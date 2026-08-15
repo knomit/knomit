@@ -259,6 +259,61 @@ func TestLearnHandler_DedupMergePreservesKind(t *testing.T) {
 	require.Equal(t, 2, merged.Sources, "merge sums sources")
 }
 
+// TestLearnHandler_DedupMergeOneExistingFactAbsorbsOneIncoming regresses the
+// collision the handler's duplicate-path guard cannot see. That guard runs over
+// the freshly-minted paths; applyDedupMerge retargets paths[i] onto an existing
+// fact's path AFTERWARDS, so two inputs in one category that both match the
+// SAME existing fact used to land on one path — one file written, one body
+// silently gone, two commit entries emitted, and a summary asserting both were
+// written. An existing fact now absorbs at most one incoming fact per call; the
+// second is written at its own path, so nothing the caller sent disappears and
+// the reported count is a count that happened.
+func TestLearnHandler_DedupMergeOneExistingFactAbsorbsOneIncoming(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+
+	r1, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
+	require.NoError(t, err)
+	require.False(t, r1.IsError, "seed write must succeed: %s", resultText(t, r1))
+	seedPath := mergedFactPath(t, r1)
+
+	// Two facts in ONE call, both canonically identical to the seed, so both
+	// dedup-search back to the same existing fact.
+	req := principleLearnReq("collide", 0.9, []any{"global"})
+	facts := req.Params.Arguments.(map[string]any)["facts"].([]any)
+	req.Params.Arguments.(map[string]any)["facts"] = []any{facts[0], facts[0]}
+
+	r2, err := LearnHandler(emb)(ctx, req)
+	require.NoError(t, err)
+	require.False(t, r2.IsError, "colliding dedup matches must not fail the call: %s", resultText(t, r2))
+
+	var parsed struct {
+		Commits []struct {
+			File string `json:"file"`
+		} `json:"commits"`
+		Summary string `json:"summary"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, r2)), &parsed))
+	require.Len(t, parsed.Commits, 2, "both inputs are accounted for")
+
+	distinct := map[string]bool{}
+	for _, c := range parsed.Commits {
+		distinct[c.File] = true
+	}
+	require.Len(t, distinct, 2,
+		"two inputs collapsed onto one file while the response reported two: %v", parsed.Commits)
+	require.Contains(t, parsed.Summary, "2 facts",
+		"the summary must count what was actually written; got %q", parsed.Summary)
+
+	// One input merged into the seed; the other kept its own freshly-minted
+	// path. Every file the response names must actually carry a body.
+	require.True(t, distinct[seedPath], "one input must still have merged into the existing fact")
+	for file := range distinct {
+		res, rerr := svc.Facts().ReadFact(context.Background(), "agent/test", file, nil)
+		require.NoError(t, rerr, "response named %s but it is not on disk", file)
+		require.NotEmpty(t, res.Content, "%s was written empty", file)
+	}
+}
+
 // TestLearnHandler_DedupMergeReValidates regresses the re-validate step: a
 // merge can produce a rule violation even when both inputs were individually
 // valid. Here a [global] principle and an identically-worded [store]-scoped

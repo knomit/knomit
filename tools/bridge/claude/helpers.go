@@ -41,11 +41,54 @@ func knomitBaseURL() string {
 	return "http://localhost:19278"
 }
 
+// skipMultipleKnomitServers is the skip reason for a project configuring more
+// than one knomit server. Named because both helpers.go and the session-start
+// hook must agree on it: the hook special-cases this reason to tell the user,
+// since unlike every other skip it is a misconfiguration that never resolves
+// on its own.
+const skipMultipleKnomitServers = "multiple_knomit_servers"
+
+// isKnomitCommand reports whether an .mcp.json entry's COMMAND identifies the
+// knomit bridge. This is the certain signal: it names the actual process and it
+// survives the key being derived per scope. `.exe` is trimmed because the
+// Makefile builds a GOOS=windows target, where the command is knomit-bridge.exe
+// and a bare basename comparison would miss every Windows install.
+func isKnomitCommand(command string) bool {
+	return strings.TrimSuffix(filepath.Base(command), ".exe") == "knomit-bridge"
+}
+
+// isKnomitKey reports whether an .mcp.json KEY looks like a knomit server. This
+// is a guess, not proof: a wrapper script, a renamed symlink, a versioned binary
+// or `go run` all leave a command isKnomitCommand cannot recognise, and those
+// configs resolved fine when the lookup was `cfg.MCPServers["knomit"]`. Failing
+// to match them does not fail safe — it falls through to the basename fallback,
+// which is the wrong-repo hazard this file's contract forbids.
+//
+// Because it is a guess it also fires on servers that merely borrowed the
+// namespace (an unrelated `knomit-notes` MCP server). mcpBinding therefore
+// treats key matches as a strictly lower tier than command matches: see the
+// selection there.
+func isKnomitKey(key string) bool {
+	return key == "knomit" || strings.HasPrefix(key, "knomit-")
+}
+
+// isKnomitServer reports whether an .mcp.json entry is a knomit bridge by
+// either signal. Callers that must distinguish proof from guess use the two
+// predicates directly.
+func isKnomitServer(key, command string) bool {
+	return isKnomitCommand(command) || isKnomitKey(key)
+}
+
 // mcpBinding classifies the knomit MCP server config in .mcp.json under
 // projectDir into either lens mode or repo mode. It is pure (no I/O beyond the
 // single file read) so the classification is unit-testable in isolation.
 //
-// Returns (repo, lens):
+// Returns (repo, lens, ambiguous):
+//   - ambiguous: the project configures MORE THAN ONE knomit server RESOLVING
+//     TO DIFFERENT TARGETS. There is no principled answer to which repo the
+//     hooks should bind to, so repo and lens are both "" and the caller must
+//     skip rather than pick one. Entries that resolve to the same target are
+//     not ambiguous — see the selection below.
 //   - lens != "": lens mode — the file configures --lens <name>. repo is "".
 //     A lens-configured file NEVER falls back to the basename; the caller must
 //     resolve the write repo via the API and skip cleanly on failure.
@@ -58,27 +101,81 @@ func knomitBaseURL() string {
 // order. A stray --repo must not demote a lens-configured session to a raw
 // repo scope — lens mode resolves via the API and fails safe (skips) rather
 // than risk reading the wrong repo.
-func mcpBinding(projectDir string) (repo, lens string) {
+func mcpBinding(projectDir string) (repo, lens string, ambiguous bool) {
 	base := filepath.Base(projectDir)
 	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
 	if err != nil {
-		return base, ""
+		return base, "", false
 	}
 	var cfg struct {
 		MCPServers map[string]struct {
-			Args []string `json:"args"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return base, ""
+		return base, "", false
 	}
-	srv, ok := cfg.MCPServers["knomit"]
-	if !ok {
-		return base, ""
+
+	// Select by COMMAND, not by key. The key used to be the constant "knomit",
+	// but `claude init` now derives it from the scope so that two knomit servers
+	// can coexist in one project — keying off it would silently unbind every
+	// hook the moment a project scaffolds as anything but a knomit-named repo,
+	// which is precisely the wrong-repo hazard the lens rules below exist to
+	// avoid. The command is what actually identifies a knomit server.
+	//
+	// Command matches are proof; key matches are a guess (isKnomitKey). A guess
+	// must never dilute proof: a project running one real bridge alongside an
+	// unrelated server that merely borrowed the `knomit-` namespace would
+	// otherwise count two matches and disable every hook, telling the user to
+	// remove a knomit entry they do not have. So key matches are considered only
+	// when nothing matched on command at all — which is exactly the legacy /
+	// wrapper-script case the key fallback exists for.
+	var byCommand, byKey []string
+	for key, srv := range cfg.MCPServers {
+		switch {
+		case isKnomitCommand(srv.Command):
+			byCommand = append(byCommand, key)
+		case isKnomitKey(key):
+			byKey = append(byKey, key)
+		}
 	}
+	matches := byCommand
+	if len(matches) == 0 {
+		matches = byKey
+	}
+	if len(matches) == 0 {
+		return base, "", false
+	}
+	repo, lens = classifyArgs(cfg.MCPServers[matches[0]].Args, base)
+	// Two or more knomit servers that name DIFFERENT targets: there is no
+	// principled answer to "which repo do the hooks bind to?", and guessing runs
+	// post-edit against possibly the wrong repo. Fail safe — the caller skips
+	// and says why.
+	//
+	// Same-target duplicates are not that case, and they are the likely one:
+	// `.mcp.json` is merge-required, so re-running init drops a companion and the
+	// obvious merge leaves the pre-existing entry beside the freshly derived one,
+	// both pointing at the same repo. Disabling the hooks over a config with a
+	// single unambiguous answer would be a fail-safe that fires on nothing.
+	// Map iteration order is random, so the comparison must be order-independent
+	// — it is: we return only when every match agrees.
+	for _, key := range matches[1:] {
+		r, l := classifyArgs(cfg.MCPServers[key].Args, base)
+		if r != repo || l != lens {
+			return "", "", true
+		}
+	}
+	return repo, lens, false
+}
+
+// classifyArgs maps one server entry's args to its (repo, lens) target, with
+// base as the repo-mode fallback. Split out of mcpBinding so the multi-server
+// path can compare targets without duplicating the precedence rules.
+func classifyArgs(args []string, base string) (repo, lens string) {
 	var repoArg string
-	for i := 0; i < len(srv.Args); i++ {
-		a := srv.Args[i]
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
 		case a == "--lens" || a == "-lens":
 			// A --lens token means lens mode even when the value is missing
@@ -87,8 +184,8 @@ func mcpBinding(projectDir string) (repo, lens string) {
 			// name, which resolveWriteRepo/lensWriteRepo turn into a clean skip
 			// rather than the wrong-repo hazard a basename fallback would
 			// reintroduce.
-			if i+1 < len(srv.Args) {
-				return "", srv.Args[i+1]
+			if i+1 < len(args) {
+				return "", args[i+1]
 			}
 			return "", "" // lens flag with no value: lens mode, empty name
 		case strings.HasPrefix(a, "--lens=") || strings.HasPrefix(a, "-lens="):
@@ -98,8 +195,8 @@ func mcpBinding(projectDir string) (repo, lens string) {
 			_, v, _ := strings.Cut(a, "=")
 			return "", v
 		case a == "--repo" || a == "-repo":
-			if repoArg == "" && i+1 < len(srv.Args) {
-				repoArg = srv.Args[i+1]
+			if repoArg == "" && i+1 < len(args) {
+				repoArg = args[i+1]
 			}
 		case strings.HasPrefix(a, "--repo=") || strings.HasPrefix(a, "-repo="):
 			if repoArg == "" {
@@ -119,7 +216,7 @@ func mcpBinding(projectDir string) (repo, lens string) {
 // repo-mode call path and its regression tests; a lens-configured file yields
 // "" here, so lens-aware callers must use resolveWriteRepo instead.
 func repoFromMCP(projectDir string) string {
-	repo, _ := mcpBinding(projectDir)
+	repo, _, _ := mcpBinding(projectDir)
 	return repo
 }
 
@@ -140,7 +237,13 @@ func repoFromMCP(projectDir string) string {
 // facts land, so session-start / post-edit context stays accurate for the
 // write side.
 func resolveWriteRepo(projectDir string) (repo, skipReason string) {
-	r, lens := mcpBinding(projectDir)
+	r, lens, ambiguous := mcpBinding(projectDir)
+	if ambiguous {
+		// More than one knomit server in this project. Binding to an arbitrary
+		// one would run post-edit against possibly the wrong repo, so skip and
+		// say why rather than go silently dark.
+		return "", skipMultipleKnomitServers
+	}
 	if r != "" {
 		return r, "" // repo mode: configured --repo or basename fallback
 	}

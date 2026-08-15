@@ -88,9 +88,12 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}
 
+		dest := describeWriteDestination(b)
 		result := map[string]interface{}{
-			"file":   file,
-			"commit": hash,
+			"file":       file,
+			"commit":     hash,
+			"written_to": dest,
+			"summary":    dest.summary("1 retraction"),
 		}
 		out, err := json.Marshal(result)
 		if err != nil {

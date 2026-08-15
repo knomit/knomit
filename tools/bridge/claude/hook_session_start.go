@@ -28,15 +28,18 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 	)
 	defer func() {
 		ev := log.Info().Str("event", "session-start").Bool("emitted", emitted)
+		// skip_reason is logged whenever it is set, INDEPENDENT of emitted. The
+		// two are not mutually exclusive: the multiple-servers skip still writes
+		// a notice to the user, and logging only on the not-emitted branch made
+		// that line indistinguishable from a healthy emission — the one skip we
+		// went out of our way to make visible was the one invisible in the log.
+		if skipReason != "" {
+			ev.Str("skip_reason", skipReason)
+		}
 		if emitted {
 			ev.Int("globals", globalsCount).
 				Int("invariants_fallback", invariantsCount).
-				Int("recent", recentCount).
-				Msg("hook result")
-			return
-		}
-		if skipReason != "" {
-			ev.Str("skip_reason", skipReason)
+				Int("recent", recentCount)
 		}
 		ev.Msg("hook result")
 	}()
@@ -49,6 +52,21 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 	repo, skip := resolveWriteRepo(in.Cwd)
 	if skip != "" {
 		skipReason = skip
+		// Every other skip reason is a transient or benign state (server down,
+		// no facts yet). This one is a misconfiguration that will never resolve
+		// on its own, and the user cannot see the log field — so say it out
+		// loud. A memory system whose hooks go silently dark is the worst
+		// failure it has: nothing is captured and nobody finds out.
+		if skip == skipMultipleKnomitServers {
+			_, err := fmt.Fprint(w, "knomit hooks are DISABLED: .mcp.json configures knomit "+
+				"servers for more than one scope, so there is no single repo to bind to. "+
+				"Leave one scope (one repo or one lens) in this project's .mcp.json to "+
+				"re-enable them; duplicate entries naming the SAME scope are fine.\n")
+			if err != nil {
+				return err
+			}
+			emitted = true
+		}
 		return nil
 	}
 	branch := agentBranch(repo)

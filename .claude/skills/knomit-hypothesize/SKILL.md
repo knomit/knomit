@@ -22,7 +22,7 @@ DON'T invoke:
 
 ## How
 
-Call `mcp__knomit__knomit_hypothesize` with no args to start a session. The tool returns one synthesis fact at a time with a `prompt` and `response_schema`.
+Call `knomit_hypothesize` with no args to start a session. The tool returns one synthesis fact at a time with a `prompt` and `response_schema`.
 
 For each item:
 

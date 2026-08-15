@@ -21,7 +21,7 @@ Fire ONLY when the user runs `/knomit-principle` explicitly. Never invoke proact
    - An area path (e.g. `store/resolver`) — surfaces only when `/knomit-recall` touches that area or any parent.
 3. Ask the user for the **title** (short, imperative — the principle as a statement).
 4. Ask the user for the **body** (rationale, scope of applicability, examples of what NOT to do).
-5. Call `mcp__knomit__knomit_learn` with:
+5. Call `knomit_learn` with:
    - `topic`: `principles`
    - `category`: `<bucket>/<slug>` (where `<slug>` is the argument the user passed to `/knomit-principle`)
    - `title`: the user's title

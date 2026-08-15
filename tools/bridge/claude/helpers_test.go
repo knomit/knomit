@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -88,7 +89,7 @@ func TestMcpBinding_RepoConfigured_RepoMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if repo != "myproject" || lens != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "myproject", "")
 	}
@@ -108,7 +109,7 @@ func TestMcpBinding_LensConfigured_LensMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if lens != "mylens" || repo != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "", "mylens")
 	}
@@ -120,7 +121,7 @@ func TestMcpBinding_LensConfigured_LensMode(t *testing.T) {
 
 func TestMcpBinding_MissingFile_BasenameRepoMode(t *testing.T) {
 	dir := t.TempDir()
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if repo != filepath.Base(dir) || lens != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, filepath.Base(dir), "")
 	}
@@ -142,7 +143,7 @@ func TestMcpBinding_BothFlags_LensWins(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			repo, lens := mcpBinding(dir)
+			repo, lens, _ := mcpBinding(dir)
 			if lens != "mylens" || repo != "" {
 				t.Errorf("mcpBinding = (%q, %q), want lens to win (%q, %q)", repo, lens, "", "mylens")
 			}
@@ -160,7 +161,7 @@ func TestMcpBinding_LensNoValue_LensModeEmptyName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens := mcpBinding(dir)
+	repo, lens, _ := mcpBinding(dir)
 	if repo != "" || lens != "" {
 		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "", "")
 	}
@@ -196,7 +197,7 @@ func TestMcpBinding_EqualsForms(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			repo, lens := mcpBinding(dir)
+			repo, lens, _ := mcpBinding(dir)
 			if repo != tc.wantRepo || lens != tc.wantLens {
 				t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, tc.wantRepo, tc.wantLens)
 			}
@@ -343,5 +344,197 @@ func TestWiredEvent(t *testing.T) {
 				t.Errorf("wiredEvent(%q, %q) = %q, want %q", tc.fromInput, tc.fallback, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsKnomitServer covers the two ways an entry is recognised. The KEY arm is
+// the compatibility path: configs predating the derived key, or using a wrapper
+// script / renamed symlink / `go run`, leave a command this cannot identify, and
+// failing to match there does NOT fail safe — it falls through to the basename
+// fallback, i.e. the wrong-repo hazard.
+func TestIsKnomitServer(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, command string
+		want               bool
+	}{
+		{"plain command", "anything", "knomit-bridge", true},
+		{"absolute command", "anything", "/usr/local/bin/knomit-bridge", true},
+		// filepath.Base is OS-specific, so a backslash path only splits on
+		// Windows. The portable assertion is the .exe suffix trimming itself,
+		// which is what the GOOS=windows build needs.
+		{"windows exe", "anything", "knomit-bridge.exe", true},
+		{"windows exe with slash path", "anything", "C:/tools/knomit-bridge.exe", true},
+		{"legacy constant key", "knomit", "/opt/wrappers/kb", true},
+		{"derived key, wrapper command", "knomit-eng", "~/bin/kb-wrapper.sh", true},
+		{"unrelated server", "postgres", "/usr/bin/pg-mcp", false},
+		{"knomit-ish command but not the bridge", "db", "knomit-bridgehead", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKnomitServer(tc.key, tc.command); got != tc.want {
+				t.Errorf("isKnomitServer(%q, %q) = %v, want %v", tc.key, tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMcpBinding_LegacyConfigStillBinds is the compatibility regression: a
+// pre-existing config keyed "knomit" whose command is a wrapper must keep
+// resolving to lens mode. Selecting on command alone silently demoted it to a
+// basename repo — the hazard mcpBinding's contract forbids.
+func TestMcpBinding_LegacyConfigStillBinds(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{"knomit":{"command":"/opt/wrappers/kb","args":["--lens","eng"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens, ambiguous := mcpBinding(dir)
+	if ambiguous {
+		t.Fatal("single server reported ambiguous")
+	}
+	if lens != "eng" {
+		t.Errorf("lens = %q, want %q", lens, "eng")
+	}
+	if repo != "" {
+		t.Errorf("repo = %q, want empty — lens config must never fall back to a basename", repo)
+	}
+}
+
+// TestMcpBinding_KeyMatchesNeverDiluteCommandMatches pins the tiering. The key
+// arm of isKnomitServer is a guess and fires on any server that borrowed the
+// `knomit-` namespace; counting such a server alongside a real bridge would
+// report ambiguity and disable every hook, with a message telling the user to
+// remove a knomit entry they do not have.
+func TestMcpBinding_KeyMatchesNeverDiluteCommandMatches(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit":{"command":"knomit-bridge","args":["--repo","real"]},
+		"knomit-notes":{"command":"npx","args":["-y","some-notes-mcp"]},
+		"knomit-docs":{"command":"/usr/bin/docs-mcp"}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens, ambiguous := mcpBinding(dir)
+	if ambiguous {
+		t.Fatal("unrelated knomit-keyed servers made a single real bridge look ambiguous")
+	}
+	if repo != "real" || lens != "" {
+		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "real", "")
+	}
+}
+
+// TestMcpBinding_KeyTierStillBindsWhenNothingMatchesOnCommand is the other half
+// of the tiering: demoting key matches must not disable them. With no
+// command-recognisable entry, the key arm is all there is, and failing to match
+// does not fail safe — it falls through to the basename fallback, i.e. the
+// wrong-repo hazard.
+func TestMcpBinding_KeyTierStillBindsWhenNothingMatchesOnCommand(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit-eng":{"command":"/opt/wrappers/kb","args":["--lens","eng"]},
+		"postgres":{"command":"/usr/bin/pg-mcp"}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens, ambiguous := mcpBinding(dir)
+	if ambiguous {
+		t.Fatal("single key-matched server reported ambiguous")
+	}
+	if lens != "eng" {
+		t.Errorf("lens = %q, want %q", lens, "eng")
+	}
+	if repo != "" {
+		t.Errorf("repo = %q, want empty — lens config must never fall back to a basename", repo)
+	}
+}
+
+// TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous pins that the fail-safe
+// fires on a real conflict, not on a redundant one. `.mcp.json` is
+// merge-required, so re-running init drops a companion and the obvious merge
+// leaves the pre-existing entry beside the freshly derived one — both naming the
+// same repo. There is one unambiguous answer there; disabling the hooks over it
+// would be a fail-safe firing on nothing.
+func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
+	t.Run("explicit repo twice", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := `{"mcpServers":{
+			"knomit":{"command":"knomit-bridge","args":["--repo","team-kb"]},
+			"knomit-repo-team-kb":{"command":"knomit-bridge","args":["--repo=team-kb"]}
+		}}`
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repo, lens, ambiguous := mcpBinding(dir)
+		if ambiguous {
+			t.Fatal("two entries naming the same repo reported as ambiguous")
+		}
+		if repo != "team-kb" || lens != "" {
+			t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "team-kb", "")
+		}
+	})
+
+	t.Run("basename fallback matches an explicit repo", func(t *testing.T) {
+		// The legacy entry carries no args and resolves to the directory
+		// basename; the derived entry names that same repo explicitly.
+		dir := t.TempDir()
+		base := filepath.Base(dir)
+		cfg := `{"mcpServers":{
+			"knomit":{"command":"knomit-bridge"},
+			"knomit-repo-` + base + `":{"command":"knomit-bridge","args":["--repo","` + base + `"]}
+		}}`
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repo, lens, ambiguous := mcpBinding(dir)
+		if ambiguous {
+			t.Fatal("basename fallback and the equivalent explicit repo reported as ambiguous")
+		}
+		if repo != base || lens != "" {
+			t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, base, "")
+		}
+	})
+
+	t.Run("differing targets stay ambiguous", func(t *testing.T) {
+		// The dedupe must not soften the actual conflict: a repo scope and a
+		// lens scope have no common answer even when they share a name.
+		dir := t.TempDir()
+		cfg := `{"mcpServers":{
+			"knomit-repo-eng":{"command":"knomit-bridge","args":["--repo","eng"]},
+			"knomit-lens-eng":{"command":"knomit-bridge","args":["--lens","eng"]}
+		}}`
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repo, lens, ambiguous := mcpBinding(dir)
+		if !ambiguous {
+			t.Fatalf("repo and lens scopes not reported as ambiguous (repo=%q lens=%q)", repo, lens)
+		}
+	})
+}
+
+// TestHookSessionStart_MultipleServersTellsTheUser pins that the one skip the
+// user cannot otherwise see is spoken aloud. Every other skip reason is
+// transient; this one never resolves on its own.
+func TestHookSessionStart_MultipleServersTellsTheUser(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit-a":{"command":"knomit-bridge","args":["--repo","a"]},
+		"knomit-b":{"command":"knomit-bridge","args":["--repo","b"]}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := strings.NewReader(`{"cwd":` + strconv.Quote(dir) + `}`)
+	var out bytes.Buffer
+	if err := hookSessionStart(in, &out); err != nil {
+		t.Fatalf("hookSessionStart: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "DISABLED") {
+		t.Errorf("session-start stayed silent about disabled hooks; got %q", got)
+	}
+	if !strings.Contains(got, ".mcp.json") {
+		t.Errorf("notice does not say where to fix it; got %q", got)
 	}
 }
