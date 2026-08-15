@@ -105,6 +105,14 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
+	// Ontology endpoints. Collection-level and repo-independent: the create
+	// wizard calls them BEFORE any repo exists, so they cannot live under
+	// /repos/{repo}. The ':' action suffix follows the convention noted above.
+	r.Post("/ontologies:validate", handleOntologyValidate())
+	r.Get("/ontologies/presets", handleOntologyPresets())
+	r.Get("/ontologies/presets/{name}", handleOntologyPresetYAML())
+	r.Get("/ontologies/schema", handleOntologySchema())
+
 	r.Route("/repos/{repo}", func(r chi.Router) {
 		// Archive deliberately sits OUTSIDE the middleware group: it resolves
 		// through m.Archive, not m.Get, and archiveErrStatus attributes its
