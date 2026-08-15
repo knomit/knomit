@@ -22,6 +22,29 @@ describe('stepsFor', () => {
     const s = wizardReducer(initialWizardState, { type: 'CHOOSE_LOCAL' });
     expect(stepsFor(s)).toEqual(['source', 'name', 'ontology', 'review']);
   });
+
+  // Review finding (round 2): an unreachable probe is a non-null probe with
+  // reachable: false — it used to fall through stepsFor's `!s.probe` check
+  // straight to the 3-step remote-with-content list, so Task 8 would render
+  // Access/Review chrome for a remote the server never actually reached.
+  it('yields only [source] when the probe is unreachable', () => {
+    const s = wizardReducer(initialWizardState, {
+      type: 'PROBE_DONE',
+      probe: { reachable: false, empty: false, auth_required: false, upstream_branch: '', branches: [], detail: 'connection refused' },
+    });
+    expect(stepsFor(s)).toEqual(['source']);
+  });
+
+  // Pin against over-correcting the fix above: auth_required alone does NOT
+  // mean unreachable. The server saw the remote and reported it needs
+  // credentials, so the access step must still be offered.
+  it('keeps the access step when the probe is reachable but requires auth', () => {
+    const s = wizardReducer(initialWizardState, {
+      type: 'PROBE_DONE',
+      probe: { reachable: true, empty: false, auth_required: true, upstream_branch: 'main', branches: ['main'] },
+    });
+    expect(stepsFor(s)).toEqual(['source', 'access', 'review']);
+  });
 });
 
 describe('wizardReducer step advancement', () => {

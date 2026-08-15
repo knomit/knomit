@@ -109,7 +109,13 @@ export function currentStep(s: WizardState): StepId {
  */
 export function stepsFor(s: WizardState): StepId[] {
   if (s.choice === 'local') return ['source', 'name', 'ontology', 'review'];
-  if (!s.probe) return ['source'];
+  // No probe yet, or the probe came back unreachable: there is no confirmed
+  // remote to build the rest of the wizard around, so the list stays at
+  // ['source'] — never advertise Access/Review chrome for a remote we could
+  // not reach. auth_required alone does NOT disqualify a probe: it is still
+  // reachable (the server saw the remote and reported it needs credentials),
+  // so that case keeps its access step below.
+  if (!s.probe || !s.probe.reachable) return ['source'];
   if (s.probe.empty) return ['source', 'access', 'ontology', 'review'];
   return ['source', 'access', 'review'];
 }
