@@ -45,7 +45,10 @@ func handleOntologyValidate() http.HandlerFunc {
 		o, diags := fact.ValidateOntologyYAML(body)
 		w.Header().Set("Content-Type", "application/json")
 		if len(diags) > 0 {
-			_ = json.NewEncoder(w).Encode(ontologyValidateResponse{OK: false, Diagnostics: diags})
+			// Topics has no omitempty (see ontologyValidateResponse), so it must be
+			// a non-nil empty slice here — a zero-value nil would encode as JSON
+			// null, and the TypeScript client declares this field string[].
+			_ = json.NewEncoder(w).Encode(ontologyValidateResponse{OK: false, Topics: []string{}, Diagnostics: diags})
 			return
 		}
 		_ = json.NewEncoder(w).Encode(ontologyValidateResponse{

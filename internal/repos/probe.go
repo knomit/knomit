@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"strings"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -16,6 +17,11 @@ import (
 // A probe is `remote.ListContext` — it sees REFS ONLY. It deliberately carries
 // no fact count, commit count or ontology id: establishing those needs a real
 // fetch. Nothing in the pre-create UI may claim them.
+//
+// Branches is always a non-nil slice on every path where ProbeOrigin returns
+// a nil error, even when empty — the OpenAPI schema declares it a plain
+// array (no nullable:true) and the web client types it string[], so a nil
+// slice serializing as JSON null would be a runtime error in the wizard.
 type ProbeResult struct {
 	Reachable      bool     `json:"reachable"`
 	Empty          bool     `json:"empty"`
@@ -42,7 +48,7 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 	}
 	auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
 	if err != nil {
-		return ProbeResult{Detail: err.Error()}, nil
+		return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
 	}
 
 	repo, err := gogit.Init(memory.NewStorage(), nil)
@@ -54,21 +60,33 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 		URLs: []string{o.URL},
 	})
 	if err != nil {
-		return ProbeResult{Detail: err.Error()}, nil
+		return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
 	}
 
 	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: auth})
-	switch {
-	case errors.Is(err, transport.ErrEmptyRemoteRepository):
-		return ProbeResult{Reachable: true, Empty: true, UpstreamBranch: upstreamOrMain(o.Branch)}, nil
-	case errors.Is(err, transport.ErrAuthenticationRequired),
-		errors.Is(err, transport.ErrAuthorizationFailed):
-		return ProbeResult{Reachable: true, AuthRequired: true, Detail: err.Error()}, nil
-	case err != nil:
-		return ProbeResult{Detail: err.Error()}, nil
+	if err != nil {
+		empty, authRequired := classifyProbeError(err)
+		switch {
+		case empty:
+			return ProbeResult{
+				Reachable:      true,
+				Empty:          true,
+				Branches:       []string{},
+				UpstreamBranch: resolveUpstream(o.Branch, "", nil),
+			}, nil
+		case authRequired:
+			return ProbeResult{
+				Reachable:    true,
+				AuthRequired: true,
+				Branches:     []string{},
+				Detail:       err.Error(),
+			}, nil
+		default:
+			return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
+		}
 	}
 
-	res := ProbeResult{Reachable: true}
+	res := ProbeResult{Reachable: true, Branches: []string{}}
 	var head string
 	for _, ref := range refs {
 		if ref.Name() == plumbing.HEAD && ref.Type() == plumbing.SymbolicReference {
@@ -84,16 +102,58 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 	return res, nil
 }
 
-func upstreamOrMain(requested string) string {
-	if requested != "" {
-		return requested
+// classifyProbeError inspects an error returned by remote.ListContext and
+// reports whether it signals an empty remote or a missing/rejected
+// credential, as opposed to a genuine connectivity failure (bad host,
+// refused connection, timeout, ...). Pure and side-effect free so it can be
+// (and is, in probe_test.go) unit-tested against synthetic errors without a
+// network or a live server.
+//
+// Coverage is transport-specific and asymmetric — this is NOT "the same
+// check for every transport":
+//
+//   - HTTP(S): go-git's http transport wraps a 401/403 response in the
+//     exported sentinels transport.ErrAuthenticationRequired /
+//     ErrAuthorizationFailed (plumbing/transport/http/common.go:584,586),
+//     so those are matched with errors.Is — a reliable, typed check.
+//
+//   - SSH: go-git's ssh transport (plumbing/transport/ssh/common.go) does
+//     NOT wrap authentication failures in any sentinel or typed error at
+//     all — connect() just returns whatever golang.org/x/crypto/ssh's
+//     NewClientConn produced. Verified against the vendored source
+//     (golang.org/x/crypto@v0.53.0/ssh/client.go:85 wraps with
+//     fmt.Errorf("ssh: handshake failed: %w", err); when every offered auth
+//     method is rejected, the wrapped error is the bare
+//     fmt.Errorf("ssh: unable to authenticate, attempted methods %v, no
+//     supported methods remain", tried) from client_auth.go:154). There is
+//     no sentinel or type to errors.Is/errors.As against, so this is
+//     matched on that message's stable substring instead. The substring is
+//     specific to actual credential rejection — other SSH failures (DNS,
+//     connection refused, timeout, host-key mismatch) do not contain it and
+//     fall through to the generic "unreachable" case.
+func classifyProbeError(err error) (empty bool, authRequired bool) {
+	if err == nil {
+		return false, false
 	}
-	return "main"
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return true, false
+	}
+	if errors.Is(err, transport.ErrAuthenticationRequired) || errors.Is(err, transport.ErrAuthorizationFailed) {
+		return false, true
+	}
+	if strings.Contains(err.Error(), "ssh: unable to authenticate") {
+		return false, true
+	}
+	return false, false
 }
 
 // resolveUpstream mirrors InitFromRemote's preference order so the wizard shows
 // the branch the clone would actually adopt: an explicit request wins, then
 // "main", then the remote's symbolic HEAD, then "main" as the last resort.
+//
+// Also covers the empty-remote case (head="", branches=nil): with no refs to
+// consider it collapses to "the requested branch, else main", which is why
+// ProbeOrigin no longer needs a separate helper for that case.
 func resolveUpstream(requested, head string, branches []string) string {
 	if requested != "" {
 		return requested

@@ -98,8 +98,15 @@ func TestValidateOntology_InvalidReturns200WithDiagnostics(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
+	// topics must serialize as [] on the ok:false path too — a nil Go slice
+	// would encode as JSON null, and the web client declares this field
+	// string[], so a null reaching its .map() is a runtime error.
+	if strings.Contains(rec.Body.String(), `"topics":null`) {
+		t.Fatalf("topics serialized as null, want []: %s", rec.Body.String())
+	}
 	var got struct {
-		OK          bool `json:"ok"`
+		OK          bool     `json:"ok"`
+		Topics      []string `json:"topics"`
 		Diagnostics []struct {
 			Line    int    `json:"line"`
 			Message string `json:"message"`
@@ -108,6 +115,9 @@ func TestValidateOntology_InvalidReturns200WithDiagnostics(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
 	if got.OK {
 		t.Fatalf("ok = true, want false")
+	}
+	if got.Topics == nil {
+		t.Fatalf("topics = nil, want a non-nil (possibly empty) slice")
 	}
 	if len(got.Diagnostics) != 1 || got.Diagnostics[0].Line != 4 {
 		t.Fatalf("diagnostics = %+v", got.Diagnostics)
