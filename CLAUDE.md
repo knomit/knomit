@@ -8,7 +8,7 @@
 <!-- knomit:integration v3 -->
 ## Working with knomit memory
 
-This project uses knomit as long-term memory. Eleven `/knomit-…` slash commands
+This project uses knomit as long-term memory. Ten `/knomit-…` slash commands
 wrap knomit's MCP tools. Use them in these moments:
 
 **Before non-trivial work** — call `/knomit-recall <what you are about to
@@ -68,11 +68,6 @@ to run the work-stealing prune (dedup), distill (synthesis), and reflect
 compress each to the slogan a hurried reader would take away, derive the
 consequences a consumer would act on, verify those against the code, and
 repair the traps (consequences, named misreadings, enforcing-code refs).
-
-**When an area has zero facts and you're about to work in it** — call
-`/knomit-bootstrap <area>` to seed foundational facts (invariants,
-architecture, conventions, decisions, gotchas). Strict trigger: only first
-time, with a real upcoming work driver.
 
 **Philosophy** — knomit is your colleague's tribal knowledge. Invariants are
 load-bearing; re-read before touching the area they cover. Facts can be
