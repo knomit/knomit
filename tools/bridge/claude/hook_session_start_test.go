@@ -137,13 +137,6 @@ func TestSessionStart_LensUnresolved_CleanNoOp(t *testing.T) {
 	require.Zero(t, out.Len(), "expected clean no-op when lens is unresolved")
 }
 
-// TestSessionStart_EmitsAvailableOnDemandTOC asserts that after the
-// PROJECT PRINCIPLES block, the hook emits an "AVAILABLE ON DEMAND" line
-// summarizing per-area fact counts grouped by the SECOND path segment
-// under kb/. Global principles (kb/principles/* with domain=global) are
-// excluded from the TOC because they're already rendered above; scoped
-// principles (no global domain) ARE included, grouped by bucket (e.g.
-// "anti-patterns"). Areas are listed alphabetically.
 // TestSessionStart_OmitsAreaTOC pins the REMOVAL of the "AVAILABLE ON DEMAND"
 // block. It counted areas over the 200-most-recent-facts window
 // (?sort=recent&limit=200), so its per-area numbers read as corpus depth while

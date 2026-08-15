@@ -5,7 +5,7 @@
 - NEVER create `plan.md`, `todo.md`, `notes.md` or similar at the project root
 - Commit messages and session logs go in `.claude/plans/`
 
-<!-- knomit:integration v2 -->
+<!-- knomit:integration v3 -->
 ## Working with knomit memory
 
 This project uses knomit as long-term memory. Eleven `/knomit-…` slash commands
@@ -25,9 +25,10 @@ work on>` before:
 
 The argument is free text, not a taxonomy term — `/knomit-recall lens write-repo
 resolution` is a valid call. Name a KIND of knowledge as well when you want one:
-`/knomit-recall invariants for internal/fact` scopes to `kb/invariants/`. The
-kinds are architecture, conventions, decisions, gotchas, incidents, invariants,
-meta, principles.
+`/knomit-recall invariants for internal/fact` scopes the query to the
+`invariants` topic. The kinds are this repo's ontology topics, listed in the
+knomit MCP server instructions; the skill turns the name you type into the
+path filter.
 
 Recall is a habit, not a phase: two recalls at the start of a session do
 not cover the debugging you do an hour later.
