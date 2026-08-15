@@ -36,6 +36,53 @@ func TestValidateOntology_OKReturnsSummary(t *testing.T) {
 	}
 }
 
+// countRules must walk nested children, not just top-level topics. This
+// fixture puts one validation at the root and one under a topic's nested
+// child (not the topic itself), so a top-level-only implementation would
+// undercount (1 instead of 2) and fail this test.
+func TestValidateOntology_RuleCountSumsRootAndNestedValidations(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	body := "" +
+		"id: x\n" +
+		"name: X\n" +
+		"validations:\n" +
+		"  - name: root-rule\n" +
+		"    message: root msg\n" +
+		"    rule: \"fact.kind !== ''\"\n" +
+		"topics:\n" +
+		"  alpha:\n" +
+		"    description: d\n" +
+		"    children:\n" +
+		"      beta:\n" +
+		"        description: d2\n" +
+		"        validations:\n" +
+		"          - name: child-rule\n" +
+		"            message: child msg\n" +
+		"            rule: \"fact.kind !== ''\"\n"
+	req := httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		OK        bool `json:"ok"`
+		RuleCount int  `json:"rule_count"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.OK {
+		t.Fatalf("ok = false, body = %s", rec.Body.String())
+	}
+	if got.RuleCount != 2 {
+		t.Fatalf("rule_count = %d, want 2 (1 root + 1 nested child)", got.RuleCount)
+	}
+}
+
 // An invalid ontology is a 200 carrying ok:false — not an HTTP error. The
 // client renders diagnostics inline; a 4xx would make "you typed a bad key"
 // indistinguishable from "the request was malformed".

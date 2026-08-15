@@ -21,10 +21,10 @@ var presetNames = []string{"default", "code"}
 
 type ontologyValidateResponse struct {
 	OK          bool              `json:"ok"`
-	ID          string            `json:"id,omitempty"`
-	Name        string            `json:"name,omitempty"`
-	Topics      []string          `json:"topics,omitempty"`
-	RuleCount   int               `json:"rule_count,omitempty"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Topics      []string          `json:"topics"`
+	RuleCount   int               `json:"rule_count"`
 	Diagnostics []fact.Diagnostic `json:"diagnostics,omitempty"`
 }
 
