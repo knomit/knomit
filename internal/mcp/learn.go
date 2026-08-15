@@ -754,8 +754,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			commits[i] = commitEntry{File: f.Path(), Hash: hash}
 		}
 
+		dest := describeWriteDestination(b)
 		result := map[string]interface{}{
-			"commits": commits,
+			"commits":    commits,
+			"written_to": dest,
+			"summary":    dest.summary(pluralFacts(len(facts))),
 		}
 		out, err := json.Marshal(result)
 		if err != nil {
