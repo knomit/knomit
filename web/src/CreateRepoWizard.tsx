@@ -32,6 +32,11 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState('');
   const [events, setEvents] = useState<CreateEvent[]>([]);
+  // Gates Next on the ontology step. Passed to StepOntology as setOntologyValid
+  // directly (not a wrapping lambda) so its identity is stable across
+  // renders — StepOntology's validity effects depend on it and a fresh
+  // lambda every render would refire them for no reason.
+  const [ontologyValid, setOntologyValid] = useState(false);
 
   const step = currentStep(state);
 
@@ -77,11 +82,14 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   const nameOk = state.name.trim().length > 0;
   // The generic "Next" footer button covers every step that has nothing
   // more specific to say about advancing: the local-only 'name' step,
-  // 'access', and the placeholder 'ontology' step. 'source' advances via its
-  // own two choice controls (CHOOSE_LOCAL, or a successful probe); 'review'
-  // submits instead of advancing.
+  // 'access', and 'ontology' (gated on ontologyValid — StepOntology's own
+  // verification round trip, not this button, decides when the chosen
+  // ontology is safe to carry forward). 'source' advances via its own two
+  // choice controls (CHOOSE_LOCAL, or a successful probe); 'review' submits
+  // instead of advancing.
   const showGenericNext = step === 'name' || step === 'access' || step === 'ontology';
-  const nextDisabled = creating || !nameOk || (step === 'access' && basicMissingUser);
+  const nextDisabled = creating || !nameOk || (step === 'access' && basicMissingUser) ||
+    (step === 'ontology' && !ontologyValid);
 
   return (
     <div>
@@ -106,7 +114,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
         </div>
       )}
       {step === 'access' && <StepAccess state={state} dispatch={dispatch} />}
-      {step === 'ontology' && <StepOntology state={state} dispatch={dispatch} />}
+      {step === 'ontology' && <StepOntology state={state} onDispatch={dispatch} onValidityChange={setOntologyValid} />}
       {step === 'review' && <StepReview state={state} />}
 
       {createErr && <div style={errText}>{createErr}</div>}
