@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -343,5 +344,83 @@ func TestWiredEvent(t *testing.T) {
 				t.Errorf("wiredEvent(%q, %q) = %q, want %q", tc.fromInput, tc.fallback, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsKnomitServer covers the two ways an entry is recognised. The KEY arm is
+// the compatibility path: configs predating the derived key, or using a wrapper
+// script / renamed symlink / `go run`, leave a command this cannot identify, and
+// failing to match there does NOT fail safe — it falls through to the basename
+// fallback, i.e. the wrong-repo hazard.
+func TestIsKnomitServer(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, command string
+		want               bool
+	}{
+		{"plain command", "anything", "knomit-bridge", true},
+		{"absolute command", "anything", "/usr/local/bin/knomit-bridge", true},
+		// filepath.Base is OS-specific, so a backslash path only splits on
+		// Windows. The portable assertion is the .exe suffix trimming itself,
+		// which is what the GOOS=windows build needs.
+		{"windows exe", "anything", "knomit-bridge.exe", true},
+		{"windows exe with slash path", "anything", "C:/tools/knomit-bridge.exe", true},
+		{"legacy constant key", "knomit", "/opt/wrappers/kb", true},
+		{"derived key, wrapper command", "knomit-eng", "~/bin/kb-wrapper.sh", true},
+		{"unrelated server", "postgres", "/usr/bin/pg-mcp", false},
+		{"knomit-ish command but not the bridge", "db", "knomit-bridgehead", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isKnomitServer(tc.key, tc.command); got != tc.want {
+				t.Errorf("isKnomitServer(%q, %q) = %v, want %v", tc.key, tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMcpBinding_LegacyConfigStillBinds is the compatibility regression: a
+// pre-existing config keyed "knomit" whose command is a wrapper must keep
+// resolving to lens mode. Selecting on command alone silently demoted it to a
+// basename repo — the hazard mcpBinding's contract forbids.
+func TestMcpBinding_LegacyConfigStillBinds(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{"knomit":{"command":"/opt/wrappers/kb","args":["--lens","eng"]}}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens, ambiguous := mcpBinding(dir)
+	if ambiguous {
+		t.Fatal("single server reported ambiguous")
+	}
+	if lens != "eng" {
+		t.Errorf("lens = %q, want %q", lens, "eng")
+	}
+	if repo != "" {
+		t.Errorf("repo = %q, want empty — lens config must never fall back to a basename", repo)
+	}
+}
+
+// TestHookSessionStart_MultipleServersTellsTheUser pins that the one skip the
+// user cannot otherwise see is spoken aloud. Every other skip reason is
+// transient; this one never resolves on its own.
+func TestHookSessionStart_MultipleServersTellsTheUser(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit-a":{"command":"knomit-bridge","args":["--repo","a"]},
+		"knomit-b":{"command":"knomit-bridge","args":["--repo","b"]}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := strings.NewReader(`{"cwd":` + strconv.Quote(dir) + `}`)
+	var out bytes.Buffer
+	if err := hookSessionStart(in, &out); err != nil {
+		t.Fatalf("hookSessionStart: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "DISABLED") {
+		t.Errorf("session-start stayed silent about disabled hooks; got %q", got)
+	}
+	if !strings.Contains(got, ".mcp.json") {
+		t.Errorf("notice does not say where to fix it; got %q", got)
 	}
 }

@@ -270,10 +270,20 @@ func printSummary(created, overwritten, conflicts []string) {
 	}
 	for _, c := range conflicts {
 		fmt.Printf("WARNING: %s exists — merge from %s manually\n", c, companionRel(c))
-		if c == "CLAUDE.md" {
+		switch c {
+		case "CLAUDE.md":
 			if note := claudeMdBlockNote(c); note != "" {
 				fmt.Printf("         %s\n", note)
 			}
+		case ".mcp.json":
+			// Deriving the key makes two knomit servers MERGEABLE, and the
+			// obvious merge — both entries side by side — is exactly what
+			// disables the hooks, since there is then no single repo to bind
+			// to. Say so here; the user finds out otherwise only by noticing
+			// that knomit went quiet.
+			fmt.Println("         note: keep ONE knomit entry — a project with two knomit")
+			fmt.Println("         servers has no single repo to bind to, so the hooks disable")
+			fmt.Println("         themselves (the MCP tools still work for both).")
 		}
 	}
 }
@@ -286,6 +296,9 @@ func printSummary(created, overwritten, conflicts []string) {
 const (
 	blockMarkerPrefix  = "<!-- knomit:integration"
 	blockMarkerCurrent = "<!-- knomit:integration v2 -->"
+	// blockHeading identifies a block whose marker is missing entirely —
+	// pre-marker installs, or a user who stripped the HTML comments.
+	blockHeading = "## Working with knomit memory"
 )
 
 // claudeMdBlockNote reports how the CLAUDE.md already on disk compares to the
@@ -300,7 +313,10 @@ func claudeMdBlockNote(path string) string {
 	switch {
 	case strings.Contains(content, blockMarkerCurrent):
 		return ""
-	case strings.Contains(content, blockMarkerPrefix):
+	case strings.Contains(content, blockMarkerPrefix), strings.Contains(content, blockHeading):
+		// The heading is checked too: the template shipped without the HTML
+		// marker until c36015e7, and users strip comments. Calling such a block
+		// absent would advise appending a SECOND full copy.
 		return "its knomit block is from an older version — replace the whole block, not just parts"
 	default:
 		return "it has no knomit block yet — append the companion's contents"

@@ -41,11 +41,41 @@ func knomitBaseURL() string {
 	return "http://localhost:19278"
 }
 
+// skipMultipleKnomitServers is the skip reason for a project configuring more
+// than one knomit server. Named because both helpers.go and the session-start
+// hook must agree on it: the hook special-cases this reason to tell the user,
+// since unlike every other skip it is a misconfiguration that never resolves
+// on its own.
+const skipMultipleKnomitServers = "multiple_knomit_servers"
+
+// isKnomitServer reports whether an .mcp.json entry is a knomit bridge.
+//
+// Command first, since that is what actually identifies the process and it
+// survives the key being derived per scope. `.exe` is trimmed because the
+// Makefile builds a GOOS=windows target, where the command is knomit-bridge.exe
+// and a bare basename comparison would miss every Windows install.
+//
+// The knomit-shaped KEY is accepted as a fallback so configs that predate the
+// derived key keep binding: a wrapper script, a renamed symlink, a versioned
+// binary or `go run` all leave a command this cannot recognise, and those
+// configs resolved fine when the lookup was `cfg.MCPServers["knomit"]`. Failing
+// to match there does not fail safe — it falls through to the basename
+// fallback, which is the wrong-repo hazard this file's contract forbids.
+func isKnomitServer(key, command string) bool {
+	if strings.TrimSuffix(filepath.Base(command), ".exe") == "knomit-bridge" {
+		return true
+	}
+	return key == "knomit" || strings.HasPrefix(key, "knomit-")
+}
+
 // mcpBinding classifies the knomit MCP server config in .mcp.json under
 // projectDir into either lens mode or repo mode. It is pure (no I/O beyond the
 // single file read) so the classification is unit-testable in isolation.
 //
-// Returns (repo, lens):
+// Returns (repo, lens, ambiguous):
+//   - ambiguous: the project configures MORE THAN ONE knomit server. There is
+//     no principled answer to which repo the hooks should bind to, so repo and
+//     lens are both "" and the caller must skip rather than pick one.
 //   - lens != "": lens mode — the file configures --lens <name>. repo is "".
 //     A lens-configured file NEVER falls back to the basename; the caller must
 //     resolve the write repo via the API and skip cleanly on failure.
@@ -82,7 +112,7 @@ func mcpBinding(projectDir string) (repo, lens string, ambiguous bool) {
 	// avoid. The command is what actually identifies a knomit server.
 	var matches []string
 	for key, srv := range cfg.MCPServers {
-		if filepath.Base(srv.Command) == "knomit-bridge" {
+		if isKnomitServer(key, srv.Command) {
 			matches = append(matches, key)
 		}
 	}
@@ -167,7 +197,7 @@ func resolveWriteRepo(projectDir string) (repo, skipReason string) {
 		// More than one knomit server in this project. Binding to an arbitrary
 		// one would run post-edit against possibly the wrong repo, so skip and
 		// say why rather than go silently dark.
-		return "", "multiple_knomit_servers"
+		return "", skipMultipleKnomitServers
 	}
 	if r != "" {
 		return r, "" // repo mode: configured --repo or basename fallback

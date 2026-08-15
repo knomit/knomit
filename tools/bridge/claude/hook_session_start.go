@@ -50,6 +50,20 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 	repo, skip := resolveWriteRepo(in.Cwd)
 	if skip != "" {
 		skipReason = skip
+		// Every other skip reason is a transient or benign state (server down,
+		// no facts yet). This one is a misconfiguration that will never resolve
+		// on its own, and the user cannot see the log field — so say it out
+		// loud. A memory system whose hooks go silently dark is the worst
+		// failure it has: nothing is captured and nobody finds out.
+		if skip == skipMultipleKnomitServers {
+			_, err := fmt.Fprint(w, "knomit hooks are DISABLED: .mcp.json configures more "+
+				"than one knomit server, so there is no single repo to bind to. "+
+				"Keep one knomit entry in this project's .mcp.json to re-enable them.\n")
+			if err != nil {
+				return err
+			}
+			emitted = true
+		}
 		return nil
 	}
 	branch := agentBranch(repo)

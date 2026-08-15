@@ -86,10 +86,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Multiple repos. Name each key `knomit-<scope>` — that is what `knomit-bridge
-claude init` generates, and the Claude Code hooks identify knomit servers by
-their `command`, so a key that does not follow the convention still binds, but
-two servers whose keys collide silently clobber each other:
+Multiple repos. Name each key `knomit-<scope>`, matching what `knomit-bridge
+claude init` generates:
 
 ```json
 {
@@ -104,6 +102,14 @@ two servers whose keys collide silently clobber each other:
   }
 }
 ```
+
+> **Claude Code projects: one knomit server per project.** The above is Claude
+> Desktop config, where multiple entries are fine. A Claude Code project's
+> `.mcp.json` is different — the hooks (`session-start`, `post-edit`) have to
+> bind to exactly one repo, so a project configuring two knomit servers
+> disables them rather than guess which repo to read and write. The MCP tools
+> themselves keep working for both; only the hooks stand down, and
+> `session-start` says so.
 
 ## Debugging
 
