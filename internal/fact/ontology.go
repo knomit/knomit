@@ -310,10 +310,20 @@ func (o *Ontology) Serialize() ([]byte, error) {
 	return []byte(buf.String()), nil
 }
 
+// serializeNode tolerates a nil node: "topics:\n  alpha:\n" — a topic key with
+// nothing under it — decodes to a nil *OntologyNode, and that YAML arrives
+// from outside through POST /ontologies:validate and POST /repos (modes custom
+// and seed). Dereferencing it here would be a remotely triggerable panic. The
+// key is still emitted, as an empty mapping, so a round trip does not silently
+// drop the topic the author declared.
 func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
 	valNode := &yaml.Node{Kind: yaml.MappingNode}
 	parent.Content = append(parent.Content, keyNode, valNode)
+
+	if node == nil {
+		return
+	}
 
 	addScalar(valNode, "description", node.Description)
 

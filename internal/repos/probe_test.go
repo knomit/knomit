@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"
@@ -149,4 +152,62 @@ func TestClassifyProbeError_NilIsNeitherEmptyNorAuthRequired(t *testing.T) {
 	empty, authRequired := classifyProbeError(nil)
 	require.False(t, empty)
 	require.False(t, authRequired)
+}
+
+// A remote that accepts the connection and then never answers must not hang
+// the wizard's first step: ProbeOrigin bounds the ref listing by
+// Cfg.Git.NetworkTimeout, exactly as every other remote git call in the
+// package does, and reports the expiry as an ordinary unreachable result.
+//
+// The detail deliberately does NOT read "context deadline exceeded": that is
+// go-git's plumbing leaking into a sentence the user is asked to act on.
+func TestProbeOrigin_HonoursNetworkTimeout(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block
+	}))
+	// Registered in this order so LIFO cleanup releases the handler BEFORE
+	// srv.Close, which otherwise blocks forever waiting on it.
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(block) })
+
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: t.TempDir(), Git: config.GitConfig{NetworkTimeout: 150 * time.Millisecond}},
+		AgentBranch: "agent/test", DisableBackgroundSync: true,
+	})
+	t.Cleanup(func() { m.Close() })
+
+	start := time.Now()
+	res, err := m.ProbeOrigin(context.Background(), OriginSpec{URL: srv.URL + "/r.git"})
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "a timed-out probe is a RESULT, not an error")
+	require.False(t, res.Reachable)
+	require.Contains(t, res.Detail, "timed out after")
+	require.NotContains(t, res.Detail, "context deadline exceeded")
+	require.Less(t, elapsed, 5*time.Second, "probe did not honour the configured network timeout")
+	require.NotNil(t, res.Branches, "Branches must never serialize as JSON null")
+}
+
+// A caller that cancels keeps go-git's own error rather than being told the
+// remote timed out — the caller already knows why it stopped, and claiming a
+// timeout would misattribute its own cancel to the remote.
+func TestProbeFailureDetail_CallerCancelKeepsTheUnderlyingError(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	derived, dcancel := probeCtx(parent, time.Millisecond)
+	defer dcancel()
+	<-derived.Done()
+
+	require.Equal(t, "boom", probeFailureDetail(parent, derived, errors.New("boom"), time.Millisecond))
+}
+
+// timeout <= 0 keeps the legacy unbounded behaviour, matching internal/store's
+// netCtxWith — a config that switches the bound off must not make every probe
+// fail instantly instead.
+func TestProbeCtx_ZeroTimeoutIsUnbounded(t *testing.T) {
+	ctx, cancel := probeCtx(context.Background(), 0)
+	defer cancel()
+	_, ok := ctx.Deadline()
+	require.False(t, ok)
 }

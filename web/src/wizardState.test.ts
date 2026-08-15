@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { initialWizardState, wizardReducer, stepsFor, createBodyFor, currentStep } from './wizardState';
+import { initialWizardState, wizardReducer, stepsFor, createBodyFor, currentStep, authFor, isValidRepoName } from './wizardState';
 
 describe('stepsFor', () => {
   it('omits the ontology step when the remote already has content', () => {
@@ -269,5 +269,47 @@ describe('createBodyFor', () => {
     s = wizardReducer(s, { type: 'SET_AUTH_USER', user: 'alice' });
     s = wizardReducer(s, { type: 'SET_TOKEN', token: 's3cret' });
     expect(createBodyFor(s).origin).toMatchObject({ auth_method: 'basic', auth_token: 'alice:s3cret' });
+  });
+});
+
+describe('authFor', () => {
+  // The probe and the create MUST resolve credentials identically. When the
+  // probe went out anonymously and the create carried a token, the step list —
+  // and therefore the mode — was derived from an answer about a different
+  // request: a private empty remote probed as {auth_required:true,
+  // empty:false}, which stepsFor reads as "has content" and createBodyFor
+  // turned into mode 'clone'.
+  it('is the same resolution createBodyFor sends on the origin', () => {
+    let s = wizardReducer(initialWizardState, { type: 'SET_URL', url: 'https://h/r.git' });
+    s = wizardReducer(s, {
+      type: 'PROBE_DONE',
+      probe: { reachable: true, empty: true, auth_required: false, upstream_branch: 'main', branches: [] },
+    });
+    s = wizardReducer(s, { type: 'SET_NAME', name: 'kb' });
+    s = wizardReducer(s, { type: 'SET_TOKEN', token: 'ghp_x' });
+    expect(authFor(s)).toEqual({ auth_method: 'token', auth_token: 'ghp_x' });
+    expect(createBodyFor(s).origin).toMatchObject(authFor(s));
+  });
+
+  it('sends nothing when no credential was typed, so an anonymous probe stays anonymous', () => {
+    expect(authFor(initialWizardState)).toEqual({ auth_method: '', auth_token: '' });
+  });
+});
+
+describe('isValidRepoName', () => {
+  // Mirrors internal/repos/manager.go's isValidRepoName exactly: non-empty,
+  // lowercase alphanumerics, '-' and '_'. Anything else is a 400 from POST
+  // /repos, and the point of having this client-side is that the user never
+  // meets that 400.
+  it('accepts what the backend accepts', () => {
+    for (const ok of ['work', 'my-kb', 'my_kb', 'a1', '1', '_', '-']) {
+      expect(isValidRepoName(ok)).toBe(true);
+    }
+  });
+
+  it('rejects what the backend rejects', () => {
+    for (const bad of ['', ' ', 'My KB', 'My-KB', 'kb.sessions', 'kb/x', 'kb ', 'ünï']) {
+      expect(isValidRepoName(bad)).toBe(false);
+    }
   });
 });

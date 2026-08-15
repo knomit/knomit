@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -179,10 +180,10 @@ func TestCreate_SeedModeInvalidOntologyYAMLRollsBack(t *testing.T) {
 func TestCreatePreflight_SeedRequiresOriginAndOntology(t *testing.T) {
 	m := newTestManager(t)
 
-	err := m.CreatePreflight(CreateSpec{Name: "a", Mode: "seed", OntologyPreset: "code"})
+	err := m.CreatePreflight(context.Background(), CreateSpec{Name: "a", Mode: "seed", OntologyPreset: "code"})
 	require.Error(t, err, "expected rejection when origin is missing")
 
-	err = m.CreatePreflight(CreateSpec{
+	err = m.CreatePreflight(context.Background(), CreateSpec{
 		Name: "a", Mode: "seed", Origin: &OriginSpec{URL: "/tmp/x"},
 	})
 	require.Error(t, err, "expected rejection when ontology is missing")
@@ -192,7 +193,7 @@ func TestCreatePreflight_SeedRequiresOriginAndOntology(t *testing.T) {
 // avoid. This must keep failing.
 func TestCreate_CloneModeStillRejectsOntologySpec(t *testing.T) {
 	m := newTestManager(t)
-	err := m.CreatePreflight(CreateSpec{
+	err := m.CreatePreflight(context.Background(), CreateSpec{
 		Name: "c", Mode: "clone", OntologyPreset: "code",
 		Origin: &OriginSpec{URL: "/tmp/x"},
 	})
@@ -228,4 +229,108 @@ func TestSeedProbeErr_UnreachableReportsBeforeEitherOtherFlag(t *testing.T) {
 
 func TestSeedProbeErr_EmptyReachableIsOK(t *testing.T) {
 	require.NoError(t, seedProbeErr(ProbeResult{Reachable: true, Empty: true}))
+}
+
+// CreatePreflight must catch a non-empty seed target BEFORE the caller starts
+// streaming. Until it did, ErrRemoteNotEmpty could only be produced inside
+// Create — i.e. after the handler had already committed to a 200 NDJSON
+// stream — so createErrStatus's ErrRemoteNotEmpty case was dead code and the
+// 409 the OpenAPI documents for this case was unreachable.
+func TestCreatePreflight_SeedRefusesNonEmptyRemote(t *testing.T) {
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote.git")
+	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	pushCommit(t, remoteDir)
+	m := newSeedManager(t, dir)
+
+	err := m.CreatePreflight(context.Background(), CreateSpec{
+		Name: "seeded", Mode: "seed", OntologyPreset: "code",
+		Origin: &OriginSpec{URL: "file://" + remoteDir},
+	})
+	require.ErrorIs(t, err, ErrRemoteNotEmpty)
+}
+
+// The counterpart: an EMPTY remote must sail through preflight. A guard that
+// refused both would turn the 409 into a wall in front of the mode's whole
+// reason to exist.
+func TestCreatePreflight_SeedAcceptsEmptyRemote(t *testing.T) {
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote.git")
+	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	m := newSeedManager(t, dir)
+
+	require.NoError(t, m.CreatePreflight(context.Background(), CreateSpec{
+		Name: "seeded", Mode: "seed", OntologyPreset: "code",
+		Origin: &OriginSpec{URL: "file://" + remoteDir},
+	}))
+}
+
+// A probe that could not SEE the remote establishes nothing, so preflight must
+// let it through rather than inventing a 409 out of a failed lookup — Create
+// then reports the real cause (unreachable) through the stream, which is where
+// a recoverable, retryable failure belongs.
+func TestCreatePreflight_SeedAllowsUnreachableRemoteThrough(t *testing.T) {
+	dir := t.TempDir()
+	m := newSeedManager(t, dir)
+
+	require.NoError(t, m.CreatePreflight(context.Background(), CreateSpec{
+		Name: "seeded", Mode: "seed", OntologyPreset: "code",
+		Origin: &OriginSpec{URL: "file://" + filepath.Join(dir, "does-not-exist.git")},
+	}))
+}
+
+// A seed whose consensus push lands but whose agent push does not leaves the
+// remote HALF seeded, and Create's cleanup then deletes the only local copy.
+// Every later seed of that URL hits ErrRemoteNotEmpty and a clone of it yields
+// a knowledge base with no agent branch — a dead end the bare push error named
+// none of. The error must state the resulting remote state and both ways out.
+func TestCreate_SeedPartialPushNamesTheRemoteStateAndRecovery(t *testing.T) {
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote.git")
+	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	// Reject only the agent branch, so the consensus push succeeds first and
+	// the remote is genuinely left half-seeded — the exact state under test.
+	hook := filepath.Join(remoteDir, "hooks", "update")
+	require.NoError(t, os.WriteFile(hook,
+		[]byte("#!/bin/sh\ncase \"$1\" in refs/heads/agent/*) echo 'agent branch refused' >&2; exit 1;; esac\nexit 0\n"), 0o755))
+
+	url := "file://" + remoteDir
+	m := newSeedManager(t, dir)
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "seeded", Mode: "seed", OntologyPreset: "code",
+		Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "agent/test-abc")
+	require.Contains(t, err.Error(), "not the agent branch",
+		"the failure must name the state the remote was left in")
+	require.Contains(t, err.Error(), "delete and recreate the empty remote",
+		"the failure must name the recovery")
+	require.Contains(t, err.Error(), `mode "clone"`,
+		"the failure must name the other recovery")
+
+	// The state the message describes must be the state that actually exists.
+	refs := remoteRefs(t, remoteDir)
+	require.Contains(t, refs, "refs/heads/main")
+	require.NotContains(t, refs, "refs/heads/agent/test-abc")
+	require.Nil(t, m.Get("seeded"), "a failed seed must leave no repo registered")
+}
+
+// pushCommit gives a bare repo a single commit on main, so it reads as
+// non-empty to a probe.
+func pushCommit(t *testing.T, bare string) {
+	t.Helper()
+	work := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = work
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	run("init", "-b", "main")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	run("commit", "--allow-empty", "-m", "init")
+	run("remote", "add", "origin", bare)
+	run("push", "origin", "main")
 }

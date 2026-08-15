@@ -944,11 +944,16 @@ export const api = {
   restoreRepo,
   purgeRepo,
 
-  probeOrigin: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string }): Promise<ProbeResult> =>
+  // signal is how the wizard's first step stays interactive: the server bounds
+  // the probe by its own network timeout, but that budget is measured in
+  // minutes and the user should not have to wait it out to correct a typo.
+  probeOrigin: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string },
+    signal?: AbortSignal): Promise<ProbeResult> =>
     fetchJSON<ProbeResult>(apiUrl('/api/v1/repos:probe-origin'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     }),
 
   validateOntology: (yamlText: string): Promise<OntologyValidation> =>

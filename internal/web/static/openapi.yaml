@@ -103,9 +103,21 @@ paths:
         409 covers several distinct conflicts: the name is already taken, the
         origin URL is already in use by another active repo, a create for the
         same name/origin is already in flight, or — mode=seed only — the
-        remote origin turned out not to be empty (re-checked at create time,
-        not trusted from an earlier probe); use mode=clone instead in that
-        last case.
+        remote origin turned out not to be empty; use mode=clone instead in
+        that last case.
+
+        The seed emptiness check runs BEFORE the stream opens (its own probe
+        of the origin, not trusted from an earlier client-side probe), which
+        is what makes that 409 reachable. It is deliberately narrow: only a
+        remote the server could see and that has refs is refused here. A
+        remote that is unreachable, or that needs credentials the request did
+        not carry, is not established either way, so it proceeds and fails as
+        an `error` event inside the 200 stream instead. Create re-asserts
+        emptiness itself in both cases — the pre-stream probe is advisory, and
+        a remote can gain refs in between.
+
+        413 is returned when the request body exceeds the ontology size cap
+        (the same cap `/ontologies:validate` enforces).
       operationId: createRepo
       requestBody:
         required: true
@@ -121,6 +133,7 @@ paths:
                 $ref: "#/components/schemas/CreateRepoEvent"
         "400": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
 
   /repos:probe-origin:
     post:
@@ -2336,9 +2349,10 @@ components:
             clone  — clone from a remote origin; ontology is taken from the remote.
             seed   — initialise an EMPTY remote origin with a chosen ontology
                      (ontology_preset or ontology_yaml), so local and remote
-                     share a root commit from birth. Create re-asserts the
-                     remote is still empty and fails with 409 if it is not —
-                     use mode=clone instead to join a non-empty remote.
+                     share a root commit from birth. The server checks the
+                     remote is still empty before the stream opens and answers
+                     409 if it is not, and Create re-asserts it again — use
+                     mode=clone instead to join a non-empty remote.
         ontology_preset:
           type: string
           description: "Preset identifier (e.g. default, code). Used when mode=preset or mode=seed."

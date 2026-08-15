@@ -28,8 +28,20 @@ type createRepoRequest struct {
 // {"type":"error"} line.
 func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// ontology_yaml rides in this body for modes "custom" and "seed", so the
+		// cap MaxOntologyBytes names has to be applied here too — :validate
+		// alone leaves the create path unbounded, and nothing forces a client
+		// to visit :validate first. The rest of the envelope (name, mode,
+		// origin) is a few hundred bytes, so capping the whole body at the
+		// ontology limit bounds the ontology.
 		var req createRepoRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, MaxOntologyBytes)).Decode(&req); err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Ontology too large",
+					"ontology exceeds the maximum accepted size", r.URL.Path)
+				return
+			}
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", err.Error(), r.URL.Path)
 			return
 		}
@@ -50,7 +62,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			}
 		}
 
-		if err := m.CreatePreflight(spec); err != nil {
+		if err := m.CreatePreflight(r.Context(), spec); err != nil {
 			status, title := createErrStatus(err)
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
 			return

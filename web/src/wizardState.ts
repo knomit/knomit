@@ -143,7 +143,18 @@ export function createBodyFor(s: WizardState): CreateRepoBody {
   return { name: s.name, mode: 'clone', origin };
 }
 
-function originFor(s: WizardState): NonNullable<CreateRepoBody['origin']> {
+/**
+ * authFor resolves the wizard's credential fields into the {auth_method,
+ * auth_token} pair the backend consumes.
+ *
+ * It is EXPORTED because the probe and the create must agree: probing
+ * anonymously and then creating with a token means the step list — and
+ * therefore the MODE — was derived from an answer about a different request.
+ * That is precisely how a private empty remote used to be classified
+ * `empty:false` and created as `clone`, silently discarding the ontology the
+ * user picked. One function, both call sites.
+ */
+export function authFor(s: WizardState): { auth_method: string; auth_token: string } {
   // Auto-detect ('') resolves to anonymous/SSH and ignores any token. A token
   // typed under auto-detect (the common private-HTTPS case) promotes to
   // explicit token auth so the credential is actually used — carried over from
@@ -157,5 +168,25 @@ function originFor(s: WizardState): NonNullable<CreateRepoBody['origin']> {
     method === 'token' ? s.authToken :
     method === 'basic' ? (s.authUser !== '' ? `${s.authUser}:${s.authToken}` : s.authToken) :
     '';
-  return { url: s.url, branch: s.branch, auth_method: method, auth_token: token };
+  return { auth_method: method, auth_token: token };
+}
+
+function originFor(s: WizardState): NonNullable<CreateRepoBody['origin']> {
+  return { url: s.url, branch: s.branch, ...authFor(s) };
+}
+
+/**
+ * isValidRepoName mirrors the backend's isValidRepoName (internal/repos/
+ * manager.go): non-empty, and lowercase alphanumerics, '-' and '_' only.
+ *
+ * Kept client-side so "My KB" is refused where it was typed rather than
+ * becoming a 400 from POST /repos — the deleted CreateRepoForm's own comment
+ * called that 400 "confusing", and the wizard reintroduced it by gating Next
+ * on nothing but `name.trim().length > 0`.
+ *
+ * The backend rule stays authoritative; this only refuses earlier. If the two
+ * ever disagree, the create still fails safely on the server.
+ */
+export function isValidRepoName(name: string): boolean {
+  return /^[a-z0-9_-]+$/.test(name);
 }

@@ -11,10 +11,11 @@ import { btn } from './manageStyles';
 // name step. The fix was to point the test's proxy at `step-source` instead —
 // it only ever meant "Manage fell back to the create surface" — not to bend
 // this component's layout to match the old flat form's DOM shape.)
-export function StepSource({ state, dispatch, onProbe, probing, probeError }: {
+export function StepSource({ state, dispatch, onProbe, onCancelProbe, probing, probeError }: {
   state: WizardState;
   dispatch: (a: WizardAction) => void;
   onProbe: () => void;
+  onCancelProbe: () => void;
   probing: boolean;
   probeError: string;
 }) {
@@ -37,11 +38,22 @@ export function StepSource({ state, dispatch, onProbe, probing, probeError }: {
           <label style={label}>Remote URL</label>
           <input data-testid="create-url" style={input} placeholder="https://… · git@host:repo · /path/to/repo"
             value={state.url} onChange={e => dispatch({ type: 'SET_URL', url: e.target.value })} />
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
             <button type="button" data-testid="probe-button" style={btn(!state.url.trim() || probing, 'primary')}
               disabled={!state.url.trim() || probing} onClick={onProbe}>
               {probing ? 'Checking…' : 'Connect'}
             </button>
+            {/* Only while a check is in flight, and labelled distinctly from
+                the wizard's own Cancel in the footer — this stops the probe,
+                it does not leave the wizard. A remote that never answers is
+                bounded server-side by the configured network timeout, but that
+                budget is minutes long and the user should not have to sit
+                through it to fix a typo. */}
+            {probing && (
+              <button type="button" data-testid="probe-cancel-button" style={btn(false)} onClick={onCancelProbe}>
+                Cancel check
+              </button>
+            )}
           </div>
           {/* Amber is reserved for a probe that actually failed — this is the
               one place StepSource can show a real failure (unreachable host). */}

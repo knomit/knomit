@@ -3,7 +3,9 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
@@ -40,6 +42,11 @@ type ProbeResult struct {
 //
 // The result is advisory. A remote can gain refs between the probe and the
 // create, so Create re-asserts emptiness itself; never treat this as authority.
+//
+// The ref listing is bounded by Cfg.Git.NetworkTimeout (see probeCtx). A
+// remote that never answers therefore comes back as an ordinary unreachable
+// result after that budget, not as a call that hangs for as long as the
+// transport allows.
 func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, error) {
 	// Every clone/fetch path gates filesystem origins, with no trusted
 	// exemption. A probe reaches the same filesystem, so it gates too.
@@ -63,7 +70,17 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 		return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
 	}
 
-	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: auth})
+	// Bound the ref listing by the configured network timeout, exactly as every
+	// other remote git call in this package does (see the netCtx wrappers in
+	// internal/store: remote_sync.go's push, repo.go's fetch). Without it a
+	// black-holed host leaves the wizard's first step spinning for as long as
+	// the TCP stack takes to give up — which is the one thing design §6 said
+	// must not happen. A zero timeout keeps the parent unchanged, matching
+	// netCtxWith's "0 means no bound" convention.
+	netCtx, cancel := probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
+	defer cancel()
+
+	refs, err := rem.ListContext(netCtx, &gogit.ListOptions{Auth: auth})
 	if err != nil {
 		empty, authRequired := classifyProbeError(err)
 		switch {
@@ -82,7 +99,7 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 				Detail:       err.Error(),
 			}, nil
 		default:
-			return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
+			return ProbeResult{Branches: []string{}, Detail: probeFailureDetail(ctx, netCtx, err, m.deps.Cfg.Git.NetworkTimeout)}, nil
 		}
 	}
 
@@ -100,6 +117,33 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 	res.Empty = len(res.Branches) == 0
 	res.UpstreamBranch = resolveUpstream(o.Branch, head, res.Branches)
 	return res, nil
+}
+
+// probeCtx bounds a single probe's network call by timeout, mirroring
+// internal/store's netCtxWith (branch.go): timeout <= 0 returns the parent
+// unchanged with a no-op cancel, so a config that disables the bound keeps the
+// legacy wait-forever behaviour rather than failing instantly.
+func probeCtx(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+// probeFailureDetail renders the detail string for a probe that failed for a
+// reason classifyProbeError could not name.
+//
+// It distinguishes OUR deadline from the caller's cancellation: when the
+// derived context expired but the request context is still live, the remote
+// simply did not answer inside the configured budget, and "context deadline
+// exceeded" is a useless thing to put in front of a user. A cancel that came
+// from the caller (the wizard's Cancel button, a dropped HTTP request) keeps
+// go-git's own error, since the caller already knows why it stopped.
+func probeFailureDetail(parent, derived context.Context, err error, timeout time.Duration) string {
+	if parent.Err() == nil && errors.Is(derived.Err(), context.DeadlineExceeded) {
+		return fmt.Sprintf("timed out after %s waiting for the remote to answer", timeout)
+	}
+	return err.Error()
 }
 
 // classifyProbeError inspects an error returned by remote.ListContext and

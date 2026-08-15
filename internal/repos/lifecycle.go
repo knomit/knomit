@@ -151,11 +151,26 @@ type Event struct {
 	Pct     int    `json:"pct"`
 }
 
-// CreatePreflight runs the cheap synchronous checks that must surface as an
-// HTTP status BEFORE any streaming begins: name validity, clone-origin
-// presence/uniqueness, name already active, and create-in-flight. The
-// authoritative guards still live inside Create.
-func (m *Manager) CreatePreflight(spec CreateSpec) error {
+// CreatePreflight runs the checks that must surface as an HTTP status BEFORE
+// any streaming begins: name validity, clone-origin presence/uniqueness, name
+// already active, create-in-flight, and — for mode "seed" only — that the
+// remote is actually empty. The authoritative guards still live inside Create.
+//
+// The seed probe is the one network call here, and it is deliberate: without
+// it ErrRemoteNotEmpty could only ever reach a caller as a {"type":"error"}
+// line inside an already-committed 200 stream, so the 409 the API documents
+// for that case was unreachable. It is bounded by Cfg.Git.NetworkTimeout
+// (ProbeOrigin) and takes ctx, so a caller that goes away stops it.
+//
+// Only the definitive "the remote has refs" verdict fails here. An
+// unreachable remote, an auth-required one, or a probe the origin gate
+// refused all fall through to Create, which reports them through the stream
+// exactly as before — a pre-stream failure is worth having only where the
+// answer is certain, and a probe that could not see the remote has not
+// established anything. Create re-asserts emptiness regardless (initSeed's
+// own seedProbeErr): this probe is advisory, and a remote can gain refs
+// between the two.
+func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	if !isValidRepoName(spec.Name) {
 		return ErrInvalidName
 	}
@@ -193,6 +208,14 @@ func (m *Manager) CreatePreflight(spec CreateSpec) error {
 	}
 	if origin != "" && originInflight {
 		return fmt.Errorf("%w (clone in flight)", ErrOriginInUse)
+	}
+	// Last, because it is the only check here that touches the network: every
+	// cheap local refusal above should cost nothing.
+	if spec.Mode == "seed" {
+		if probe, perr := m.ProbeOrigin(ctx, *spec.Origin); perr == nil &&
+			probe.Reachable && !probe.AuthRequired && !probe.Empty {
+			return ErrRemoteNotEmpty
+		}
 	}
 	return nil
 }
@@ -660,11 +683,39 @@ func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, 
 	// consensus branch is a deliberate, one-time bootstrap rather than a
 	// change to steady-state sync (which never pushes main).
 	emit(Event{Step: "push", Message: "pushing seed to " + spec.Origin.URL, Pct: 65})
-	if _, perr := svc.Remote().Push(ctx, upstream, auth); perr != nil {
+	// Both PushResults are inspected rather than discarded: Push reports
+	// Pushed:false for "nothing to push", which against a remote this mode
+	// just told the user it would initialise is a silent no-op, not a success.
+	// Left unchecked it is indistinguishable from a real push, and the caller
+	// would go on to activate sync against a still-ref-less remote.
+	consensusPush, perr := svc.Remote().Push(ctx, upstream, auth)
+	if perr != nil {
 		return "", fmt.Errorf("seed: push %s: %w", upstream, perr)
 	}
-	if _, perr := svc.Remote().Push(ctx, m.deps.AgentBranch, auth); perr != nil {
-		return "", fmt.Errorf("seed: push %s: %w", m.deps.AgentBranch, perr)
+	if !consensusPush.Pushed {
+		return "", fmt.Errorf("seed: push %s: remote reported nothing to push, so %s was left without the seed commit",
+			upstream, spec.Origin.URL)
+	}
+	agentPush, perr := svc.Remote().Push(ctx, m.deps.AgentBranch, auth)
+	if perr != nil {
+		// The consensus push already landed, so this failure leaves the remote
+		// HALF seeded — and Create's cleanup removes the local repo, taking the
+		// only copy of the agent branch with it. From the user's side the
+		// remote now looks non-empty: every later seed of this URL fails with
+		// ErrRemoteNotEmpty, and a clone of it yields a knowledge base with the
+		// ontology but no agent branch. None of that is guessable from a bare
+		// "push agent/... failed", so name the state and both ways out here —
+		// this is the only place that still knows what happened.
+		return "", fmt.Errorf(
+			"seed: push %s: %w (the remote %s now has %s but not the agent branch: "+
+				"delete and recreate the empty remote to seed it again, or use mode \"clone\" to adopt it as it stands)",
+			m.deps.AgentBranch, perr, spec.Origin.URL, upstream)
+	}
+	if !agentPush.Pushed {
+		return "", fmt.Errorf(
+			"seed: push %s: remote reported nothing to push (the remote %s now has %s but not the agent branch: "+
+				"delete and recreate the empty remote to seed it again, or use mode \"clone\" to adopt it as it stands)",
+			m.deps.AgentBranch, spec.Origin.URL, upstream)
 	}
 
 	if cerr := ctx.Err(); cerr != nil {

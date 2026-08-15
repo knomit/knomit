@@ -1,6 +1,9 @@
 package fact
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateOntologyYAML_CollectsAllErrorsWithLines(t *testing.T) {
 	src := "id: x\nname: X\ntopics:\n  Bad One:\n    description: d\n  Bad Two:\n    description: d\n"
@@ -31,5 +34,70 @@ func TestValidateOntologyYAML_MalformedYAMLIsOneDiagnostic(t *testing.T) {
 	_, diags := ValidateOntologyYAML([]byte("id: [unclosed\n"))
 	if len(diags) != 1 {
 		t.Fatalf("diagnostics = %d, want 1", len(diags))
+	}
+}
+
+// A bare topic key decodes to a NIL *OntologyNode, and this is the shape a
+// hand-written ontology takes most easily — "topics:\n  alpha:\n" is what you
+// get by typing the topic and not yet the body. Every walk over o.Topics must
+// therefore tolerate nil.
+//
+// This is remotely triggerable: the same YAML arrives through POST /repos with
+// mode=custom (and mode=seed) and through POST /ontologies:validate, so a nil
+// deref here is a panic any caller can cause. ValidateOntologyYAML's child-key
+// loop guards it with `node == nil || node.Children == nil`, buildRulesCache's
+// walk with `if n == nil`, and countRules (internal/web) with its own — none
+// of which anything pinned until now.
+func TestValidateOntologyYAML_BareTopicKeyIsANilNodeAndDoesNotPanic(t *testing.T) {
+	src := "id: x\nname: X\ntopics:\n  alpha:\n"
+	o, diags := ValidateOntologyYAML([]byte(src))
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics = %+v, want none", diags)
+	}
+	if o == nil {
+		t.Fatal("ontology not returned")
+	}
+	node, ok := o.Topics["alpha"]
+	if !ok {
+		t.Fatal("topic alpha missing")
+	}
+	if node != nil {
+		t.Fatalf("topic alpha = %+v, want a nil node — the whole point of this guard", node)
+	}
+	// The two exported walks a nil topic reaches from here.
+	if err := o.ValidatePath("alpha/anything/deeper"); err != nil {
+		t.Errorf("ValidatePath over a nil topic node: %v", err)
+	}
+	if got := o.TopicNames(); len(got) != 1 || got[0] != "alpha" {
+		t.Errorf("TopicNames() = %v, want [alpha]", got)
+	}
+	// Serialize is the one initSeed calls on the ontology it is about to write
+	// as the remote's root commit, so a panic here takes out a create.
+	y, err := o.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize over a nil topic node: %v", err)
+	}
+	if !strings.Contains(string(y), "alpha") {
+		t.Errorf("Serialize dropped the bare topic: %s", y)
+	}
+	round, rerr := ParseOntology(y)
+	if rerr != nil {
+		t.Fatalf("re-parsing a serialized nil topic node: %v", rerr)
+	}
+	if _, ok := round.Topics["alpha"]; !ok {
+		t.Errorf("round trip lost topic alpha: %s", y)
+	}
+}
+
+// ParseOntology is the create path's entry point (resolveOntology → this), and
+// it reaches the same nil node through ValidateOntologyYAML. Pinned separately
+// because that is the function the remotely reachable panic used to be in.
+func TestParseOntology_BareTopicKeyDoesNotPanic(t *testing.T) {
+	o, err := ParseOntology([]byte("id: x\nname: X\ntopics:\n  alpha:\n  beta:\n    description: d\n"))
+	if err != nil {
+		t.Fatalf("ParseOntology: %v", err)
+	}
+	if o.Topics["alpha"] != nil {
+		t.Fatalf("topic alpha should decode to a nil node")
 	}
 }

@@ -11,8 +11,12 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// MaxOntologyBytes caps an ontology document accepted by :validate and by
-// create. Sits alongside MaxRepoDescriptionBytes as a request-size guard.
+// MaxOntologyBytes caps an ontology document accepted by :validate (whose
+// whole body is the YAML) and by create (whose body carries it as
+// ontology_yaml, and is capped as a whole — the rest of that envelope is a
+// few hundred bytes). Both enforce it with http.MaxBytesReader and answer 413;
+// neither path may read an ontology without it. Sits alongside
+// MaxRepoDescriptionBytes as a request-size guard.
 const MaxOntologyBytes = 256 * 1024
 
 // presetNames is the ordered preset list. "default" leads because it is the

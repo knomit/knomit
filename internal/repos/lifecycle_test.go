@@ -236,7 +236,7 @@ func TestCreate_CloneMode_RejectsOntologySpec(t *testing.T) {
 			Origin: &OriginSpec{URL: url, Branch: "main"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.ErrorIs(t, m.CreatePreflight(tc.spec), ErrInvalidName)
+			require.ErrorIs(t, m.CreatePreflight(context.Background(), tc.spec), ErrInvalidName)
 			_, err := m.Create(context.Background(), tc.spec, nil)
 			require.ErrorIs(t, err, ErrInvalidName)
 			require.Nil(t, m.Get(tc.spec.Name), "rejected clone must not leave a registered repo")

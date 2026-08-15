@@ -39,10 +39,20 @@ export function StepReview({ state }: { state: WizardState }) {
         <ol style={list}>
           <li>Repository "{state.name}" is created by cloning {state.url} (branch {branch}).</li>
           <li>Its ontology comes from the remote itself — not a choice made here.</li>
+          {/* An auth_required probe returns branches: [] because it was
+              REFUSED, not because the remote has none. Saying "no other
+              branches were found" there states as fact something the probe
+              never established — exactly what design §3's "What the review may
+              claim" forbids. Under the current flow the access step re-probes
+              before letting you reach review, so this should be unreachable;
+              it is guarded anyway, because the cost of being wrong is a false
+              claim about the user's own data. */}
           <li>
-            {state.probe.branches.length > 0
-              ? `Branches already there: ${state.probe.branches.join(', ')}.`
-              : 'No other branches were found on the remote.'}
+            {state.probe.auth_required
+              ? 'Its branches were not listed — the check ran without access to them.'
+              : state.probe.branches.length > 0
+                ? `Branches already there: ${state.probe.branches.join(', ')}.`
+                : 'No other branches were found on the remote.'}
           </li>
         </ol>
       )}
