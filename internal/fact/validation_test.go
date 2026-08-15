@@ -1,6 +1,8 @@
 package fact
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,4 +212,151 @@ topics:
 	_, err := ParseOntology([]byte(y))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "bad")
+}
+
+// factToJSOmitted names the exported Fact fields deliberately withheld from
+// the rule sandbox, each with the reason it is withheld. It is the opt-out
+// list for TestFactToJS_ExposesEveryFactField: adding a field to Fact without
+// exposing it to rules is a red test unless the omission is recorded here.
+//
+// The default is EXPOSURE. A field belongs here only when a rule written over
+// it could not be trusted — not merely because no rule needs it today.
+var factToJSOmitted = map[string]string{
+	"RefWarnings": "derived on read, never stored, and unusable from a rule in both directions: " +
+		"structurally always empty on the knomit_learn path (the fact is built in memory and " +
+		"SerializeFact refuses to write a malformed ref anyway), and stale on the knomit_update " +
+		"path (ParseFact computes it from the on-disk refs, which the handler replaces wholesale " +
+		"before ValidateFact runs) — so a rule would judge refs that are not being written",
+}
+
+// TestFactToJS_ExposesEveryFactField is the regression guard for the omission
+// this list exists to prevent: sources, origin and evidence_weight were added
+// to Fact and factToJS was never updated, so rules could not see them and
+// nothing failed. Reflection over the struct turns the next such addition into
+// a red test instead of a silent gap.
+func TestFactToJS_ExposesEveryFactField(t *testing.T) {
+	js := factToJS(Fact{})
+	typ := reflect.TypeFor[Fact]()
+
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		key, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		require.NotEmpty(t, key, "Fact.%s has no json tag; the rule-sandbox key cannot be derived", f.Name)
+
+		if reason, omitted := factToJSOmitted[f.Name]; omitted {
+			require.NotEmpty(t, reason, "Fact.%s is omitted from factToJS without a recorded reason", f.Name)
+			require.NotContains(t, js, key,
+				"Fact.%s is listed in factToJSOmitted but factToJS exposes %q — remove one or the other", f.Name, key)
+			continue
+		}
+		require.Contains(t, js, key,
+			"Fact.%s (json %q) is invisible to ontology rules. Expose it in factToJS, "+
+				"or record why it must stay hidden in factToJSOmitted.", f.Name, key)
+	}
+
+	// path is unexported on Fact (read via f.Path()), so the loop above cannot
+	// reach it. Assert it separately rather than leave the sandbox's most-used
+	// key untested.
+	require.Contains(t, js, "path")
+}
+
+func TestEvaluateRule_SeesSources(t *testing.T) {
+	rules, err := compileRules("p", []Validation{
+		{Name: "corroborated", Message: "needs two sources", Rule: "fact.sources >= 2"},
+	})
+	require.NoError(t, err)
+
+	ok, err := evaluateRule(rules[0], Fact{Sources: 2})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = evaluateRule(rules[0], Fact{Sources: 1})
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestEvaluateRule_SeesEvidenceWeight(t *testing.T) {
+	rules, err := compileRules("p", []Validation{
+		{Name: "weighted", Message: "needs weight", Rule: "fact.evidence_weight > 0.5"},
+	})
+	require.NoError(t, err)
+
+	ok, err := evaluateRule(rules[0], Fact{EvidenceWeight: 0.9})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = evaluateRule(rules[0], Fact{EvidenceWeight: 0.1})
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+// TestEvaluateRule_SeesResolvedOrigin pins the decision that rules see the
+// RESOLVED origin, never the raw field. knomit_learn deliberately leaves
+// Fact.Origin empty when the caller omitted it, so SerializeFact/ParseFact can
+// apply the default — but that happens AFTER ValidateFact runs. knomit_update,
+// by contrast, hands ValidateFact a fact ParseFact already resolved. Exposing
+// the raw field would therefore make one rule disagree between the two write
+// paths: `fact.origin === 'authored'` would reject nearly every learn write
+// while passing the equivalent update.
+func TestEvaluateRule_SeesResolvedOrigin(t *testing.T) {
+	rules, err := compileRules("p", []Validation{
+		{Name: "authored", Message: "x", Rule: "fact.origin === 'authored'"},
+		{Name: "distilled", Message: "x", Rule: "fact.origin === 'distilled'"},
+		{Name: "discovered", Message: "x", Rule: "fact.origin === 'discovered'"},
+	})
+	require.NoError(t, err)
+	byName := map[string]compiledRule{}
+	for _, r := range rules {
+		byName[r.Name] = r
+	}
+
+	cases := []struct {
+		name  string
+		fact  Fact
+		rule  string
+		match bool
+	}{
+		// Unset origin resolves through defaultOriginForType, exactly as the
+		// on-disk round trip will resolve it.
+		{"unset observation is authored", Fact{Type: Observation}, "authored", true},
+		{"unset synthesis is distilled", Fact{Type: Synthesis}, "distilled", true},
+		{"unset synthesis is not authored", Fact{Type: Synthesis}, "authored", false},
+		// An explicit origin passes through untouched.
+		{"explicit discovered survives", Fact{Type: Synthesis, Origin: Discovered}, "discovered", true},
+		{"explicit authored survives", Fact{Type: Observation, Origin: Authored}, "authored", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, err := evaluateRule(byName[tc.rule], tc.fact)
+			require.NoError(t, err)
+			require.Equal(t, tc.match, ok)
+		})
+	}
+}
+
+// TestEvaluateRule_ResolvedOriginAgreesAcrossWritePaths states the property the
+// resolution exists to preserve, rather than the mechanism: the same fact must
+// judge identically whether it reaches ValidateFact straight from knomit_learn
+// (origin unset) or via ParseFact on the knomit_update path (origin resolved).
+func TestEvaluateRule_ResolvedOriginAgreesAcrossWritePaths(t *testing.T) {
+	rules, err := compileRules("p", []Validation{
+		{Name: "not-discovered", Message: "x", Rule: "fact.origin !== 'discovered'"},
+	})
+	require.NoError(t, err)
+
+	for _, typ := range []Type{Observation, Synthesis, Hypothesis} {
+		asLearnBuilt := Fact{Type: typ}                                // origin left unset
+		asParsed := Fact{Type: typ, Origin: defaultOriginForType(typ)} // origin resolved
+
+		learnOK, err := evaluateRule(rules[0], asLearnBuilt)
+		require.NoError(t, err)
+		parsedOK, err := evaluateRule(rules[0], asParsed)
+		require.NoError(t, err)
+
+		require.Equal(t, parsedOK, learnOK,
+			"type %q judges differently on the learn and update paths — origin is not being resolved", typ)
+	}
 }

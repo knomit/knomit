@@ -506,13 +506,29 @@ rule's `message`.
 
 - The expression is evaluated with a single variable in scope, `fact`,
   exposing exactly: `kind`, `type`, `domain` (array), `entities` (array),
-  `refs` (array), `title`, `body`, `path` (normalized lowercase), and
-  `confidence`. Nothing else.
+  `refs` (array), `title`, `body`, `path` (normalized lowercase),
+  `confidence`, `sources`, `origin`, and `evidence_weight`. Nothing else.
+- `fact.origin` is the **resolved** origin — the value that will actually be
+  written — never the raw field. A fact may reach validation with `origin`
+  unset (a writer may leave it for the serialize/parse round trip to
+  default), so the implementation substitutes the type's default before
+  binding: `authored`, or `distilled` for `type: synthesis`. Rules therefore
+  judge identically whichever write path a fact arrives on.
+- `ref_warnings` is deliberately **not** exposed. It is derived on read and
+  never stored, so it is empty for a fact being written fresh and describes
+  the pre-update refs for a fact being updated — a rule over it would judge
+  refs that are not the ones being written.
 - Rules are pure expressions: no I/O, no host access, bounded execution.
 - The result is coerced by JavaScript truthiness. The first failing rule
   rejects the write; a rule that throws also rejects.
 - Rules attach to the ontology node matching the fact's topic path; a fact
   under an **unknown topic matches no node and passes vacuously**.
+- Rules are re-evaluated on the **merged** fact when a write dedup-merges
+  into an existing one, so a rule may see values no single write supplied:
+  `sources` is the sum of both facts, `confidence` the max, `domain` and
+  `entities` the union. A rule like `fact.sources >= 2` therefore gates a
+  claim's first write and passes automatically thereafter — it is a
+  corroboration gate, not a per-write floor.
 
 The `general` preset ships no rules. The `source-code` preset ships exactly
 four, all on `principles`:
