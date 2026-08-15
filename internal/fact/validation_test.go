@@ -341,22 +341,44 @@ func TestEvaluateRule_SeesResolvedOrigin(t *testing.T) {
 // resolution exists to preserve, rather than the mechanism: the same fact must
 // judge identically whether it reaches ValidateFact straight from knomit_learn
 // (origin unset) or via ParseFact on the knomit_update path (origin resolved).
+// The rules must DISCRIMINATE the defaults: a rule like `fact.origin !==
+// 'discovered'` is true both for an unresolved (undefined) origin and for every
+// resolved one, so it agrees across the paths whether or not resolution happens
+// and would pass with the fix removed. Asserting the whole match vector — and
+// that exactly one origin matches — is what fails when the raw field leaks
+// through (undefined matches none) or when the wrong default is substituted.
 func TestEvaluateRule_ResolvedOriginAgreesAcrossWritePaths(t *testing.T) {
+	origins := []Origin{Authored, Distilled, Discovered}
 	rules, err := compileRules("p", []Validation{
-		{Name: "not-discovered", Message: "x", Rule: "fact.origin !== 'discovered'"},
+		{Name: "authored", Message: "x", Rule: "fact.origin === 'authored'"},
+		{Name: "distilled", Message: "x", Rule: "fact.origin === 'distilled'"},
+		{Name: "discovered", Message: "x", Rule: "fact.origin === 'discovered'"},
 	})
 	require.NoError(t, err)
 
-	for _, typ := range []Type{Observation, Synthesis, Hypothesis} {
-		asLearnBuilt := Fact{Type: typ}                                // origin left unset
-		asParsed := Fact{Type: typ, Origin: defaultOriginForType(typ)} // origin resolved
+	// What ParseFact resolves an elided origin to, stated literally rather than
+	// through defaultOriginForType — otherwise a wrong default would make both
+	// sides agree on the same wrong answer.
+	parsedOrigin := map[Type]Origin{
+		Observation: Authored,
+		Synthesis:   Distilled,
+		Hypothesis:  Authored,
+	}
 
-		learnOK, err := evaluateRule(rules[0], asLearnBuilt)
-		require.NoError(t, err)
-		parsedOK, err := evaluateRule(rules[0], asParsed)
-		require.NoError(t, err)
+	for typ, want := range parsedOrigin {
+		asLearnBuilt := Fact{Type: typ}           // origin left unset
+		asParsed := Fact{Type: typ, Origin: want} // origin resolved by ParseFact
 
-		require.Equal(t, parsedOK, learnOK,
-			"type %q judges differently on the learn and update paths — origin is not being resolved", typ)
+		for i, o := range origins {
+			learnOK, err := evaluateRule(rules[i], asLearnBuilt)
+			require.NoError(t, err)
+			parsedOK, err := evaluateRule(rules[i], asParsed)
+			require.NoError(t, err)
+
+			require.Equal(t, parsedOK, learnOK,
+				"type %q judges origin %q differently on the learn and update paths — origin is not being resolved", typ, o)
+			require.Equal(t, o == want, learnOK,
+				"type %q with origin unset should match only %q, but rule %q returned %v", typ, want, o, learnOK)
+		}
 	}
 }

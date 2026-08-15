@@ -523,12 +523,17 @@ rule's `message`.
   rejects the write; a rule that throws also rejects.
 - Rules attach to the ontology node matching the fact's topic path; a fact
   under an **unknown topic matches no node and passes vacuously**.
-- Rules are re-evaluated on the **merged** fact when a write dedup-merges
-  into an existing one, so a rule may see values no single write supplied:
-  `sources` is the sum of both facts, `confidence` the max, `domain` and
-  `entities` the union. A rule like `fact.sources >= 2` therefore gates a
-  claim's first write and passes automatically thereafter — it is a
-  corroboration gate, not a per-write floor.
+- A write that dedup-merges into an existing fact is validated **twice**:
+  once on the incoming fact exactly as supplied, and again on the merged
+  result, where a rule may see values no single write supplied — `sources`
+  is the sum of both facts, `confidence` the max, `domain` and `entities`
+  the union. The fact must pass **both** passes. The merge pass can only
+  add strictness; it can never rescue a fact the incoming pass already
+  rejected, because the incoming check runs first and fails the whole write.
+  A rule like `fact.sources >= 2` is therefore a per-write floor that
+  rejects every write supplying the default `sources: 1` — it does not
+  become a corroboration gate that opens once a second write arrives.
+  Corroboration cannot be expressed as a validation rule.
 
 The `general` preset ships no rules. The `source-code` preset ships exactly
 four, all on `principles`:
