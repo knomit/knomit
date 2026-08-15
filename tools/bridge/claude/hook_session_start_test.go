@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -226,4 +231,41 @@ func TestSessionStart_FallsBackToInvariantsWhenNoGlobalPrinciples(t *testing.T) 
 	require.Contains(t, got, "Vtables must not re-enter")
 	require.Contains(t, got, "Refs branch by scheme")
 	require.NotContains(t, got, "PROJECT PRINCIPLES:")
+}
+
+// TestSessionStart_MultipleServersLogsTheSkipReason pins that the notice the
+// user sees is also legible in the bridge log. The multiple-servers case is the
+// one skip that both emits output AND skips, and logging skip_reason only on the
+// not-emitted branch left its line — emitted=true, no counts, no reason —
+// indistinguishable at a glance from a healthy emission. Whoever reads the log
+// to find out why knomit went quiet is exactly who needs that field.
+func TestSessionStart_MultipleServersLogsTheSkipReason(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit-repo-a":{"command":"knomit-bridge","args":["--repo","a"]},
+		"knomit-repo-b":{"command":"knomit-bridge","args":["--repo","b"]}
+	}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644))
+
+	var logBuf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&logBuf)
+	t.Cleanup(func() { log.Logger = prev })
+
+	var out bytes.Buffer
+	in := strings.NewReader(`{"cwd":` + strconv.Quote(dir) + `}`)
+	require.NoError(t, hookSessionStart(in, &out))
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(logBuf.Bytes()), &entry),
+		"log line is not a single JSON object: %s", logBuf.String())
+	require.Equal(t, skipMultipleKnomitServers, entry["skip_reason"],
+		"skip_reason missing from the log line: %s", logBuf.String())
+	// emitted stays true — the hook really did write the user-facing notice.
+	// The point is that the two coexist, not that one replaces the other; the
+	// counts alongside it are honestly zero, and skip_reason is what tells a log
+	// reader that this line is the misconfiguration notice, not a healthy run.
+	require.Equal(t, true, entry["emitted"])
+	require.Equal(t, float64(0), entry["globals"])
+	require.Equal(t, float64(0), entry["recent"])
 }

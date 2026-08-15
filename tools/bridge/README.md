@@ -86,16 +86,18 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Multiple repos. Name each key `knomit-<scope>`, matching what `knomit-bridge
-claude init` generates:
+Multiple repos. Name each key `knomit-repo-<name>` (or `knomit-lens-<name>` for
+a lens), matching what `knomit-bridge claude init` generates — the axis is part
+of the key so a repo and a lens sharing a name cannot collide:
 
 ```json
 {
   "mcpServers": {
-    "knomit-personal": {
-      "command": "/path/to/dist/knomit-bridge"
+    "knomit-repo-personal": {
+      "command": "/path/to/dist/knomit-bridge",
+      "args": ["--repo", "personal"]
     },
-    "knomit-work": {
+    "knomit-repo-work": {
       "command": "/path/to/dist/knomit-bridge",
       "args": ["--repo", "work"]
     }
@@ -103,13 +105,22 @@ claude init` generates:
 }
 ```
 
-> **Claude Code projects: one knomit server per project.** The above is Claude
+Claude Code turns the key into the tool-name prefix `mcp__<key>__knomit_learn`,
+and the API caps tool names at 64 characters, so the repo or lens name may be at
+most 27 characters. `claude init` checks this before writing anything and fails
+with the limit named. In repo mode the name defaults to the directory basename,
+so a deeply-named directory can trip it — pass `--repo <shorter>`; the repo name
+does not have to match the directory.
+
+> **Claude Code projects: one knomit SCOPE per project.** The above is Claude
 > Desktop config, where multiple entries are fine. A Claude Code project's
 > `.mcp.json` is different — the hooks (`session-start`, `post-edit`) have to
-> bind to exactly one repo, so a project configuring two knomit servers
-> disables them rather than guess which repo to read and write. The MCP tools
-> themselves keep working for both; only the hooks stand down, and
-> `session-start` says so.
+> bind to exactly one repo, so a project whose knomit entries name two different
+> repos or lenses disables them rather than guess which repo to read and write.
+> The MCP tools themselves keep working for both; only the hooks stand down, and
+> `session-start` says so. Duplicate entries resolving to the *same* scope — what
+> the obvious merge of a `.mcp.json.knomit` companion produces — are not
+> ambiguous and keep the hooks on.
 
 ## Debugging
 

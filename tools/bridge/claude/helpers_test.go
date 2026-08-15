@@ -399,6 +399,120 @@ func TestMcpBinding_LegacyConfigStillBinds(t *testing.T) {
 	}
 }
 
+// TestMcpBinding_KeyMatchesNeverDiluteCommandMatches pins the tiering. The key
+// arm of isKnomitServer is a guess and fires on any server that borrowed the
+// `knomit-` namespace; counting such a server alongside a real bridge would
+// report ambiguity and disable every hook, with a message telling the user to
+// remove a knomit entry they do not have.
+func TestMcpBinding_KeyMatchesNeverDiluteCommandMatches(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit":{"command":"knomit-bridge","args":["--repo","real"]},
+		"knomit-notes":{"command":"npx","args":["-y","some-notes-mcp"]},
+		"knomit-docs":{"command":"/usr/bin/docs-mcp"}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens, ambiguous := mcpBinding(dir)
+	if ambiguous {
+		t.Fatal("unrelated knomit-keyed servers made a single real bridge look ambiguous")
+	}
+	if repo != "real" || lens != "" {
+		t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "real", "")
+	}
+}
+
+// TestMcpBinding_KeyTierStillBindsWhenNothingMatchesOnCommand is the other half
+// of the tiering: demoting key matches must not disable them. With no
+// command-recognisable entry, the key arm is all there is, and failing to match
+// does not fail safe — it falls through to the basename fallback, i.e. the
+// wrong-repo hazard.
+func TestMcpBinding_KeyTierStillBindsWhenNothingMatchesOnCommand(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit-eng":{"command":"/opt/wrappers/kb","args":["--lens","eng"]},
+		"postgres":{"command":"/usr/bin/pg-mcp"}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo, lens, ambiguous := mcpBinding(dir)
+	if ambiguous {
+		t.Fatal("single key-matched server reported ambiguous")
+	}
+	if lens != "eng" {
+		t.Errorf("lens = %q, want %q", lens, "eng")
+	}
+	if repo != "" {
+		t.Errorf("repo = %q, want empty — lens config must never fall back to a basename", repo)
+	}
+}
+
+// TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous pins that the fail-safe
+// fires on a real conflict, not on a redundant one. `.mcp.json` is
+// merge-required, so re-running init drops a companion and the obvious merge
+// leaves the pre-existing entry beside the freshly derived one — both naming the
+// same repo. There is one unambiguous answer there; disabling the hooks over it
+// would be a fail-safe firing on nothing.
+func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
+	t.Run("explicit repo twice", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := `{"mcpServers":{
+			"knomit":{"command":"knomit-bridge","args":["--repo","team-kb"]},
+			"knomit-repo-team-kb":{"command":"knomit-bridge","args":["--repo=team-kb"]}
+		}}`
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repo, lens, ambiguous := mcpBinding(dir)
+		if ambiguous {
+			t.Fatal("two entries naming the same repo reported as ambiguous")
+		}
+		if repo != "team-kb" || lens != "" {
+			t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, "team-kb", "")
+		}
+	})
+
+	t.Run("basename fallback matches an explicit repo", func(t *testing.T) {
+		// The legacy entry carries no args and resolves to the directory
+		// basename; the derived entry names that same repo explicitly.
+		dir := t.TempDir()
+		base := filepath.Base(dir)
+		cfg := `{"mcpServers":{
+			"knomit":{"command":"knomit-bridge"},
+			"knomit-repo-` + base + `":{"command":"knomit-bridge","args":["--repo","` + base + `"]}
+		}}`
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repo, lens, ambiguous := mcpBinding(dir)
+		if ambiguous {
+			t.Fatal("basename fallback and the equivalent explicit repo reported as ambiguous")
+		}
+		if repo != base || lens != "" {
+			t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, base, "")
+		}
+	})
+
+	t.Run("differing targets stay ambiguous", func(t *testing.T) {
+		// The dedupe must not soften the actual conflict: a repo scope and a
+		// lens scope have no common answer even when they share a name.
+		dir := t.TempDir()
+		cfg := `{"mcpServers":{
+			"knomit-repo-eng":{"command":"knomit-bridge","args":["--repo","eng"]},
+			"knomit-lens-eng":{"command":"knomit-bridge","args":["--lens","eng"]}
+		}}`
+		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		repo, lens, ambiguous := mcpBinding(dir)
+		if !ambiguous {
+			t.Fatalf("repo and lens scopes not reported as ambiguous (repo=%q lens=%q)", repo, lens)
+		}
+	})
+}
+
 // TestHookSessionStart_MultipleServersTellsTheUser pins that the one skip the
 // user cannot otherwise see is spoken aloud. Every other skip reason is
 // transient; this one never resolves on its own.

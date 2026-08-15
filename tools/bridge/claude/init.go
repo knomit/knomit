@@ -63,10 +63,20 @@ func runInit(args []string) error {
 	}
 	// Reject up front rather than emit a .mcp.json whose derived key produces a
 	// tool name over the API's 64-char limit. Repo mode can trip this without
-	// the user naming anything: repoName defaults to the directory basename.
-	if key := serverKey(repoName, *lens); len(key) > maxServerKeyRunes {
-		return fmt.Errorf("derived MCP server key %q is %d characters (max %d); "+
-			"pass a shorter --repo or --lens name", key, len(key), maxServerKeyRunes)
+	// the user naming anything: repoName defaults to the directory basename, so
+	// a long directory name fails an otherwise flagless `claude init`. Say so —
+	// the remedy (name the repo explicitly) is not obvious from the error alone,
+	// because nothing else in the tool requires the repo to match the directory.
+	if key := serverKey(repoName, *lens); len(key) > maxServerKeyLen {
+		scope, flag := repoName, "--repo"
+		if *lens != "" {
+			scope, flag = *lens, "--lens"
+		}
+		return fmt.Errorf("derived MCP server key %q is %d characters (max %d), "+
+			"because %s name %q is %d (max %d); pass a shorter %s "+
+			"(it need not match the directory name)",
+			key, len(key), maxServerKeyLen,
+			strings.TrimPrefix(flag, "--"), scope, len(scope), maxScopeNameLen, flag)
 	}
 
 	var created []string
@@ -159,8 +169,20 @@ func runInit(args []string) error {
 // scoping wins over a repo scoping because the two are mutually exclusive at the
 // flag layer and the lens is the thing actually being served.
 //
-// The prefix is applied UNCONDITIONALLY, so the mapping from scope to key is
-// injective: distinct scopes can never collide. An earlier draft skipped the
+// The prefix names the AXIS as well as the product, and is applied
+// UNCONDITIONALLY, so the mapping from scope to key is injective: distinct
+// scopes can never collide. Both halves are load-bearing.
+//
+// Naming the axis is what makes the two namespaces disjoint. Repos and lenses
+// are separate namespaces validated by the same repos.IsValidName, so nothing
+// stops a lens and a repo sharing a name — a lens named after the repo it
+// writes to is the natural naming — and a shared `knomit-` prefix would map
+// `--repo eng` and `--lens eng` to the same key. Since `knomit-repo-` and
+// `knomit-lens-` are fixed-length and differ, no repo key can ever equal a lens
+// key, whatever the names (a repo literally named `lens-eng` yields
+// `knomit-repo-lens-eng`, not `knomit-lens-eng`). See TestServerKey_IsInjective.
+//
+// Applying it unconditionally is the other half. An earlier draft skipped the
 // prefix when the name already carried it, to avoid the ugly `knomit-knomit`
 // for a repo named `knomit` — but that rule is inherently many-to-one
 // (`web` and `knomit-web` both map to `knomit-web`), which re-creates in one
@@ -174,22 +196,29 @@ func runInit(args []string) error {
 // Callers must validate name/lens with repos.IsValidName first: the result is
 // interpolated into JSON, and this function does no escaping of its own.
 func serverKey(repoName, lens string) string {
-	name := repoName
 	if lens != "" {
-		name = lens
+		return "knomit-lens-" + lens
 	}
-	return "knomit-" + name
+	return "knomit-repo-" + repoName
 }
 
-// maxServerKeyRunes bounds the derived key so the fully-qualified tool name
+// maxServerKeyLen bounds the derived key so the fully-qualified tool name
 // Claude Code builds from it stays under the API's 64-character tool-name
 // limit. The longest tool is knomit_hypothesize, giving
 // len("mcp__") + len(key) + len("__") + len("knomit_hypothesize") = 25 + key.
 //
+// Bytes, not runes: repos.IsValidName restricts names to ASCII, so the two
+// counts coincide and the byte length is what the API actually measures.
+//
 // This could not be hit before: the key was a 6-character constant. It can now,
 // because the key derives from a repo name that defaults to the directory
 // basename, and repos.IsValidName constrains the character set but not length.
-const maxServerKeyRunes = 64 - len("mcp____knomit_hypothesize")
+const maxServerKeyLen = 64 - len("mcp____knomit_hypothesize")
+
+// maxScopeNameLen is the resulting budget for the repo or lens NAME itself —
+// what the error message must quote, since that is the knob the user turns.
+// Both axis prefixes are the same length, so one constant covers both.
+const maxScopeNameLen = maxServerKeyLen - len("knomit-repo-")
 
 // isOwnedByIntegration reports whether dstRel is a file that the integration
 // owns outright (skills). These are always overwritten on re-run, so deleting
@@ -277,29 +306,60 @@ func printSummary(created, overwritten, conflicts []string) {
 			}
 		case ".mcp.json":
 			// Deriving the key makes two knomit servers MERGEABLE, and the
-			// obvious merge — both entries side by side — is exactly what
-			// disables the hooks, since there is then no single repo to bind
-			// to. Say so here; the user finds out otherwise only by noticing
-			// that knomit went quiet.
-			fmt.Println("         note: keep ONE knomit entry — a project with two knomit")
-			fmt.Println("         servers has no single repo to bind to, so the hooks disable")
-			fmt.Println("         themselves (the MCP tools still work for both).")
+			// obvious merge — both entries side by side — can disable the
+			// hooks, since two DIFFERENT scopes leave no single repo to bind
+			// to. (Two entries naming the same scope are fine; mcpBinding
+			// treats them as one.) Say so here; the user finds out otherwise
+			// only by noticing that knomit went quiet.
+			fmt.Println("         note: keep ONE knomit SCOPE — a project whose knomit entries")
+			fmt.Println("         name two different repos or lenses has no single repo to bind")
+			fmt.Println("         to, so the hooks disable themselves (the MCP tools still work")
+			fmt.Println("         for both). Duplicate entries naming the same scope are fine.")
 		}
 	}
 }
 
-// blockMarkerPrefix and blockMarkerCurrent make the integration block's version
-// legible to init. Without a consumer the version in the marker would be inert
-// decoration: a stale installed block would be indistinguishable from a current
-// one, which is the whole reason the block drifted (installed copies saying
-// "Nine /knomit-… slash commands" against a template saying "Eleven").
+// blockMarkerPrefix makes the integration block's version legible to init.
+// Without a consumer the version in the marker would be inert decoration: a
+// stale installed block would be indistinguishable from a current one, which is
+// the whole reason the block drifted (installed copies saying "Nine /knomit-…
+// slash commands" against a template saying "Eleven").
 const (
-	blockMarkerPrefix  = "<!-- knomit:integration"
-	blockMarkerCurrent = "<!-- knomit:integration v2 -->"
+	blockMarkerPrefix = "<!-- knomit:integration"
 	// blockHeading identifies a block whose marker is missing entirely —
 	// pre-marker installs, or a user who stripped the HTML comments.
 	blockHeading = "## Working with knomit memory"
+	// claudeMdBlockTemplate is the embedded block whose marker defines "current".
+	claudeMdBlockTemplate = "templates/CLAUDE-md-block.txt"
 )
+
+// blockMarkerCurrent is the marker of the block THIS build ships, read off the
+// embedded template rather than restated as a constant here. A hand-written copy
+// drifts silently in BOTH directions: bump the template to v3 and forget the
+// copy, and claudeMdBlockNote calls a freshly merged current block "from an
+// older version"; bump the copy and forget the template, and every install is
+// reported current forever. That is the same "the marker drifted because nothing
+// read it" failure the marker exists to prevent, moved one level up.
+//
+// Empty if the template has no marker line. That disables only the
+// already-current shortcut — claudeMdBlockNote guards against the empty string,
+// since strings.Contains(anything, "") is true and would report every CLAUDE.md
+// as current. TestBlockMarkerCurrent_ComesFromTemplate turns the condition into
+// a test failure rather than a silent degradation.
+var blockMarkerCurrent = templateBlockMarker()
+
+func templateBlockMarker() string {
+	data, err := templatesFS.ReadFile(claudeMdBlockTemplate)
+	if err != nil {
+		return ""
+	}
+	first, _, _ := strings.Cut(string(data), "\n")
+	first = strings.TrimSpace(first)
+	if !strings.HasPrefix(first, blockMarkerPrefix) {
+		return ""
+	}
+	return first
+}
 
 // claudeMdBlockNote reports how the CLAUDE.md already on disk compares to the
 // block this build ships, so the merge warning says WHAT to merge. Returns ""
@@ -311,7 +371,7 @@ func claudeMdBlockNote(path string) string {
 	}
 	content := string(data)
 	switch {
-	case strings.Contains(content, blockMarkerCurrent):
+	case blockMarkerCurrent != "" && strings.Contains(content, blockMarkerCurrent):
 		return ""
 	case strings.Contains(content, blockMarkerPrefix), strings.Contains(content, blockHeading):
 		// The heading is checked too: the template shipped without the HTML
