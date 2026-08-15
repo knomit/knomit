@@ -76,11 +76,10 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   const basicMissingUser = state.authMethod === 'basic' && state.authUser.trim() === '';
   const nameOk = state.name.trim().length > 0;
   // The generic "Next" footer button covers every step that has nothing
-  // more specific to say about advancing: the local-only confirmation
-  // ('name' — StepSource in its confirmOnly rendering), 'access', and the
-  // placeholder 'ontology' step. 'source' advances via its own two choice
-  // controls (CHOOSE_LOCAL, or a successful probe); 'review' submits
-  // instead of advancing.
+  // more specific to say about advancing: the local-only 'name' step,
+  // 'access', and the placeholder 'ontology' step. 'source' advances via its
+  // own two choice controls (CHOOSE_LOCAL, or a successful probe); 'review'
+  // submits instead of advancing.
   const showGenericNext = step === 'name' || step === 'access' || step === 'ontology';
   const nextDisabled = creating || !nameOk || (step === 'access' && basicMissingUser);
 
@@ -89,10 +88,22 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
       <h3 style={heading}>New repository</h3>
 
       {step === 'source' && (
-        <StepSource state={state} dispatch={dispatch} onProbe={handleProbe} probing={probing} probeError={probeError} confirmOnly={false} />
+        <StepSource state={state} dispatch={dispatch} onProbe={handleProbe} probing={probing} probeError={probeError} />
       )}
+      {/* Local-only's dedicated 'name' step (stepsFor: ['source','name',
+          'ontology','review']). There is no StepName.tsx per the brief's file
+          list — this is small enough to stay inline, and Task 9 has no reason
+          to touch it. A reachable remote never lands here: its name field
+          lives on StepAccess instead, per stepsFor's remote-path lists. */}
       {step === 'name' && (
-        <StepSource state={state} dispatch={dispatch} onProbe={handleProbe} probing={probing} probeError={probeError} confirmOnly={true} />
+        <div>
+          <label style={label}>Name</label>
+          {/* Same WKWebView guard as StepAccess's name field — see CreateRepoForm.tsx:81-83. */}
+          <input data-testid="create-name" style={input} placeholder="e.g. work (a–z, 0–9, -, _)" value={state.name}
+            autoCapitalize="off" autoCorrect="off" spellCheck={false}
+            onChange={e => dispatch({ type: 'SET_NAME', name: e.target.value })} />
+          <div style={hint}>Local-only — nothing leaves this machine until you connect a remote later.</div>
+        </div>
       )}
       {step === 'access' && <StepAccess state={state} dispatch={dispatch} />}
       {step === 'ontology' && <StepOntology state={state} dispatch={dispatch} />}
@@ -128,3 +139,6 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
 const heading: React.CSSProperties = { margin: '0 0 14px', fontSize: 16 };
 const footer: React.CSSProperties = { display: 'flex', gap: 8, marginTop: 16 };
 const errText: React.CSSProperties = { color: '#f88', fontSize: 13, marginTop: 8 };
+const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 12, display: 'block' };
+const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#111', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
+const hint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 8, lineHeight: 1.5 };

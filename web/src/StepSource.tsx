@@ -1,87 +1,70 @@
 import type { WizardAction, WizardState } from './wizardState';
-import { btn, cardLabel } from './manageStyles';
+import { btn } from './manageStyles';
 
-// StepSource renders the wizard's first screen — name it, then say where it
-// comes from — and doubles as the confirmation screen once "Keep it on this
-// machine" has been chosen (currentStep === 'name'; there is no dedicated
-// StepName file, since local-only has nothing left to ask beyond the name
-// already collected here). `confirmOnly` selects that second rendering.
-//
-// The name field is unconditional and always first: a zero-repo install lands
-// here with nothing else on screen, and the create surface must show a name
-// field the instant it mounts (App.norepos.test.tsx) — it cannot be gated
-// behind choosing a source first.
-export function StepSource({ state, dispatch, onProbe, probing, probeError, confirmOnly }: {
+// StepSource renders the wizard's FIRST screen only — the two peer cards plus
+// the URL field. It does not collect a name: local-only's name arrives on its
+// own dedicated 'name' step (see CreateRepoWizard.tsx), and a reachable
+// remote's name arrives on StepAccess — exactly what stepsFor(state) already
+// says for each case. (An earlier version of this file also rendered the name
+// field here, to make App.norepos.test.tsx's `create-name` proxy pass on
+// first mount without a click; that forced the source step to double as a
+// name step. The fix was to point the test's proxy at `step-source` instead —
+// it only ever meant "Manage fell back to the create surface" — not to bend
+// this component's layout to match the old flat form's DOM shape.)
+export function StepSource({ state, dispatch, onProbe, probing, probeError }: {
   state: WizardState;
   dispatch: (a: WizardAction) => void;
   onProbe: () => void;
   probing: boolean;
   probeError: string;
-  confirmOnly: boolean;
 }) {
   return (
     <div data-testid="step-source">
-      <label style={label}>Name</label>
-      {/* autoCapitalize/autoCorrect/spellCheck off: the desktop WKWebView otherwise
-          capitalizes/substitutes the typed name (e.g. "test" → "Test"), which fails
-          the lowercase-only isValidRepoName check with a confusing 400. See
-          CreateRepoForm.tsx:81-83, which this replaces but does not delete. */}
-      <input data-testid="create-name" style={input} placeholder="e.g. work (a–z, 0–9, -, _)" value={state.name}
-        autoCapitalize="off" autoCorrect="off" spellCheck={false}
-        onChange={e => dispatch({ type: 'SET_NAME', name: e.target.value })} />
-
-      {confirmOnly ? (
-        <div style={{ ...card, marginTop: 14 }}>
-          <div style={cardLabel}>Local-only</div>
-          <div style={hint}>Nothing leaves this machine until you connect a remote later.</div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
-          {/* Peer #1, listed first with the fuller description: connecting a
-              remote is the path that keeps a repo's full history the moment it
-              gains one, so it leads — carried by ordering and detail, not a
-              badge. A badge on either peer would make the other read as wrong. */}
-          <div style={{ ...card, flex: '1 1 260px' }}>
-            <button type="button" style={cardTitleBtn} onClick={() => dispatch({ type: 'CHOOSE_REMOTE' })}>
-              Connect a git repository
-            </button>
-            <p style={cardBody}>
-              Point this at a git remote — GitHub, GitLab, Bitbucket, or a bare
-              repo reachable over SSH — and knomit keeps the knowledge base in
-              sync with it from the first commit.
-            </p>
-            <label style={label}>Remote URL</label>
-            <input data-testid="create-url" style={input} placeholder="https://… · git@host:repo · /path/to/repo"
-              value={state.url} onChange={e => dispatch({ type: 'SET_URL', url: e.target.value })} />
-            <div style={{ marginTop: 8 }}>
-              <button type="button" data-testid="probe-button" style={btn(!state.url.trim() || probing, 'primary')}
-                disabled={!state.url.trim() || probing} onClick={onProbe}>
-                {probing ? 'Checking…' : 'Connect'}
-              </button>
-            </div>
-            {/* Amber is reserved for a probe that actually failed — this is the
-                one place StepSource can show a real failure (unreachable host). */}
-            {probeError && <div style={warnText}>{probeError}</div>}
-            <p style={hint}>
-              No repository there yet? Create an EMPTY one first — no README, no
-              .gitignore, no license — knomit needs to write the first commit
-              itself.{' '}
-              {/* target="_blank": the desktop build is a WKWebView, so an
-                  in-frame navigation here would strand the reader with no way
-                  back. */}
-              <a href="https://knomit.io/docs" target="_blank" rel="noreferrer" style={link}>Learn more</a>.
-            </p>
-          </div>
-
-          <div style={{ ...card, flex: '1 1 200px' }}>
-            <div style={cardTitle}>Keep it on this machine</div>
-            <p style={cardBody}>Start locally now, connect a remote whenever you like.</p>
-            <button type="button" style={btn(false)} onClick={() => dispatch({ type: 'CHOOSE_LOCAL' })}>
-              Keep it on this machine
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {/* Peer #1, listed first with the fuller description: connecting a
+            remote is the path that keeps a repo's full history the moment it
+            gains one, so it leads — carried by ordering and detail, not a
+            badge. A badge on either peer would make the other read as wrong. */}
+        <div style={{ ...card, flex: '1 1 260px' }}>
+          <button type="button" style={cardTitleBtn} onClick={() => dispatch({ type: 'CHOOSE_REMOTE' })}>
+            Connect a git repository
+          </button>
+          <p style={cardBody}>
+            Point this at a git remote — GitHub, GitLab, Bitbucket, or a bare
+            repo reachable over SSH — and knomit keeps the knowledge base in
+            sync with it from the first commit.
+          </p>
+          <label style={label}>Remote URL</label>
+          <input data-testid="create-url" style={input} placeholder="https://… · git@host:repo · /path/to/repo"
+            value={state.url} onChange={e => dispatch({ type: 'SET_URL', url: e.target.value })} />
+          <div style={{ marginTop: 8 }}>
+            <button type="button" data-testid="probe-button" style={btn(!state.url.trim() || probing, 'primary')}
+              disabled={!state.url.trim() || probing} onClick={onProbe}>
+              {probing ? 'Checking…' : 'Connect'}
             </button>
           </div>
+          {/* Amber is reserved for a probe that actually failed — this is the
+              one place StepSource can show a real failure (unreachable host). */}
+          {probeError && <div style={warnText}>{probeError}</div>}
+          <p style={hint}>
+            No repository there yet? Create an EMPTY one first — no README, no
+            .gitignore, no license — knomit needs to write the first commit
+            itself.{' '}
+            {/* target="_blank": the desktop build is a WKWebView, so an
+                in-frame navigation here would strand the reader with no way
+                back. */}
+            <a href="https://knomit.io/docs" target="_blank" rel="noreferrer" style={link}>Learn more</a>.
+          </p>
         </div>
-      )}
+
+        <div style={{ ...card, flex: '1 1 200px' }}>
+          <div style={cardTitle}>Keep it on this machine</div>
+          <p style={cardBody}>Start locally now, connect a remote whenever you like.</p>
+          <button type="button" style={btn(false)} onClick={() => dispatch({ type: 'CHOOSE_LOCAL' })}>
+            Keep it on this machine
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

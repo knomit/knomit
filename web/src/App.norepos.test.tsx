@@ -82,10 +82,15 @@ describe('the zero-repo screen', () => {
     expect(screen.queryByText(/knomit init/)).not.toBeInTheDocument();
 
     // No intermediate "Create a repository" button any more. With nothing to
-    // browse, the app IS Manage, and Manage falls back to the create form
-    // because there is no detail pane to land on.
+    // browse, the app IS Manage, and Manage falls back to the create surface
+    // because there is no detail pane to land on. `step-source` is a proxy
+    // for "the create surface rendered" — it is the wizard's first screen,
+    // not an assertion about what that screen contains; it used to check
+    // `create-name` (the old flat form's first field), but the wizard's first
+    // screen is the source-choice step and the name field arrives on the
+    // step after, so the proxy now points at the step that's actually there.
     await waitFor(() => expect(screen.getByTestId('manage-surface')).toBeInTheDocument());
-    expect(screen.getByTestId('create-name')).toBeInTheDocument();
+    expect(screen.getByTestId('step-source')).toBeInTheDocument();
   });
 
   it('offers no way out of Manage, because there is nowhere to go', async () => {
@@ -93,7 +98,8 @@ describe('the zero-repo screen', () => {
     render(<App />);
 
     await screen.findByTestId('no-repos');
-    await waitFor(() => expect(screen.getByTestId('create-name')).toBeInTheDocument());
+    // Proxy for "the create surface rendered" — see the comment above.
+    await waitFor(() => expect(screen.getByTestId('step-source')).toBeInTheDocument());
 
     // The mode is locked: leaving would land on a browse surface that does not
     // exist. Both a step-out control and a Cancel on the form would be buttons
