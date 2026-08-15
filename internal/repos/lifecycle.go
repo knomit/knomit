@@ -459,19 +459,38 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 // resolveOntology turns a spec's ontology fields into an Ontology. Shared by
 // initLocal and initSeed so the two modes cannot drift in how they read the
 // same two fields.
+//
+// Mode-aware, not merely field-aware, to reproduce initLocal's ORIGINAL
+// precedence byte-for-byte (a bare "OntologyYAML != "" wins" precedence,
+// tried first, silently changed two reachable behaviours: a preset request
+// that also carried a leftover ontology_yaml value would start parsing the
+// YAML instead of honouring the preset, and mode=custom with an empty
+// ontology_yaml — previously a hard, surfaced ParseOntology error — would
+// silently fall through to the default ontology instead):
+//
+//   - "custom" ALWAYS parses OntologyYAML, unconditionally, even when it is
+//     empty — that must stay a hard error, never a silent default.
+//   - "seed" parses OntologyYAML only when the caller actually supplied one;
+//     unlike "custom" it may legitimately carry a preset instead, and
+//     initSeed's own authoritative check (mirroring rejectOntologySpecForClone)
+//     independently refuses a seed request with neither field, so an empty
+//     OntologyYAML here is not itself an error — it just means "prefer the
+//     preset arm below".
+//   - every other mode (preset) ignores OntologyYAML entirely, exactly as the
+//     original switch did by gating that arm on `Mode == "custom"` rather
+//     than on the field alone.
 func resolveOntology(spec CreateSpec) (*fact.Ontology, error) {
-	switch {
-	case spec.OntologyYAML != "":
+	if spec.Mode == "custom" || (spec.Mode == "seed" && spec.OntologyYAML != "") {
 		o, err := fact.ParseOntology([]byte(spec.OntologyYAML))
 		if err != nil {
 			return nil, fmt.Errorf("parse ontology: %w", err)
 		}
 		return o, nil
-	case spec.OntologyPreset != "":
-		return fact.OntologyByPreset(spec.OntologyPreset)
-	default:
-		return fact.DefaultOntology(), nil
 	}
+	if spec.OntologyPreset != "" {
+		return fact.OntologyByPreset(spec.OntologyPreset)
+	}
+	return fact.DefaultOntology(), nil
 }
 
 // rejectOntologySpecForClone refuses a clone request that also names an
@@ -562,22 +581,30 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 //
 // Like initClone, this does NOT persist the origin anywhere — Create does
 // that, into control.db, once initSeed returns the resolved upstream.
+//
+// Unlike initClone, this DOES push (both the consensus and agent branches)
+// before returning — see the comment above that push, below, for why: the
+// underlying store call never does it, and without it the remote this mode
+// exists to seed stays permanently empty.
 func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
+	}
+	// The authoritative copy of the CreatePreflight check: Create is also
+	// called directly (tests, future CLI paths), and resolveOntology below
+	// would otherwise quietly default rather than refuse — the exact
+	// silent-default this mode exists to prevent. Mirrors initClone's own
+	// authoritative re-assertion of rejectOntologySpecForClone, just above.
+	if spec.OntologyPreset == "" && spec.OntologyYAML == "" {
+		return "", fmt.Errorf("%w: seed mode requires ontology_preset or ontology_yaml", ErrInvalidName)
 	}
 	emit(Event{Step: "probe", Message: "checking " + spec.Origin.URL, Pct: 10})
 	probe, err := m.ProbeOrigin(ctx, *spec.Origin)
 	if err != nil {
 		return "", err
 	}
-	if !probe.Reachable {
-		return "", fmt.Errorf("seed: remote not reachable: %s", probe.Detail)
-	}
-	// Re-asserted HERE, not trusted from the client: the wizard's probe and this
-	// create are separated in time, and a remote can gain refs in between.
-	if !probe.Empty {
-		return "", ErrRemoteNotEmpty
+	if serr := seedProbeErr(probe); serr != nil {
+		return "", serr
 	}
 
 	emit(Event{Step: "ontology", Message: "resolving ontology", Pct: 20})
@@ -614,10 +641,62 @@ func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, 
 	if err != nil {
 		return "", fmt.Errorf("seed: %w", err)
 	}
+
+	// initFromEmptyRemote (store/repo.go) writes the root commit, the
+	// consensus branch and the agent branch LOCALLY ONLY — by design it never
+	// pushes. Left there, the remote stays ref-less: the very next step in
+	// Create is ActivateSync, whose synchronous reconcile fetches BEFORE it
+	// ever pushes, that fetch fails with "remote repository is empty"
+	// against a still-ref-less remote, and — because builder.go's startSync
+	// closure returns on that error before reaching the `go
+	// runReconcileLoop(...)` call — no background sync loop starts for the
+	// rest of the process's life. Create only logs the failure as a warning,
+	// so nothing surfaces this to the caller either. That is not a corner
+	// case here the way it is for clone-of-an-empty-remote: it is what
+	// happens on EVERY seed, defeating the mode's entire premise (the remote
+	// is backed up from the first commit). So push both branches now, before
+	// returning, using the same generic Push the periodic reconcile loop
+	// uses for the agent branch — this is the one place a push of the
+	// consensus branch is a deliberate, one-time bootstrap rather than a
+	// change to steady-state sync (which never pushes main).
+	emit(Event{Step: "push", Message: "pushing seed to " + spec.Origin.URL, Pct: 65})
+	if _, perr := svc.Remote().Push(ctx, upstream, auth); perr != nil {
+		return "", fmt.Errorf("seed: push %s: %w", upstream, perr)
+	}
+	if _, perr := svc.Remote().Push(ctx, m.deps.AgentBranch, auth); perr != nil {
+		return "", fmt.Errorf("seed: push %s: %w", m.deps.AgentBranch, perr)
+	}
+
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
 	return upstream, nil
+}
+
+// seedProbeErr maps a ProbeOrigin result to the error initSeed should return
+// before doing any work, or nil when the remote is a valid seed target.
+//
+// AuthRequired is checked BEFORE Empty deliberately: ProbeOrigin reports an
+// auth-required remote as {Reachable:true, AuthRequired:true, Empty:false}
+// (probe.go) — it has no way to know whether a remote it cannot authenticate
+// against is empty or not. Checking Empty first would report a private
+// remote with a missing or wrong token as ErrRemoteNotEmpty, the wrong cause,
+// and steer the caller toward mode "clone", which fails against the exact
+// same missing credential.
+func seedProbeErr(probe ProbeResult) error {
+	if !probe.Reachable {
+		return fmt.Errorf("seed: remote not reachable: %s", probe.Detail)
+	}
+	if probe.AuthRequired {
+		return fmt.Errorf("seed: remote requires authentication: %s", probe.Detail)
+	}
+	// Re-asserted HERE, not trusted from the client: the wizard's probe and
+	// this create are separated in time, and a remote can gain refs in
+	// between.
+	if !probe.Empty {
+		return ErrRemoteNotEmpty
+	}
+	return nil
 }
 
 // authConfigFromSpec maps an OriginSpec to the config shape ResolveAuth expects.

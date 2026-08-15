@@ -99,6 +99,13 @@ paths:
         Initiates repo creation and streams progress as newline-delimited JSON
         (NDJSON). Each line is a `CreateRepoEvent` object. The stream ends with
         a `done` or `error` event.
+
+        409 covers several distinct conflicts: the name is already taken, the
+        origin URL is already in use by another active repo, a create for the
+        same name/origin is already in flight, or — mode=seed only — the
+        remote origin turned out not to be empty (re-checked at create time,
+        not trusted from an earlier probe); use mode=clone instead in that
+        last case.
       operationId: createRepo
       requestBody:
         required: true
@@ -2306,7 +2313,7 @@ components:
     # Repo lifecycle — create / archive / restore / purge
     CreateRepoOrigin:
       type: object
-      description: Remote origin to clone from (used when mode=clone).
+      description: Remote origin to clone from or seed (used when mode=clone or mode=seed).
       properties:
         url:         { type: string, description: Remote URL }
         branch:      { type: string, description: Remote branch to track }
@@ -2322,17 +2329,22 @@ components:
           description: Unique repo name (slug).
         mode:
           type: string
-          enum: [preset, custom, clone]
+          enum: [preset, custom, clone, seed]
           description: |
             preset — use a built-in ontology preset (e.g. default, code).
             custom — supply ontology_yaml directly.
             clone  — clone from a remote origin; ontology is taken from the remote.
+            seed   — initialise an EMPTY remote origin with a chosen ontology
+                     (ontology_preset or ontology_yaml), so local and remote
+                     share a root commit from birth. Create re-asserts the
+                     remote is still empty and fails with 409 if it is not —
+                     use mode=clone instead to join a non-empty remote.
         ontology_preset:
           type: string
-          description: "Preset identifier (e.g. default, code). Used when mode=preset."
+          description: "Preset identifier (e.g. default, code). Used when mode=preset or mode=seed."
         ontology_yaml:
           type: string
-          description: Raw ontology YAML. Used when mode=custom.
+          description: Raw ontology YAML. Used when mode=custom or mode=seed.
         origin:
           $ref: "#/components/schemas/CreateRepoOrigin"
 
