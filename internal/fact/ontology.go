@@ -2,6 +2,7 @@ package fact
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -227,35 +228,14 @@ type Validation struct {
 // validKeyRe matches lowercase kebab-case identifiers.
 var validKeyRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-// ParseOntology parses and validates an ontology from YAML bytes.
+// ParseOntology parses and validates an ontology from YAML bytes. It reports
+// only the FIRST problem; use ValidateOntologyYAML when you want them all.
 func ParseOntology(data []byte) (*Ontology, error) {
-	var o Ontology
-	if err := yaml.Unmarshal(data, &o); err != nil {
-		return nil, fmt.Errorf("parse ontology: %w", err)
+	o, diags := ValidateOntologyYAML(data)
+	if len(diags) > 0 {
+		return nil, errors.New(diags[0].Message)
 	}
-	if o.ID == "" {
-		return nil, fmt.Errorf("parse ontology: id is required")
-	}
-	if o.Name == "" {
-		return nil, fmt.Errorf("parse ontology: name is required")
-	}
-	if len(o.Topics) == 0 {
-		return nil, fmt.Errorf("parse ontology: at least one topic is required")
-	}
-	if err := validateKeys("topic", o.Topics); err != nil {
-		return nil, err
-	}
-	for key, node := range o.Topics {
-		if node.Children != nil {
-			if err := validateKeys(fmt.Sprintf("topic %q child", key), node.Children); err != nil {
-				return nil, err
-			}
-		}
-	}
-	if err := o.buildRulesCache(); err != nil {
-		return nil, err
-	}
-	return &o, nil
+	return o, nil
 }
 
 // TopicNames returns the sorted top-level topic keys.
@@ -381,14 +361,4 @@ func sortedKeys(m map[string]*OntologyNode) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// validateKeys checks that all map keys match validKeyRe.
-func validateKeys(ctx string, m map[string]*OntologyNode) error {
-	for k := range m {
-		if !validKeyRe.MatchString(k) {
-			return fmt.Errorf("parse ontology: invalid key %q in %s: must be lowercase kebab-case", k, ctx)
-		}
-	}
-	return nil
 }
