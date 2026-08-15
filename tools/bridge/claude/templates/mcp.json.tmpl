@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "knomit": {
+    {{jsonStr .ServerKey}}: {
       "command": "knomit-bridge",
       "args": ["--repo", {{jsonStr .RepoName}}]
     }

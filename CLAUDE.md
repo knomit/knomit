@@ -5,14 +5,14 @@
 - NEVER create `plan.md`, `todo.md`, `notes.md` or similar at the project root
 - Commit messages and session logs go in `.claude/plans/`
 
-<!-- knomit:integration -->
+<!-- knomit:integration v2 -->
 ## Working with knomit memory
 
 This project uses knomit as long-term memory. Eleven `/knomit-…` slash commands
 wrap knomit's MCP tools. Use them in these moments:
 
 **Before non-trivial work** — call `/knomit-recall <area>` before:
-- Editing or writing files under <KNOWN_INVARIANT_PATHS>
+- Editing or writing code in an area you have not already recalled for this session
 - Picking where new code goes
 - Implementing a pattern that may already exist
 - Answering "why does X work this way?"

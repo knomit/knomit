@@ -20,7 +20,7 @@ DON'T use for:
 
 ## How
 
-Call `mcp__knomit__knomit_retract` with:
+Call `knomit_retract` with:
 
 - `file`: the fact path (e.g. `kb/decisions/.../<uuid>.md`)
 - `moment_name`: short label explaining why (e.g. `"synthesize/recipes deleted in 0938d83"`)

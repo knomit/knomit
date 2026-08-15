@@ -51,7 +51,7 @@ Word every draft against the body authoring contract in /knomit-remember: name e
 
 Bootstrapping is high-leverage and high-blast-radius. Show drafts as a list (title + 1-line body summary + topic/category) and ask for approval before writing. **Don't write unilaterally.** A bad bootstrap pollutes the corpus and biases all future recall in the area.
 
-### Step 4 — Write approved facts via `mcp__knomit__knomit_learn`
+### Step 4 — Write approved facts via `knomit_learn`
 
 Single batched `knomit_learn` call with all approved facts. Suggested defaults:
 
