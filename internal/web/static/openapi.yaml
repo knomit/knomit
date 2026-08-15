@@ -17,6 +17,11 @@ servers:
 tags:
   - name: discovery
   - name: repos
+  - name: ontologies
+    description: |
+      Repo-independent ontology helpers the create wizard calls before any
+      repo exists — validate custom YAML, list built-in presets, fetch a
+      preset's YAML, and read the field reference backing editor completions.
   - name: archive
     description: Archived-repo lifecycle — list, restore, and purge archived repos
   - name: lenses
@@ -109,6 +114,109 @@ paths:
                 $ref: "#/components/schemas/CreateRepoEvent"
         "400": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+
+  /repos:probe-origin:
+    post:
+      tags: [repos, origin]
+      summary: Probe a remote origin before create
+      description: |
+        Inspects a remote without cloning it (`remote.ListContext` — REFS
+        ONLY), so the create wizard can tell "join an existing knowledge
+        base" (has refs) from "seed an empty one" (no refs) before asking the
+        user to declare which up front. Filesystem origins are routed through
+        the same local-origin gate as every clone/fetch path — no exemption.
+
+        The result is advisory, not authority: a remote can gain refs between
+        the probe and the create, so create re-asserts emptiness itself.
+
+        Unreachable and auth-required come back as 200 results with the
+        corresponding flag set, NOT HTTP errors — both are states the wizard
+        renders and recovers from. Only a refused request (a missing url, or
+        a local origin the local-origin gate rejects) is a 400.
+      operationId: probeOrigin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProbeOriginRequest" }
+      responses:
+        "200":
+          description: Probe result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProbeOriginResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /ontologies:validate:
+    post:
+      tags: [ontologies]
+      summary: Validate ontology YAML
+      description: |
+        Parses and validates a raw ontology YAML document without persisting
+        anything, for the create wizard's custom-ontology editor.
+
+        Always 200: an ontology that fails to parse or validate returns
+        `ok:false` with the full diagnostics list (every problem found, not
+        just the first), never an HTTP error — a 4xx is reserved for a body
+        the server could not even read.
+      operationId: validateOntology
+      requestBody:
+        required: true
+        content:
+          text/yaml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OntologyValidateResponse" }
+        "413": { $ref: "#/components/responses/Problem" }
+
+  /ontologies/presets:
+    get:
+      tags: [ontologies]
+      summary: List built-in ontology presets
+      operationId: listOntologyPresets
+      responses:
+        "200":
+          description: Presets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OntologyPresetsResponse" }
+
+  /ontologies/presets/{name}:
+    parameters:
+      - { name: name, in: path, required: true, description: "Preset identifier (e.g. default, code).", schema: { type: string } }
+    get:
+      tags: [ontologies]
+      summary: Get a preset's ontology YAML
+      description: |
+        Returns the same serialized form that create would commit — the
+        wizard seeds its custom-ontology editor from this.
+      operationId: getOntologyPreset
+      responses:
+        "200":
+          description: Ontology YAML
+          content:
+            text/yaml:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /ontologies/schema:
+    get:
+      tags: [ontologies]
+      summary: Ontology YAML field reference
+      description: |
+        The field list backing the editor's completions, served from Go so
+        there is exactly one description of the ontology shape.
+      operationId: getOntologySchema
+      responses:
+        "200":
+          description: Field list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OntologySchemaResponse" }
 
   /repos/{repo}:
     parameters:
@@ -2260,6 +2368,56 @@ components:
           type: string
           description: Extended detail or error description.
 
+    # Origin probe (pre-create)
+    ProbeOriginRequest:
+      type: object
+      required: [url]
+      description: |
+        Same fields as CreateRepoOrigin, but url is required — there is
+        nothing to probe without one.
+      properties:
+        url:         { type: string, description: Remote URL to probe. }
+        branch:      { type: string, description: "Branch to report as upstream if already known; otherwise the probe derives it (see ProbeOriginResult.upstream_branch)." }
+        auth_method: { type: string, enum: [token, basic, ssh] }
+        auth_token:  { type: string }
+
+    ProbeOriginResult:
+      type: object
+      required: [reachable, empty, auth_required, upstream_branch, branches]
+      description: |
+        What a pre-create look at a remote can establish via
+        `remote.ListContext` — REFS ONLY. Deliberately carries no fact count,
+        commit count, or ontology id: establishing those needs a real fetch.
+        Advisory, not authority — a remote can gain refs between the probe
+        and the create.
+      properties:
+        reachable:
+          type: boolean
+          description: |
+            false only for a connection-level failure (timeout, DNS,
+            connection refused, unknown host, ...). true whenever the remote
+            answered at all, including when empty or auth_required.
+        empty:
+          type: boolean
+          description: true when the remote has no branches.
+        auth_required:
+          type: boolean
+          description: true when the remote demanded credentials the probe did not have.
+        upstream_branch:
+          type: string
+          description: |
+            The branch a clone would actually adopt: the requested branch if
+            one was given, else "main" if the remote has it, else the
+            remote's symbolic HEAD, else "main" as the last resort. Mirrors
+            InitFromRemote's own preference order.
+        branches:
+          type: array
+          items: { type: string }
+          description: Every branch the remote reported. Empty when empty is true.
+        detail:
+          type: string
+          description: Extra detail — an error message when unreachable or auth_required, otherwise absent.
+
     ArchivedRepo:
       type: object
       required: [id, name, archivedAt, sizeBytes, _links]
@@ -2658,3 +2816,88 @@ components:
         children:
           type: array
           items: { $ref: "#/components/schemas/LensTopicChild" }
+
+    # Ontologies (pre-create wizard helpers)
+    OntologyDiagnostic:
+      type: object
+      required: [line, column, message]
+      properties:
+        line:    { type: integer, description: 1-based line number in the submitted YAML. }
+        column:  { type: integer, description: 1-based column number. }
+        message: { type: string }
+
+    OntologyValidateResponse:
+      type: object
+      required: [ok, id, name, topics, rule_count]
+      description: |
+        ok:true carries the parsed ontology's summary (id, name, topics,
+        rule_count); ok:false carries diagnostics instead — every diagnostic
+        found, not just the first — and id/name/topics/rule_count are present
+        but zero-valued in that case, not meaningful.
+      properties:
+        ok:
+          type: boolean
+        id:
+          type: string
+          description: The ontology's own id field. Empty when ok is false.
+        name:
+          type: string
+          description: Empty when ok is false.
+        topics:
+          type: array
+          items: { type: string }
+          description: Empty when ok is false.
+        rule_count:
+          type: integer
+          description: Total validations declared at the root and on every node. 0 when ok is false.
+        diagnostics:
+          type: array
+          items: { $ref: "#/components/schemas/OntologyDiagnostic" }
+          description: Present only when ok is false.
+
+    OntologyPresetSummary:
+      type: object
+      required: [name, id, title, description, topics]
+      properties:
+        name:
+          type: string
+          description: Preset identifier — used in the URL and in CreateRepoRequest.ontology_preset.
+        id:
+          type: string
+          description: The ontology's own id field.
+        title:       { type: string }
+        description: { type: string }
+        topics:
+          type: array
+          items: { type: string }
+
+    OntologyPresetsResponse:
+      type: object
+      required: [presets]
+      properties:
+        presets:
+          type: array
+          items: { $ref: "#/components/schemas/OntologyPresetSummary" }
+
+    OntologySchemaField:
+      type: object
+      required: [struct, field, doc]
+      description: One ontology YAML key, for the create wizard's editor completions.
+      properties:
+        struct:
+          type: string
+          description: The Go struct this YAML key belongs to (Ontology, OntologyNode, or Validation).
+        field:
+          type: string
+          description: The YAML key name.
+        doc:
+          type: string
+          description: One-line description.
+
+    OntologySchemaResponse:
+      type: object
+      required: [fields]
+      properties:
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/OntologySchemaField" }

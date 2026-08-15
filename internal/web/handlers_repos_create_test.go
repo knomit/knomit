@@ -26,6 +26,24 @@ func newRealManager(t *testing.T) *repos.Manager {
 	return m
 }
 
+// newRealManagerWithLocalOriginRoot is newRealManager with LocalOriginRoot set
+// to root, so a file:// origin under it clears the local-origin policy gate.
+// newRealManager itself must keep no root configured — other tests depend on
+// filesystem origins being disabled by default — so this is a separate helper
+// rather than a parameter added to it.
+func newRealManagerWithLocalOriginRoot(t *testing.T, root string) *repos.Manager {
+	t.Helper()
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentBranch: "machine/test",
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	return m
+}
+
 func TestPostRepos_StreamsNDJSONAndCreates(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()

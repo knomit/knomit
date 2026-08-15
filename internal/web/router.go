@@ -105,6 +105,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
+	// Probes an origin before create, so the wizard can classify it (has refs
+	// / empty / unreachable) instead of asking the user to declare that up
+	// front. Collection-level for the same reason as the ontology block below:
+	// it runs BEFORE any repo exists.
+	r.Post("/repos:probe-origin", handleReposProbeOrigin(s.Manager))
+
 	// Ontology endpoints. Collection-level and repo-independent: the create
 	// wizard calls them BEFORE any repo exists, so they cannot live under
 	// /repos/{repo}. The ':' action suffix follows the convention noted above.
