@@ -38,19 +38,58 @@ func compileRules(topic string, rules []Validation) ([]compiledRule, error) {
 }
 
 // factToJS converts a Fact into a plain map suitable for read-only JS access.
-// Only fields a rule might branch on are exposed.
+//
+// Every field of Fact is exposed, keyed by its json tag, with one deliberate
+// exception: RefWarnings. That field is derived on read and never stored, and
+// a rule over it could not be trusted in either direction — it is structurally
+// always empty on the knomit_learn path (the fact is built in memory, and
+// SerializeFact refuses to write a malformed ref anyway), and stale on the
+// knomit_update path (ParseFact computes it from the on-disk refs, which the
+// handler replaces wholesale before ValidateFact runs).
+//
+// TestFactToJS_ExposesEveryFactField enforces both halves of that: reflection
+// over the struct fails if a newly added field is not exposed here, and the
+// omission list it checks against carries the reason above. Add a field to
+// Fact, and either expose it here or record why it must stay hidden.
 func factToJS(f Fact) map[string]any {
 	return map[string]any{
-		"kind":       string(f.Kind),
-		"type":       string(f.Type),
-		"domain":     append([]string{}, f.Domain...),
-		"entities":   append([]string{}, f.Entities...),
-		"refs":       append([]string{}, f.Refs...),
-		"title":      f.Title,
-		"body":       f.Body,
-		"path":       f.Path(),
-		"confidence": f.Confidence,
+		"kind":            string(f.Kind),
+		"type":            string(f.Type),
+		"domain":          append([]string{}, f.Domain...),
+		"entities":        append([]string{}, f.Entities...),
+		"refs":            append([]string{}, f.Refs...),
+		"title":           f.Title,
+		"body":            f.Body,
+		"path":            f.Path(),
+		"confidence":      f.Confidence,
+		"sources":         f.Sources,
+		"origin":          string(resolvedOrigin(f)),
+		"evidence_weight": f.EvidenceWeight,
 	}
+}
+
+// resolvedOrigin is the origin a rule sees: the value that will actually land
+// on disk, never the raw field.
+//
+// The two write paths disagree about whether Origin is set by the time
+// ValidateFact runs. knomit_learn deliberately leaves it empty when the caller
+// omitted it, so the serialize/parse round trip can apply the default — which
+// happens after validation. knomit_update, by contrast, hands ValidateFact a
+// fact ParseFact already resolved. Passing the raw field through would
+// therefore make one rule disagree between the two: `fact.origin ===
+// 'authored'` would reject nearly every learn write while passing the
+// equivalent update, and `fact.origin !== 'discovered'` would quietly pass
+// facts whose origin is genuinely unset.
+//
+// Resolving through defaultOriginForType keeps this in lockstep with
+// ParseFact and SerializeFact rather than restating their rule — the drift
+// between two independent expressions of that default is what once
+// round-tripped authored synthesis facts into distilled.
+func resolvedOrigin(f Fact) Origin {
+	if f.Origin != "" {
+		return f.Origin
+	}
+	return defaultOriginForType(f.Type)
 }
 
 // evaluateRule runs one compiled rule against a fact. Returns (pass, err).

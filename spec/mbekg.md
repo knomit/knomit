@@ -506,13 +506,34 @@ rule's `message`.
 
 - The expression is evaluated with a single variable in scope, `fact`,
   exposing exactly: `kind`, `type`, `domain` (array), `entities` (array),
-  `refs` (array), `title`, `body`, `path` (normalized lowercase), and
-  `confidence`. Nothing else.
+  `refs` (array), `title`, `body`, `path` (normalized lowercase),
+  `confidence`, `sources`, `origin`, and `evidence_weight`. Nothing else.
+- `fact.origin` is the **resolved** origin — the value that will actually be
+  written — never the raw field. A fact may reach validation with `origin`
+  unset (a writer may leave it for the serialize/parse round trip to
+  default), so the implementation substitutes the type's default before
+  binding: `authored`, or `distilled` for `type: synthesis`. Rules therefore
+  judge identically whichever write path a fact arrives on.
+- `ref_warnings` is deliberately **not** exposed. It is derived on read and
+  never stored, so it is empty for a fact being written fresh and describes
+  the pre-update refs for a fact being updated — a rule over it would judge
+  refs that are not the ones being written.
 - Rules are pure expressions: no I/O, no host access, bounded execution.
 - The result is coerced by JavaScript truthiness. The first failing rule
   rejects the write; a rule that throws also rejects.
 - Rules attach to the ontology node matching the fact's topic path; a fact
   under an **unknown topic matches no node and passes vacuously**.
+- A write that dedup-merges into an existing fact is validated **twice**:
+  once on the incoming fact exactly as supplied, and again on the merged
+  result, where a rule may see values no single write supplied — `sources`
+  is the sum of both facts, `confidence` the max, `domain` and `entities`
+  the union. The fact must pass **both** passes. The merge pass can only
+  add strictness; it can never rescue a fact the incoming pass already
+  rejected, because the incoming check runs first and fails the whole write.
+  A rule like `fact.sources >= 2` is therefore a per-write floor that
+  rejects every write supplying the default `sources: 1` — it does not
+  become a corroboration gate that opens once a second write arrives.
+  Corroboration cannot be expressed as a validation rule.
 
 The `general` preset ships no rules. The `source-code` preset ships exactly
 four, all on `principles`:
