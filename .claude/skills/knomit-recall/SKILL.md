@@ -64,6 +64,13 @@ Call `mcp__knomit__knomit_query` with:
 - `text`: the user-supplied topic (or your own one-line summary of the area)
 - `entities`: any file paths currently open or about to be edited
 - `applies_to`: the area path the work targets (e.g. `store/resolver`). Derive from an explicit user-supplied path, OR from the dominant directory among open files. Omit if uncertain; text/entities matching still works.
+- `path`: an ontology-path prefix, when the request names a KIND of knowledge rather than only a subject. `applies_to` and `path` are DIFFERENT AXES and combine freely:
+    - `applies_to` = **subject matter**, matched against each fact's `domain:` tags (`store`, `mcp`, `repos`, `build`).
+    - `path` = **kind of knowledge**, the `kb/<topic>/` folder. Valid topics: `architecture`, `conventions`, `decisions`, `gotchas`, `incidents`, `invariants`, `meta`, `principles`. A bare topic name maps to `kb/<topic>/`.
+
+  So "invariants about the lens write repo" is `text: "lens write repo"` + `path: "kb/invariants/"`, and "everything scoped to store" is `applies_to: ["store"]`. Confusing the two is the common error — `applies_to: ["invariants"]` half-works by accident, because a few facts carry `invariant` as a domain tag, and returns the wrong thing convincingly.
+
+  **Use `path` whenever the question is about a kind.** Step 1 below tells you to read principles and invariants first; without `path` that is a hope about ranking, and with it the priority order is actually reachable.
 
 **Empty result?** Note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no designer principle applies at this scope — proceed with text/entity results as today.
 

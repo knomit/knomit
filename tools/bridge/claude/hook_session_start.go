@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -96,11 +95,6 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 			fmt.Fprintf(&sb, "  - %s\n    %s\n", f.Title, f.Path)
 		}
 		sb.WriteString("\n")
-	}
-	if toc := buildAreaTOC(recentWindow); toc != "" {
-		sb.WriteString("AVAILABLE ON DEMAND (use /knomit-recall <area>):\n  ")
-		sb.WriteString(toc)
-		sb.WriteString("\n\n")
 	}
 	if len(recent) > 0 {
 		sb.WriteString("Recent work in this repo:\n")
@@ -207,49 +201,6 @@ func principleShortPath(p string) string {
 		return rest
 	}
 	return parts[0] + "/" + parts[1]
-}
-
-// buildAreaTOC builds a one-line, alphabetically-sorted summary of how
-// many recent facts exist under each "area" — the SECOND path segment
-// after kb/ (e.g. kb/invariants/store/a.md → area "store",
-// kb/principles/anti-patterns/bridge/d.md → area "anti-patterns").
-//
-// Global principles are excluded because they're already rendered in the
-// PROJECT PRINCIPLES block above; scoped principles ARE counted so the
-// agent learns the bucket exists and can /knomit-recall it.
-//
-// Returns "" when no area has any facts; the caller suppresses the line
-// in that case.
-func buildAreaTOC(facts []factSummary) string {
-	counts := map[string]int{}
-	for _, f := range facts {
-		if !strings.HasPrefix(f.Path, "kb/") {
-			continue
-		}
-		if strings.HasPrefix(f.Path, "kb/principles/") && containsString(f.Domain, "global") {
-			continue
-		}
-		rest := strings.TrimPrefix(f.Path, "kb/")
-		parts := strings.SplitN(rest, "/", 3)
-		if len(parts) < 2 {
-			continue
-		}
-		area := parts[1]
-		counts[area]++
-	}
-	if len(counts) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(counts))
-	for k := range counts {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s (%d)", k, counts[k]))
-	}
-	return strings.Join(parts, ", ")
 }
 
 func filterByPathPrefix(facts []factSummary, prefix string, max int) []factSummary {

@@ -4,7 +4,8 @@
 This project uses knomit as long-term memory. Eleven `/knomit-…` slash commands
 wrap knomit's MCP tools. Use them in these moments:
 
-**Before non-trivial work** — call `/knomit-recall <area>` before:
+**Before non-trivial work** — call `/knomit-recall <what you are about to
+work on>` before:
 - Editing or writing files under <KNOWN_INVARIANT_PATHS>
 - Picking where new code goes
 - Implementing a pattern that may already exist
@@ -14,6 +15,12 @@ wrap knomit's MCP tools. Use them in these moments:
   already say WHY, and may say your reproduction points at the wrong cause.
 - Briefing a subagent on an area — recall for them and put it in the brief,
   or tell them to recall.
+
+The argument is free text, not a taxonomy term — `/knomit-recall lens write-repo
+resolution` is a valid call. Name a KIND of knowledge as well when you want one:
+`/knomit-recall invariants for internal/fact` scopes to `kb/invariants/`. The
+kinds are architecture, conventions, decisions, gotchas, incidents, invariants,
+meta, principles.
 
 Recall is a habit, not a phase: two recalls at the start of a session do
 not cover the debugging you do an hour later.
