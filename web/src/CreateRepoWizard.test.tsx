@@ -84,6 +84,52 @@ describe('CreateRepoWizard', () => {
     expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument();
   });
 
+  // Ported from the old CreateRepoForm.test.tsx. Regression: a colon-less
+  // basic-auth token reads on the backend as Password with an empty
+  // Username — the exact broken-credential case basic support exists to
+  // avoid. Require a username before allowing Next to advance.
+  it('blocks Next on the access step for basic auth with a blank username', async () => {
+    (api.probeOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(probed({ auth_required: true }));
+    render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
+
+    fireEvent.change(screen.getByTestId('create-url'), { target: { value: 'https://h/r.git' } });
+    fireEvent.click(screen.getByTestId('probe-button'));
+    await waitFor(() => expect(screen.getByTestId('step-access')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'kb' } });
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'basic' } });
+    // Password only, no username.
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 's3cret' } });
+
+    const nextBtn = screen.getByRole('button', { name: /^next$/i }) as HTMLButtonElement;
+    expect(nextBtn.disabled).toBe(true);
+
+    // Supplying a username unblocks Next.
+    fireEvent.change(screen.getByPlaceholderText('username'), { target: { value: 'alice' } });
+    expect((screen.getByRole('button', { name: /^next$/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // Ported from the old CreateRepoForm.test.tsx: the old suite asserted
+  // onDone was called with the repo name the server reported on its 'done'
+  // event. No wizard-level test exercised that wiring; the other submit
+  // tests here only check the request body.
+  it('calls onDone with the created repo name for a local-only repo using the default preset', async () => {
+    const onDone = vi.fn();
+    render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /keep it on this machine/i }));
+    fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'scratch' } });
+    fireEvent.click(screen.getByRole('button', { name: /next|ontology/i }));
+    await waitFor(() => expect(screen.getByTestId('step-ontology')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /next|review/i }));
+    await waitFor(() => expect(screen.getByTestId('step-review')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /create repository/i }));
+
+    await waitFor(() => expect(api.createRepo).toHaveBeenCalled());
+    const body = (api.createRepo as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(body).toMatchObject({ mode: 'preset', name: 'scratch', ontology_preset: 'default' });
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('kb'));
+  });
+
   it('surfaces an unreachable remote without advancing', async () => {
     (api.probeOrigin as ReturnType<typeof vi.fn>).mockResolvedValue({
       reachable: false, empty: false, auth_required: false,

@@ -212,4 +212,62 @@ describe('createBodyFor', () => {
     s = wizardReducer(s, { type: 'SET_NAME', name: 'kb' });
     expect(createBodyFor(s).origin).toMatchObject({ auth_method: '', auth_token: '' });
   });
+
+  // Ported from the old CreateRepoForm.test.tsx (removed in Task 10): the
+  // local-only, no-yaml branch of createBodyFor was otherwise untested here —
+  // every other createBodyFor case covers 'seed', 'clone', or 'custom', but
+  // not the default 'preset' mode a local-only repo takes when the user
+  // never touches "write your own"/upload.
+  it('sends mode preset for a local-only repo using the selected preset (no yaml)', () => {
+    let s = wizardReducer(initialWizardState, { type: 'CHOOSE_LOCAL' });
+    s = wizardReducer(s, { type: 'SET_NAME', name: 'scratch' });
+    expect(createBodyFor(s)).toMatchObject({ name: 'scratch', mode: 'preset', ontology_preset: 'default' });
+  });
+
+  // Ported from the old CreateRepoForm.test.tsx: explicitly selecting "none"
+  // must still send an empty token, not just auto-detect's empty method.
+  it('sends auth_method "none" and empty token when None is explicitly selected', () => {
+    let s = wizardReducer(initialWizardState, { type: 'SET_URL', url: 'https://h/r.git' });
+    s = wizardReducer(s, {
+      type: 'PROBE_DONE',
+      probe: { reachable: true, empty: false, auth_required: true, upstream_branch: 'main', branches: ['main'] },
+    });
+    s = wizardReducer(s, { type: 'SET_NAME', name: 'kb' });
+    s = wizardReducer(s, { type: 'SET_AUTH_METHOD', method: 'none' });
+    expect(createBodyFor(s).origin).toMatchObject({ auth_method: 'none', auth_token: '' });
+  });
+
+  // Ported from the old CreateRepoForm.test.tsx. Regression: a token typed
+  // under auto-detect and then abandoned (method switched to none) must NOT
+  // be shipped — only methods that consume a token send one, so no stale
+  // credential is persisted server-side.
+  it('drops a stale token when the method is switched away from token/basic', () => {
+    let s = wizardReducer(initialWizardState, { type: 'SET_URL', url: 'https://h/r.git' });
+    s = wizardReducer(s, {
+      type: 'PROBE_DONE',
+      probe: { reachable: true, empty: false, auth_required: true, upstream_branch: 'main', branches: ['main'] },
+    });
+    s = wizardReducer(s, { type: 'SET_NAME', name: 'kb' });
+    s = wizardReducer(s, { type: 'SET_TOKEN', token: 'ghp_secret' });
+    s = wizardReducer(s, { type: 'SET_AUTH_METHOD', method: 'none' });
+    expect(createBodyFor(s).origin).toMatchObject({ auth_method: 'none', auth_token: '' });
+  });
+
+  // Ported from the old CreateRepoForm.test.tsx. Regression: basic auth needs
+  // a username. The wizard assembles "user:password" into auth_token — the
+  // convention the backend (assembleAuthToken / remoteAuthFromRecord /
+  // authConfigFromSpec) splits on. Previously a single field sent only the
+  // password, producing BasicAuth{Username:"", ...} which fails on real hosts.
+  it('assembles user:password into auth_token for basic auth', () => {
+    let s = wizardReducer(initialWizardState, { type: 'SET_URL', url: 'https://h/r.git' });
+    s = wizardReducer(s, {
+      type: 'PROBE_DONE',
+      probe: { reachable: true, empty: false, auth_required: true, upstream_branch: 'main', branches: ['main'] },
+    });
+    s = wizardReducer(s, { type: 'SET_NAME', name: 'kb' });
+    s = wizardReducer(s, { type: 'SET_AUTH_METHOD', method: 'basic' });
+    s = wizardReducer(s, { type: 'SET_AUTH_USER', user: 'alice' });
+    s = wizardReducer(s, { type: 'SET_TOKEN', token: 's3cret' });
+    expect(createBodyFor(s).origin).toMatchObject({ auth_method: 'basic', auth_token: 'alice:s3cret' });
+  });
 });
