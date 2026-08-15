@@ -661,11 +661,50 @@ export function parseNDJSONLine(line: string): CreateEvent | null {
 
 export interface CreateRepoBody {
   name: string;
-  mode: 'preset' | 'custom' | 'clone';
+  mode: 'preset' | 'custom' | 'clone' | 'seed';
   ontology_preset?: string;
   ontology_yaml?: string;
   origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string };
 }
+
+// ProbeResult is the response of POST /api/v1/repos:probe-origin — the wizard's
+// probe of a candidate remote before committing to clone/seed it. `branches` is
+// always a JSON array from the server, never null. `detail` carries a
+// human-readable reason when `reachable` is false (or auth is required).
+export interface ProbeResult {
+  reachable: boolean;
+  empty: boolean;
+  auth_required: boolean;
+  upstream_branch: string;
+  branches: string[];
+  detail?: string;
+}
+
+// OntologyDiagnostic is one parse/validation error from POST
+// /api/v1/ontologies:validate, line/column 1-based into the submitted YAML.
+export interface OntologyDiagnostic { line: number; column: number; message: string }
+
+// OntologyValidation is the response of POST /api/v1/ontologies:validate. On
+// success (ok: true) all five keys are always present, including
+// `rule_count: 0` — never omitted to mean zero. On failure (ok: false) only
+// `diagnostics` accompanies `ok`.
+export interface OntologyValidation {
+  ok: boolean;
+  id?: string;
+  name?: string;
+  topics?: string[];
+  rule_count?: number;
+  diagnostics?: OntologyDiagnostic[];
+}
+
+// OntologyPreset is one row of GET /api/v1/ontologies/presets.
+export interface OntologyPreset {
+  name: string; id: string; title: string; description: string; topics: string[];
+}
+
+// OntologyField is one row of GET /api/v1/ontologies/schema — the struct/field
+// pairs a custom ontology's rules may reference, with their doc string.
+export interface OntologyField { struct: string; field: string; doc: string }
 
 export interface ArchivedRepo {
   /** The repo's registry uid — the key restore and purge take. */
@@ -907,6 +946,37 @@ export const api = {
   listArchived,
   restoreRepo,
   purgeRepo,
+
+  probeOrigin: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string }): Promise<ProbeResult> =>
+    fetchJSON<ProbeResult>(apiUrl('/api/v1/repos:probe-origin'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  validateOntology: (yamlText: string): Promise<OntologyValidation> =>
+    fetchJSON<OntologyValidation>(apiUrl('/api/v1/ontologies:validate'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/yaml' },
+      body: yamlText,
+    }),
+
+  ontologyPresets: (): Promise<OntologyPreset[]> =>
+    fetchJSON<{ presets: OntologyPreset[] }>(apiUrl('/api/v1/ontologies/presets'))
+      .then(d => d.presets),
+
+  // ontologyPresetYAML GETs a single preset's raw YAML body. This endpoint
+  // returns text/yaml, not JSON, so it needs a plain fetch with its own
+  // non-OK check rather than fetchJSON (which assumes a JSON body).
+  ontologyPresetYAML: async (name: string): Promise<string> => {
+    const r = await fetch(apiUrl(`/api/v1/ontologies/presets/${encodeURIComponent(name)}`));
+    if (!r.ok) throw new Error(`preset ${name} → ${r.status}`);
+    return r.text();
+  },
+
+  ontologySchema: (): Promise<OntologyField[]> =>
+    fetchJSON<{ fields: OntologyField[] }>(apiUrl('/api/v1/ontologies/schema'))
+      .then(d => d.fields),
 
   listLenses,
   getLens,
