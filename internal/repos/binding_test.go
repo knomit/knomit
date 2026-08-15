@@ -63,6 +63,38 @@ func TestBinding_IsLens(t *testing.T) {
 	require.True(t, lens.IsLens(), "write + distinct read mount is a lens")
 }
 
+// TestBinding_FromLens_IsProvenanceNotBreadth pins the distinction that makes
+// FromLens worth having separately from IsLens. A lens whose only read mount is
+// its own write repo federates across nothing, so IsLens is false about it —
+// but the caller unambiguously connected THROUGH a lens, and anything reporting
+// how a caller connected (the write-destination stamp) must still say so.
+// Reading IsLens there renders such a connection indistinguishable from a
+// direct /repos/{repo}/… one.
+func TestBinding_FromLens_IsProvenanceNotBreadth(t *testing.T) {
+	m := newLifecycleManager(t)
+	core := createRepo(t, m, testRepoName)
+
+	// A single-member lens: write repo is also its only read mount.
+	lens, err := m.LensRegistry().Create(Lens{
+		Name:     "solo-lens",
+		WriteUID: core.UID(),
+		Reads:    []LensRead{{RepoUID: core.UID()}},
+	})
+	require.NoError(t, err)
+	b, err := NewBindingOfLens(m, lens)
+	require.NoError(t, err)
+
+	require.False(t, b.IsLens(), "sanity: a lens of one member federates across nothing")
+	require.True(t, b.FromLens(), "provenance survives where breadth does not")
+	require.Equal(t, "solo-lens", b.Name())
+
+	// The lens-of-one synthesized for /repos/{repo}/… is the case FromLens must
+	// keep saying false about — it did not come from a lens definition.
+	direct := NewBindingOfRepo(core, "")
+	require.False(t, direct.FromLens(), "a synthesized repo binding is not from a lens")
+	require.False(t, direct.IsLens())
+}
+
 func TestBinding_WriteMountBranch(t *testing.T) {
 	// Lens-of-one bound to an explicit branch: WriteMountBranch is that branch.
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo", AgentBranch: "agent/test"})

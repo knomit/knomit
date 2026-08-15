@@ -450,6 +450,24 @@ func applyDedupMerge(
 	// commit that wrote them; the ref gate must not re-judge them just because
 	// a merge is rewriting the file that carries them.
 	priorRefs := make(map[string][]string)
+	// An existing fact absorbs at most ONE incoming fact per call. Search runs
+	// with Limit: 1, so two inputs in the same category directory can both come
+	// back pointing at the same existing fact — and without this set the second
+	// one retargets paths[i] onto a path the first already claimed, AFTER the
+	// duplicate-path guard in the handler has run and can no longer see it.
+	// That is the exact loss that guard describes: one file, two commit
+	// entries, one body silently gone, and a summary that reports both as
+	// written. It also double-lists a subsumed hypothesis in retract.
+	//
+	// A second matcher is SKIPPED rather than chained onto the in-progress
+	// merge — the same choice applyGreedyMerges makes with its `consumed` set
+	// ("each fact index participates in at most one merge"). Skipping writes
+	// the fact at its own freshly-minted path: two near-duplicates land instead
+	// of one, which a later review prune collapses. Chaining would instead pick
+	// a tiebreak winner among three bodies and drop two, silently, inside a
+	// call the caller thinks wrote everything it sent. A redundant fact is
+	// recoverable; a discarded one is not.
+	consumed := make(map[string]bool)
 
 	for i, f := range facts {
 		// Private-state facts are not knowledge and have no category
@@ -487,6 +505,10 @@ func applyDedupMerge(
 		}
 
 		match := results[0]
+		if consumed[match.Path] {
+			// Already absorbed an earlier fact in this call — see `consumed`.
+			continue
+		}
 		// Read existing fact to get its full metadata (refs, etc.)
 		readResult, readErr := s.facts.ReadFact(ctx, agentBranch, match.Path, nil)
 		if readErr != nil {
@@ -502,6 +524,7 @@ func applyDedupMerge(
 		// observation is written at its OWN path — it is a new fact, not a
 		// revision of the prediction it settles.
 		if existingFact.Type == fact.Hypothesis && f.Type != fact.Hypothesis {
+			consumed[match.Path] = true
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
@@ -540,6 +563,7 @@ func applyDedupMerge(
 		// f.Path() here removed a key that was never inserted (the build stage
 		// keyed by the raw path), so the merge left the new-fact file in place
 		// and the commit wrote BOTH the original and the merged file.
+		consumed[match.Path] = true
 		delete(files, paths[i])
 		paths[i] = match.Path
 		priorRefs[match.Path] = existingFact.Refs

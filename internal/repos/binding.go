@@ -100,6 +100,24 @@ func (b *Binding) IsLens() bool {
 	return false
 }
 
+// FromLens reports whether this binding was RESOLVED FROM a persisted lens
+// definition, rather than synthesized for a single repo (the /repos/{repo}/…
+// path). Read off PinID, which is prefixed exactly so the two provenances are
+// distinguishable without a name comparison.
+//
+// Distinct from IsLens, and the difference is load-bearing: IsLens asks about
+// federation BREADTH — does this binding read more than its own write repo —
+// and a lens that mounts a single member federates across nothing, so IsLens
+// says false about a binding that unambiguously came from a lens. Anything
+// reporting HOW THE CALLER CONNECTED wants FromLens; anything deciding whether
+// federation machinery has more than one mount to fan out over wants IsLens.
+//
+// A uid-less binding mints an empty PinID (pinOf fails closed) and therefore
+// reads as not-from-a-lens. That is the same four-barriers-unreachable case
+// PinID documents, and the safe direction to fail: a missing lens name is a
+// thinner report, not a wrong one.
+func (b *Binding) FromLens() bool { return strings.HasPrefix(b.pinID, "lens:") }
+
 // Reads returns the read mounts (the write repo is always among them).
 func (b *Binding) Reads() []ReadTarget { return b.reads }
 
