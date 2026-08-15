@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import ReactMarkdown from 'react-markdown';
 import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { RepoStateChip } from './RepoStateChip';
-import { CreateRepoForm } from './CreateRepoForm';
+import { CreateRepoWizard } from './CreateRepoWizard';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
 import { RemoteCard } from './RemoteStatus';
@@ -344,7 +344,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             )}
             {view.kind === 'new' && readOnly && <CreateBlocked what="repository" />}
             {view.kind === 'new' && !readOnly && (
-              <CreateRepoForm
+              <CreateRepoWizard
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
                 // With no repos the fallback selection IS this form and Manage is
                 // the whole window, so there is nothing to back out TO: clearing
