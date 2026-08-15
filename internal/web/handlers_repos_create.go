@@ -104,6 +104,8 @@ func createErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Create in flight"
 	case errors.Is(err, repos.ErrOriginInUse):
 		return http.StatusConflict, "Origin in use"
+	case errors.Is(err, repos.ErrRemoteNotEmpty):
+		return http.StatusConflict, "Remote is not empty"
 	default:
 		return http.StatusInternalServerError, "Create failed"
 	}

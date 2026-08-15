@@ -53,6 +53,11 @@ var (
 	// In practice it is the shutdown race: an in-flight POST /api/v1/repos that
 	// reached Create while Close was tearing the manager down.
 	ErrManagerStopped = errors.New("repo manager is not running")
+	// ErrRemoteNotEmpty is returned when mode "seed" is asked to initialise a
+	// remote that already has refs. Seeding must never half-obey: the ontology
+	// the caller chose is either written, or the request is refused — it is
+	// never silently replaced by the remote's own.
+	ErrRemoteNotEmpty = errors.New("remote is not empty; use mode \"clone\" to join it")
 )
 
 // controlHandles snapshots the two control.db tenants under m.mu.
@@ -123,10 +128,20 @@ type OriginSpec struct {
 // CreateSpec is the single input for all repo-creation modes.
 type CreateSpec struct {
 	Name           string
-	Mode           string // "preset" | "custom" | "clone"
+	Mode           string // "preset" | "custom" | "clone" | "seed"
 	OntologyPreset string
 	OntologyYAML   string
 	Origin         *OriginSpec
+}
+
+// hasRemote reports whether spec's mode attaches a remote origin. "clone" and
+// "seed" are the two remote-bearing modes — everywhere one of them needs the
+// origin checked, reserved, persisted, or synced, the other needs it too.
+// Written once here rather than repeated as `|| spec.Mode == "seed"` at each
+// of the five sites in this file, so a future sixth site can't be added
+// without the same check.
+func (s CreateSpec) hasRemote() bool {
+	return s.Mode == "clone" || s.Mode == "seed"
 }
 
 // Event is a progress message emitted during Create.
@@ -145,13 +160,19 @@ func (m *Manager) CreatePreflight(spec CreateSpec) error {
 		return ErrInvalidName
 	}
 	origin := ""
-	if spec.Mode == "clone" {
+	if spec.hasRemote() {
 		if spec.Origin == nil || spec.Origin.URL == "" {
-			return fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
+			return fmt.Errorf("%w: %s mode requires origin.url", ErrInvalidName, spec.Mode)
 		}
 		origin = spec.Origin.URL
-		if err := rejectOntologySpecForClone(spec); err != nil {
-			return err
+		if spec.Mode == "clone" {
+			if err := rejectOntologySpecForClone(spec); err != nil {
+				return err
+			}
+		} else if spec.OntologyPreset == "" && spec.OntologyYAML == "" {
+			// Seeding without an ontology has no meaning — it would be a clone
+			// of an empty remote, which is what mode "clone" already does.
+			return fmt.Errorf("%w: seed mode requires ontology_preset or ontology_yaml", ErrInvalidName)
 		}
 		if active := m.ActiveRepoWithOrigin(origin); active != "" {
 			return fmt.Errorf("%w: %q", ErrOriginInUse, active)
@@ -250,13 +271,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, err
 	}
 
-	// Determine the origin to reserve (clone mode only) before reserving, so the
-	// reservation covers the whole clone — including the network fetch — and a
-	// second clone of the same origin is blocked for that entire window.
+	// Determine the origin to reserve (clone/seed only) before reserving, so the
+	// reservation covers the whole clone/seed — including the network fetch —
+	// and a second clone/seed of the same origin is blocked for that entire
+	// window.
 	var origin string
-	if spec.Mode == "clone" {
+	if spec.hasRemote() {
 		if spec.Origin == nil || spec.Origin.URL == "" {
-			return nil, fmt.Errorf("%w: clone mode requires origin.url", ErrInvalidName)
+			return nil, fmt.Errorf("%w: %s mode requires origin.url", ErrInvalidName, spec.Mode)
 		}
 		origin = spec.Origin.URL
 	}
@@ -327,6 +349,15 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			return nil, ierr
 		}
 		resolvedUpstream = upstream
+	case "seed":
+		// Name/origin presence and uniqueness were validated and reserved up
+		// front via reserveNameAndOrigin; just seed.
+		upstream, ierr := m.initSeed(ctx, spec, dbPath, emit)
+		if ierr != nil {
+			cleanup()
+			return nil, ierr
+		}
+		resolvedUpstream = upstream
 	default:
 		cleanup()
 		return nil, fmt.Errorf("%w: unknown mode %q", ErrInvalidName, spec.Mode)
@@ -338,10 +369,10 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	}
 
 	var originRec *Origin
-	if spec.Mode == "clone" {
+	if spec.hasRemote() {
 		emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
 		// The upstream InitFromRemote RESOLVED, never the one requested — see
-		// initClone, which returns it for exactly this reason.
+		// initClone/initSeed, both of which return it for exactly this reason.
 		originRec = &Origin{
 			URL:        spec.Origin.URL,
 			Branch:     resolvedUpstream,
@@ -381,7 +412,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 	}
 
-	if spec.Mode == "clone" && ri != nil {
+	if spec.hasRemote() && ri != nil {
 		emit(Event{Step: "sync", Message: "activating sync", Pct: 95})
 		if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
 			log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
@@ -395,21 +426,9 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 // initLocal handles preset/custom modes: resolve ontology bytes, seed a fresh repo.
 func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
 	emit(Event{Step: "ontology", Message: "resolving ontology", Pct: 20})
-	var ont *fact.Ontology
-	var err error
-	switch {
-	case spec.Mode == "custom":
-		ont, err = fact.ParseOntology([]byte(spec.OntologyYAML))
-		if err != nil {
-			return fmt.Errorf("parse ontology: %w", err)
-		}
-	case spec.OntologyPreset != "":
-		ont, err = fact.OntologyByPreset(spec.OntologyPreset)
-		if err != nil {
-			return err
-		}
-	default:
-		ont = fact.DefaultOntology()
+	ont, err := resolveOntology(spec)
+	if err != nil {
+		return err
 	}
 	y, err := ont.Serialize()
 	if err != nil {
@@ -435,6 +454,24 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 		return fmt.Errorf("init git: %w", err)
 	}
 	return nil
+}
+
+// resolveOntology turns a spec's ontology fields into an Ontology. Shared by
+// initLocal and initSeed so the two modes cannot drift in how they read the
+// same two fields.
+func resolveOntology(spec CreateSpec) (*fact.Ontology, error) {
+	switch {
+	case spec.OntologyYAML != "":
+		o, err := fact.ParseOntology([]byte(spec.OntologyYAML))
+		if err != nil {
+			return nil, fmt.Errorf("parse ontology: %w", err)
+		}
+		return o, nil
+	case spec.OntologyPreset != "":
+		return fact.OntologyByPreset(spec.OntologyPreset)
+	default:
+		return fact.DefaultOntology(), nil
+	}
 }
 
 // rejectOntologySpecForClone refuses a clone request that also names an
@@ -506,6 +543,76 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 		map[string]string{OntologyPath: string(ont)})
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return "", cerr
+	}
+	return upstream, nil
+}
+
+// initSeed handles "seed" mode: initialise an EMPTY remote with the caller's
+// chosen ontology, so local and remote share a root commit from birth and are
+// never disjoint histories.
+//
+// This is the case rejectOntologySpecForClone refuses for mode "clone", and it
+// is safe here only because of the guard below: if the remote turns out to have
+// refs we fail with ErrRemoteNotEmpty rather than proceeding and letting
+// InitFromRemote silently discard the seed files. That is the difference
+// between this mode and relaxing the clone rule.
+//
+// Like initClone, this does NOT persist the origin anywhere — Create does
+// that, into control.db, once initSeed returns the resolved upstream.
+func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+	if cerr := ctx.Err(); cerr != nil {
+		return "", cerr
+	}
+	emit(Event{Step: "probe", Message: "checking " + spec.Origin.URL, Pct: 10})
+	probe, err := m.ProbeOrigin(ctx, *spec.Origin)
+	if err != nil {
+		return "", err
+	}
+	if !probe.Reachable {
+		return "", fmt.Errorf("seed: remote not reachable: %s", probe.Detail)
+	}
+	// Re-asserted HERE, not trusted from the client: the wizard's probe and this
+	// create are separated in time, and a remote can gain refs in between.
+	if !probe.Empty {
+		return "", ErrRemoteNotEmpty
+	}
+
+	emit(Event{Step: "ontology", Message: "resolving ontology", Pct: 20})
+	ont, err := resolveOntology(spec)
+	if err != nil {
+		return "", err
+	}
+	y, err := ont.Serialize()
+	if err != nil {
+		return "", fmt.Errorf("serialize ontology: %w", err)
+	}
+
+	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	if err != nil {
+		return "", fmt.Errorf("resolve auth: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return "", err
+	}
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("open store: %w", err)
+	}
+	defer svc.Close()
+	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
+	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+	// No Crypt is wired here, for the same reason initClone doesn't: the
+	// credential is already resolved above, and its durable copy belongs to
+	// control.db's Origins, which holds the only Crypt.
+
+	emit(Event{Step: "init-git", Message: "initialising " + spec.Origin.URL, Pct: 50})
+	upstream, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
+		map[string]string{OntologyPath: string(y)})
+	if err != nil {
+		return "", fmt.Errorf("seed: %w", err)
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
