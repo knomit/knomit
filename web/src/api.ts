@@ -684,18 +684,15 @@ export interface ProbeResult {
 // /api/v1/ontologies:validate, line/column 1-based into the submitted YAML.
 export interface OntologyDiagnostic { line: number; column: number; message: string }
 
-// OntologyValidation is the response of POST /api/v1/ontologies:validate. On
-// success (ok: true) all five keys are always present, including
-// `rule_count: 0` — never omitted to mean zero. On failure (ok: false) only
-// `diagnostics` accompanies `ok`.
-export interface OntologyValidation {
-  ok: boolean;
-  id?: string;
-  name?: string;
-  topics?: string[];
-  rule_count?: number;
-  diagnostics?: OntologyDiagnostic[];
-}
+// OntologyValidation is the response of POST /api/v1/ontologies:validate.
+// Discriminated on `ok` rather than an all-optional bag: on success all four
+// remaining keys are always present, including `rule_count: 0` — the backend
+// dropped `omitempty` from these fields specifically so a real zero survives
+// the wire. Typing them optional would let `if (result.rule_count)` silently
+// mistreat that zero as absent, the same class of bug the wire fix closed.
+export type OntologyValidation =
+  | { ok: true; id: string; name: string; topics: string[]; rule_count: number }
+  | { ok: false; diagnostics: OntologyDiagnostic[] };
 
 // OntologyPreset is one row of GET /api/v1/ontologies/presets.
 export interface OntologyPreset {

@@ -40,7 +40,24 @@ export type WizardAction =
   | { type: 'BACK' }
   | { type: 'GOTO'; step: StepId };
 
+// wizardReducer applies the action, then clamps stepIndex into range for the
+// RESULT's own stepsFor. This is belt-and-braces with currentStep() below:
+// any action here — not just the two (CHOOSE_LOCAL, PROBE_DONE) that R2 gives
+// an explicit advance rule — can change `choice`/`probe` and therefore shrink
+// the derived list out from under a stepIndex that used to be valid. E.g.
+// probe an empty remote (list grows to 4, land on 'access' at index 1), then
+// correct a typo'd URL (SET_URL resets probe → list collapses to ['source']);
+// without this clamp stepIndex would still read 1, one past the end.
 export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
+  return clampStepIndex(applyAction(s, a));
+}
+
+function clampStepIndex(s: WizardState): WizardState {
+  const max = Math.max(stepsFor(s).length - 1, 0);
+  return s.stepIndex > max ? { ...s, stepIndex: max } : s;
+}
+
+function applyAction(s: WizardState, a: WizardAction): WizardState {
   switch (a.type) {
     case 'CHOOSE_REMOTE': return { ...s, choice: 'remote' };
     // Advances to the name step unconditionally — there is no probe to wait on
@@ -71,6 +88,16 @@ export function wizardReducer(s: WizardState, a: WizardAction): WizardState {
     }
     default: return s;
   }
+}
+
+// currentStep is the read-time counterpart of the clamp above: it re-derives
+// stepsFor(s) and clamps the index there too, so a consumer (Task 8) that
+// indexes via this selector is safe even if some future action forgets to
+// keep stepIndex in range. Never index `stepsFor(s)[s.stepIndex]` directly.
+export function currentStep(s: WizardState): StepId {
+  const steps = stepsFor(s);
+  const i = Math.min(Math.max(s.stepIndex, 0), steps.length - 1);
+  return steps[i];
 }
 
 /**
