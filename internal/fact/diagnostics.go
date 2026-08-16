@@ -46,7 +46,14 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 		diags = append(diags, Diagnostic{Message: "parse ontology: at least one topic is required"})
 	}
 
-	topicNodes := mappingChildren(valueForKey(documentRoot(&doc), "topics"))
+	// Two different nodes per topic, and mixing them up costs the position:
+	// topicsNode is the MAPPING under `topics:`, whose VALUE for a topic is that
+	// topic's body (where `children:` lives), while topicNodes holds each topic's
+	// KEY node (which is what carries the position to report). Descending into
+	// `children` from the key node silently yields nothing — valueForKey returns
+	// nil for a non-mapping — and every child diagnostic then reports line 0.
+	topicsNode := valueForKey(documentRoot(&doc), "topics")
+	topicNodes := mappingChildren(topicsNode)
 	for _, key := range sortedKeys(o.Topics) {
 		if !validKeyRe.MatchString(key) {
 			diags = append(diags, diagAt(topicNodes[key], fmt.Sprintf(
@@ -58,7 +65,7 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 		if node == nil || node.Children == nil {
 			continue
 		}
-		childNodes := mappingChildren(valueForKey(topicNodes[key], "children"))
+		childNodes := mappingChildren(valueForKey(valueForKey(topicsNode, key), "children"))
 		for _, child := range sortedKeys(node.Children) {
 			if !validKeyRe.MatchString(child) {
 				diags = append(diags, diagAt(childNodes[child], fmt.Sprintf(

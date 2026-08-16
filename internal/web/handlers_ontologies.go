@@ -12,10 +12,12 @@ import (
 )
 
 // MaxOntologyBytes caps an ontology document accepted by :validate (whose
-// whole body is the YAML) and by create (whose body carries it as
-// ontology_yaml, and is capped as a whole — the rest of that envelope is a
-// few hundred bytes). Both enforce it with http.MaxBytesReader and answer 413;
-// neither path may read an ontology without it. Sits alongside
+// whole body is the YAML) and by create (whose body carries it as the JSON
+// string ontology_yaml). Both answer 413, and both measure the RAW YAML — a
+// create that instead capped its whole body would reject, as "too large",
+// ontologies that :validate had just accepted, since JSON escaping inflates
+// the document (see maxCreateBodyBytes in handlers_repos_create.go). Neither
+// path may read an ontology without a cap. Sits alongside
 // MaxRepoDescriptionBytes as a request-size guard.
 const MaxOntologyBytes = 256 * 1024
 

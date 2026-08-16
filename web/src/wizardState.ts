@@ -14,6 +14,19 @@ export interface WizardState {
   authToken: string;
   /** 'default' | 'code' when a preset is selected, '' when custom yaml is used. */
   preset: string;
+  /**
+   * The preset CARD the user last clicked. Never cleared — this is not the wire
+   * value (`preset` is), it is the answer to "which preset did they choose?",
+   * which `preset` stops being able to give the moment SET_YAML clears it.
+   *
+   * It lives in the reducer rather than in StepOntology because the ontology
+   * step is conditionally rendered (CreateRepoWizard.tsx): Back-then-Next
+   * unmounts and remounts it, and a component-local ref re-initialises from
+   * `state.preset` — which is '' by then — and silently degrades to 'default'.
+   * A user who picked "code" would get the default ontology, permanently,
+   * because the ontology is immutable after repo creation.
+   */
+  seedPreset: string;
   yaml: string;
   stepIndex: number;
 }
@@ -21,7 +34,7 @@ export interface WizardState {
 export const initialWizardState: WizardState = {
   choice: null, url: '', probe: null, name: '', branch: '',
   authMethod: '', authUser: '', authToken: '',
-  preset: 'default', yaml: '', stepIndex: 0,
+  preset: 'default', seedPreset: 'default', yaml: '', stepIndex: 0,
 };
 
 export type WizardAction =
@@ -77,8 +90,10 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
     case 'SET_AUTH_USER': return { ...s, authUser: a.user };
     case 'SET_TOKEN':     return { ...s, authToken: a.token };
     // Preset and yaml are mutually exclusive: selecting one clears the other so
-    // createBodyFor never has to guess which the user meant.
-    case 'SET_PRESET':    return { ...s, preset: a.preset, yaml: '' };
+    // createBodyFor never has to guess which the user meant. seedPreset is the
+    // deliberate exception — it records the CHOICE, not the payload, and so
+    // survives SET_YAML (see its doc on WizardState).
+    case 'SET_PRESET':    return { ...s, preset: a.preset, seedPreset: a.preset, yaml: '' };
     case 'SET_YAML':      return { ...s, yaml: a.yaml, preset: '' };
     case 'NEXT':          return { ...s, stepIndex: Math.min(s.stepIndex + 1, stepsFor(s).length - 1) };
     case 'BACK':          return { ...s, stepIndex: Math.max(s.stepIndex - 1, 0) };
@@ -129,16 +144,21 @@ export function stepsFor(s: WizardState): StepId[] {
  *   remote, has refs → 'clone'  (carries NO ontology — the backend refuses one)
  */
 export function createBodyFor(s: WizardState): CreateRepoBody {
+  // `s.preset || s.seedPreset`, never `|| 'default'`: the fallback fires
+  // exactly when SET_YAML has cleared s.preset, and hardcoding 'default' there
+  // hands a user who chose "code" an ontology they did not pick — permanently,
+  // since it is immutable after creation. seedPreset is the same question
+  // asked of state that SET_YAML does not clear.
   if (s.choice === 'local') {
     return s.yaml
       ? { name: s.name, mode: 'custom', ontology_yaml: s.yaml }
-      : { name: s.name, mode: 'preset', ontology_preset: s.preset || 'default' };
+      : { name: s.name, mode: 'preset', ontology_preset: s.preset || s.seedPreset };
   }
   const origin = originFor(s);
   if (s.probe?.empty) {
     return s.yaml
       ? { name: s.name, mode: 'seed', ontology_yaml: s.yaml, origin }
-      : { name: s.name, mode: 'seed', ontology_preset: s.preset || 'default', origin };
+      : { name: s.name, mode: 'seed', ontology_preset: s.preset || s.seedPreset, origin };
   }
   return { name: s.name, mode: 'clone', origin };
 }

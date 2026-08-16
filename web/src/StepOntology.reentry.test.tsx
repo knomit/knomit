@@ -1,4 +1,4 @@
-import { useReducer } from 'react';
+import { useReducer, useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { StepOntology } from './StepOntology';
@@ -41,11 +41,17 @@ vi.mock('./api', () => ({
 // their real consequences (notably: SET_YAML clears state.preset, which is the
 // mechanism that made the re-seed resolve to 'default'). The rendered JSON is
 // the wire body the wizard would POST.
+// `showing` mirrors CreateRepoWizard's `{step === 'ontology' && <StepOntology
+// …>}`: leaving the step UNMOUNTS this component and coming back MOUNTS a
+// fresh one, so anything it remembers in a ref is gone while the reducer state
+// below survives. Tests that never leave the step simply never touch it.
 function Harness({ onValidityChange = () => {} }: { onValidityChange?: (v: boolean) => void }) {
   const [state, dispatch] = useReducer(wizardReducer, { ...initialWizardState, choice: 'local', name: 'kb' });
+  const [showing, setShowing] = useState(true);
   return (
     <>
-      <StepOntology state={state} onDispatch={dispatch} onValidityChange={onValidityChange} />
+      {showing && <StepOntology state={state} onDispatch={dispatch} onValidityChange={onValidityChange} />}
+      <button type="button" data-testid="toggle-step" onClick={() => setShowing(s => !s)}>toggle</button>
       <pre data-testid="create-body">{JSON.stringify(createBodyFor(state))}</pre>
     </>
   );
@@ -55,6 +61,11 @@ const createBody = () => JSON.parse(screen.getByTestId('create-body').textConten
 const editor = () => screen.getByTestId('ontology-editor') as HTMLTextAreaElement;
 const clickWriteOwn = () => fireEvent.click(screen.getByRole('button', { name: /write your own/i }));
 const clickUpload = () => fireEvent.click(screen.getByRole('button', { name: /upload a file/i }));
+// Back, then Next — the wizard's own way of unmounting and remounting the step.
+const leaveAndReturn = () => {
+  fireEvent.click(screen.getByTestId('toggle-step'));
+  fireEvent.click(screen.getByTestId('toggle-step'));
+};
 
 describe('StepOntology re-entry into a choice already selected', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -127,6 +138,50 @@ describe('StepOntology re-entry into a choice already selected', () => {
     expect(editor()).toHaveValue(EDITED_YAML);
     expect(api.ontologyPresetYAML).not.toHaveBeenCalled();
     expect(createBody()).toEqual({ name: 'kb', mode: 'custom', ontology_yaml: EDITED_YAML });
+  });
+
+  // Same finding, reached by LEAVING the step instead of re-clicking a card.
+  // CreateRepoWizard renders `{step === 'ontology' && <StepOntology …>}`, so
+  // Back-then-Next unmounts and remounts this component — and a preset
+  // remembered only in a component-local ref does not survive that.
+  it('re-seeds from the chosen preset even after the step is unmounted and remounted', async () => {
+    render(<Harness />);
+    await waitFor(() => expect(api.ontologyPresets).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Code/i }));
+    clickWriteOwn();
+    await waitFor(() => expect(editor()).toHaveValue(CODE_YAML));
+    fireEvent.change(editor(), { target: { value: '' } });
+
+    leaveAndReturn();
+    await waitFor(() => expect(screen.getByTestId('step-ontology')).toBeInTheDocument());
+    clickWriteOwn();
+
+    await waitFor(() => expect(editor()).toHaveValue(CODE_YAML));
+    expect(api.ontologyPresetYAML).toHaveBeenLastCalledWith('code');
+  });
+
+  // The damage the remount did on its own, with no further clicks: mode falls
+  // back to 'preset' because there is no yaml, but SET_YAML had already cleared
+  // state.preset — so no card renders selected while Next reports valid, and
+  // createBodyFor's `state.preset || 'default'` sends the DEFAULT ontology to a
+  // user who chose "code".
+  it('does not report valid on remount when the emptied editor left no selection', async () => {
+    const onValidityChange = vi.fn();
+    render(<Harness onValidityChange={onValidityChange} />);
+    await waitFor(() => expect(api.ontologyPresets).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Code/i }));
+    clickWriteOwn();
+    await waitFor(() => expect(editor()).toHaveValue(CODE_YAML));
+    fireEvent.change(editor(), { target: { value: '' } });
+
+    onValidityChange.mockClear();
+    leaveAndReturn();
+    await waitFor(() => expect(screen.getByTestId('step-ontology')).toBeInTheDocument());
+
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+    expect(screen.getByText(/pick one of the choices above/i)).toBeInTheDocument();
   });
 
   // Re-clicking "Upload a file" while already on it used to reset the Next

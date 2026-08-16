@@ -15,7 +15,11 @@ import { cardLabel } from './manageStyles';
 // are plain text: amber on every line would mean nobody reads it on the one
 // that matters.
 export function StepReview({ state }: { state: WizardState }) {
-  const presetLabel = state.yaml ? 'a custom' : `the "${state.preset || 'default'}"`;
+  // Same fallback createBodyFor uses, and for the same reason: this line must
+  // name the ontology that will actually be sent, so reading 'default' off a
+  // cleared state.preset here would make the review page confidently wrong
+  // about the one choice that cannot be changed after creation.
+  const presetLabel = state.yaml ? 'a custom' : `the "${state.preset || state.seedPreset}"`;
   const branch = state.branch || state.probe?.upstream_branch || 'main';
 
   return (

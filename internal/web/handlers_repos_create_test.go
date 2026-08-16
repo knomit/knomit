@@ -2,6 +2,7 @@ package web
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -187,5 +188,69 @@ func TestPostRepos_BodyUnderTheCapIsNotRejectedAsOversize(t *testing.T) {
 	}
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// The two paths have to agree on what MaxOntologyBytes measures. Create used to
+// cap the whole JSON ENVELOPE at that number, but ontology_yaml is a JSON
+// string inside it and escaping inflates the YAML — an ontology is mostly
+// newlines, and each costs two bytes encoded. So an ontology comfortably under
+// the documented limit, which :validate had just shown green in the editor,
+// came back from create as 413 "Ontology too large": an error naming a limit
+// the document does not exceed, with no action the user could take.
+func TestPostRepos_YAMLUnderTheCapWhoseJSONEncodingExceedsItIsAccepted(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+
+	// Newline-dense, so the encoded form is ~2x the raw form: raw stays under
+	// MaxOntologyBytes while the escaped body lands well over it.
+	head := "id: x\nname: X\ntopics:\n  alpha:\n    description: d\n"
+	raw := head + strings.Repeat("# p\n", (MaxOntologyBytes-len(head)-1024)/4)
+	if len(raw) > MaxOntologyBytes {
+		t.Fatalf("test fixture is %d bytes, over the cap it is meant to stay under", len(raw))
+	}
+	encoded, err := json.Marshal(map[string]string{"name": "kb", "mode": "custom", "ontology_yaml": raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) <= MaxOntologyBytes {
+		t.Fatalf("encoded body is %d bytes, not over the cap — the fixture proves nothing", len(encoded))
+	}
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", bytes.NewReader(encoded)))
+
+	if rec.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("an ontology of %d raw bytes (under the %d cap) was rejected as oversize: %s",
+			len(raw), MaxOntologyBytes, rec.Body.String())
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// The other side of the same boundary: the cap still applies, and it applies to
+// the DECODED ontology rather than to the envelope around it.
+func TestPostRepos_OversizeOntologyYAMLIs413(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+
+	encoded, err := json.Marshal(map[string]string{
+		"name": "kb", "mode": "custom", "ontology_yaml": strings.Repeat("x", MaxOntologyBytes+1),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", bytes.NewReader(encoded)))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Ontology too large") {
+		t.Fatalf("413 does not name the ontology as the cause: %s", rec.Body.String())
+	}
+	if s.Manager.Get("kb") != nil {
+		t.Fatal("an oversize create must not register a repo")
 	}
 }

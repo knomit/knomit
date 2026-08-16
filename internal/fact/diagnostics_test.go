@@ -19,6 +19,31 @@ func TestValidateOntologyYAML_CollectsAllErrorsWithLines(t *testing.T) {
 	}
 }
 
+// Child keys are the case the test above does NOT cover, and they regressed
+// independently: the walk descended into `children:` from the topic's KEY node
+// rather than its value, so valueForKey always returned nil and every child
+// diagnostic came back at line 0. Line 0 is not merely imprecise — it means "no
+// position available" (see Diagnostic), the panel renders "Line 0 — …", and
+// OntologyEditor's mapDiagnostic clamps it up to line 1, underlining `id:`
+// instead of the offending key.
+func TestValidateOntologyYAML_ChildKeyDiagnosticsCarryTheirLine(t *testing.T) {
+	src := "id: x\nname: X\ntopics:\n  ok:\n    children:\n      Bad Child:\n        description: d\n" +
+		"  also-ok:\n    children:\n      Another Bad:\n        description: d\n"
+	_, diags := ValidateOntologyYAML([]byte(src))
+	if len(diags) != 2 {
+		t.Fatalf("diagnostics = %d, want 2: %+v", len(diags), diags)
+	}
+	// sortedKeys orders the topics, so "also-ok" reports before "ok".
+	if diags[0].Line != 10 || diags[0].Column != 7 {
+		t.Errorf("first diagnostic at line %d col %d, want line 10 col 7: %s",
+			diags[0].Line, diags[0].Column, diags[0].Message)
+	}
+	if diags[1].Line != 6 || diags[1].Column != 7 {
+		t.Errorf("second diagnostic at line %d col %d, want line 6 col 7: %s",
+			diags[1].Line, diags[1].Column, diags[1].Message)
+	}
+}
+
 func TestValidateOntologyYAML_ValidReturnsNoDiagnostics(t *testing.T) {
 	src := "id: x\nname: X\ntopics:\n  alpha:\n    description: d\n"
 	o, diags := ValidateOntologyYAML([]byte(src))

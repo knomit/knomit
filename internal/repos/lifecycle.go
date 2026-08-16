@@ -386,9 +386,25 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, fmt.Errorf("%w: unknown mode %q", ErrInvalidName, spec.Mode)
 	}
 
+	// A seed that got this far has already PUSHED (initSeed pushes both branches
+	// before returning, and explains there why it cannot wait). Every failure
+	// from here on calls cleanup() — deleting the local .db and the registry row
+	// — while the remote KEEPS the seed, leaving the user exactly where
+	// initSeed's own agent-push failure path leaves them: the remote is no
+	// longer empty, so every later seed of that URL returns ErrRemoteNotEmpty,
+	// and the local half they would otherwise clone back is gone. None of that
+	// is guessable from "persist origin: …" or "register repo: …", and this is
+	// the last frame that still knows a push happened.
+	explainSeeded := func(err error) error {
+		if spec.Mode != "seed" || !spec.hasRemote() {
+			return err
+		}
+		return seedAlreadyLanded(err, spec.Origin.URL, resolvedUpstream)
+	}
+
 	if cerr := ctx.Err(); cerr != nil {
 		cleanup()
-		return nil, cerr
+		return nil, explainSeeded(cerr)
 	}
 
 	var originRec *Origin
@@ -404,7 +420,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 		if oerr := origins.Set(uid, *originRec); oerr != nil {
 			cleanup()
-			return nil, fmt.Errorf("persist origin: %w", oerr)
+			return nil, explainSeeded(fmt.Errorf("persist origin: %w", oerr))
 		}
 	}
 
@@ -412,7 +428,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 
 	if aerr := m.Add(spec.Name, uid, dbPath, originRec); aerr != nil {
 		cleanup()
-		return nil, fmt.Errorf("register repo: %w", aerr)
+		return nil, explainSeeded(fmt.Errorf("register repo: %w", aerr))
 	}
 	ri := m.Get(spec.Name)
 	if ri != nil {
@@ -427,7 +443,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 				if errors.Is(rerr, ErrRepoAlreadyRegistered) {
 					m.Remove(spec.Name)
 					cleanup()
-					return nil, rerr
+					return nil, explainSeeded(rerr)
 				}
 				log.Warn().Err(rerr).Str("repo", spec.Name).Str("uid", uid).
 					Msg("recording repo identity failed; repo stays registered")
@@ -738,10 +754,29 @@ func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, 
 			m.deps.AgentBranch, spec.Origin.URL, upstream)
 	}
 
+	// Past the pushes, so a cancellation here costs the same as any later
+	// failure: the local repo is rolled back and the seeded remote is not. The
+	// Create-side wrapper never sees this one — the mode switch returns it
+	// directly — so it carries its own explanation.
 	if cerr := ctx.Err(); cerr != nil {
-		return "", cerr
+		return "", seedAlreadyLanded(cerr, spec.Origin.URL, upstream)
 	}
 	return upstream, nil
+}
+
+// seedAlreadyLanded annotates a failure that happens AFTER a seed's push has
+// landed. Every such path — initSeed's trailing cancellation check and each
+// rollback in Create past the mode switch — goes through here, so the user
+// gets one description of the state they are in and the two ways out of it,
+// rather than one path that explains itself and three that do not.
+//
+// It wraps with %w: ErrRepoAlreadyRegistered and context.Canceled both reach
+// this, and both are matched with errors.Is by callers (createErrStatus in
+// internal/web, among others).
+func seedAlreadyLanded(err error, url, upstream string) error {
+	return fmt.Errorf("%w (the seed already reached %s, so that remote now holds %s and the agent branch and is no "+
+		"longer empty: delete and recreate the empty remote to seed it again, or use mode \"clone\" to adopt it "+
+		"as it stands)", err, url, upstream)
 }
 
 // seedProbeErr maps a ProbeOrigin result to the error initSeed should return

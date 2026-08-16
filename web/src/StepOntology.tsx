@@ -60,33 +60,30 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
   // separate refs that each only guard their own mode.
   const opSeq = useRef(0);
 
-  // The preset the USER actually chose, remembered HERE because wizard state
-  // cannot answer the question: SET_YAML clears state.preset (preset and yaml
-  // are mutually exclusive, wizardState.ts), so the moment the editor is
-  // seeded `state.preset` is '' and `state.preset || 'default'` silently
-  // degrades to 'default'. A re-seed read off that would fetch a DIFFERENT
-  // ontology than the card the user selected — and since the ontology is
-  // immutable after repo creation, there is no repair short of deleting and
-  // recreating the repo.
-  const chosenPreset = useRef(state.preset || 'default');
-
   useEffect(() => {
     let cancelled = false;
     api.ontologyPresets().then(p => { if (!cancelled) setPresets(p); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
-  // A preset is server-supplied and already parses — selecting one is valid
+  // A preset is server-supplied and already parses — SELECTING one is valid
   // with no validate round trip. Fires on mount too, since
   // initialWizardState.preset === 'default' selects one before any click.
+  //
+  // Gated on state.preset rather than reporting a flat `true`, because preset
+  // mode is also where an EMPTIED editor lands: SET_YAML('') leaves
+  // {yaml:'', preset:''}, the mount initialiser above then reads no yaml and
+  // picks 'preset', and no card renders as selected. Reporting valid there
+  // enabled Next over a selection the user cannot see, and createBodyFor's
+  // `state.preset || 'default'` turned it into the default ontology —
+  // immutable after creation, so unfixable short of recreating the repo.
   useEffect(() => {
-    if (mode === 'preset') onValidityChange(true);
+    if (mode === 'preset') onValidityChange(state.preset !== '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, state.preset]);
 
   function selectPreset(p: OntologyPreset) {
     opSeq.current++; // abandons any in-flight upload validate or seed fetch
-    chosenPreset.current = p.name; // the seed source for a later "Write your own"
     setMode('preset');
     setUploadError(''); setUploadResult(null);
     setSeedBusy(false); setSeedError(''); setWriteResult(null);
@@ -122,8 +119,9 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
   // So: any existing content — an earlier seed the user has since edited, or a
   // file they just uploaded — is carried into the editor untouched, and the
   // write-mode validate effect below re-validates it. Only an EMPTY editor
-  // gets a seed, and that seed comes from chosenPreset (the card the user
-  // actually clicked), never from a fallback.
+  // gets a seed, and that seed comes from state.seedPreset (the card the user
+  // actually clicked, remembered in the reducer precisely so it survives both
+  // SET_YAML and a remount of this step), never from a fallback.
   async function startWriteOwn() {
     const seq = ++opSeq.current; // abandons any in-flight upload validate
     const stale = () => !mounted.current || seq !== opSeq.current;
@@ -141,7 +139,7 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
     }
     setSeedBusy(true);
     try {
-      const seed = await api.ontologyPresetYAML(chosenPreset.current);
+      const seed = await api.ontologyPresetYAML(state.seedPreset);
       if (stale()) return;
       onDispatch({ type: 'SET_YAML', yaml: seed });
     } catch (e) {
@@ -250,6 +248,15 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
           <div style={presetBody}>Start from the selected preset and edit it.</div>
         </button>
       </div>
+
+      {/* Preset mode with nothing selected is reachable exactly one way: the
+          user emptied the editor and came back to this step, so state is
+          {yaml:'', preset:''}. Next is correctly disabled there — but a
+          disabled button next to four unselected cards says nothing about why,
+          so say it. Plain text, not amber: nothing has failed. */}
+      {mode === 'preset' && state.preset === '' && (
+        <div style={hint}>Pick one of the choices above to continue.</div>
+      )}
 
       {mode === 'upload' && (
         <div style={panel}>

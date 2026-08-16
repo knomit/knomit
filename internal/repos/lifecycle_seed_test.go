@@ -197,6 +197,48 @@ func TestCreate_SeedModeRequiresOntology_AuthoritativeInCreate(t *testing.T) {
 	require.Nil(t, m.Get("seeded"), "a seed request with no ontology must leave no repo registered")
 }
 
+// initSeed pushes BEFORE the origin record and the registry entry are durable,
+// so a failure in either rolls the local repo back while the remote keeps the
+// seed. initSeed's own agent-push failure path explains that state at length;
+// the paths on the other side of the mode switch used to return a bare
+// "persist origin: …" that named none of it — leaving the user with a remote
+// that now refuses every later seed as ErrRemoteNotEmpty and a local copy that
+// has just been deleted, and no way to work out why from the message.
+//
+// The failure is provoked with the one credential-shaped seam that reaches it
+// on a file:// remote: a token to persist, on a Manager with no KeyPath, so
+// Origins.Set refuses to store the credential (crypt unavailable). The
+// mechanism does not matter — what is pinned is that the annotation reaches the
+// caller from the far side of the push.
+func TestCreate_SeedFailureAfterPushExplainsTheStrandedRemote(t *testing.T) {
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote.git")
+	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	url := "file://" + remoteDir
+	// No Deps.KeyPath, so control.db's Origins tenant has no Crypt to encrypt
+	// with and Set refuses the token rather than storing it in plaintext.
+	m := newSeedManager(t, dir)
+
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "seeded", Mode: "seed", OntologyPreset: "code",
+		Origin: &OriginSpec{URL: url, AuthMethod: "token", AuthToken: "secret"},
+	}, nil)
+	require.Error(t, err)
+	require.Nil(t, m.Get("seeded"), "the failed create must leave no repo registered")
+
+	// The precondition that makes the message necessary: the push landed, so the
+	// remote is NOT recoverable by simply retrying the same seed.
+	refs := remoteRefs(t, remoteDir)
+	require.Contains(t, refs, "refs/heads/main")
+	require.Contains(t, refs, "refs/heads/agent/test-abc")
+
+	msg := err.Error()
+	require.Contains(t, msg, "persist origin:", "the proximate cause must survive the annotation")
+	require.Contains(t, msg, "no longer empty", "the message must say the remote is no longer a valid seed target")
+	require.Contains(t, msg, url, "the message must name the remote it stranded")
+	require.Contains(t, msg, "clone", "the message must name adopting the remote as one way out")
+}
+
 // initSeed's failure paths are only two of the four fully covered above and
 // below (empty ontology, non-empty remote); these pin the remaining two:
 // a remote the probe can't reach at all, and an ontology_yaml that fails to
