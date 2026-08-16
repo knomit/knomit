@@ -2422,13 +2422,20 @@ components:
           description: |
             false only for a connection-level failure (timeout, DNS,
             connection refused, unknown host, ...). true whenever the remote
-            answered at all, including when empty or auth_required.
+            answered at all, including when empty or auth_required — and also
+            when the probe never got as far as the network because the
+            credential itself could not be resolved, which is an auth result
+            (auth_required), not evidence about the remote.
         empty:
           type: boolean
           description: true when the remote has no branches.
         auth_required:
           type: boolean
-          description: true when the remote demanded credentials the probe did not have.
+          description: |
+            true when the remote demanded credentials the probe did not have,
+            or when this machine could not assemble the credential at all
+            (e.g. an ssh:// URL with no usable key) — either way the caller's
+            recovery is the same: supply a credential and probe again.
         upstream_branch:
           type: string
           description: |

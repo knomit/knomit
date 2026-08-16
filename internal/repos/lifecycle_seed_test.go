@@ -120,6 +120,61 @@ func TestCreate_SeedModeRefusesNonEmptyRemote(t *testing.T) {
 	require.Nil(t, m.Get("seeded"), "a refused seed must leave no repo registered")
 }
 
+// The dangerous window: the remote is EMPTY when initSeed probes it and has
+// refs by the time InitFromRemote actually fetches. initSeed's push uses the
+// forced refspec "+refs/heads/%s:refs/heads/%s" (store/remote_sync.go) and a
+// freshly-seeded repo has no origin/<branch> tracking ref to trip the
+// up-to-date short circuit, so proceeding here would FORCE-OVERWRITE history on
+// a remote we do not own — with no local copy of what was destroyed.
+//
+// The interleaving is driven deterministically, with no race: initSeed's own
+// progress callback is synchronous, and it emits Step "ontology" strictly
+// AFTER seedProbeErr accepts the probe and strictly BEFORE InitFromRemote runs.
+// Pushing from inside that callback reproduces the window exactly, every run.
+//
+// What must happen: initSeed learns from InitFromRemote's remoteWasEmpty=false
+// that the empty path was NOT taken, refuses with ErrRemoteNotEmpty, and never
+// reaches the push — so the commit that arrived in the window is still the
+// remote's tip afterwards.
+func TestCreate_SeedRefusesRemoteThatGainedRefsAfterTheProbe(t *testing.T) {
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote.git")
+	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
+	url := "file://" + remoteDir
+	m := newSeedManager(t, dir)
+
+	interloper := ""
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "seeded", Mode: "seed", OntologyPreset: "code",
+		Origin: &OriginSpec{URL: url},
+	}, func(e Event) {
+		// After the probe said "empty", before InitFromRemote looks.
+		if e.Step == "ontology" && interloper == "" {
+			pushCommit(t, remoteDir)
+			interloper = refHash(t, remoteDir, "refs/heads/main")
+		}
+	})
+	require.NotEmpty(t, interloper, "the interleaving never ran — initSeed's step order changed")
+	require.ErrorIs(t, err, ErrRemoteNotEmpty,
+		"a remote that gained refs before the fetch must be refused, not force-pushed over")
+	require.Nil(t, m.Get("seeded"), "a refused seed must leave no repo registered")
+
+	// The proof that no push happened: the interloper's commit is still the tip,
+	// unrewritten, and the seed's agent branch never appeared.
+	require.Equal(t, []string{"refs/heads/main"}, remoteRefs(t, remoteDir),
+		"initSeed pushed anyway — the remote's refs were rewritten")
+	require.Equal(t, interloper, refHash(t, remoteDir, "refs/heads/main"),
+		"the remote's history was force-overwritten by the seed push")
+}
+
+// refHash returns the commit a ref points at in a bare repo.
+func refHash(t *testing.T, bare, ref string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", bare, "rev-parse", ref).Output()
+	require.NoError(t, err)
+	return strings.TrimSpace(string(out))
+}
+
 // Finding 1 regression: Create is also reachable directly (tests, future CLI
 // paths), bypassing CreatePreflight entirely, so initSeed must re-assert the
 // "ontology required" rule itself rather than trust the preflight check —

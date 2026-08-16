@@ -60,6 +60,16 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
   // separate refs that each only guard their own mode.
   const opSeq = useRef(0);
 
+  // The preset the USER actually chose, remembered HERE because wizard state
+  // cannot answer the question: SET_YAML clears state.preset (preset and yaml
+  // are mutually exclusive, wizardState.ts), so the moment the editor is
+  // seeded `state.preset` is '' and `state.preset || 'default'` silently
+  // degrades to 'default'. A re-seed read off that would fetch a DIFFERENT
+  // ontology than the card the user selected — and since the ontology is
+  // immutable after repo creation, there is no repair short of deleting and
+  // recreating the repo.
+  const chosenPreset = useRef(state.preset || 'default');
+
   useEffect(() => {
     let cancelled = false;
     api.ontologyPresets().then(p => { if (!cancelled) setPresets(p); }).catch(() => {});
@@ -76,31 +86,62 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
 
   function selectPreset(p: OntologyPreset) {
     opSeq.current++; // abandons any in-flight upload validate or seed fetch
+    chosenPreset.current = p.name; // the seed source for a later "Write your own"
     setMode('preset');
     setUploadError(''); setUploadResult(null);
-    setSeedError(''); setWriteResult(null);
+    setSeedBusy(false); setSeedError(''); setWriteResult(null);
     onDispatch({ type: 'SET_PRESET', preset: p.name });
   }
 
   function startUpload() {
+    // Clicking the card you are already on is a no-op, never a reset. This
+    // panel's own state (the chosen file's validation summary, and the Next
+    // gate derived from it) is the only thing the reset below would throw
+    // away, and the user asked for nothing by clicking a card that is already
+    // selected. Same rule as startWriteOwn's guard below, for the same reason.
+    if (mode === 'upload') return;
     opSeq.current++; // abandons any in-flight seed fetch
     setMode('upload');
-    setSeedError(''); setWriteResult(null);
+    setSeedBusy(false); setSeedError(''); setWriteResult(null);
     // No file chosen yet — without this, Next would stay enabled off
     // whatever preset was selected before switching panels, even though the
     // visible panel now promises "pick a file", not "use that preset".
     onValidityChange(false);
   }
 
+  // startWriteOwn SEEDS ONLY WHEN THERE IS NOTHING TO LOSE.
+  //
+  // The card has no disabled guard, so it is clickable while already selected —
+  // and an unconditional seed there fetched a preset and dispatched SET_YAML
+  // straight over whatever the user had typed. Worse, `state.preset` is ''
+  // by then (SET_YAML cleared it), so the refetch resolved to 'default': a
+  // user who picked "code", opened the editor and edited it lost the edits AND
+  // got the default ontology, permanently, because the ontology is immutable
+  // after repo creation.
+  //
+  // So: any existing content — an earlier seed the user has since edited, or a
+  // file they just uploaded — is carried into the editor untouched, and the
+  // write-mode validate effect below re-validates it. Only an EMPTY editor
+  // gets a seed, and that seed comes from chosenPreset (the card the user
+  // actually clicked), never from a fallback.
   async function startWriteOwn() {
     const seq = ++opSeq.current; // abandons any in-flight upload validate
     const stale = () => !mounted.current || seq !== opSeq.current;
     setMode('write');
     setUploadError(''); setUploadResult(null);
-    setSeedBusy(true); setSeedError('');
+    setSeedError('');
     onValidityChange(false); // present but not yet validated
+    if (state.yaml !== '') {
+      // Also clears a seedBusy left set by a fetch that was abandoned in
+      // another mode (its own finally is suppressed by the stale check), which
+      // would otherwise pin this panel on "Loading a starting point…" and never
+      // render the editor holding the content we just refused to overwrite.
+      setSeedBusy(false);
+      return;
+    }
+    setSeedBusy(true);
     try {
-      const seed = await api.ontologyPresetYAML(state.preset || 'default');
+      const seed = await api.ontologyPresetYAML(chosenPreset.current);
       if (stale()) return;
       onDispatch({ type: 'SET_YAML', yaml: seed });
     } catch (e) {

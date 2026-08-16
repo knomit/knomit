@@ -581,7 +581,11 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	if err != nil {
 		return "", fmt.Errorf("serialize ontology: %w", err)
 	}
-	upstream, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
+	// The remoteWasEmpty flag is deliberately ignored HERE: cloning a non-empty
+	// remote is this mode's normal case, and cloning an empty one is its
+	// documented corner (the seed files above exist for exactly that). initSeed
+	// is the caller that must act on it.
+	upstream, _, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
 		map[string]string{OntologyPath: string(ont)})
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
@@ -659,10 +663,26 @@ func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, 
 	// control.db's Origins, which holds the only Crypt.
 
 	emit(Event{Step: "init-git", Message: "initialising " + spec.Origin.URL, Pct: 50})
-	upstream, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
 		map[string]string{OntologyPath: string(y)})
 	if err != nil {
 		return "", fmt.Errorf("seed: %w", err)
+	}
+	// THE AUTHORITATIVE emptiness check, and the one that gates the force-push
+	// below. seedProbeErr above is a fail-fast affordance run against a probe
+	// taken strictly EARLIER in time; this flag is InitFromRemote's report of
+	// what it found at the moment it actually fetched. If the remote gained refs
+	// in that window, InitFromRemote silently CLONED them (discarding the seed
+	// files) and pushing now would force `+refs/heads/…` over history on a
+	// remote we do not own — unrecoverable from here. Refuse instead.
+	//
+	// A sub-millisecond window between this check and the push remains, and is
+	// accepted: the user told us the remote was ready to be seeded and we
+	// verified it was ref-less at fetch time.
+	if !remoteWasEmpty {
+		return "", fmt.Errorf(
+			"%w (it gained refs between the check and the fetch, so seeding it would overwrite them)",
+			ErrRemoteNotEmpty)
 	}
 
 	// initFromEmptyRemote (store/repo.go) writes the root commit, the

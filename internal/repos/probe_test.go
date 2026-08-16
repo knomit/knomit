@@ -87,6 +87,43 @@ func TestProbeOrigin_UnreachableIsNotAnError(t *testing.T) {
 	require.NotNil(t, got.Branches, "Branches must be [] not JSON null, for the web client's string[] type")
 }
 
+// A credential this machine cannot assemble at all — an SSH URL with no key
+// configured (TestManager_ResolveAuth_SSHNoKeyFails) — is an AUTH result, not
+// an unreachable one. Nothing in ProbeOrigin has touched the network at that
+// point, so "could not reach that remote" is a claim about the remote with no
+// evidence behind it.
+//
+// The consequence is what this pins: the web wizard's stepsFor collapses an
+// unreachable probe to ['source'], which removes the access step — the only
+// place a credential can be entered. Reporting this as unreachable therefore
+// named the wrong cause AND locked the user out of the fix, with no way to
+// create the repo at all. Reachable+AuthRequired keeps the access step in the
+// list (see wizardState.test.ts's stepsFor cases) and lands in seedProbeErr's
+// authentication arm rather than its reachability one.
+func TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable(t *testing.T) {
+	// KeyPath "" is the no-key-on-this-machine case; the URL is SSH-style so
+	// ResolveAuth auto-detects ssh and then fails for want of a key.
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: t.TempDir()},
+		AgentBranch: "agent/test", KeyPath: "", DisableBackgroundSync: true,
+	})
+	t.Cleanup(func() { m.Close() })
+
+	got, err := m.ProbeOrigin(context.Background(), OriginSpec{URL: "git@github.com:user/repo.git", AuthMethod: "ssh"})
+	require.NoError(t, err, "a credential failure is a RESULT, not an error")
+	require.True(t, got.Reachable, "a credential we could not assemble says nothing about reachability")
+	require.True(t, got.AuthRequired, "an unresolvable credential must be reported as an auth problem")
+	require.Contains(t, got.Detail, "key path", "the underlying cause must survive into Detail")
+	require.NotNil(t, got.Branches, "Branches must never serialize as JSON null")
+
+	// seedProbeErr must read it as authentication, not "not empty": steering
+	// the user to mode "clone" would fail against the same missing key.
+	serr := seedProbeErr(got)
+	require.Error(t, serr)
+	require.False(t, errors.Is(serr, ErrRemoteNotEmpty))
+	require.Contains(t, serr.Error(), "requires authentication")
+}
+
 // TestClassifyProbeError unit-tests classifyProbeError directly against
 // synthetic errors — no network or live server needed. This is the coverage
 // that was missing: ProbeOrigin's own tests only ever hit real go-git errors

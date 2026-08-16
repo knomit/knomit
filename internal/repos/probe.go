@@ -53,9 +53,31 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 	if err := m.ValidateLocalOrigin(o.URL); err != nil {
 		return ProbeResult{}, err
 	}
+	// A credential that cannot even be ASSEMBLED is an auth problem, not a
+	// reachability one: nothing here touched the network, so "unreachable" is a
+	// claim about the remote we have no evidence for. The concrete case is an
+	// SSH URL (git@host:repo) with no usable key on this machine
+	// (TestManager_ResolveAuth_SSHNoKeyFails) — a perfectly reachable remote.
+	//
+	// Reporting it as {Reachable:false} was a DEAD END, not just a mislabel:
+	// stepsFor (web/src/wizardState.ts) collapses an unreachable probe to
+	// ['source'], and the access step — the only place a credential can be
+	// entered — is exactly what that removes. So the user was told the wrong
+	// cause AND denied the one control that fixes it.
+	//
+	// Reachable:true here therefore means "no evidence of a reachability
+	// failure", which is the reading every consumer already gives it for the
+	// auth-required case ProbeOrigin reports below (also Reachable:true with
+	// Empty unknown/false). seedProbeErr (lifecycle.go) orders !Reachable →
+	// AuthRequired → !Empty, so this lands in its authentication arm.
 	auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
 	if err != nil {
-		return ProbeResult{Branches: []string{}, Detail: err.Error()}, nil
+		return ProbeResult{
+			Reachable:    true,
+			AuthRequired: true,
+			Branches:     []string{},
+			Detail:       err.Error(),
+		}, nil
 	}
 
 	repo, err := gogit.Init(memory.NewStorage(), nil)

@@ -341,4 +341,32 @@ describe('CreateRepoWizard', () => {
     expect(screen.getByTestId('step-source')).toBeInTheDocument();
     expect(screen.queryByTestId('step-access')).not.toBeInTheDocument();
   });
+
+  // The counterpart, and a DEAD END until the backend stopped conflating the
+  // two: an SSH URL with no usable key on this machine fails inside
+  // ResolveAuth, before any network call. Reported as {reachable:false} it
+  // collapsed stepsFor to ['source'] — removing the access step, which is the
+  // only place a credential can be entered — so the user was told the remote
+  // was unreachable AND denied the one control that fixes it. There was no way
+  // to create the repo at all.
+  //
+  // internal/repos/probe.go now reports it as {reachable:true,
+  // auth_required:true} (TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable
+  // pins the producer); this pins what the user gets for it.
+  it('routes an unresolvable credential to the access step instead of dead-ending on source', async () => {
+    (api.probeOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(probed({
+      auth_required: true, branches: [], upstream_branch: '',
+      detail: 'resolve auth: ssh auth requires a key path',
+    }));
+    render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
+    fireEvent.change(screen.getByTestId('create-url'), { target: { value: 'git@github.com:user/repo.git' } });
+    fireEvent.click(screen.getByTestId('probe-button'));
+
+    await waitFor(() => expect(screen.getByTestId('step-access')).toBeInTheDocument());
+    // The credential fields — the whole point of getting here.
+    expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument();
+    expect(screen.getByTestId('recheck-button')).toBeInTheDocument();
+    // And the wrong cause is not asserted at the user.
+    expect(screen.queryByText(/could not reach that remote/i)).not.toBeInTheDocument();
+  });
 });
