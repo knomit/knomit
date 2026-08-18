@@ -120,6 +120,15 @@ describe('the wizard against a fake git host', () => {
       await reachAccess('https://h/existing.git', HOST.populated());
       expect(screen.getByTestId('outcome-card')).toHaveAttribute('data-tone', 'good');
       expect(screen.getByTestId('probe-branches')).toHaveTextContent('draft');
+      // And it must not PROMISE the shape of the rest of the wizard. This card
+      // used to say knomit would "adopt the ontology already in it — so there
+      // is no ontology step for this case", which is the deleted clone-only
+      // flow: whether an ontology step exists is decided by the branch check on
+      // the NEXT step, and for a repository with a README and no .knomit/ the
+      // answer is that one does.
+      const card = screen.getByTestId('outcome-card');
+      expect(card).not.toHaveTextContent(/no ontology step/i);
+      expect(card).toHaveTextContent(/branch/i);
       // source · access · branch. Neither Ontology nor Review is promised yet:
       // which of them comes next is decided by the initialization check, and
       // advertising a shape nobody has established is a claim we cannot back.

@@ -339,7 +339,15 @@ function Outcome({ state, probeError, probeFailure }: {
       tone="good"
       headline={`Reached ${named} — ${count} ${count === 1 ? 'branch' : 'branches'}`}
       url={state.url}
-      body="knomit will clone this repository and adopt the ontology already in it — that choice belongs to the remote, so there is no ontology step for this case."
+      // States only what THIS check established: the remote answered and these
+      // are its branches. It used to promise the rest of the wizard as well —
+      // "knomit will clone this repository and adopt the ontology already in
+      // it, so there is no ontology step for this case" — which described the
+      // clone-only flow that predates the branch step. Whether an ontology
+      // already exists is decided per-branch on the next step, and for the
+      // common case this card is shown for (a project created with a README
+      // and no .knomit/) the answer is that one does not.
+      body="Next you'll pick the branch knomit should treat as the project's agreed state, and knomit will check whether it already holds a knowledge base."
     >
       {count > 0 && (
         <div data-testid="probe-branches" style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
