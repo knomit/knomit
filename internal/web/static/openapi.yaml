@@ -17,6 +17,11 @@ servers:
 tags:
   - name: discovery
   - name: repos
+  - name: ontologies
+    description: |
+      Repo-independent ontology helpers the create wizard calls before any
+      repo exists — validate custom YAML, list built-in presets, fetch a
+      preset's YAML, and read the field reference backing editor completions.
   - name: archive
     description: Archived-repo lifecycle — list, restore, and purge archived repos
   - name: lenses
@@ -94,6 +99,42 @@ paths:
         Initiates repo creation and streams progress as newline-delimited JSON
         (NDJSON). Each line is a `CreateRepoEvent` object. The stream ends with
         a `done` or `error` event.
+
+        409 covers several distinct conflicts: the name is already taken, the
+        origin URL is already in use by another active repo, a create for the
+        same name/origin is already in flight, or the remote is in a state the
+        requested mode cannot work with. That last group is three cases, and
+        each names the mode that would have worked:
+
+        - the remote has NO branches (mode=initialize and mode=clone alike) —
+          there is nothing to cut an agent branch from, and knomit never
+          creates a branch on a remote other than its own. Create a `main`
+          first; one commit is enough.
+        - the branch has no ontology, so it is not a knowledge base to join
+          (mode=clone) — use mode=initialize.
+        - the branch already has one (mode=initialize) — use mode=clone.
+
+        All three checks run BEFORE the stream opens, from the server's own
+        probes of the origin rather than anything trusted from an earlier
+        client-side probe — which is what makes these 409s reachable at all.
+        A condition that can only be produced once the 200 is committed is not
+        a 409 to any client.
+
+        They are deliberately narrow. Only a remote the server could actually
+        see is refused: one that is unreachable, or that needs credentials the
+        request did not carry, establishes nothing either way, so it proceeds
+        and fails as an `error` event inside the 200 stream instead. Create
+        re-asserts all three conditions itself regardless — the pre-stream
+        probes are advisory, and a remote can change in between.
+
+        The ontology question is asked of the branch the create will actually
+        READ, which is not always the branch named: when the remote already
+        carries this machine's agent branch, that branch is adopted, and it is
+        the one inspected. `/repos:probe-initialized` applies the same rule and
+        reports which branch it looked at.
+
+        413 is returned when the request body exceeds the ontology size cap
+        (the same cap `/ontologies:validate` enforces).
       operationId: createRepo
       requestBody:
         required: true
@@ -109,6 +150,167 @@ paths:
                 $ref: "#/components/schemas/CreateRepoEvent"
         "400": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+
+  /repos:probe-origin:
+    post:
+      tags: [repos, origin]
+      summary: Probe a remote origin before create
+      description: |
+        Inspects a remote without cloning it (`remote.ListContext` — REFS
+        ONLY), so the create wizard learns whether the remote is reachable,
+        which branches it has, whether it needs credentials, and whether it
+        advertises push access — before asking the user to declare any of it.
+        Filesystem origins are routed through the same local-origin gate as
+        every clone/fetch path — no exemption.
+
+        It answers questions about the REMOTE. Whether a given BRANCH already
+        holds a knowledge base is a different question with a different answer
+        per branch, and is served by `/repos:probe-initialized`.
+
+        A remote with NO branches is a blocked state, not a mode: knomit never
+        creates a branch on a remote other than its own agent branch, so there
+        would be nothing to cut that branch from. The wizard asks the user to
+        create a `main` first — one commit is enough.
+
+        The result is advisory, not authority: a remote can change between the
+        probe and the create, so create re-asserts what it needs itself.
+
+        Unreachable and auth-required come back as 200 results with the
+        corresponding flag set, NOT HTTP errors — both are states the wizard
+        renders and recovers from. Only a refused request (a missing url, or
+        a local origin the local-origin gate rejects) is a 400.
+      operationId: probeOrigin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProbeOriginRequest" }
+      responses:
+        "200":
+          description: Probe result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProbeOriginResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /repos:probe-initialized:
+    post:
+      tags: [repos, origin]
+      summary: Is this branch of a remote already a knomit knowledge base?
+      description: |
+        A repository is a knomit knowledge base IF AND ONLY IF it has an
+        ontology at `.knomit/ontology.yaml` (legacy rungs `.domains/` and
+        `domains/` are also read). Nothing else makes one — not being
+        non-empty, not having commits, not having a `main`.
+
+        This endpoint answers that one question for ONE branch, and its answer
+        decides the create mode: present means `clone` (its ontology governs),
+        absent means `initialize` (knomit writes one onto its own agent branch,
+        cut from that branch's tip).
+
+        Separate from `/repos:probe-origin` because the answer is per-branch —
+        a repository can carry the ontology on `main` and not on `develop` —
+        and because the branch is not known when that probe runs. It is also a
+        heavier call: a `depth=1`, single-branch, no-tags clone into memory,
+        read for its tip tree and discarded.
+
+        THREE STATES, and the third is not a formality. `initialized` is
+        `"yes"`, `"no"`, or ABSENT — absent meaning the check did not complete.
+        Clients MUST NOT collapse the absent case into either answer. A repo's
+        ontology is fixed at create time and never user-editable afterwards, so
+        guessing "yes" discards the ontology the user chose and guessing "no"
+        writes one over a knowledge base that already had its own. Both are
+        unrecoverable; the wizard blocks and offers a retry instead.
+
+        Every outcome — including a remote that could not be read, a branch
+        that does not exist, and a remote with no refs at all — is a 200 with
+        the field absent and a `detail`. Only a refused request (a missing url,
+        or a local origin the local-origin gate rejects) is a 400.
+      operationId: probeInitialized
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProbeInitializedRequest" }
+      responses:
+        "200":
+          description: Initialization check result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProbeInitializedResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /ontologies:validate:
+    post:
+      tags: [ontologies]
+      summary: Validate ontology YAML
+      description: |
+        Parses and validates a raw ontology YAML document without persisting
+        anything, for the create wizard's custom-ontology editor.
+
+        Always 200: an ontology that fails to parse or validate returns
+        `ok:false` with the full diagnostics list (every problem found, not
+        just the first), never an HTTP error — a 4xx is reserved for a body
+        the server could not even read.
+      operationId: validateOntology
+      requestBody:
+        required: true
+        content:
+          text/yaml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OntologyValidateResponse" }
+        "413": { $ref: "#/components/responses/Problem" }
+
+  /ontologies/presets:
+    get:
+      tags: [ontologies]
+      summary: List built-in ontology presets
+      operationId: listOntologyPresets
+      responses:
+        "200":
+          description: Presets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OntologyPresetsResponse" }
+
+  /ontologies/presets/{name}:
+    parameters:
+      - { name: name, in: path, required: true, description: "Preset identifier (e.g. default, code).", schema: { type: string } }
+    get:
+      tags: [ontologies]
+      summary: Get a preset's ontology YAML
+      description: |
+        Returns the same serialized form that create would commit — the
+        wizard seeds its custom-ontology editor from this.
+      operationId: getOntologyPreset
+      responses:
+        "200":
+          description: Ontology YAML
+          content:
+            text/yaml:
+              schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /ontologies/schema:
+    get:
+      tags: [ontologies]
+      summary: Ontology YAML field reference
+      description: |
+        The field list backing the editor's completions, served from Go so
+        there is exactly one description of the ontology shape.
+      operationId: getOntologySchema
+      responses:
+        "200":
+          description: Field list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OntologySchemaResponse" }
 
   /repos/{repo}:
     parameters:
@@ -880,6 +1082,23 @@ paths:
       tags: [origin]
       summary: Configure remote origin
       operationId: setOrigin
+      description: |
+        Points an EXISTING repository at a remote.
+
+        409 when that remote is a different knowledge base — it carries an
+        ontology whose id is not this repository's. A repository's ontology is
+        fixed when it is created and is never editable afterwards, so two
+        taxonomies cannot govern one repository: every fact already written was
+        validated against the local one, and every fact arriving from the remote
+        was validated against the other. The `detail` names both ids.
+
+        A remote that is NOT a knowledge base is accepted — that is how an
+        existing local repository gets backed up, and knomit carries its
+        ontology to the remote on agent/<host>. So is a remote holding the SAME
+        knowledge base, which is the ordinary case when re-attaching a repo to
+        its own remote. A remote that could not be read refuses nothing: it
+        establishes neither answer, and the create-time checks still apply to
+        anything it later turns out to be.
       requestBody:
         required: true
         content:
@@ -893,6 +1112,7 @@ paths:
               schema: { $ref: "#/components/schemas/OriginSetResponse" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
     delete:
       tags: [origin]
@@ -2198,7 +2418,7 @@ components:
     # Repo lifecycle — create / archive / restore / purge
     CreateRepoOrigin:
       type: object
-      description: Remote origin to clone from (used when mode=clone).
+      description: Remote origin to join or initialize (used when mode=clone or mode=initialize).
       properties:
         url:         { type: string, description: Remote URL }
         branch:      { type: string, description: Remote branch to track }
@@ -2214,17 +2434,36 @@ components:
           description: Unique repo name (slug).
         mode:
           type: string
-          enum: [preset, custom, clone]
+          enum: [preset, custom, clone, initialize]
           description: |
             preset — use a built-in ontology preset (e.g. default, code).
-            custom — supply ontology_yaml directly.
-            clone  — clone from a remote origin; ontology is taken from the remote.
+                     Local only, no remote.
+            custom — supply ontology_yaml directly. Local only, no remote.
+
+            The two remote modes are the two halves of ONE question about the
+            chosen branch — does it already carry `.knomit/ontology.yaml`? —
+            answered by `/repos:probe-initialized`. Neither ever creates or
+            writes a branch on the remote other than agent/<host>.
+
+            clone      — JOIN a branch that already has an ontology. That
+                         ontology governs, and supplying ontology_preset or
+                         ontology_yaml is REFUSED rather than silently
+                         dropped. 409 if the branch has none.
+            initialize — turn a branch that has NO ontology into a knowledge
+                         base: clone it, cut agent/<host> from its tip, commit
+                         the chosen ontology (ontology_preset or
+                         ontology_yaml) there, and push THAT BRANCH ALONE. The
+                         consensus branch is never written, so no push access
+                         to a protected `main` is needed; open a merge request
+                         from agent/<host> when the knowledge base should
+                         become the project's consensus. 409 if the branch
+                         already has an ontology.
         ontology_preset:
           type: string
-          description: "Preset identifier (e.g. default, code). Used when mode=preset."
+          description: "Preset identifier (e.g. default, code). Used when mode=preset or mode=initialize."
         ontology_yaml:
           type: string
-          description: Raw ontology YAML. Used when mode=custom.
+          description: Raw ontology YAML. Used when mode=custom or mode=initialize.
         origin:
           $ref: "#/components/schemas/CreateRepoOrigin"
 
@@ -2259,6 +2498,129 @@ components:
         detail:
           type: string
           description: Extended detail or error description.
+
+    # Origin probe (pre-create)
+    ProbeOriginRequest:
+      type: object
+      required: [url]
+      description: |
+        Same fields as CreateRepoOrigin, but url is required — there is
+        nothing to probe without one.
+      properties:
+        url:         { type: string, description: Remote URL to probe. }
+        branch:      { type: string, description: "Branch to report as upstream if already known; otherwise the probe derives it (see ProbeOriginResult.upstream_branch)." }
+        auth_method: { type: string, enum: [token, basic, ssh] }
+        auth_token:  { type: string }
+
+    ProbeInitializedRequest:
+      type: object
+      required: [url]
+      description: |
+        Credentials are carried for the same reason ProbeOriginRequest carries
+        them: an answer obtained anonymously is an answer about a different
+        request than the create will make.
+      properties:
+        url:    { type: string, description: Remote URL to inspect. }
+        branch:
+          type: string
+          description: |
+            The branch to inspect. When omitted, the remote's own default
+            (its symbolic HEAD) is inspected, and the result names which
+            branch that turned out to be.
+        auth_method: { type: string, enum: [token, basic, ssh] }
+        auth_token:  { type: string }
+
+    ProbeInitializedResult:
+      type: object
+      description: |
+        The per-branch answer to "is this already a knomit knowledge base?".
+      properties:
+        initialized:
+          type: string
+          # QUOTED, and it must stay that way: YAML 1.1 parses bare yes/no as
+          # BOOLEANS, so an unquoted enum here becomes [true, false] and the
+          # generated client would validate the wire values it actually
+          # receives as invalid.
+          enum: ["yes", "no"]
+          description: |
+            `yes` — the branch carries an ontology; join it with mode=clone,
+            and its ontology governs.
+
+            `no` — the branch exists and carries none; mode=initialize writes
+            one onto knomit's own agent branch, cut from this branch's tip.
+
+            ABSENT — the check did not complete, and NOTHING was established.
+            Never render or route this as either answer. The ontology is
+            immutable after creation, so guessing "yes" permanently discards
+            the ontology the user chose and guessing "no" permanently writes
+            one over a knowledge base that already had its own. Block, show
+            `detail`, and offer a retry.
+        branch:
+          type: string
+          description: |
+            The branch actually inspected, which is NOT always the one asked
+            about. A create reads whatever it adopts: this machine's agent
+            branch when the remote already carries one, otherwise the branch
+            named (or the remote's default when none was). This probe mirrors
+            that rule so its answer is about the branch a create would read —
+            asking about the consensus branch instead made re-creating a repo
+            this machine had already initialized a permanent dead end.
+        ontology_id:
+          type: string
+          description: |
+            The id of the ontology found, when one was — i.e. WHICH knowledge
+            base this is. Absent unless `initialized` is `yes`, and also absent
+            when the ontology could not be parsed: an id that could not be read
+            is not an id. Used to refuse attaching a remote governed by a
+            different ontology to an existing repository, which nothing could
+            undo afterwards.
+        detail:
+          type: string
+          description: Why the answer is absent, in the transport's own words. Only present for the unestablished case.
+
+    ProbeOriginResult:
+      type: object
+      required: [reachable, empty, auth_required, upstream_branch, branches]
+      description: |
+        What a pre-create look at a remote can establish via
+        `remote.ListContext` — REFS ONLY. Deliberately carries no fact count,
+        commit count, or ontology id: establishing those needs a real fetch.
+        Advisory, not authority — a remote can gain refs between the probe
+        and the create.
+      properties:
+        reachable:
+          type: boolean
+          description: |
+            false only for a connection-level failure (timeout, DNS,
+            connection refused, unknown host, ...). true whenever the remote
+            answered at all, including when empty or auth_required — and also
+            when the probe never got as far as the network because the
+            credential itself could not be resolved, which is an auth result
+            (auth_required), not evidence about the remote.
+        empty:
+          type: boolean
+          description: true when the remote has no branches.
+        auth_required:
+          type: boolean
+          description: |
+            true when the remote demanded credentials the probe did not have,
+            or when this machine could not assemble the credential at all
+            (e.g. an ssh:// URL with no usable key) — either way the caller's
+            recovery is the same: supply a credential and probe again.
+        upstream_branch:
+          type: string
+          description: |
+            The branch a clone would actually adopt: the requested branch if
+            one was given, else "main" if the remote has it, else the
+            remote's symbolic HEAD, else "main" as the last resort. Mirrors
+            InitFromRemote's own preference order.
+        branches:
+          type: array
+          items: { type: string }
+          description: Every branch the remote reported. Empty when empty is true.
+        detail:
+          type: string
+          description: Extra detail — an error message when unreachable or auth_required, otherwise absent.
 
     ArchivedRepo:
       type: object
@@ -2658,3 +3020,88 @@ components:
         children:
           type: array
           items: { $ref: "#/components/schemas/LensTopicChild" }
+
+    # Ontologies (pre-create wizard helpers)
+    OntologyDiagnostic:
+      type: object
+      required: [line, column, message]
+      properties:
+        line:    { type: integer, description: 1-based line number in the submitted YAML. }
+        column:  { type: integer, description: 1-based column number. }
+        message: { type: string }
+
+    OntologyValidateResponse:
+      type: object
+      required: [ok, id, name, topics, rule_count]
+      description: |
+        ok:true carries the parsed ontology's summary (id, name, topics,
+        rule_count); ok:false carries diagnostics instead — every diagnostic
+        found, not just the first — and id/name/topics/rule_count are present
+        but zero-valued in that case, not meaningful.
+      properties:
+        ok:
+          type: boolean
+        id:
+          type: string
+          description: The ontology's own id field. Empty when ok is false.
+        name:
+          type: string
+          description: Empty when ok is false.
+        topics:
+          type: array
+          items: { type: string }
+          description: Empty when ok is false.
+        rule_count:
+          type: integer
+          description: Total validations declared at the root and on every node. 0 when ok is false.
+        diagnostics:
+          type: array
+          items: { $ref: "#/components/schemas/OntologyDiagnostic" }
+          description: Present only when ok is false.
+
+    OntologyPresetSummary:
+      type: object
+      required: [name, id, title, description, topics]
+      properties:
+        name:
+          type: string
+          description: Preset identifier — used in the URL and in CreateRepoRequest.ontology_preset.
+        id:
+          type: string
+          description: The ontology's own id field.
+        title:       { type: string }
+        description: { type: string }
+        topics:
+          type: array
+          items: { type: string }
+
+    OntologyPresetsResponse:
+      type: object
+      required: [presets]
+      properties:
+        presets:
+          type: array
+          items: { $ref: "#/components/schemas/OntologyPresetSummary" }
+
+    OntologySchemaField:
+      type: object
+      required: [struct, field, doc]
+      description: One ontology YAML key, for the create wizard's editor completions.
+      properties:
+        struct:
+          type: string
+          description: The Go struct this YAML key belongs to (Ontology, OntologyNode, or Validation).
+        field:
+          type: string
+          description: The YAML key name.
+        doc:
+          type: string
+          description: One-line description.
+
+    OntologySchemaResponse:
+      type: object
+      required: [fields]
+      properties:
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/OntologySchemaField" }

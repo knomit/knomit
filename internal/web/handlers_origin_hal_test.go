@@ -899,3 +899,80 @@ func TestOriginWrites_RefuseAStoppedManager(t *testing.T) {
 		}
 	}
 }
+
+// ATTACHING A REMOTE MUST NOT CHANGE THE REPO'S ONTOLOGY.
+//
+// "A repository is a knomit knowledge base if and only if it has an ontology"
+// is enforced at CREATE — initClone refuses a remote without one, initInitialize
+// refuses one that already has one. PUT /origin is the other door into exactly
+// the same situation: it points an existing repo, which already has an ontology
+// and facts written against it, at a remote that has its own. Nothing checked.
+//
+// The repo's ontology is fixed at create time and is never user-editable, so a
+// remote whose taxonomy differs cannot be reconciled with it — every fact
+// already written was validated against the local one, and every fact written
+// afterwards would be validated against the remote's.
+func TestHandleHALSetOrigin_RefusesARemoteWithADifferentOntology(t *testing.T) {
+	root := t.TempDir()
+	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
+	r := s.NewAPIRouter()
+
+	// A repo on the CODE taxonomy.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	// A remote that is a knowledge base on a DIFFERENT one (the default).
+	url := seedKnomitRemoteForTest(t, filepath.Join(root, "remote.git"), "seed")
+
+	rec = httptest.NewRecorder()
+	body := `{"url":"` + url + `","branch":"main"}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body)))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body = %s", rec.Code, rec.Body.String())
+	}
+	// The reader has to learn WHICH two taxonomies are in conflict; "conflict"
+	// alone leaves them looking for something they cannot see.
+	if b := rec.Body.String(); !strings.Contains(b, "source-code") || !strings.Contains(b, "general") {
+		t.Fatalf("the refusal does not name both ontologies: %s", b)
+	}
+}
+
+// The counterpart, and the reason this is not simply "refuse any remote with an
+// ontology": attaching a remote that is NOT a knowledge base is how an existing
+// local repo gets backed up. That must keep working, and the repo's own
+// ontology must still be there afterwards.
+func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T) {
+	root := t.TempDir()
+	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	url := seedPlainRemoteForTest(t, filepath.Join(root, "remote.git"))
+
+	rec = httptest.NewRecorder()
+	body := `{"url":"` + url + `","branch":"main"}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want the attach to be allowed; body = %s", rec.Code, rec.Body.String())
+	}
+
+	ri := s.Manager.Get("kb")
+	if ri == nil {
+		t.Fatal("repo disappeared")
+	}
+	if got := ri.Ontology().ID; got != "source-code" {
+		t.Fatalf("ontology id = %q, want source-code — attaching a remote replaced the repo's taxonomy", got)
+	}
+}

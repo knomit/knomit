@@ -867,6 +867,27 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 
 		ri := repos.RepoFromContext(r.Context())
 
+		// The same gate PUT /origin applies, at the same point in the flow:
+		// before anything is written and before the stream opens, so the
+		// refusal is a 409 the client can act on rather than an error line in
+		// a committed SSE body. A repo's ontology is fixed at create time, so a
+		// remote governed by a different one can never be reconciled with it.
+		if remoteURL != "" && ri != nil && ri.Ontology() != nil {
+			if err := rm.CheckOriginOntology(r.Context(), ri.Ontology().ID, repos.OriginSpec{
+				URL:        remoteURL,
+				Branch:     appliedRemoteBranch,
+				AuthMethod: authCfg.Method,
+				// Assembled exactly as the flow below assembles it: a basic
+				// credential is "user:password", and probing with the raw token
+				// would ask about a different request than the one being made.
+				AuthToken: assembleAuthToken(authCfg.Method, authCfg.Token, authCfg.User, authCfg.Password),
+			}); err != nil {
+				hal.WriteProblem(w, http.StatusConflict, "Different knowledge base",
+					err.Error(), r.URL.Path)
+				return
+			}
+		}
+
 		sendEvent, ok := beginSSE(w)
 		if !ok {
 			return

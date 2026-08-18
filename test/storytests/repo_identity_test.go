@@ -60,6 +60,13 @@ func TestCreate_MirrorCloneRejected(t *testing.T) {
 
 	origin := sb.BareRemote("origin")
 	origin.WriteMain("kb/seed.md", testenv.Fact("seed"), "seed on origin")
+	// Clone mode joins a KNOWLEDGE BASE, and a repository is one only if it has
+	// an ontology — so without this the Creates below are refused with
+	// ErrRemoteNotInitialized long before the identity check under test runs.
+	// It must land BEFORE MirrorOf, which snapshots origin once at call time:
+	// initializing afterwards would leave the two remotes with different
+	// histories and defeat the shared-root-commit premise asserted just below.
+	origin.EnsureKnowledgeBase()
 	mirror := sb.MirrorOf("mirror", origin)
 
 	// Fixture sanity: the mirror must genuinely share origin's root commit,

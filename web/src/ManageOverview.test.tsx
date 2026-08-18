@@ -178,8 +178,9 @@ describe('Manage Overview', () => {
 
   it('has no Overview row at all with zero repositories', async () => {
     render(<RepoManager {...baseProps} repos={[]} currentRepo="" />);
-    // Nothing to summarise, and the create form owns that screen.
-    await waitFor(() => expect(screen.getByTestId('create-name')).toBeInTheDocument());
+    // Nothing to summarise, and the create form owns that screen. `step-source`
+    // is the wizard's first screen — see App.norepos.test.tsx.
+    await waitFor(() => expect(screen.getByTestId('step-source')).toBeInTheDocument());
     expect(screen.queryByTestId('repomgr-overview')).not.toBeInTheDocument();
   });
 
@@ -195,7 +196,7 @@ describe('Manage Overview', () => {
     expect(screen.getByTestId('overview-new-lens')).toBeDisabled();
 
     fireEvent.click(screen.getByTestId('overview-new-repo'));
-    expect(screen.queryByTestId('create-name')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('step-source')).not.toBeInTheDocument();
   });
 });
 

@@ -252,7 +252,10 @@ describe('RepoManager', () => {
     render(<RepoManager {...baseProps} repos={[]} currentRepo="" readOnly />);
 
     expect(await screen.findByTestId('create-blocked-repository')).toBeInTheDocument();
-    expect(screen.queryByTestId('create-name')).not.toBeInTheDocument();
+    // `step-source` is the wizard's first screen — a proxy for "the create
+    // surface rendered" (was `create-name`, the old flat form's first field;
+    // see App.norepos.test.tsx for the fuller rationale).
+    expect(screen.queryByTestId('step-source')).not.toBeInTheDocument();
   });
 
   // The same hole from the other direction: a selection made while live
@@ -260,10 +263,10 @@ describe('RepoManager', () => {
   it('blocks a create form the selection carried into a read-only state', async () => {
     const { rerender } = render(<RepoManager {...baseProps} />);
     fireEvent.click(await screen.findByTestId('repomgr-new'));
-    expect(await screen.findByTestId('create-name')).toBeInTheDocument();
+    expect(await screen.findByTestId('step-source')).toBeInTheDocument();
 
     rerender(<RepoManager {...baseProps} readOnly />);
-    expect(screen.queryByTestId('create-name')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('step-source')).not.toBeInTheDocument();
     expect(screen.getByTestId('create-blocked-repository')).toBeInTheDocument();
   });
 
@@ -341,7 +344,8 @@ describe('RepoManager', () => {
   // would query a nameless repo; the create form is the only useful landing.
   it('opens on the create form when there are no repos', async () => {
     render(<RepoManager {...baseProps} repos={[]} currentRepo="" />);
-    expect(screen.getByTestId('create-name')).toBeInTheDocument();
+    // `step-source`: the wizard's first screen — see App.norepos.test.tsx.
+    expect(screen.getByTestId('step-source')).toBeInTheDocument();
     await waitFor(() => expect(api.listArchived).toHaveBeenCalled());
     expect(api.getAgentBranch).not.toHaveBeenCalled();
     expect(api.getRepo).not.toHaveBeenCalled();

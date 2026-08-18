@@ -6,9 +6,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -67,6 +69,37 @@ func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.Aut
 	return fmt.Errorf("fetchOrigin: strict fetch failed (%w); fallback fetch failed: %v", err, fallbackErr)
 }
 
+// abandonedByCaller reports whether this attempt ended because OUR context was
+// CANCELLED, rather than because the remote said something.
+//
+// Such an attempt established NOTHING about the remote, so it must not
+// overwrite what the last completed one established. The reported case: a
+// create against a remote finishes by calling ActivateSync, which cancels the
+// reconcile loop to restart it (repos/builder.go). A tick whose fetch was in
+// flight died with "context canceled", and that was written here as the
+// remote's status — so a create that fully succeeded, agent branch pushed and
+// all, showed "sync failed — Sync: fetch: ...: context canceled" on the repo
+// screen. The repository was fine; the message was about knomit stopping its
+// own request.
+//
+// CANCELLATION ONLY — a DEADLINE is a real failure and is still recorded.
+// The two are not interchangeable just because both land in ctx.Err():
+// recoverFromOrigin gives the startup reconcile a 15s budget (builder.go), and
+// a remote that does not answer inside it has genuinely failed. Treating every
+// non-nil ctx.Err() as ours would leave a stale "ok" on a remote that was
+// unreachable at boot, which is worse than the message this function exists to
+// suppress: a false failure is noise, a false success is a lie.
+//
+// Both halves are required. `ctx.Err()` being Cancelled says we stopped; the
+// error ITSELF wrapping context.Canceled says that is why this attempt ended.
+// Without the second half the test is a coincidence rather than a cause, and a
+// real refusal that lands microseconds before a cancellation is discarded.
+func abandonedByCaller(ctx context.Context, retErr error) bool {
+	return retErr != nil &&
+		errors.Is(ctx.Err(), context.Canceled) &&
+		errors.Is(retErr, context.Canceled)
+}
+
 // Sync runs one reconcile cycle for the agent branch:
 //
 //  1. Fetch origin (configured refspecs: main + agent/<host>).
@@ -91,8 +124,13 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		return SyncResult{}, nil
 	}
 
-	// Past the "no remote" gate — write status on every return from here.
+	// Past the "no remote" gate — write status on every return from here, with
+	// one exception: an attempt WE stopped (see abandonedByCaller).
 	defer func() {
+		if abandonedByCaller(ctx, retErr) {
+			log.Debug().Err(retErr).Msg("Sync: cancelled by caller; leaving the last established status")
+			return
+		}
 		if retErr != nil {
 			errMsg := retErr.Error()
 			if statusErr := ri.updateRemoteStatus("origin", "error", &errMsg); statusErr != nil {
@@ -211,6 +249,10 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	}
 
 	defer func() {
+		if abandonedByCaller(ctx, retErr) {
+			log.Debug().Err(retErr).Msg("Push: cancelled by caller; leaving the last established status")
+			return
+		}
 		if retErr != nil {
 			errMsg := retErr.Error()
 			if statusErr := ri.updateRemotePushStatus("origin", "error", &errMsg); statusErr != nil {
@@ -239,17 +281,57 @@ func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.A
 	refspec := fmt.Sprintf("+refs/heads/%s:refs/heads/%s", branch, branch)
 	pushCtx, pushCancel := ri.rh.netCtx(ctx)
 	defer pushCancel()
+	// Progress is the SERVER'S SIDE of the conversation, and without it a
+	// refusal arrives as go-git's summary alone: "command error on
+	// refs/heads/main: pre-receive hook declined". The reason a hook declined
+	// — protected branch, push rule, unsigned commit, oversized file — is sent
+	// on the sideband as `remote:` lines, and dropping them left a reader
+	// staring at the fact of a refusal with no way to learn its cause.
+	var srv bytes.Buffer
 	if err := ri.rh.repo.PushContext(pushCtx, &gogit.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []gogitconfig.RefSpec{gogitconfig.RefSpec(refspec)},
 		Auth:       auth,
+		Progress:   &srv,
 	}); err != nil {
 		if errors.Is(err, gogit.NoErrAlreadyUpToDate) {
 			return PushResult{Pushed: false}, nil
 		}
-		return PushResult{}, fmt.Errorf("Push: %w", err)
+		return PushResult{}, fmt.Errorf("Push: %w%s", err, remoteSays(srv.String()))
 	}
 
 	log.Info().Str("branch", branch).Msg("Push: force-pushed")
 	return PushResult{Pushed: true}, nil
+}
+
+// remoteSays renders the server's own words from a push's sideband, ready to
+// append to an error.
+//
+// git sends hook output back prefixed "remote: ", interleaved with progress
+// that uses carriage returns, and hosts repeat themselves (GitLab frames its
+// reason with blank banner lines above and below). So: split on both line
+// endings, strip the prefix, drop blanks and duplicates.
+//
+// The lines are kept as LINES. Hosts wrap their prose and format instructions
+// as lists — GitLab answers a refused initial commit with a sentence and two
+// numbered remedies — and folding that onto one line with separators turns
+// readable guidance into a run-on. Callers render it in a pre-wrap block.
+//
+// Returns "" when the server said nothing, so the caller's error reads exactly
+// as it did before rather than trailing an empty separator.
+func remoteSays(sideband string) string {
+	var lines []string
+	seen := map[string]bool{}
+	for _, raw := range strings.FieldsFunc(sideband, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		line := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "remote:"))
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(lines, "\n")
 }

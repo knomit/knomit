@@ -2,6 +2,7 @@ package fact
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -227,35 +228,29 @@ type Validation struct {
 // validKeyRe matches lowercase kebab-case identifiers.
 var validKeyRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
-// ParseOntology parses and validates an ontology from YAML bytes.
+// ParseOntology parses and validates an ontology from YAML bytes. It reports
+// only the FIRST FATAL problem; use ValidateOntologyYAML when you want them all,
+// warnings included.
+//
+// Warnings do not fail the parse. The callers here are the ones that READ an
+// ontology which already exists — the repo open path (repos/builder.go) and the
+// okf source reader — and for them a key this binary does not declare is not a
+// reason to reject a document. Rejecting it there meant returning the DEFAULT
+// ontology instead of the repo's own, which is unrecoverable: the ontology is
+// fixed at create time and every fact in the repo was written against it.
+// Callers that accept NEW input (Manager.Create, the validate endpoint) surface
+// warnings themselves rather than relying on this.
 func ParseOntology(data []byte) (*Ontology, error) {
-	var o Ontology
-	if err := yaml.Unmarshal(data, &o); err != nil {
-		return nil, fmt.Errorf("parse ontology: %w", err)
-	}
-	if o.ID == "" {
-		return nil, fmt.Errorf("parse ontology: id is required")
-	}
-	if o.Name == "" {
-		return nil, fmt.Errorf("parse ontology: name is required")
-	}
-	if len(o.Topics) == 0 {
-		return nil, fmt.Errorf("parse ontology: at least one topic is required")
-	}
-	if err := validateKeys("topic", o.Topics); err != nil {
-		return nil, err
-	}
-	for key, node := range o.Topics {
-		if node.Children != nil {
-			if err := validateKeys(fmt.Sprintf("topic %q child", key), node.Children); err != nil {
-				return nil, err
-			}
+	o, diags := ValidateOntologyYAML(data)
+	for _, d := range diags {
+		if d.IsError() {
+			return nil, errors.New(d.Message)
 		}
 	}
-	if err := o.buildRulesCache(); err != nil {
-		return nil, err
+	if o == nil {
+		return nil, errors.New("parse ontology: no ontology in document")
 	}
-	return &o, nil
+	return o, nil
 }
 
 // TopicNames returns the sorted top-level topic keys.
@@ -330,10 +325,20 @@ func (o *Ontology) Serialize() ([]byte, error) {
 	return []byte(buf.String()), nil
 }
 
+// serializeNode tolerates a nil node: "topics:\n  alpha:\n" — a topic key with
+// nothing under it — decodes to a nil *OntologyNode, and that YAML arrives
+// from outside through POST /ontologies:validate and POST /repos (modes custom
+// and seed). Dereferencing it here would be a remotely triggerable panic. The
+// key is still emitted, as an empty mapping, so a round trip does not silently
+// drop the topic the author declared.
 func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
 	valNode := &yaml.Node{Kind: yaml.MappingNode}
 	parent.Content = append(parent.Content, keyNode, valNode)
+
+	if node == nil {
+		return
+	}
 
 	addScalar(valNode, "description", node.Description)
 
@@ -381,14 +386,4 @@ func sortedKeys(m map[string]*OntologyNode) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// validateKeys checks that all map keys match validKeyRe.
-func validateKeys(ctx string, m map[string]*OntologyNode) error {
-	for k := range m {
-		if !validKeyRe.MatchString(k) {
-			return fmt.Errorf("parse ontology: invalid key %q in %s: must be lowercase kebab-case", k, ctx)
-		}
-	}
-	return nil
 }

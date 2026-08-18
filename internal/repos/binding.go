@@ -199,8 +199,13 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 	// every member here is active, so the order is total.
 	sort.Slice(reads, func(i, j int) bool { return reads[i].RI.Name() < reads[j].RI.Name() })
 	return &Binding{
-		write:   write,
-		writeOK: true, // lens writes always target the write repo's agent branch
+		write: write,
+		// Lens writes always target the write repo's OWN agent branch — which is
+		// precisely why this asks the same question every other write path
+		// asks, rather than asserting the answer. A repo whose ontology could
+		// not be established accepts no writes through any door, and a lens
+		// that hardcoded `true` was a door.
+		writeOK: write.WritableBranch(write.AgentBranch()),
 		name:    l.Name,
 		pinID:   pinOf("lens:", l.UID),
 		reads:   reads,

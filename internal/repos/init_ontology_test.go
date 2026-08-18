@@ -27,39 +27,20 @@ func TestCreate_localWritesOntologyToAgentBranch(t *testing.T) {
 	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
 }
 
-// TestCreate_cloneOfEmptyRemoteWritesOntology verifies that cloning an empty
-// remote (no branches yet) still seeds the ontology onto the agent branch.
-// There is nothing to clone, so the seed files are the only source — a repo
-// created this way must not end up ontology-less while every locally-created
-// repo has one.
-func TestCreate_cloneOfEmptyRemoteWritesOntology(t *testing.T) {
-	dir := t.TempDir()
-
-	remoteDir := filepath.Join(dir, "remote.git")
-	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
-
-	m := New(context.Background(), Deps{
-		Cfg: config.Config{
-			Home: dir,
-			// A filesystem origin is only permitted inside LocalOriginRoot; the
-			// remote lives under dir, so allow that root.
-			LocalOriginRoot: dir,
-		},
-		AgentBranch:           "agent/test-abc",
-		DisableBackgroundSync: true,
-	})
-	require.NoError(t, m.Start())
-	ri, err := m.Create(context.Background(), CreateSpec{
-		Name:   testRepoName,
-		Mode:   "clone",
-		Origin: &OriginSpec{URL: "file://" + remoteDir},
-	}, nil)
-	require.NoError(t, err)
-
-	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", OntologyPath, nil)
-	require.NoError(t, err, "ontology must be readable from agent branch after clone of an empty remote")
-	require.NotEmpty(t, result.Content, "ontology file must have content on agent branch")
-}
+// The clone-of-an-EMPTY-remote case used to be tested here, pinning that clone
+// mode seeded fact.DefaultOntology() onto the agent branch so such a repo was
+// not left ontology-less. That behaviour is GONE, deliberately, and its
+// replacement is a refusal — see TestCreate_CloneRefusesAnEmptyRemote and
+// TestCreate_InitializeRefusesAnEmptyRemote in lifecycle_initialize_test.go.
+//
+// Two things were wrong with it. An empty remote has no branch to cut an agent
+// branch from, so InitFromRemote's empty path minted a fresh ROOT COMMIT — a
+// repo identity no other machine sharing that remote would ever agree with.
+// And the ontology it seeded was the DEFAULT, chosen by the code rather than
+// the user, which is the same silent substitution that made a reader who
+// picked "Code" end up with "General". A repository is a knomit knowledge base
+// if and only if it has an ontology; deciding that on the user's behalf is
+// precisely what this design removed.
 
 // TestCreate_LocalOriginRejectedWithoutRoot pins the absolute local-origin
 // policy at the clone path: a filesystem origin is rejected when

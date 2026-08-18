@@ -100,6 +100,17 @@ func handleHALBranch(
 
 		idxState, idxDone, idxTotal := ri.IndexStatus()
 
+		// ALL REPOS MUST HAVE AN ONTOLOGY. When one could not be established
+		// the repo is readable but writes are refused everywhere
+		// (RepoInstance.WritableBranch), and a refusal the client cannot
+		// explain is indistinguishable from a bug. Reported here, on the branch
+		// the client is looking at, in the same payload that already says
+		// whether this is the agent branch.
+		ontologyErr := ""
+		if oerr := ri.OntologyError(); oerr != nil {
+			ontologyErr = oerr.Error()
+		}
+
 		a := hal.Anchor{Branch: branch}
 		branchURL := b.Branch(repoName, a)
 		body := map[string]any{
@@ -108,6 +119,8 @@ func handleHALBranch(
 			"index_commit":       info.IndexCommit,
 			"embeddings_enabled": embeddingsEnabled,
 			"is_agent_branch":    branch == agentBranch,
+			"writable":           ri.WritableBranch(branch),
+			"ontology_error":     ontologyErr,
 			"index_state":        idxState, // "ready" | "indexing" | "error"
 			"index_done":         idxDone,
 			"index_total":        idxTotal,

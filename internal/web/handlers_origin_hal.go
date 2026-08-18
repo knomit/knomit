@@ -452,6 +452,27 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 			}
 		}
 
+		// A remote that is a DIFFERENT knowledge base cannot govern this repo.
+		// Create enforces this on both of its remote modes; attaching an origin
+		// is the other door into the same situation, and the repo's ontology is
+		// fixed at create time, so there is no way back from getting it wrong.
+		//
+		// Before SetOrigin, not after: the origin row and the git remote are
+		// written there, and a refusal that arrives afterwards has already
+		// pointed the repo at the remote it is refusing.
+		if req.URL != "" && ri.Ontology() != nil {
+			if err := m.CheckOriginOntology(r.Context(), ri.Ontology().ID, repos.OriginSpec{
+				URL:        req.URL,
+				Branch:     req.Branch,
+				AuthMethod: req.AuthMethod,
+				AuthToken:  assembleAuthToken(req.AuthMethod, req.Token, req.User, req.Password),
+			}); err != nil {
+				hal.WriteProblem(w, http.StatusConflict, "Different knowledge base",
+					err.Error(), r.URL.Path)
+				return
+			}
+		}
+
 		if err := op.SetOrigin(r.Context(), m, ri, req); err != nil {
 			// errors.Is, not ==: the provider WRAPS the acquire failure that
 			// carries the reason (ErrStoreUnavailable / ErrRepoClosed).
