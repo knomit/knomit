@@ -59,13 +59,20 @@ DON'T fire for:
 
 ## How
 
-Call `mcp__knomit__knomit_query` with:
+Call `knomit_query` with:
 
 - `text`: the user-supplied topic (or your own one-line summary of the area)
 - `entities`: any file paths currently open or about to be edited
 - `applies_to`: the area path the work targets (e.g. `store/resolver`). Derive from an explicit user-supplied path, OR from the dominant directory among open files. Omit if uncertain; text/entities matching still works.
+- `path`: an ontology-path prefix, when the request names a KIND of knowledge rather than only a subject. `applies_to` and `path` are DIFFERENT AXES and combine freely:
+    - `applies_to` = **subject matter**, matched ancestor-or-equal against each fact's `domain:` tags (`store`, `mcp`, `repos`, `build`). The match walks UP, not down: `["store/resolver"]` returns facts scoped to `store/resolver` *and* facts scoped to `store`, because a fact declared at the parent applies to the child. `["store"]` therefore does NOT pick up facts tagged `store/resolver` — name the narrowest scope you mean. **One value per call**: each entry adds its own `AND EXISTS (…)` clause, so `["store","mcp"]` matches only facts tagged with *both* — in practice nothing. To cover two scopes, run two queries.
+    - `path` = **kind of knowledge**, the `<ontology-root>/<topic>/` folder. It is a RAW prefix (`path LIKE '<value>%'`) with no normalization, so spell it in full: `path: "kb/invariants/"`. A bare `"invariants"` matches nothing. Root and topics are per-repo — the root is `kb` unless `ontology_root` says otherwise, and the knomit MCP server instructions in this session list the topics this repo actually has.
 
-**Empty result?** Note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no designer principle applies at this scope — proceed with text/entity results as today.
+  So "invariants about the lens write repo" is `text: "lens write repo"` + `path: "kb/invariants/"`, and "everything scoped at or above store" is `applies_to: ["store"]`. Confusing the two is the common error — `applies_to: ["invariants"]` half-works by accident, because a few facts carry `invariants` as a domain tag, and returns the wrong thing convincingly. The tag has to match exactly (modulo case and hyphens): this axis does no plural stemming, so a fact tagged `invariant` would not answer a query for `invariants`.
+
+  **Use `path` whenever the question is about a kind.** Step 1 below tells you to read principles and invariants first; without `path` that is a hope about ranking, and with it the priority order is actually reachable.
+
+**Empty result?** If you passed `path` or `applies_to`, re-run on `text`/`entities` alone BEFORE concluding anything: both filters fail silently, as an empty result rather than an error, so a malformed prefix and a genuinely empty area are indistinguishable. Once the unfiltered query is also empty, note "no prior facts in this area — proceeding" and continue. Empty results are common in unfamiliar areas; not a blocker. When `applies_to` is set, missing matches mean no designer principle applies at this scope — proceed with text/entity results as today.
 
 When the query returns facts, do BOTH steps below. Skipping step 2 means you're trusting facts that may be stale — corpus facts can lag HEAD.
 
@@ -99,8 +106,10 @@ dispatching implementers, reviewers, or explorers into an area, do one of:
 
 - Recall on their behalf and put the findings in the brief — preferred when the
   area has invariants they could violate without knowing it.
-- Tell them explicitly to run `/knomit-recall <area>` before concluding
-  anything.
+- Tell them explicitly to recall for themselves before concluding anything. A
+  dispatch is their session start: the brief should say to run
+  `/knomit-recall <what they are about to work on>` as their first act,
+  described in the same free text you would use yourself — not a taxonomy term.
 
 Their reports are subject to the same rule: a subagent that hands back a cause
 ("the failure is a parallelism bug") has asserted a WHY, and that assertion is

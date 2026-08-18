@@ -1,0 +1,223 @@
+package repos
+
+import (
+	"database/sql"
+	"fmt"
+
+	"github.com/rs/zerolog/log"
+	"github.com/segmentio/ksuid"
+)
+
+// upgradeLensSchema re-keys a name-keyed `lenses`/`lens_reads` pair onto uids.
+//
+// Guarded by an explicit column probe rather than CREATE TABLE IF NOT EXISTS,
+// which is a NO-OP against an existing table — the baseline migration's DDL
+// alone would leave a legacy table untouched while every query against the new
+// column failed at runtime. The probe is what makes this work where that
+// would not.
+//
+// Two upgrade mechanisms exist, for two different starting shapes, and the
+// uid-keyed `lenses`/`lens_reads` pair in migrate.Control's baseline is the
+// target shape of both:
+//
+//   - "Membership already uid-keyed, lens row itself still name-keyed" is what
+//     THIS function handles: `lenses.write_uid` / `lens_reads.repo_uid` already
+//     point at repos(uid) (every home that has ever run `migrate-registry`),
+//     but `lenses` is still keyed by name with no `uid` column of its own. It
+//     is re-keyed in place, here, on the open path.
+//   - A genuinely pre-registry control.db (`lenses.write_repo`, member
+//     references by NAME) never reaches here at all: Manager.Start's boot
+//     guard (HasLegacyLensSchema) refuses to boot such a home, so
+//     OpenLensRegistry never runs against it in practice, and controlUp skips
+//     this call for it. `migrate-registry` is the only thing that converts
+//     that shape — it DROPS the legacy tables, lets the baseline recreate
+//     them, and translates member references from names to uids as it goes.
+//
+// Runs on every open and is idempotent: a database already carrying lenses.uid
+// returns immediately, so uids are never re-minted.
+//
+// SQLite cannot change a PRIMARY KEY in place, so both tables are rebuilt.
+// foreign_keys is disabled for the duration — lens_reads references lenses(name)
+// until the swap completes, and the rebuild would trip the constraint mid-flight.
+// The PRAGMA is a no-op inside a transaction, so it is issued outside one and
+// restored in a defer.
+//
+// The restore is verified, not just attempted: this connection is the single
+// connection OpenLensRegistry hands out for the rest of the process's life
+// (SetMaxOpenConns(1)), so a restore that silently failed would leave every
+// later Delete's `ON DELETE CASCADE` disarmed for good — lens_reads rows would
+// outlive the lens they belonged to, with nothing after the one log line to
+// say so. A migration that leaves the handle in that state must not report
+// success.
+func upgradeLensSchema(db *sql.DB) (err error) {
+	hasLenses, err := lensTableExists(db)
+	if err != nil {
+		return fmt.Errorf("lens upgrade: probe table: %w", err)
+	}
+	if !hasLenses {
+		return nil // fresh database: the baseline creates the new shape directly
+	}
+	hasUID, err := lensColumnExists(db, "lenses", "uid")
+	if err != nil {
+		return fmt.Errorf("lens upgrade: probe column: %w", err)
+	}
+	if hasUID {
+		return nil // already migrated
+	}
+
+	if _, err := db.Exec(`PRAGMA foreign_keys=off`); err != nil {
+		return fmt.Errorf("lens upgrade: disable fks: %w", err)
+	}
+	defer func() {
+		if _, derr := db.Exec(`PRAGMA foreign_keys=on`); derr != nil {
+			log.Error().Err(derr).Msg("lens upgrade: could not restore foreign_keys")
+			if err == nil {
+				err = fmt.Errorf("lens upgrade: could not restore foreign_keys: %w", derr)
+			}
+			return
+		}
+		var fk int
+		if qerr := db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); qerr != nil {
+			log.Error().Err(qerr).Msg("lens upgrade: could not verify foreign_keys restored")
+			if err == nil {
+				err = fmt.Errorf("lens upgrade: could not verify foreign_keys restored: %w", qerr)
+			}
+			return
+		}
+		if fk != 1 {
+			log.Error().Int("foreign_keys", fk).Msg("lens upgrade: foreign_keys did not re-enable")
+			if err == nil {
+				err = fmt.Errorf("lens upgrade: foreign_keys did not re-enable (pragma reports %d)", fk)
+			}
+		}
+	}()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("lens upgrade: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
+	// Mint a uid per existing lens, in Go rather than SQL — ksuid is how repo
+	// uids are minted and the two must be indistinguishable in shape.
+	rows, err := tx.Query(`SELECT name FROM lenses`)
+	if err != nil {
+		return fmt.Errorf("lens upgrade: read names: %w", err)
+	}
+	uidByName := map[string]string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("lens upgrade: scan name: %w", err)
+		}
+		uidByName[name] = ksuid.New().String()
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("lens upgrade: rows: %w", err)
+	}
+	rows.Close()
+
+	stmts := []string{
+		`ALTER TABLE lenses RENAME TO lenses_old`,
+		`ALTER TABLE lens_reads RENAME TO lens_reads_old`,
+		`CREATE TABLE lenses (
+		    uid TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL,
+		    write_uid TEXT NOT NULL REFERENCES repos(uid),
+		    description TEXT NOT NULL DEFAULT '',
+		    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
+		`CREATE UNIQUE INDEX lenses_name ON lenses(name)`,
+		`CREATE TABLE lens_reads (
+		    lens_uid TEXT NOT NULL REFERENCES lenses(uid) ON DELETE CASCADE,
+		    repo_uid TEXT NOT NULL REFERENCES repos(uid),
+		    branch TEXT NOT NULL DEFAULT '', source TEXT,
+		    PRIMARY KEY (lens_uid, repo_uid))`,
+	}
+	for _, s := range stmts {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("lens upgrade: %q: %w", s, err)
+		}
+	}
+
+	for name, uid := range uidByName {
+		if _, err := tx.Exec(
+			`INSERT INTO lenses (uid, name, write_uid, description, created_at, updated_at)
+			 SELECT ?, name, write_uid, description, created_at, updated_at
+			   FROM lenses_old WHERE name = ?`, uid, name); err != nil {
+			return fmt.Errorf("lens upgrade: copy lens %q: %w", name, err)
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO lens_reads (lens_uid, repo_uid, branch, source)
+			 SELECT ?, repo_uid, branch, source
+			   FROM lens_reads_old WHERE lens_name = ?`, uid, name); err != nil {
+			return fmt.Errorf("lens upgrade: copy reads for %q: %w", name, err)
+		}
+	}
+
+	// Account for the read mounts BEFORE dropping the old table. The copy above
+	// is driven by uidByName, so a lens_reads_old row whose lens_name matches no
+	// row in lenses is silently left behind and then destroyed by the DROP.
+	//
+	// Discarding it is correct — the new lens_reads has a FK to lenses(uid), so
+	// there is no uid to give it and the constraint would reject it anyway — but
+	// discarding it SILENTLY is not. Such a row is reachable: the old schema's
+	// FK is only enforced when foreign_keys is ON, and the sqlite3 CLI defaults
+	// it OFF, so anyone who has ever poked at control.db by hand could have left
+	// one. Losing read mounts with no trace is the kind of thing an operator
+	// discovers months later as "that lens used to see more repos".
+	//
+	// Counted, logged, and never fatal: a failed count must not abort a
+	// migration that has otherwise succeeded, so a count error degrades to a
+	// warning of its own.
+	var oldReads, newReads int
+	countErr := tx.QueryRow(`SELECT COUNT(*) FROM lens_reads_old`).Scan(&oldReads)
+	if countErr == nil {
+		countErr = tx.QueryRow(`SELECT COUNT(*) FROM lens_reads`).Scan(&newReads)
+	}
+	switch {
+	case countErr != nil:
+		log.Warn().Err(countErr).
+			Msg("lens registry: could not account for read mounts across the re-key; orphaned rows (if any) were dropped uncounted")
+	case oldReads > newReads:
+		log.Warn().
+			Int("discarded", oldReads-newReads).
+			Int("before", oldReads).
+			Int("after", newReads).
+			Msg("lens registry: dropped read mounts whose lens_name matched no lens; they cannot be re-keyed onto a lens uid and the new lens_reads foreign key would reject them")
+	}
+
+	for _, s := range []string{`DROP TABLE lens_reads_old`, `DROP TABLE lenses_old`} {
+		if _, err := tx.Exec(s); err != nil {
+			return fmt.Errorf("lens upgrade: %q: %w", s, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("lens upgrade: commit: %w", err)
+	}
+	log.Info().Int("lenses", len(uidByName)).Msg("lens registry: re-keyed onto uids")
+	return nil
+}
+
+// lensTableExists / lensColumnExists mirror migrate-registry's rawTableExists /
+// rawColumnExists (cmd/migrate_registry.go:1761,1770) — same sqlite_master /
+// PRAGMA table_info shapes. Duplicated rather than shared because cmd/ ->
+// internal/ is the only legal import direction; internal/repos cannot import
+// cmd's helpers.
+func lensTableExists(db *sql.DB) (bool, error) {
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'lenses'`).Scan(&n); err != nil {
+		return false, fmt.Errorf("look for table %q: %w", "lenses", err)
+	}
+	return n > 0, nil
+}
+
+func lensColumnExists(db *sql.DB, table, column string) (bool, error) {
+	var n int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil {
+		return false, fmt.Errorf("look for %s.%s: %w", table, column, err)
+	}
+	return n > 0, nil
+}

@@ -621,6 +621,7 @@ func rankedFedRepo(t *testing.T) (*repos.RepoInstance, context.Context) {
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "test",
+		UID:          nextTestRepoUID(),
 		AgentBranch:  "agent/test",
 		Svc:          svc,
 		Ontology:     fact.CodeOntology(),

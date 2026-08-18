@@ -597,7 +597,7 @@ func (si *searchIndex) indexFile(ctx context.Context, branch, path, commitHash s
 
 	rec, err := parseFact(path, content)
 	if err != nil {
-		return nil, nil // not a fact file (e.g. README.md manifest, ontology.yaml)
+		return nil, nil // not a fact file (e.g. README.md manifest, the ontology file)
 	}
 	rec.BlobHash = blobHash
 	rec.SourceCommit = commitHash

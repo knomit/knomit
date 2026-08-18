@@ -24,9 +24,9 @@ DON'T fire for:
 
 ## How
 
-1. Run `mcp__knomit__knomit_query` on the would-be title to surface similar or contradicting existing facts.
+1. Run `knomit_query` on the would-be title to surface similar or contradicting existing facts.
 2. If a contradicting fact exists: ASK the user whether to `/knomit-update`, `/knomit-retract`, or merge — don't write a duplicate.
-3. Otherwise call `mcp__knomit__knomit_learn` with: `topic`, `category`, `title`, `body`, `kind` (default epistemic), `type` (default observation; use `hypothesis` for predictions), `entities`, `refs`, `confidence` 0.85.
+3. Otherwise call `knomit_learn` with: `topic`, `category`, `title`, `body`, `kind` (default epistemic), `type` (default observation; use `hypothesis` for predictions), `entities`, `refs`, `confidence` 0.85.
 
 ## Body authoring contract — write it so it can't compress into a falsehood
 

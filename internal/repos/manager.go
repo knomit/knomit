@@ -141,11 +141,13 @@ var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
 var ErrInvalidLensName = errors.New("invalid lens name")
 
 // ErrLensNameConflictsRepo rejects a lens whose name equals an existing repo
-// name. A lens and a lens-of-one repo both surface Binding.Name() as their
-// cursor-pinning identity (RFC §7.3); if a lens and a repo shared a name a
-// cursor minted on one endpoint could resume on the other. Disjoint names
-// keep the binding pin sound (closes ledger gotcha M-1 /
-// kb/gotchas/lens/cursor-binding-pin).
+// name. The cursor-pinning identity (RFC §7.3) is Binding.PinID() now —
+// repo:<uid> / lens:<uid> — which cannot collide between a lens and a repo
+// even if they share a name, so this guard is no longer what keeps the
+// binding pin sound. It survives as a UX nicety: a lens and a lens-of-one
+// repo share one display-name and endpoint-path namespace, and letting them
+// collide would make "which one did I mean" ambiguous in URLs, error
+// messages, and logs (closes ledger gotcha M-1 / kb/gotchas/lens/cursor-binding-pin).
 var ErrLensNameConflictsRepo = errors.New("lens name conflicts with an existing repo name")
 
 // ValidateLens checks a lens definition against the live repo set: every
@@ -167,12 +169,15 @@ func (m *Manager) ValidateLens(ctx context.Context, l Lens) error {
 // while m.mu is held.
 //
 // Members resolve by registry uid; only the lens NAME is checked against repo
-// names, because names (not uids) share the Binding.Name() cursor-pinning
-// namespace.
+// names. The cursor-pinning identity (RFC §7.3) is Binding.PinID() now —
+// repo:<uid> / lens:<uid> — which cannot collide between a lens and a repo
+// even if they share a name, so this check is no longer what keeps cursor
+// namespaces disjoint; it survives as a UX nicety (one name must never serve
+// two endpoints).
 func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	// Name checks fail fast, before any member resolution: a lens name must be a
-	// valid repo-grammar name and must not collide with an existing repo name,
-	// so lens and repo cursor-binding namespaces stay disjoint (gotcha M-1).
+	// valid repo-grammar name and must not collide with an existing repo name
+	// (namespace legibility — one name must never serve two endpoints; gotcha M-1).
 	if !isValidRepoName(l.Name) {
 		return fmt.Errorf("%w: %q", ErrInvalidLensName, l.Name)
 	}
@@ -349,10 +354,16 @@ func (m *Manager) CreateLens(ctx context.Context, l Lens) (Lens, error) {
 // persists first (Archive's RefsRepo then sees the new mount → ErrRepoInUseByLens).
 // A member can never be archived between the membership check and the persist.
 //
-// Unlike CreateLens it does NOT reserve the name in m.creating: the lens already
-// exists and its name is immutable, so there is no new repo/lens name to race
-// (P2). A repo Create for the lens's name still loses to the existing lens via
-// its own registry re-check, independent of this call.
+// Unlike CreateLens — and unlike RenameLens, which DOES reserve — this does not
+// reserve the name in m.creating, and the reason is narrow: UpdateLens never
+// CHANGES the name. Lens names became mutable on this branch, so "the name is
+// immutable" is no longer why this is safe; what makes it safe is that the only
+// name in play here is one the lens already durably holds. There is no new name
+// being introduced into the shared repo/lens namespace, so there is nothing for
+// P2's mutual exclusion to protect: a repo Create for that name still loses to
+// the existing lens via its own lensNameConflict re-check, independent of this
+// call. Any future edit that lets this method rewrite l.Name must add the
+// reservation (see RenameLens for the shape and for what goes wrong without it).
 //
 // The write repo and description are pure input, checked up front. The name is
 // re-validated (grammar) but never changed — the caller passes the existing name.
@@ -472,10 +483,12 @@ func (m *Manager) Close() error {
 	m.origins = nil
 	m.mu.Unlock()
 	if reg != nil {
+		// Non-owning: shares repoReg's handle, so this is a no-op.
 		_ = reg.Close()
 	}
 	if repoReg != nil {
-		// Origins shares repoReg's *sql.DB and has no Close of its own.
+		// Owns the single control.db handle. Origins and the lens registry
+		// both borrow it and have no Close of their own that does anything.
 		_ = repoReg.Close()
 	}
 
@@ -555,14 +568,19 @@ func (m *Manager) Start() error {
 	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
 		return err
 	}
-	if err := repoReg.EnsureSchema(); err != nil {
+
+	// Only now may anything write to control.db. controlUp holds the second
+	// load-bearing ordering — the lens re-key before the versioned baseline —
+	// and is shared with OpenRegistry and OpenLensRegistry so no entry point can
+	// migrate this file without it.
+	if err := controlUp(repoReg.DB()); err != nil {
 		return err
 	}
 
-	reg, err := OpenLensRegistry(filepath.Join(m.deps.Cfg.Home, "control.db"))
-	if err != nil {
-		return fmt.Errorf("open control db: %w", err)
-	}
+	// One handle for all three tenants: Registry owns it, the lens registry and
+	// Origins borrow it. Sharing is what lets the lens foreign keys into
+	// repos(uid) be enforced on the same connection.
+	reg := NewLensRegistry(repoReg.DB())
 	m.mu.Lock()
 	m.registry = reg
 	m.mu.Unlock()
@@ -579,12 +597,10 @@ func (m *Manager) Start() error {
 	} else {
 		crypt = c
 	}
-	// OpenOrigins declares a foreign key into repos(uid), so it must follow
-	// EnsureSchema.
-	origins, err := OpenOrigins(repoReg.DB(), crypt)
-	if err != nil {
-		return fmt.Errorf("open repo origins: %w", err)
-	}
+	// repo_origins declares a foreign key into repos(uid), so this must follow
+	// the migration that creates both — OpenOrigins itself cannot check, and
+	// cannot fail.
+	origins := OpenOrigins(repoReg.DB(), crypt)
 	m.mu.Lock()
 	m.origins = origins
 	m.mu.Unlock()
@@ -826,14 +842,17 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 //
 // And its evidence is destroyed by writing: whoever creates the `repos` table
 // makes SchemaExisted report true forever after. That is why Manager.Start
-// opens with OpenRegistryNoSchema and calls EnsureSchema only once this
+// opens with OpenRegistryNoSchema and calls migrate.Control only once this
 // function has returned nil. Create the table on the way past and the guard
 // fires exactly once — retry the boot and the server comes up on an unconverted
 // home with every legacy .db invisible, which under a restart policy (systemd
 // Restart=on-failure, Docker) turns "refuse loudly" into "refuse once, at 3am,
 // into a log nobody reads".
 func refuseUnmigratedHome(repoReg *Registry, reposDir string) error {
-	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it"
+	// The command named here is deprecated and scheduled for removal, so the
+	// advice says "now": an operator who defers this until the next upgrade may
+	// find the only converter gone.
+	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it now — that command is deprecated and will be removed in a future build"
 
 	legacyLenses, err := HasLegacyLensSchema(repoReg.DB())
 	if err != nil {
@@ -897,6 +916,10 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		keyPath:               m.deps.KeyPath,
 		ctx:                   m.ctx,
 		disableBackgroundSync: m.deps.DisableBackgroundSync,
+		// The ontology gate, wired in so the sync-activation path can enforce
+		// it without the builder knowing about the Manager. Every path that
+		// attaches a remote ends here; see startSync.
+		checkOriginOntology: m.CheckOriginOntology,
 	}
 
 	if err := b.openStore(); err != nil {

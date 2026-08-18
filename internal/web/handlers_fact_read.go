@@ -225,6 +225,7 @@ func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvi
 		// invariant (retracted-but-recoverable targets still classify as fact).
 		resolver := readerRefResolver{ctx: r.Context(), reader: reader, ri: ri, branch: branch, commit: ""}
 		view := BuildFactView(b, repoName, a, head, f, resolver, knomitfact.ID12(ri.ID()))
+		view.AsOf.Date = factVersionDate(r.Context(), ri, a.Branch, f.Path(), view.AsOf.Commit)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

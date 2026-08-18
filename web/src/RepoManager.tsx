@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { RepoStateChip } from './RepoStateChip';
-import { CreateRepoForm } from './CreateRepoForm';
+import { CreateRepoWizard } from './CreateRepoWizard';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
 import { RemoteCard } from './RemoteStatus';
@@ -29,7 +29,12 @@ interface Props {
   hideRemoteConfig: boolean;
   // No onClose: leaving Manage is the top bar's job now, not this pane's. The
   // surface has no chrome of its own to dismiss.
-  onChanged: () => void;             // parent re-fetches the repo list
+  //
+  // Optionally carries a rename: {from, to} so the caller can re-point a
+  // currently-BROWSED repo (state.repo, tracked outside this pane entirely) at
+  // its new name instead of falling back to an arbitrary remaining repo — the
+  // same repo, just renamed, is not the same case as one that vanished.
+  onChanged: (renamed?: { from: string; to: string }) => void;  // parent re-fetches the repo list
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
   // True while a connect commit is in flight. Withholding the rail is not
   // enough on its own: the app's own exits (Escape, the top bar's step-out)
@@ -294,6 +299,12 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
                 onConnect={() => setSel({ kind: 'connect', name: view.name })}
                 onChanged={onChanged}
+                // refresh() picks up the lens list's re-derived member names
+                // (Mounted-in reads them off `lenses`, held in THIS pane's
+                // state); onChanged(...) is the repo-list reload plus the
+                // rename hint that lets the app follow a stale browse
+                // selection to the new name (see the Props.onChanged doc).
+                onRenamed={newName => { onChanged({ from: view.name, to: newName }); refresh(); setSel({ kind: 'repo', name: newName }); }}
                 onBrowse={onBrowse}
                 onError={setErr}
               />
@@ -333,7 +344,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             )}
             {view.kind === 'new' && readOnly && <CreateBlocked what="repository" />}
             {view.kind === 'new' && !readOnly && (
-              <CreateRepoForm
+              <CreateRepoWizard
                 onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
                 // With no repos the fallback selection IS this form and Manage is
                 // the whole window, so there is nothing to back out TO: clearing
@@ -353,6 +364,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 readOnly={readOnly}
                 onDeleted={() => { onChanged(); refresh(); setSel(null); }}
                 onSaved={() => { onChanged(); refresh(); }}
+                // Same rename hint as RepoDetail's onRenamed (see its comment
+                // above): the pane is keyed on `name`, so onChanged carries
+                // {from, to} for the app to follow a browsed lens to its new
+                // name instead of treating the old one as vanished.
+                onRenamed={newName => { onChanged({ from: view.name, to: newName }); refresh(); setSel({ kind: 'lens', name: newName }); }}
                 onBrowse={onBrowse}
                 onError={setErr}
               />
@@ -469,7 +485,7 @@ function CreateBlocked({ what }: { what: 'repository' | 'lens' }) {
   );
 }
 
-function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onBrowse, onSelectLens, onError }: {
+function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onRenamed, onBrowse, onSelectLens, onError }: {
   name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
   // Every lens, so the Mounted-in block can be derived rather than fetched —
   // it is the reverse of a lens's read mounts, and the list is already here.
@@ -478,6 +494,10 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // failing remote is in view rather than at the bottom of a page you must hunt.
   focus?: string;
   onArchived: () => void; onConnect: () => void; onChanged: () => void;
+  // Fired with the NEW name once the server confirms the rename. The pane is
+  // keyed on `name` by its caller, so this is how the parent learns to stop
+  // addressing it by the old one.
+  onRenamed: (newName: string) => void;
   onBrowse: (ctx: BrowseContext) => void; onSelectLens: (name: string) => void;
   onError: (m: string) => void;
 }) {
@@ -497,12 +517,42 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       setDescription(updated.description ?? '');
     },
   });
-  // license is read-only: set once from the GET response, never written back.
+  // License is now editable, mirroring the description above it — but its READ
+  // view stays <pre>. See the section body for why that must not change.
   const [license, setLicense] = useState('');
+  // A LICENSE that exists but is too large for the server to hand back (see
+  // RepoDetails.license_oversize). Mutually exclusive with `license` being
+  // non-empty. While this is true the block must render neither Add nor Edit
+  // — opening a blank editor over a file the server never read is exactly
+  // what let a Save silently destroy the original (see WriteLicense's
+  // ErrLicenseTooLargeToReplace guard on the server, which now refuses that
+  // write too).
+  const [licenseOversize, setLicenseOversize] = useState(false);
+  const [licEditing, setLicEditing] = useState(false);
+  const licEditor = useDescriptionEditor({
+    markdown: license,
+    maxBytes: MAX_REPO_DESCRIPTION_BYTES,
+    editing: licEditing,
+    onEditing: setLicEditing,
+    onSave: async text => {
+      const updated = await api.updateRepo(name, { license: text });
+      setLicense(updated.license ?? '');
+    },
+  });
+  // Destructured to a local, not read as `licEditor.bodyRef` at the JSX site
+  // below: the licence read view attaches this ref directly (DescriptionBody
+  // never renders it — see the section body for why), and a bare local
+  // matches how DescriptionBody itself takes bodyRef off its `editor` prop.
+  const { bodyRef: licBodyRef } = licEditor;
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildMsg, setRebuildMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<'disconnect' | null>(null);
+  // Rename draft + its typed confirmation. Local to the danger zone; cleared
+  // when the pane switches repos by the same effect that clears description.
+  const [renameTo, setRenameTo] = useState('');
+  const [renameConfirm, setRenameConfirm] = useState('');
+  const [renaming, setRenaming] = useState(false);
   // The pane owns the remote so the Remote block can render the right thing for
   // each state — Connect when there is none, the card when there is, the error
   // when the read failed. RemoteCard is the display half of that same state.
@@ -513,10 +563,13 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     api.getAgentBranch(name).then(b => { if (!cancelled) setAgentBranch(b); }).catch(() => {});
     setDescription('');
     setLicense('');
+    setLicenseOversize(false);
+    setRenameTo(''); setRenameConfirm('');
     api.getRepo(name).then(r => {
       if (cancelled) return;
       setDescription(r.description ?? '');
       setLicense(r.license ?? '');
+      setLicenseOversize(!!r.license_oversize);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [name]);
@@ -559,6 +612,25 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     catch (e) { onError(`disconnect failed: ${String(e)}`); }
     finally { setBusy(false); }
   };
+  // Unlike rebuild's 409, this one is NOT rewritten into invented copy: the
+  // server's detail for the "changed during rename" conflict already tells the
+  // user the one true thing to do (re-read and retry), and every sibling
+  // mutation in this file (archive, disconnect, restore, purge…) already
+  // surfaces `String(e)` verbatim rather than guessing at friendlier words.
+  const rename = async () => {
+    onError(''); setRenaming(true);
+    try {
+      const updated = await api.renameRepo(name, renameTo);
+      setRenameTo(''); setRenameConfirm('');
+      // The pane is addressed by name, so it must follow the repo to its new
+      // one — leaving it on the old name would show a 404 on the next read.
+      onRenamed(updated.name);
+    } catch (e) {
+      onError(`rename failed: ${String(e)}`);
+    } finally {
+      setRenaming(false);
+    }
+  };
 
   // Blocks, ordered identity → wiring → operations → danger. That ordering is
   // the rule for where a NEW setting goes, which is what a page with no tabs
@@ -577,19 +649,55 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     });
   }
 
-  // LICENSE is read-only: internal/repos/manifest.go has ReadReadme/WriteReadme
-  // but only a read path for LicensePath, so there is nothing to offer beyond
-  // showing it. No block at all when the file is absent — an empty "License"
-  // heading would imply a control that does not exist.
-  if (license) {
+  // Shown whenever there is something to read OR the user could write one —
+  // the same rule the Description block above uses. A read-only repo with no
+  // LICENSE gets no block: nothing to read, nothing to offer. An oversize
+  // LICENSE counts as "something to read" even though its content did not
+  // come down the wire — there IS a file, and the block must say so.
+  if (license || licenseOversize || !readOnly) {
     sections.push({
       id: 'license',
       title: 'License',
-      hint: 'LICENSE at the repo root',
-      body: (
-        // Preformatted, NOT markdown: a licence's single newlines are
-        // meaningful, and a markdown renderer reflows them away.
-        <pre style={licenseText} data-testid="repo-license">{license}</pre>
+      hint: `LICENSE at the repo root · up to ${Math.round(MAX_REPO_DESCRIPTION_BYTES / 1024)} KiB`,
+      // No control at all when oversize: neither "Edit" (there is nothing
+      // here to seed the textarea with) nor "Add" (there already IS a
+      // LICENSE — offering "Add" would imply there is not, and a blank draft
+      // saved over it is exactly the silent-destruction bug this state
+      // exists to prevent; the server refuses the write too, but the control
+      // must not be there to invite it).
+      action: readOnly || licenseOversize ? undefined : (
+        <DescriptionActions editor={licEditor} label={license ? 'Edit license' : 'Add license'} testIdPrefix="repo-license" />
+      ),
+      body: licenseOversize ? (
+        <div data-testid="repo-license-oversize" style={{ fontSize: 12.5, color: '#888' }}>
+          A LICENSE is present at the repo root but is too large to display or
+          edit here.
+        </div>
+      ) : licEditing ? (
+        // The EDITOR is the shared monospace textarea; only the read view
+        // below differs from the description block.
+        <DescriptionBody editor={licEditor} readOnly={readOnly}
+          containerTestId="repo-license-editor" textareaTestId="license-textarea" />
+      ) : license ? (
+        // PREFORMATTED, NOT MARKDOWN. A licence's single newlines are
+        // meaningful and a markdown renderer reflows them away — the MIT text
+        // loses every line break. This is the one thing that must not be
+        // copied from the Description block, whose read view IS markdown.
+        //
+        // ref={licBodyRef}: this IS the licence's read view (unlike the
+        // description block, whose read view lives inside DescriptionBody), so
+        // it — not DescriptionBody's markdown div, which the licence editor
+        // never renders while reading — is what useDescriptionEditor's
+        // useLayoutEffect must measure. Without this the hook's bodyRef never
+        // attaches to anything for licEditor, readHeight.current stays null
+        // forever, and the editor falls back to DESC_BODY_MAX on every open —
+        // a three-line MIT header expanding to full height.
+        <pre ref={licBodyRef} style={licenseText} data-testid="repo-license">{license}</pre>
+      ) : (
+        <div style={{ fontSize: 12.5, color: '#888' }}>
+          No LICENSE at the repo root. knomit stores whatever terms you supply;
+          it does not generate them.
+        </div>
       ),
     });
   }
@@ -747,6 +855,45 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
         <div style={{ fontSize: 11.5, color: '#777', marginTop: 6 }}>
           Recoverable — it moves into Archived under Repositories, and nothing is deleted.
         </div>
+        <div style={{ borderTop: '1px solid #3a2020', marginTop: 14, paddingTop: 14 }}>
+          <div style={{ fontSize: 13, color: '#ddd', marginBottom: 4 }}>Rename this repository</div>
+          {/* Name the actual consequence rather than saying "this is
+              dangerous". Nothing is deleted and the rename is reversible; what
+              breaks is the URL agents are configured against — NOT their
+              in-flight queries, which resolve through the uid, not the name. */}
+          <div data-testid="repo-rename-warning" style={{ fontSize: 11.5, color: '#777', marginBottom: 10 }}>
+            Agent MCP endpoint URLs contain this repository's name and will stop
+            resolving until each agent is reconfigured. Facts, history, lens
+            mounts and in-flight agent queries are unaffected.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              data-testid="repo-rename-input"
+              value={renameTo}
+              onChange={e => setRenameTo(e.target.value)}
+              placeholder="new-name"
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <input
+              data-testid="repo-rename-confirm"
+              value={renameConfirm}
+              onChange={e => setRenameConfirm(e.target.value)}
+              placeholder={`type "${name}" to confirm`}
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <button
+              type="button"
+              data-testid="repo-rename-submit"
+              style={btn(readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name, 'danger')}
+              disabled={readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name}
+              onClick={rename}
+            >
+              {renaming ? 'Renaming…' : 'Rename'}
+            </button>
+          </div>
+        </div>
       </div>
     ),
   });
@@ -829,10 +976,25 @@ export function useDescriptionEditor({ markdown, maxBytes, editing, onEditing, o
   //
   // The empty description is the one case with nothing to measure, and nobody
   // writes a README from scratch in the 20px a placeholder line would give.
-  const bodyRef = useRef<HTMLDivElement>(null);
+  //
+  // A CALLBACK ref, not a RefObject: the description block attaches this to a
+  // <div> (DescriptionBody's markdown render), but the licence block attaches
+  // it directly to its <pre> read view — DescriptionBody never renders the
+  // licence's read view, so there is no <div> for licEditor to measure. A
+  // `RefObject<HTMLElement | null>` reads fine for either call site but is
+  // NOT assignable to `Ref<HTMLDivElement>` or `Ref<HTMLPreElement>` — the two
+  // element types are unrelated as far as the object-identity ref's exact
+  // generic is concerned, so `tsc -b` (unlike `tsc --noEmit -p .`, which
+  // missed this) rejects it at both attach sites. A callback ref sidesteps
+  // that: `Ref<T>` for any element T also accepts `(el: T | null) => void`,
+  // and function parameters check contravariantly, so one callback typed at
+  // the wider `HTMLElement | null` is assignable everywhere a narrower
+  // `HTMLDivElement | null` or `HTMLPreElement | null` callback is expected.
+  const elRef = useRef<HTMLElement | null>(null);
+  const bodyRef = useCallback((el: HTMLElement | null) => { elRef.current = el; }, []);
   const readHeight = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (!editing && bodyRef.current) readHeight.current = bodyRef.current.offsetHeight;
+    if (!editing && elRef.current) readHeight.current = elRef.current.offsetHeight;
   });
   const height = markdown ? (readHeight.current ?? DESC_BODY_MAX) : DESC_BODY_BLANK;
 
@@ -858,11 +1020,16 @@ export type DescriptionEditor = ReturnType<typeof useDescriptionEditor>;
 // README.md on the agent branch" directly under a heading that already reads
 // "README.md, committed to the agent branch". The byte counter did, and it is
 // here, where it can appear and disappear without reflowing the page either.
-export function DescriptionActions({ editor, label }: { editor: DescriptionEditor; label: string }) {
+export function DescriptionActions({ editor, label, testIdPrefix = 'repo-description' }: {
+  editor: DescriptionEditor; label: string;
+  // Lets a second block (the licence) reuse this control without colliding
+  // testids with the description block it sits beside on the same page.
+  testIdPrefix?: string;
+}) {
   const { editing, busy, over, bytes, maxBytes, showCount, save, cancel } = editor;
   if (!editing) {
     return (
-      <button type="button" className="k-bare" data-testid="repo-description-edit"
+      <button type="button" className="k-bare" data-testid={`${testIdPrefix}-edit`}
         title={label} aria-label={label}
         style={cardIconBtn()} onClick={editor.edit}>
         <PencilIcon color="#888" size={13} />
@@ -872,16 +1039,16 @@ export function DescriptionActions({ editor, label }: { editor: DescriptionEdito
   return (
     <>
       {showCount && (
-        <span data-testid="repo-description-count"
+        <span data-testid={`${testIdPrefix}-count`}
           style={{ fontSize: 11, color: over ? '#f88' : '#888', whiteSpace: 'nowrap' }}>
           {bytes.toLocaleString()} / {maxBytes.toLocaleString()} bytes
         </span>
       )}
-      <button type="button" data-testid="repo-description-save" style={descBtn(busy || over, 'primary')} disabled={busy || over}
+      <button type="button" data-testid={`${testIdPrefix}-save`} style={descBtn(busy || over, 'primary')} disabled={busy || over}
         title={over ? `too long by ${(bytes - maxBytes).toLocaleString()} bytes` : undefined} onClick={save}>
         {busy ? 'Saving…' : 'Save'}
       </button>
-      <button type="button" data-testid="repo-description-cancel" style={descBtn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
+      <button type="button" data-testid={`${testIdPrefix}-cancel`} style={descBtn(busy)} disabled={busy} onClick={cancel}>Cancel</button>
     </>
   );
 }
@@ -898,16 +1065,22 @@ export function DescriptionActions({ editor, label }: { editor: DescriptionEdito
 // bounded band — a long manifest must not push the wiring blocks off the page —
 // and the editor is a plain textarea over the raw markdown, with no rich-text
 // layer that could rewrite what gets committed.
-export function DescriptionBody({ editor, readOnly }: {
+export function DescriptionBody({ editor, readOnly, containerTestId = 'repo-description', textareaTestId = 'repo-description-input' }: {
   editor: DescriptionEditor; readOnly: boolean;
+  // Same reason as DescriptionActions' testIdPrefix: the licence block reuses
+  // this component for its EDITOR only (its read view is <pre>, never this),
+  // and needs its own textarea identity — `data-testid="license-textarea"` —
+  // without colliding with the description block's, which sits on the page
+  // at the same time.
+  containerTestId?: string; textareaTestId?: string;
 }) {
   const { markdown, editing, text, busy, err, setDraft, bodyRef, height } = editor;
   return (
-    <div data-testid="repo-description">
+    <div data-testid={containerTestId}>
       {editing ? (
         <>
           <textarea
-            data-testid="repo-description-input"
+            data-testid={textareaTestId}
             value={text}
             disabled={busy}
             onChange={e => setDraft(e.target.value)}
@@ -1078,9 +1251,15 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
 // CreateLensForm (checkbox rows, LENS tokens) rather than importing its row
 // component: that form's rows are tightly coupled to its own reads/branchData
 // state, so extraction would force a risky refactor for no shared behavior.
-function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onBrowse, onError }: {
+function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onRenamed, onBrowse, onError }: {
   lens?: Lens; name: string; repos: RepoInfo[]; readOnly: boolean;
-  onDeleted: () => void; onSaved: () => void; onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
+  onDeleted: () => void; onSaved: () => void;
+  // Fired with the NEW name once the server confirms the rename — same
+  // contract as RepoDetail's onRenamed. The pane is keyed on `name` by its
+  // caller, so this is how the parent learns to stop addressing it by the old
+  // one.
+  onRenamed: (newName: string) => void;
+  onBrowse: (ctx: BrowseContext) => void; onError: (m: string) => void;
 }) {
   const [lens, setLens] = useState<Lens | undefined>(initial);
   // Owned here for the same reason as a repo's descEditing: the Note block's
@@ -1100,6 +1279,11 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   const [writeBranch, setWriteBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Rename draft + its typed confirmation. Local to the danger zone; cleared
+  // when the pane switches lenses by the same effect that resets editReads.
+  const [renameTo, setRenameTo] = useState('');
+  const [renameConfirm, setRenameConfirm] = useState('');
+  const [renaming, setRenaming] = useState(false);
   // Edit mode: reads maps a mounted read repo → its branch pin ('' = default).
   // The write repo is never a key (it is read implicitly). null = not editing.
   const [editReads, setEditReads] = useState<Record<string, string> | null>(null);
@@ -1121,6 +1305,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
   useEffect(() => {
     setLens(initial);
     setEditReads(null);
+    setRenameTo(''); setRenameConfirm('');
     // Always refresh the full detail — the list view can omit the description,
     // and getLens returns the canonical reads set.
     let cancelled = false;
@@ -1153,6 +1338,25 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
     try { await api.deleteLens(name); onDeleted(); }
     catch (e) { onError(`delete failed: ${String(e)}`); }
     finally { setBusy(false); setConfirming(false); }
+  };
+
+  // Mirrors RepoDetail's rename: the server's detail for a 409 (name taken by
+  // another lens, or by a repo — they share one namespace) already tells the
+  // user the one true thing to do, so it is surfaced verbatim like every
+  // sibling mutation in this file rather than rewritten into invented copy.
+  const rename = async () => {
+    onError(''); setRenaming(true);
+    try {
+      const updated = await api.renameLens(name, renameTo);
+      setRenameTo(''); setRenameConfirm('');
+      // The pane is addressed by name, so it must follow the lens to its new
+      // one — leaving it on the old name would show a 404 on the next read.
+      onRenamed(updated.name);
+    } catch (e) {
+      onError(`rename failed: ${String(e)}`);
+    } finally {
+      setRenaming(false);
+    }
   };
 
   // ── edit mode ──
@@ -1329,6 +1533,45 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
             </div>
           </div>
         )}
+        <div style={{ borderTop: '1px solid #3a2020', marginTop: 14, paddingTop: 14 }}>
+          <div style={{ fontSize: 13, color: '#ddd', marginBottom: 4 }}>Rename this lens</div>
+          {/* Differs from the repo warning: a lens has no history or mounts of
+              its OWN to lose, and its identity (uid) is stable across the
+              rename — the MCP binding pin is lens:<uid>, never the name (RFC
+              §7.3) — so the one real consequence is the endpoint URL. */}
+          <div data-testid="lens-rename-warning" style={{ fontSize: 11.5, color: '#777', marginBottom: 10 }}>
+            Agent MCP endpoint URLs contain this lens's name and will stop resolving
+            until each agent is reconfigured. The lens keeps its identity, so its
+            mounts, and any in-flight agent queries against it, are unaffected.
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              data-testid="lens-rename-input"
+              value={renameTo}
+              onChange={e => setRenameTo(e.target.value)}
+              placeholder="new-name"
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <input
+              data-testid="lens-rename-confirm"
+              value={renameConfirm}
+              onChange={e => setRenameConfirm(e.target.value)}
+              placeholder={`type "${name}" to confirm`}
+              disabled={readOnly || renaming}
+              style={renameInput}
+            />
+            <button
+              type="button"
+              data-testid="lens-rename-submit"
+              style={btn(readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name, 'danger')}
+              disabled={readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name}
+              onClick={rename}
+            >
+              {renaming ? 'Renaming…' : 'Rename'}
+            </button>
+          </div>
+        </div>
       </div>
     ),
   });
@@ -1605,6 +1848,13 @@ const licenseText: React.CSSProperties = {
 // as a fenced-off area rather than one more setting.
 const dangerBox: React.CSSProperties = {
   background: '#161111', border: '1px solid #3a2626', borderRadius: 6, padding: '11px 13px',
+};
+// Monospace: a repo name is an identifier that appears in URLs, so it is typed
+// and compared character by character.
+const renameInput: React.CSSProperties = {
+  background: '#141414', border: '1px solid #3a2020', borderRadius: 4,
+  color: '#ddd', fontFamily: 'var(--k-font-mono)', fontSize: 12,
+  padding: '5px 8px', minWidth: 170, outline: 'none',
 };
 // mountOrdinal numbers a lens's read mounts. The union resolves top to bottom,
 // so the position IS information — this is a rank, not a bullet.

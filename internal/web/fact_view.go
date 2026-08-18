@@ -39,6 +39,14 @@ type FactView struct {
 type AsOf struct {
 	Branch string `json:"branch"`
 	Commit string `json:"commit"`
+	// Date is when the VERSION OF THIS FACT on display was committed —
+	// RFC3339, UTC. Not the anchor commit's date: in a HEAD view the anchor is
+	// the branch tip, and its date says when the repo last changed, which has
+	// nothing to do with the fact being read.
+	//
+	// omitempty is load-bearing: an unresolvable commit must omit the field so
+	// the client renders nothing, never a zero time formatted as 1970.
+	Date string `json:"date,omitempty"`
 }
 
 // MarshalJSON emits FactView with the _links map under its canonical key.

@@ -154,17 +154,44 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// seedBareRemote builds a bare git repo with one commit on `main` and returns a
-// file:// URL pointing at it — a stand-in for a real remote that clone-mode
-// Create can fetch from.
+// seedBareRemote builds a bare git repo with one commit on `main` that IS a
+// knomit knowledge base — it carries .knomit/ontology.yaml — and returns a
+// file:// URL pointing at it. The stand-in for a real remote that clone-mode
+// Create can join.
+//
+// The ontology is not decoration. A repository is a knomit knowledge base if
+// and only if it has one (fact.OntologyPathsNewestFirst), and clone mode
+// refuses a remote that is not one — see initClone's ErrRemoteNotInitialized.
+// A fixture without it is a fixture for a DIFFERENT case, which is what
+// seedBareRemoteNoOntology is for.
 func seedBareRemote(t *testing.T, bare string) string {
+	t.Helper()
+	return seedBareRemoteWithOntology(t, bare, true)
+}
+
+// seedBareRemoteNoOntology is the same remote WITHOUT an ontology: an ordinary
+// git repository that is not a knowledge base. It is the "initialize" target,
+// and the fixture that proves clone mode refuses rather than silently
+// substituting fact.DefaultOntology().
+func seedBareRemoteNoOntology(t *testing.T, bare string) string {
+	t.Helper()
+	return seedBareRemoteWithOntology(t, bare, false)
+}
+
+func seedBareRemoteWithOntology(t *testing.T, bare string, withOntology bool) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
 	runGit(t, "", "init", "--bare", "--initial-branch=main", bare)
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
 	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
-	runGit(t, work, "add", "seed.txt")
+	if withOntology {
+		ont, err := fact.DefaultOntology().Serialize()
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath), ont, 0o644))
+	}
+	runGit(t, work, "add", "-A")
 	runGit(t, work, "commit", "-m", "seed")
 	runGit(t, work, "push", "origin", "main")
 	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
@@ -236,7 +263,7 @@ func TestCreate_CloneMode_RejectsOntologySpec(t *testing.T) {
 			Origin: &OriginSpec{URL: url, Branch: "main"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.ErrorIs(t, m.CreatePreflight(tc.spec), ErrInvalidName)
+			require.ErrorIs(t, m.CreatePreflight(context.Background(), tc.spec), ErrInvalidName)
 			_, err := m.Create(context.Background(), tc.spec, nil)
 			require.ErrorIs(t, err, ErrInvalidName)
 			require.Nil(t, m.Get(tc.spec.Name), "rejected clone must not leave a registered repo")

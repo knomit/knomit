@@ -22,6 +22,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/repos"
 	"knomit/internal/store"
+	migrate "knomit/internal/store/migrate"
 )
 
 // The fixture's agent branch. Fixed rather than host-derived so the rewind and
@@ -140,7 +141,7 @@ func makeLegacyRepoDB(t *testing.T, path string, initFiles map[string]string, re
 	require.NoError(t, err)
 	require.NoError(t, svc.Close())
 
-	downSQL, err := os.ReadFile(filepath.Join("..", "internal", "store", "migrate", "migrations",
+	downSQL, err := os.ReadFile(filepath.Join("..", "internal", "store", "migrate", "repo",
 		"000017_remotes_drop_connection.down.sql"))
 	require.NoError(t, err)
 
@@ -320,8 +321,7 @@ func TestMigrateRegistry_ConvertsALegacyHome(t *testing.T) {
 	require.FileExists(t, filepath.Join(home, "control.db.bak"))
 
 	// The credential moved without ever being decrypted, and still decrypts.
-	origins, err := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
-	require.NoError(t, err)
+	origins := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
 	org, err := origins.Get(active[0].UID)
 	require.NoError(t, err)
 	require.NotNil(t, org)
@@ -556,8 +556,7 @@ func TestMigrateRegistry_RefusesAnAlreadyMigratedHome(t *testing.T) {
 	active, err := reg.List(repos.StateActive)
 	require.NoError(t, err)
 	require.Len(t, active, 1)
-	origins, err := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
-	require.NoError(t, err)
+	origins := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
 	org, err := origins.Get(active[0].UID)
 	require.NoError(t, err)
 	require.NotNil(t, org)
@@ -633,8 +632,7 @@ func TestMigrateRegistry_DegradesOnAnUnresolvableHead(t *testing.T) {
 	require.Equal(t, repos.ProfileCode, broken.Profile, "no profile: repo_settings is keyed by root commit")
 
 	// Its origin still came across — the capture never depended on the walk.
-	origins, err := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
-	require.NoError(t, err)
+	origins := repos.OpenOrigins(reg.DB(), testCryptFor(t, home))
 	org, err := origins.Get(broken.UID)
 	require.NoError(t, err)
 	require.NotNil(t, org)
@@ -708,8 +706,20 @@ func TestMigrateRegistry_ForceResumesAfterAnInterruptedRun(t *testing.T) {
 	for _, rp := range plan.Repos {
 		firstUIDs[rp.Name] = rp.UID
 	}
-	require.NoError(t, applyControlDB(plan))
+	require.NoError(t, applyControlDB(io.Discard, plan))
 	require.FileExists(t, filepath.Join(home, "repos", "alpha.db"), "the crash was before the renames")
+
+	// The lens's own uid must be just as stable across the resume as the repo
+	// uid asserted below: Task 4d pins the MCP cursor on this id, and a
+	// re-mint here would silently invalidate every pinned cursor and any
+	// stored reference to it.
+	firstLensReg, err := repos.OpenLensRegistry(filepath.Join(home, "control.db"))
+	require.NoError(t, err)
+	firstLens, ok, err := firstLensReg.Get("workspace")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotEmpty(t, firstLens.UID)
+	require.NoError(t, firstLensReg.Close())
 
 	// Without --force the re-run refuses, because the registry has rows.
 	rerr := runMigrateRegistry(home, quietOpts(migrateOpts{}))
@@ -734,6 +744,7 @@ func TestMigrateRegistry_ForceResumesAfterAnInterruptedRun(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, active[0].UID, lens.WriteUID, "lens membership still resolves")
+	require.Equal(t, firstLens.UID, lens.UID, "the re-run reuses the lens's own uid, not just the repo uid it points at")
 }
 
 // The entire ordering invariant rests on this: a legacy repo database can be
@@ -1149,7 +1160,7 @@ func TestMigrateRegistry_CheckpointsARepoWALBeforeRenamingIt(t *testing.T) {
 
 	plan, err := planMigration(home, migrateOpts{})
 	require.NoError(t, err)
-	require.NoError(t, applyControlDB(plan))
+	require.NoError(t, applyControlDB(io.Discard, plan))
 	// Stop before migrateRepoDatabases: store.Open would create a fresh -wal of
 	// its own and make the assertion below meaningless.
 	require.NoError(t, moveRepoFiles(io.Discard, plan))
@@ -1180,6 +1191,15 @@ func TestMigrateRegistry_CheckpointsARepoWALBeforeRenamingIt(t *testing.T) {
 // its stored url, auth_method and encrypted token — which is precisely what
 // repo_origins exists to keep recoverable when a .db goes missing. Nothing used
 // to mention it.
+//
+// The fixture builds its tables with migrate.Control, which STAMPS this home at
+// v1 before the tool ever runs. That is deliberate: it exercises applyControlDB
+// against an already-stamped home, where rebuilding the lens tables through the
+// migrator would be a no-op and this test would fail on a missing table long
+// before reaching the refusal it is actually about. It passes because the
+// rebuild runs the baseline's DDL text inside the transaction instead, which
+// does not consult the stamp. Do not swap this fixture back to hand-written DDL
+// expecting it to be equivalent — the stamp is part of what is under test.
 func TestMigrateRegistry_ForceRefusesToCascadeAwayUnbackedOrigins(t *testing.T) {
 	home := buildLegacyHome(t)
 	controlPath := filepath.Join(home, "control.db")
@@ -1188,10 +1208,7 @@ func TestMigrateRegistry_ForceRefusesToCascadeAwayUnbackedOrigins(t *testing.T) 
 	db, err := sql.Open("sqlite3", controlPath+"?_foreign_keys=on")
 	require.NoError(t, err)
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(repos.RegistrySchemaSQL)
-	require.NoError(t, err)
-	_, err = db.Exec(repos.OriginsSchemaSQL)
-	require.NoError(t, err)
+	require.NoError(t, migrate.Control(db))
 	_, err = db.Exec(
 		`INSERT INTO repos (uid, name, state, profile, created_at) VALUES (?, 'lost', 'active', 'code', 1)`,
 		lostUID)
@@ -1229,7 +1246,7 @@ func alphaUIDIn(t *testing.T, controlPath string) string {
 }
 
 // A repo whose HEAD does not resolve has an EMPTY RootCommit, and repo_settings
-// is keyed by root commit. Without a guard, a legacy row with repo_id='' is
+// is keyed by root commit. Without a guard, a legacy row with repo_id=” is
 // looked up by that empty key and applied to every such repo — silently, and
 // contradicting what printPlan promises about them two screens up. The old
 // writer rejected an empty id so no shipped home has such a row; this is two
@@ -1255,6 +1272,131 @@ func TestMigrateRegistry_EmptyRepoSettingsKeyDoesNotClaimUnresolvableRepos(t *te
 		"an empty root commit must not match an empty repo_settings key")
 }
 
+// A legacy home can arrive here ALREADY STAMPED at control.db schema version
+// 1: controlUp skips the lens re-key for a `lenses.write_repo` home but still
+// runs the baseline, so any prior repos.OpenRegistry touch — a support session,
+// an aborted boot, any tool that opened the registry — writes schema_migrations
+// while the lens tables stay legacy.
+//
+// applyControlDB drops those legacy tables and rebuilds them. It must not do
+// that rebuild by asking the MIGRATOR, because a migrator that believes v1 is
+// already applied does NOTHING, and `lenses` and `lens_reads` are simply gone —
+// the lens definitions destroyed by the very tool that exists to convert them.
+// Executing the baseline's own DDL text inside the transaction is what makes
+// the stamp irrelevant: IF NOT EXISTS recreates exactly what was just dropped,
+// whatever schema_migrations happens to say.
+func TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen(t *testing.T) {
+	home := buildLegacyHome(t)
+	controlPath := filepath.Join(home, "control.db")
+
+	// The touch. Nothing here converts the home; it only stamps it.
+	reg, err := repos.OpenRegistry(controlPath)
+	require.NoError(t, err)
+	require.NoError(t, reg.Close())
+
+	requireTablePresent(t, controlPath, "schema_migrations")
+	probe, err := openRaw(controlPath)
+	require.NoError(t, err)
+	legacy, err := repos.HasLegacyLensSchema(probe)
+	// The probe's own error first: a Close failure asserted ahead of it would
+	// mask the far more informative reason the schema check failed.
+	require.NoError(t, err)
+	require.NoError(t, probe.Close())
+	require.True(t, legacy,
+		"the fixture must be stamped v1 AND still name-keyed, or this proves nothing")
+
+	require.NoError(t, runMigrateRegistry(home, quietOpts(migrateOpts{})))
+
+	// The lens tables are still there, in the new shape, with their rows.
+	requireTablePresent(t, controlPath, "lenses")
+	requireTablePresent(t, controlPath, "lens_reads")
+	requireLensSchemaIsUIDKeyed(t, controlPath)
+
+	lreg, err := repos.OpenLensRegistry(controlPath)
+	require.NoError(t, err)
+	defer lreg.Close()
+	lenses, err := lreg.List()
+	require.NoError(t, err)
+	require.Len(t, lenses, 1)
+	require.Equal(t, "workspace", lenses[0].Name)
+	require.Equal(t, alphaUIDIn(t, controlPath), lenses[0].WriteUID)
+	require.Len(t, lenses[0].Reads, 1)
+	require.Equal(t, alphaUIDIn(t, controlPath), lenses[0].Reads[0].RepoUID)
+}
+
+// A failure partway through applyControlDB must leave control.db exactly as it
+// was found — legacy lens tables, legacy rows and all.
+//
+// This is the property that makes the tool safely re-runnable, and it is easy
+// to lose. Destroy the legacy lens rows outside the transaction and the damage
+// is invisible: the rollback restores repo_settings, so the home still LOOKS
+// unconverted, the operator re-runs, planLenses reads a lenses table that now
+// exists and is empty, and the second run reports success having silently
+// discarded every lens definition. control.db.bak would hold the only copy,
+// with nothing to tell anyone to reach for it.
+//
+// The abort is induced with two active repos claiming one name, which the
+// repos_active_name partial unique index rejects — a failure landing AFTER the
+// drops and the schema build, which is exactly the window that matters.
+func TestApplyControlDB_AbortLeavesTheLegacyLensTablesUntouched(t *testing.T) {
+	home := buildLegacyHome(t)
+	controlPath := filepath.Join(home, "control.db")
+
+	before := legacyLensRowCount(t, controlPath)
+	require.Positive(t, before, "the fixture must start with legacy lens rows, or this proves nothing")
+
+	plan := &migrationPlan{
+		Home:            home,
+		ControlPath:     controlPath,
+		ReposDir:        filepath.Join(home, "repos"),
+		ControlDBExists: true,
+		LegacyControlDB: true,
+		Repos: []repoPlan{
+			{UID: ksuid.New().String(), Name: "clash", Profile: repos.ProfileCode, CreatedAt: 1},
+			{UID: ksuid.New().String(), Name: "clash", Profile: repos.ProfileCode, CreatedAt: 2},
+		},
+	}
+
+	err := applyControlDB(io.Discard, plan)
+	require.Error(t, err, "two active repos sharing a name must be rejected")
+
+	// The legacy lens tables survived in their ORIGINAL shape: still name-keyed,
+	// still holding their rows. Not recreated-and-empty.
+	requireTablePresent(t, controlPath, "lenses")
+	probe, err := openRaw(controlPath)
+	require.NoError(t, err)
+	legacy, herr := repos.HasLegacyLensSchema(probe)
+	require.NoError(t, herr)
+	require.NoError(t, probe.Close())
+	require.True(t, legacy,
+		"the rollback must restore the legacy lens shape, not leave the rebuilt one")
+	require.Equal(t, before, legacyLensRowCount(t, controlPath),
+		"the legacy lens rows must survive an aborted conversion")
+
+	// And the home is still convertible: a re-run carries the lenses across.
+	require.NoError(t, runMigrateRegistry(home, quietOpts(migrateOpts{})))
+	requireLensSchemaIsUIDKeyed(t, controlPath)
+	lreg, err := repos.OpenLensRegistry(controlPath)
+	require.NoError(t, err)
+	defer lreg.Close()
+	lenses, err := lreg.List()
+	require.NoError(t, err)
+	require.Len(t, lenses, before,
+		"the re-run after an abort must not silently drop lens definitions")
+}
+
+// legacyLensRowCount counts rows in the pre-registry `lenses` table without
+// caring which shape it is in.
+func legacyLensRowCount(t *testing.T, path string) int {
+	t.Helper()
+	db, err := openRaw(path)
+	require.NoError(t, err)
+	defer db.Close()
+	var n int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM lenses`).Scan(&n))
+	return n
+}
+
 // The command's own help is the last thing an operator reads before running an
 // irreversible conversion of their whole knowledge base. It used to say only
 // that control.db is backed up, which reads as "this is recoverable" — and the
@@ -1265,4 +1407,54 @@ func TestMigrateRegistryCmd_HelpSaysItIsIrreversible(t *testing.T) {
 	require.Contains(t, c.Long, "COPY THE WHOLE HOME BEFORE")
 	require.NotContains(t, c.Long, "leaving every file in the home as it")
 	require.Contains(t, c.Flags().Lookup("dry-run").Usage, "no file contents are changed")
+}
+
+// The command is deprecated, and the deprecation has to reach an operator who
+// never reads --help. Both surfaces are asserted: the help text for whoever
+// looks, and the run banner for whoever pastes the command from a runbook.
+func TestMigrateRegistryCmd_AnnouncesItsDeprecation(t *testing.T) {
+	c := migrateRegistryCmd()
+	require.Contains(t, c.Short, "DEPRECATED")
+	require.Contains(t, c.Long, "REMOVED in a future build")
+	require.Contains(t, deprecationNotice, "DEPRECATED")
+	require.Contains(t, deprecationNotice, "REMOVED in a future build")
+}
+
+// A deprecated command that vanishes from `knomit --help` is worse than one
+// that stays: a legacy home refuses to boot with a message naming this command,
+// and cobra's own Deprecated field would make IsAvailableCommand report false
+// and drop it from the listing. Assert the command remains discoverable.
+func TestMigrateRegistryCmd_StaysListedInHelp(t *testing.T) {
+	c := migrateRegistryCmd()
+	require.Empty(t, c.Deprecated,
+		"setting cobra's Deprecated field hides the command from `knomit --help`")
+	require.True(t, c.IsAvailableCommand(), "migrate-registry must stay listed in help")
+
+	root := RootCmd()
+	var found bool
+	for _, sub := range root.Commands() {
+		if sub.Name() == "migrate-registry" {
+			found = true
+			require.True(t, sub.IsAvailableCommand())
+		}
+	}
+	require.True(t, found, "migrate-registry must stay registered on the root command")
+}
+
+// The banner has to print before the plan, on the ordinary path AND on the path
+// most likely to be taken by someone evaluating whether to run this at all.
+func TestMigrateRegistry_DryRunPrintsTheDeprecationBanner(t *testing.T) {
+	home := buildLegacyHome(t)
+
+	c := migrateRegistryCmd()
+	var out writerRecorder
+	c.SetOut(&out)
+	c.SetErr(&out)
+	c.SetArgs([]string{"--home", home, "--dry-run"})
+	require.NoError(t, c.Execute())
+
+	got := out.String()
+	require.Contains(t, got, "DEPRECATED")
+	require.Less(t, strings.Index(got, "DEPRECATED"), strings.Index(got, "dry run"),
+		"the warning must come before the plan, not after it")
 }

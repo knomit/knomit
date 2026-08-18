@@ -59,8 +59,12 @@ const (
 
 // RepoInstance holds all runtime state for a single repository.
 type RepoInstance struct {
-	mu          sync.RWMutex
-	name        string
+	mu sync.RWMutex
+	// name is the repo's DISPLAY name — the only one of its three identifiers
+	// that is mutable (uid is membership, the root-commit id is fact
+	// addressing). Atomic because RenameRepo writes it on a live instance while
+	// unsynchronised readers — mostly log statements — are reading it.
+	name        atomic.Pointer[string]
 	dbPath      string
 	agentBranch string
 	// uid is the registry identity: stable for the repo's whole life, minted at
@@ -72,9 +76,12 @@ type RepoInstance struct {
 	// decision 11). Resolved lazily; "" when unresolvable.
 	// idMu guards id. ID() caches only successful resolution so a transient
 	// failure (e.g. during a store swap) is retried on the next call.
-	idMu                sync.Mutex
-	id                  string
-	ontology            *fact.Ontology
+	idMu     sync.Mutex
+	id       string
+	ontology *fact.Ontology
+	// ontologyErr is non-nil when the ontology could not be established. The
+	// repo is then readable but not writable — see WritableBranch.
+	ontologyErr         error
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
 	methodologyMinScore float64
@@ -229,8 +236,19 @@ func (ri *RepoInstance) attachStore(svc *store.Service) bool {
 	return true
 }
 
-// Name returns the repository name.
-func (ri *RepoInstance) Name() string { return ri.name }
+// Name returns the repository's display name.
+func (ri *RepoInstance) Name() string {
+	if p := ri.name.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// setName publishes a new display name. Package-private: the only legitimate
+// caller is Manager.RenameRepo, which re-keys m.repos in the same operation.
+// Setting one without the other leaves the manager's map disagreeing with the
+// instance about what this repo is called.
+func (ri *RepoInstance) setName(s string) { ri.name.Store(&s) }
 
 // UID returns the repo's registry identity — the control.db primary key and
 // the .db filename stem. Never empty for a registered repo.
@@ -259,7 +277,7 @@ func (ri *RepoInstance) ID() string {
 		}
 		root, err := svc.RootCommit(context.Background(), ri.agentBranch)
 		if err != nil {
-			log.Warn().Err(err).Str("repo", ri.name).Msg("repo id: root commit unresolved")
+			log.Warn().Err(err).Str("repo", ri.Name()).Msg("repo id: root commit unresolved")
 			return
 		}
 		ri.id = root
@@ -288,11 +306,38 @@ func (ri *RepoInstance) ShortID() string {
 // there corrupts their watermarks) are never writable. Future experiment
 // branches widen this classification — extend HERE, not at call sites.
 func (ri *RepoInstance) WritableBranch(branch string) bool {
+	// ALL REPOS MUST HAVE AN ONTOLOGY. Without one, no branch is writable —
+	// not even the agent branch. Facts are validated against the repo's
+	// ontology on write, so authoring while it is unestablished either
+	// validates against a taxonomy nobody chose or skips validation entirely,
+	// and both write data the repo cannot vouch for.
+	//
+	// Extended HERE rather than at call sites, per the note above: binding.go
+	// derives writeOK from this one function, so every write path inherits it.
+	if ri.ontologyErr != nil {
+		return false
+	}
 	return branch != "" && branch == ri.agentBranch
 }
 
-// Ontology returns the ontology loaded from this repo's git store at open time.
-func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }
+// Ontology returns the ontology loaded from this repo's git store at open time,
+// or NIL when it could not be established.
+//
+// Nil is the honest answer and callers must handle it. The alternative — the
+// default taxonomy, which is what this returned before — is a different
+// ontology presented as this repo's own, and since a repo's ontology is fixed
+// at create time there is no later correction. OntologyError says what went
+// wrong.
+func (ri *RepoInstance) Ontology() *fact.Ontology {
+	if ri.ontologyErr != nil {
+		return nil
+	}
+	return ri.ontology
+}
+
+// OntologyError reports why this repo has no usable ontology, or nil when it
+// has one. A non-nil value means the repo is open for READING only.
+func (ri *RepoInstance) OntologyError() error { return ri.ontologyErr }
 
 // Embedder returns the batch embedder for this repo, or nil if unavailable.
 func (ri *RepoInstance) Embedder() store.BatchEmbedder { return ri.embedder }
@@ -453,25 +498,41 @@ func (ri *RepoInstance) shutdown() {
 func (ri *RepoInstance) Verify(ctx context.Context, opts store.VerifyOpts) (store.IntegrityReport, error) {
 	svc, release, err := ri.Acquire()
 	if err != nil {
-		return store.IntegrityReport{Repo: ri.name}, err
+		return store.IntegrityReport{Repo: ri.Name()}, err
 	}
 	defer release()
 	report, err := svc.Verify(ctx, opts)
-	report.Repo = ri.name
+	report.Repo = ri.Name()
 	return report, err
+}
+
+// PruneGeneratedRefs deletes this repo's residual okf/* export refs. Held under
+// the same Acquire as Verify, so a concurrent SwapStore/Archive drains the call
+// rather than closing the service while it is deleting refs.
+//
+// Unlike Verify this one WRITES, which is why it is a separate call an operator
+// asks for by name rather than something Verify does when it finds residue.
+func (ri *RepoInstance) PruneGeneratedRefs(ctx context.Context) (store.PruneResult, error) {
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return store.PruneResult{}, err
+	}
+	defer release()
+	return svc.PruneGeneratedRefs(ctx)
 }
 
 // NewTestInstance creates a minimal RepoInstance for use in tests that
 // exercise Manager operations (Set, Get, Replace, ForEach, Names, context).
 // Production code must use Manager.openOne instead.
 func NewTestInstance(name string) *RepoInstance {
-	return &RepoInstance{
-		name:        name,
+	ri := &RepoInstance{
 		syncCancel:  func() {},
 		syncWg:      &sync.WaitGroup{},
 		indexCancel: func() {},
 		indexWg:     &sync.WaitGroup{},
 	}
+	ri.setName(name)
+	return ri
 }
 
 // TestInstanceConfig holds optional fields for NewTestInstanceWithDeps.
@@ -481,7 +542,15 @@ type TestInstanceConfig struct {
 	// UID is the instance's control.db identity. Leave empty for a bare
 	// instance that no registry row backs; set it (to the uid of a row the
 	// test inserted) when the code under test writes through Manager.Repos()
-	// or Manager.Origins(), both of which key on it.
+	// or Manager.Origins(), both of which key on it. It is ALSO
+	// Binding.PinID()'s source (repo:<uid>) — the MCP cursor-pinning identity,
+	// RFC §7.3 — so two fixtures left at the zero value collapse onto the same
+	// pin ("" in, "" back out: PinID fails closed rather than a bare "repo:").
+	// A resume against that pin is rejected either way (empty never matches),
+	// but a test whose whole point is that two DIFFERENT bindings behave
+	// differently needs distinct, non-empty uids to exercise that at all — set
+	// one whenever a test builds more than one instance and compares them as
+	// bindings.
 	UID                 string
 	AgentBranch         string
 	Svc                 *store.Service
@@ -497,8 +566,7 @@ type TestInstanceConfig struct {
 // dependencies. Intended for handler/integration tests in sibling packages.
 // Production code must use Manager.openOne instead.
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
-	return &RepoInstance{
-		name:                cfg.Name,
+	ri := &RepoInstance{
 		uid:                 cfg.UID,
 		agentBranch:         cfg.AgentBranch,
 		handle:              newStoreHandle(cfg.Svc),
@@ -520,4 +588,6 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		indexCancel:                   func() {},
 		indexWg:                       &sync.WaitGroup{},
 	}
+	ri.setName(cfg.Name)
+	return ri
 }

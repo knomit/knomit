@@ -81,8 +81,11 @@ type createLensRequest struct {
 // patchLensRequest is the PATCH body for editing a lens. Every field is a
 // pointer so an omitted field (JSON key absent → nil) is distinguishable from a
 // provided-but-empty one: omitted = keep the current value, provided = replace it
-// wholesale (reads replace as a set, never merge). The name is immutable and has
-// no field here.
+// wholesale (reads replace as a set, never merge). The name has no field here:
+// it is not patchable through PATCH, which is not the same as immutable —
+// POST /lenses/{lens}/rename (handleHALLensRename) changes it, because a rename
+// invalidates the identifier the request was addressed by and so cannot share a
+// resource with the response.
 type patchLensRequest struct {
 	Write       *lensMember    `json:"write"`
 	Description *string        `json:"description"`
@@ -367,8 +370,10 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 }
 
 // handleHALLensPatch serves PATCH /api/v1/lenses/{lens}. It edits a lens's write
-// repo, read mounts, and description; the name is immutable. Omitted fields keep
-// their current value, provided fields replace wholesale. The merge starts from
+// repo, read mounts, and description. It does NOT touch the name — renaming is
+// POST /lenses/{lens}/rename (handleHALLensRename), a separate route precisely
+// because the response has to be re-read through the NEW name. Omitted fields
+// keep their current value, provided fields replace wholesale. The merge starts from
 // the persisted lens (a 404 if unknown), then Manager.UpdateLens re-runs the full
 // create-time validation (member existence, replica, branch pins, description
 // cap) under the same locking discipline before persisting.

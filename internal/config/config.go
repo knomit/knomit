@@ -33,6 +33,16 @@ type GitConfig struct {
 	// Default 120s (set in Defaults). 0 disables the bound entirely (the old,
 	// hang-forever behavior) — only when explicitly set to 0.
 	NetworkTimeout time.Duration `toml:"network_timeout"`
+	// MaxProbeBytes bounds what the pre-create initialization probe will pull
+	// into MEMORY to answer "does this branch carry an ontology?".
+	//
+	// That probe clones a tip (Depth 1, single branch) into a memory store from
+	// a caller-supplied URL. Depth bounds the history, not the content, so the
+	// whole tip tree lands on the heap — for a question that needs one tree
+	// entry. A remote past this budget is reported as NOT ESTABLISHED rather
+	// than answered, because an answer nobody could obtain must not route a
+	// create. Default 64 MiB (set in Defaults); 0 disables the bound.
+	MaxProbeBytes int64 `toml:"max_probe_bytes"`
 }
 
 // RemoteAuthConfig holds git remote authentication settings.
@@ -227,7 +237,7 @@ func Defaults() Config {
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
 		},
-		Git: GitConfig{Serve: true, NetworkTimeout: 120 * time.Second},
+		Git: GitConfig{Serve: true, NetworkTimeout: 120 * time.Second, MaxProbeBytes: 64 << 20},
 		Log: LogConfig{
 			Format:        "console",
 			Level:         "info",

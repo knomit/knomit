@@ -1,7 +1,8 @@
 // Repo registry: the machine-local record of which repositories exist, what
 // state each is in, and which knowledge base each one holds. A tenant of
-// <home>/control.db alongside the lens registry — same file, own handle, same
-// WAL + busy-timeout + single-connection discipline.
+// <home>/control.db alongside the lens registry and the origins store — and on
+// the boot path the OWNER of the one handle all three share, opened WAL with a
+// busy timeout and a single connection.
 //
 // The registry is authoritative. Manager.Start reads it rather than globbing
 // the repos directory, so a repo's existence no longer depends on a filename
@@ -17,6 +18,8 @@ import (
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	storemigrate "knomit/internal/store/migrate"
 )
 
 // RepoState is the STORED lifecycle state of a registered repo. Deliberately
@@ -49,29 +52,6 @@ const (
 // ErrInvalidProfile is returned by SetProfile for unknown profile values.
 var ErrInvalidProfile = errors.New("invalid profile (want code, chat, or generic)")
 
-const registrySchema = `
-CREATE TABLE IF NOT EXISTS repos (
-    uid         TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    state       TEXT NOT NULL,
-    profile     TEXT NOT NULL DEFAULT 'code',
-    repo_id     TEXT,
-    created_at  INTEGER NOT NULL,
-    archived_at INTEGER
-);
-CREATE UNIQUE INDEX IF NOT EXISTS repos_active_name
-    ON repos(name) WHERE state = 'active';
-CREATE UNIQUE INDEX IF NOT EXISTS repos_active_repo_id
-    ON repos(repo_id) WHERE state = 'active' AND repo_id IS NOT NULL;
-`
-
-// RegistrySchemaSQL exposes the repos-table DDL to the one-shot
-// `knomit migrate-registry` tool, which builds the whole registry inside a
-// SINGLE control.db transaction (so an abort leaves no half-built registry)
-// and therefore cannot go through OpenRegistry. Exported rather than copied so
-// the migration tool can never drift from the schema it is supposed to produce.
-const RegistrySchemaSQL = registrySchema
-
 // RepoRecord is one registered repository.
 type RepoRecord struct {
 	UID     string
@@ -98,18 +78,73 @@ type Registry struct {
 	schemaExisted bool
 }
 
-// OpenRegistry opens the repos tenant at path — the same control.db file the
-// lens registry uses — and creates its schema if absent.
+// controlUp brings an open control.db handle fully up to date: the lens re-key
+// first, then the versioned baseline. The order is load-bearing — ALTER TABLE
+// ... RENAME TO does not rename attached indexes, so a baseline that created
+// lenses_name first would make the re-key's own CREATE UNIQUE INDEX lenses_name
+// collide.
+//
+// EVERY path that migrates control.db goes through here — OpenRegistry,
+// OpenLensRegistry and Manager.Start — because skipping the re-key is not a
+// recoverable mistake. Against a pre-uid home, a bare migrate.Control creates
+// lenses_name on the still-name-keyed table AND stamps the home at version 1,
+// so the collision is permanent: every later open, correctly ordered or not,
+// fails with "index lenses_name already exists". One stray caller that opened
+// the file without the re-key would brick the home for good.
+//
+// applyControlDB (cmd/migrate_registry.go) is the ONE deliberate exemption in
+// production code; the rest of a `migrate.Control` grep is tests. It is safe
+// because of what it does inside its transaction, BEFORE the stamp: it drops
+// lens_reads and lenses, recreates them by exec'ing the baseline's DDL text,
+// and rewrites the lens rows from its own captured plan. With no `lenses` table
+// left there is nothing for the re-key to convert and no lenses_name index to
+// collide with, so the re-key would be a no-op — it is skipped because it has
+// nothing to do, not because the ordering above stopped mattering.
+//
+// Note that it does NOT drop the schema_migrations stamp, and must not need to:
+// it rebuilds from the DDL text rather than from the migrator, so whatever the
+// stamp says is irrelevant. Rebuilding via migrate.Control instead would be the
+// data-destroying path — on an already-stamped home the migrator no-ops and the
+// lens tables stay dropped. See
+// TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen.
+//
+// The re-key is Go, not a .sql file, because it mints ksuids.
+//
+// A GENUINELY pre-registry home (lenses.write_repo, membership by NAME) is the
+// one shape it skips the re-key for. upgradeLensSchema cannot convert that
+// shape — it copies write_uid, a column that home does not have — and nothing
+// here should try: `knomit migrate-registry` is the only thing that converts
+// it, and Manager.Start's guard refuses to boot it in the meantime. Skipping
+// leaves it exactly as migrate-registry expects to find it, and the guard's
+// write_repo arm still fires afterwards, so a home cannot be quietly half-
+// converted on the way past.
+func controlUp(db *sql.DB) error {
+	legacy, err := HasLegacyLensSchema(db)
+	if err != nil {
+		return fmt.Errorf("check control.db lens schema: %w", err)
+	}
+	if !legacy {
+		if err := upgradeLensSchema(db); err != nil {
+			return fmt.Errorf("lens registry upgrade: %w", err)
+		}
+	}
+	if err := storemigrate.Control(db); err != nil {
+		return fmt.Errorf("migrate control.db: %w", err)
+	}
+	return nil
+}
+
+// OpenRegistry opens control.db at path and brings it fully up to date.
 //
 // Manager.Start deliberately does NOT use this: it opens with
-// OpenRegistryNoSchema, runs the unmigrated-home guard, and only then calls
-// EnsureSchema. See refuseUnmigratedHome for why the order is load-bearing.
+// OpenRegistryNoSchema, runs the unmigrated-home guard, and only then migrates.
+// See refuseUnmigratedHome for why the order is load-bearing.
 func OpenRegistry(path string) (*Registry, error) {
 	r, err := OpenRegistryNoSchema(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.EnsureSchema(); err != nil {
+	if err := controlUp(r.db); err != nil {
 		r.Close()
 		return nil, err
 	}
@@ -118,7 +153,7 @@ func OpenRegistry(path string) (*Registry, error) {
 
 // OpenRegistryNoSchema opens the repos tenant at path WITHOUT creating its
 // schema. Callers that intend to read or write rows must follow with
-// EnsureSchema; the split exists so a caller can first observe whether the
+// controlUp; the split exists so a caller can first observe whether the
 // repos table was ever there — evidence that creating it would destroy.
 func OpenRegistryNoSchema(path string) (*Registry, error) {
 	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
@@ -134,31 +169,21 @@ func OpenRegistryNoSchema(path string) (*Registry, error) {
 	return &Registry{db: db, schemaExisted: existed}, nil
 }
 
-// EnsureSchema creates the repos table and its indexes if they are absent.
-// Idempotent, and it does NOT disturb schemaExisted: that field answers "was
-// the table there when this handle opened", which stays true of the past
-// however many times this runs.
-func (r *Registry) EnsureSchema() error {
-	if _, err := r.db.Exec(registrySchema); err != nil {
-		return fmt.Errorf("repo registry schema: %w", err)
-	}
-	return nil
-}
-
 // HasLegacyLensSchema reports whether control.db still carries the PRE-registry
 // lens tables: a `lenses` table with the name-keyed `write_repo` column, which
 // the uid-keyed schema replaced with `write_uid`.
 //
 // This is DURABLE evidence of an unmigrated home, and that is why the boot
 // guard leads with it: it is independent of SchemaExisted, whose durability
-// rests on Manager.Start deferring EnsureSchema until the guard has passed.
+// rests on Manager.Start deferring migrate.Control until the guard has passed.
 // Anything that creates the `repos` table on the way past makes SchemaExisted
 // report true on the second boot, and a guard resting on that arm alone would
 // fire only on the first — under a restart policy (systemd Restart=on-failure,
 // Docker, or an operator who simply tries again) nobody would ever see it.
 //
-// Nothing in a failed boot removes this column: OpenLensRegistry's CREATE TABLE
-// IF NOT EXISTS is a no-op against the legacy table (see LensSchemaSQL).
+// Nothing in a failed boot removes this column: the baseline migration's
+// CREATE TABLE IF NOT EXISTS is a no-op against the legacy table, and
+// controlUp skips the in-place re-key for this shape (see upgradeLensSchema).
 // `knomit migrate-registry` is the only thing that drops and rebuilds those
 // tables, so the signal clears exactly when the home is actually converted.
 func HasLegacyLensSchema(db *sql.DB) (bool, error) {
@@ -191,7 +216,7 @@ func tableExists(db *sql.DB, name string) (bool, error) {
 // purged), not an unmigrated home.
 //
 // This is DURABLE only because Manager.Start opens via OpenRegistryNoSchema and
-// defers EnsureSchema until after the guard has passed. Creating the table on
+// defers migrate.Control until after the guard has passed. Creating the table on
 // the way past — which OpenRegistry does — makes the second boot against an
 // unconverted home report true, and the guard that should fire on every attempt
 // fires only on the first.
@@ -353,6 +378,43 @@ func (r *Registry) Rename(uid, name string) error {
 		return classifyRegistryErr(err, name)
 	}
 	return requireOneRow(res, uid)
+}
+
+// RenameIfNamed sets uid's name to `to` ONLY IF it currently holds `from`.
+// Reports whether the row changed: (false, nil) means the predicate did not
+// hold — a legitimate outcome, NOT an error. Contrast Rename, which is
+// unconditional and reports zero rows as ErrRegistryNotFound; the two have
+// different zero-row semantics and mixing them up is the trap here.
+//
+// This is a compare-and-swap, and Manager.RenameRepo uses it for BOTH halves of
+// a rename — the forward write and its compensating revert. Neither may be
+// unconditional, for two different reasons:
+//
+//   - FORWARD (the primitive's main job today). Two RenameRepo calls racing
+//     from the same old name would both durably succeed under a plain UPDATE,
+//     with the last writer winning independently of which one goes on to win
+//     the in-memory map. As a CAS, only one can see the old name still there;
+//     the loser matches zero rows, learns it lost before writing anything, and
+//     never needs compensating at all.
+//   - COMPENSATING (RenameIfNamed(uid, new, old), undoing this call's own
+//     forward write after a lost revalidate). An unconditional revert clobbers
+//     a concurrent winner: it would restore the old name durably while the
+//     winner's in-memory state keeps the new one, and the next boot resolves
+//     the disagreement in favour of the stale value.
+//
+// A caller that only wants "set the name, whatever it is now" is describing
+// Rename, not this — but think twice: unconditional is what made the forward
+// write racy in the first place.
+func (r *Registry) RenameIfNamed(uid, from, to string) (bool, error) {
+	res, err := r.db.Exec(`UPDATE repos SET name = ? WHERE uid = ? AND name = ?`, to, uid, from)
+	if err != nil {
+		return false, classifyRegistryErr(err, to)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("registry rename if named: %w", err)
+	}
+	return n > 0, nil
 }
 
 // SetProfile upserts the serving profile (code | chat | generic).

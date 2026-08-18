@@ -319,7 +319,7 @@ func TestCreatePreflight_RejectsLensNameCollision(t *testing.T) {
 	_, err := m.LensRegistry().Create(Lens{Name: "eng", WriteUID: alpha.UID(), CreatedAt: 1, UpdatedAt: 1})
 	require.NoError(t, err)
 
-	err = m.CreatePreflight(CreateSpec{Name: "eng", Mode: "preset", OntologyPreset: "default"})
+	err = m.CreatePreflight(context.Background(), CreateSpec{Name: "eng", Mode: "preset", OntologyPreset: "default"})
 	require.ErrorIs(t, err, ErrRepoNameConflictsLens)
 	require.ErrorContains(t, err, "eng")
 }

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"strings"
 
 	migrate "github.com/golang-migrate/migrate/v4"
@@ -14,8 +15,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
+//go:embed repo/*.sql
+var repoFS embed.FS
+
+//go:embed control/*.sql
+var controlFS embed.FS
 
 // Core applies only the standard SQLite migrations (version 1: all base tables).
 // Works with the plain "sqlite3" driver — no extensions required.
@@ -27,7 +31,7 @@ var migrationsFS embed.FS
 // callers only ever hand it a fresh :memory: database, where the dirty state
 // cannot arise.
 func Core(db *sql.DB) error {
-	m, err := newMigrator(db)
+	m, err := newMigrator(db, repoFS, "repo")
 	if err != nil {
 		return err
 	}
@@ -41,7 +45,7 @@ func Core(db *sql.DB) error {
 // schema. db must be opened with the "sqlite3_knomit" driver (sqlite-vec loaded).
 // Called by store.Open.
 func All(db *sql.DB) error {
-	m, err := newMigrator(db)
+	m, err := newMigrator(db, repoFS, "repo")
 	if err != nil {
 		return err
 	}
@@ -49,6 +53,68 @@ func All(db *sql.DB) error {
 		return fmt.Errorf("migrate.All: %w", err)
 	}
 	return nil
+}
+
+// Control applies every control.db migration. db is <home>/control.db, opened
+// with the stock "sqlite3" driver -- the control plane needs no sqlite-vec.
+//
+// It shares All's dirty recovery rather than using a bare Up(), and the reason
+// is sharper here than for a repo store: control.db is a single machine-wide
+// file, so a permanently dirty version does not cost one repo, it makes every
+// repo unreachable at once (issue #33).
+//
+// MUST run after Manager.Start's unmigrated-home guard and after
+// upgradeLensSchema. See refuseUnmigratedHome and upgradeLensSchema for why
+// each ordering is load-bearing.
+func Control(db *sql.DB) error {
+	m, err := newMigrator(db, controlFS, "control")
+	if err != nil {
+		return err
+	}
+	if err := upWithRecovery(m); err != nil {
+		return fmt.Errorf("migrate.Control: %w", err)
+	}
+	return nil
+}
+
+// ControlBaselineSQL returns the body of the control.db baseline migration, for
+// the one caller that must create the control schema INSIDE its own
+// transaction: `knomit migrate-registry`, which drops the legacy lens tables
+// and rebuilds them in the uid shape.
+//
+// It cannot use Control for that. sqlite3.WithInstance takes a *sql.DB and
+// there is no *sql.Tx form, so the migrator can never join a caller's
+// transaction — and against control.db's SetMaxOpenConns(1) pool, calling it
+// while a transaction is open does not merely fail to nest, it DEADLOCKS
+// waiting for a second connection that cannot exist. (golang-migrate's
+// Config.NoTxWrap would sidestep that, but it also removes the per-migration
+// transaction that upWithRecovery's recovery argument depends on, so it is not
+// free and is not used here.)
+//
+// The migrator does not need to be in the transaction — only the DDL does. The
+// body is IF NOT EXISTS throughout with no data statements, so executing it
+// against a database that already holds some of these tables recreates only
+// what is missing and leaves existing rows untouched. migrate-registry runs
+// Control afterwards, outside the transaction, purely to record the version.
+//
+// This is an accessor over the embedded file, deliberately NOT a second copy of
+// the DDL: a hand-copied constant is exactly what the deleted RegistrySchemaSQL
+// / OriginsSchemaSQL / LensSchemaSQL were, and what they failed to keep in step.
+//
+// IT RETURNS MIGRATION 000001 ONLY, and that is a trap the moment a 000002
+// exists. migrate-registry rebuilds the lens tables from whatever this returns,
+// so a home already stamped at v2 would have its lens tables recreated at the
+// V1 shape while schema_migrations still reads v2 — a mismatch no later
+// migration repairs, because every one of them is already recorded as applied.
+// TestControlHasExactlyOneMigration fails when a second migration is added, to
+// force whoever adds it here first: either replay the whole control/ chain
+// inside migrate-registry's transaction, or make this return the chain.
+func ControlBaselineSQL() (string, error) {
+	body, err := controlFS.ReadFile("control/000001_control_baseline.up.sql")
+	if err != nil {
+		return "", fmt.Errorf("migrate: read control baseline: %w", err)
+	}
+	return string(body), nil
 }
 
 // upWithRecovery runs every pending migration, recovering ONCE from a dirty
@@ -203,8 +269,8 @@ func alreadyApplied(err error) bool {
 		strings.Contains(msg, "duplicate column name")
 }
 
-func newMigrator(db *sql.DB) (*migrate.Migrate, error) {
-	src, err := iofs.New(migrationsFS, "migrations")
+func newMigrator(db *sql.DB, fsys fs.FS, dir string) (*migrate.Migrate, error) {
+	src, err := iofs.New(fsys, dir)
 	if err != nil {
 		return nil, fmt.Errorf("migrate: iofs source: %w", err)
 	}

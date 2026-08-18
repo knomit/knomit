@@ -67,6 +67,7 @@ import (
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
+	migrate "knomit/internal/store/migrate"
 )
 
 // migrateOpts are the command's switches, split out so runMigrateRegistry is
@@ -109,6 +110,20 @@ func (o migrateOpts) out() io.Writer {
 	return o.Out
 }
 
+// deprecationNotice heads every run, including --dry-run. The command is not
+// given cobra's own Deprecated field on purpose: cobra's IsAvailableCommand
+// treats a deprecated command as unavailable and drops it from `knomit --help`,
+// and this is the command a legacy home's boot refusal tells the operator to
+// run. Hiding it would leave that refusal pointing at something they cannot
+// find.
+const deprecationNotice = `WARNING: migrate-registry is DEPRECATED and will be REMOVED in a future build.
+  It converts a home shape that predates the control.db repo registry. If this
+  home still needs converting, convert it now — once the command is gone the
+  only path off the legacy shape is re-cloning each knowledge base from its
+  remote, and a repo with no recorded remote cannot be recovered that way.
+
+`
+
 // migrateRegistryCmd builds the `knomit migrate-registry` subcommand.
 func migrateRegistryCmd() *cobra.Command {
 	var (
@@ -121,8 +136,21 @@ func migrateRegistryCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "migrate-registry",
-		Short: "Convert a pre-registry knomit home to the control.db repo registry",
-		Long: `Converts a home created before the repo registry moved into control.db.
+		Short: "DEPRECATED: convert a pre-registry knomit home to the control.db repo registry",
+		Long: `DEPRECATED — this command will be REMOVED in a future build.
+
+It converts a home shape that only exists on installations predating the
+control.db repo registry. Once your home is converted there is no reason to
+run it again, and a home created by a current build never needs it at all.
+If you still have an unconverted home, migrate it now: after this command is
+removed, the only supported path off the legacy shape will be to re-clone
+each knowledge base from its remote — and a repo whose remote was never
+recorded anywhere else cannot be recovered that way.
+
+Deliberately still listed in ` + "`knomit --help`" + ` rather than hidden: a legacy
+home makes the server refuse to boot, and the refusal names this command.
+
+Converts a home created before the repo registry moved into control.db.
 
 Run it ONCE, with the server stopped. It reads every repo database's remote
 connection config BEFORE migrating any of them (the schema migration that
@@ -147,6 +175,10 @@ creates a -shm and a zero-length -wal beside each database it opens;
 neither carries committed data and the next clean read-write close clears
 both.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Printed on stdout with the plan rather than only in --help,
+			// because the operator who most needs to see it is the one who
+			// pasted the command from a two-year-old runbook.
+			fmt.Fprint(cmd.OutOrStdout(), deprecationNotice)
 			if home == "" {
 				cfg, err := config.Load()
 				if err != nil {
@@ -221,6 +253,11 @@ type skippedFile struct {
 
 // lensPlan is one lens, already translated to uids.
 type lensPlan struct {
+	// UID is the lens's own registry identity (lenses.uid) it will land with.
+	// Carried across unchanged when the source row already has one (a re-run
+	// against a control.db this same tool already re-keyed); minted fresh
+	// otherwise.
+	UID         string
 	Name        string
 	WriteUID    string
 	Description string
@@ -247,9 +284,15 @@ type migrationPlan struct {
 	ArchiveDir  string
 	Repos       []repoPlan
 	Lenses      []lensPlan
-	// LensesAlreadyKeyedByUID is true when control.db's lens tables were found
-	// in the new shape (a re-run); rows are then carried across unchanged.
-	LensesAlreadyKeyedByUID bool
+	// LensMembersKeyedByUID is true when control.db's lens tables were found in
+	// the new shape (a re-run) — i.e. the lens MEMBER references (write_uid /
+	// repo_uid) are already keyed by repo uid rather than repo name. Probed
+	// from the write_uid column. This says nothing about whether the lens ROW
+	// ITSELF has its own uid — that is the separate hasOwnUID probe (the
+	// "uid" column), added later alongside OpenLensRegistry's self-upgrade;
+	// a home can have this true and hasOwnUID false. When this is true, rows
+	// are carried across unchanged.
+	LensMembersKeyedByUID bool
 	// ControlDBExists is false for a home that never had a control.db, in which
 	// case there is nothing to back up.
 	ControlDBExists bool
@@ -350,10 +393,12 @@ func runMigrateRegistry(home string, opts migrateOpts) error {
 		fmt.Fprintf(out, "\nbacked up %s -> %s\n", plan.ControlPath, bak)
 	}
 
-	// Steps 4-7 in ONE transaction: registry rows, origins, the lens rebuild
+	// Steps 4-7 in ONE transaction: the lens rebuild, registry rows, origins
 	// and the repo_settings fold either all land or none do, so a failure
-	// anywhere in there cannot leave a half-built registry behind.
-	if err := applyControlDB(plan); err != nil {
+	// anywhere in there cannot leave a half-built registry behind — and, just
+	// as importantly, cannot leave the legacy lens rows destroyed. Only the
+	// version stamp sits outside, after the commit.
+	if err := applyControlDB(out, plan); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, "control.db written")
@@ -1076,10 +1121,25 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 	if err != nil {
 		return err
 	}
-	plan.LensesAlreadyKeyedByUID = newShape
+	plan.LensMembersKeyedByUID = newShape
 	writeCol, readCol := "write_repo", "repo"
 	if newShape {
 		writeCol, readCol = "write_uid", "repo_uid"
+	}
+
+	// A control.db this same tool already re-keyed (write_uid present) may or
+	// may not already carry the lens's OWN uid too — that column was added
+	// alongside OpenLensRegistry's self-upgrade, so an already-uid-keyed home
+	// this tool has not yet touched under the new version does not have it
+	// yet. Read it when present so a --force re-run does not mint a second,
+	// different identity for a lens that already has one; mint fresh below
+	// when it is absent.
+	hasOwnUID := false
+	if newShape {
+		hasOwnUID, err = rawColumnExists(db, "lenses", "uid")
+		if err != nil {
+			return err
+		}
 	}
 
 	// name -> uid for ACTIVE repos, with archived names as a fallback. The old
@@ -1108,22 +1168,31 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 		return uid, ok
 	}
 
-	rows, err := db.Query(
-		`SELECT name, ` + writeCol + `, description, created_at, updated_at FROM lenses ORDER BY name`)
+	lensSelectCols := "name, " + writeCol + ", description, created_at, updated_at"
+	if hasOwnUID {
+		lensSelectCols = "uid, " + lensSelectCols
+	}
+	rows, err := db.Query(`SELECT ` + lensSelectCols + ` FROM lenses ORDER BY name`)
 	if err != nil {
 		return fmt.Errorf("read legacy lenses: %w", err)
 	}
 	var lenses []lensPlan
 	type rawLens struct {
-		name, write, desc string
-		created, updated  int64
+		uid, name, write, desc string
+		created, updated       int64
 	}
 	var raws []rawLens
 	for rows.Next() {
 		var rl rawLens
-		if err := rows.Scan(&rl.name, &rl.write, &rl.desc, &rl.created, &rl.updated); err != nil {
+		var scanErr error
+		if hasOwnUID {
+			scanErr = rows.Scan(&rl.uid, &rl.name, &rl.write, &rl.desc, &rl.created, &rl.updated)
+		} else {
+			scanErr = rows.Scan(&rl.name, &rl.write, &rl.desc, &rl.created, &rl.updated)
+		}
+		if scanErr != nil {
 			rows.Close()
-			return fmt.Errorf("read legacy lenses: %w", err)
+			return fmt.Errorf("read legacy lenses: %w", scanErr)
 		}
 		raws = append(raws, rl)
 	}
@@ -1140,7 +1209,12 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 		return err
 	}
 	for _, rl := range raws {
+		uid := rl.uid
+		if uid == "" {
+			uid = ksuid.New().String()
+		}
 		lp := lensPlan{
+			UID:         uid,
 			Name:        rl.name,
 			Description: rl.desc,
 			CreatedAt:   rl.created,
@@ -1156,9 +1230,16 @@ func planLenses(plan *migrationPlan, opts migrateOpts) error {
 		lp.WriteUID = writeUID
 
 		if readsExist {
+			// lens_reads.lens_uid replaces .lens_name in the exact same DDL
+			// change that adds lenses.uid, so the two probes share hasOwnUID:
+			// when the lens's own uid is already there, so is its child's.
+			readsKeyCol, readsKeyVal := "lens_name", rl.name
+			if hasOwnUID {
+				readsKeyCol, readsKeyVal = "lens_uid", rl.uid
+			}
 			rrows, qerr := db.Query(
-				`SELECT `+readCol+`, branch, COALESCE(source, '') FROM lens_reads WHERE lens_name = ? ORDER BY `+readCol,
-				rl.name)
+				`SELECT `+readCol+`, branch, COALESCE(source, '') FROM lens_reads WHERE `+readsKeyCol+` = ? ORDER BY `+readCol,
+				readsKeyVal)
 			if qerr != nil {
 				return fmt.Errorf("read legacy lens reads: %w", qerr)
 			}
@@ -1320,10 +1401,28 @@ func backupControlDB(controlPath string) (string, error) {
 	return dst, nil
 }
 
-// applyControlDB performs steps 4-7 in ONE transaction: create the registry
-// tables, insert every repo and its origin, rebuild the lens tables in the uid
-// shape, and drop repo_settings once its profiles have been folded in.
-func applyControlDB(plan *migrationPlan) error {
+// applyControlDB performs steps 4-7 in ONE transaction: rebuild the lens tables
+// in the uid shape, insert every repo and its origin, rewrite the lens rows, and
+// drop repo_settings once its profiles have been folded in. Either all of it
+// lands or none of it does.
+//
+// The schema comes from migrate.ControlBaselineSQL rather than from
+// migrate.Control, and that is what keeps the transaction whole. The migrator
+// cannot join a caller's transaction — sqlite3.WithInstance takes a *sql.DB and
+// against this SetMaxOpenConns(1) pool would deadlock waiting for a second
+// connection — but the DDL does not need it to. The baseline body is
+// IF NOT EXISTS throughout with no data statements, so running it here recreates
+// exactly the lens tables just dropped and no-ops on repos/repo_origins.
+//
+// Doing it the other way round is not merely less tidy, it loses data. When the
+// legacy DROP commits outside the transaction, an abort leaves the lens tables
+// recreated and EMPTY while the rollback restores repo_settings — so the home
+// still looks unconverted, the operator re-runs, planLenses reads the empty
+// new-shape table, and the second run reports success having silently discarded
+// every lens definition. control.db.bak holds the only copy, and nothing says so.
+//
+// migrate.Control runs after the commit, purely to record the version.
+func applyControlDB(out io.Writer, plan *migrationPlan) error {
 	db, err := sql.Open("sqlite3",
 		plan.ControlPath+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
@@ -1332,6 +1431,14 @@ func applyControlDB(plan *migrationPlan) error {
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 
+	// Read the baseline before opening the transaction: it is the schema this
+	// function is about to install, and failing to find it must not abort a
+	// half-run migration.
+	baseline, err := migrate.ControlBaselineSQL()
+	if err != nil {
+		return err
+	}
+
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin control.db transaction: %w", err)
@@ -1339,10 +1446,11 @@ func applyControlDB(plan *migrationPlan) error {
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
 	// The legacy lens tables go first: their rows are already captured in the
-	// plan, they hold the OLD columns that CREATE TABLE IF NOT EXISTS would
-	// leave in place, and lens_reads' foreign key into repos(uid) would
-	// otherwise block the row rewrite below. lens_reads before lenses so the
-	// child is gone before its parent.
+	// plan, they hold the OLD columns the baseline's IF NOT EXISTS would leave
+	// in place, and lens_reads' foreign key into repos(uid) would otherwise
+	// block the row rewrite below. lens_reads before lenses so the child is
+	// gone before its parent. Dropping `lenses` takes its indexes with it, so
+	// the baseline below recreates lenses_name cleanly.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS lens_reads`,
 		`DROP TABLE IF EXISTS lenses`,
@@ -1352,12 +1460,14 @@ func applyControlDB(plan *migrationPlan) error {
 		}
 	}
 
-	if _, err := tx.Exec(repos.RegistrySchemaSQL); err != nil {
-		return fmt.Errorf("create repos table: %w", err)
+	// Recreate them — and create repos/repo_origins if this home has neither —
+	// from the versioned baseline's own text. IF NOT EXISTS throughout, so the
+	// tables that survived the drops above are left exactly as they are, rows
+	// included.
+	if _, err := tx.Exec(baseline); err != nil {
+		return fmt.Errorf("create control.db schema: %w", err)
 	}
-	if _, err := tx.Exec(repos.OriginsSchemaSQL); err != nil {
-		return fmt.Errorf("create repo_origins table: %w", err)
-	}
+
 	if plan.ForceResetRows {
 		// --force means "rebuild the registry from what is on disk". Origins
 		// cascade from repos.
@@ -1402,16 +1512,13 @@ func applyControlDB(plan *migrationPlan) error {
 		}
 	}
 
-	// Rebuild the lens tables in the uid shape and carry the translated rows
-	// across. This is the step OpenLensRegistry cannot do for itself.
-	if _, err := tx.Exec(repos.LensSchemaSQL); err != nil {
-		return fmt.Errorf("create lens tables: %w", err)
-	}
+	// Carry the translated lens rows across into the uid shape. This is the
+	// step OpenLensRegistry cannot do for itself.
 	for _, lp := range plan.Lenses {
 		if _, err := tx.Exec(
-			`INSERT INTO lenses (name, write_uid, description, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-			lp.Name, lp.WriteUID, lp.Description, lp.CreatedAt, lp.UpdatedAt,
+			`INSERT INTO lenses (uid, name, write_uid, description, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			lp.UID, lp.Name, lp.WriteUID, lp.Description, lp.CreatedAt, lp.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("rewrite lens %q: %w", lp.Name, err)
 		}
@@ -1421,8 +1528,8 @@ func applyControlDB(plan *migrationPlan) error {
 				source = r.Source
 			}
 			if _, err := tx.Exec(
-				`INSERT INTO lens_reads (lens_name, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
-				lp.Name, r.RepoUID, r.Branch, source,
+				`INSERT INTO lens_reads (lens_uid, repo_uid, branch, source) VALUES (?, ?, ?, ?)`,
+				lp.UID, r.RepoUID, r.Branch, source,
 			); err != nil {
 				return fmt.Errorf("rewrite lens %q read mount: %w", lp.Name, err)
 			}
@@ -1437,6 +1544,26 @@ func applyControlDB(plan *migrationPlan) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit control.db transaction: %w", err)
+	}
+
+	// Record the version. The schema is already correct — the transaction built
+	// it from this very baseline — so this only writes schema_migrations, and on
+	// a home some earlier OpenRegistry already stamped it is a pure no-op. It is
+	// deliberately AFTER the commit: run against an open transaction it would
+	// deadlock on the single connection this pool allows.
+	//
+	// A failure here WARNS rather than returning. Returning would abort the whole
+	// migration at its worst possible moment: control.db is committed and already
+	// names repos/<uid>.db paths, but moveRepoFiles has not run, so those files do
+	// not exist yet — and the re-run that would finish the job hits step 1a's
+	// "this home looks migrated" refusal and needs --force. Trading a converted
+	// home for an unusable one is a bad deal when the thing that failed is only
+	// the version row, which the next open re-runs the idempotent baseline and
+	// writes for free.
+	if err := migrate.Control(db); err != nil {
+		fmt.Fprintf(out,
+			"warning: control.db is converted but its schema version was not recorded (%v)\n"+
+				"  the next open re-runs the baseline and stamps it; no action needed\n", err)
 	}
 	return nil
 }
@@ -1638,7 +1765,7 @@ func printPlan(out io.Writer, plan *migrationPlan) {
 	if plan.ForceResetRows {
 		fmt.Fprintln(out, "--force: the existing repos rows will be rebuilt from what is on disk")
 	}
-	if plan.LensesAlreadyKeyedByUID {
+	if plan.LensMembersKeyedByUID {
 		fmt.Fprintln(out, "lens tables are already uid-keyed; their rows are carried across unchanged")
 	}
 	if len(plan.Repos) == 0 {

@@ -53,7 +53,7 @@ func (m *Manager) reinjectOrigin(ri *RepoInstance, svc *store.Service) {
 	}
 	o, err := origins.Get(ri.uid)
 	if err != nil {
-		log.Warn().Err(err).Str("repo", ri.name).Str("uid", ri.uid).
+		log.Warn().Err(err).Str("repo", ri.Name()).Str("uid", ri.uid).
 			Msg("SwapStore: could not read the stored origin; sync stays inactive until the next boot")
 		return
 	}
@@ -167,12 +167,12 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	reopenLocal := func() *store.Service {
 		svc, err := store.Open(ri.dbPath)
 		if err != nil {
-			log.Error().Err(err).Str("repo", ri.name).Msg("SwapStore: recovery reopen failed; repo store unavailable")
+			log.Error().Err(err).Str("repo", ri.Name()).Msg("SwapStore: recovery reopen failed; repo store unavailable")
 			return nil
 		}
 		if err := svc.OpenRepo(); err != nil {
 			svc.Close()
-			log.Error().Err(err).Str("repo", ri.name).Msg("SwapStore: recovery git reopen failed; repo store unavailable")
+			log.Error().Err(err).Str("repo", ri.Name()).Msg("SwapStore: recovery git reopen failed; repo store unavailable")
 			return nil
 		}
 		return svc
@@ -238,11 +238,11 @@ func (m *Manager) recordSwappedIdentity(ri *RepoInstance) {
 
 	id := ri.ID()
 	if id == "" {
-		log.Warn().Str("repo", ri.name).Msg("SwapStore: root commit unresolved; registry identity not updated")
+		log.Warn().Str("repo", ri.Name()).Msg("SwapStore: root commit unresolved; registry identity not updated")
 		return
 	}
 	if err := reg.RecordRepoID(ri.uid, id); err != nil {
-		log.Error().Err(err).Str("repo", ri.name).Str("uid", ri.uid).Str("repo_id", id).
+		log.Error().Err(err).Str("repo", ri.Name()).Str("uid", ri.uid).Str("repo_id", id).
 			Msg("SwapStore: registry identity not updated; the pre-swap uniqueness check was skipped or raced")
 	}
 }

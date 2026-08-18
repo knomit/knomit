@@ -19,13 +19,13 @@ DON'T fire for:
 
 ## How
 
-Call `mcp__knomit__knomit_explain` with the fact path. The tool returns:
+Call `knomit_explain` with the fact path. The tool returns:
 
 - The fact's own body
 - Outgoing refs (what this fact references — both source files and other facts), classified as `local` (other fact paths) and `external` (URLs, src:// anchors)
 - All resolved at the fact's anchor commit, NOT at HEAD
 
-`knomit_explain` does NOT return incoming references (no backlink index). If you need to find facts that reference this one, use `mcp__knomit__knomit_query` with the fact path as a search term.
+`knomit_explain` does NOT return incoming references (no backlink index). If you need to find facts that reference this one, use `knomit_query` with the fact path as a search term.
 
 Walk the source-file refs:
 

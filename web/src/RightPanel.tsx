@@ -98,8 +98,28 @@ function renderFact(
             style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}
           >
             {fact.commit_date && (
-              <span title={new Date(fact.commit_date).toLocaleString()} style={{ color: '#555', fontSize: 11 }}>
-                {relativeTime(fact.commit_date)}
+              // WHEN THIS VERSION OF THE FACT WAS COMMITTED — not the anchor's
+              // date. It sits here, left of the control strip, for two reasons:
+              // the band never scrolls, so it survives a long fact; and it lands
+              // beside the version chip, so "v4 · 3d ago" reads as one
+              // statement. Deliberately NOT inside the strip — every cell in
+              // there is a control, and this is a readout.
+              //
+              // Amber when anchored, matching the timeline rail and the status
+              // pill, where amber already means "you are not at HEAD".
+              <span
+                data-testid="fact-version-date"
+                title={new Date(fact.commit_date).toLocaleString()}
+                style={{
+                  color: anchorCommit ? '#e5a23c' : '#555',
+                  fontSize: 11, fontFamily: 'var(--k-font-mono)',
+                  whiteSpace: 'nowrap', flexShrink: 0,
+                }}
+              >
+                {anchorCommit
+                  ? new Date(fact.commit_date).toLocaleDateString(undefined,
+                      { day: 'numeric', month: 'short', year: 'numeric' })
+                  : relativeTime(fact.commit_date)}
               </span>
             )}
             {/*

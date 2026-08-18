@@ -23,6 +23,36 @@ func TestNewBindingOfRepo(t *testing.T) {
 	require.Equal(t, "main", ro.Reads()[0].Branch)
 }
 
+// TestBinding_PinID_FailsClosedOnEmptyUID pins pinOf's fail-closed contract: a
+// uid-less RepoInstance (TestInstanceConfig.UID left at its zero value, as
+// most test fixtures across the codebase do) must never produce a bare
+// "repo:"/"lens:" prefix as its PinID — that would let two DIFFERENT
+// uid-less bindings collide on a shared, non-empty pin. Two independently
+// built, uid-less bindings over two DIFFERENT repos end up with neither
+// having a real PinID to share: both come back empty. (What then keeps an
+// empty PinID from letting a minted session resume under a different
+// uid-less binding is the resume-side guard in internal/mcp/query.go and
+// explain.go — sess.Binding == "" is rejected outright — which is exercised
+// at the MCP layer, not here.)
+func TestBinding_PinID_FailsClosedOnEmptyUID(t *testing.T) {
+	riA := NewTestInstanceWithDeps(TestInstanceConfig{Name: "alpha", AgentBranch: "agent/test"})
+	riB := NewTestInstanceWithDeps(TestInstanceConfig{Name: "beta", AgentBranch: "agent/test"})
+	require.Empty(t, riA.UID(), "fixture must be uid-less for this test to mean anything")
+	require.Empty(t, riB.UID())
+
+	bA := NewBindingOfRepo(riA, "")
+	bB := NewBindingOfRepo(riB, "")
+
+	require.NotEqual(t, bA.Name(), bB.Name(), "sanity: these are genuinely different bindings")
+	require.Empty(t, bA.PinID(), "an empty uid must never produce a bare \"repo:\" prefix")
+	require.Empty(t, bB.PinID(), "same for a second, independently uid-less binding")
+
+	// NewBindingForTest and NewBindingOfLens share the same pinOf helper, so
+	// the fail-closed contract holds for every constructor, not just
+	// NewBindingOfRepo.
+	require.Empty(t, NewBindingForTest(riA).PinID())
+}
+
 func TestBinding_IsLens(t *testing.T) {
 	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "solo"})
 	require.False(t, NewBindingOfRepo(ri, "").IsLens(), "lens-of-one is not a lens")
@@ -31,6 +61,38 @@ func TestBinding_IsLens(t *testing.T) {
 	r := NewTestInstanceWithDeps(TestInstanceConfig{Name: "r"})
 	lens := NewBindingForTest(w, ReadTarget{RI: w, Branch: w.AgentBranch()}, ReadTarget{RI: r, Branch: r.AgentBranch()})
 	require.True(t, lens.IsLens(), "write + distinct read mount is a lens")
+}
+
+// TestBinding_FromLens_IsProvenanceNotBreadth pins the distinction that makes
+// FromLens worth having separately from IsLens. A lens whose only read mount is
+// its own write repo federates across nothing, so IsLens is false about it —
+// but the caller unambiguously connected THROUGH a lens, and anything reporting
+// how a caller connected (the write-destination stamp) must still say so.
+// Reading IsLens there renders such a connection indistinguishable from a
+// direct /repos/{repo}/… one.
+func TestBinding_FromLens_IsProvenanceNotBreadth(t *testing.T) {
+	m := newLifecycleManager(t)
+	core := createRepo(t, m, testRepoName)
+
+	// A single-member lens: write repo is also its only read mount.
+	lens, err := m.LensRegistry().Create(Lens{
+		Name:     "solo-lens",
+		WriteUID: core.UID(),
+		Reads:    []LensRead{{RepoUID: core.UID()}},
+	})
+	require.NoError(t, err)
+	b, err := NewBindingOfLens(m, lens)
+	require.NoError(t, err)
+
+	require.False(t, b.IsLens(), "sanity: a lens of one member federates across nothing")
+	require.True(t, b.FromLens(), "provenance survives where breadth does not")
+	require.Equal(t, "solo-lens", b.Name())
+
+	// The lens-of-one synthesized for /repos/{repo}/… is the case FromLens must
+	// keep saying false about — it did not come from a lens definition.
+	direct := NewBindingOfRepo(core, "")
+	require.False(t, direct.FromLens(), "a synthesized repo binding is not from a lens")
+	require.False(t, direct.IsLens())
 }
 
 func TestBinding_WriteMountBranch(t *testing.T) {

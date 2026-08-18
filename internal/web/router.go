@@ -28,6 +28,12 @@ const APIBase = "/api/v1"
 // the router root.
 func (s *Server) NewAPIRouter() chi.Router {
 	r := chi.NewRouter()
+	// Correlation id for slow-request warnings. chi echoes an inbound
+	// X-Request-Id verbatim and only generates one when the header is absent, so
+	// req_id is trustworthy exactly as far as the client is: useful for stitching
+	// a proxy's id to ours, forgeable by anyone who wants two requests to look
+	// like one. It labels log lines only — never an authorization decision.
+	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)                    // produces the 500 response
 	r.Use(reportPanic)                             // captures a crash bundle, re-panics
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default
@@ -99,6 +105,27 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
+	// Probes an origin before create, so the wizard can classify it (has refs
+	// / empty / unreachable) instead of asking the user to declare that up
+	// front. Collection-level for the same reason as the ontology block below:
+	// it runs BEFORE any repo exists.
+	r.Post("/repos:probe-origin", handleReposProbeOrigin(s.Manager))
+
+	// The second, per-BRANCH half of that classification: does the chosen
+	// branch already hold a knomit knowledge base? Separate from probe-origin
+	// because the answer differs per branch and the branch is not known when
+	// that probe runs — and because this one actually transfers a commit
+	// (shallow, single-branch, discarded) rather than only listing refs.
+	r.Post("/repos:probe-initialized", handleReposProbeInitialized(s.Manager))
+
+	// Ontology endpoints. Collection-level and repo-independent: the create
+	// wizard calls them BEFORE any repo exists, so they cannot live under
+	// /repos/{repo}. The ':' action suffix follows the convention noted above.
+	r.Post("/ontologies:validate", handleOntologyValidate())
+	r.Get("/ontologies/presets", handleOntologyPresets())
+	r.Get("/ontologies/presets/{name}", handleOntologyPresetYAML())
+	r.Get("/ontologies/schema", handleOntologySchema())
+
 	r.Route("/repos/{repo}", func(r chi.Router) {
 		// Archive deliberately sits OUTSIDE the middleware group: it resolves
 		// through m.Archive, not m.Get, and archiveErrStatus attributes its
@@ -115,6 +142,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 			r.Get("/", handleHALRepo(b))
 			r.Patch("/", handleHALRepoPatch(b))
+
+			// Inside the middleware group, unlike Archive: {repo} must exist
+			// for a rename, so the middleware's 404 is the right answer, and
+			// every error this handler raises is about the NEW name, which the
+			// middleware never sees.
+			r.Post("/rename", handleHALRepoRename(b, s.Manager))
 
 			r.Get("/origin", handleHALGetOrigin(b, p.origin))
 			r.Put("/origin", handleHALSetOrigin(b, s.Manager, p.origin))
@@ -187,11 +220,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))
 
 	r.Route("/lenses/{lens}", func(r chi.Router) {
-		// The lens CRUD trio resolves through the registry directly and
-		// reports its own errors, so it stays outside the binding group.
+		// The lens CRUD quartet — including rename — resolves through the
+		// registry directly and reports its own errors, so it stays outside
+		// the binding group below.
 		r.Get("/", handleHALLens(b, s.Manager))
 		r.Patch("/", handleHALLensPatch(b, s.Manager))
 		r.Delete("/", handleHALLensDelete(s.Manager))
+		r.Post("/rename", handleHALLensRename(b, s.Manager))
 
 		r.Group(func(r chi.Router) {
 			r.Use(LensMiddleware(s.Manager))

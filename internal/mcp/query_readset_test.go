@@ -152,7 +152,7 @@ func TestQueryResume_RetriesPastUnreadableWindow(t *testing.T) {
 	var sessID string
 	repoA.WithRead(func(svc *store.Service) {
 		ts := svc.ToolSession()
-		sess, cerr := ts.CreateToolSession(context.Background(), "query", b.WriteMountBranch(), "", b.Name(), federate.ReadSetFingerprint(b))
+		sess, cerr := ts.CreateToolSession(context.Background(), "query", b.WriteMountBranch(), "", b.PinID(), federate.ReadSetFingerprint(b))
 		require.NoError(t, cerr)
 		sessID = sess.ID
 		require.NoError(t, ts.EnqueuePaths(context.Background(), sess.ID, []store.QueueItem{

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/fact"
+	"knomit/internal/repos"
 	"knomit/test/testenv/gitserver"
 )
 
@@ -93,6 +95,24 @@ func (sb *Storyboard) MirrorOf(name string, src *RemoteHandle) *RemoteHandle {
 	}
 }
 
+// ontologyFixturePath is the canonical ontology location, spelled as the
+// production constant rather than as a literal so a move of the file moves
+// these fixtures with it. It is what makes a repository a knomit knowledge
+// base — see EnsureKnowledgeBase.
+const ontologyFixturePath = repos.OntologyPath
+
+// ontologyFixtureBytes is the ontology a fixture remote is initialized with:
+// the real embedded default, serialized by the real serializer, so a remote
+// built here parses under the same rules a production one does.
+func ontologyFixtureBytes(t *testing.T) []byte {
+	t.Helper()
+	y, err := fact.DefaultOntology().Serialize()
+	if err != nil {
+		t.Fatalf("serialize the default ontology for the fixture remote: %v", err)
+	}
+	return y
+}
+
 // URL returns the file:// URL of the bare remote. Used by Connect and by
 // any test that wants to construct its own go-git Clone.
 func (r *RemoteHandle) URL() string { return r.url }
@@ -113,6 +133,58 @@ func (r *RemoteHandle) UpstreamBranch() string {
 		return "main"
 	}
 	return r.upstreamBranch
+}
+
+// EnsureKnowledgeBase makes this remote's upstream branch exist and carry
+// .knomit/ontology.yaml — i.e. makes it a knomit knowledge base — creating the
+// branch and/or the ontology only if they are not already there. Idempotent.
+//
+// It exists because a repository is a knomit knowledge base IF AND ONLY IF it
+// has an ontology, and the two remote create modes are the two halves of that
+// one question: mode=clone JOINS a branch that has one and refuses a branch
+// that does not (ErrRemoteNotInitialized); mode=initialize is the converse.
+// Neither will touch a remote with NO branches at all (ErrRemoteNoBranches),
+// because knomit never creates a branch on a remote other than its own agent
+// branch.
+//
+// So a bare remote straight out of BareRemote is not something any create mode
+// will accept, and it never was a state a user could reach through the wizard
+// either — the wizard blocks there and asks them to create a `main` first.
+// This helper is the fixture-side equivalent of that instruction plus a prior
+// `initialize`, giving the sync and reconcile scenarios the precondition they
+// have always actually assumed: an origin that is already a knowledge base.
+//
+// Implemented with the same clone-edit-push pattern as WriteMain, for the same
+// reason — it is an op the production code does not perform.
+func (r *RemoteHandle) EnsureKnowledgeBase() {
+	t := r.sb.t
+	t.Helper()
+	up := r.UpstreamBranch()
+
+	work := t.TempDir()
+	mustGit(t, "", "clone", r.dir, work)
+	if hasRef(work, "refs/remotes/origin/"+up) {
+		mustGit(t, work, "checkout", "-B", up, "origin/"+up)
+		if _, err := os.Stat(filepath.Join(work, ontologyFixturePath)); err == nil {
+			return // already a knowledge base
+		}
+	} else {
+		// No upstream yet: an orphan branch so the first commit is a fresh
+		// root, matching WriteMain's own bootstrap shape.
+		mustGit(t, work, "checkout", "--orphan", up)
+		mustGit(t, work, "rm", "-rf", "--ignore-unmatch", ".")
+	}
+
+	full := filepath.Join(work, ontologyFixturePath)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("EnsureKnowledgeBase: mkdir %s: %v", filepath.Dir(full), err)
+	}
+	if err := os.WriteFile(full, ontologyFixtureBytes(t), 0o644); err != nil {
+		t.Fatalf("EnsureKnowledgeBase: write %s: %v", full, err)
+	}
+	mustGit(t, work, "add", ontologyFixturePath)
+	mustGit(t, work, "commit", "-m", "init: create knowledge base")
+	mustGit(t, work, "push", "origin", up)
 }
 
 // MergeIntoMain merges the named branch into main on the bare remote.

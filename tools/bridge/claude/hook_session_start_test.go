@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
 
@@ -132,14 +137,20 @@ func TestSessionStart_LensUnresolved_CleanNoOp(t *testing.T) {
 	require.Zero(t, out.Len(), "expected clean no-op when lens is unresolved")
 }
 
-// TestSessionStart_EmitsAvailableOnDemandTOC asserts that after the
-// PROJECT PRINCIPLES block, the hook emits an "AVAILABLE ON DEMAND" line
-// summarizing per-area fact counts grouped by the SECOND path segment
-// under kb/. Global principles (kb/principles/* with domain=global) are
-// excluded from the TOC because they're already rendered above; scoped
-// principles (no global domain) ARE included, grouped by bucket (e.g.
-// "anti-patterns"). Areas are listed alphabetically.
-func TestSessionStart_EmitsAvailableOnDemandTOC(t *testing.T) {
+// TestSessionStart_OmitsAreaTOC pins the REMOVAL of the "AVAILABLE ON DEMAND"
+// block. It counted areas over the 200-most-recent-facts window
+// (?sort=recent&limit=200), so its per-area numbers read as corpus depth while
+// actually measuring recent write activity: every count in a real emitted block
+// summed to 199. A quiet, well-covered area looked small and a churny one
+// looked large, and a two-month-old load-bearing invariant did not appear at
+// all. It also told the reader to run "/knomit-recall <area>" while listing
+// ontology TOPICS, which is a different axis from the domain `applies_to`
+// matches — see the knomit-recall skill.
+//
+// Nothing replaces it for main sessions: the CLAUDE.md knomit block already
+// states what knomit holds and when to recall, and duplicating CLAUDE.md
+// guidance in a hook is one of the reasons dd5f32ba deleted three others.
+func TestSessionStart_OmitsAreaTOC(t *testing.T) {
 	dir := t.TempDir()
 
 	mux := http.NewServeMux()
@@ -150,8 +161,6 @@ func TestSessionStart_EmitsAvailableOnDemandTOC(t *testing.T) {
 			w.Write([]byte(`{"_embedded":{"facts":[
 				{"path":"kb/invariants/store/a.md","title":"store a","domain":["store"],"entities":[]},
 				{"path":"kb/invariants/store/b.md","title":"store b","domain":["store"],"entities":[]},
-				{"path":"kb/invariants/ui/c.md","title":"ui c","domain":["ui"],"entities":[]},
-				{"path":"kb/principles/anti-patterns/bridge/d.md","title":"bridge anti-pattern","domain":["bridge"],"entities":["designer"]},
 				{"path":"kb/decisions/mcp/e.md","title":"mcp decision","domain":["mcp"],"entities":[]}
 			]}}`))
 		default:
@@ -162,24 +171,20 @@ func TestSessionStart_EmitsAvailableOnDemandTOC(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("KNOMIT_BASE_URL", srv.URL)
 
-	payload := map[string]interface{}{
-		"cwd":             dir,
-		"session_id":      "s1",
-		"transcript_path": "/tmp/nope.jsonl",
-	}
-	data, _ := json.Marshal(payload)
-
+	data, _ := json.Marshal(map[string]interface{}{
+		"cwd": dir, "session_id": "s1", "transcript_path": "/tmp/nope.jsonl",
+	})
 	var out bytes.Buffer
 	require.NoError(t, hookSessionStart(bytes.NewReader(data), &out))
 
 	got := out.String()
-	require.Contains(t, got, "AVAILABLE ON DEMAND (use /knomit-recall <area>):")
-	// Per-area counts (alphabetical order enforced by helper, but assert
-	// substring presence so reordering individual entries is harmless).
-	require.Contains(t, got, "anti-patterns (1)")
-	require.Contains(t, got, "mcp (1)")
-	require.Contains(t, got, "store (2)")
-	require.Contains(t, got, "ui (1)")
+	require.NotContains(t, got, "AVAILABLE ON DEMAND")
+	require.NotContains(t, got, "/knomit-recall <area>")
+	// The recency-window counts specifically must not come back.
+	require.NotContains(t, got, "store (2)")
+	require.NotContains(t, got, "mcp (1)")
+	// The rest of the block still works.
+	require.Contains(t, got, "Known facts from knomit for this codebase:")
 }
 
 // TestSessionStart_FallsBackToInvariantsWhenNoGlobalPrinciples verifies the
@@ -226,4 +231,41 @@ func TestSessionStart_FallsBackToInvariantsWhenNoGlobalPrinciples(t *testing.T) 
 	require.Contains(t, got, "Vtables must not re-enter")
 	require.Contains(t, got, "Refs branch by scheme")
 	require.NotContains(t, got, "PROJECT PRINCIPLES:")
+}
+
+// TestSessionStart_MultipleServersLogsTheSkipReason pins that the notice the
+// user sees is also legible in the bridge log. The multiple-servers case is the
+// one skip that both emits output AND skips, and logging skip_reason only on the
+// not-emitted branch left its line — emitted=true, no counts, no reason —
+// indistinguishable at a glance from a healthy emission. Whoever reads the log
+// to find out why knomit went quiet is exactly who needs that field.
+func TestSessionStart_MultipleServersLogsTheSkipReason(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"mcpServers":{
+		"knomit-repo-a":{"command":"knomit-bridge","args":["--repo","a"]},
+		"knomit-repo-b":{"command":"knomit-bridge","args":["--repo","b"]}
+	}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644))
+
+	var logBuf bytes.Buffer
+	prev := log.Logger
+	log.Logger = zerolog.New(&logBuf)
+	t.Cleanup(func() { log.Logger = prev })
+
+	var out bytes.Buffer
+	in := strings.NewReader(`{"cwd":` + strconv.Quote(dir) + `}`)
+	require.NoError(t, hookSessionStart(in, &out))
+
+	var entry map[string]any
+	require.NoError(t, json.Unmarshal(bytes.TrimSpace(logBuf.Bytes()), &entry),
+		"log line is not a single JSON object: %s", logBuf.String())
+	require.Equal(t, skipMultipleKnomitServers, entry["skip_reason"],
+		"skip_reason missing from the log line: %s", logBuf.String())
+	// emitted stays true — the hook really did write the user-facing notice.
+	// The point is that the two coexist, not that one replaces the other; the
+	// counts alongside it are honestly zero, and skip_reason is what tells a log
+	// reader that this line is the misconfiguration notice, not a healthy run.
+	require.Equal(t, true, entry["emitted"])
+	require.Equal(t, float64(0), entry["globals"])
+	require.Equal(t, float64(0), entry["recent"])
 }

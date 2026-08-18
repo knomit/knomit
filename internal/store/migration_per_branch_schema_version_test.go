@@ -19,7 +19,7 @@ import (
 
 func migrationSQL(t *testing.T, name string) string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("migrate", "migrations", name))
+	body, err := os.ReadFile(filepath.Join("migrate", "repo", name))
 	require.NoError(t, err)
 	return string(body)
 }
