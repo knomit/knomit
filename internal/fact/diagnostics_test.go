@@ -68,7 +68,7 @@ func TestValidateOntologyYAML_MalformedYAMLIsOneDiagnostic(t *testing.T) {
 // therefore tolerate nil.
 //
 // This is remotely triggerable: the same YAML arrives through POST /repos with
-// mode=custom (and mode=seed) and through POST /ontologies:validate, so a nil
+// mode=custom (and mode=initialize) and through POST /ontologies:validate, so a nil
 // deref here is a panic any caller can cause. ValidateOntologyYAML's child-key
 // loop guards it with `node == nil || node.Children == nil`, buildRulesCache's
 // walk with `if n == nil`, and countRules (internal/web) with its own — none
@@ -96,8 +96,8 @@ func TestValidateOntologyYAML_BareTopicKeyIsANilNodeAndDoesNotPanic(t *testing.T
 	if got := o.TopicNames(); len(got) != 1 || got[0] != "alpha" {
 		t.Errorf("TopicNames() = %v, want [alpha]", got)
 	}
-	// Serialize is the one initSeed calls on the ontology it is about to write
-	// as the remote's root commit, so a panic here takes out a create.
+	// Serialize is the one initInitialize calls on the ontology it is about to
+	// commit onto the agent branch, so a panic here takes out a create.
 	y, err := o.Serialize()
 	if err != nil {
 		t.Fatalf("Serialize over a nil topic node: %v", err)
@@ -124,5 +124,128 @@ func TestParseOntology_BareTopicKeyDoesNotPanic(t *testing.T) {
 	}
 	if o.Topics["alpha"] != nil {
 		t.Fatalf("topic alpha should decode to a nil node")
+	}
+}
+
+// An unknown key used to be dropped in silence, so an ontology full of
+// invented blocks validated ok:true — and a MISSPELT real key (descriptionn)
+// discarded the value without a word. The ontology is immutable once the repo
+// exists, so "it validated" is the only assurance a reader ever gets.
+func TestValidateOntologyYAML_ReportsUnknownFields(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "invented top-level block",
+			yaml: "id: x\nname: X\nfuusbar:\n  barfuus:\n    barf:\ntopics:\n  a:\n    description: d\n",
+			want: "fuusbar",
+		},
+		{
+			name: "misspelt key inside a topic",
+			yaml: "id: x\nname: X\ntopics:\n  a:\n    descriptionn: typo\n",
+			want: "descriptionn",
+		},
+		{
+			name: "unknown key inside a validation",
+			yaml: "id: x\nname: X\ntopics:\n  a:\n    description: d\nvalidations:\n  - name: r\n    mesage: typo\n    rule: \"true\"\n",
+			want: "mesage",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o, diags := ValidateOntologyYAML([]byte(c.yaml))
+			// REPORTED, and non-fatal. The document is returned because an
+			// unrecognised key does not stop this binary reading the rest of
+			// it: the open path must be able to read a repo whose ontology was
+			// written by a newer knomit, and the alternative — refusing — made
+			// loadOntology substitute the DEFAULT taxonomy for the repo's own,
+			// permanently and silently.
+			//
+			// This is not the editor going quiet. The validate endpoint reports
+			// ok:false for any diagnostic at all, warnings included, which
+			// TestValidateOntology_UnknownKeyIsStillRefused pins.
+			if o == nil {
+				t.Fatal("an unknown key must not withhold a document that otherwise parses")
+			}
+			var joined string
+			for _, d := range diags {
+				joined += d.Message + "\n"
+				if d.IsError() {
+					t.Fatalf("an unknown key must be a warning, not a fatal error: %+v", d)
+				}
+			}
+			if !strings.Contains(joined, c.want) {
+				t.Fatalf("diagnostics do not mention %q: %s", c.want, joined)
+			}
+		})
+	}
+}
+
+// The counterpart, and the line this check must not cross: TOPIC names are map
+// keys, so an ontology may name its topics anything (that is the entire point
+// of a custom ontology). Only STRUCT fields are constrained.
+func TestValidateOntologyYAML_TopicNamesAreNotFields(t *testing.T) {
+	o, diags := ValidateOntologyYAML([]byte(
+		"id: x\nname: X\ntopics:\n  anything-at-all:\n    description: d\n    children:\n      also-anything:\n        description: d\n"))
+	if len(diags) != 0 {
+		t.Fatalf("free-form topic names must validate: %+v", diags)
+	}
+	if _, ok := o.Topics["anything-at-all"]; !ok {
+		t.Fatal("topic anything-at-all missing")
+	}
+}
+
+// The line number has to survive into the diagnostic, or the editor cannot put
+// a marker where the problem is.
+func TestValidateOntologyYAML_UnknownFieldCarriesItsLine(t *testing.T) {
+	_, diags := ValidateOntologyYAML([]byte("id: x\nname: X\nbogus: 1\ntopics:\n  a:\n    description: d\n"))
+	var found bool
+	for _, d := range diags {
+		if !strings.Contains(d.Message, "bogus") {
+			continue
+		}
+		found = true
+		if d.Line != 3 {
+			t.Fatalf("Line = %d, want 3 (bogus: is on line 3)", d.Line)
+		}
+		if strings.Contains(d.Message, "line 3") {
+			t.Fatalf("the line belongs in Line, not the text: %q", d.Message)
+		}
+	}
+	if !found {
+		t.Fatalf("no diagnostic mentions bogus: %+v", diags)
+	}
+}
+
+// A duplicate key reported its line INSIDE the message while Diagnostic.Line
+// stayed 0, so the editor said "Line 0" next to a sentence naming line 4 and
+// had nowhere to put a marker.
+func TestValidateOntologyYAML_DuplicateKeyCarriesItsLine(t *testing.T) {
+	_, diags := ValidateOntologyYAML([]byte("id: x\nname: X\ntopics:\n  a:\n    description: d\ntopics:\n  b:\n    description: d\n"))
+	if len(diags) == 0 {
+		t.Fatal("a duplicate mapping key must be reported")
+	}
+	d := diags[0]
+	if d.Line != 6 {
+		t.Fatalf("Line = %d, want 6 (the second topics: is on line 6): %+v", d.Line, diags)
+	}
+	if !strings.Contains(d.Message, "already defined") {
+		t.Fatalf("message lost the cause: %q", d.Message)
+	}
+	if strings.Contains(d.Message, "line 6") {
+		t.Fatalf("the line belongs in Line, not the text: %q", d.Message)
+	}
+}
+
+// A plain syntax error must keep its position too.
+func TestValidateOntologyYAML_SyntaxErrorCarriesItsLine(t *testing.T) {
+	_, diags := ValidateOntologyYAML([]byte("id: x\nname: X\ntopics:\n  a: [unclosed\n"))
+	if len(diags) == 0 {
+		t.Fatal("a syntax error must be reported")
+	}
+	if diags[0].Line == 0 {
+		t.Fatalf("syntax error lost its line: %+v", diags)
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import { EditorState } from '@codemirror/state';
 import { OntologyEditor, mapDiagnostic } from './OntologyEditor';
 
@@ -16,6 +16,42 @@ describe('OntologyEditor', () => {
     expect(content).toHaveAttribute('autocapitalize', 'off');
     expect(content).toHaveAttribute('autocorrect', 'off');
     expect(content).toHaveAttribute('spellcheck', 'false');
+  });
+
+  const shownDoc = () =>
+    (screen.getByTestId('ontology-editor').querySelector('.cm-content') as HTMLElement).textContent;
+
+  // The editor is built ONCE, so a document handed to it afterwards — an
+  // uploaded file, a re-seed from another preset — only appears if the view is
+  // told. Without this it was write-only after mount: edits went out through
+  // onChange, nothing came back in, and uploading a file silently changed the
+  // wizard's state while the visible document stayed put.
+  //
+  // Asserted against the REAL component on purpose. The suites that exercise
+  // upload stub it with a controlled <textarea>, which honours `value` for
+  // free — so the stub passed while the shipped editor did not.
+  it('adopts a document supplied after mount', () => {
+    const { rerender } = render(<OntologyEditor value="id: first" onChange={() => {}} />);
+    expect(shownDoc()).toContain('id: first');
+
+    act(() => { rerender(<OntologyEditor value="id: uploaded" onChange={() => {}} />); });
+    expect(shownDoc()).toContain('id: uploaded');
+    expect(shownDoc()).not.toContain('id: first');
+  });
+
+  // The guard that makes the sync safe to run every render: an echo of the
+  // editor's own content must not be dispatched back into it, or the view
+  // fights the user for the cursor on every keystroke.
+  it('ignores a value identical to what it already shows', () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<OntologyEditor value="id: same" onChange={onChange} />);
+    onChange.mockClear();
+
+    act(() => { rerender(<OntologyEditor value="id: same" onChange={onChange} />); });
+    // A redundant dispatch would be a docChanged update, and the listener
+    // would report it back out as an edit the user never made.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(shownDoc()).toContain('id: same');
   });
 });
 

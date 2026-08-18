@@ -7,6 +7,7 @@ import { yaml } from '@codemirror/lang-yaml';
 import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 import { linter, lintGutter, type Diagnostic } from '@codemirror/lint';
 import { api, type OntologyDiagnostic, type OntologyField } from './api';
+import { ontologyEditorTheme } from './ontologyTheme';
 
 // mapDiagnostic turns a server OntologyDiagnostic (1-based line/column into
 // the YAML that was SUBMITTED) into a CodeMirror Diagnostic (0-based offsets
@@ -60,10 +61,27 @@ const ontologyLinter = linter(async (view) => {
 export function OntologyEditor({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  // The view is built once, so the update listener installed at construction
+  // would capture whatever onChange was passed on that first render forever.
+  // Reading through a ref keeps a caller free to pass a fresh closure without
+  // this component silently calling last render's.
+  const onChangeRef = useRef(onChange);
+  // True only while this component is pushing an externally supplied document
+  // into the view. onChange means "the user edited this", not "the document
+  // changed" — without the distinction, adopting an uploaded file echoed
+  // straight back out as an edit, and the caller could not tell the two apart
+  // (StepOntology reads an edit as "this is no longer the file you uploaded"
+  // and drops the filename it is displaying).
+  const syncing = useRef(false);
   // Populated asynchronously; the completion source below reads this by
   // reference on every keystroke, so it doesn't matter whether the schema
   // fetch resolves before or after the view is constructed.
   const fieldsRef = useRef<OntologyField[]>([]);
+
+  // Assigned in an effect rather than during render: a ref is not render
+  // state, and writing one on the render path is the pattern that makes a
+  // component quietly miss updates.
+  useEffect(() => { onChangeRef.current = onChange; });
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +117,11 @@ export function OntologyEditor({ value, onChange }: { value: string; onChange: (
         // so this doesn't strand anyone.
         keymap.of([indentWithTab]),
         basicSetup,
+        // AFTER basicSetup: basicSetup installs CodeMirror's default highlight
+        // style, which is built for a light background and rendered YAML keys
+        // as navy on this app's near-black panels. A later extension wins, so
+        // this must not move above it.
+        ontologyEditorTheme,
         yamlLang,
         // The documented CM6 pattern for adding a completion source scoped to
         // one language, rather than a second autocompletion() call — basicSetup
@@ -106,7 +129,9 @@ export function OntologyEditor({ value, onChange }: { value: string; onChange: (
         yamlLang.language.data.of({ autocomplete: completionSource }),
         ontologyLinter,
         lintGutter(),
-        EditorView.updateListener.of(u => { if (u.docChanged) onChange(u.state.doc.toString()); }),
+        EditorView.updateListener.of(u => {
+          if (u.docChanged && !syncing.current) onChangeRef.current(u.state.doc.toString());
+        }),
       ],
       parent: host.current,
     });
@@ -120,6 +145,31 @@ export function OntologyEditor({ value, onChange }: { value: string; onChange: (
     return () => { v.destroy(); view.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Adopt a document supplied from OUTSIDE — an uploaded file, or a re-seed
+  // from a different preset.
+  //
+  // Without this the editor was write-only after mount: it published edits
+  // through onChange but never accepted anything back, so uploading a file
+  // updated the wizard's state and left the visible document untouched. That
+  // read as "upload does nothing". It survived review because the tests that
+  // exercise upload stub this component with a controlled <textarea>, which
+  // honours `value` for free — the stub was more capable than the real thing.
+  //
+  // The equality check is what makes this safe to run on every render: each
+  // keystroke fires onChange, which comes straight back as a new `value`, and
+  // dispatching that back into the view would fight the user for the cursor.
+  useEffect(() => {
+    const v = view.current;
+    if (!v) return;
+    if (v.state.doc.toString() === value) return;
+    syncing.current = true;
+    try {
+      v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: value } });
+    } finally {
+      syncing.current = false;
+    }
+  }, [value]);
 
   return <div ref={host} data-testid="ontology-editor" />;
 }

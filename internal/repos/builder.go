@@ -3,6 +3,7 @@ package repos
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -36,6 +37,12 @@ type repoBuilder struct {
 	// accumulated state
 	svc      *store.Service
 	ontology *fact.Ontology
+	// checkOriginOntology refuses a remote governed by a DIFFERENT ontology.
+	// Injected by the Manager (openOne) so startSync can enforce it.
+	checkOriginOntology func(ctx context.Context, localOntologyID string, o OriginSpec) error
+	// ontologyErr is set when the repo's ontology could not be ESTABLISHED.
+	// It is carried instead of a substitute taxonomy: see loadOntology.
+	ontologyErr error
 
 	// index work deferred to the background (set by setupIndex, run after
 	// build): the branches whose index we maintain, each carrying its own
@@ -144,13 +151,27 @@ func (b *repoBuilder) rehydrateUpstreamMain() {
 }
 
 // loadOntology reads the ontology from the repo's agent branch, walking
-// fact.OntologyPathsNewestFirst: the canonical path, then each legacy location
-// for repos that predate a move (no migration is provided — repos are updated
-// by hand). Falls back to the default ontology only if NO rung has content or
-// the content is unparseable.
+// fact.OntologyPathsNewestFirst so a legacy path still opens (and is reported
+// so it can be renamed).
+//
+// IT NEVER SUBSTITUTES. A repository is a knomit knowledge base if and only if
+// it has an ontology, and that ontology is fixed when the repo is created and
+// never editable afterwards — so there is no such thing as a reasonable
+// stand-in. Every fact in the repo was written against the real one, and every
+// fact written under a stand-in would be validated against topics the user
+// never chose, with nothing on screen to say so. That is unrecoverable, which
+// is why it is refused rather than logged.
+//
+// When it cannot be established, ontologyErr is set and the repo opens WITHOUT
+// an ontology: readable, so the data stays reachable and the problem can be
+// inspected, and unwritable (RepoInstance.WritableBranch), so nothing new is
+// authored against a taxonomy nobody chose.
 func (b *repoBuilder) loadOntology() {
 	if b.svc == nil {
-		b.ontology = fact.DefaultOntology()
+		// No store means no branch to read, so nothing about this repo's
+		// taxonomy was established. Substituting one here would be the same
+		// lie the paths below used to tell, just earlier.
+		b.ontologyErr = errors.New("no store: the ontology could not be read")
 		return
 	}
 	// Track the source path: the refresh below writes BACK to it. Always
@@ -169,9 +190,13 @@ func (b *repoBuilder) loadOntology() {
 		}
 	}
 	if content == "" {
-		log.Warn().Str("repo", b.name).
-			Msgf("no ontology at %s, using default ontology", strings.Join(paths, ", "))
-		b.ontology = fact.DefaultOntology()
+		// A repository IS a knomit knowledge base if and only if it has an
+		// ontology. One without is an ordinary git repository, and handing it
+		// the default taxonomy is what made "not a knowledge base" and "a
+		// knowledge base about people" indistinguishable from the outside.
+		log.Error().Str("repo", b.name).Str("branch", b.agentBranch).
+			Msgf("no ontology at %s: this repository is not a knowledge base and will not accept writes", strings.Join(paths, ", "))
+		b.ontologyErr = fmt.Errorf("no ontology at %s on %s", strings.Join(paths, ", "), b.agentBranch)
 		return
 	}
 	if srcPath != OntologyPath {
@@ -180,8 +205,14 @@ func (b *repoBuilder) loadOntology() {
 	}
 	ont, err := fact.ParseOntology([]byte(content))
 	if err != nil {
-		log.Warn().Err(err).Str("repo", b.name).Msg("failed to parse ontology, using default")
-		b.ontology = fact.DefaultOntology()
+		// NOT the default. This repo has an ontology — it is right there on the
+		// branch — and it is the one every fact in the repo was written
+		// against; what failed is reading it. Answering that with a DIFFERENT
+		// taxonomy meant the repo came up looking healthy while validating
+		// every new fact against the wrong topics, and nothing said so.
+		log.Error().Err(err).Str("repo", b.name).Str("path", srcPath).
+			Msg("ontology does not parse: this repository will not accept writes until it does")
+		b.ontologyErr = fmt.Errorf("ontology at %s does not parse: %w", srcPath, err)
 		return
 	}
 
@@ -483,6 +514,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		dbPath:                        b.dbPath,
 		agentBranch:                   b.agentBranch,
 		ontology:                      b.ontology,
+		ontologyErr:                   b.ontologyErr,
 		embedder:                      b.embedder,
 		ontologyRoot:                  b.cfg.OntologyRoot,
 		methodologyMinScore:           b.cfg.MethodologyMinScore,
@@ -592,6 +624,30 @@ func (b *repoBuilder) build() *RepoInstance {
 		// intact rather than killing it and orphaning ri.syncCancel.
 		if verr := validateLocalOrigin(remote.URL, cfg.LocalOriginRoot); verr != nil {
 			return fmt.Errorf("ActivateSync: origin blocked by local-origin policy: %w", verr)
+		}
+
+		// THE CHOKE POINT for "a repository is a knomit knowledge base if and
+		// only if it has an ontology" on the attach side.
+		//
+		// Every path that points a repo at a remote ends here — Create, PUT
+		// /origin, and the session flow all call ActivateSync — so enforcing it
+		// at this one place means a future attach path cannot forget it. The
+		// handlers check first as well, because they can answer with a proper
+		// 409 naming both ontologies before anything is written; this is the
+		// guarantee behind that courtesy, and it is deliberately the same
+		// re-assertion the local-origin policy makes on the line above rather
+		// than trusting a check made earlier by someone else.
+		if check := b.checkOriginOntology; check != nil {
+			if ont := ri.Ontology(); ont != nil {
+				if cerr := check(ctx, ont.ID, OriginSpec{
+					URL:        remote.URL,
+					Branch:     remote.Branch,
+					AuthMethod: remote.AuthMethod,
+					AuthToken:  remote.AuthToken,
+				}); cerr != nil {
+					return fmt.Errorf("ActivateSync: %w", cerr)
+				}
+			}
 		}
 
 		syncCancel()

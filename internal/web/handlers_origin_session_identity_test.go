@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 )
 
@@ -39,11 +40,26 @@ func seedKnomitRemoteForTest(t *testing.T, bare, factBody string) string {
 	if err := os.MkdirAll(filepath.Join(work, "kb"), 0o755); err != nil {
 		t.Fatalf("mkdir kb: %v", err)
 	}
-	fact := "---\ntitle: seed\n---\n\n" + factBody + "\n"
-	if err := os.WriteFile(filepath.Join(work, "kb", "seed.md"), []byte(fact), 0o644); err != nil {
+	factFile := "---\ntitle: seed\n---\n\n" + factBody + "\n"
+	if err := os.WriteFile(filepath.Join(work, "kb", "seed.md"), []byte(factFile), 0o644); err != nil {
 		t.Fatalf("write seed fact: %v", err)
 	}
-	runGitForTest(t, work, "add", "kb/seed.md")
+	// The ONTOLOGY is what makes this a knomit remote — the name of this helper
+	// was true of its intent and not of its output until this was added. A
+	// repository is a knomit knowledge base if and only if it has one, and
+	// clone mode now refuses a remote that is not one (ErrRemoteNotInitialized)
+	// rather than cloning it and letting the default get substituted later.
+	ont, oerr := fact.DefaultOntology().Serialize()
+	if oerr != nil {
+		t.Fatalf("serialize ontology: %v", oerr)
+	}
+	if err := os.MkdirAll(filepath.Join(work, filepath.Dir(repos.OntologyPath)), 0o755); err != nil {
+		t.Fatalf("mkdir ontology dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, repos.OntologyPath), ont, 0o644); err != nil {
+		t.Fatalf("write ontology: %v", err)
+	}
+	runGitForTest(t, work, "add", "-A")
 	runGitForTest(t, work, "commit", "-m", "seed "+factBody)
 	runGitForTest(t, work, "push", "origin", "main")
 	runGitForTest(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")

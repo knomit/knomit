@@ -9,55 +9,84 @@ import { OntologyEditor } from './OntologyEditor';
 // round trip that ends in a generic HTTP error.
 const MAX_ONTOLOGY_BYTES = 256 * 1024;
 
-// DEBOUNCE_MS is how long "Write your own" waits after the last keystroke
-// before re-validating — mirrors the editor's own lint debounce (see
+// DEBOUNCE_MS is how long the step waits after the last change before
+// re-validating — mirrors the editor's own lint debounce (see
 // OntologyEditor.tsx) so the panel and the in-editor squiggles update in step.
 const DEBOUNCE_MS = 400;
 
-type Mode = 'preset' | 'upload' | 'write';
+// Sentinels for the two source options that are not presets. Prefixed so they
+// cannot collide with a preset the server adds later.
+const UPLOAD = '__upload__';
+const BLANK = '__blank__';
 
-// StepOntology owns the four choices (two presets, upload, write-your-own)
-// and the verification panel that renders a parsed summary or diagnostics.
-// It does NOT know about CodeMirror internals — that boundary lives in
-// OntologyEditor, which this component treats as a plain value/onChange box.
+// ── One field, one document ──────────────────────────────────────────────
 //
-// Appears only for seed-an-empty-remote and local-only (stepsFor in
-// wizardState.ts) — joining a remote that already has content never reaches
-// this step, because that ontology comes from the remote and the backend
-// hard-refuses one in 'clone' mode.
+// This step asks ONE question: where does this repository's ontology come
+// from? Everything else follows from the answer.
+//
+// It has been through three shapes. Four peer cards (two presets, "Upload a
+// file", "Write your own") said uploading was a sibling of picking "Code" — it
+// is not, it is a way to START a document. Splitting into Predefined and
+// Custom modes fixed that and introduced a worse problem: one document living
+// in two places, which then needed a replace dropdown, a confirmation banner,
+// and a header line that could describe a document it no longer held.
+//
+// "Predefined" was never a KIND of ontology. It is a starting point. Every
+// path here ends with exactly one YAML document, and the only real questions
+// are where it came from and whether it has been changed — so there is one
+// source field, one editor, and one line that answers both.
+//
+// ── doc is not state.yaml ────────────────────────────────────────────────
+//
+// An untouched preset sends NO yaml: state.yaml stays empty and createBodyFor
+// emits mode 'preset', so the server uses its own copy rather than one
+// round-tripped through the browser. `doc` (what the editor shows) therefore
+// differs from state.yaml until the reader edits, uploads, or starts blank.
+// That split is what lets a preset be valid with no validate round trip.
 export function StepOntology({ state, onDispatch, onValidityChange }: {
   state: WizardState;
   onDispatch: (a: WizardAction) => void;
   onValidityChange: (valid: boolean) => void;
 }) {
   const [presets, setPresets] = useState<OntologyPreset[]>([]);
-  // Which of the four choices is showing. Derived once at mount from wizard
-  // state (yaml already present -> the user was mid-edit/upload last time
-  // this step was on screen; otherwise a preset is selected, matching
-  // initialWizardState.preset === 'default'). Local UI state, not stored in
-  // the wizard reducer: SET_PRESET/SET_YAML only need to know WHAT ontology
-  // was chosen, not which of upload/write produced a custom one.
-  const [mode, setMode] = useState<Mode>(() => (state.yaml ? 'write' : 'preset'));
 
-  const [uploadResult, setUploadResult] = useState<OntologyValidation | null>(null);
-  const [uploadError, setUploadError] = useState('');
-  const [uploadBusy, setUploadBusy] = useState(false);
+  // What the editor shows. See the header — not state.yaml until the document
+  // stops being a pristine preset.
+  const [doc, setDoc] = useState(state.yaml);
+  // Where `doc` came from, and whether the reader has had a hand in it.
+  //
+  // `edited` is tracked rather than derived by comparing against a pristine
+  // copy: "the reader typed something" is precisely the fact the wire format
+  // turns on, and string equality would call an edit-and-undo a pristine
+  // preset while the wizard had already switched to mode 'custom'.
+  //
+  // Re-entering the step (Back, then Next) remounts this component, so both
+  // initialise from the wizard's own state: a non-empty state.yaml can only
+  // have come from an edit or an upload, and seedPreset remembers which preset
+  // it started from. The filename does not survive that round trip; naming the
+  // preset is the honest remainder.
+  const [source, setSource] = useState<Source>(
+    () => ({ kind: 'preset', name: state.preset || state.seedPreset || 'default' }));
+  const [edited, setEdited] = useState(state.yaml !== '');
 
+  const [validation, setValidation] = useState<{ yaml: string; result: OntologyValidation } | null>(null);
   const [seedBusy, setSeedBusy] = useState(false);
   const [seedError, setSeedError] = useState('');
-  const [writeResult, setWriteResult] = useState<OntologyValidation | null>(null);
+  const [fileError, setFileError] = useState('');
+  // A source change asked for while the reader holds unsaved edits — the one
+  // action here that destroys work, so the one that asks first. It asks in the
+  // field's own line rather than a banner, which used to shove the editor down
+  // the page the moment you touched the control.
+  const [pending, setPending] = useState('');
 
+  const fileInput = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  // Bumped on EVERY mode transition (selectPreset, startUpload, startWriteOwn)
-  // and every new file selection — not just same-mode re-selection. A response
-  // for an abandoned choice (switched away mid-fetch, or a second file/preset
-  // picked before the first round trip resolves) must never land on state for
-  // a choice the user no longer has selected: the ontology is immutable after
-  // repo creation, so "the user got an ontology they didn't pick" has no
-  // repair path short of recreating the repo. One counter shared by all four
-  // call sites closes the cross-mode case by construction, rather than three
-  // separate refs that each only guard their own mode.
+
+  // Bumped on every source change. A seed fetch that resolves after the reader
+  // has moved on must never land: the ontology is immutable once the repo is
+  // created, so "you got an ontology you did not pick" has no repair path
+  // short of deleting the repo.
   const opSeq = useRef(0);
 
   useEffect(() => {
@@ -66,82 +95,53 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
     return () => { cancelled = true; };
   }, []);
 
-  // A preset is server-supplied and already parses — SELECTING one is valid
-  // with no validate round trip. Fires on mount too, since
-  // initialWizardState.preset === 'default' selects one before any click.
-  //
-  // Gated on state.preset rather than reporting a flat `true`, because preset
-  // mode is also where an EMPTIED editor lands: SET_YAML('') leaves
-  // {yaml:'', preset:''}, the mount initialiser above then reads no yaml and
-  // picks 'preset', and no card renders as selected. Reporting valid there
-  // enabled Next over a selection the user cannot see, and createBodyFor's
-  // `state.preset || 'default'` turned it into the default ontology —
-  // immutable after creation, so unfixable short of recreating the repo.
+  // Show the starting preset on arrival. Guarded on an empty state.yaml so
+  // returning to the step never overwrites work — `doc` does not survive the
+  // unmount, but the wizard's state.yaml does, and the initialiser above has
+  // already restored it.
   useEffect(() => {
-    if (mode === 'preset') onValidityChange(state.preset !== '');
+    if (state.yaml === '' && source.kind === 'preset') void seed(source.name, ++opSeq.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, state.preset]);
+  }, []);
 
-  function selectPreset(p: OntologyPreset) {
-    opSeq.current++; // abandons any in-flight upload validate or seed fetch
-    setMode('preset');
-    setUploadError(''); setUploadResult(null);
-    setSeedBusy(false); setSeedError(''); setWriteResult(null);
-    onDispatch({ type: 'SET_PRESET', preset: p.name });
-  }
+  // A pristine preset is valid with no round trip — it is server-supplied and
+  // already parses. Anything the reader has a hand in is validated below.
+  useEffect(() => {
+    if (!needsValidation(edited, source)) onValidityChange(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edited, source.kind, source.kind === 'preset' ? source.name : '']);
 
-  function startUpload() {
-    // Clicking the card you are already on is a no-op, never a reset. This
-    // panel's own state (the chosen file's validation summary, and the Next
-    // gate derived from it) is the only thing the reset below would throw
-    // away, and the user asked for nothing by clicking a card that is already
-    // selected. Same rule as startWriteOwn's guard below, for the same reason.
-    if (mode === 'upload') return;
-    opSeq.current++; // abandons any in-flight seed fetch
-    setMode('upload');
-    setSeedBusy(false); setSeedError(''); setWriteResult(null);
-    // No file chosen yet — without this, Next would stay enabled off
-    // whatever preset was selected before switching panels, even though the
-    // visible panel now promises "pick a file", not "use that preset".
-    onValidityChange(false);
-  }
+  // Validity is reported ONLY when an answer arrives. Setting it false on every
+  // keystroke and true again 400ms later made Next blink the whole time the
+  // reader was typing; holding the last answer across the gap keeps it still,
+  // and a document that was never valid stays blocked throughout.
+  useEffect(() => {
+    if (!needsValidation(edited, source)) return;
+    if (!doc.trim()) { onValidityChange(false); return; }
+    let cancelled = false;
+    const yaml = doc;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await api.validateOntology(yaml);
+        if (cancelled) return;
+        setValidation({ yaml, result });
+        onValidityChange(result.ok);
+      } catch {
+        if (cancelled) return;
+        onValidityChange(false);
+      }
+    }, DEBOUNCE_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, edited, source.kind]);
 
-  // startWriteOwn SEEDS ONLY WHEN THERE IS NOTHING TO LOSE.
-  //
-  // The card has no disabled guard, so it is clickable while already selected —
-  // and an unconditional seed there fetched a preset and dispatched SET_YAML
-  // straight over whatever the user had typed. Worse, `state.preset` is ''
-  // by then (SET_YAML cleared it), so the refetch resolved to 'default': a
-  // user who picked "code", opened the editor and edited it lost the edits AND
-  // got the default ontology, permanently, because the ontology is immutable
-  // after repo creation.
-  //
-  // So: any existing content — an earlier seed the user has since edited, or a
-  // file they just uploaded — is carried into the editor untouched, and the
-  // write-mode validate effect below re-validates it. Only an EMPTY editor
-  // gets a seed, and that seed comes from state.seedPreset (the card the user
-  // actually clicked, remembered in the reducer precisely so it survives both
-  // SET_YAML and a remount of this step), never from a fallback.
-  async function startWriteOwn() {
-    const seq = ++opSeq.current; // abandons any in-flight upload validate
+  async function seed(presetName: string, seq: number) {
     const stale = () => !mounted.current || seq !== opSeq.current;
-    setMode('write');
-    setUploadError(''); setUploadResult(null);
-    setSeedError('');
-    onValidityChange(false); // present but not yet validated
-    if (state.yaml !== '') {
-      // Also clears a seedBusy left set by a fetch that was abandoned in
-      // another mode (its own finally is suppressed by the stale check), which
-      // would otherwise pin this panel on "Loading a starting point…" and never
-      // render the editor holding the content we just refused to overwrite.
-      setSeedBusy(false);
-      return;
-    }
-    setSeedBusy(true);
+    setSeedBusy(true); setSeedError(''); setFileError('');
     try {
-      const seed = await api.ontologyPresetYAML(state.seedPreset);
+      const yaml = await api.ontologyPresetYAML(presetName);
       if (stale()) return;
-      onDispatch({ type: 'SET_YAML', yaml: seed });
+      setDoc(yaml);
     } catch (e) {
       if (stale()) return;
       setSeedError(e instanceof Error ? e.message : String(e));
@@ -150,79 +150,88 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
     }
   }
 
+  // choose applies a source change. Only ever reached once the reader has
+  // agreed to lose whatever the editor is holding.
+  function choose(value: string) {
+    const seq = ++opSeq.current;
+    setFileError(''); setSeedError(''); setValidation(null);
+    if (value === UPLOAD) { fileInput.current?.click(); return; }
+    if (value === BLANK) {
+      setSource({ kind: 'blank' });
+      setEdited(true);
+      setDoc('');
+      onDispatch({ type: 'SET_YAML', yaml: '' });
+      return;
+    }
+    setSource({ kind: 'preset', name: value });
+    setEdited(false);
+    // SET_PRESET clears state.yaml — which is what puts the wire body back on
+    // mode 'preset' — and records the choice in seedPreset, where it survives
+    // a later SET_YAML.
+    onDispatch({ type: 'SET_PRESET', preset: value });
+    void seed(value, seq);
+  }
+
+  function requestChoose(value: string) {
+    if (!value) return;
+    if (edited && doc.trim() !== '') { setPending(value); return; }
+    choose(value);
+  }
+
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ''; // allow re-selecting the same file after fixing it
     if (!file) return;
-    const seq = ++opSeq.current; // abandons any earlier upload or seed fetch
-    const stale = () => !mounted.current || seq !== opSeq.current;
-    setUploadResult(null);
-    setUploadError('');
+    opSeq.current++; // abandons any in-flight seed fetch
+    setSeedBusy(false); setSeedError(''); setFileError('');
     if (file.size > MAX_ONTOLOGY_BYTES) {
-      setUploadError(`That file is ${Math.ceil(file.size / 1024)} KiB — ontologies are capped at 256 KiB.`);
+      setFileError(`That file is ${Math.ceil(file.size / 1024)} KiB — ontologies are capped at 256 KiB.`);
       onValidityChange(false);
       return;
     }
     const text = await file.text();
-    if (stale()) return;
+    if (!mounted.current) return;
+    setSource({ kind: 'file', name: file.name });
+    setEdited(true);
+    setDoc(text);
+    setValidation(null);
     onDispatch({ type: 'SET_YAML', yaml: text });
     onValidityChange(false); // present but not yet validated
-    setUploadBusy(true);
-    try {
-      const result = await api.validateOntology(text);
-      if (stale()) return;
-      setUploadResult(result);
-      onValidityChange(result.ok);
-    } catch (err) {
-      if (stale()) return;
-      setUploadError(err instanceof Error ? err.message : String(err));
-      onValidityChange(false);
-    } finally {
-      if (!stale()) setUploadBusy(false);
-    }
   }
 
+  // Typing is not a mode change — it is a fact about the document, and the only
+  // thing it switches is what gets sent.
   function handleEditorChange(text: string) {
+    setDoc(text);
+    if (!edited) setEdited(true);
     onDispatch({ type: 'SET_YAML', yaml: text });
   }
 
-  // Re-validate "write your own" content DEBOUNCE_MS after the user stops
-  // typing, driving this panel's summary/diagnostics and the Next gate. This
-  // is independent of the editor's own inline lint (OntologyEditor.tsx) —
-  // that call renders squiggles in the editor; this one renders the panel
-  // below it and decides whether Next may be clicked. Skipped entirely while
-  // the seed fetch is still in flight, so a stale empty doc never validates.
-  useEffect(() => {
-    if (mode !== 'write' || seedBusy) return;
-    let cancelled = false;
-    if (!state.yaml.trim()) {
-      setWriteResult(null);
-      onValidityChange(false);
-      return;
-    }
-    onValidityChange(false);
-    const timer = setTimeout(async () => {
-      try {
-        const result = await api.validateOntology(state.yaml);
-        if (cancelled) return;
-        setWriteResult(result);
-        onValidityChange(result.ok);
-      } catch {
-        if (cancelled) return;
-        setWriteResult(null);
-        onValidityChange(false);
-      }
-    }, DEBOUNCE_MS);
-    return () => { cancelled = true; clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, state.yaml, seedBusy]);
+  // revert discards the reader's edits, so it is offered rather than performed,
+  // and only while there is a preset to revert TO.
+  function revert() {
+    if (source.kind !== 'preset') return;
+    const seq = ++opSeq.current;
+    setEdited(false);
+    setValidation(null);
+    onDispatch({ type: 'SET_PRESET', preset: source.name });
+    void seed(source.name, seq);
+  }
+
+  const selectValue = source.kind === 'preset' ? source.name : source.kind === 'blank' ? BLANK : UPLOAD;
+  // A summary only ever describes the document currently on screen — it used to
+  // outlive its subject, reporting a rule count for an ontology whose rules the
+  // reader had since deleted.
+  const shown = validation && validation.yaml === doc ? validation.result : null;
+  const checking = needsValidation(edited, source) && doc.trim() !== '' && !shown && !seedBusy;
+  const presetRecord = source.kind === 'preset' ? presets.find(p => p.name === source.name) : undefined;
 
   return (
     <div data-testid="step-ontology">
       <label style={label}>Ontology</label>
       <p style={hint}>
         The ontology is the topic tree and validation rules new facts are checked
-        against. Start from a preset, upload one, or write your own.{' '}
+        against.{' '}
         {/* target="_blank": the desktop build is a WKWebView, so an in-frame
             navigation here would strand the reader with no way back. */}
         <a href="https://knomit.io/docs/ontology" target="_blank" rel="noreferrer" style={link}>
@@ -230,68 +239,103 @@ export function StepOntology({ state, onDispatch, onValidityChange }: {
         </a>
       </p>
 
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8 }}>
-        {presets.map(p => (
-          <button key={p.name} type="button" style={presetCard(mode === 'preset' && state.preset === p.name)}
-            onClick={() => selectPreset(p)}>
-            <div style={presetTitle}>{p.title}</div>
-            <div style={presetBody}>{p.description}</div>
-            <div style={presetTopics}>{p.topics.join(', ')}</div>
-          </button>
-        ))}
-        <button type="button" style={presetCard(mode === 'upload')} onClick={startUpload}>
-          <div style={presetTitle}>Upload a file</div>
-          <div style={presetBody}>Bring an ontology YAML from elsewhere.</div>
-        </button>
-        <button type="button" style={presetCard(mode === 'write')} onClick={startWriteOwn}>
-          <div style={presetTitle}>Write your own</div>
-          <div style={presetBody}>Start from the selected preset and edit it.</div>
-        </button>
+      <div style={sourceRow}>
+        <select data-testid="ontology-source-select" style={{ ...input, width: 'auto', minWidth: 200 }}
+          value={selectValue} disabled={seedBusy}
+          onChange={e => requestChoose(e.target.value)}>
+          {presets.map(p => <option key={p.name} value={p.name}>{p.title}</option>)}
+          {/* An uploaded file is a source in its own right, and the select has
+              to be able to SHOW it — otherwise it snaps back to naming a preset
+              the editor is not holding, which is the lie the old header told. */}
+          {source.kind === 'file'
+            ? <option value={UPLOAD}>{source.name}</option>
+            : <option value={UPLOAD}>Upload a file…</option>}
+          <option value={BLANK}>Start from an empty document</option>
+        </select>
+
+        {pending ? (
+          <span data-testid="ontology-replace-confirm" style={{ ...prov, color: '#d2a24c' }}>
+            Replace with {sourceLabel(pending, presets)}? Your edits are not kept.{' '}
+            <button type="button" data-testid="ontology-replace-yes" style={linkBtn}
+              onClick={() => { const v = pending; setPending(''); choose(v); }}>Replace</button>
+            <button type="button" data-testid="ontology-replace-no" style={{ ...linkBtn, marginLeft: 10 }}
+              onClick={() => setPending('')}>Keep editing</button>
+          </span>
+        ) : (
+          <span data-testid="ontology-source" style={prov}>
+            {source.kind === 'file' ? (
+              <>Editing <b style={{ color: '#ddd' }}>{source.name}</b></>
+            ) : source.kind === 'blank' ? (
+              'Writing your own, from an empty document'
+            ) : edited ? (
+              <>
+                <b style={{ color: '#ddd' }}>{sourceLabel(source.name, presets)}</b>
+                <span data-testid="ontology-edited" style={{ color: '#7c9' }}> · edited</span>{' '}
+                <button type="button" data-testid="ontology-revert" style={linkBtn} onClick={revert}>revert</button>
+              </>
+            ) : (
+              presetRecord?.description ?? ''
+            )}
+          </span>
+        )}
       </div>
 
-      {/* Preset mode with nothing selected is reachable exactly one way: the
-          user emptied the editor and came back to this step, so state is
-          {yaml:'', preset:''}. Next is correctly disabled there — but a
-          disabled button next to four unselected cards says nothing about why,
-          so say it. Plain text, not amber: nothing has failed. */}
-      {mode === 'preset' && state.preset === '' && (
-        <div style={hint}>Pick one of the choices above to continue.</div>
-      )}
+      {/* One file input for the step, opened by the select's Upload option — a
+          bare <input type=file> cannot be styled to match the rest. */}
+      <input ref={fileInput} data-testid="ontology-file" type="file" hidden
+        accept=".yaml,.yml,text/yaml" onChange={handleFile} />
 
-      {mode === 'upload' && (
-        <div style={panel}>
-          <label style={label}>Ontology file</label>
-          <input data-testid="ontology-file" type="file" accept=".yaml,.yml,text/yaml" onChange={handleFile} />
-          {uploadBusy && <div style={hint}>Validating…</div>}
-          {!uploadBusy && uploadError && <div style={warnText}>{uploadError}</div>}
-          {!uploadBusy && uploadResult && <ValidationSummary result={uploadResult} />}
-        </div>
-      )}
-
-      {mode === 'write' && (
-        <div style={panel}>
-          {seedBusy && <div style={hint}>Loading a starting point…</div>}
-          {seedError && <div style={warnText}>{seedError}</div>}
-          {!seedBusy && !seedError && (
-            <>
-              <OntologyEditor value={state.yaml} onChange={handleEditorChange} />
-              {writeResult && <ValidationSummary result={writeResult} />}
-            </>
-          )}
-        </div>
-      )}
+      <div style={panel}>
+        {seedBusy && <div style={hint}>Loading…</div>}
+        {seedError && <div style={warnText}>{seedError}</div>}
+        {fileError && <div data-testid="ontology-file-error" style={warnText}>{fileError}</div>}
+        {!seedBusy && !seedError && (
+          <>
+            <OntologyEditor value={doc} onChange={handleEditorChange} />
+            {shown
+              ? <ValidationSummary result={shown} />
+              : checking
+                ? <div data-testid="ontology-checking" style={summaryDetail}>Checking…</div>
+                : !edited && presetRecord
+                  ? (
+                    <div data-testid="ontology-preset-summary" style={summary}>
+                      <div>{presetRecord.id} — {presetRecord.title}</div>
+                      <div style={summaryDetail}>{presetRecord.topics.length} topics</div>
+                    </div>
+                  )
+                  : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
+type Source =
+  | { kind: 'preset'; name: string }
+  | { kind: 'file'; name: string }
+  | { kind: 'blank' };
+
+// A pristine preset is the one document the server already vouches for.
+// Everything else — edited, uploaded, blank — is the reader's, and is checked.
+function needsValidation(edited: boolean, source: Source): boolean {
+  return edited || source.kind !== 'preset';
+}
+
+function sourceLabel(value: string, presets: OntologyPreset[]): string {
+  if (value === BLANK) return 'an empty document';
+  if (value === UPLOAD) return 'an uploaded file';
+  return presets.find(p => p.name === value)?.title ?? value;
+}
+
 // ValidationSummary renders an OntologyValidation result: the parsed
 // id/name/topic-count/rule-count on success, or each diagnostic as
-// "line N — message" on failure. Amber is reserved for genuine failure —
+// "Line N — message" on failure. Amber is reserved for genuine failure —
 // diagnostics qualify; the success summary stays plain text.
 function ValidationSummary({ result }: { result: OntologyValidation }) {
   if (result.ok) {
     return (
-      <div style={summary}>
+      <div data-testid="ontology-valid" style={summary}>
         <div>{result.id} — {result.name}</div>
         <div style={summaryDetail}>{result.topics.length} topics</div>
         <div style={summaryDetail}>{result.rule_count} validation rules</div>
@@ -299,9 +343,11 @@ function ValidationSummary({ result }: { result: OntologyValidation }) {
     );
   }
   return (
-    <div style={summary}>
+    <div data-testid="ontology-diagnostics" style={summary}>
       {result.diagnostics.map((d: OntologyDiagnostic, i: number) => (
-        <div key={i} style={warnText}>Line {d.line} — {d.message}</div>
+        // Line 0 is the server saying it had no position for this problem.
+        // Printing "Line 0" would be worse than printing nothing.
+        <div key={i} style={warnText}>{d.line > 0 ? `Line ${d.line} — ` : ''}{d.message}</div>
       ))}
     </div>
   );
@@ -311,16 +357,10 @@ const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 
 const hint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 8, lineHeight: 1.5 };
 const link: React.CSSProperties = { color: '#6ea8fe' };
 const panel: React.CSSProperties = { marginTop: 12, padding: '10px 12px', background: '#111', border: '1px solid #2a2a2a', borderRadius: 6 };
-const presetCard = (selected: boolean): React.CSSProperties => ({
-  flex: '1 1 200px', textAlign: 'left', cursor: 'pointer',
-  padding: '10px 12px', borderRadius: 6,
-  background: selected ? '#1a2a1a' : '#111',
-  border: '1px solid ' + (selected ? '#2a4a2a' : '#2a2a2a'),
-  color: '#eee',
-});
-const presetTitle: React.CSSProperties = { fontSize: 14, fontWeight: 600 };
-const presetBody: React.CSSProperties = { fontSize: 12, color: '#999', margin: '4px 0' };
-const presetTopics: React.CSSProperties = { fontSize: 11, color: '#666' };
-const summary: React.CSSProperties = { marginTop: 8, fontSize: 12, color: '#ccc', lineHeight: 1.6 };
-const summaryDetail: React.CSSProperties = { color: '#999' };
+const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', background: '#111', border: '1px solid #333', color: '#eee', padding: '6px 8px', borderRadius: 4, fontSize: 13 };
 const warnText: React.CSSProperties = { color: '#d2a24c', fontSize: 12, marginTop: 4 };
+const summary: React.CSSProperties = { marginTop: 8, fontSize: 12, color: '#ccc', lineHeight: 1.6 };
+const summaryDetail: React.CSSProperties = { color: '#999', fontSize: 12, marginTop: 8 };
+const sourceRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 10 };
+const prov: React.CSSProperties = { fontSize: 11.5, color: '#999', lineHeight: 1.5 };
+const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#6ea8fe', cursor: 'pointer', fontSize: 11.5, padding: 0, textDecoration: 'underline' };

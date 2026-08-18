@@ -229,11 +229,26 @@ type Validation struct {
 var validKeyRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // ParseOntology parses and validates an ontology from YAML bytes. It reports
-// only the FIRST problem; use ValidateOntologyYAML when you want them all.
+// only the FIRST FATAL problem; use ValidateOntologyYAML when you want them all,
+// warnings included.
+//
+// Warnings do not fail the parse. The callers here are the ones that READ an
+// ontology which already exists — the repo open path (repos/builder.go) and the
+// okf source reader — and for them a key this binary does not declare is not a
+// reason to reject a document. Rejecting it there meant returning the DEFAULT
+// ontology instead of the repo's own, which is unrecoverable: the ontology is
+// fixed at create time and every fact in the repo was written against it.
+// Callers that accept NEW input (Manager.Create, the validate endpoint) surface
+// warnings themselves rather than relying on this.
 func ParseOntology(data []byte) (*Ontology, error) {
 	o, diags := ValidateOntologyYAML(data)
-	if len(diags) > 0 {
-		return nil, errors.New(diags[0].Message)
+	for _, d := range diags {
+		if d.IsError() {
+			return nil, errors.New(d.Message)
+		}
+	}
+	if o == nil {
+		return nil, errors.New("parse ontology: no ontology in document")
 	}
 	return o, nil
 }

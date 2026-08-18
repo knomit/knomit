@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/fact"
 )
 
 // TestOpenGit_UpstreamBranchSurvivesReboot pins that the resolved upstream
@@ -31,7 +32,14 @@ func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 	work := filepath.Join(dir, "work")
 	runGit(t, "", "init", "--initial-branch=master", work)
 	require.NoError(t, os.WriteFile(filepath.Join(work, "README.md"), []byte("seed\n"), 0o644))
-	runGit(t, work, "add", "README.md")
+	// The remote must be a knomit knowledge base, or clone mode refuses it
+	// (ErrRemoteNotInitialized) before this test reaches the upstream-resolution
+	// behaviour it is actually about.
+	ont, oerr := fact.DefaultOntology().Serialize()
+	require.NoError(t, oerr)
+	require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath), ont, 0o644))
+	runGit(t, work, "add", "-A")
 	runGit(t, work, "commit", "-m", "seed")
 	runGit(t, work, "remote", "add", "origin", remoteDir)
 	runGit(t, work, "push", "origin", "master")

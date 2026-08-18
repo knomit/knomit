@@ -111,6 +111,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// it runs BEFORE any repo exists.
 	r.Post("/repos:probe-origin", handleReposProbeOrigin(s.Manager))
 
+	// The second, per-BRANCH half of that classification: does the chosen
+	// branch already hold a knomit knowledge base? Separate from probe-origin
+	// because the answer differs per branch and the branch is not known when
+	// that probe runs — and because this one actually transfers a commit
+	// (shallow, single-branch, discarded) rather than only listing refs.
+	r.Post("/repos:probe-initialized", handleReposProbeInitialized(s.Manager))
+
 	// Ontology endpoints. Collection-level and repo-independent: the create
 	// wizard calls them BEFORE any repo exists, so they cannot live under
 	// /repos/{repo}. The ':' action suffix follows the convention noted above.

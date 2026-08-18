@@ -11,6 +11,7 @@ import (
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/storage/memory"
 )
 
@@ -31,6 +32,27 @@ type ProbeResult struct {
 	UpstreamBranch string   `json:"upstream_branch"`
 	Branches       []string `json:"branches"`
 	Detail         string   `json:"detail,omitempty"`
+
+	// WriteAccess is the answer to the question the CREATE actually asks, which
+	// a ref listing never did: may knomit PUSH here?
+	//
+	// Reading and writing are authorized separately — ls-remote speaks
+	// git-upload-pack, a push speaks git-receive-pack — so a public repository
+	// answers a read probe anonymously and then refuses the seed commit. That
+	// gap is how "Access confirmed" was followed by "You are not allowed to
+	// push code to this project" at 65%.
+	//
+	// Three states, because "we did not establish it" is a real one and must
+	// not be reported as either answer:
+	//
+	//   ""       not established — no read access yet, or the check was skipped
+	//   "ok"     the remote advertised receive-pack to these credentials
+	//   "denied" it refused them
+	//
+	// A "denied" is advisory, never a gate: a host may answer a receive-pack
+	// advertisement oddly, and a reader may be about to add the deploy key.
+	WriteAccess string `json:"write_access,omitempty"`
+	WriteDetail string `json:"write_detail,omitempty"`
 }
 
 // ProbeOrigin inspects a remote without cloning it, so the create wizard can
@@ -48,6 +70,12 @@ type ProbeResult struct {
 // result after that budget, not as a call that hangs for as long as the
 // transport allows.
 func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, error) {
+	return m.probeOrigin(ctx, o, true)
+}
+
+// probeOrigin is the shared body. withWrite decides whether the receive-pack
+// question is asked at all — see ProbeOriginRefs for why it is a choice.
+func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool) (ProbeResult, error) {
 	// Every clone/fetch path gates filesystem origins, with no trusted
 	// exemption. A probe reaches the same filesystem, so it gates too.
 	if err := m.ValidateLocalOrigin(o.URL); err != nil {
@@ -68,8 +96,9 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 	// Reachable:true here therefore means "no evidence of a reachability
 	// failure", which is the reading every consumer already gives it for the
 	// auth-required case ProbeOrigin reports below (also Reachable:true with
-	// Empty unknown/false). seedProbeErr (lifecycle.go) orders !Reachable →
-	// AuthRequired → !Empty, so this lands in its authentication arm.
+	// Empty unknown/false). initializeProbeErr (lifecycle.go) orders
+	// !Reachable → AuthRequired → Empty, so this lands in its authentication
+	// arm rather than telling the user to go create a branch they already have.
 	auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
 	if err != nil {
 		return ProbeResult{
@@ -107,11 +136,21 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 		empty, authRequired := classifyProbeError(err)
 		switch {
 		case empty:
+			// The write probe belongs HERE too, and this is the case that needs
+			// it most: an empty remote is the seed path, and seeding is the one
+			// mode that MUST push. Skipping it here was how a create still got
+			// to 65% and failed on "not allowed to push".
+			wa, wd := "", ""
+			if withWrite {
+				wa, wd = m.probeWrite(ctx, o, auth)
+			}
 			return ProbeResult{
 				Reachable:      true,
 				Empty:          true,
 				Branches:       []string{},
 				UpstreamBranch: resolveUpstream(o.Branch, "", nil),
+				WriteAccess:    wa,
+				WriteDetail:    wd,
 			}, nil
 		case authRequired:
 			return ProbeResult{
@@ -126,6 +165,9 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 	}
 
 	res := ProbeResult{Reachable: true, Branches: []string{}}
+	if withWrite {
+		res.WriteAccess, res.WriteDetail = m.probeWrite(ctx, o, auth)
+	}
 	var head string
 	for _, ref := range refs {
 		if ref.Name() == plumbing.HEAD && ref.Type() == plumbing.SymbolicReference {
@@ -139,6 +181,130 @@ func (m *Manager) ProbeOrigin(ctx context.Context, o OriginSpec) (ProbeResult, e
 	res.Empty = len(res.Branches) == 0
 	res.UpstreamBranch = resolveUpstream(o.Branch, head, res.Branches)
 	return res, nil
+}
+
+// probeWrite asks the remote whether these credentials may PUSH, without
+// pushing anything.
+//
+// The receive-pack REF ADVERTISEMENT is the whole request: it is the first
+// half of a push, it is what a server authorizes a push against, and it sends
+// no packfile. GitLab answers it with "You are not allowed to push code to
+// this project" for a reader who has no write access — the same sentence the
+// create failed with, arriving on the step that can still do something about
+// it.
+//
+// It is called only on the path where a ref listing already succeeded, so a
+// remote that could not be read is never asked a second question it has no way
+// to answer.
+func (m *Manager) probeWrite(ctx context.Context, o OriginSpec, auth transport.AuthMethod) (string, string) {
+	ep, err := transport.NewEndpoint(o.URL)
+	if err != nil {
+		return writeUnknown, ""
+	}
+	c, err := transportclient.NewClient(ep)
+	if err != nil {
+		return writeUnknown, ""
+	}
+	netCtx, cancel := probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
+	defer cancel()
+
+	// NewReceivePackSession DIALS, and go-git gives it no context: the ssh
+	// transport builds and connects the client eagerly in runner.Command, with
+	// no ClientConfig.Timeout. So on a filtered SSH port this call blocks for
+	// the OS TCP timeout — minutes — regardless of Cfg.Git.NetworkTimeout, and
+	// the wizard's Cancel cannot interrupt it.
+	//
+	// Running it on its own goroutine and selecting on netCtx bounds the
+	// CALLER, which is what the timeout and the cancel button promise. The
+	// goroutine itself still lingers until the dial gives up; it holds nothing
+	// but its own session and closes it on arrival, and that is strictly better
+	// than a create that cannot be cancelled.
+	type sessionResult struct {
+		sess transport.ReceivePackSession
+		err  error
+	}
+	ch := make(chan sessionResult, 1)
+	go func() {
+		sess, serr := c.NewReceivePackSession(ep, auth)
+		ch <- sessionResult{sess, serr}
+	}()
+
+	var res sessionResult
+	select {
+	case res = <-ch:
+	case <-netCtx.Done():
+		go func() {
+			if late := <-ch; late.sess != nil {
+				_ = late.sess.Close()
+			}
+		}()
+		return classifyWriteProbeError(netCtx.Err())
+	}
+	if res.err != nil {
+		return classifyWriteProbeError(res.err)
+	}
+	defer func() { _ = res.sess.Close() }()
+
+	if _, aerr := res.sess.AdvertisedReferencesContext(netCtx); aerr != nil {
+		return classifyWriteProbeError(aerr)
+	}
+	return writeOK, ""
+}
+
+// ProbeOriginRefs answers only what the REFS say — reachable, empty, branches —
+// and never opens a receive-pack session.
+//
+// It exists because "what shape is this remote" and "may we push to it" are two
+// questions with two costs, and only the wizard's access step asks the second.
+// The create paths read Empty and nothing else, yet paid for a second handshake
+// — the one that dials without a usable context bound — on every create.
+func (m *Manager) ProbeOriginRefs(ctx context.Context, o OriginSpec) (ProbeResult, error) {
+	return m.probeOrigin(ctx, o, false)
+}
+
+// The three WriteAccess values, named so a caller cannot typo one into
+// silently meaning "not established".
+const (
+	writeOK     = "ok"
+	writeDenied = "denied"
+	// writeUnknown is the THIRD STATE, and for a long time nothing could
+	// produce it: every failure of the receive-pack advertisement returned
+	// writeDenied, so a timeout, a reset, or the anonymous 401 a public HTTPS
+	// remote answers before any credential is offered all rendered to the user
+	// as "the host let knomit read this repository, but not push to it" — an
+	// authorization verdict about their account, invented from a network error.
+	writeUnknown = ""
+)
+
+// classifyWriteProbeError decides which of the three answers a failed write
+// probe establishes.
+//
+// ONLY the server refusing the credential is "denied". That is a statement
+// about permissions, and knomit may only make it when a server actually made
+// it. Everything else — our own deadline, our own cancellation, a dropped
+// connection, a host key that changed — establishes nothing, and the wizard
+// says nothing rather than guessing at someone's access rights.
+//
+// The same rule `initialized` follows, for the same reason: a claim nobody
+// established is worse than no claim, because the reader acts on it.
+func classifyWriteProbeError(err error) (access, detail string) {
+	if err == nil {
+		return writeOK, ""
+	}
+	// An EMPTY remote advertises no refs and says so — the server accepted the
+	// credentials and then found nothing to list. That is a yes.
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return writeOK, ""
+	}
+	if errors.Is(err, transport.ErrAuthorizationFailed) ||
+		errors.Is(err, transport.ErrAuthenticationRequired) ||
+		errors.Is(err, transport.ErrInvalidAuthMethod) {
+		return writeDenied, err.Error()
+	}
+	if strings.Contains(err.Error(), "ssh: unable to authenticate") {
+		return writeDenied, err.Error()
+	}
+	return writeUnknown, err.Error()
 }
 
 // probeCtx bounds a single probe's network call by timeout, mirroring
@@ -205,6 +371,18 @@ func classifyProbeError(err error) (empty bool, authRequired bool) {
 		return true, false
 	}
 	if errors.Is(err, transport.ErrAuthenticationRequired) || errors.Is(err, transport.ErrAuthorizationFailed) {
+		return false, true
+	}
+	// A credential that does not FIT this URL's transport is an auth problem,
+	// not a reachability one — go-git dispatches by scheme, so a token (which
+	// resolveAuth turns into githttp.BasicAuth) handed to a git@/ssh:// remote
+	// is rejected here before anything touches the network. Reporting it as
+	// unreachable is the dead end this file already documents for the
+	// unresolvable-credential case: stepsFor collapses an unreachable probe to
+	// ['source'], removing the access step, which is the only place a
+	// credential can be corrected. The user who typed a token against an SSH
+	// URL was thrown back to the first screen with no way to fix it.
+	if errors.Is(err, transport.ErrInvalidAuthMethod) {
 		return false, true
 	}
 	if strings.Contains(err.Error(), "ssh: unable to authenticate") {

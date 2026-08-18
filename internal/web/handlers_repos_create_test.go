@@ -108,33 +108,26 @@ func TestPostRepos_BadNameReturns400(t *testing.T) {
 	}
 }
 
-// A seed against a remote that already has refs must be refused BEFORE the
+// An initialize against a remote with NO branches must be refused BEFORE the
 // NDJSON stream opens, as a real 409 — the status the OpenAPI documents for
-// this case. Until CreatePreflight probed, ErrRemoteNotEmpty could only be
-// produced inside Create, i.e. after w.WriteHeader(200), so createErrStatus's
-// ErrRemoteNotEmpty case was unreachable and the documented 409 was a lie.
-func TestPostRepos_SeedNonEmptyRemoteIs409NotAStreamedError(t *testing.T) {
+// this case. Unless CreatePreflight probes, ErrRemoteNoBranches can only be
+// produced inside Create, i.e. after w.WriteHeader(200), which would make
+// createErrStatus's case unreachable and the documented 409 a lie.
+//
+// This is the INVERSE of the check it replaces. The deleted "seed" mode
+// required a ref-less remote and 409'd one with refs; initialize requires a
+// branch to cut its agent branch from and 409s one without.
+func TestPostRepos_InitializeEmptyRemoteIs409NotAStreamedError(t *testing.T) {
 	root := t.TempDir()
 	remote := filepath.Join(root, "remote.git")
 	if err := exec.Command("git", "init", "--bare", remote).Run(); err != nil {
 		t.Fatalf("init bare: %v", err)
 	}
-	work := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-b", "main"}, {"config", "user.email", "t@e.com"}, {"config", "user.name", "t"},
-		{"commit", "--allow-empty", "-m", "init"}, {"remote", "add", "origin", remote}, {"push", "origin", "main"},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = work
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
 
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	body := `{"name":"kb","mode":"seed","ontology_preset":"default","origin":{"url":"file://` + remote + `"}}`
+	body := `{"name":"kb","mode":"initialize","ontology_preset":"default","origin":{"url":"file://` + remote + `"}}`
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
 
 	if rec.Code != http.StatusConflict {
@@ -143,8 +136,11 @@ func TestPostRepos_SeedNonEmptyRemoteIs409NotAStreamedError(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "ndjson") {
 		t.Fatalf("a pre-stream refusal must not open the NDJSON stream; content-type = %q", ct)
 	}
-	if !strings.Contains(rec.Body.String(), "not empty") {
-		t.Fatalf("body does not name the cause: %s", rec.Body.String())
+	// The body must carry the INSTRUCTION, not just the diagnosis — a reader
+	// who is told "no branches" and not told that one commit fixes it has to
+	// guess what knomit wants from them.
+	if !strings.Contains(rec.Body.String(), "one commit is enough") {
+		t.Fatalf("body does not tell the user how to fix it: %s", rec.Body.String())
 	}
 }
 
@@ -252,5 +248,87 @@ func TestPostRepos_OversizeOntologyYAMLIs413(t *testing.T) {
 	}
 	if s.Manager.Get("kb") != nil {
 		t.Fatal("an oversize create must not register a repo")
+	}
+}
+
+// The other three shape refusals, each of which createErrStatus maps to a 409
+// and openapi.yaml documents as one — and none of which could happen before
+// the stream opened, because CreatePreflight probed for exactly one condition
+// (Empty) in exactly one mode (initialize).
+//
+// A refusal that arrives INSIDE the NDJSON stream is a 200 with an untyped
+// error line: the status code says the create was accepted, the documented 409
+// never occurs, and a client cannot tell "your remote is the wrong shape for
+// this mode" from "the create broke halfway through". These pin all three at
+// the door.
+
+// clone joins an existing knowledge base, and refuses a supplied ontology on
+// the grounds that the remote's own governs — so a remote with no ontology
+// leaves the mode nothing to honour. Before this, the clone was accepted and
+// only refused mid-stream.
+func TestPostRepos_CloneOfANonKnowledgeBaseIs409NotAStreamedError(t *testing.T) {
+	root := t.TempDir()
+	url := seedPlainRemoteForTest(t, filepath.Join(root, "remote.git"))
+
+	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
+	r := s.NewAPIRouter()
+	rec := httptest.NewRecorder()
+	body := `{"name":"kb","mode":"clone","origin":{"url":"` + url + `","branch":"main"}}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "ndjson") {
+		t.Fatalf("a pre-stream refusal must not open the NDJSON stream; content-type = %q", ct)
+	}
+	// It must name the mode that WOULD have worked. Every one of these three
+	// refusals has one, and a reader told only what is wrong has to guess.
+	if !strings.Contains(rec.Body.String(), "initialize") {
+		t.Fatalf("body does not name the mode that works: %s", rec.Body.String())
+	}
+}
+
+// The mirror: initialize refuses a branch that is already a knowledge base
+// rather than writing a second ontology over the one that governs it.
+func TestPostRepos_InitializeOfAKnowledgeBaseIs409NotAStreamedError(t *testing.T) {
+	root := t.TempDir()
+	url := seedKnomitRemoteForTest(t, filepath.Join(root, "remote.git"), "seed")
+
+	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
+	r := s.NewAPIRouter()
+	rec := httptest.NewRecorder()
+	body := `{"name":"kb","mode":"initialize","ontology_preset":"default","origin":{"url":"` + url + `","branch":"main"}}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "clone") {
+		t.Fatalf("body does not name the mode that works: %s", rec.Body.String())
+	}
+}
+
+// A ref-less remote is refused for CLONE too, not only for initialize.
+// openapi.yaml documents this 409 as applying to "mode=initialize and
+// mode=clone alike"; only one of those was true.
+func TestPostRepos_CloneOfARefLessRemoteIs409NotAStreamedError(t *testing.T) {
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	if err := exec.Command("git", "init", "--bare", remote).Run(); err != nil {
+		t.Fatalf("init bare: %v", err)
+	}
+
+	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
+	r := s.NewAPIRouter()
+	rec := httptest.NewRecorder()
+	body := `{"name":"kb","mode":"clone","origin":{"url":"file://` + remote + `"}}`
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "one commit is enough") {
+		t.Fatalf("body does not tell the user how to fix it: %s", rec.Body.String())
 	}
 }

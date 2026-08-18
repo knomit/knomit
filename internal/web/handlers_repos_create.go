@@ -42,7 +42,7 @@ const maxCreateBodyBytes = 6*MaxOntologyBytes + 4*1024
 // {"type":"error"} line.
 func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ontology_yaml rides in this body for modes "custom" and "seed", so the
+		// ontology_yaml rides in this body for modes "custom" and "initialize", so the
 		// cap MaxOntologyBytes names has to be applied here too — :validate
 		// alone leaves the create path unbounded, and nothing forces a client
 		// to visit :validate first. Two guards, because they answer two
@@ -138,8 +138,16 @@ func createErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Create in flight"
 	case errors.Is(err, repos.ErrOriginInUse):
 		return http.StatusConflict, "Origin in use"
-	case errors.Is(err, repos.ErrRemoteNotEmpty):
-		return http.StatusConflict, "Remote is not empty"
+	// The three ways a remote can be the wrong SHAPE for the requested mode.
+	// All 409: the request is well-formed and the server understood it, but the
+	// remote is in a state that conflicts with it — and each names the mode that
+	// would have worked, because in every case one of the other modes does.
+	case errors.Is(err, repos.ErrRemoteNoBranches):
+		return http.StatusConflict, "Remote has no branches"
+	case errors.Is(err, repos.ErrRemoteNotInitialized):
+		return http.StatusConflict, "Remote is not a knowledge base"
+	case errors.Is(err, repos.ErrRemoteAlreadyInitialized):
+		return http.StatusConflict, "Remote is already a knowledge base"
 	default:
 		return http.StatusInternalServerError, "Create failed"
 	}

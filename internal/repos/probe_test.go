@@ -43,7 +43,9 @@ func initBareRepo(t *testing.T, parent string) string {
 	return "file://" + dir
 }
 
-// An empty bare repo on disk is the case the wizard's "seed" path depends on.
+// An empty bare repo on disk is the case the wizard BLOCKS on: with no
+// branches there is nothing to cut an agent branch from, and knomit never
+// creates a branch on a remote other than its own.
 func TestProbeOrigin_EmptyLocalRepo(t *testing.T) {
 	root := t.TempDir()
 	m := newProbeTestManager(t, root)
@@ -98,8 +100,8 @@ func TestProbeOrigin_UnreachableIsNotAnError(t *testing.T) {
 // place a credential can be entered. Reporting this as unreachable therefore
 // named the wrong cause AND locked the user out of the fix, with no way to
 // create the repo at all. Reachable+AuthRequired keeps the access step in the
-// list (see wizardState.test.ts's stepsFor cases) and lands in seedProbeErr's
-// authentication arm rather than its reachability one.
+// list (see wizardState.test.ts's stepsFor cases) and lands in
+// initializeProbeErr's authentication arm rather than its reachability one.
 func TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable(t *testing.T) {
 	// KeyPath "" is the no-key-on-this-machine case; the URL is SSH-style so
 	// ResolveAuth auto-detects ssh and then fails for want of a key.
@@ -116,11 +118,13 @@ func TestProbeOrigin_UnresolvableCredentialIsAuthNotUnreachable(t *testing.T) {
 	require.Contains(t, got.Detail, "key path", "the underlying cause must survive into Detail")
 	require.NotNil(t, got.Branches, "Branches must never serialize as JSON null")
 
-	// seedProbeErr must read it as authentication, not "not empty": steering
-	// the user to mode "clone" would fail against the same missing key.
-	serr := seedProbeErr(got)
+	// initializeProbeErr must read it as authentication, not "no branches":
+	// steering the user back to their host to create a branch they already have
+	// is the wrong instruction, and mode "clone" would fail against the same
+	// missing key anyway.
+	serr := initializeProbeErr(got)
 	require.Error(t, serr)
-	require.False(t, errors.Is(serr, ErrRemoteNotEmpty))
+	require.False(t, errors.Is(serr, ErrRemoteNoBranches))
 	require.Contains(t, serr.Error(), "requires authentication")
 }
 
@@ -165,6 +169,22 @@ func TestClassifyProbeError(t *testing.T) {
 		{
 			name:             "ssh authentication failure",
 			err:              sshAuthFailure,
+			wantAuthRequired: true,
+		},
+		// The create wizard's reported break: an SSH URL with a token typed
+		// under auto-detect. resolveAuth turns the token into githttp.BasicAuth,
+		// go-git dispatches by scheme, and the ssh transport rejects it before
+		// any network call. Classified as unreachable it collapsed stepsFor to
+		// ['source'] and threw the user back to the first screen — with the
+		// access step, the only place the credential can be corrected, gone.
+		{
+			name:             "credential does not fit the URL's transport",
+			err:              transport.ErrInvalidAuthMethod,
+			wantAuthRequired: true,
+		},
+		{
+			name:             "wrapped invalid auth method",
+			err:              fmt.Errorf("probe origin: %w", transport.ErrInvalidAuthMethod),
 			wantAuthRequired: true,
 		},
 		{

@@ -426,6 +426,23 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 		return nil // idempotent
 	}
 
+	// Give the remote the precondition mode=clone requires: an upstream branch
+	// that carries an ontology, i.e. a remote that IS a knowledge base.
+	//
+	// This used to be unnecessary because clone mode accepted anything —
+	// including a completely EMPTY remote, which it handled by minting a root
+	// commit locally and seeding the hardcoded DEFAULT ontology. Both halves of
+	// that are gone. The minted root gave the local repo an identity no other
+	// machine sharing the remote would agree with, and the seeded ontology was
+	// chosen by the code rather than by the user. Clone now REFUSES a remote
+	// that is not a knowledge base (ErrRemoteNotInitialized) and one with no
+	// branches at all (ErrRemoteNoBranches).
+	//
+	// Doing it here rather than in BareRemote keeps the fixture honest for the
+	// tests that assert on a genuinely empty remote, and keeps MirrorOf's
+	// snapshot semantics untouched.
+	remote.EnsureKnowledgeBase()
+
 	// The Storyboard creates repos via preset mode, which leaves the local
 	// SQLite DB populated with an unrelated init commit. To drive the clone path
 	// cleanly, dispose of that repo entirely so the re-booted manager comes up

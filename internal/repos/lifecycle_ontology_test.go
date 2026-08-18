@@ -10,7 +10,7 @@ import (
 )
 
 // Finding 2 regression: resolveOntology's extraction (sharing initLocal's
-// ontology-field-reading logic with initSeed) originally reordered the
+// ontology-field-reading logic with initInitialize) originally reordered the
 // precedence from "gated on Mode" to "gated on which field is non-empty",
 // which silently changed two reachable initLocal behaviours. This test pins
 // the first: mode=preset with BOTH ontology_preset and ontology_yaml set

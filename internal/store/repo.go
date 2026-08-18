@@ -268,11 +268,41 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 // transport.ErrEmptyRemoteRepository, long after any pre-check the caller ran.
 // true means the empty path (initFiles were written, the remote had no refs at
 // FETCH time); false means the clone path (the remote had refs, initFiles were
-// ignored). A caller that only makes sense against an empty remote — notably
-// repos.initSeed, which FORCE-pushes what it built — must refuse when this is
-// false rather than proceed: its own probe was taken earlier in time, and a
-// remote that gained refs in between would otherwise be overwritten. On a
-// non-nil error the value is meaningless.
+// ignored). A caller whose meaning depends on which path ran must ACT on this
+// rather than trust its own pre-check, which was taken strictly earlier in
+// time. Both repos-layer remote modes do: repos.initClone and
+// repos.initInitialize each refuse when this comes back true, because the
+// empty path mints a fresh ROOT COMMIT — and therefore a repo identity no
+// other machine sharing that remote would agree with. On a non-nil error the
+// value is meaningless.
+// BranchACreateReads names the branch a create against a remote will end up
+// READING — the one whose tree decides whether the remote is already a
+// knowledge base, and whose tip the repo's agent branch starts from.
+//
+// THIS IS THE RULE, and it exists as one function because it has to be applied
+// in two places that see different data. InitFromRemote applies it below,
+// against the remote-tracking refs it has just fetched. repos.ProbeInitialized
+// applies it BEFORE any fetch, against the refs the remote advertises, in order
+// to predict what a create would do.
+//
+// When those two answered differently, re-creating a repository that this
+// machine had already initialized became a permanent dead end: the probe looked
+// at the consensus branch, which knomit never writes to and which therefore
+// never gains an ontology, while the create adopted the agent branch, which
+// already had one. The wizard could only derive the mode that could not
+// succeed. A comment asking two implementations to agree is what allowed that;
+// one function is what prevents it.
+//
+// Only THIS machine's agent branch is adopted. Another machine's is ignored —
+// we would cut our own from the consensus branch — which is why the caller
+// passes the answer for its own agent branch alone.
+func BranchACreateReads(remoteHasAgentBranch bool, agentBranch, consensusBranch string) string {
+	if remoteHasAgentBranch {
+		return agentBranch
+	}
+	return consensusBranch
+}
+
 func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string) (upstream string, remoteWasEmpty bool, err error) {
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
@@ -388,7 +418,11 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	// unpushedCommits walk stops there cleanly.
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 	var watermarkHash plumbing.Hash
-	if remoteAgentRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); err == nil {
+	remoteAgentRef, remoteAgentErr := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch))
+	// The rule, applied here against the refs just fetched. ProbeInitialized
+	// applies the SAME function against the refs the remote advertises, so its
+	// prediction of what this create will read cannot drift from what it does.
+	if BranchACreateReads(remoteAgentErr == nil, agentBranch, upstreamMain) == agentBranch {
 		// Adopt path: agent ref points at the adopted origin/agent tip.
 		if err := s.rh.gits.SetReference(plumbing.NewHashReference(agentRefName, remoteAgentRef.Hash())); err != nil {
 			return "", false, fmt.Errorf("InitFromRemote: set agent from remote agent: %w", err)

@@ -21,7 +21,7 @@ import { stepsFor, currentStep, type StepId, type WizardAction, type WizardState
 //     GOTO exists in wizardState and why this is the only thing that dispatches
 //     it.
 const LABELS: Record<StepId, string> = {
-  source: 'Source', access: 'Access', name: 'Name', ontology: 'Ontology', review: 'Review',
+  source: 'Source', access: 'Access', branch: 'Branch', ontology: 'Ontology', review: 'Review',
 };
 
 export function WizardStepRail({ state, dispatch }: { state: WizardState; dispatch: (a: WizardAction) => void }) {

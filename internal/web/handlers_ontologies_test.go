@@ -216,3 +216,47 @@ func factValidate(b []byte) (any, []fact.Diagnostic) {
 	o, d := fact.ValidateOntologyYAML(b)
 	return o, d
 }
+
+// The editor must keep REFUSING an ontology with an invented key, even though
+// the parser now treats unknown keys as non-fatal.
+//
+// The two readers of an ontology want opposite things, and this endpoint serves
+// the strict one. A person here is choosing a taxonomy they can never change
+// afterwards, so a key knomit does not understand — an invented block, a
+// misspelt `descriptionn:` that silently drops a description — has to be in
+// front of them while it can still be fixed. The repo OPEN path is the lenient
+// reader (fact.ParseOntology): there the ontology is already committed and
+// rejecting it would swap in a different taxonomy, which nothing can undo.
+//
+// This test exists because that leniency was added for the open path. If it
+// ever leaks out here, an invented block starts reading as accepted.
+func TestValidateOntology_UnknownKeyIsStillRefused(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	body := "id: x\nname: X\nfuusbar:\n  barfuus:\n    barf:\ntopics:\n  a:\n    description: d\n"
+	req := httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		OK          bool              `json:"ok"`
+		Diagnostics []fact.Diagnostic `json:"diagnostics"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.OK {
+		t.Fatal("an ontology with an invented top-level key must not validate as ok")
+	}
+	var joined string
+	for _, d := range got.Diagnostics {
+		joined += d.Message + "\n"
+	}
+	if !strings.Contains(joined, "fuusbar") {
+		t.Fatalf("diagnostics do not name the unknown key: %s", joined)
+	}
+}

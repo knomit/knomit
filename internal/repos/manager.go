@@ -916,6 +916,10 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		keyPath:               m.deps.KeyPath,
 		ctx:                   m.ctx,
 		disableBackgroundSync: m.deps.DisableBackgroundSync,
+		// The ontology gate, wired in so the sync-activation path can enforce
+		// it without the builder knowing about the Manager. Every path that
+		// attaches a remote ends here; see startSync.
+		checkOriginOntology: m.CheckOriginOntology,
 	}
 
 	if err := b.openStore(); err != nil {

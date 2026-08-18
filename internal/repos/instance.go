@@ -76,9 +76,12 @@ type RepoInstance struct {
 	// decision 11). Resolved lazily; "" when unresolvable.
 	// idMu guards id. ID() caches only successful resolution so a transient
 	// failure (e.g. during a store swap) is retried on the next call.
-	idMu                sync.Mutex
-	id                  string
-	ontology            *fact.Ontology
+	idMu     sync.Mutex
+	id       string
+	ontology *fact.Ontology
+	// ontologyErr is non-nil when the ontology could not be established. The
+	// repo is then readable but not writable — see WritableBranch.
+	ontologyErr         error
 	embedder            store.BatchEmbedder
 	ontologyRoot        string
 	methodologyMinScore float64
@@ -303,11 +306,38 @@ func (ri *RepoInstance) ShortID() string {
 // there corrupts their watermarks) are never writable. Future experiment
 // branches widen this classification — extend HERE, not at call sites.
 func (ri *RepoInstance) WritableBranch(branch string) bool {
+	// ALL REPOS MUST HAVE AN ONTOLOGY. Without one, no branch is writable —
+	// not even the agent branch. Facts are validated against the repo's
+	// ontology on write, so authoring while it is unestablished either
+	// validates against a taxonomy nobody chose or skips validation entirely,
+	// and both write data the repo cannot vouch for.
+	//
+	// Extended HERE rather than at call sites, per the note above: binding.go
+	// derives writeOK from this one function, so every write path inherits it.
+	if ri.ontologyErr != nil {
+		return false
+	}
 	return branch != "" && branch == ri.agentBranch
 }
 
-// Ontology returns the ontology loaded from this repo's git store at open time.
-func (ri *RepoInstance) Ontology() *fact.Ontology { return ri.ontology }
+// Ontology returns the ontology loaded from this repo's git store at open time,
+// or NIL when it could not be established.
+//
+// Nil is the honest answer and callers must handle it. The alternative — the
+// default taxonomy, which is what this returned before — is a different
+// ontology presented as this repo's own, and since a repo's ontology is fixed
+// at create time there is no later correction. OntologyError says what went
+// wrong.
+func (ri *RepoInstance) Ontology() *fact.Ontology {
+	if ri.ontologyErr != nil {
+		return nil
+	}
+	return ri.ontology
+}
+
+// OntologyError reports why this repo has no usable ontology, or nil when it
+// has one. A non-nil value means the repo is open for READING only.
+func (ri *RepoInstance) OntologyError() error { return ri.ontologyErr }
 
 // Embedder returns the batch embedder for this repo, or nil if unavailable.
 func (ri *RepoInstance) Embedder() store.BatchEmbedder { return ri.embedder }

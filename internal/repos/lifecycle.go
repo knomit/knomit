@@ -53,11 +53,6 @@ var (
 	// In practice it is the shutdown race: an in-flight POST /api/v1/repos that
 	// reached Create while Close was tearing the manager down.
 	ErrManagerStopped = errors.New("repo manager is not running")
-	// ErrRemoteNotEmpty is returned when mode "seed" is asked to initialise a
-	// remote that already has refs. Seeding must never half-obey: the ontology
-	// the caller chose is either written, or the request is refused — it is
-	// never silently replaced by the remote's own.
-	ErrRemoteNotEmpty = errors.New("remote is not empty; use mode \"clone\" to join it")
 )
 
 // controlHandles snapshots the two control.db tenants under m.mu.
@@ -126,22 +121,28 @@ type OriginSpec struct {
 }
 
 // CreateSpec is the single input for all repo-creation modes.
+//
+// The two remote modes answer ONE question about the chosen branch — does it
+// already carry a knomit ontology? — and are the two halves of its answer:
+// "clone" joins a branch that has one, "initialize" writes one onto knomit's
+// own agent branch cut from a branch that has not. Neither ever creates or
+// writes a branch on the remote other than agent/<host>.
 type CreateSpec struct {
 	Name           string
-	Mode           string // "preset" | "custom" | "clone" | "seed"
+	Mode           string // "preset" | "custom" | "clone" | "initialize"
 	OntologyPreset string
 	OntologyYAML   string
 	Origin         *OriginSpec
 }
 
 // hasRemote reports whether spec's mode attaches a remote origin. "clone" and
-// "seed" are the two remote-bearing modes — everywhere one of them needs the
-// origin checked, reserved, persisted, or synced, the other needs it too.
-// Written once here rather than repeated as `|| spec.Mode == "seed"` at each
-// of the five sites in this file, so a future sixth site can't be added
+// "initialize" are the two remote-bearing modes — everywhere one of them needs
+// the origin checked, reserved, persisted, or synced, the other needs it too.
+// Written once here rather than repeated as `|| spec.Mode == "initialize"` at
+// each of the five sites in this file, so a future sixth site can't be added
 // without the same check.
 func (s CreateSpec) hasRemote() bool {
-	return s.Mode == "clone" || s.Mode == "seed"
+	return s.Mode == "clone" || s.Mode == "initialize"
 }
 
 // Event is a progress message emitted during Create.
@@ -153,22 +154,24 @@ type Event struct {
 
 // CreatePreflight runs the checks that must surface as an HTTP status BEFORE
 // any streaming begins: name validity, clone-origin presence/uniqueness, name
-// already active, create-in-flight, and — for mode "seed" only — that the
-// remote is actually empty. The authoritative guards still live inside Create.
+// already active, create-in-flight, and — for mode "initialize" only — that
+// the remote has at least one branch. The authoritative guards still live
+// inside Create.
 //
-// The seed probe is the one network call here, and it is deliberate: without
-// it ErrRemoteNotEmpty could only ever reach a caller as a {"type":"error"}
-// line inside an already-committed 200 stream, so the 409 the API documents
-// for that case was unreachable. It is bounded by Cfg.Git.NetworkTimeout
-// (ProbeOrigin) and takes ctx, so a caller that goes away stops it.
+// The initialize probe is the one network call here, and it is deliberate:
+// without it ErrRemoteNoBranches could only ever reach a caller as a
+// {"type":"error"} line inside an already-committed 200 stream, so the 409 the
+// API documents for that case would be unreachable. It is bounded by
+// Cfg.Git.NetworkTimeout (ProbeOrigin) and takes ctx, so a caller that goes
+// away stops it.
 //
-// Only the definitive "the remote has refs" verdict fails here. An
+// Only the definitive "the remote has NO refs" verdict fails here. An
 // unreachable remote, an auth-required one, or a probe the origin gate
 // refused all fall through to Create, which reports them through the stream
 // exactly as before — a pre-stream failure is worth having only where the
 // answer is certain, and a probe that could not see the remote has not
-// established anything. Create re-asserts emptiness regardless (initSeed's
-// own seedProbeErr): this probe is advisory, and a remote can gain refs
+// established anything. Create re-asserts this regardless (initInitialize runs
+// its own probe): this one is advisory, and a remote can gain or lose refs
 // between the two.
 func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	if !isValidRepoName(spec.Name) {
@@ -185,9 +188,10 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 				return err
 			}
 		} else if spec.OntologyPreset == "" && spec.OntologyYAML == "" {
-			// Seeding without an ontology has no meaning — it would be a clone
-			// of an empty remote, which is what mode "clone" already does.
-			return fmt.Errorf("%w: seed mode requires ontology_preset or ontology_yaml", ErrInvalidName)
+			// Initializing without an ontology has no meaning: writing
+			// .knomit/ontology.yaml IS the act that turns the branch into a
+			// knowledge base, and there would be nothing to write.
+			return fmt.Errorf("%w: initialize mode requires ontology_preset or ontology_yaml", ErrInvalidName)
 		}
 		if active := m.ActiveRepoWithOrigin(origin); active != "" {
 			return fmt.Errorf("%w: %q", ErrOriginInUse, active)
@@ -211,10 +215,51 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	}
 	// Last, because it is the only check here that touches the network: every
 	// cheap local refusal above should cost nothing.
-	if spec.Mode == "seed" {
-		if probe, perr := m.ProbeOrigin(ctx, *spec.Origin); perr == nil &&
-			probe.Reachable && !probe.AuthRequired && !probe.Empty {
-			return ErrRemoteNotEmpty
+	//
+	// The refusal is the INVERSE of the one seed mode used to make here. Seed
+	// needed a ref-less remote and refused one with refs; initialize needs a
+	// branch to cut its agent branch from and refuses one WITHOUT refs. That
+	// inversion is the whole point of the redesign: knomit never creates a
+	// branch on the remote other than its own, so it can no longer be the thing
+	// that pushes a protected default branch into existence.
+	if spec.hasRemote() {
+		// A ref-less remote is refused for BOTH remote modes. knomit never
+		// creates a branch on a remote other than its own agent branch, so
+		// there is nothing to cut that branch from and nothing to clone —
+		// initialize needs a tip to start from, and clone needs an ontology
+		// that cannot exist where no branch does.
+		// Refs only. This asks whether the remote has branches; whether we may
+		// PUSH is the wizard's question, and answering it here cost a second
+		// handshake — the one that dials without a usable context bound — on
+		// every create, while also exposing the create to a "denied" verdict it
+		// does not act on.
+		if probe, perr := m.ProbeOriginRefs(ctx, *spec.Origin); perr == nil &&
+			probe.Reachable && !probe.AuthRequired && probe.Empty {
+			return ErrRemoteNoBranches
+		}
+		// And the SHAPE question: is the branch this create will read already a
+		// knowledge base? Each mode has exactly one answer it can work with.
+		//
+		// Established here so the refusal is a 409 with the stream still shut.
+		// Both conditions were reachable only from inside Create — i.e. after
+		// w.WriteHeader(200) — which made a documented 409 impossible to
+		// receive, and left a client unable to tell "your remote is the wrong
+		// shape for this mode" from "the create broke halfway through". The
+		// authoritative checks stay where they are: this is a fail-fast
+		// affordance run against an earlier moment in time, exactly as the
+		// no-branches probe above is.
+		//
+		// The UNKNOWN answer refuses nothing. A check that did not complete
+		// established nothing, and turning that into a refusal would block a
+		// create that is very likely fine; Create's own check will decide with
+		// the connection it actually opens.
+		if init, ierr := m.ProbeInitialized(ctx, *spec.Origin); ierr == nil {
+			switch {
+			case spec.Mode == "clone" && init.Initialized == InitializedNo:
+				return ErrRemoteNotInitialized
+			case spec.Mode == "initialize" && init.Initialized == InitializedYes:
+				return ErrRemoteAlreadyInitialized
+			}
 		}
 	}
 	return nil
@@ -372,10 +417,10 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			return nil, ierr
 		}
 		resolvedUpstream = upstream
-	case "seed":
+	case "initialize":
 		// Name/origin presence and uniqueness were validated and reserved up
-		// front via reserveNameAndOrigin; just seed.
-		upstream, ierr := m.initSeed(ctx, spec, dbPath, emit)
+		// front via reserveNameAndOrigin; just initialize.
+		upstream, ierr := m.initInitialize(ctx, spec, dbPath, emit)
 		if ierr != nil {
 			cleanup()
 			return nil, ierr
@@ -386,32 +431,31 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, fmt.Errorf("%w: unknown mode %q", ErrInvalidName, spec.Mode)
 	}
 
-	// A seed that got this far has already PUSHED (initSeed pushes both branches
-	// before returning, and explains there why it cannot wait). Every failure
-	// from here on calls cleanup() — deleting the local .db and the registry row
-	// — while the remote KEEPS the seed, leaving the user exactly where
-	// initSeed's own agent-push failure path leaves them: the remote is no
-	// longer empty, so every later seed of that URL returns ErrRemoteNotEmpty,
-	// and the local half they would otherwise clone back is gone. None of that
-	// is guessable from "persist origin: …" or "register repo: …", and this is
-	// the last frame that still knows a push happened.
-	explainSeeded := func(err error) error {
-		if spec.Mode != "seed" || !spec.hasRemote() {
+	// An initialize that got this far has already PUSHED its agent branch.
+	// Every failure from here on calls cleanup() — deleting the local .db and
+	// the registry row — while the remote KEEPS that branch. It is a far
+	// gentler state than seed's used to be (the consensus branch is untouched,
+	// so nothing is stranded and no later create is blocked: re-running the
+	// same create simply adopts the agent branch it finds), but it is still not
+	// guessable from a bare "persist origin: …", and this is the last frame
+	// that still knows a push happened.
+	explainPushed := func(err error) error {
+		if spec.Mode != "initialize" || !spec.hasRemote() {
 			return err
 		}
-		return seedAlreadyLanded(err, spec.Origin.URL, resolvedUpstream)
+		return agentBranchAlreadyPushed(err, spec.Origin.URL, m.deps.AgentBranch, resolvedUpstream)
 	}
 
 	if cerr := ctx.Err(); cerr != nil {
 		cleanup()
-		return nil, explainSeeded(cerr)
+		return nil, explainPushed(cerr)
 	}
 
 	var originRec *Origin
 	if spec.hasRemote() {
 		emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
 		// The upstream InitFromRemote RESOLVED, never the one requested — see
-		// initClone/initSeed, both of which return it for exactly this reason.
+		// initClone/initInitialize, both of which return it for exactly this reason.
 		originRec = &Origin{
 			URL:        spec.Origin.URL,
 			Branch:     resolvedUpstream,
@@ -420,7 +464,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 		if oerr := origins.Set(uid, *originRec); oerr != nil {
 			cleanup()
-			return nil, explainSeeded(fmt.Errorf("persist origin: %w", oerr))
+			return nil, explainPushed(fmt.Errorf("persist origin: %w", oerr))
 		}
 	}
 
@@ -428,7 +472,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 
 	if aerr := m.Add(spec.Name, uid, dbPath, originRec); aerr != nil {
 		cleanup()
-		return nil, explainSeeded(fmt.Errorf("register repo: %w", aerr))
+		return nil, explainPushed(fmt.Errorf("register repo: %w", aerr))
 	}
 	ri := m.Get(spec.Name)
 	if ri != nil {
@@ -443,7 +487,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 				if errors.Is(rerr, ErrRepoAlreadyRegistered) {
 					m.Remove(spec.Name)
 					cleanup()
-					return nil, explainSeeded(rerr)
+					return nil, explainPushed(rerr)
 				}
 				log.Warn().Err(rerr).Str("repo", spec.Name).Str("uid", uid).
 					Msg("recording repo identity failed; repo stays registered")
@@ -496,8 +540,8 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 }
 
 // resolveOntology turns a spec's ontology fields into an Ontology. Shared by
-// initLocal and initSeed so the two modes cannot drift in how they read the
-// same two fields.
+// initLocal and initInitialize so the two modes cannot drift in how they read
+// the same two fields.
 //
 // Mode-aware, not merely field-aware, to reproduce initLocal's ORIGINAL
 // precedence byte-for-byte (a bare "OntologyYAML != "" wins" precedence,
@@ -509,17 +553,17 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 //
 //   - "custom" ALWAYS parses OntologyYAML, unconditionally, even when it is
 //     empty — that must stay a hard error, never a silent default.
-//   - "seed" parses OntologyYAML only when the caller actually supplied one;
-//     unlike "custom" it may legitimately carry a preset instead, and
-//     initSeed's own authoritative check (mirroring rejectOntologySpecForClone)
-//     independently refuses a seed request with neither field, so an empty
-//     OntologyYAML here is not itself an error — it just means "prefer the
-//     preset arm below".
+//   - "initialize" parses OntologyYAML only when the caller actually supplied
+//     one; unlike "custom" it may legitimately carry a preset instead, and
+//     initInitialize's own authoritative check (mirroring
+//     rejectOntologySpecForClone) independently refuses an initialize request
+//     with neither field, so an empty OntologyYAML here is not itself an error
+//     — it just means "prefer the preset arm below".
 //   - every other mode (preset) ignores OntologyYAML entirely, exactly as the
 //     original switch did by gating that arm on `Mode == "custom"` rather
 //     than on the field alone.
 func resolveOntology(spec CreateSpec) (*fact.Ontology, error) {
-	if spec.Mode == "custom" || (spec.Mode == "seed" && spec.OntologyYAML != "") {
+	if spec.Mode == "custom" || (spec.Mode == "initialize" && spec.OntologyYAML != "") {
 		o, err := fact.ParseOntology([]byte(spec.OntologyYAML))
 		if err != nil {
 			return nil, fmt.Errorf("parse ontology: %w", err)
@@ -546,9 +590,9 @@ func rejectOntologySpecForClone(spec CreateSpec) error {
 	return nil
 }
 
-// initClone handles clone mode: fetch from origin and seed branches. It does
-// NOT persist the origin anywhere — Create does that, into control.db, once
-// initClone returns.
+// initClone handles clone mode — JOINING a remote that is already a knomit
+// knowledge base. It does NOT persist the origin anywhere — Create does that,
+// into control.db, once initClone returns.
 //
 // The returned upstream is the branch the clone ACTUALLY adopted, resolved by
 // svc.InitFromRemote against the remote (prefer "main", else its symbolic
@@ -557,12 +601,16 @@ func rejectOntologySpecForClone(spec CreateSpec) error {
 // this repo's local branch and fetch refspecs were built from the RESOLVED
 // branch, so persisting anything else writes an origin that disagrees with
 // them, and every later sync reads a nonexistent origin/<branch>.
+//
+// A remote that turns out NOT to be a knowledge base is REFUSED here, and that
+// refusal is the whole reason this function ends with a check rather than a
+// return — see the comment on it below.
 func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
 	// The authoritative copy of the CreatePreflight check: Create is also called
-	// directly (tests, future CLI paths) and the seed below would otherwise
+	// directly (tests, future CLI paths) and the clone below would otherwise
 	// quietly ignore a requested ontology.
 	if err := rejectOntologySpecForClone(spec); err != nil {
 		return "", err
@@ -586,50 +634,98 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
 	// holds the only Crypt. This store never stores a credential of its own.
 
-	// Seed the ontology for the EMPTY-remote case. InitFromRemote ignores these
-	// files when the remote has branches (their content comes from the clone),
-	// and writes them onto the new agent branch when it does not — so without
-	// them, cloning an empty origin yields a repo with no ontology file at all,
-	// unlike every repo created through initLocal. The DEFAULT ontology is the
-	// unambiguous choice here because a clone request may not name one (see
-	// rejectOntologySpecForClone).
-	ont, err := fact.DefaultOntology().Serialize()
-	if err != nil {
-		return "", fmt.Errorf("serialize ontology: %w", err)
-	}
-	// The remoteWasEmpty flag is deliberately ignored HERE: cloning a non-empty
-	// remote is this mode's normal case, and cloning an empty one is its
-	// documented corner (the seed files above exist for exactly that). initSeed
-	// is the caller that must act on it.
-	upstream, _, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
-		map[string]string{OntologyPath: string(ont)})
+	// NO seed files. This used to pass fact.DefaultOntology() so that cloning an
+	// EMPTY origin produced a repo with some ontology rather than none — a
+	// corner that no longer exists, because an empty remote is refused before
+	// any mode runs (initInitialize's ErrRemoteNoBranches). Passing them now
+	// would be worse than useless: InitFromRemote writes them ONLY on the
+	// empty-remote path, so the one case they could still reach is the one case
+	// we refuse.
+	//
+	// remoteWasEmpty is checked rather than discarded for the same reason. The
+	// preflight probe ran strictly EARLIER in time; this flag is what
+	// InitFromRemote found at the moment it actually fetched, and a remote that
+	// lost its refs in between must not be silently turned into a fresh local
+	// knowledge base with a minted identity nobody else shares.
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil)
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
+	}
+	if remoteWasEmpty {
+		return "", fmt.Errorf("clone: %w", ErrRemoteNoBranches)
 	}
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
+
+	// THE CHECK THAT MAKES THIS MODE HONEST: a repository is a knomit knowledge
+	// base if and only if it has an ontology (fact.OntologyPathsNewestFirst).
+	// Clone mode JOINS one, and refuses a supplied ontology on the grounds that
+	// the remote's own governs — so a remote with no ontology leaves the mode
+	// with nothing to honour.
+	//
+	// Until this existed the clone SUCCEEDED there, and the missing ontology was
+	// silently replaced by fact.DefaultOntology() at the repo's next open
+	// (repoBuilder.loadOntology). The user who created their project with a
+	// README, was routed here because that made it non-empty, and picked "Code"
+	// on the way, got "General" — permanently, since the ontology is immutable
+	// after creation, and with nothing in the UI ever saying so.
+	//
+	// Refusing at CREATE is what closes it. loadOntology's fallback stays as it
+	// is: that is the open path, it serves repos that already exist, and hard-
+	// failing there would strand exactly the users this bug already hurt.
+	hasOnt, oerr := branchHasOntology(ctx, svc, m.deps.AgentBranch)
+	if oerr != nil {
+		return "", fmt.Errorf("clone: check for an ontology: %w", oerr)
+	}
+	if !hasOnt {
+		return "", fmt.Errorf("clone %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
+	}
 	return upstream, nil
 }
 
-// initSeed handles "seed" mode: initialise an EMPTY remote with the caller's
-// chosen ontology, so local and remote share a root commit from birth and are
-// never disjoint histories.
+// initInitialize handles "initialize" mode: turn a branch that is NOT yet a
+// knomit knowledge base into one, by writing the caller's chosen ontology onto
+// knomit's own agent branch — cut from that branch's tip — and pushing THAT
+// BRANCH ALONE.
 //
-// This is the case rejectOntologySpecForClone refuses for mode "clone", and it
-// is safe here only because of the guard below: if the remote turns out to have
-// refs we fail with ErrRemoteNotEmpty rather than proceeding and letting
-// InitFromRemote silently discard the seed files. That is the difference
-// between this mode and relaxing the clone rule.
+// It is the replacement for the deleted "seed" mode, and the difference is the
+// entire point of the redesign. Seed required a completely EMPTY remote, minted
+// a root commit, created the consensus branch, and pushed it. That consensus
+// push was the only one in this codebase, and it was the sole reason knomit ever
+// needed write access to a protected branch — which hosts protect by default on
+// new projects, so the create failed outright for anyone below Maintainer:
 //
-// Like initClone, this does NOT persist the origin anywhere — Create does
-// that, into control.db, once initSeed returns the resolved upstream.
+//	seed: push main: pre-receive hook declined
+//	GitLab: You cannot push the initial commit because the default branch is
+//	        protected and your role does not allow it.
 //
-// Unlike initClone, this DOES push (both the consensus and agent branches)
-// before returning — see the comment above that push, below, for why: the
-// underlying store call never does it, and without it the remote this mode
-// exists to seed stays permanently empty.
-func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+// This mode never touches the consensus branch. The user creates the repository
+// on their host with a "main" (one commit is enough — "add a README" is just the
+// quickest way to get one), and knomit writes only where it is entitled to. The
+// knowledge base is backed up from the first write, and the merge request from
+// agent/<host> into main is how it later becomes the project's consensus.
+//
+// Three further consequences follow from cutting from an EXISTING commit rather
+// than minting one:
+//
+//   - Identity is stable across machines. The repo id is the remote's existing
+//     root commit, so two machines initializing the same remote agree. Seed
+//     minted a nonce per machine, which is the accepted split-brain race
+//     documented at store/repo.go's initFromEmptyRemote.
+//   - There is no half-written remote. One push instead of two, so seed's window
+//     — consensus lands, agent push fails, cleanup deletes the only local copy —
+//     cannot arise.
+//   - A failed create is retryable. The consensus branch is untouched, so
+//     nothing about the remote has been made unusable.
+//
+// Like initClone, this does NOT persist the origin anywhere — Create does that,
+// into control.db, once this returns the resolved upstream. Unlike initClone,
+// this DOES push before returning: store.InitFromRemote only ever writes
+// locally, so without it the ontology would sit on a local branch the remote has
+// never heard of, and the "backed up from the first write" promise would be
+// false.
+func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
@@ -639,14 +735,16 @@ func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, 
 	// silent-default this mode exists to prevent. Mirrors initClone's own
 	// authoritative re-assertion of rejectOntologySpecForClone, just above.
 	if spec.OntologyPreset == "" && spec.OntologyYAML == "" {
-		return "", fmt.Errorf("%w: seed mode requires ontology_preset or ontology_yaml", ErrInvalidName)
+		return "", fmt.Errorf("%w: initialize mode requires ontology_preset or ontology_yaml", ErrInvalidName)
 	}
 	emit(Event{Step: "probe", Message: "checking " + spec.Origin.URL, Pct: 10})
-	probe, err := m.ProbeOrigin(ctx, *spec.Origin)
+	// Refs only, for the same reason as CreatePreflight: this reads Empty and
+	// Branches, never WriteAccess.
+	probe, err := m.ProbeOriginRefs(ctx, *spec.Origin)
 	if err != nil {
 		return "", err
 	}
-	if serr := seedProbeErr(probe); serr != nil {
+	if serr := initializeProbeErr(probe); serr != nil {
 		return "", serr
 	}
 
@@ -678,129 +776,135 @@ func (m *Manager) initSeed(ctx context.Context, spec CreateSpec, dbPath string, 
 	// credential is already resolved above, and its durable copy belongs to
 	// control.db's Origins, which holds the only Crypt.
 
-	emit(Event{Step: "init-git", Message: "initialising " + spec.Origin.URL, Pct: 50})
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch,
-		map[string]string{OntologyPath: string(y)})
+	// nil initFiles, exactly as initClone passes: InitFromRemote writes them
+	// only on the EMPTY-remote path, which is the path this mode refuses. The
+	// ontology is written below instead — as an ordinary commit on the agent
+	// branch, through the same fact machinery every later write uses.
+	emit(Event{Step: "clone", Message: "reading " + spec.Origin.URL, Pct: 40})
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil)
 	if err != nil {
-		return "", fmt.Errorf("seed: %w", err)
+		return "", fmt.Errorf("initialize: %w", err)
 	}
-	// THE AUTHORITATIVE emptiness check, and the one that gates the force-push
-	// below. seedProbeErr above is a fail-fast affordance run against a probe
-	// taken strictly EARLIER in time; this flag is InitFromRemote's report of
-	// what it found at the moment it actually fetched. If the remote gained refs
-	// in that window, InitFromRemote silently CLONED them (discarding the seed
-	// files) and pushing now would force `+refs/heads/…` over history on a
-	// remote we do not own — unrecoverable from here. Refuse instead.
-	//
-	// A sub-millisecond window between this check and the push remains, and is
-	// accepted: the user told us the remote was ready to be seeded and we
-	// verified it was ref-less at fetch time.
-	if !remoteWasEmpty {
-		return "", fmt.Errorf(
-			"%w (it gained refs between the check and the fetch, so seeding it would overwrite them)",
-			ErrRemoteNotEmpty)
+	// THE AUTHORITATIVE branch check. initializeProbeErr above is a fail-fast
+	// affordance run against a probe taken strictly EARLIER in time; this flag
+	// is InitFromRemote's report of what it found at the moment it actually
+	// fetched. A remote that lost its refs in that window took the empty path,
+	// which mints a fresh root commit and therefore a repo identity no other
+	// machine shares — the split-brain seed mode used to accept. Refuse it.
+	if remoteWasEmpty {
+		return "", fmt.Errorf("initialize: %w (it had no refs at fetch time)", ErrRemoteNoBranches)
 	}
 
-	// initFromEmptyRemote (store/repo.go) writes the root commit, the
-	// consensus branch and the agent branch LOCALLY ONLY — by design it never
-	// pushes. Left there, the remote stays ref-less: the very next step in
-	// Create is ActivateSync, whose synchronous reconcile fetches BEFORE it
-	// ever pushes, that fetch fails with "remote repository is empty"
-	// against a still-ref-less remote, and — because builder.go's startSync
-	// closure returns on that error before reaching the `go
-	// runReconcileLoop(...)` call — no background sync loop starts for the
-	// rest of the process's life. Create only logs the failure as a warning,
-	// so nothing surfaces this to the caller either. That is not a corner
-	// case here the way it is for clone-of-an-empty-remote: it is what
-	// happens on EVERY seed, defeating the mode's entire premise (the remote
-	// is backed up from the first commit). So push both branches now, before
-	// returning, using the same generic Push the periodic reconcile loop
-	// uses for the agent branch — this is the one place a push of the
-	// consensus branch is a deliberate, one-time bootstrap rather than a
-	// change to steady-state sync (which never pushes main).
-	emit(Event{Step: "push", Message: "pushing seed to " + spec.Origin.URL, Pct: 65})
-	// Both PushResults are inspected rather than discarded: Push reports
-	// Pushed:false for "nothing to push", which against a remote this mode
-	// just told the user it would initialise is a silent no-op, not a success.
-	// Left unchecked it is indistinguishable from a real push, and the caller
-	// would go on to activate sync against a still-ref-less remote.
-	consensusPush, perr := svc.Remote().Push(ctx, upstream, auth)
-	if perr != nil {
-		return "", fmt.Errorf("seed: push %s: %w", upstream, perr)
+	// Refuse a branch that is ALREADY a knowledge base rather than writing a
+	// second ontology over the one that governs it — the mirror of initClone's
+	// check, and load-bearing for the same reason: the ontology is immutable
+	// after creation, so a wrong one here is not correctable later.
+	//
+	// It is checked on the AGENT branch, not the consensus branch, because that
+	// is where the write would land. The two differ in one reachable case: this
+	// machine initialized the remote before, never merged, and is now creating
+	// again — InitFromRemote adopts its existing origin/agent/<host>, which
+	// already carries an ontology. The wizard looked at the consensus branch and
+	// saw none, so it offered this mode; refusing here with "use clone" is
+	// correct, and clone genuinely succeeds, because it runs this same check
+	// against the same adopted branch.
+	hasOnt, oerr := branchHasOntology(ctx, svc, m.deps.AgentBranch)
+	if oerr != nil {
+		return "", fmt.Errorf("initialize: check for an ontology: %w", oerr)
 	}
-	if !consensusPush.Pushed {
-		return "", fmt.Errorf("seed: push %s: remote reported nothing to push, so %s was left without the seed commit",
-			upstream, spec.Origin.URL)
+	if hasOnt {
+		return "", fmt.Errorf("initialize %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteAlreadyInitialized)
 	}
+
+	// THE ACT that makes this a knowledge base. One ordinary commit on the agent
+	// branch, through the same fact machinery every later write uses — not a
+	// special-cased root commit, which is what let seed's identity diverge.
+	emit(Event{Step: "ontology-write", Message: "writing " + OntologyPath, Pct: 55})
+	if _, werr := svc.Facts().WriteFact(ctx, m.deps.AgentBranch, OntologyPath, string(y),
+		"init: create knowledge base", "created"); werr != nil {
+		return "", fmt.Errorf("initialize: write %s: %w", OntologyPath, werr)
+	}
+
+	// THE AGENT BRANCH ONLY. Steady-state sync pushes exactly this ref and no
+	// other (repos/sync.go), and this bootstrap deliberately does not become the
+	// exception — pushing the consensus branch here would reintroduce the
+	// protected-branch failure this mode was built to remove.
+	emit(Event{Step: "push", Message: "pushing " + m.deps.AgentBranch + " to " + spec.Origin.URL, Pct: 70})
+	// The PushResult is inspected rather than discarded: Push reports
+	// Pushed:false for "nothing to push", which right after a commit this
+	// function just made is a silent no-op, not a success. Left unchecked it is
+	// indistinguishable from a real push, and Create would go on to report a
+	// knowledge base the remote has never seen.
 	agentPush, perr := svc.Remote().Push(ctx, m.deps.AgentBranch, auth)
 	if perr != nil {
-		// The consensus push already landed, so this failure leaves the remote
-		// HALF seeded — and Create's cleanup removes the local repo, taking the
-		// only copy of the agent branch with it. From the user's side the
-		// remote now looks non-empty: every later seed of this URL fails with
-		// ErrRemoteNotEmpty, and a clone of it yields a knowledge base with the
-		// ontology but no agent branch. None of that is guessable from a bare
-		// "push agent/... failed", so name the state and both ways out here —
-		// this is the only place that still knows what happened.
-		return "", fmt.Errorf(
-			"seed: push %s: %w (the remote %s now has %s but not the agent branch: "+
-				"delete and recreate the empty remote to seed it again, or use mode \"clone\" to adopt it as it stands)",
-			m.deps.AgentBranch, perr, spec.Origin.URL, upstream)
+		// The remote is UNCHANGED — nothing was pushed — so this is the one
+		// failure in this mode that needs no state explanation, only its cause.
+		// Naming the branch matters though: a host that refuses this push is
+		// refusing agent/<host>, not the consensus branch the user was probably
+		// worrying about.
+		return "", fmt.Errorf("initialize: push %s: %w", m.deps.AgentBranch, perr)
 	}
 	if !agentPush.Pushed {
 		return "", fmt.Errorf(
-			"seed: push %s: remote reported nothing to push (the remote %s now has %s but not the agent branch: "+
-				"delete and recreate the empty remote to seed it again, or use mode \"clone\" to adopt it as it stands)",
-			m.deps.AgentBranch, spec.Origin.URL, upstream)
+			"initialize: push %s: remote reported nothing to push, so %s was left without the ontology commit",
+			m.deps.AgentBranch, spec.Origin.URL)
 	}
 
-	// Past the pushes, so a cancellation here costs the same as any later
-	// failure: the local repo is rolled back and the seeded remote is not. The
-	// Create-side wrapper never sees this one — the mode switch returns it
-	// directly — so it carries its own explanation.
+	// Past the push, so a cancellation here leaves the agent branch on the
+	// remote while Create rolls the local repo back. The Create-side wrapper
+	// never sees this one — the mode switch returns it directly — so it carries
+	// its own explanation.
 	if cerr := ctx.Err(); cerr != nil {
-		return "", seedAlreadyLanded(cerr, spec.Origin.URL, upstream)
+		return "", agentBranchAlreadyPushed(cerr, spec.Origin.URL, m.deps.AgentBranch, upstream)
 	}
 	return upstream, nil
 }
 
-// seedAlreadyLanded annotates a failure that happens AFTER a seed's push has
-// landed. Every such path — initSeed's trailing cancellation check and each
-// rollback in Create past the mode switch — goes through here, so the user
-// gets one description of the state they are in and the two ways out of it,
-// rather than one path that explains itself and three that do not.
+// agentBranchAlreadyPushed annotates a failure that happens AFTER initialize's
+// push has landed. Every such path — initInitialize's trailing cancellation
+// check and each rollback in Create past the mode switch — goes through here,
+// so the user gets one description of the state they are in rather than one
+// path that explains itself and three that do not.
+//
+// The state it describes is deliberately mild, and says so: the consensus
+// branch was never touched, so the remote is not stranded and re-running the
+// same create simply adopts the agent branch it finds. That is the whole
+// improvement over the seed-era version of this message, which had to explain
+// an unrecoverable half-seeded remote and offer two ways out of it.
 //
 // It wraps with %w: ErrRepoAlreadyRegistered and context.Canceled both reach
 // this, and both are matched with errors.Is by callers (createErrStatus in
 // internal/web, among others).
-func seedAlreadyLanded(err error, url, upstream string) error {
-	return fmt.Errorf("%w (the seed already reached %s, so that remote now holds %s and the agent branch and is no "+
-		"longer empty: delete and recreate the empty remote to seed it again, or use mode \"clone\" to adopt it "+
-		"as it stands)", err, url, upstream)
+func agentBranchAlreadyPushed(err error, url, agentBranch, upstream string) error {
+	return fmt.Errorf("%w (%s was already pushed to %s, so the ontology is safe there; %s was not touched, "+
+		"and creating this repository again will adopt that branch rather than start over)",
+		err, agentBranch, url, upstream)
 }
 
-// seedProbeErr maps a ProbeOrigin result to the error initSeed should return
-// before doing any work, or nil when the remote is a valid seed target.
+// initializeProbeErr maps a ProbeOrigin result to the error initInitialize
+// should return before doing any work, or nil when the remote is a valid
+// initialize target.
 //
 // AuthRequired is checked BEFORE Empty deliberately: ProbeOrigin reports an
 // auth-required remote as {Reachable:true, AuthRequired:true, Empty:false}
 // (probe.go) — it has no way to know whether a remote it cannot authenticate
-// against is empty or not. Checking Empty first would report a private
-// remote with a missing or wrong token as ErrRemoteNotEmpty, the wrong cause,
-// and steer the caller toward mode "clone", which fails against the exact
-// same missing credential.
-func seedProbeErr(probe ProbeResult) error {
+// against has branches or not. Checking Empty first would be reading a flag the
+// probe never established.
+//
+// The Empty arm is the INVERSE of the seed-era check it replaces: a remote with
+// no refs has no branch to cut the agent branch from, and knomit never creates
+// one on a remote other than its own.
+func initializeProbeErr(probe ProbeResult) error {
 	if !probe.Reachable {
-		return fmt.Errorf("seed: remote not reachable: %s", probe.Detail)
+		return fmt.Errorf("initialize: remote not reachable: %s", probe.Detail)
 	}
 	if probe.AuthRequired {
-		return fmt.Errorf("seed: remote requires authentication: %s", probe.Detail)
+		return fmt.Errorf("initialize: remote requires authentication: %s", probe.Detail)
 	}
 	// Re-asserted HERE, not trusted from the client: the wizard's probe and
-	// this create are separated in time, and a remote can gain refs in
-	// between.
-	if !probe.Empty {
-		return ErrRemoteNotEmpty
+	// this create are separated in time, and a remote can lose refs in between.
+	if probe.Empty {
+		return ErrRemoteNoBranches
 	}
 	return nil
 }

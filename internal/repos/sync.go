@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -63,6 +64,27 @@ func remoteStatusIsError(status *string) bool { return status != nil && *status 
 
 // syncChanged reports whether a sync tick actually moved either branch. The
 // zero Mode ("") means the step did not run and is treated like ModeNoop.
+// tickAbandoned reports whether this tick failed because the LOOP was
+// cancelled, rather than because the remote said something.
+//
+// Such a tick established nothing, so it is not broadcast to clients and does
+// not count toward failure escalation. Creating a repo against a remote ends
+// with ActivateSync, which cancels this loop to restart it (builder.go); the
+// loop starts with an immediate tick, so a fetch is routinely in flight when
+// that lands. Reporting it put "sync failed — Sync: fetch: ...: context
+// canceled" on the repo screen of a create that had just fully succeeded.
+//
+// CANCELLATION ONLY, and the error must be the cancellation itself. A tick that
+// ran out of time, or a real refusal that happens to land as the loop is being
+// torn down, is a genuine failure and is still reported — store.abandonedByCaller
+// draws the same line for the persisted status, and the two must agree or a
+// failure would be broadcast without being recorded, or the reverse.
+func tickAbandoned(ctx context.Context, err error) bool {
+	return err != nil &&
+		errors.Is(ctx.Err(), context.Canceled) &&
+		errors.Is(err, context.Canceled)
+}
+
 func syncChanged(result store.SyncResult) bool {
 	moved := func(m store.Mode) bool { return m != store.ModeNoop && m != "" }
 	return moved(result.Main.Mode) || moved(result.Agent.Mode)
@@ -173,6 +195,12 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 
 		// Sync first.
 		syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
+		if tickAbandoned(ctx, err) {
+			// Our own cancellation, not the remote's verdict. Say nothing, count
+			// nothing, and do not go on to push — that would fail identically.
+			lg.Debug().Err(err).Msg("reconcile: tick abandoned; loop is stopping")
+			return
+		}
 		if err != nil {
 			syncFails++
 			hub.broadcastSyncError("origin", err.Error())
@@ -200,6 +228,10 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		// Then push (skipped in read-only / pull-only mode).
 		if pushAllowed(readOnly) {
 			pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
+			if tickAbandoned(ctx, err) {
+				lg.Debug().Err(err).Msg("reconcile: push abandoned; loop is stopping")
+				return
+			}
 			if err != nil {
 				pushFails++
 				hub.broadcastPushError("origin", err.Error())

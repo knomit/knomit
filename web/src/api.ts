@@ -661,10 +661,69 @@ export function parseNDJSONLine(line: string): CreateEvent | null {
 
 export interface CreateRepoBody {
   name: string;
-  mode: 'preset' | 'custom' | 'clone' | 'seed';
+  /**
+   * `preset`/`custom` are local-only. The two REMOTE modes are the two halves
+   * of one question about the chosen branch — does it already carry
+   * `.knomit/ontology.yaml`? — which api.probeInitialized answers:
+   *
+   *   `clone`      joins a branch that HAS one. Its ontology governs, and the
+   *                backend REFUSES an ontology_preset/ontology_yaml here
+   *                rather than silently dropping it.
+   *   `initialize` turns a branch that has NONE into a knowledge base: it
+   *                carries the chosen ontology, which knomit commits to its
+   *                own agent branch and pushes. The consensus branch is never
+   *                written.
+   *
+   * There is no mode for an empty remote. knomit never creates a branch on a
+   * remote other than its own agent branch, so a remote with no branches is a
+   * blocked state the wizard reports rather than a case it handles.
+   */
+  mode: 'preset' | 'custom' | 'clone' | 'initialize';
   ontology_preset?: string;
   ontology_yaml?: string;
   origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string };
+}
+
+/**
+ * InitializedResult is the response of POST /api/v1/repos:probe-initialized —
+ * "does THIS BRANCH of this remote already hold a knomit knowledge base?"
+ *
+ * Separate from ProbeResult because the answer is per-branch (a repo can carry
+ * the ontology on main and not on develop) and the branch is not known when the
+ * origin probe runs.
+ */
+export interface InitializedResult {
+  /**
+   * THREE STATES, and the third must never be collapsed into either other.
+   *
+   *   'yes'      the branch is a knowledge base → mode 'clone'
+   *   'no'       it is not → mode 'initialize'
+   *   undefined  THE CHECK DID NOT COMPLETE, and nothing was established
+   *
+   * `undefined` is the absent field, not the empty string — the backend omits
+   * it precisely so a client that forgets this case reads undefined rather
+   * than something that looks like an answer.
+   *
+   * Guessing either way is unrecoverable, because a repo's ontology is fixed at
+   * create time and never editable afterwards: guess 'yes' and the ontology the
+   * user chose is discarded; guess 'no' and one is written over a knowledge base
+   * that already had its own. Block and offer a retry instead.
+   */
+  initialized?: 'yes' | 'no';
+  /**
+   * The branch actually inspected, which is NOT always the one asked about.
+   *
+   * A create reads whatever it adopts: this machine's agent branch when the
+   * remote already carries one, otherwise the branch named. The probe mirrors
+   * that rule, so this names the branch the answer is really about — the branch
+   * step shows it, because "main already holds a knowledge base" is false when
+   * the ontology is on agent/<host> and main has none.
+   */
+  branch?: string;
+  /** Which knowledge base it is — the id of the ontology found. Only when `initialized` is 'yes'. */
+  ontology_id?: string;
+  /** Why the answer is absent. Only present for the unestablished case. */
+  detail?: string;
 }
 
 // ProbeResult is the response of POST /api/v1/repos:probe-origin — the wizard's
@@ -678,6 +737,16 @@ export interface ProbeResult {
   upstream_branch: string;
   branches: string[];
   detail?: string;
+  /**
+   * May knomit PUSH here? Reading and writing are authorized separately —
+   * a ref listing speaks git-upload-pack, a push speaks git-receive-pack — so
+   * a remote can answer a read probe and still refuse the first commit.
+   *
+   * '' / absent means NOT ESTABLISHED, which is a third state and must never
+   * be rendered as either answer. 'denied' is advisory, never a gate.
+   */
+  write_access?: '' | 'ok' | 'denied';
+  write_detail?: string;
 }
 
 // OntologyDiagnostic is one parse/validation error from POST
@@ -950,6 +1019,19 @@ export const api = {
   probeOrigin: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string },
     signal?: AbortSignal): Promise<ProbeResult> =>
     fetchJSON<ProbeResult>(apiUrl('/api/v1/repos:probe-origin'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+
+  // The per-BRANCH half of the classification, and the one that decides the
+  // create mode. Heavier than probeOrigin — a shallow single-branch clone
+  // rather than a ref listing — so it takes a signal for the same reason:
+  // the step stays interactive while it runs.
+  probeInitialized: (body: { url: string; branch?: string; auth_method?: string; auth_token?: string },
+    signal?: AbortSignal): Promise<InitializedResult> =>
+    fetchJSON<InitializedResult>(apiUrl('/api/v1/repos:probe-initialized'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
