@@ -21,7 +21,7 @@ LIBDIR  := $(DIST)/lib
 # internal/version package via -ldflags, so every binary (knomit,
 # knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
 # A bare `go build` (no make) falls back to the package default "dev".
-BASE_VERSION := 0.5.2
+BASE_VERSION := 0.5.3
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # BUILD_VERSION is the macOS CFBundleVersion, which macOS/LaunchServices use to
 # order builds for upgrade detection — so it MUST increase monotonically across
