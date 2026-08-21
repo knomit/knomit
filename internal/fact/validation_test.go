@@ -227,6 +227,12 @@ var factToJSOmitted = map[string]string{
 		"SerializeFact refuses to write a malformed ref anyway), and stale on the knomit_update " +
 		"path (ParseFact computes it from the on-disk refs, which the handler replaces wholesale " +
 		"before ValidateFact runs) — so a rule would judge refs that are not being written",
+	"MotifWarnings": "derived on read, never stored, and unusable from a rule for the same reason " +
+		"RefWarnings is: structurally always empty on the knomit_learn path (the fact is built in " +
+		"memory and SerializeFact refuses to write a motif that would earn a warning), and stale on " +
+		"the knomit_update path (ParseFact computes it from the on-disk motifs, which the handler may " +
+		"replace wholesale before ValidateFact runs) — so a rule would judge motifs that are not " +
+		"being written. The STRIPPED motif list is exposed instead; see resolvedMotifs.",
 }
 
 // TestFactToJS_ExposesEveryFactField is the regression guard for the omission

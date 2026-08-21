@@ -7,15 +7,22 @@ import (
 )
 
 // TokenDF returns the number of facts LIVE on `branch` at HEAD that carry the
-// given domain or entity tag — the document-frequency input to discovery's
-// `spec` (rarity) signal. It is a plain indexed COUNT over the junction tables
-// joined to branch_facts for liveness; it never reads or tokenizes fact body
-// text. kind must be "domain" or "entity".
+// given domain, entity or motif tag — the document-frequency input to
+// discovery's `spec` (rarity) signal. It is a plain indexed COUNT over the
+// junction tables joined to branch_facts for liveness; it never reads or
+// tokenizes fact body text. kind must be "domain", "entity" or "motif".
 //
 //   - "domain": token is the CANONICAL tag (canonicalizeDomain form). fact_domains
 //     stores the canonical form, so this is an exact indexed match.
 //   - "entity": token is matched case-insensitively (fact_entities is COLLATE
 //     NOCASE); pass the authored entity form. Entities are not de-hyphenized.
+//   - "motif": token is the motif string AS WRITTEN. There is no canonical
+//     form to pass and none is computed here (MN3): a motif is stored exactly
+//     as its author typed it, and the alias resolution that maps spellings to
+//     a canonical id is derived state that resolves the token BEFORE calling
+//     this. Matching is case-insensitive (fact_motifs is COLLATE NOCASE), but
+//     motifs are validated lowercase, so that only ever forgives a
+//     hand-edited file.
 //
 // Liveness + branch scoping come from branch_facts (UNIQUE(branch_id, path) =>
 // one row per live path per branch), exactly as BlastRadius does.
@@ -26,8 +33,10 @@ func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (
 		table, col = "fact_domains", "domain"
 	case "entity":
 		table, col = "fact_entities", "entity"
+	case "motif":
+		table, col = "fact_motifs", "motif"
 	default:
-		return 0, fmt.Errorf("TokenDF: invalid kind %q: must be \"domain\" or \"entity\"", kind)
+		return 0, fmt.Errorf("TokenDF: invalid kind %q: must be \"domain\", \"entity\" or \"motif\"", kind)
 	}
 	branchID, err := gs.rh.branchID(ctx, branch)
 	if err != nil {

@@ -792,7 +792,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight, origin)
+		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin)
 		SELECT
 			pe.path,
 			pe.blob_hash,
@@ -801,6 +801,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			json_extract(pe.parsed, '$.type'),
 			json_extract(pe.parsed, '$.domain'),
 			json_extract(pe.parsed, '$.entities'),
+			COALESCE(json_extract(pe.parsed, '$.motifs'), '[]'),
 			json_extract(pe.parsed, '$.confidence'),
 			json_extract(pe.parsed, '$.sources'),
 			json_extract(pe.parsed, '$.refs'),
@@ -814,6 +815,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			type            = excluded.type,
 			domain          = excluded.domain,
 			entities        = excluded.entities,
+			motifs          = excluded.motifs,
 			confidence      = excluded.confidence,
 			sources         = excluded.sources,
 			refs            = excluded.refs,
@@ -878,6 +880,28 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 		WHERE j.value IS NOT NULL AND j.value != ''
 	`); err != nil {
 		return 0, fmt.Errorf("rebuildFacts: repopulate fact_entities: %w", err)
+	}
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		DELETE FROM fact_motifs WHERE fact_id IN (
+			SELECT f.id FROM facts f
+			JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		)
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: clear fact_motifs: %w", err)
+	}
+	// No knomit_canon_* wrapper, unlike fact_domains above: motifs are stored
+	// AS WRITTEN (MN3). DISTINCT + OR IGNORE anyway, because the primary key
+	// is (fact_id, motif) and the column is COLLATE NOCASE — two spellings
+	// that differ only in case collide there even though neither is rewritten.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		INSERT OR IGNORE INTO fact_motifs(fact_id, motif)
+		SELECT DISTINCT f.id, j.value
+		FROM facts f
+		JOIN _rebuild_entries e ON e.path = f.path AND e.blob_hash = f.blob_hash
+		JOIN json_each(f.motifs) j
+		WHERE j.value IS NOT NULL AND j.value != ''
+	`); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: repopulate fact_motifs: %w", err)
 	}
 
 	// Populate branch_facts: link each fact to this branch with its commit_hash.

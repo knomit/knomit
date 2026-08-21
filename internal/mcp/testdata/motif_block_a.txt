@@ -1,0 +1,8 @@
+motifs (optional, 0–3): the general regularities this fact is an instance of.
+Each motif is a 2–4 word kebab-case noun phrase naming a mechanism, failure
+shape, or pattern that a fact about a completely different subject could also
+carry — that is the test. Examples: identifier-collision,
+derived-state-liability, harness-over-model, capital-influx. NOT the fact's
+subject (that is entities), NOT its area (that is domain), NOT its claim
+compressed (that is the title). Omit entirely when the fact is a bare
+datapoint with no general shape — an empty list is a correct answer.

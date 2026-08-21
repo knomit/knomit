@@ -31,6 +31,7 @@ type parsedFact struct {
 	Type           string   `json:"type"`
 	Domain         []string `json:"domain"`
 	Entities       []string `json:"entities"`
+	Motifs         []string `json:"motifs,omitempty"`
 	Confidence     float64  `json:"confidence"`
 	Sources        int      `json:"sources"`
 	Refs           []string `json:"refs"`
@@ -59,6 +60,7 @@ func sqlParseFact(data []byte) interface{} {
 		Type:           string(f.Type),
 		Domain:         f.Domain,
 		Entities:       f.Entities,
+		Motifs:         f.Motifs,
 		Confidence:     f.Confidence,
 		Sources:        f.Sources,
 		Refs:           f.Refs,

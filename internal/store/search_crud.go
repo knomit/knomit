@@ -133,6 +133,17 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	if err != nil {
 		return fmt.Errorf("marshal refs: %w", err)
 	}
+	// nil marshals to "null", which json_each cannot walk — the rebuild would
+	// then read no motifs for a motif-less fact instead of an empty list, and
+	// the column's DEFAULT '[]' only covers rows this statement never names.
+	motifsList := rec.Motifs
+	if motifsList == nil {
+		motifsList = []string{}
+	}
+	motifsJSON, err := json.Marshal(motifsList)
+	if err != nil {
+		return fmt.Errorf("marshal motifs: %w", err)
+	}
 
 	factType := rec.Type
 	if factType == "" {
@@ -189,10 +200,10 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
 	_, err = db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, confidence, sources, refs, evidence_weight, origin)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.BlobHash, rec.Title, factKind, factType,
-		string(domainJSON), string(entitiesJSON),
+		string(domainJSON), string(entitiesJSON), string(motifsJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.EvidenceWeight, factOrigin,
 	)
@@ -307,6 +318,21 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 			); err != nil {
 				return fmt.Errorf("upsert fact_domain_tokens: %w", err)
 			}
+		}
+	}
+	// Stored AS WRITTEN (MN3) — no canonicalization, unlike fact_domains
+	// above. The motif strings on disk ARE the fact's claim; every
+	// normalization the design calls for (alias ids, definitions, df) is
+	// derived state built FROM these rows and never written back into them.
+	for _, motif := range rec.Motifs {
+		if motif == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO fact_motifs(fact_id, motif) VALUES (?, ?)`,
+			factID, motif,
+		); err != nil {
+			return fmt.Errorf("upsert fact_motifs: %w", err)
 		}
 	}
 

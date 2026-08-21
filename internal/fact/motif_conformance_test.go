@@ -1,0 +1,355 @@
+package fact
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+// repoRoot walks up from the test's working directory to the module root.
+// It FAILS rather than skips when it cannot find one: every check in this file
+// is a constraint the roadmap enforces by inspection, and a conformance test
+// that cannot locate its subject must say so, not report success.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		require.NotEqualf(t, parent, dir,
+			"no go.mod above %s — the conformance scans below cannot run and are NOT being enforced", dir)
+		dir = parent
+	}
+}
+
+// goSources returns every non-test .go file under internal/, keyed by its
+// repo-relative path.
+func goSources(t *testing.T) map[string]string {
+	t.Helper()
+	root := repoRoot(t)
+	out := map[string]string{}
+	require.NoError(t, filepath.Walk(filepath.Join(root, "internal"),
+		func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return err
+			}
+			if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return nil
+			}
+			b, rerr := os.ReadFile(p)
+			if rerr != nil {
+				return rerr
+			}
+			rel, _ := filepath.Rel(root, p)
+			out[filepath.ToSlash(rel)] = string(b)
+			return nil
+		}))
+	// A scan that examined nothing is not a check.
+	require.Greater(t, len(out), 100, "the source scan must actually be reading the tree")
+	return out
+}
+
+// motifGateNames are the helpers that DECIDE what a valid motif is. Any use of
+// one outside internal/fact is a second place the rules are applied, which is
+// exactly what MN4 forbids.
+//
+// fact.MergeMotifs and fact.MaxMotifs are deliberately NOT here. They are
+// writer plumbing, not gate logic: MergeMotifs unions two already-validated
+// lists and MaxMotifs is the cap it trims to, and every fact-merging path needs
+// them by construction. Policing them as if they were validation is what pushed
+// the review-session merge into dropping the loser's motifs to stay "clean".
+var motifGateNames = regexp.MustCompile(`\b(ValidateMotifs|StripSubjectMotifs|DropInvalidMotifs)\b`)
+
+// motifGateCallSites are the write paths permitted to invoke the gate helpers
+// directly, with the reason each needs to.
+//
+// Calling the shared gate is not what MN4 forbids — RE-IMPLEMENTING it is. A
+// path that asks fact.StripSubjectMotifs what to drop is using the single
+// definition, not inventing a second one. The list exists so that a new direct
+// caller has to be justified, because needing one usually means the path is not
+// reaching SerializeFact, which is the actual defect.
+var motifGateCallSites = map[string]string{
+	"internal/web/handlers_fact_write.go": "the REST PUT path commits the client's bytes verbatim, so it must " +
+		"apply the gate itself and reserialize when the gate changes anything; it is the one write " +
+		"path that does not reach SerializeFact on its own",
+}
+
+// motifMergeSites are the fact-merging paths permitted to call fact.MergeMotifs.
+// Both are the SAME operation in two locations; the list exists so a third one
+// cannot appear unnoticed.
+var motifMergeSites = map[string]string{
+	"internal/mcp/learn.go":        "learn-time dedup merge",
+	"internal/synthesize/dedup.go": "review-session consolidation merge",
+}
+
+// TestMN4_MotifValidationHasOneCallSite is the roadmap's MN4 grep, as a test.
+//
+// It fails on any non-test file outside internal/fact that touches the motif
+// rule helpers. That is the property MN4 actually protects: the rules can be
+// DEFINED once and still be re-applied by a handler that "just checks the
+// count first", which is exactly how per-path validation grows back.
+func TestMN4_MotifValidationHasOneCallSite(t *testing.T) {
+	offenders := map[string][]string{}
+	mergeCallers := map[string]bool{}
+	for rel, src := range goSources(t) {
+		if strings.HasPrefix(rel, "internal/fact/") {
+			continue // the definition site
+		}
+		if hits := motifGateNames.FindAllString(src, -1); len(hits) > 0 {
+			offenders[rel] = hits
+		}
+		if callsFunc(t, rel, "MergeMotifs") {
+			mergeCallers[rel] = true
+		}
+	}
+
+	for rel, hits := range offenders {
+		require.Containsf(t, motifGateCallSites, rel,
+			"MN4: %s invokes the motif gate %v outside internal/fact. Route the fact "+
+				"through SerializeFact instead — or, if this path genuinely commits bytes "+
+				"that never reach it, declare it in motifGateCallSites with the reason.", rel, hits)
+	}
+	for rel, why := range motifGateCallSites {
+		require.Containsf(t, offenders, rel,
+			"%s is declared a direct gate call site (%s) but no longer calls one — "+
+				"remove the entry, or restore the gate it was granted for", rel, why)
+	}
+
+	// The merge helper is permitted, but only where a fact merge actually
+	// happens, and every declared site must still be one.
+	for rel := range mergeCallers {
+		require.Containsf(t, motifMergeSites, rel,
+			"%s calls fact.MergeMotifs but is not a declared fact-merge site — "+
+				"add it to motifMergeSites with a reason, or stop merging motifs there", rel)
+	}
+	for rel, why := range motifMergeSites {
+		require.Truef(t, mergeCallers[rel],
+			"%s is declared a motif-merge site (%s) but no longer calls fact.MergeMotifs — "+
+				"a merge that drops the loser's motifs silently loses authored data", rel, why)
+	}
+}
+
+// mechanicsPaths are the engine's mechanical decision paths, mapped to the
+// functions within each that may legitimately touch motifs.
+//
+// Empty slice = no function in that file may mention them at all.
+var mechanicsPaths = map[string][]string{
+	// dedupCluster is a WRITER: it merges two facts and commits the survivor,
+	// so it must carry the loser's motifs across or that authored data is
+	// deleted with the loser and no derived state can rebuild it. Every OTHER
+	// function here — the similarity scoring, the threshold comparison, the
+	// greedy pair selection — must stay blind to motifs, which is the actual
+	// MN6 constraint.
+	"internal/synthesize/dedup.go":           {"dedupCluster"},
+	"internal/synthesize/bridge.go":          nil,
+	"internal/synthesize/bridge_score.go":    nil,
+	"internal/synthesize/bridge_filtered.go": nil,
+	"internal/synthesize/bridge_reshape.go":  nil,
+	"internal/synthesize/restatement.go":     nil,
+	"internal/synthesize/cluster.go":         nil,
+	"internal/synthesize/louvain.go":         nil,
+	"internal/store/search_query.go":         nil,
+}
+
+// TestMN6_MotifsDoNotDriveMechanics — MN6 as clarified by the designer on
+// 2026-08-21: the restriction is about MECHANICS, not visibility.
+//
+// Motifs may be READ by anyone — UI, query/explain output, the ontology rule
+// sandbox, serialization — and they may be MERGED by anything that writes
+// facts. None of that is a "consumer" in this rule's sense. What motifs must
+// never do is influence the engine's mechanical decisions: dedup thresholds,
+// clustering, search ranking, or anything that spawns work outside the
+// §4/§5/§7 synthesis paths designed for them.
+//
+// The check is per-FUNCTION rather than per-file, and that distinction is the
+// whole point. A file-level ban read MN6 as "dedup.go must not say motif",
+// which is how the review-session merge came to drop the loser's motifs: the
+// conformance test was enforcing a rule stricter than the one written down,
+// and the code obediently lost data to satisfy it.
+func TestMN6_MotifsDoNotDriveMechanics(t *testing.T) {
+	sources := goSources(t)
+	for rel, allowed := range mechanicsPaths {
+		// ERROR, not skip: if one of these was renamed, this test has stopped
+		// checking the thing it names and must say so rather than shrink.
+		require.Containsf(t, sources, rel,
+			"MN6 target %s is missing — update this list, do not let the check lapse", rel)
+
+		offenders := funcsMentioningMotifs(t, rel)
+		for _, name := range allowed {
+			require.Containsf(t, offenders, name,
+				"%s is allow-listed to touch motifs in %s but no longer does — "+
+					"remove the entry rather than leaving a permission nothing uses", name, rel)
+		}
+		for _, fn := range offenders {
+			require.Containsf(t, allowed, fn,
+				"MN6: %s.%s is a mechanical decision path and must not read motifs. "+
+					"If it WRITES facts rather than deciding something, allow-list it in "+
+					"mechanicsPaths with a reason.", rel, fn)
+		}
+	}
+}
+
+// funcsMentioningMotifs returns the names of top-level functions in rel whose
+// body mentions a motif identifier. Parsed, not grepped, so a comment
+// explaining why a function has nothing to do with motifs does not trip it —
+// and so the check can be scoped to a function rather than a whole file.
+func funcsMentioningMotifs(t *testing.T, rel string) []string {
+	t.Helper()
+	var out []string
+	for _, decl := range parseGo(t, rel).Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		mentions := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch id := n.(type) {
+			case *ast.Ident:
+				if strings.Contains(strings.ToLower(id.Name), "motif") {
+					mentions = true
+				}
+			case *ast.SelectorExpr:
+				if strings.Contains(strings.ToLower(id.Sel.Name), "motif") {
+					mentions = true
+				}
+			}
+			return !mentions
+		})
+		if mentions {
+			out = append(out, fn.Name.Name)
+		}
+	}
+	return out
+}
+
+// TestMN2_NoLLMInMotifCode — vacuous this phase, and stated anyway so the
+// phase-3 enumeration loop inherits a check that already exists rather than
+// needing one written under deadline.
+func TestMN2_NoLLMInMotifCode(t *testing.T) {
+	sources := goSources(t)
+	for _, rel := range []string{"internal/fact/motif.go", "internal/textnorm/textnorm.go"} {
+		src, ok := sources[rel]
+		require.Truef(t, ok, "MN2 target %s is missing", rel)
+		lower := strings.ToLower(src)
+		for _, banned := range []string{"internal/llm", "anthropic", "openai", "completion"} {
+			require.NotContainsf(t, lower, banned,
+				"MN2: %s must reach no LLM — all motif gating is mechanical", rel)
+		}
+	}
+}
+
+// TestMN13_MotifConstantsAreClassified — every numeric constant in the motif
+// path is a documented budget, never a corpus-property constant.
+//
+// Two things it deliberately does NOT do, both fixed after review:
+//
+//   - It does not assert the ORDER of comment prose. The first version required
+//     "CONSTANT CLASSIFICATION" to appear before "const MaxMotifs" in the file
+//     text, which is a rule about paragraph layout, not about the code — moving
+//     a doc comment would have failed it while changing nothing that matters.
+//     It now checks that the constant's own doc comment says what class it is.
+//   - It does not regex the file for float literals. A float in a COMMENT
+//     ("measured 0.75 on the research corpus") is calibration evidence being
+//     cited, which MN13 explicitly permits; a float in the CODE is a threshold.
+//     Only the parser can tell those apart.
+func TestMN13_MotifConstantsAreClassified(t *testing.T) {
+	const rel = "internal/fact/motif.go"
+	file := parseGo(t, rel)
+
+	// Each named constant must carry a doc comment declaring its class.
+	wantClassified := map[string]string{
+		"MaxMotifs":     "CONSTANT CLASSIFICATION",
+		"minMotifWords": "contract, not",
+		"maxMotifWords": "contract, not",
+	}
+	seen := map[string]bool{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		// A const block's doc comment covers every spec inside it.
+		blockDoc := gen.Doc.Text()
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			doc := blockDoc + vs.Doc.Text()
+			for _, name := range vs.Names {
+				want, tracked := wantClassified[name.Name]
+				if !tracked {
+					continue
+				}
+				seen[name.Name] = true
+				require.Containsf(t, doc, want,
+					"MN13: const %s must state its class where it is defined "+
+						"(expected its doc comment to contain %q)", name.Name, want)
+			}
+		}
+	}
+	for name := range wantClassified {
+		require.Truef(t, seen[name], "const %s no longer exists in %s — "+
+			"update this test rather than letting the classification rule lapse", name, rel)
+	}
+
+	// No float literal anywhere in the CODE. Comments are exempt by
+	// construction: ast.Inspect walks expressions, not trivia.
+	var floats []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
+			floats = append(floats, lit.Value)
+		}
+		return true
+	})
+	require.Emptyf(t, floats,
+		"MN13: a float literal in the motif path is a corpus-property constant "+
+			"in disguise: %v", floats)
+}
+
+// callsFunc reports whether the file at repo-relative rel contains an actual
+// CALL to name (bare or selector-qualified), parsed rather than grepped, so
+// comments and strings mentioning the name do not count.
+func callsFunc(t *testing.T, rel, name string) bool {
+	t.Helper()
+	file := parseGo(t, rel)
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if fn.Name == name {
+				found = true
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == name {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// parseGo parses one repo-relative Go file, failing (never skipping) if it
+// cannot be read or parsed.
+func parseGo(t *testing.T, rel string) *ast.File {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(repoRoot(t), rel), nil, parser.ParseComments)
+	require.NoErrorf(t, err, "parsing %s", rel)
+	return file
+}

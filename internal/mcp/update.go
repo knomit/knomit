@@ -32,22 +32,36 @@ func updateTool() mcpgo.Tool {
 		mcpgo.WithObject("updates",
 			mcpgo.Required(),
 			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn."),
-			mcpgo.Properties(map[string]any{
-				"title": map[string]any{"type": "string", "description": "New title."},
-				"body":  map[string]any{"type": "string", "description": "New body text."},
-				// Shared with knomit_learn via factschema.go, minus the
-				// defaults: an update patches an existing fact, so declaring
-				// a schema "default" would read as "omit this and it resets".
-				"kind":       kindProperty(""),
-				"type":       typeProperty(""),
-				"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
-				"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
-				"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
-				"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces entity list."},
-				"refs":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces the ENTIRE refs list. Send every ref the fact should keep — any existing ref you leave out is dropped. To add or refresh a ref, read the current refs first and resend the full merged list. Omit the field to leave refs unchanged."},
-			}),
+			mcpgo.Properties(updateToolSchemaProperties()),
 		),
 	)
+}
+
+// updateToolSchemaProperties is the knomit_update `updates` object's
+// properties map. Extracted from the registration literal above for the same
+// reason learnToolSchemaProperties is: conformance tests read the bytes
+// actually served.
+func updateToolSchemaProperties() map[string]any {
+	return map[string]any{
+		"title": map[string]any{"type": "string", "description": "New title."},
+		"body":  map[string]any{"type": "string", "description": "New body text."},
+		// Shared with knomit_learn via factschema.go, minus the
+		// defaults: an update patches an existing fact, so declaring
+		// a schema "default" would read as "omit this and it resets".
+		"kind":       kindProperty(""),
+		"type":       typeProperty(""),
+		"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0."},
+		"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
+		"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
+		"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces entity list."},
+		// Block A verbatim, shared with knomit_learn, so the two tools cannot
+		// drift on what the field means. The wholesale-replacement rule is
+		// stated once in the `updates` description above, where it covers every
+		// list field at once — keeping it out of here is what lets this string
+		// stay byte-identical to knomit_learn's.
+		"motifs": motifsProperty(),
+		"refs":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces the ENTIRE refs list. Send every ref the fact should keep — any existing ref you leave out is dropped. To add or refresh a ref, read the current refs first and resend the full merged list. Omit the field to leave refs unchanged."},
+	}
 }
 
 // updateInput represents the updates object in the request.
@@ -61,6 +75,7 @@ type updateInput struct {
 	Refs       []string `json:"refs"`
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
+	Motifs     []string `json:"motifs"`
 }
 
 // UpdateHandler returns the handler function for knomit_update.
@@ -172,6 +187,13 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 		if updates.Entities != nil {
 			fact.Entities = updates.Entities
+		}
+		// Wholesale replacement, like Domain and Entities. nil means
+		// "unchanged"; an explicit [] clears. No validation here — a malformed
+		// motif is rejected and a subject motif silently dropped by
+		// SerializeFact, the single gate (MN4).
+		if updates.Motifs != nil {
+			fact.Motifs = updates.Motifs
 		}
 		// Refs replace wholesale, like Domain and Entities — the caller
 		// sends the complete new list. Dropping a ref only affects this

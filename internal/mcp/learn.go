@@ -67,39 +67,50 @@ func learnTool() mcpgo.Tool {
 			mcpgo.Required(),
 			mcpgo.Description("Array of fact objects to write."),
 			mcpgo.Items(map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					// topic and category are REQUIRED for knowledge, but cannot
-					// say so in the schema's `required` list: `path` replaces
-					// them for private state, and JSON Schema cannot express
-					// "one or the other" in a list. The descriptions carry the
-					// rule instead.
-					"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science). REQUIRED unless you supply path."},
-					"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency). REQUIRED unless you supply path."},
-					"path":     map[string]any{"type": "string", "description": "PRIVATE STATE ONLY. An explicit repo path under " + fact.PrivateRoot + "/<area>/, e.g. " + fact.PrivateRoot + "/<area>/<name>.md, where <area> is a directory name containing no dot, for machinery that is not knowledge — a periodic job's bookkeeping. Mutually exclusive with topic/category: supply one or the other, never both. A fact written here is INVISIBLE to knomit_query, the UI and export, by design; address it later by this exact path. Fails if the path already exists — use knomit_update to write a new revision."},
-					"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
-					"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
-					// kind/type/origin come from the shared fragments in
-					// factschema.go so this schema, knomit_update's, and the
-					// server instructions cannot disagree. knomit_learn mints
-					// facts, so it declares the defaults it will assume.
-					"kind":       kindProperty(fact.DefaultKind),
-					"type":       typeProperty(fact.DefaultEpistemicType),
-					"origin":     originProperty(),
-					"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
-					"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
-					"sources":    map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
-					"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
-					"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
-						"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
-						"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
-						"(3) Source code: `src://<source-repo-id>/<path>@<commit>:<blob>`, with FULL 40-hex commit and blob, optionally `#L<start>-L<end>`. This id is the SOURCE repo's, not a knomit repo id — get all three components by running git in the checkout you are citing: `git rev-list --max-parents=0 HEAD | cut -c1-12` (repo id), `git rev-parse HEAD` (commit), `git rev-parse <commit>:<path>` (blob). That last command failing IS the check — the server holds no source objects and cannot verify src refs for you, so never cite source that does not exist in the repo's history. The older `src://<name>/<path>@<commit>` form is still accepted and is never rewritten. " +
-						"(4) An external URL: `https://…` or `file:///…`."},
-				},
-				"required": []string{"title", "body"},
+				"type":       "object",
+				"properties": learnToolSchemaProperties(),
+				"required":   []string{"title", "body"},
 			}),
 		),
 	)
+}
+
+// learnToolSchemaProperties is the knomit_learn input schema's properties map.
+//
+// Extracted from the registration literal above so conformance tests can read
+// the bytes actually served — in particular that the motifs description is
+// blueprint §2 Block A verbatim. The registration is its only production
+// caller.
+func learnToolSchemaProperties() map[string]any {
+	return map[string]any{
+		// topic and category are REQUIRED for knowledge, but cannot
+		// say so in the schema's `required` list: `path` replaces
+		// them for private state, and JSON Schema cannot express
+		// "one or the other" in a list. The descriptions carry the
+		// rule instead.
+		"topic":    map[string]any{"type": "string", "description": "Top-level ontology topic (e.g. technology, people, science). REQUIRED unless you supply path."},
+		"category": map[string]any{"type": "string", "description": "Category path within the topic (e.g. languages/go/concurrency). REQUIRED unless you supply path."},
+		"path":     map[string]any{"type": "string", "description": "PRIVATE STATE ONLY. An explicit repo path under " + fact.PrivateRoot + "/<area>/, e.g. " + fact.PrivateRoot + "/<area>/<name>.md, where <area> is a directory name containing no dot, for machinery that is not knowledge — a periodic job's bookkeeping. Mutually exclusive with topic/category: supply one or the other, never both. A fact written here is INVISIBLE to knomit_query, the UI and export, by design; address it later by this exact path. Fails if the path already exists — use knomit_update to write a new revision."},
+		"title":    map[string]any{"type": "string", "description": "Fact title (short, descriptive)."},
+		"body":     map[string]any{"type": "string", "description": "Fact body in natural language. State compound conditions in full — name every component; never abbreviate a multi-part condition into a catchier summary. Include the consequence a consumer should act on. For rules and policies, name the foreseeable misreading (what the fact does NOT mean) if you can see one."},
+		// kind/type/origin come from the shared fragments in
+		// factschema.go so this schema, knomit_update's, and the
+		// server instructions cannot disagree. knomit_learn mints
+		// facts, so it declares the defaults it will assume.
+		"kind":       kindProperty(fact.DefaultKind),
+		"type":       typeProperty(fact.DefaultEpistemicType),
+		"origin":     originProperty(),
+		"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
+		"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
+		"sources":    map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
+		"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
+		"motifs":     motifsProperty(),
+		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
+			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
+			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
+			"(3) Source code: `src://<source-repo-id>/<path>@<commit>:<blob>`, with FULL 40-hex commit and blob, optionally `#L<start>-L<end>`. This id is the SOURCE repo's, not a knomit repo id — get all three components by running git in the checkout you are citing: `git rev-list --max-parents=0 HEAD | cut -c1-12` (repo id), `git rev-parse HEAD` (commit), `git rev-parse <commit>:<path>` (blob). That last command failing IS the check — the server holds no source objects and cannot verify src refs for you, so never cite source that does not exist in the repo's history. The older `src://<name>/<path>@<commit>` form is still accepted and is never rewritten. " +
+			"(4) An external URL: `https://…` or `file:///…`."},
+	}
 }
 
 // learnFactInput is the JSON shape of a single fact in the input array.
@@ -125,6 +136,7 @@ type learnFactInput struct {
 	Confidence *float64 `json:"confidence"`
 	Sources    *int     `json:"sources"`
 	Entities   []string `json:"entities"`
+	Motifs     []string `json:"motifs"`
 	Refs       []string `json:"refs"`
 	Origin     string   `json:"origin"`
 }
@@ -287,6 +299,10 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			f.Sources = *fi.Sources
 		}
 		f.Entities = entities
+		// Passed through untouched: SerializeFact is the single gate (MN4). A
+		// subject motif is dropped there, silently, and a malformed one fails
+		// the call there — neither decision belongs in a handler.
+		f.Motifs = fi.Motifs
 		f.Refs = refs
 		// Explicit origin: set it and let SerializeFact validate, the
 		// same way (kind, type) is handled above — one chokepoint, so
@@ -334,7 +350,9 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // the identity — title, body, kind, type, origin — while the metadata is
 // always pooled, because both facts are evidence of the same thing. Confidence
 // takes the max rather than the winner's, and sources add: two independent
-// observations of one fact are worth more than either alone. Pure.
+// observations of one fact are worth more than either alone. Motifs are the
+// one field that unions WINNER-first, because they are capped and so their
+// order decides what survives — see the call site. Pure.
 //
 // existingPath is the existing fact's RAW on-disk path and is deliberately
 // distinct from existing.Path(). The two differ in case: existing came from
@@ -347,23 +365,24 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // names nothing on disk, so every provenance walk through that edge dangles.
 func mergeFacts(newFact, existing fact.Fact, existingPath string) fact.Fact {
 	merged := fact.NewFact(existing.Path())
+	winner, loser := existing, newFact
 	if newFactWins(newFact, existing) {
-		merged.Title = newFact.Title
-		merged.Body = newFact.Body
-		merged.Kind = newFact.Kind
-		merged.Type = newFact.Type
-		// New fact's identity wins, so its origin wins too.
-		merged.Origin = newFact.Origin
-	} else {
-		merged.Title = existing.Title
-		merged.Body = existing.Body
-		merged.Kind = existing.Kind
-		merged.Type = existing.Type
-		// Existing fact's identity wins, so its origin wins too.
-		merged.Origin = existing.Origin
+		winner, loser = newFact, existing
 	}
+	merged.Title = winner.Title
+	merged.Body = winner.Body
+	merged.Kind = winner.Kind
+	merged.Type = winner.Type
+	// The winner's identity wins, so its origin wins too.
+	merged.Origin = winner.Origin
+
 	merged.Domain = fact.UnionStrings(newFact.Domain, existing.Domain)
 	merged.Entities = fact.UnionStrings(newFact.Entities, existing.Entities)
+	// Motifs union WINNER-first and trim at the cap — deliberately unlike the
+	// incoming-first domain and entity unions two lines above. The rule and the
+	// reasoning live in fact.MergeMotifs, shared with the review-session merge
+	// so the two cannot drift.
+	merged.Motifs = fact.MergeMotifs(winner.Motifs, loser.Motifs)
 	merged.Confidence = max(newFact.Confidence, existing.Confidence)
 	merged.Sources = newFact.Sources + existing.Sources
 	// Raw path, not existing.Path(): see the doc comment above.
