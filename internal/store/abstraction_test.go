@@ -336,3 +336,62 @@ func TestAbstraction_TitleVecWidthFixedOnAnUpgradedDatabase(t *testing.T) {
 		FactID: targets[0].FactID, Vec: vec,
 	}}), "the axis must have been rebuilt at the active model's width")
 }
+
+// TestAbstraction_HandlesIdListsBeyondTheSQLVariableLimit — SQLite binds at most
+// 32,766 parameters per statement, and these queries build one placeholder per
+// fact id. The session that CLOSES a backfill rescans the whole corpus, so it
+// passes every live fact id at once: on a corpus past ~16k facts the delete
+// binds 2N parameters and the statement fails outright.
+//
+// It fails soft — the refresh degrades to "no candidates" with a health line —
+// which is exactly what makes it worth a test: a large corpus would simply
+// never get this feature, and would say so only in a line nobody reads.
+func TestAbstraction_HandlesIdListsBeyondTheSQLVariableLimit(t *testing.T) {
+	ctx := context.Background()
+	svc := openAbstractionTestService(t)
+	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
+
+	// Well past the limit, and past 2x it for the two-list queries.
+	ids := make([]int64, 40_000)
+	for i := range ids {
+		ids[i] = int64(i + 1)
+	}
+
+	require.NoError(t, svc.Abstraction().ReplaceRestatementPairs(ctx, "agent/test", ids, nil, ids),
+		"a whole-corpus rescan must not exceed the parameter limit")
+
+	_, err := svc.Abstraction().BodyVectorsByFactID(ctx, ids)
+	require.NoError(t, err, "scoring a whole corpus's pairs must not exceed the parameter limit")
+
+	_, err = svc.Abstraction().PartnersOfFacts(ctx, "agent/test", ids)
+	require.NoError(t, err, "a mass retraction must not exceed the parameter limit")
+
+	_, err = svc.Abstraction().FactIDsByPath(ctx, "agent/test", manyPaths(40_000))
+	require.NoError(t, err)
+}
+
+// TestCosineSim_OrthogonalIsZeroNotNull — the SQL function and the Go helper are
+// one formula now, and unifying them must not quietly change what either
+// returns. Orthogonal vectors have a defined similarity of 0; only a degenerate
+// (zero-norm) vector has none.
+func TestCosineSim_OrthogonalIsZeroNotNull(t *testing.T) {
+	svc := openAbstractionTestService(t)
+
+	a := make([]float32, 8)
+	b := make([]float32, 8)
+	a[0], b[1] = 1, 1
+
+	var sim *float64
+	require.NoError(t, svc.rh.db.QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
+		float32SliceToBytes(a), float32SliceToBytes(b)).Scan(&sim))
+	require.NotNil(t, sim, "orthogonal vectors have a similarity, and it is 0")
+	require.InDelta(t, 0.0, *sim, 1e-9)
+
+	// A zero-norm vector genuinely has none.
+	require.NoError(t, svc.rh.db.QueryRow(`SELECT knomit_cosine_sim(?, ?)`,
+		float32SliceToBytes(a), float32SliceToBytes(make([]float32, 8))).Scan(&sim))
+	require.Nil(t, sim, "a degenerate vector has no similarity to anything")
+
+	require.InDelta(t, 0.0, CosineSim(a, b), 1e-9)
+	require.InDelta(t, 0.0, CosineSim(a, make([]float32, 8)), 1e-9)
+}

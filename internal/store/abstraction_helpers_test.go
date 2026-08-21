@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -99,4 +100,12 @@ func (e *dim512Embedder) EmbedDocuments(ctx context.Context, titles, bodies []st
 
 func (e *dim512Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
 	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}
+
+func manyPaths(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("kb/p%d.md", i)
+	}
+	return out
 }

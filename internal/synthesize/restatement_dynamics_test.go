@@ -260,3 +260,67 @@ func (e *restatementEnv) standingPairSet() map[string]bool {
 	}
 	return out
 }
+
+// TestDynamics_ProbeIsNotConsumedWhenNothingIsEmitted — the probe is the only
+// path by which a defunded corpus can change its own evidence, so spending one
+// on a session that emits nothing costs a full interval of silence for no
+// information.
+//
+// This is the repair's own recursion: the probe fix restored recovery, and this
+// asks what the repair does when the thing it funds turns out to be empty.
+func TestDynamics_ProbeIsNotConsumedWhenNothingIsEmitted(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 600)
+	env.seedShortlist()
+
+	// Decline until defunded.
+	for range throttleWindow {
+		pairs, health, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		require.NoError(t, err)
+		if health.ThrottleState == throttleDefunded {
+			break
+		}
+		for _, p := range pairs {
+			env.recordVerdict(p.APath, p.BPath, false)
+		}
+	}
+
+	// Retire every remaining standing pair, so a probe has nothing to offer.
+	standing, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100_000)
+	require.NoError(t, err)
+	for _, p := range standing {
+		require.NoError(t, env.svc.Abstraction().DeleteRestatementPair(ctx, env.branch, p.AFactID, p.BFactID))
+	}
+
+	// Run well past a probe interval. No pair can be emitted, so no probe may
+	// be marked as spent.
+	for range throttleProbeInterval * 2 {
+		pairs, health, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		require.NoError(t, err)
+		require.Empty(t, pairs)
+		require.False(t, health.Probing, "a session that emits nothing has not probed")
+	}
+
+	// Put the pairs back. Re-running the refresh alone would not do it — every
+	// fact is already marked covered — so evict the cache state the way a
+	// partner requeue does, which forces a rescan.
+	ids := env.liveFactIDs()
+	all := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		all = append(all, id)
+	}
+	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, all, nil, nil))
+	env.seedShortlist()
+	require.Positive(t, env.standingPairCount(), "the corpus has pairs to offer again")
+	probed := false
+	for range throttleProbeInterval {
+		pairs, health, err := selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
+		require.NoError(t, err)
+		if health.Probing {
+			probed = true
+			require.NotEmpty(t, pairs)
+			break
+		}
+	}
+	require.True(t, probed, "the probe budget was still owed, not burned on empty sessions")
+}

@@ -8,6 +8,36 @@ import (
 	"time"
 )
 
+// sqlIDChunk is a SQL PARAMETER BUDGET: how many ids are bound into one
+// statement's IN clause.
+//
+// SQLite caps parameters per statement (32,766 on this build, 999 on older
+// ones). These queries bind one placeholder per fact id — and the session that
+// closes a backfill rescans the whole corpus, so it has every live id in hand
+// at once. Unchunked, the feature would stop working entirely somewhere past
+// ~16k facts, and would say so only in a health line. The value is deliberately
+// well under the smaller historical cap.
+const sqlIDChunk = 400
+
+// chunkIDs splits ids into batches no larger than sqlIDChunk.
+func chunkIDs(ids []int64) [][]int64 {
+	var out [][]int64
+	for start := 0; start < len(ids); start += sqlIDChunk {
+		end := min(start+sqlIDChunk, len(ids))
+		out = append(out, ids[start:end])
+	}
+	return out
+}
+
+// idPlaceholders renders "?,?,..." and the matching args for one chunk.
+func idPlaceholders(ids []int64) (string, []any) {
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", len(ids)), ","), args
+}
+
 // abstractionIndex implements AbstractionIndex: the title-embedding axis and
 // the restatement shortlist built on it.
 //
@@ -237,31 +267,34 @@ func (ax *abstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64
 	if len(ids) == 0 {
 		return out, nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id
-	}
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
-		`SELECT rowid, embedding FROM facts_vec WHERE rowid IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("abstraction: body vectors: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var id int64
-		var blob []byte
-		if err := rows.Scan(&id, &blob); err != nil {
-			return nil, fmt.Errorf("abstraction: scan body vector: %w", err)
-		}
-		vec, err := bytesToFloat32Slice(blob)
+	for _, chunk := range chunkIDs(ids) {
+		placeholders, args := idPlaceholders(chunk)
+		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+			`SELECT rowid, embedding FROM facts_vec WHERE rowid IN (`+placeholders+`)`, args...)
 		if err != nil {
-			return nil, fmt.Errorf("abstraction: decode body vector %d: %w", id, err)
+			return nil, fmt.Errorf("abstraction: body vectors: %w", err)
 		}
-		out[id] = vec
+		for rows.Next() {
+			var id int64
+			var blob []byte
+			if err := rows.Scan(&id, &blob); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("abstraction: scan body vector: %w", err)
+			}
+			vec, err := bytesToFloat32Slice(blob)
+			if err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("abstraction: decode body vector %d: %w", id, err)
+			}
+			out[id] = vec
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("abstraction: body vectors: %w", err)
+		}
+		rows.Close()
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ── the standing restatement shortlist ────────────────────────────────────
@@ -306,27 +339,35 @@ func (ax *abstractionIndex) FactIDsByPath(ctx context.Context, branch string, pa
 	if len(paths) == 0 {
 		return out, nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(paths)), ",")
-	args := make([]any, 0, len(paths)+1)
-	args = append(args, branch)
-	for _, p := range paths {
-		args = append(args, p)
-	}
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
-		`SELECT f.id, f.path`+epistemicLiveJoin+` AND f.path IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("abstraction: fact ids by path: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id int64
-		var path string
-		if err := rows.Scan(&id, &path); err != nil {
-			return nil, fmt.Errorf("abstraction: scan fact id: %w", err)
+	for start := 0; start < len(paths); start += sqlIDChunk {
+		chunk := paths[start:min(start+sqlIDChunk, len(paths))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, branch)
+		for _, p := range chunk {
+			args = append(args, p)
 		}
-		out[path] = id
+		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+			`SELECT f.id, f.path`+epistemicLiveJoin+` AND f.path IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("abstraction: fact ids by path: %w", err)
+		}
+		for rows.Next() {
+			var id int64
+			var path string
+			if err := rows.Scan(&id, &path); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("abstraction: scan fact id: %w", err)
+			}
+			out[path] = id
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("abstraction: fact ids by path: %w", err)
+		}
+		rows.Close()
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // PartnersOfFacts returns the still-cached partners of the given facts — the
@@ -347,40 +388,43 @@ func (ax *abstractionIndex) PartnersOfFacts(ctx context.Context, branch string, 
 	if err != nil {
 		return nil, err
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(factIDs)), ",")
-	args := make([]any, 0, len(factIDs)*2+1)
-	args = append(args, branchID)
-	for _, id := range factIDs {
-		args = append(args, id)
-	}
-	for _, id := range factIDs {
-		args = append(args, id)
-	}
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
-		`SELECT a_fact_id, b_fact_id FROM restatement_pairs
-		  WHERE branch_id = ?
-		    AND (a_fact_id IN (`+placeholders+`) OR b_fact_id IN (`+placeholders+`))`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("abstraction: partners of facts: %w", err)
-	}
-	defer rows.Close()
-
 	dropped := make(map[int64]struct{}, len(factIDs))
 	for _, id := range factIDs {
 		dropped[id] = struct{}{}
 	}
-	for rows.Next() {
-		var a, b int64
-		if err := rows.Scan(&a, &b); err != nil {
-			return nil, fmt.Errorf("abstraction: scan partner: %w", err)
+
+	for _, chunk := range chunkIDs(factIDs) {
+		placeholders, ids := idPlaceholders(chunk)
+		args := make([]any, 0, len(ids)*2+1)
+		args = append(args, branchID)
+		args = append(args, ids...)
+		args = append(args, ids...)
+		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+			`SELECT a_fact_id, b_fact_id FROM restatement_pairs
+			  WHERE branch_id = ?
+			    AND (a_fact_id IN (`+placeholders+`) OR b_fact_id IN (`+placeholders+`))`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("abstraction: partners of facts: %w", err)
 		}
-		for _, id := range []int64{a, b} {
-			if _, isDropped := dropped[id]; !isDropped {
-				out[id] = struct{}{}
+		for rows.Next() {
+			var a, b int64
+			if err := rows.Scan(&a, &b); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("abstraction: scan partner: %w", err)
+			}
+			for _, id := range []int64{a, b} {
+				if _, isDropped := dropped[id]; !isDropped {
+					out[id] = struct{}{}
+				}
 			}
 		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("abstraction: partners of facts: %w", err)
+		}
+		rows.Close()
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // DeleteRestatementPair removes one standing pair.
@@ -430,24 +474,20 @@ func (ax *abstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch 
 	}
 	db := conn(ctx, ax.rh.db)
 
-	if len(dropFactIDs) > 0 {
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(dropFactIDs)), ",")
-		args := make([]any, 0, len(dropFactIDs)*2+1)
-		args = append(args, branchID)
-		for _, id := range dropFactIDs {
-			args = append(args, id)
-		}
-		for _, id := range dropFactIDs {
-			args = append(args, id)
-		}
+	for _, chunk := range chunkIDs(dropFactIDs) {
+		placeholders, ids := idPlaceholders(chunk)
+		pairArgs := make([]any, 0, len(ids)*2+1)
+		pairArgs = append(pairArgs, branchID)
+		pairArgs = append(pairArgs, ids...)
+		pairArgs = append(pairArgs, ids...)
 		if _, err := db.ExecContext(ctx,
 			`DELETE FROM restatement_pairs
 			  WHERE branch_id = ?
 			    AND (a_fact_id IN (`+placeholders+`) OR b_fact_id IN (`+placeholders+`))`,
-			args...); err != nil {
+			pairArgs...); err != nil {
 			return fmt.Errorf("abstraction: drop pairs: %w", err)
 		}
-		stateArgs := append([]any{branchID}, args[1:len(dropFactIDs)+1]...)
+		stateArgs := append([]any{branchID}, ids...)
 		if _, err := db.ExecContext(ctx,
 			`DELETE FROM restatement_cache_state
 			  WHERE branch_id = ? AND fact_id IN (`+placeholders+`)`,

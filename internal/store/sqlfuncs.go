@@ -84,12 +84,11 @@ func sqlCosineSim(a, b []byte) interface{} {
 	if err != nil || len(vb) != len(va) {
 		return nil
 	}
-	sim := CosineSim(va, vb)
-	if sim == 0 {
-		// CosineSim folds "degenerate" into 0; SQL callers want NULL for a
-		// vector that has no meaningful similarity, and a genuine 0 is
-		// indistinguishable from it at this boundary. Orthogonality is
-		// vanishingly rare in practice and NULL is the safer answer.
+	sim, ok := cosineSim(va, vb)
+	if !ok {
+		// NULL only for a vector with no defined similarity. Orthogonal vectors
+		// are not that case: their similarity is 0, and reporting NULL for it
+		// would change what this function has always answered.
 		return nil
 	}
 	return sim

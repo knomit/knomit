@@ -462,17 +462,18 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	h.ResolutionRate, h.ThrottleState = throttleState(verdicts)
 
 	budget := shortlistBudget(n)
+	probing := false
 	if h.ThrottleState == throttleDefunded {
 		// Defunded corpora still probe, or they could never recover.
-		probeBudget, err := probeAllowance(ctx, d, branch)
+		allowed, err := probeAllowed(ctx, d, branch)
 		if err != nil {
 			return nil, h, err
 		}
-		if probeBudget == 0 {
+		if !allowed {
 			return nil, h, nil
 		}
-		h.Probing = true
-		budget = probeBudget
+		probing = true
+		budget = 1
 	} else if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
 		// A funded corpus owes no probe; reset so a later defunding starts its
 		// wait from now rather than inheriting an ancient count.
@@ -502,6 +503,16 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		out = append(out, p)
 		if len(out) == budget {
 			break
+		}
+	}
+	if probing && len(out) > 0 {
+		// The probe is spent only if it actually put something in front of the
+		// judge. A session that found nothing to offer produced no evidence,
+		// and charging it a probe would buy another full interval of silence
+		// for nothing.
+		h.Probing = true
+		if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
+			return nil, h, wrapf(reviewTool, err, "shortlist: consume probe")
 		}
 	}
 	if len(out) > 0 {
@@ -837,26 +848,29 @@ func pairCovered(mergePaths []string, a, b string) bool {
 	return sawA && sawB
 }
 
-// probeAllowance is how many slots a DEFUNDED corpus may spend this session:
-// one, every throttleProbeInterval sessions, and zero otherwise.
+// probeAllowed reports whether a DEFUNDED corpus may spend a probe slot this
+// session: one every throttleProbeInterval sessions.
 //
 // This is the whole of the recovery path. A defunded corpus produces no
 // verdicts, so its own evidence can never change without someone spending a
 // slot to generate more — the probe spends exactly one, on a schedule, and the
 // ordinary throttle takes over the moment a probe resolves.
-func probeAllowance(ctx context.Context, d Deps, branch string) (int, error) {
+//
+// The waiting counter is advanced here but CONSUMED by the caller, and only
+// when a pair was actually emitted: a probe that found nothing to offer has
+// bought no information and must not cost an interval.
+func probeAllowed(ctx context.Context, d Deps, branch string) (bool, error) {
 	waited, err := d.Abstraction.ProbeSessionsWaited(ctx, branch)
 	if err != nil {
-		return 0, wrapf(reviewTool, err, "shortlist: probe wait")
+		return false, wrapf(reviewTool, err, "shortlist: probe wait")
 	}
 	if waited+1 < throttleProbeInterval {
 		if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, waited+1); err != nil {
-			return 0, wrapf(reviewTool, err, "shortlist: bump probe wait")
+			return false, wrapf(reviewTool, err, "shortlist: bump probe wait")
 		}
-		return 0, nil
+		return false, nil
 	}
-	if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
-		return 0, wrapf(reviewTool, err, "shortlist: reset probe wait")
-	}
-	return 1, nil
+	// At the interval: hold the counter here so every subsequent session is
+	// also eligible until one of them actually emits.
+	return true, nil
 }
