@@ -119,13 +119,22 @@ func TestConformance_ReviewPipelineOnly(t *testing.T) {
 				base == "vec_table.go" || base == "branch.go" || base == "service.go") {
 				continue
 			}
-			src := readSourceFile(t, path)
-			require.NotContains(t, src, "Abstraction()",
-				"%s must not reach the abstraction axis — it is review-time derived state", path)
-			require.NotContains(t, src, "restatement",
-				"%s must not reach the restatement shortlist", path)
-			require.NotContains(t, src, "Restatement",
-				"%s must not reach the restatement shortlist", path)
+			// Parsed, not grepped over raw bytes. The property is
+			// REACHABILITY, and a violation is written as an identifier, a
+			// selector, or a SQL string naming one of the tables — never as a
+			// comment. Raw-text matching failed on the difference: a comment
+			// explaining why some unrelated table is legitimate ("the same
+			// shape as Phase 0's restatement_verdicts") tripped it, so the
+			// check forbade DISCUSSING the axis as well as reaching it.
+			//
+			// String literals are still inspected, so `SELECT ... FROM
+			// restatement_pairs` in the store is caught exactly as before —
+			// dropping them would trade a false positive for a false negative,
+			// which is the worse half of this trade.
+			for _, ref := range codeMentions(t, path, "abstraction", "restatement") {
+				require.Failf(t, "review-time state reached from a runtime path",
+					"%s must not reach %s — it is review-time derived state", path, ref)
+			}
 			scanned++
 		}
 	}
@@ -225,4 +234,52 @@ func readSourceFile(t *testing.T, rel string) string {
 	b, err := os.ReadFile(filepath.Clean(rel))
 	require.NoError(t, err)
 	return string(b)
+}
+
+// codeMentions returns the identifiers, selectors and string literals in rel
+// whose text contains any of terms (case-insensitively). Comments are NOT
+// inspected: the checks above are about what a file REACHES, and prose about a
+// subsystem is not a dependency on it.
+//
+// This is the same shape as internal/fact's funcsMentioningMotifs, and for the
+// same reason recorded there: a check has to inspect the form a violation
+// would actually be written in. Here that form is code — an identifier, a
+// selector, or a SQL string naming a table.
+func codeMentions(t *testing.T, rel string, terms ...string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	// ParseFile without ParseComments: comments are not part of the AST we walk.
+	file, err := parser.ParseFile(fset, filepath.Clean(rel), nil, 0)
+	require.NoError(t, err)
+
+	hit := func(s string) string {
+		low := strings.ToLower(s)
+		for _, term := range terms {
+			if strings.Contains(low, term) {
+				return s
+			}
+		}
+		return ""
+	}
+	var out []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.Ident:
+			if got := hit(v.Name); got != "" {
+				out = append(out, got)
+			}
+		case *ast.SelectorExpr:
+			if got := hit(v.Sel.Name); got != "" {
+				out = append(out, got)
+			}
+		case *ast.BasicLit:
+			if v.Kind == token.STRING {
+				if got := hit(v.Value); got != "" {
+					out = append(out, got)
+				}
+			}
+		}
+		return true
+	})
+	return out
 }

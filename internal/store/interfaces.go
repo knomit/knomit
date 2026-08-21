@@ -253,6 +253,10 @@ type MotifIndex interface {
 	// unresolved spelling resolves to ITSELF, so a corpus with no alias table
 	// behaves as one where every motif is its own singleton cluster.
 	CanonicalID(ctx context.Context, branch, motif string) (string, error)
+	// RecordJudgeMerge records that the LLM clustering pass judged two clusters
+	// to name the same mechanism. Takes spellings, stores cluster keys. The
+	// decision takes effect at the next RebuildAliases.
+	RecordJudgeMerge(ctx context.Context, branch, motifA, motifB string) error
 	// ClusterKey returns the STABLE identity of a spelling's cluster. Use this,
 	// never CanonicalID, to key state that must survive across sessions:
 	// CanonicalID is the highest-df member spelling and flips as usage shifts.
