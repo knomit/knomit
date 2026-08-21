@@ -59,10 +59,6 @@ CREATE TABLE pipeline_sessions (
     stat_merged      INTEGER NOT NULL DEFAULT 0,
     stat_updated     INTEGER NOT NULL DEFAULT 0,
     stat_synthesized INTEGER NOT NULL DEFAULT 0,
-    -- Corpus-health descriptors produced while planning this session (one line
-    -- per entry, JSON array). Observability that travels back to the calling
-    -- agent on the session result; nothing in the engine reads it back.
-    health       TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL,
     last_used_at TEXT NOT NULL              -- idle-reap heartbeat (bumped on work-item access)

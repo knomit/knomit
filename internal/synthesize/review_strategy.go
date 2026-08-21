@@ -151,7 +151,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// Every step degrades to "no candidates" rather than failing the session:
 	// this is an addition to consolidation, and a corpus that cannot embed its
 	// titles or read its own cache should still get its ordinary review.
-	if err := planRestatementShortlist(ctx, d, sess, branch, clusters, len(llmSeeds)); err != nil {
+	if err := planRestatementShortlist(ctx, d, sess, branch, clusters); err != nil {
 		return err
 	}
 

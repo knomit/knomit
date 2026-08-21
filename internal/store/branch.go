@@ -254,6 +254,17 @@ func (rh *repoHandler) DropBranch(ctx context.Context, name string) error {
 	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branch_facts WHERE branch_id = ?`, id); err != nil {
 		return fmt.Errorf("drop branch_facts: %w", err)
 	}
+	// 2b. Delete the branch's restatement-shortlist state. These tables
+	// reference branches(id) WITHOUT a cascade, and foreign keys are enforced
+	// (_foreign_keys=1), so leaving them would fail step 3 — after the git ref
+	// is already gone, which is the half-removed state step 1 exists to avoid.
+	// Derived state either way: the next review session rebuilds it.
+	for _, table := range []string{"restatement_pairs", "restatement_cache_state", "restatement_verdicts", "restatement_throttle_state"} {
+		if _, err := conn(ctx, rh.db).ExecContext(ctx,
+			`DELETE FROM `+table+` WHERE branch_id = ?`, id); err != nil {
+			return fmt.Errorf("drop %s: %w", table, err)
+		}
+	}
 	// 3. Delete the branches row. This cascades into branch_commits via
 	// the FK defined in migration 000004.
 	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branches WHERE id = ?`, id); err != nil {

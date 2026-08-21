@@ -174,13 +174,10 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Health descriptors recorded during Plan ride the FIRST result: the
-	// session row is the only place they could survive planning (the engine is
-	// per-call stateless), and the start turn is the one the agent reads before
-	// deciding how much of this session to work through.
-	if fresh, ferr := d.Pipeline.GetPipelineSession(ctx, sess.ID); ferr == nil {
-		res.Health = sessionHealthLines(fresh)
-	}
+	// Health descriptors recorded during Plan ride the FIRST result — the turn
+	// the agent reads before deciding how much of this session to work through.
+	// Plan hung them on the same session object this call is holding.
+	res.Health = sess.Health
 	return res, nil
 }
 

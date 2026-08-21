@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // defaultVecDim is the dimension facts_vec is created at when no embedder is
@@ -81,29 +82,79 @@ func (si *searchIndex) ensureFactsVec(ctx context.Context, modelID string, dim i
 	if err != nil {
 		return err
 	}
-	exists, err := si.vecTableExists(ctx, factsVecTable)
+	// Width is validated on EVERY path, before the identity short-circuit.
+	// fact_titles_vec is created at defaultVecDim by Open (the table must exist
+	// for the delete trigger), so under a model of any other dimension it would
+	// otherwise keep that wrong width forever: inserts would fail, the axis
+	// would stay empty, and the shortlist would silently find nothing. The
+	// identity check below governs RE-EMBEDDING; it cannot govern shape.
+	titlesOK, err := si.vecTableHasDim(ctx, titlesVecTable, dim)
 	if err != nil {
 		return err
 	}
-	if exists && curID == modelID && curDim == dim {
+	if !titlesOK {
+		if err := si.recreateVecTable(ctx, titlesVecTable, dim); err != nil {
+			return err
+		}
+		if err := si.clearRestatementState(ctx); err != nil {
+			return err
+		}
+	}
+
+	factsOK, err := si.vecTableHasDim(ctx, factsVecTable, dim)
+	if err != nil {
+		return err
+	}
+	if factsOK && curID == modelID && curDim == dim {
 		return nil
 	}
 	// The abstraction axis is embedded by the same model at the same dimension,
 	// so it drifts with facts_vec and is recreated by the same mechanism. The
-	// restatement caches are derived from the axis — title cosines computed
-	// under another model are not comparable — so they go with it.
+	// restatement state is derived from the axis — title cosines computed under
+	// another model are not comparable — so it goes with it.
 	if err := si.recreateVecTable(ctx, factsVecTable, dim); err != nil {
 		return err
 	}
 	if err := si.recreateVecTable(ctx, titlesVecTable, dim); err != nil {
 		return err
 	}
-	for _, table := range []string{"restatement_pairs", "restatement_cache_state"} {
+	return si.clearRestatementState(ctx)
+}
+
+// clearRestatementState drops everything derived from the abstraction axis.
+//
+// The VERDICTS go too, which is easy to miss: a trailing resolution-rate that
+// mixed judgements made under two different embedding models would be reading
+// evidence about pairs the new model may never propose. The schema says an
+// empty verdict window is safe — it reads as "optimistic", the cold-start
+// posture — so the honest move on a model change is to start over.
+func (si *searchIndex) clearRestatementState(ctx context.Context) error {
+	for _, table := range []string{
+		"restatement_pairs",
+		"restatement_cache_state",
+		"restatement_verdicts",
+		"restatement_throttle_state",
+	} {
 		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM `+table); err != nil {
 			return fmt.Errorf("clear %s on embed-identity change: %w", table, err)
 		}
 	}
 	return nil
+}
+
+// vecTableHasDim reports whether table exists AND was created at exactly dim,
+// read back from its stored DDL.
+func (si *searchIndex) vecTableHasDim(ctx context.Context, table string, dim int) (bool, error) {
+	var ddl sql.NullString
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&ddl)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s ddl: %w", table, err)
+	}
+	return strings.Contains(ddl.String, fmt.Sprintf("FLOAT[%d]", dim)), nil
 }
 
 // recreateVecTable drops table if present and creates it empty at dim.

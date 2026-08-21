@@ -113,25 +113,27 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
 
-	before := neighbourQueryCount.Load()
-	require.NoError(t, refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold()))
-	require.Equal(t, int64(40), neighbourQueryCount.Load()-before, "first refresh seeds every fact")
+	refresh, err := refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	require.NoError(t, err)
+	require.Equal(t, 40, refresh.NeighbourQueries, "first refresh seeds every fact")
 
 	stats, err := env.svc.Abstraction().RestatementPairStats(ctx, env.branch)
 	require.NoError(t, err)
 	require.Positive(t, stats.Count, "the cache is populated")
 
-	before = neighbourQueryCount.Load()
-	require.NoError(t, refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold()))
-	require.Equal(t, before, neighbourQueryCount.Load(), "unchanged corpus does no work")
+	refresh, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	require.NoError(t, err)
+	require.Zero(t, refresh.NeighbourQueries, "unchanged corpus does no work")
 
 	env.writeFact("kb/f7.md", "F7 revised", "body-7-v2")
 	_, _, err = ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
 
-	before = neighbourQueryCount.Load()
-	require.NoError(t, refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold()))
-	require.Equal(t, int64(1), neighbourQueryCount.Load()-before, "one edited fact, one lookup")
+	refresh, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	require.NoError(t, err)
+	require.LessOrEqual(t, refresh.NeighbourQueries, 1+pairNeighbourK,
+		"one edited fact costs its own lookup plus at most its partners'")
+	require.Positive(t, refresh.NeighbourQueries)
 }
 
 // TestRefreshShortlist_DropsPairsOfDepartedFacts — a stale pair naming a fact
@@ -142,11 +144,13 @@ func TestRefreshShortlist_DropsPairsOfDepartedFacts(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	require.NoError(t, refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold()))
+	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	require.NoError(t, err)
 
 	_, err = env.svc.Facts().DeleteFact(ctx, env.branch, "kb/f3.md", "retract f3")
 	require.NoError(t, err)
-	require.NoError(t, refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold()))
+	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	require.NoError(t, err)
 
 	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 1000)
 	require.NoError(t, err)
@@ -172,7 +176,8 @@ func TestRefreshShortlist_ExcludesPairsAtOrAboveDedup(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	require.NoError(t, refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold()))
+	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	require.NoError(t, err)
 
 	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)
 	require.NoError(t, err)
@@ -201,7 +206,8 @@ func TestRefreshShortlist_KeepsSimilarToNeighbours(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	require.NoError(t, refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold()))
+	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	require.NoError(t, err)
 
 	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)
 	require.NoError(t, err)
@@ -221,10 +227,10 @@ func TestShortlistBudget_ScalesWithCorpusAndCapsOut(t *testing.T) {
 	require.Equal(t, maxShortlistItems, shortlistBudget(50_000), "capped however large the corpus")
 }
 
-// TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnMerge is the
+// TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution is the
 // SOLE enforcement mechanism in phase 0: a corpus decides from its own judge's
 // verdicts whether the shortlist is worth funding.
-func TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnMerge(t *testing.T) {
+func TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution(t *testing.T) {
 	rate, state := throttleState(nil)
 	require.Equal(t, throttleOptimistic, state, "no history means try it")
 	require.Zero(t, rate)
@@ -234,43 +240,60 @@ func TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnMerge(t *testin
 	require.Equal(t, throttleFunded, state)
 
 	_, state = throttleState(keepVerdicts(throttleMinVerdicts))
-	require.Equal(t, throttleDefunded, state, "enough judged, none merged")
+	require.Equal(t, throttleDefunded, state, "enough judged, none resolved")
 
-	withMerge := append(keepVerdicts(throttleMinVerdicts), store.RestatementVerdict{Merged: true})
-	rate, state = throttleState(withMerge)
-	require.Equal(t, throttleFunded, state, "one merge restores funding")
+	withResolution := append(keepVerdicts(throttleMinVerdicts), store.RestatementVerdict{Resolved: true})
+	rate, state = throttleState(withResolution)
+	require.Equal(t, throttleFunded, state, "one resolution restores funding")
 	require.Positive(t, rate)
 }
 
-// TestSelect_ThrottleDefundsAndAMergeRestores drives the throttle through the
-// real store rather than the pure function above.
-func TestSelect_ThrottleDefundsAndAMergeRestores(t *testing.T) {
+// TestSelect_DefundedCorpusProbesAndRecovers is the test the earlier version of
+// this suite got wrong. It used to "restore" funding by writing a resolution
+// verdict directly — a state production can never reach, because a defunded
+// corpus emits nothing, so it produces no verdicts, so its evidence can never
+// change. Recovery has to come from a path the system can actually walk.
+func TestSelect_DefundedCorpusProbesAndRecovers(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 400)
 	d := env.deps()
 	env.seedShortlist()
 
+	// Decline enough pairs to defund the corpus.
+	for range throttleMinVerdicts {
+		pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+		require.NoError(t, err)
+		require.NotEmpty(t, pairs)
+		env.recordVerdict(pairs[0].APath, pairs[0].BPath, false)
+	}
 	pairs, health, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
 	require.NoError(t, err)
-	require.NotEmpty(t, pairs, "a fresh corpus is funded")
-	require.Equal(t, throttleOptimistic, health.ThrottleState)
-	require.Equal(t, len(pairs), health.Emitted)
-	require.Positive(t, health.OperatingPoint, "the cut is reported as a cosine")
-
-	for i := range throttleMinVerdicts {
-		env.recordVerdict(fmt.Sprintf("kb/f%d.md", i), "kb/f399.md", false)
-	}
-	pairs, health, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
-	require.NoError(t, err)
-	require.Empty(t, pairs, "all-keep history zeroes the corpus's shortlist budget")
+	require.Empty(t, pairs, "an all-keep history stops the spending")
 	require.Equal(t, throttleDefunded, health.ThrottleState)
-	require.Positive(t, health.StandingPairs, "the pairs still stand; the corpus just stops paying to judge them")
 
-	env.recordVerdict("kb/f1.md", "kb/f2.md", true)
+	// Quiet sessions while the probe interval elapses.
+	for range throttleProbeInterval - 2 {
+		pairs, health, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+		require.NoError(t, err)
+		require.Empty(t, pairs)
+		require.False(t, health.Probing)
+	}
+
+	// Then one probe slot, unprompted.
 	pairs, health, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
 	require.NoError(t, err)
-	require.NotEmpty(t, pairs, "a merge restores funding")
+	require.Len(t, pairs, 1, "a defunded corpus spends exactly one slot to test its own verdict")
+	require.True(t, health.Probing)
+	require.Equal(t, throttleDefunded, health.ThrottleState)
+
+	// The probe resolves — and the corpus funds itself again, from evidence it
+	// could only have generated by probing.
+	env.recordVerdict(pairs[0].APath, pairs[0].BPath, true)
+	pairs, health, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	require.NoError(t, err)
 	require.Equal(t, throttleFunded, health.ThrottleState)
+	require.NotEmpty(t, pairs, "funding restored")
+	require.False(t, health.Probing)
 }
 
 // TestSelect_ExcludesPairsCoGroupedByThisSessionsClusters — the exact "prune
@@ -295,9 +318,12 @@ func TestSelect_ExcludesPairsCoGroupedByThisSessionsClusters(t *testing.T) {
 		"a pair prune already sees in one cluster must not also cost a shortlist slot")
 }
 
-// TestSelect_KeptPairIsNotReOffered — the throttle defunds a CORPUS; this is
-// what stops one declined pair from occupying the funded slots forever.
-func TestSelect_KeptPairIsNotReOffered(t *testing.T) {
+// TestSelect_DeclinedPairIsRetiredNotJustSkipped — a declined pair leaves the
+// standing set entirely. Filtering it at selection time was not enough: the
+// pair kept its place at the top of the ranking, so after a few declining
+// sessions the whole selection window was pairs the judge had already refused
+// and nothing new could be offered.
+func TestSelect_DeclinedPairIsRetiredNotJustSkipped(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 400)
 	d := env.deps()
@@ -310,17 +336,21 @@ func TestSelect_KeptPairIsNotReOffered(t *testing.T) {
 
 	env.recordVerdict(top.APath, top.BPath, false)
 
+	standing, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 10_000)
+	require.NoError(t, err)
+	require.False(t, containsPair(standing, top.APath, top.BPath),
+		"the declined pair is gone from the standing set, not merely skipped")
+
 	pairs, _, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
 	require.NoError(t, err)
-	require.False(t, containsPair(pairs, top.APath, top.BPath),
-		"the judge already looked at this pair and said keep")
-	require.NotEmpty(t, pairs, "and the slot goes to the next-ranked pair instead")
+	require.NotEmpty(t, pairs, "and the slot goes to the next-ranked pair")
+	require.False(t, containsPair(pairs, top.APath, top.BPath))
 }
 
-// TestSelect_EditingEitherFactReEligibilizesTheKeptPair — the exclusion is
-// keyed by fact id, and ids are content-addressed, so a keep expires
-// structurally when either fact changes rather than by any staleness rule.
-func TestSelect_EditingEitherFactReEligibilizesTheKeptPair(t *testing.T) {
+// TestRefresh_DeclinedPairIsNotReMintedByALaterRescan — retiring the pair is
+// only half the job. A later neighbour rescan (triggered by an unrelated edit
+// elsewhere) would happily rediscover it, so the verdict log gates minting too.
+func TestRefresh_DeclinedPairIsNotReMintedByALaterRescan(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 400)
 	d := env.deps()
@@ -331,9 +361,31 @@ func TestSelect_EditingEitherFactReEligibilizesTheKeptPair(t *testing.T) {
 	top := pairs[0]
 	env.recordVerdict(top.APath, top.BPath, false)
 
-	pairs, _, err = selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	// Force both endpoints back through KNN by evicting them from the cache
+	// state — exactly what a partner requeue does.
+	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch,
+		[]int64{env.liveFactIDs()[top.APath], env.liveFactIDs()[top.BPath]}, nil, nil))
+	env.seedShortlist()
+
+	standing, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 10_000)
 	require.NoError(t, err)
-	require.False(t, containsPair(pairs, top.APath, top.BPath))
+	require.False(t, containsPair(standing, top.APath, top.BPath),
+		"a rescan must not resurrect a pair the judge has already refused")
+}
+
+// TestSelect_EditingEitherFactReEligibilizesTheDeclinedPair — the guard is
+// keyed by fact id, and ids are content-addressed, so a decline expires
+// structurally when either fact changes rather than by any staleness rule.
+func TestSelect_EditingEitherFactReEligibilizesTheDeclinedPair(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 400)
+	d := env.deps()
+	env.seedShortlist()
+
+	pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, 400)
+	require.NoError(t, err)
+	top := pairs[0]
+	env.recordVerdict(top.APath, top.BPath, false)
 
 	// Rewrite one endpoint with the same title (so it stays a candidate pair)
 	// but a different body: new blob, new facts row, new id.
@@ -527,14 +579,65 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
 	require.NoError(t, err)
 	require.Len(t, verdicts, 1)
-	require.False(t, verdicts[0].Merged)
+	require.False(t, verdicts[0].Resolved)
 
-	// The same item answered with a merge OF THAT PAIR is attributed as merged.
+	// The same item answered with a merge OF THAT PAIR is attributed as resolved.
 	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
 		Merges: []MergeEntry{{Paths: []string{"kb/pair-a.md", "kb/pair-b.md"}}},
 	})
 	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
 	require.NoError(t, err)
 	require.Len(t, verdicts, 2)
-	require.True(t, verdicts[0].Merged, "newest first")
+	require.True(t, verdicts[0].Resolved, "newest first")
+
+	// ...and so is a RETRACT of either half. A judge that consolidates by
+	// retracting the redundant fact has done the work this mechanism buys;
+	// counting only merges would defund a corpus that is succeeding.
+	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
+		Decisions: []PruneDecision{{Path: "kb/pair-b.md", Action: "retract"}},
+	})
+	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	require.NoError(t, err)
+	require.True(t, verdicts[0].Resolved, "a retract of one half resolves the pair")
+
+	// A confidence update does NOT: both facts still stand, so the redundancy
+	// the pair was offered for is still there.
+	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
+		Decisions: []PruneDecision{{Path: "kb/pair-a.md", Action: "update", Confidence: 0.9}},
+	})
+	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	require.NoError(t, err)
+	require.False(t, verdicts[0].Resolved, "an update leaves the redundancy in place")
+}
+
+// TestApply_SkipsVerdictWhenAnEndpointIsAlreadyGone — a pair whose halves were
+// merged or retracted earlier in the same session is judging something that no
+// longer exists. Recording it would write fact id 0 into the declined set,
+// where it matches every other unresolved pair, and would spend a slot of the
+// throttle window on a non-event.
+func TestApply_SkipsVerdictWhenAnEndpointIsAlreadyGone(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 4)
+	d := env.deps()
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	require.NoError(t, err)
+
+	item := &store.PipelineWorkItem{
+		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
+		FactsJSON: env.factsJSON("kb/f0.md", "kb/f1.md"),
+	}
+	judged := resolveShortlistPair(ctx, d, sess, item)
+	require.NotNil(t, judged)
+
+	// f1 is retracted before the verdict is recorded — the earlier-item case.
+	_, err = env.svc.Facts().DeleteFact(ctx, env.branch, "kb/f1.md", "retract f1")
+	require.NoError(t, err)
+	gone := resolveShortlistPair(ctx, d, sess, item)
+	require.NotNil(t, gone)
+	require.Zero(t, gone.BFactID, "the retracted endpoint no longer resolves")
+
+	recordShortlistVerdict(ctx, d, sess, gone, &PruneResult{})
+	verdicts, err := env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	require.NoError(t, err)
+	require.Empty(t, verdicts, "no verdict is recorded for a pair that no longer exists")
 }

@@ -222,11 +222,12 @@ func (e *restatementEnv) seedShortlist() {
 	ctx := context.Background()
 	_, _, err := ensureTitleVectors(ctx, e.deps(), e.branch, titleBackfillBudget)
 	require.NoError(e.t, err)
-	require.NoError(e.t, refreshRestatementShortlist(ctx, e.deps(), e.branch, e.dedupThreshold()))
+	_, err = refreshRestatementShortlist(ctx, e.deps(), e.branch, e.dedupThreshold())
+	require.NoError(e.t, err)
 }
 
 // recordVerdict stores a judge outcome for a pair, resolving the fact ids the
-// way the apply path does.
+// way the apply path does, and retires the pair the way the apply path does.
 func (e *restatementEnv) recordVerdict(aPath, bPath string, merged bool) {
 	e.t.Helper()
 	ctx := context.Background()
@@ -234,8 +235,9 @@ func (e *restatementEnv) recordVerdict(aPath, bPath string, merged bool) {
 	require.NoError(e.t, e.svc.Abstraction().RecordRestatementVerdict(ctx, e.branch, store.RestatementVerdict{
 		APath: aPath, BPath: bPath,
 		AFactID: ids[aPath], BFactID: ids[bPath],
-		Merged: merged, JudgedAt: time.Now(),
+		Resolved: merged, JudgedAt: time.Now(),
 	}))
+	require.NoError(e.t, e.svc.Abstraction().DeleteRestatementPair(ctx, e.branch, ids[aPath], ids[bPath]))
 }
 
 // liveFactIDs maps live paths to their current fact ids.

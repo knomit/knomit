@@ -193,9 +193,6 @@ type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
-	// SetPipelineSessionHealth stores corpus-health descriptor lines for the
-	// session. Observability that rides back to the caller on the result.
-	SetPipelineSessionHealth(ctx context.Context, id, health string) error
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
@@ -250,9 +247,12 @@ type AbstractionIndex interface {
 	PutTitleVectors(ctx context.Context, vecs []TitleVector) error
 	// TitleVectorCoverage reports (embedded, total) over live epistemic facts.
 	TitleVectorCoverage(ctx context.Context, branch string) (have, total int, err error)
-	// LiveEpistemicFacts is the live set the pair cache is diffed against,
-	// keyed by fact id with its path.
+	// LiveEpistemicFacts is the live set, keyed by fact id with its path.
 	LiveEpistemicFacts(ctx context.Context, branch string) (map[int64]string, error)
+	// LiveEpistemicFactsOnAxis is the same set restricted to facts that carry a
+	// title vector — what the pair cache is diffed against, so a partial
+	// backfill cannot mark un-embedded facts as covered.
+	LiveEpistemicFactsOnAxis(ctx context.Context, branch string) (map[int64]string, error)
 	// TopTitleNeighbours returns up to k live epistemic neighbours of factID on
 	// the axis, self excluded, most similar first. A fact with no vector yet
 	// returns nothing rather than an error.
@@ -279,10 +279,28 @@ type AbstractionIndex interface {
 	// first — the input to the throttle.
 	RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]RestatementVerdict, error)
 	// KeptPairFactIDs returns pairs the judge declined, keyed by FactIDPairKey.
+	// Consulted when MINTING pairs, so a declined pair is not re-created by a
+	// later neighbour rescan.
 	KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error)
+	// PartnersOfFacts returns the still-cached partners of the given facts, so
+	// an asymmetric KNN discovery is not lost when its owner is re-scanned.
+	PartnersOfFacts(ctx context.Context, branch string, factIDs []int64) (map[int64]struct{}, error)
+	// DeleteRestatementPair removes one standing pair (the judge declined it).
+	DeleteRestatementPair(ctx context.Context, branch string, aFactID, bFactID int64) error
+	// ProbeSessionsWaited returns how many sessions this branch has waited
+	// since its last throttle probe, and ResetProbeWait / BumpProbeWait move it.
+	// The counter is what keeps a defunded corpus recoverable.
+	ProbeSessionsWaited(ctx context.Context, branch string) (int, error)
+	SetProbeSessionsWaited(ctx context.Context, branch string, n int) error
 }
 
 // RestatementVerdict is one judge outcome on a shortlist-originated pair.
+//
+// Resolved, not Merged: a judge that consolidates a restatement by RETRACTING
+// the redundant half has done exactly the work this mechanism exists to buy.
+// Counting only merges would defund a corpus that is consolidating
+// successfully by another route — which is the failure mode a throttle can
+// least afford, since it looks identical to "the shortlist finds nothing".
 //
 // It carries fact ids as well as paths because ids are content-addressed: a
 // "keep" applies to the exact pair of versions that was judged, and editing
@@ -292,7 +310,7 @@ type RestatementVerdict struct {
 	BPath    string
 	AFactID  int64
 	BFactID  int64
-	Merged   bool
+	Resolved bool
 	JudgedAt time.Time
 }
 

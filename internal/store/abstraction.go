@@ -109,8 +109,27 @@ func (ax *abstractionIndex) TitleVectorCoverage(ctx context.Context, branch stri
 // that is what a prune work item talks in — and resolving them one id at a time
 // afterwards would be a query per changed fact.
 func (ax *abstractionIndex) LiveEpistemicFacts(ctx context.Context, branch string) (map[int64]string, error) {
-	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
-		`SELECT f.id, f.path`+epistemicLiveJoin, branch)
+	return ax.liveEpistemicFacts(ctx, branch, false)
+}
+
+// LiveEpistemicFactsOnAxis is LiveEpistemicFacts restricted to facts that
+// actually carry a title vector.
+//
+// The distinction is load-bearing during a partial backfill. A fact with no
+// vector has no neighbours to find, so treating it as "covered" would mark it
+// done in the cache state and its KNN would never run — permanently, because
+// the cache state is exactly what says "already covered". The refresh therefore
+// diffs against THIS set and leaves un-embedded facts for a later session.
+func (ax *abstractionIndex) LiveEpistemicFactsOnAxis(ctx context.Context, branch string) (map[int64]string, error) {
+	return ax.liveEpistemicFacts(ctx, branch, true)
+}
+
+func (ax *abstractionIndex) liveEpistemicFacts(ctx context.Context, branch string, onAxisOnly bool) (map[int64]string, error) {
+	query := `SELECT f.id, f.path` + epistemicLiveJoin
+	if onAxisOnly {
+		query += ` AND EXISTS (SELECT 1 FROM fact_titles_vec tv WHERE tv.rowid = f.id)`
+	}
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx, query, branch)
 	if err != nil {
 		return nil, fmt.Errorf("abstraction: live facts: %w", err)
 	}
@@ -264,6 +283,82 @@ func (ax *abstractionIndex) CachedPairFactIDs(ctx context.Context, branch string
 	return out, rows.Err()
 }
 
+// PartnersOfFacts returns the still-cached partners of the given facts — the
+// other endpoint of every standing pair that touches one of them.
+//
+// The refresh needs this because KNN is ASYMMETRIC: a pair can exist only
+// because B's top-K included A, never the other way round. Dropping every pair
+// that touches an edited fact and then re-running only that fact's KNN
+// therefore destroys pairs that nothing will rediscover. Requeuing the
+// surviving partners restores them, at a bounded cost of at most K partners per
+// dropped fact.
+func (ax *abstractionIndex) PartnersOfFacts(ctx context.Context, branch string, factIDs []int64) (map[int64]struct{}, error) {
+	out := map[int64]struct{}{}
+	if len(factIDs) == 0 {
+		return out, nil
+	}
+	branchID, err := ax.branchID(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(factIDs)), ",")
+	args := make([]any, 0, len(factIDs)*2+1)
+	args = append(args, branchID)
+	for _, id := range factIDs {
+		args = append(args, id)
+	}
+	for _, id := range factIDs {
+		args = append(args, id)
+	}
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT a_fact_id, b_fact_id FROM restatement_pairs
+		  WHERE branch_id = ?
+		    AND (a_fact_id IN (`+placeholders+`) OR b_fact_id IN (`+placeholders+`))`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: partners of facts: %w", err)
+	}
+	defer rows.Close()
+
+	dropped := make(map[int64]struct{}, len(factIDs))
+	for _, id := range factIDs {
+		dropped[id] = struct{}{}
+	}
+	for rows.Next() {
+		var a, b int64
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, fmt.Errorf("abstraction: scan partner: %w", err)
+		}
+		for _, id := range []int64{a, b} {
+			if _, isDropped := dropped[id]; !isDropped {
+				out[id] = struct{}{}
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+// DeleteRestatementPair removes one standing pair.
+//
+// Called when the judge declines a pair: the verdict log keeps the record, and
+// leaving the pair standing would let it occupy the top of the ranking session
+// after session, saturating the selection window until nothing else could ever
+// be offered. An edit to either fact re-mints the pair through the ordinary KNN
+// path, which is the behaviour we want — the judge has not seen that version.
+func (ax *abstractionIndex) DeleteRestatementPair(ctx context.Context, branch string, aFactID, bFactID int64) error {
+	branchID, err := ax.branchID(ctx, branch)
+	if err != nil {
+		return err
+	}
+	if _, err := conn(ctx, ax.rh.db).ExecContext(ctx,
+		`DELETE FROM restatement_pairs
+		  WHERE branch_id = ?
+		    AND ((a_fact_id = ? AND b_fact_id = ?) OR (a_fact_id = ? AND b_fact_id = ?))`,
+		branchID, aFactID, bFactID, bFactID, aFactID); err != nil {
+		return fmt.Errorf("abstraction: delete pair: %w", err)
+	}
+	return nil
+}
+
 // ReplaceRestatementPairs applies one delta to the cache atomically: every pair
 // touching a dropped-or-changed fact goes, the new pairs land, and the cache
 // state records what the cache now covers.
@@ -289,17 +384,29 @@ func (ax *abstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch 
 	}
 	db := conn(ctx, ax.rh.db)
 
-	for _, id := range dropFactIDs {
-		if _, err := db.ExecContext(ctx,
-			`DELETE FROM restatement_pairs
-			  WHERE branch_id = ? AND (a_fact_id = ? OR b_fact_id = ?)`,
-			branchID, id, id); err != nil {
-			return fmt.Errorf("abstraction: drop pairs for %d: %w", id, err)
+	if len(dropFactIDs) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(dropFactIDs)), ",")
+		args := make([]any, 0, len(dropFactIDs)*2+1)
+		args = append(args, branchID)
+		for _, id := range dropFactIDs {
+			args = append(args, id)
+		}
+		for _, id := range dropFactIDs {
+			args = append(args, id)
 		}
 		if _, err := db.ExecContext(ctx,
-			`DELETE FROM restatement_cache_state WHERE branch_id = ? AND fact_id = ?`,
-			branchID, id); err != nil {
-			return fmt.Errorf("abstraction: drop cache state for %d: %w", id, err)
+			`DELETE FROM restatement_pairs
+			  WHERE branch_id = ?
+			    AND (a_fact_id IN (`+placeholders+`) OR b_fact_id IN (`+placeholders+`))`,
+			args...); err != nil {
+			return fmt.Errorf("abstraction: drop pairs: %w", err)
+		}
+		stateArgs := append([]any{branchID}, args[1:len(dropFactIDs)+1]...)
+		if _, err := db.ExecContext(ctx,
+			`DELETE FROM restatement_cache_state
+			  WHERE branch_id = ? AND fact_id IN (`+placeholders+`)`,
+			stateArgs...); err != nil {
+			return fmt.Errorf("abstraction: drop cache state: %w", err)
 		}
 	}
 	for _, p := range add {
@@ -404,18 +511,13 @@ func (ax *abstractionIndex) pairQuantile(ctx context.Context, branch string, cou
 	return v, nil
 }
 
-// branchID resolves a branch name to its row id. A branch the registry has
-// never seen is an error rather than a silent no-op: writing shortlist state
-// under a phantom branch id would be invisible and permanent.
+// branchID resolves a branch name to its row id through repoHandler's cached
+// resolver, so this sub-service shares the cache and returns the same
+// ErrBranchNotFound every other caller matches on.
 func (ax *abstractionIndex) branchID(ctx context.Context, branch string) (int64, error) {
-	var id int64
-	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
-		`SELECT id FROM branches WHERE name = ?`, branch).Scan(&id)
-	if err == sql.ErrNoRows {
-		return 0, fmt.Errorf("abstraction: unknown branch %q", branch)
-	}
+	id, err := ax.rh.branchID(ctx, branch)
 	if err != nil {
-		return 0, fmt.Errorf("abstraction: branch id for %q: %w", branch, err)
+		return 0, fmt.Errorf("abstraction: %w", err)
 	}
 	return id, nil
 }
@@ -433,15 +535,15 @@ func (ax *abstractionIndex) RecordRestatementVerdict(ctx context.Context, branch
 	if err != nil {
 		return err
 	}
-	merged := 0
-	if v.Merged {
-		merged = 1
+	resolved := 0
+	if v.Resolved {
+		resolved = 1
 	}
 	if _, err := conn(ctx, ax.rh.db).ExecContext(ctx,
 		`INSERT INTO restatement_verdicts
-		     (branch_id, a_path, b_path, a_fact_id, b_fact_id, merged, judged_at)
+		     (branch_id, a_path, b_path, a_fact_id, b_fact_id, resolved, judged_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		branchID, v.APath, v.BPath, v.AFactID, v.BFactID, merged,
+		branchID, v.APath, v.BPath, v.AFactID, v.BFactID, resolved,
 		v.JudgedAt.UTC().Format(time.RFC3339)); err != nil {
 		return fmt.Errorf("abstraction: record verdict: %w", err)
 	}
@@ -454,7 +556,7 @@ func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branc
 		return nil, nil
 	}
 	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
-		`SELECT v.a_path, v.b_path, v.a_fact_id, v.b_fact_id, v.merged, v.judged_at
+		`SELECT v.a_path, v.b_path, v.a_fact_id, v.b_fact_id, v.resolved, v.judged_at
 		   FROM restatement_verdicts v
 		   JOIN branches b ON b.id = v.branch_id
 		  WHERE b.name = ?
@@ -468,12 +570,12 @@ func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branc
 	var out []RestatementVerdict
 	for rows.Next() {
 		var v RestatementVerdict
-		var merged int
+		var resolved int
 		var judged string
-		if err := rows.Scan(&v.APath, &v.BPath, &v.AFactID, &v.BFactID, &merged, &judged); err != nil {
+		if err := rows.Scan(&v.APath, &v.BPath, &v.AFactID, &v.BFactID, &resolved, &judged); err != nil {
 			return nil, fmt.Errorf("abstraction: scan verdict: %w", err)
 		}
-		v.Merged = merged == 1
+		v.Resolved = resolved == 1
 		if t, perr := time.Parse(time.RFC3339, judged); perr == nil {
 			v.JudgedAt = t
 		}
@@ -482,19 +584,21 @@ func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branc
 	return out, rows.Err()
 }
 
-// KeptPairFactIDs returns the id-pairs this branch's judge declined to merge,
-// as "a:b" keys with a < b.
+// KeptPairFactIDs returns the id-pairs this branch's judge declined to
+// resolve, as FactIDPairKey keys.
 //
-// Keyed by FACT ID rather than path on purpose. Ids are content-addressed, so
-// "the judge already looked at this and said keep" expires structurally the
-// moment either fact is edited — the pair becomes a new pair of ids and is
-// eligible again, with no hash comparison and no staleness rule to get wrong.
+// The refresh consults it when MINTING pairs, not the selector when choosing
+// them: a declined pair is deleted outright, and this set is what stops a later
+// neighbour rescan from minting it again. Keyed by FACT ID on purpose — ids are
+// content-addressed, so "the judge looked at this and kept both" expires
+// structurally the moment either fact is edited, with no staleness rule to get
+// wrong.
 func (ax *abstractionIndex) KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error) {
 	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
 		`SELECT v.a_fact_id, v.b_fact_id
 		   FROM restatement_verdicts v
 		   JOIN branches b ON b.id = v.branch_id
-		  WHERE b.name = ? AND v.merged = 0`, branch)
+		  WHERE b.name = ? AND v.resolved = 0`, branch)
 	if err != nil {
 		return nil, fmt.Errorf("abstraction: kept pairs: %w", err)
 	}
@@ -519,4 +623,38 @@ func FactIDPairKey(a, b int64) string {
 		a, b = b, a
 	}
 	return fmt.Sprintf("%d:%d", a, b)
+}
+
+// ProbeSessionsWaited returns how many sessions this branch has waited since it
+// last spent a probe slot. Zero for a branch that has never been defunded.
+func (ax *abstractionIndex) ProbeSessionsWaited(ctx context.Context, branch string) (int, error) {
+	var n int
+	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+		`SELECT s.sessions_since_probe
+		   FROM restatement_throttle_state s
+		   JOIN branches b ON b.id = s.branch_id
+		  WHERE b.name = ?`, branch).Scan(&n)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("abstraction: probe wait: %w", err)
+	}
+	return n, nil
+}
+
+// SetProbeSessionsWaited records the probe counter for this branch.
+func (ax *abstractionIndex) SetProbeSessionsWaited(ctx context.Context, branch string, n int) error {
+	branchID, err := ax.branchID(ctx, branch)
+	if err != nil {
+		return err
+	}
+	if _, err := conn(ctx, ax.rh.db).ExecContext(ctx,
+		`INSERT INTO restatement_throttle_state(branch_id, sessions_since_probe)
+		 VALUES (?, ?)
+		 ON CONFLICT(branch_id) DO UPDATE SET sessions_since_probe = excluded.sessions_since_probe`,
+		branchID, n); err != nil {
+		return fmt.Errorf("abstraction: set probe wait: %w", err)
+	}
+	return nil
 }

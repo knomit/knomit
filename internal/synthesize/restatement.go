@@ -7,7 +7,6 @@ import (
 	"math"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -101,9 +100,15 @@ func ensureTitleVectors(ctx context.Context, d Deps, branch string, budget time.
 // standing cache at K·N rows and per-session work at O(Δ·K).
 const pairNeighbourK = 10
 
-// neighbourQueryCount counts KNN lookups so tests can assert that per-session
-// work is proportional to what CHANGED rather than to corpus size.
-var neighbourQueryCount atomic.Int64
+// refreshStats reports what one refresh actually did. Returned rather than
+// counted in a package variable: test instrumentation does not belong in
+// production state, and a caller that wants to log the cost should be handed it.
+type refreshStats struct {
+	NeighbourQueries int // KNN lookups — the per-session work
+	PairsAdded       int
+	FactsRequeued    int  // partners re-scanned so an asymmetric discovery is not lost
+	AxisComplete     bool // false while the backfill is still filling the axis
+}
 
 // refreshRestatementShortlist brings the standing candidate cache up to date.
 //
@@ -116,21 +121,35 @@ var neighbourQueryCount atomic.Int64
 //
 // NO clustering runs in this path. The neighbour lookup is the same KNN the
 // similarity graph uses.
-func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, dedupThreshold float64) error {
+func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, dedupThreshold float64) (refreshStats, error) {
+	var stats refreshStats
+
+	// Diff against facts that are actually ON THE AXIS. A fact with no title
+	// vector has no neighbours to find, so counting it as covered would mark it
+	// done and its KNN would never run — permanently, because the cache state
+	// is what says "already covered". During a partial backfill that would
+	// freeze the cache at whatever the first session managed.
+	onAxis, err := d.Abstraction.LiveEpistemicFactsOnAxis(ctx, branch)
+	if err != nil {
+		return stats, wrapf(reviewTool, err, "shortlist: live facts on axis")
+	}
 	live, err := d.Abstraction.LiveEpistemicFacts(ctx, branch)
 	if err != nil {
-		return wrapf(reviewTool, err, "shortlist: live facts")
+		return stats, wrapf(reviewTool, err, "shortlist: live facts")
 	}
 	cached, err := d.Abstraction.CachedPairFactIDs(ctx, branch)
 	if err != nil {
-		return wrapf(reviewTool, err, "shortlist: cached fact ids")
+		return stats, wrapf(reviewTool, err, "shortlist: cached fact ids")
 	}
 
-	// The delta is the symmetric difference. An edit shows up as one added id
-	// and one dropped id, because facts rows are content-addressed — which is
-	// why nothing here needs a watermark.
+	// While the axis is incomplete, every on-axis fact is in play: see the
+	// coverage note where the cache state is written.
+	complete := len(onAxis) == len(live)
+
+	// An edit shows up as one added id and one dropped id, because facts rows
+	// are content-addressed — which is why nothing here needs a watermark.
 	var added []int64
-	for id := range live {
+	for id := range onAxis {
 		if _, ok := cached[id]; !ok {
 			added = append(added, id)
 		}
@@ -142,30 +161,96 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, ded
 		}
 	}
 	if len(added) == 0 && len(dropped) == 0 {
-		return nil
+		return stats, nil
+	}
+	stats.AxisComplete = complete
+
+	// KNN is ASYMMETRIC: a standing pair may exist only because B's top-K
+	// included A, and never the reverse. Dropping every pair that touches a
+	// departed fact and re-scanning only the arrivals would therefore destroy
+	// discoveries that nothing rediscovers. Re-scan the surviving partners too
+	// — bounded at K per dropped fact.
+	partners, err := d.Abstraction.PartnersOfFacts(ctx, branch, dropped)
+	if err != nil {
+		return stats, wrapf(reviewTool, err, "shortlist: partners of dropped facts")
+	}
+	requeue := append([]int64(nil), added...)
+	for id := range partners {
+		if _, stillOnAxis := onAxis[id]; stillOnAxis {
+			requeue = append(requeue, id)
+			stats.FactsRequeued++
+		}
 	}
 	// Deterministic order so two runs over the same delta produce the same
 	// cache, and so a test can talk about "the first fact".
-	slices.Sort(added)
-	slices.Sort(dropped)
+	slices.Sort(requeue)
+	requeue = slices.Compact(requeue)
+
+	// Pairs the judge already declined must not be re-minted by this rescan.
+	// The pair itself was deleted when the verdict landed; this is what keeps
+	// it gone until one of its facts is edited (which makes it a new pair of
+	// content-addressed ids, and therefore genuinely unseen).
+	declined, err := d.Abstraction.KeptPairFactIDs(ctx, branch)
+	if err != nil {
+		return stats, wrapf(reviewTool, err, "shortlist: declined pairs")
+	}
 
 	var candidates []store.RestatementPair
-	for _, id := range added {
-		neighbourQueryCount.Add(1)
+	for _, id := range requeue {
+		stats.NeighbourQueries++
 		neighbours, err := d.Abstraction.TopTitleNeighbours(ctx, branch, id, pairNeighbourK)
 		if err != nil {
-			return wrapf(reviewTool, err, "shortlist: neighbours for fact %d", id)
+			return stats, wrapf(reviewTool, err, "shortlist: neighbours for fact %d", id)
 		}
 		for _, n := range neighbours {
-			candidates = append(candidates, newRestatementPair(id, live[id], n))
+			if _, ok := declined[store.FactIDPairKey(id, n.FactID)]; ok {
+				continue
+			}
+			candidates = append(candidates, newRestatementPair(id, onAxis[id], n))
 		}
 	}
 
-	kept, err := filterByBlendedCosine(ctx, d, candidates, dedupThreshold)
+	kept, unscorable, err := filterByBlendedCosine(ctx, d, candidates, dedupThreshold)
 	if err != nil {
-		return err
+		return stats, err
 	}
-	return d.Abstraction.ReplaceRestatementPairs(ctx, branch, append(dropped, added...), kept, added)
+	stats.PairsAdded = len(kept)
+
+	// Nothing is recorded as covered until the axis is COMPLETE.
+	//
+	// The cache state means "scanned against the whole corpus", and during a
+	// backfill that is a lie: a fact scanned while half the corpus had no title
+	// vector cannot have seen the partners embedded later, and KNN asymmetry
+	// means the later fact's own scan may not find it either. Marking it
+	// covered would make that a permanent hole rather than a delay. So while
+	// coverage is partial, every on-axis fact is rescanned each session — the
+	// pairs found so far are still offered, they are just not treated as final.
+	// The cost is bounded to the fill period and vanishes the session coverage
+	// closes.
+	//
+	// A fact whose blended vector could not be read was not really scanned
+	// either, for the same reason and with the same consequence.
+	var covered []int64
+	if complete {
+		covered = make([]int64, 0, len(requeue))
+		for _, id := range requeue {
+			if _, bad := unscorable[id]; !bad {
+				covered = append(covered, id)
+			}
+		}
+	}
+	// Pairs are deleted for departed facts and for facts being scanned for the
+	// first time — never for requeued partners, whose existing pairs are
+	// exactly the asymmetric discoveries the requeue exists to preserve.
+	//
+	// "First time" is a no-op during ordinary operation (a new fact version has
+	// new ids and therefore no pairs), and does the necessary cleanup in one
+	// case: the session where the backfill finally completes. Nothing was
+	// marked covered while the axis was partial, so that session rescans the
+	// whole corpus — and its pairs should describe the finished axis, not the
+	// union of every half-filled state it passed through on the way.
+	return stats, d.Abstraction.ReplaceRestatementPairs(ctx, branch,
+		append(dropped, added...), kept, covered)
 }
 
 // newRestatementPair canonicalises a pair so A-B and B-A are one row.
@@ -192,9 +277,10 @@ func newRestatementPair(id int64, path string, n store.TitleNeighbour) store.Res
 // contributes no absolute cosine of its own.
 //
 // Vectors come from the stored facts_vec rows. Nothing is re-embedded.
-func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.RestatementPair, dedupThreshold float64) ([]store.RestatementPair, error) {
+func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.RestatementPair, dedupThreshold float64) ([]store.RestatementPair, map[int64]struct{}, error) {
+	unscorable := map[int64]struct{}{}
 	if len(pairs) == 0 {
-		return nil, nil
+		return nil, unscorable, nil
 	}
 	idSet := map[int64]struct{}{}
 	for _, p := range pairs {
@@ -207,7 +293,7 @@ func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.Restatemen
 	}
 	vecs, err := d.Abstraction.BodyVectorsByFactID(ctx, ids)
 	if err != nil {
-		return nil, wrapf(reviewTool, err, "shortlist: body vectors")
+		return nil, unscorable, wrapf(reviewTool, err, "shortlist: body vectors")
 	}
 
 	out := make([]store.RestatementPair, 0, len(pairs))
@@ -215,8 +301,15 @@ func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.Restatemen
 		a, aok := vecs[p.AFactID]
 		b, bok := vecs[p.BFactID]
 		if !aok || !bok {
-			// A fact with no stored vector cannot be scored. Keeping it would
-			// mean guessing whether dedup would already have caught the pair.
+			// A fact with no stored vector cannot be scored — keeping the pair
+			// would mean guessing whether dedup already caught it. Report the
+			// missing side so the caller does not record it as covered.
+			if !aok {
+				unscorable[p.AFactID] = struct{}{}
+			}
+			if !bok {
+				unscorable[p.BFactID] = struct{}{}
+			}
 			continue
 		}
 		if cosine(a, b) >= dedupThreshold {
@@ -224,7 +317,7 @@ func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.Restatemen
 		}
 		out = append(out, p)
 	}
-	return out, nil
+	return out, unscorable, nil
 }
 
 // cosine of two stored vectors. They are L2-normalized at embed time, so this
@@ -268,13 +361,22 @@ const maxShortlistItems = 8
 // learned anything about it.
 const shortlistPerMille = 5
 
-// throttleWindow is how many shortlist verdicts the trailing merge-rate is
+// throttleWindow is how many shortlist verdicts the trailing resolution-rate is
 // measured over; throttleMinVerdicts is how much evidence must accumulate
-// before a corpus may defund itself. Both are PATIENCE BUDGETS, trading wasted
-// judge slots against how fast a corpus can turn its own shortlist off.
+// before a corpus may defund itself; throttleProbeInterval is how many sessions
+// a defunded corpus waits before spending ONE slot to test whether it is still
+// right to be defunded. All three are PATIENCE BUDGETS, trading wasted judge
+// slots against how fast a corpus can change its own mind.
+//
+// The probe is not a nicety. Without it the throttle is a LATCH: defunded means
+// no emission, no emission means no verdicts, and no verdicts means the "a
+// resolution restores it" clause can never fire. A corpus that briefly looked
+// unproductive would be switched off permanently by evidence it is then
+// forbidden from updating.
 const (
-	throttleWindow      = 10
-	throttleMinVerdicts = 5
+	throttleWindow        = 10
+	throttleMinVerdicts   = 5
+	throttleProbeInterval = 5
 )
 
 // shortlistOverfetch is how many ranked pairs are considered per funded slot,
@@ -311,8 +413,15 @@ type restatementHealth struct {
 	TailP999       float64
 	OperatingPoint float64 // title-cos of the last selected pair, in THIS repo
 	Emitted        int
-	MergeRate      float64
+	ResolutionRate float64
 	ThrottleState  string
+	// Probing is true when a defunded corpus spent its periodic probe slot —
+	// the one path by which its own evidence can change.
+	Probing bool
+	// Failure names the step that failed, when one did. The shortlist degrades
+	// to "no candidates" rather than failing a session, so without this line a
+	// broken axis and a clean corpus look identical from outside.
+	Failure string
 }
 
 // shortlistBudget is how many judge slots this session may spend.
@@ -331,14 +440,14 @@ func throttleState(verdicts []store.RestatementVerdict) (float64, string) {
 	if len(verdicts) == 0 {
 		return 0, throttleOptimistic
 	}
-	merges := 0
+	resolved := 0
 	for _, v := range verdicts {
-		if v.Merged {
-			merges++
+		if v.Resolved {
+			resolved++
 		}
 	}
-	rate := float64(merges) / float64(len(verdicts))
-	if merges == 0 && len(verdicts) >= throttleMinVerdicts {
+	rate := float64(resolved) / float64(len(verdicts))
+	if resolved == 0 && len(verdicts) >= throttleMinVerdicts {
 		return rate, throttleDefunded
 	}
 	return rate, throttleFunded
@@ -371,16 +480,27 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	if err != nil {
 		return nil, h, wrapf(reviewTool, err, "shortlist: verdicts")
 	}
-	h.MergeRate, h.ThrottleState = throttleState(verdicts)
+	h.ResolutionRate, h.ThrottleState = throttleState(verdicts)
 
 	budget := shortlistBudget(n)
-	if h.ThrottleState == throttleDefunded || budget == 0 {
-		return nil, h, nil
+	if h.ThrottleState == throttleDefunded {
+		// Defunded corpora still probe, or they could never recover.
+		probeBudget, err := probeAllowance(ctx, d, branch)
+		if err != nil {
+			return nil, h, err
+		}
+		if probeBudget == 0 {
+			return nil, h, nil
+		}
+		h.Probing = true
+		budget = probeBudget
+	} else if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
+		// A funded corpus owes no probe; reset so a later defunding starts its
+		// wait from now rather than inheriting an ancient count.
+		return nil, h, wrapf(reviewTool, err, "shortlist: reset probe wait")
 	}
-
-	kept, err := d.Abstraction.KeptPairFactIDs(ctx, branch)
-	if err != nil {
-		return nil, h, wrapf(reviewTool, err, "shortlist: kept pairs")
+	if budget == 0 {
+		return nil, h, nil
 	}
 
 	// Over-fetch: the exclusions below are decided per candidate, and cutting to
@@ -395,9 +515,6 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	var out []store.RestatementPair
 	for _, p := range raw {
 		if _, ok := coGrouped[pathPairKey(p.APath, p.BPath)]; ok {
-			continue
-		}
-		if _, ok := kept[store.FactIDPairKey(p.AFactID, p.BFactID)]; ok {
 			continue
 		}
 		if !d.Scope.IsEmpty() && !pairTouchesScope(ctx, d, branch, p) {
@@ -522,9 +639,17 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 // candidates and a health line saying so": this mechanism is an ADDITION to
 // consolidation, and a corpus whose axis cannot be built should still get its
 // ordinary review rather than an error.
-func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, clusters [][]factForLLM, seeds int) error {
-	_, total, err := ensureTitleVectors(ctx, d, branch, titleBackfillBudget)
+func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, clusters [][]factForLLM) error {
+	// health is emitted on EVERY path, including the failures below. The error
+	// path is exactly where "the shortlist found nothing" has to stay
+	// distinguishable from "the shortlist could not run" — a silent skip on a
+	// corpus with 2,000 standing pairs reads as a clean bill of health.
+	var health restatementHealth
+	defer func() { recordRestatementHealth(sess, health) }()
+
+	have, total, err := ensureTitleVectors(ctx, d, branch, titleBackfillBudget)
 	if err != nil {
+		health.Failure = "title backfill failed"
 		log.Warn().Err(err).Str("session", sess.ID).
 			Msg("review: title backfill failed; skipping restatement shortlist")
 		return nil
@@ -532,25 +657,40 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 	if total == 0 {
 		return nil // empty corpus: every ratio is zero and there is nothing to do
 	}
+	health.Coverage = float64(have) / float64(total)
 
 	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
-	if err := refreshRestatementShortlist(ctx, d, branch, dedupThreshold); err != nil {
+	refresh, err := refreshRestatementShortlist(ctx, d, branch, dedupThreshold)
+	if err != nil {
+		health.Failure = "shortlist refresh failed"
 		log.Warn().Err(err).Str("session", sess.ID).
 			Msg("review: restatement shortlist refresh failed; continuing without candidates")
 		return nil
 	}
+	log.Debug().Str("session", sess.ID).
+		Int("knn_queries", refresh.NeighbourQueries).
+		Int("pairs_added", refresh.PairsAdded).
+		Int("facts_requeued", refresh.FactsRequeued).
+		Msg("review: restatement shortlist refreshed")
 
-	pairs, health, err := selectRestatementCandidates(ctx, d, branch, clusters, seeds)
+	// The budget scales with the CORPUS, not with this session's dirty seeds.
+	// Seeds would make the feature a first-scan special case: every incremental
+	// session sees a handful of changed facts, and a handful times 5-per-1000
+	// is zero — so the shortlist would emit nothing for the entire life of a
+	// repo after its first review, with a full pair cache sitting unread.
+	pairs, selectHealth, err := selectRestatementCandidates(ctx, d, branch, clusters, total)
 	if err != nil {
+		health.Failure = "shortlist selection failed"
 		log.Warn().Err(err).Str("session", sess.ID).
 			Msg("review: restatement selection failed; continuing without candidates")
 		return nil
 	}
+	selectHealth.Coverage = health.Coverage
+	health = selectHealth
 
 	if err := enqueueRestatementItems(ctx, d, sess, branch, pairs); err != nil {
 		return err
 	}
-	recordRestatementHealth(ctx, d, sess.ID, health)
 	return nil
 }
 
@@ -565,42 +705,44 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 // a percentile of each repo's own distribution rather than a threshold someone
 // picked (MN13).
 func healthLines(h restatementHealth) []string {
+	if h.Failure != "" {
+		return []string{
+			fmt.Sprintf("restatement shortlist unavailable this session: %s "+
+				"(no candidates — this is NOT a statement about the corpus)", h.Failure),
+			fmt.Sprintf("abstraction coverage: %.0f%% of live epistemic facts", h.Coverage*100),
+		}
+	}
 	return []string{
 		fmt.Sprintf("abstraction coverage: %.0f%% of live epistemic facts", h.Coverage*100),
 		fmt.Sprintf("standing restatement pairs: %d (title-cos p99 %.3f, p99.9 %.3f)",
 			h.StandingPairs, h.TailP99, h.TailP999),
 		fmt.Sprintf("operating point: title-cos %.3f (this corpus, this session)", h.OperatingPoint),
 		fmt.Sprintf("restatement candidates emitted: %d", h.Emitted),
-		fmt.Sprintf("shortlist throttle: %s (trailing merge-rate %.0f%% over last %d judged)",
-			h.ThrottleState, h.MergeRate*100, throttleWindow),
+		fmt.Sprintf("shortlist throttle: %s%s (trailing resolution-rate %.0f%% over last %d judged)",
+			h.ThrottleState, probeSuffix(h), h.ResolutionRate*100, throttleWindow),
 	}
 }
 
-// recordRestatementHealth stores the session's health lines so the result the
-// caller receives can carry them. The engine is per-call stateless, so this
-// cannot be kept in memory between planning and responding.
-func recordRestatementHealth(ctx context.Context, d Deps, sessionID string, h restatementHealth) {
-	encoded, err := json.Marshal(healthLines(h))
-	if err != nil {
+func probeSuffix(h restatementHealth) string {
+	if h.Probing {
+		return " (probing)"
+	}
+	return ""
+}
+
+// recordRestatementHealth hangs the session's health lines on the session
+// object StartSession is holding.
+//
+// In memory, not in the session row: planning and responding happen inside the
+// SAME StartSession call, on the same *PipelineSession pointer, so a database
+// round trip would buy nothing. Health is read once, by the turn that produced
+// it (invariants/synthesize/per-call-objects-no-session-state is about state
+// that must SURVIVE a call — this deliberately does not).
+func recordRestatementHealth(sess *store.PipelineSession, h restatementHealth) {
+	if sess == nil {
 		return
 	}
-	if err := d.Pipeline.SetPipelineSessionHealth(ctx, sessionID, string(encoded)); err != nil {
-		// Informational, like recordStats: losing a health line costs
-		// visibility, never correctness.
-		log.Warn().Err(err).Str("session", sessionID).Msg("review: could not record health lines")
-	}
-}
-
-// sessionHealthLines decodes what recordRestatementHealth stored.
-func sessionHealthLines(sess *store.PipelineSession) []string {
-	if sess == nil || sess.Health == "" {
-		return nil
-	}
-	var lines []string
-	if err := json.Unmarshal([]byte(sess.Health), &lines); err != nil {
-		return nil
-	}
-	return lines
+	sess.Health = healthLines(h)
 }
 
 // ── verdict attribution ───────────────────────────────────────────────────
@@ -642,31 +784,67 @@ func resolveShortlistPair(ctx context.Context, d Deps, sess *store.PipelineSessi
 	}
 }
 
-// recordShortlistVerdict records what the judge did with a shortlist pair.
+// recordShortlistVerdict records what the judge did with a shortlist pair, and
+// retires the pair when the judge declined it.
 //
-// "Merged" means the judge merged THE PAIR the shortlist put in front of it,
-// not merely that the item produced some merge — on a two-fact item those
-// coincide, but saying it precisely keeps the throttle measuring what it
-// claims to measure.
+// RESOLVED, not merged. A judge that consolidates a restatement by retracting
+// the redundant half has done exactly the work this mechanism exists to buy, so
+// counting only merges would defund a corpus that is consolidating
+// successfully by another route — and a wrongly defunded corpus looks
+// identical, from outside, to one where the shortlist genuinely finds nothing.
+//
+// A confidence "update" is deliberately NOT a resolution: it leaves both facts
+// standing, so the redundancy this pair was offered for is still there.
 func recordShortlistVerdict(ctx context.Context, d Deps, sess *store.PipelineSession, judged *judgedPair, res *PruneResult) {
 	if judged == nil || res == nil {
 		return
 	}
-	merged := false
+	if judged.AFactID == 0 || judged.BFactID == 0 {
+		// An endpoint could not be resolved to a live fact — it was merged or
+		// retracted earlier in this same session, so this item was judging a
+		// pair that no longer exists. Recording it would write a zero id into
+		// the declined set (matching every other unresolved pair) and spend a
+		// slot of the throttle window on a non-event.
+		log.Debug().Str("session", sess.ID).
+			Str("a", judged.APath).Str("b", judged.BPath).
+			Msg("review: shortlist pair no longer live at judgement; not recording a verdict")
+		return
+	}
+
+	resolved := false
 	for _, m := range res.Merges {
 		if pairCovered(m.Paths, judged.APath, judged.BPath) {
-			merged = true
+			resolved = true
 			break
 		}
 	}
+	for _, dec := range res.Decisions {
+		if dec.Action == "retract" && (dec.Path == judged.APath || dec.Path == judged.BPath) {
+			resolved = true
+			break
+		}
+	}
+
 	if err := d.Abstraction.RecordRestatementVerdict(ctx, sess.Branch, store.RestatementVerdict{
 		APath: judged.APath, BPath: judged.BPath,
 		AFactID: judged.AFactID, BFactID: judged.BFactID,
-		Merged: merged, JudgedAt: time.Now().UTC(),
+		Resolved: resolved, JudgedAt: time.Now().UTC(),
 	}); err != nil {
 		// Informational, like recordStats: the mutations are already committed,
 		// and a lost verdict only makes the throttle slightly more optimistic.
 		log.Warn().Err(err).Str("session", sess.ID).Msg("review: could not record shortlist verdict")
+		return
+	}
+
+	// Retire the pair either way. A resolved pair no longer exists as written;
+	// a declined pair must not keep its place at the top of the ranking, or
+	// after a few declining sessions the whole selection window would be
+	// standing pairs the judge has already refused and nothing new could ever
+	// be offered. The verdict log remains the record, and an edit to either
+	// fact re-mints the pair through the ordinary KNN path — at which point it
+	// is genuinely unseen, because a new version is a new id.
+	if err := d.Abstraction.DeleteRestatementPair(ctx, sess.Branch, judged.AFactID, judged.BFactID); err != nil {
+		log.Warn().Err(err).Str("session", sess.ID).Msg("review: could not retire judged shortlist pair")
 	}
 }
 
@@ -682,4 +860,28 @@ func pairCovered(mergePaths []string, a, b string) bool {
 		}
 	}
 	return sawA && sawB
+}
+
+// probeAllowance is how many slots a DEFUNDED corpus may spend this session:
+// one, every throttleProbeInterval sessions, and zero otherwise.
+//
+// This is the whole of the recovery path. A defunded corpus produces no
+// verdicts, so its own evidence can never change without someone spending a
+// slot to generate more — the probe spends exactly one, on a schedule, and the
+// ordinary throttle takes over the moment a probe resolves.
+func probeAllowance(ctx context.Context, d Deps, branch string) (int, error) {
+	waited, err := d.Abstraction.ProbeSessionsWaited(ctx, branch)
+	if err != nil {
+		return 0, wrapf(reviewTool, err, "shortlist: probe wait")
+	}
+	if waited+1 < throttleProbeInterval {
+		if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, waited+1); err != nil {
+			return 0, wrapf(reviewTool, err, "shortlist: bump probe wait")
+		}
+		return 0, nil
+	}
+	if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
+		return 0, wrapf(reviewTool, err, "shortlist: reset probe wait")
+	}
+	return 1, nil
 }

@@ -51,13 +51,19 @@ CREATE TABLE IF NOT EXISTS restatement_cache_state (
 );
 
 -- Judge outcomes for shortlist-originated prune items — the ONLY enforcement
--- input in this design. Two consumers: the trailing merge-rate that funds or
--- defunds a corpus's shortlist, and the kept-pair exclusion that stops one
--- declined pair from occupying the funded slots forever.
+-- input in this design. Two consumers: the trailing resolution-rate that funds
+-- or defunds a corpus's shortlist, and the kept-pair guard that stops a
+-- declined pair from being re-minted by a later neighbour rescan.
+--
+-- `resolved`, not `merged`: a judge that consolidates a restatement by
+-- RETRACTING the redundant half has done exactly the work this mechanism
+-- exists to buy, and counting only merges would defund a corpus that is
+-- consolidating successfully by another route.
 --
 -- Fact ids, not just paths, because ids are content-addressed: "the judge kept
 -- this pair" expires structurally the moment either fact is edited, with no
--- hash comparison and no staleness.
+-- hash comparison and no staleness. Paths ride along because every human and
+-- log line that reads these rows thinks in paths.
 --
 -- Losing these rows is safe. An empty window reads as "optimistic", which is
 -- the cold-start posture anyway.
@@ -68,8 +74,20 @@ CREATE TABLE IF NOT EXISTS restatement_verdicts (
     b_path    TEXT NOT NULL,
     a_fact_id INTEGER NOT NULL,
     b_fact_id INTEGER NOT NULL,
-    merged    INTEGER NOT NULL,
+    resolved  INTEGER NOT NULL,
     judged_at TEXT NOT NULL
+);
+
+-- How many sessions a defunded corpus has waited since its last probe.
+--
+-- Without this the throttle is a LATCH, not a governor: a defunded corpus
+-- emits nothing, so it produces no verdicts, so nothing can ever restore it.
+-- The counter buys back the missing feedback at a bounded price — one probe
+-- pair every Nth session — so recovery stays data-driven rather than
+-- configured.
+CREATE TABLE IF NOT EXISTS restatement_throttle_state (
+    branch_id            INTEGER PRIMARY KEY REFERENCES branches(id),
+    sessions_since_probe INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS restatement_verdicts_recent
     ON restatement_verdicts(branch_id, id DESC);

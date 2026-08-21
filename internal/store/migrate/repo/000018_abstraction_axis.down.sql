@@ -1,4 +1,5 @@
 DROP TRIGGER IF EXISTS facts_after_delete_title_vecs;
+DROP TABLE IF EXISTS restatement_throttle_state;
 DROP TABLE IF EXISTS restatement_verdicts;
 DROP TABLE IF EXISTS restatement_cache_state;
 DROP TABLE IF EXISTS restatement_pairs;

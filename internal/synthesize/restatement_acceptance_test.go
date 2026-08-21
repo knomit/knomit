@@ -93,9 +93,11 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 	t.Logf("coverage complete: %d/%d", have, total)
 
 	seeded := time.Now()
-	require.NoError(t, refreshRestatementShortlist(ctx, d, branch,
-		store.EmbedderThresholds(emb).Dedup))
-	t.Logf("shortlist seeded in %s", time.Since(seeded).Round(time.Millisecond))
+	refresh, err := refreshRestatementShortlist(ctx, d, branch, store.EmbedderThresholds(emb).Dedup)
+	require.NoError(t, err)
+	t.Logf("shortlist seeded in %s (%d KNN queries, %d pairs, %d partners requeued)",
+		time.Since(seeded).Round(time.Millisecond),
+		refresh.NeighbourQueries, refresh.PairsAdded, refresh.FactsRequeued)
 
 	pairs, health, err := selectRestatementCandidates(ctx, d, branch, nil, total)
 	require.NoError(t, err)
