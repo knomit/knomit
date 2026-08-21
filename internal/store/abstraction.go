@@ -70,6 +70,16 @@ func (ax *abstractionIndex) PutTitleVectors(ctx context.Context, vecs []TitleVec
 	if len(vecs) == 0 {
 		return nil
 	}
+	// One transaction for the batch: a backfill writes these 32 at a time, and
+	// under _txlock=immediate each implicit transaction is a process-wide write
+	// lock acquisition.
+	ctx, tx, owned, err := beginTxIfNeeded(ctx, ax.rh.db)
+	if err != nil {
+		return fmt.Errorf("abstraction: begin tx: %w", err)
+	}
+	if owned {
+		defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	}
 	db := conn(ctx, ax.rh.db)
 	for _, v := range vecs {
 		if _, err := db.ExecContext(ctx,
@@ -81,6 +91,9 @@ func (ax *abstractionIndex) PutTitleVectors(ctx context.Context, vecs []TitleVec
 			v.FactID, float32SliceToBytes(v.Vec)); err != nil {
 			return fmt.Errorf("abstraction: put title vector %d: %w", v.FactID, err)
 		}
+	}
+	if owned {
+		return tx.Commit()
 	}
 	return nil
 }
@@ -279,6 +292,39 @@ func (ax *abstractionIndex) CachedPairFactIDs(ctx context.Context, branch string
 			return nil, fmt.Errorf("abstraction: scan cached fact id: %w", err)
 		}
 		out[id] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// FactIDsByPath resolves specific live paths to their current fact ids.
+//
+// Two paths, not the corpus: verdict attribution needs the ids of exactly the
+// pair it is recording, and scanning every live fact to find two of them is a
+// full table read on every judged item.
+func (ax *abstractionIndex) FactIDsByPath(ctx context.Context, branch string, paths []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(paths))
+	if len(paths) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(paths)), ",")
+	args := make([]any, 0, len(paths)+1)
+	args = append(args, branch)
+	for _, p := range paths {
+		args = append(args, p)
+	}
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT f.id, f.path`+epistemicLiveJoin+` AND f.path IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: fact ids by path: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, fmt.Errorf("abstraction: scan fact id: %w", err)
+		}
+		out[path] = id
 	}
 	return out, rows.Err()
 }

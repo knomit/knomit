@@ -33,7 +33,6 @@ func TestAbstraction_TitleVectorLifecycle(t *testing.T) {
 
 	require.NoError(t, ax.PutTitleVectors(ctx, []TitleVector{{
 		FactID: targets[0].FactID,
-		Path:   targets[0].Path,
 		Vec:    unitVectorAt(0, 768),
 	}}))
 
@@ -102,7 +101,7 @@ func TestAbstraction_TopTitleNeighbours(t *testing.T) {
 	// angle i, so neighbours of 0 are 1, then 2, then 3...
 	for i, tgt := range targets {
 		require.NoError(t, ax.PutTitleVectors(ctx, []TitleVector{{
-			FactID: tgt.FactID, Path: tgt.Path, Vec: ringVector(i, len(targets), 768),
+			FactID: tgt.FactID, Vec: ringVector(i, len(targets), 768),
 		}}))
 	}
 
@@ -164,7 +163,7 @@ func TestAbstraction_EmbedIdentityChangeClearsTheAxis(t *testing.T) {
 	targets, err := svc.Abstraction().LiveFactsMissingTitleVector(ctx, "agent/test", 10)
 	require.NoError(t, err)
 	require.NoError(t, svc.Abstraction().PutTitleVectors(ctx, []TitleVector{{
-		FactID: targets[0].FactID, Path: targets[0].Path, Vec: unitVectorAt(0, 768),
+		FactID: targets[0].FactID, Vec: unitVectorAt(0, 768),
 	}}))
 	require.NoError(t, svc.Close())
 
@@ -181,4 +180,159 @@ func TestAbstraction_EmbedIdentityChangeClearsTheAxis(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, total, "the fact is still there")
 	require.Equal(t, 0, have, "vectors from another model must not survive")
+}
+
+// TestAbstraction_DropBranchClearsShortlistState — the restatement tables
+// reference branches(id) with no cascade, and foreign keys are enforced. Left
+// behind, they make DropBranch fail on the branches delete AFTER the git ref is
+// already gone: exactly the half-removed state DropBranch's ordering exists to
+// avoid.
+func TestAbstraction_DropBranchClearsShortlistState(t *testing.T) {
+	ctx := context.Background()
+	svc := openAbstractionTestService(t)
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/doomed", "agent/test"))
+
+	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
+	targets, err := svc.Abstraction().LiveFactsMissingTitleVector(ctx, "agent/test", 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, targets)
+
+	// Give the doomed branch a full set of shortlist state.
+	require.NoError(t, svc.Abstraction().ReplaceRestatementPairs(ctx, "agent/doomed", nil,
+		[]RestatementPair{{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2, TitleCos: 0.9}},
+		[]int64{1, 2}))
+	require.NoError(t, svc.Abstraction().RecordRestatementVerdict(ctx, "agent/doomed",
+		RestatementVerdict{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2}))
+	require.NoError(t, svc.Abstraction().SetProbeSessionsWaited(ctx, "agent/doomed", 3))
+
+	require.NoError(t, svc.Branches().DropBranch(ctx, "agent/doomed"),
+		"a branch carrying shortlist state must still drop cleanly")
+
+	branches, err := svc.Branches().ListBranches(ctx)
+	require.NoError(t, err)
+	for _, b := range branches {
+		require.NotEqual(t, "agent/doomed", b.Name)
+	}
+}
+
+// TestAbstraction_TitleVecWidthIsValidatedUnderEveryModel — fact_titles_vec is
+// created at the default 768 by Open (the delete trigger needs a table to
+// exist), and a vec0 table's width is fixed at CREATE. Under a model of any
+// other dimension the identity check would short-circuit before anyone noticed:
+// every insert would fail, the axis would stay empty, and the shortlist would
+// silently find nothing forever.
+func TestAbstraction_TitleVecWidthIsValidatedUnderEveryModel(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "k.db")
+
+	svc := openAbstractionTestServiceAt(t, path, &dim512Embedder{})
+	// Rebuild first: the vec tables are bootstrapped at the default width by
+	// Open, and it is the rebuild that recreates them at the ACTIVE model's
+	// dimension — which is the order the app startup path uses too.
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/test", nil))
+	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
+
+	targets, err := svc.Abstraction().LiveFactsMissingTitleVector(ctx, "agent/test", 10)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+
+	vec := make([]float32, 512)
+	vec[0] = 1
+	require.NoError(t, svc.Abstraction().PutTitleVectors(ctx, []TitleVector{{
+		FactID: targets[0].FactID, Vec: vec,
+	}}), "the axis must accept vectors at the ACTIVE model's dimension")
+
+	have, _, err := svc.Abstraction().TitleVectorCoverage(ctx, "agent/test")
+	require.NoError(t, err)
+	require.Equal(t, 1, have)
+}
+
+// TestAbstraction_EmbedIdentityChangeClearsVerdictsToo — a trailing
+// resolution-rate mixing judgements made under two embedding models is reading
+// evidence about pairs the new model may never propose. The schema says an
+// empty verdict window is safe, so a model change starts over.
+func TestAbstraction_EmbedIdentityChangeClearsVerdictsToo(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "k.db")
+
+	svc := openAbstractionTestServiceAt(t, path, &stub768Embedder{})
+	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
+	require.NoError(t, svc.Abstraction().RecordRestatementVerdict(ctx, "agent/test",
+		RestatementVerdict{APath: "kb/a.md", BPath: "kb/b.md", AFactID: 1, BFactID: 2, Resolved: true}))
+	require.NoError(t, svc.Abstraction().SetProbeSessionsWaited(ctx, "agent/test", 4))
+	require.NoError(t, svc.Close())
+
+	svc2 := openAbstractionTestServiceAt(t, path, &otherIDEmbedder{})
+	require.NoError(t, svc2.IndexManager().Rebuild(ctx, "agent/test", nil))
+
+	verdicts, err := svc2.Abstraction().RecentRestatementVerdicts(ctx, "agent/test", 10)
+	require.NoError(t, err)
+	require.Empty(t, verdicts, "verdicts from another model must not steer this one's throttle")
+
+	waited, err := svc2.Abstraction().ProbeSessionsWaited(ctx, "agent/test")
+	require.NoError(t, err)
+	require.Zero(t, waited)
+}
+
+// TestAbstraction_FactIDsByPathResolvesOnlyLiveVersions — verdict attribution
+// keys on ids, so a path that has been retracted must resolve to nothing rather
+// than to a stale id.
+func TestAbstraction_FactIDsByPathResolvesOnlyLiveVersions(t *testing.T) {
+	ctx := context.Background()
+	svc := openAbstractionTestService(t)
+	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
+	writeTestFact(t, svc, "kb/b.md", "Beta", "body-b")
+
+	ids, err := svc.Abstraction().FactIDsByPath(ctx, "agent/test", []string{"kb/a.md", "kb/b.md"})
+	require.NoError(t, err)
+	require.Len(t, ids, 2)
+
+	_, err = svc.Facts().DeleteFact(ctx, "agent/test", "kb/b.md", "retract b")
+	require.NoError(t, err)
+
+	ids, err = svc.Abstraction().FactIDsByPath(ctx, "agent/test", []string{"kb/a.md", "kb/b.md"})
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	require.NotContains(t, ids, "kb/b.md")
+}
+
+// TestAbstraction_TitleVecWidthFixedOnAnUpgradedDatabase is the actual latent
+// case, and the one the width check exists for.
+//
+// A database indexed under a non-768 model, upgraded from a version that
+// predates the axis: Open bootstraps fact_titles_vec at the DEFAULT 768 so the
+// delete trigger has a table, and then the embedding identity MATCHES — same
+// model, same dim — so the rebuild has every reason to return early. Without a
+// width check that runs before that short-circuit, the axis keeps the wrong
+// width permanently: every insert fails, coverage never rises, and the
+// shortlist reports "no candidates" forever on a corpus full of them.
+func TestAbstraction_TitleVecWidthFixedOnAnUpgradedDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "k.db")
+
+	svc := openAbstractionTestServiceAt(t, path, &dim512Embedder{})
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, "agent/test", nil))
+	writeTestFact(t, svc, "kb/a.md", "Alpha", "body-a")
+
+	// Simulate the pre-axis database: the titles table simply is not there.
+	_, err := svc.rh.db.ExecContext(ctx, `DROP TABLE fact_titles_vec`)
+	require.NoError(t, err)
+	require.NoError(t, svc.Close())
+
+	// Reopen: Open recreates it at the default width, and the identity check
+	// has nothing to complain about.
+	svc2 := openAbstractionTestServiceAt(t, path, &dim512Embedder{})
+	require.NoError(t, svc2.IndexManager().Rebuild(ctx, "agent/test", nil))
+
+	targets, err := svc2.Abstraction().LiveFactsMissingTitleVector(ctx, "agent/test", 10)
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+
+	vec := make([]float32, 512)
+	vec[0] = 1
+	require.NoError(t, svc2.Abstraction().PutTitleVectors(ctx, []TitleVector{{
+		FactID: targets[0].FactID, Vec: vec,
+	}}), "the axis must have been rebuilt at the active model's width")
 }

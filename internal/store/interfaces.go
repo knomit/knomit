@@ -218,10 +218,10 @@ type TitleTarget struct {
 	Title  string
 }
 
-// TitleVector is one fact's title embedding.
+// TitleVector is one fact's title embedding, keyed by fact id — the same
+// content-addressed key facts_vec uses.
 type TitleVector struct {
 	FactID int64
-	Path   string
 	Vec    []float32
 }
 
@@ -282,6 +282,8 @@ type AbstractionIndex interface {
 	// Consulted when MINTING pairs, so a declined pair is not re-created by a
 	// later neighbour rescan.
 	KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error)
+	// FactIDsByPath resolves specific live paths to their current fact ids.
+	FactIDsByPath(ctx context.Context, branch string, paths []string) (map[string]int64, error)
 	// PartnersOfFacts returns the still-cached partners of the given facts, so
 	// an asymmetric KNN discovery is not lost when its owner is re-scanned.
 	PartnersOfFacts(ctx context.Context, branch string, factIDs []int64) (map[int64]struct{}, error)

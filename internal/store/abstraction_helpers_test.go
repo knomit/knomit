@@ -70,3 +70,33 @@ type otherIDEmbedder struct{ stub768Embedder }
 func (e *otherIDEmbedder) ID() string { return "stub768-other" }
 
 func (e *otherIDEmbedder) Thresholds() params.Thresholds { return params.Defaults() }
+
+// dim512Embedder is a stub at a NON-default dimension, for testing that the vec
+// tables are created at the active model's width rather than the 768 the
+// tables are bootstrapped with at Open.
+type dim512Embedder struct{ stub768Embedder }
+
+func (e *dim512Embedder) Dim() int   { return 512 }
+func (e *dim512Embedder) ID() string { return "stub512" }
+
+func (e *dim512Embedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
+	return make([]float32, 512), nil
+}
+
+func (e *dim512Embedder) EmbedDocument(ctx context.Context, title, body string) ([]float32, error) {
+	v := make([]float32, 512)
+	v[0] = 1
+	return v, nil
+}
+
+func (e *dim512Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
+	out := make([][]float32, len(titles))
+	for i := range titles {
+		out[i], _ = e.EmbedDocument(ctx, titles[i], bodies[i])
+	}
+	return out, nil
+}
+
+func (e *dim512Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

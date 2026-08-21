@@ -2,7 +2,6 @@ package synthesize
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -109,9 +108,9 @@ func TestAcceptance_RealCorpusShortlist(t *testing.T) {
 		"whatever the corpus looks like, a session's spend is bounded")
 
 	for i, p := range pairs {
-		t.Log(fmt.Sprintf("candidate %d (title-cos %.3f)", i, p.TitleCos))
-		t.Log("  A " + p.APath)
-		t.Log("  B " + p.BPath)
+		t.Logf("candidate %d (title-cos %.3f)", i, p.TitleCos)
+		t.Logf("  A %s", p.APath)
+		t.Logf("  B %s", p.BPath)
 	}
 
 	// The whole standing population, for corpora small enough to read.

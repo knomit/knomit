@@ -79,3 +79,28 @@ func bytesToFloat32Slice(b []byte) ([]float32, error) {
 	}
 	return v, nil
 }
+
+// CosineSim is the cosine similarity of two vectors, and the single definition
+// of that formula in this package: the SQL function knomit_cosine_sim decodes
+// its blobs and calls straight through to it, so a change here cannot leave the
+// two disagreeing.
+//
+// Returns 0 for mismatched lengths or a degenerate (zero-norm) vector, which
+// has no meaningful similarity to anything.
+func CosineSim(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		va, vb := float64(a[i]), float64(b[i])
+		dot += va * vb
+		normA += va * va
+		normB += vb * vb
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
+}

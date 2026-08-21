@@ -3,9 +3,7 @@
 package store
 
 import (
-	"encoding/binary"
 	"encoding/json"
-	"math"
 
 	"knomit/internal/fact"
 
@@ -78,21 +76,21 @@ func sqlParseFact(data []byte) interface{} {
 // Both inputs must be little-endian float32 arrays of equal length.
 // Returns a REAL in [-1, 1] or NULL on invalid input.
 func sqlCosineSim(a, b []byte) interface{} {
-	if len(a) == 0 || len(b) == 0 || len(a) != len(b) || len(a)%4 != 0 {
+	va, err := bytesToFloat32Slice(a)
+	if err != nil || len(va) == 0 {
 		return nil
 	}
-	n := len(a) / 4
-	var dot, normA, normB float64
-	for i := 0; i < n; i++ {
-		va := float64(math.Float32frombits(binary.LittleEndian.Uint32(a[i*4:])))
-		vb := float64(math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:])))
-		dot += va * vb
-		normA += va * va
-		normB += vb * vb
-	}
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
+	vb, err := bytesToFloat32Slice(b)
+	if err != nil || len(vb) != len(va) {
 		return nil
 	}
-	return dot / denom
+	sim := CosineSim(va, vb)
+	if sim == 0 {
+		// CosineSim folds "degenerate" into 0; SQL callers want NULL for a
+		// vector that has no meaningful similarity, and a genuine 0 is
+		// indistinguishable from it at this boundary. Orthogonality is
+		// vanishingly rare in practice and NULL is the safer answer.
+		return nil
+	}
+	return sim
 }

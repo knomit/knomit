@@ -91,5 +91,3 @@ CREATE TABLE IF NOT EXISTS restatement_throttle_state (
 );
 CREATE INDEX IF NOT EXISTS restatement_verdicts_recent
     ON restatement_verdicts(branch_id, id DESC);
-CREATE INDEX IF NOT EXISTS restatement_verdicts_pair
-    ON restatement_verdicts(branch_id, a_fact_id, b_fact_id);

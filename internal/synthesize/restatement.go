@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 	"time"
@@ -85,7 +84,7 @@ func ensureTitleVectors(ctx context.Context, d Deps, branch string, budget time.
 		}
 		out := make([]store.TitleVector, 0, len(targets))
 		for i, t := range targets {
-			out = append(out, store.TitleVector{FactID: t.FactID, Path: t.Path, Vec: vecs[i]})
+			out = append(out, store.TitleVector{FactID: t.FactID, Vec: vecs[i]})
 		}
 		if err := d.Abstraction.PutTitleVectors(ctx, out); err != nil {
 			return 0, 0, wrapf(reviewTool, err, "title backfill: store")
@@ -312,32 +311,12 @@ func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.Restatemen
 			}
 			continue
 		}
-		if cosine(a, b) >= dedupThreshold {
+		if store.CosineSim(a, b) >= dedupThreshold {
 			continue
 		}
 		out = append(out, p)
 	}
 	return out, unscorable, nil
-}
-
-// cosine of two stored vectors. They are L2-normalized at embed time, so this
-// is a dot product; the norms are recomputed anyway rather than assumed,
-// because a donated vector (WithPrecomputedEmbeddings) is only validated for
-// dimension.
-func cosine(a, b []float32) float64 {
-	if len(a) != len(b) {
-		return 0
-	}
-	var dot, na, nb float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		na += float64(a[i]) * float64(a[i])
-		nb += float64(b[i]) * float64(b[i])
-	}
-	if na <= 1e-12 || nb <= 1e-12 {
-		return 0
-	}
-	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
 
 // ── selection ─────────────────────────────────────────────────────────────
@@ -769,14 +748,10 @@ func resolveShortlistPair(ctx context.Context, d Deps, sess *store.PipelineSessi
 	if err != nil || len(paths) != 2 {
 		return nil
 	}
-	live, err := d.Abstraction.LiveEpistemicFacts(ctx, sess.Branch)
+	ids, err := d.Abstraction.FactIDsByPath(ctx, sess.Branch, paths)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sess.ID).Msg("review: could not resolve shortlist verdict ids")
 		return nil
-	}
-	ids := map[string]int64{}
-	for id, path := range live {
-		ids[path] = id
 	}
 	return &judgedPair{
 		APath: paths[0], BPath: paths[1],
