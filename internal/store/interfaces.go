@@ -210,6 +210,131 @@ type PipelineIndex interface {
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }
 
+// TitleTarget is a fact whose title still needs embedding onto the abstraction
+// axis.
+type TitleTarget struct {
+	FactID int64
+	Path   string
+	Title  string
+}
+
+// TitleVector is one fact's title embedding, keyed by fact id — the same
+// content-addressed key facts_vec uses.
+type TitleVector struct {
+	FactID int64
+	Vec    []float32
+}
+
+// TitleNeighbour is one KNN hit on the abstraction axis.
+type TitleNeighbour struct {
+	FactID     int64
+	Path       string
+	Similarity float64
+}
+
+// AbstractionIndex is the title-embedding axis ("the abstraction axis") and the
+// restatement shortlist built on it. Implemented by *abstractionIndex, exposed
+// on Service via Abstraction().
+//
+// REVIEW PIPELINE ONLY. It is deliberately not part of the SearchIndex
+// composite: nothing on the runtime paths (query / explain / learn) may consume
+// it, and keeping it off the composite makes that structural rather than a rule
+// somebody has to remember.
+type AbstractionIndex interface {
+	// LiveFactsMissingTitleVector returns up to limit live epistemic facts on
+	// branch that have no title vector yet, lowest fact id first.
+	LiveFactsMissingTitleVector(ctx context.Context, branch string, limit int) ([]TitleTarget, error)
+	PutTitleVectors(ctx context.Context, vecs []TitleVector) error
+	// TitleVectorCoverage reports (embedded, total) over live epistemic facts.
+	TitleVectorCoverage(ctx context.Context, branch string) (have, total int, err error)
+	// LiveEpistemicFacts is the live set, keyed by fact id with its path.
+	LiveEpistemicFacts(ctx context.Context, branch string) (map[int64]string, error)
+	// LiveEpistemicFactsOnAxis is the same set restricted to facts that carry a
+	// title vector — what the pair cache is diffed against, so a partial
+	// backfill cannot mark un-embedded facts as covered.
+	LiveEpistemicFactsOnAxis(ctx context.Context, branch string) (map[int64]string, error)
+	// TopTitleNeighbours returns up to k live epistemic neighbours of factID on
+	// the axis, self excluded, most similar first. A fact with no vector yet
+	// returns nothing rather than an error.
+	TopTitleNeighbours(ctx context.Context, branch string, factID int64, k int) ([]TitleNeighbour, error)
+	// BodyVectorsByFactID returns STORED blended vectors from facts_vec.
+	BodyVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error)
+
+	// CachedPairFactIDs returns the fact ids the standing pair cache covers.
+	CachedPairFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error)
+	// ReplaceRestatementPairs applies one cache delta atomically: pairs touching
+	// dropFactIDs are removed, add is inserted, and coveredNow is recorded as
+	// covered.
+	ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []RestatementPair, coveredNow []int64) error
+	// RestatementPairsByRank returns the top `limit` pairs by title cosine.
+	RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]RestatementPair, error)
+	// RestatementPairStats describes the standing population. Observability
+	// only — no branch reads these values.
+	RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error)
+
+	// RecordRestatementVerdict records what the judge did with one
+	// shortlist-originated pair.
+	RecordRestatementVerdict(ctx context.Context, branch string, v RestatementVerdict) error
+	// RecentRestatementVerdicts returns the last `window` verdicts, newest
+	// first — the input to the throttle.
+	RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]RestatementVerdict, error)
+	// KeptPairFactIDs returns pairs the judge declined, keyed by FactIDPairKey.
+	// Consulted when MINTING pairs, so a declined pair is not re-created by a
+	// later neighbour rescan.
+	KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error)
+	// FactIDsByPath resolves specific live paths to their current fact ids.
+	FactIDsByPath(ctx context.Context, branch string, paths []string) (map[string]int64, error)
+	// PartnersOfFacts returns the still-cached partners of the given facts, so
+	// an asymmetric KNN discovery is not lost when its owner is re-scanned.
+	PartnersOfFacts(ctx context.Context, branch string, factIDs []int64) (map[int64]struct{}, error)
+	// DeleteRestatementPair removes one standing pair (the judge declined it).
+	DeleteRestatementPair(ctx context.Context, branch string, aFactID, bFactID int64) error
+	// ProbeSessionsWaited returns how many sessions this branch has waited
+	// since its last throttle probe, and ResetProbeWait / BumpProbeWait move it.
+	// The counter is what keeps a defunded corpus recoverable.
+	ProbeSessionsWaited(ctx context.Context, branch string) (int, error)
+	SetProbeSessionsWaited(ctx context.Context, branch string, n int) error
+}
+
+// RestatementVerdict is one judge outcome on a shortlist-originated pair.
+//
+// Resolved, not Merged: a judge that consolidates a restatement by RETRACTING
+// the redundant half has done exactly the work this mechanism exists to buy.
+// Counting only merges would defund a corpus that is consolidating
+// successfully by another route — which is the failure mode a throttle can
+// least afford, since it looks identical to "the shortlist finds nothing".
+//
+// It carries fact ids as well as paths because ids are content-addressed: a
+// "keep" applies to the exact pair of versions that was judged, and editing
+// either fact makes the pair eligible again with no staleness rule needed.
+type RestatementVerdict struct {
+	APath    string
+	BPath    string
+	AFactID  int64
+	BFactID  int64
+	Resolved bool
+	JudgedAt time.Time
+}
+
+// RestatementPair is one standing candidate: two facts whose TITLES are close
+// on the abstraction axis while their bodies are not close enough for the
+// mechanical dedup gate to have merged them. Canonical order: APath < BPath.
+type RestatementPair struct {
+	APath    string
+	BPath    string
+	AFactID  int64
+	BFactID  int64
+	TitleCos float64
+}
+
+// RestatementPairStats describes the standing pair population for health
+// output: how many pairs stand, and where the top of the distribution sits.
+type RestatementPairStats struct {
+	Count int
+	P99   float64
+	P999  float64
+}
+
 // Embedder computes vector embeddings. Roles differ because retrieval models
 // embed queries and documents with different prompts.
 //
@@ -253,4 +378,10 @@ func EmbedderThresholds(emb Embedder) params.Thresholds {
 type BatchEmbedder interface {
 	Embedder
 	EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error)
+	// EmbedShortStrings embeds bare short strings (fact titles today, motif
+	// names later) through the model's short-string template. Separate from
+	// EmbedDocuments because the RENDERING differs, not the batching: a few
+	// words in the document template embed measurably worse than the same words
+	// in the title slot (see embeddings.Model.ShortStringTemplate).
+	EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error)
 }

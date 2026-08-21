@@ -60,3 +60,10 @@ func TestGraphBuildSimilarityEdges_SkipsNeighborWithNullDistance(t *testing.T) {
 	err = svc.si.graphBuildSimilarityEdges(ctx, "kb/x/src.md", blobHash)
 	require.NoError(t, err, "NULL-distance neighbors must be skipped, not fail the edge build")
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *zeroForMarkerEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

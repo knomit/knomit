@@ -141,6 +141,20 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		}
 	}
 
+	// The consolidation-scope fix. Prune's judge only ever sees facts that
+	// landed in the same cluster, so restatements whose halves cluster apart are
+	// judged by nothing and live forever
+	// (gotchas/synthesize/prune-scope/c40d6748). The shortlist below is
+	// corpus-wide and cached; the only session-dependent input is the
+	// co-membership check against the clusters computed above.
+	//
+	// Every step degrades to "no candidates" rather than failing the session:
+	// this is an addition to consolidation, and a corpus that cannot embed its
+	// titles or read its own cache should still get its ordinary review.
+	if err := planRestatementShortlist(ctx, d, sess, branch, clusters); err != nil {
+		return err
+	}
+
 	// Store distill work items if >1 seed (lower priority than prune).
 	//
 	// Grouped by cluster, then chunked. Depth-0 distill used to pass the whole
@@ -596,11 +610,22 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		}
 
 	case "prune":
+		// Resolve the shortlist pair BEFORE applying: an "update" decision
+		// rewrites a fact, and a rewritten fact is a new row with a new id, so
+		// ids read afterwards would not be the versions the judge saw.
+		// Returns nil for ordinary cluster items.
+		judged := resolveShortlistPair(ctx, d, sess, item)
+
 		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply prune")
 		}
 		recordStats(ctx, reviewTool, d, sess, stats)
+		// Attribution for the judge-outcome throttle. ONLY shortlist-originated
+		// items count: a cluster prune's merges say nothing about whether the
+		// shortlist is earning its slots, and counting them would keep a
+		// useless shortlist funded forever on any healthy corpus.
+		recordShortlistVerdict(ctx, d, sess, judged, dec.prune)
 
 	case "distill":
 		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())

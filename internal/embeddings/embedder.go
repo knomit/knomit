@@ -160,6 +160,27 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) 
 	return embedInBatches(ctx, texts, e.embedBatch)
 }
 
+// EmbedShortStrings embeds bare short strings — fact titles, and from Phase 2
+// of the motif work, motif names and name+definition strings — through the
+// model's ShortStringTemplate. Never the query or document template: see the
+// descriptor's comment for the measurement that settled this.
+//
+// ctx is checked before each batch, exactly as in EmbedDocuments.
+func (e *Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	rendered := make([]string, len(texts))
+	for i, t := range texts {
+		rendered[i] = e.shortStringText(t)
+	}
+	return embedInBatches(ctx, rendered, e.embedBatch)
+}
+
+// shortStringText renders one short string through the model's descriptor. The
+// string fills the {content} slot; {title} is empty, which for the title-hack
+// template is not reached at all.
+func (e *Embedder) shortStringText(s string) string {
+	return fillTemplate(e.model.ShortStringTemplate, "", s)
+}
+
 // embedInBatches splits texts into docBatchSize chunks and feeds each to run,
 // abandoning the remainder as soon as ctx is done. Split out from
 // EmbedDocuments (rather than inlined) so the cancellation checkpoint — the

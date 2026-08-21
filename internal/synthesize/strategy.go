@@ -55,14 +55,17 @@ type SearchQuery interface {
 // invariants/synthesize/session-branch-binding — nothing below StartSession
 // may consult RI.AgentBranch().
 type Deps struct {
-	RI         *repos.RepoInstance
-	Facts      store.FactIndex
-	Search     SearchQuery
-	Pipeline   store.PipelineIndex
-	Branches   store.BranchIndex
-	Effort     Effort
-	Scope      ScopeFilter
-	OnProgress func(ProgressEvent)
+	RI       *repos.RepoInstance
+	Facts    store.FactIndex
+	Search   SearchQuery
+	Pipeline store.PipelineIndex
+	Branches store.BranchIndex
+	// Abstraction is the title-embedding axis and the restatement shortlist
+	// built on it (the consolidation-scope fix). Review-pipeline only.
+	Abstraction store.AbstractionIndex
+	Effort      Effort
+	Scope       ScopeFilter
+	OnProgress  func(ProgressEvent)
 }
 
 // pagedStrategy is the optional half of Strategy: implemented only by
@@ -147,6 +150,16 @@ type PipelineResult struct {
 	// the name is review-flavoured but the counters are not.
 	Summary  *ReviewStats
 	Progress *ReviewProgress
+	// Health carries corpus-health descriptor lines recorded while planning the
+	// session — coverage of the abstraction axis, the standing pair population
+	// and where its top sits, what this session was funded to spend and why.
+	//
+	// Observability only: nothing in the engine reads it back, and no branch
+	// anywhere depends on a value in it. It rides the session RESULT because
+	// that is the one carrier that always reaches the calling agent — reflect
+	// items exist only when a session found hypothesis transitions, and
+	// progress events go to the server log.
+	Health []string
 }
 
 // Strategy is the per-tool half of a synthesis pipeline.
