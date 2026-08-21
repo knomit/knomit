@@ -1,11 +1,12 @@
 package antigravity
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -200,9 +201,16 @@ func emitNotice(w io.Writer, msg string) error {
 // is checked rather than trusted, and workspacePaths is used as a fallback, so
 // that a platform change to hook cwd degrades to a named skip instead of a
 // silent one.
+//
+// The name check is paired with isPluginDir because the name alone is not
+// evidence: a workspace directory can itself be called "knomit" (this repo's
+// own checkout is .../knomit/knomit). Matching on the name and returning early
+// handed back the workspace root, skipped both remaining probes, and greeted
+// the user forever with "no usable knomit server in mcp_config.json" while a
+// perfectly good plugin dir sat one level down.
 func locatePluginDir(workspacePaths []string) (string, bool) {
 	if cwd, err := os.Getwd(); err == nil {
-		if filepath.Base(cwd) == pluginDirName {
+		if filepath.Base(cwd) == pluginDirName && isPluginDir(cwd) {
 			return cwd, true
 		}
 		// cwd is not our plugin dir; it may still be the workspace root.
@@ -226,48 +234,31 @@ func isPluginDir(dir string) bool {
 	return err == nil
 }
 
-// markerPath returns the marker file for a conversation, or "" when the id is
-// unusable. The id is opaque agent-supplied text, so it is restricted to a
-// path-safe alphabet rather than trusted: a value containing separators or
-// ".." could otherwise steer the write out of the cache directory.
+// markerPath returns the marker file for a conversation, or "" when there is
+// no id to key on.
+//
+// The id is opaque agent-supplied text, so it never becomes a filename
+// directly: a value containing separators or ".." could otherwise steer the
+// write out of the cache directory. It is HASHED rather than rejected. The id
+// format is an unverified detail of a beta platform API, and a path-safe
+// alphabet would reject any id carrying a '.' or ':' — a timestamped id like
+// conv_2026-08-18T10:30:00Z would then disable the greeting for every
+// conversation of every user, with nothing but a log line to say so. Hashing
+// keeps the write inside the cache directory for any id at all, and its fixed
+// hex output is also immune to Windows device names and length limits.
+//
+// An empty id still skips: with nothing to key on, the once-per-conversation
+// guard cannot function, and a guard that cannot evaluate must fail closed.
 func markerPath(conversationID string) string {
-	if conversationID == "" || !isPathSafe(conversationID) {
+	if conversationID == "" {
 		return ""
 	}
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(cache, "knomit", "agy-sessions", conversationID)
-}
-
-// windowsReserved are device names that resolve to an OS device rather than a
-// file on Windows, so a marker written to one would never persist and the
-// conversation would be greeted again on every invocation.
-var windowsReserved = map[string]bool{
-	"con": true, "prn": true, "aux": true, "nul": true,
-	"com1": true, "com2": true, "com3": true, "com4": true, "com5": true,
-	"com6": true, "com7": true, "com8": true, "com9": true,
-	"lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true, "lpt5": true,
-	"lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
-}
-
-func isPathSafe(s string) bool {
-	if len(s) > 128 {
-		return false
-	}
-	if windowsReserved[strings.ToLower(s)] {
-		return false
-	}
-	return strings.IndexFunc(s, func(r rune) bool {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			return false
-		case r == '-' || r == '_':
-			return false
-		}
-		return true
-	}) < 0
+	sum := sha256.Sum256([]byte(conversationID))
+	return filepath.Join(cache, "knomit", "agy-sessions", hex.EncodeToString(sum[:]))
 }
 
 // writeMarker records that this conversation has been greeted, and prunes stale

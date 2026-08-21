@@ -148,14 +148,36 @@ func TestPreInvocation_MissingInvocationNum_FailsClosed(t *testing.T) {
 	}
 }
 
-// REGRESSION: an unusable conversationId used to make markerPath return "",
-// which skipped the marker check entirely rather than failing closed.
-func TestPreInvocation_UnusableConversationID_FailsClosed(t *testing.T) {
+// REGRESSION: an absent conversationId used to make markerPath return "",
+// which skipped the marker check entirely rather than failing closed. With
+// nothing to key a marker on, the guard cannot function and must stay silent.
+func TestPreInvocation_MissingConversationID_FailsClosed(t *testing.T) {
 	boundPlugin(t)
 	factsServer(t)
-	for _, id := range []string{"", "conv_2026-08-18T10:30:00Z", "../../escape", "a/b", strings.Repeat("x", 200)} {
+	assertEmpty(t, run(t, map[string]any{"invocationNum": 0}))
+	assertEmpty(t, run(t, map[string]any{"invocationNum": 0, "conversationId": ""}))
+}
+
+// REGRESSION: the marker filename used to be the raw id, restricted to
+// [A-Za-z0-9_-], and anything else was a hard skip. The id format is an
+// unverified beta-API detail, so a timestamped or dotted id would have
+// disabled the greeting for every conversation. Hashing greets each of these
+// exactly once instead.
+func TestPreInvocation_ExoticConversationID_GreetsOnce(t *testing.T) {
+	boundPlugin(t)
+	factsServer(t)
+	for _, id := range []string{
+		"conv_2026-08-18T10:30:00Z",
+		"../../escape",
+		"a/b",
+		"CON",
+		"café",
+		strings.Repeat("x", 200),
+	} {
 		t.Run(id, func(t *testing.T) {
-			assertEmpty(t, run(t, map[string]any{"invocationNum": 0, "conversationId": id}))
+			if !strings.Contains(run(t, map[string]any{"invocationNum": 0, "conversationId": id}), "injectSteps") {
+				t.Error("first invocation should be greeted")
+			}
 			assertEmpty(t, run(t, map[string]any{"invocationNum": 0, "conversationId": id}))
 		})
 	}
@@ -253,6 +275,28 @@ func TestPreInvocation_RunFromWorkspaceRoot_StillBinds(t *testing.T) {
 	}
 }
 
+// REGRESSION: locatePluginDir accepted any cwd merely NAMED "knomit" and
+// returned early, so a workspace directory called knomit (this repo's own
+// checkout is .../knomit/knomit) resolved to the workspace root, skipped the
+// remaining probes, and greeted the user on every conversation with a
+// misconfiguration notice no re-run could fix.
+func TestPreInvocation_WorkspaceNamedKnomit_StillBinds(t *testing.T) {
+	ws := filepath.Join(t.TempDir(), pluginDirName)
+	dir := filepath.Join(ws, PluginDir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","proj"]}}}`)
+	chdir(t, ws) // a workspace root that shares the plugin dir's name
+	isolateCache(t)
+	factsServer(t)
+
+	got := run(t, map[string]any{"invocationNum": 0, "conversationId": "c1"})
+	if !strings.Contains(got, "Known facts from knomit") {
+		t.Errorf("a workspace named %q must not shadow its own plugin dir; got %q", pluginDirName, got)
+	}
+}
+
 func TestPreInvocation_UsesWorkspacePathsWhenCwdIsUnrelated(t *testing.T) {
 	ws := t.TempDir()
 	dir := filepath.Join(ws, PluginDir)
@@ -277,11 +321,9 @@ func TestPreInvocation_NoPluginDirAnywhere_SaysSo(t *testing.T) {
 	}
 }
 
-// REGRESSION: this test previously asserted a path the vulnerable code could
-// never write to. markerPath joins the id under <cache>/knomit/agy-sessions,
-// and filepath.Join CLEANS the result, so "../../escape" collapses to
-// <cache>/escape — not two levels above the cache root. The old assertion
-// passed with isPathSafe disabled entirely.
+// A conversation id is opaque agent-supplied text, so a traversal-shaped one
+// must not steer the marker write outside the cache directory. It is hashed,
+// so the filename is fixed-length hex no matter what the id contains.
 func TestPreInvocation_TraversalConversationID_WritesNoMarkerOutside(t *testing.T) {
 	boundPlugin(t)
 	factsServer(t)
@@ -292,41 +334,30 @@ func TestPreInvocation_TraversalConversationID_WritesNoMarkerOutside(t *testing.
 
 	run(t, map[string]any{"invocationNum": 0, "conversationId": "../../escape"})
 
-	// The path the vulnerable implementation would actually produce.
+	// The path a raw-id implementation would produce: filepath.Join CLEANS the
+	// result, so "../../escape" collapses to <cache>/escape.
 	if _, err := os.Stat(filepath.Join(cache, "escape")); err == nil {
 		t.Error("marker escaped into the cache root")
 	}
-	// And the direct unit check, independent of any join semantics.
-	if got := markerPath("../../escape"); got != "" {
-		t.Errorf("markerPath(%q) = %q, want \"\"", "../../escape", got)
+
+	sessions := filepath.Join(cache, "knomit", "agy-sessions")
+	got := markerPath("../../escape")
+	if filepath.Dir(got) != sessions {
+		t.Errorf("markerPath(%q) = %q, want a file directly under %q", "../../escape", got, sessions)
+	}
+	if name := filepath.Base(got); len(name) != 64 || strings.Trim(name, "0123456789abcdef") != "" {
+		t.Errorf("marker filename %q is not a sha256 hex digest", name)
 	}
 }
 
-func TestIsPathSafe(t *testing.T) {
-	for _, tc := range []struct {
-		id   string
-		want bool
-	}{
-		{"8d7ee1d7-1012-466a-ab22-ca44da844229", true},
-		{"c1", true},
-		{"", true}, // emptiness is rejected by markerPath, not here
-		{"../../escape", false},
-		{"a/b", false},
-		{`a\b`, false},
-		{"a:b", false},
-		{"a.b", false},
-		{"a b", false},
-		{"café", false},
-		{strings.Repeat("x", 129), false},
-		// Windows device names resolve to an OS device, so a marker written
-		// there would never persist and the conversation would repeat forever.
-		{"CON", false},
-		{"nul", false},
-		{"COM1", false},
-		{"lpt9", false},
-	} {
-		if got := isPathSafe(tc.id); got != tc.want {
-			t.Errorf("isPathSafe(%q) = %v, want %v", tc.id, got, tc.want)
-		}
+// The once-per-conversation guard needs distinct ids to land on distinct
+// markers; a hash collision here would greet one conversation and silence the
+// other for its whole life.
+func TestMarkerPath_DistinctIDsDistinctMarkers(t *testing.T) {
+	if markerPath("c1") == markerPath("c2") {
+		t.Error("distinct conversation ids must not share a marker")
+	}
+	if markerPath("") != "" {
+		t.Error("an empty id has nothing to key on and must yield no marker")
 	}
 }
