@@ -120,3 +120,10 @@ func pathSet(results []SearchResult) map[string]bool {
 	}
 	return out
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *floorEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

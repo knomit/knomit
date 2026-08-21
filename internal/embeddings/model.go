@@ -57,6 +57,19 @@ type Model struct {
 	MaxTokens     int
 	QueryTemplate string
 	DocTemplate   string
+	// ShortStringTemplate renders a BARE SHORT STRING (a fact title, a motif
+	// name, a name+definition) for embedding. It is deliberately the title slot
+	// with a literal "none" body — the "title-hack".
+	//
+	// This looks wrong and is right: the task sweep recorded in
+	// .claude/plans/motif/2026-08-20-motif-summarizer-experiment.md measured the
+	// model card's own task prompts WORSE than this rendering for strings of a
+	// few words on embeddinggemma, and every operating point calibrated in that
+	// work assumes this exact string. Do not "fix" it to a task prompt without
+	// re-running the sweep. New embedding axes get their own calibrated
+	// operating points; never reuse fact-embedding thresholds
+	// (decisions/embeddings/model-dependent-thresholds-on-descriptor).
+	ShortStringTemplate string
 	// Thresholds are this model's cosine cutoffs for dedup/search/graph/reflect.
 	// They are calibrated per model against the real corpus (tools/calibrate),
 	// because each model has a different cosine distribution.
@@ -78,6 +91,8 @@ var registry = map[string]Model{
 		MaxTokens:     2048, // EmbeddingGemma max position embeddings.
 		QueryTemplate: "task: search result | query: {content}",
 		DocTemplate:   "title: {title} | text: {content}",
+		// The title-hack — see the descriptor comment above.
+		ShortStringTemplate: "title: {content} | text: none",
 		// Calibrated against the real knomit corpus (712 facts, tools/calibrate).
 		// EmbeddingGemma's cosine distribution runs markedly cooler than nomic's
 		// (distinct same-category pairs: mean 0.48 vs 0.75), so every cutoff is
@@ -105,6 +120,10 @@ var registry = map[string]Model{
 		MaxTokens:     2048, // nomic-embed-text-v1.5 context window.
 		QueryTemplate: "search_query: {content}",
 		DocTemplate:   "search_document: {content}",
+		// Not swept on nomic: its document rendering has no title slot, so the
+		// title-hack has no analogue here. Re-measure before trusting any
+		// short-string operating point under this model.
+		ShortStringTemplate: "search_document: {content}",
 		// nomic was the original default; these are the historical literals the
 		// thresholds were implicitly tuned against (== params.Defaults()).
 		Thresholds: params.Defaults(),

@@ -283,3 +283,10 @@ func TestUpsert_DuplicateEntitiesAndDomains_NoError(t *testing.T) {
 	// Domains are stored canonicalised (de-hyphenized): "machine-learning" → "machine learning".
 	require.Equal(t, []string{"ai", "machine learning"}, domains)
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *configurableEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

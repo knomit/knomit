@@ -253,4 +253,10 @@ func EmbedderThresholds(emb Embedder) params.Thresholds {
 type BatchEmbedder interface {
 	Embedder
 	EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error)
+	// EmbedShortStrings embeds bare short strings (fact titles today, motif
+	// names later) through the model's short-string template. Separate from
+	// EmbedDocuments because the RENDERING differs, not the batching: a few
+	// words in the document template embed measurably worse than the same words
+	// in the title slot (see embeddings.Model.ShortStringTemplate).
+	EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error)
 }

@@ -211,3 +211,17 @@ func TestRebuild_SerializedWithConcurrentSyncLocked(t *testing.T) {
 		t.Fatal("SyncLocked never resumed after Rebuild released the branch lock")
 	}
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *blockingBatchEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *shortBatchEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}
