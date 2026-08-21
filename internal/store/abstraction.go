@@ -100,24 +100,29 @@ func (ax *abstractionIndex) TitleVectorCoverage(ctx context.Context, branch stri
 	return have, total, nil
 }
 
-// LiveEpistemicFactIDs is the live set the pair cache is diffed against. The
-// symmetric difference with the cached set is the delta, which is why the
-// shortlist needs no watermark of its own.
-func (ax *abstractionIndex) LiveEpistemicFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error) {
+// LiveEpistemicFacts is the live set the pair cache is diffed against, keyed by
+// fact id with its path. The symmetric difference with the cached set is the
+// delta, which is why the shortlist needs no watermark of its own.
+//
+// It carries paths as well as ids because a candidate pair is keyed by path —
+// that is what a prune work item talks in — and resolving them one id at a time
+// afterwards would be a query per changed fact.
+func (ax *abstractionIndex) LiveEpistemicFacts(ctx context.Context, branch string) (map[int64]string, error) {
 	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
-		`SELECT f.id`+epistemicLiveJoin, branch)
+		`SELECT f.id, f.path`+epistemicLiveJoin, branch)
 	if err != nil {
-		return nil, fmt.Errorf("abstraction: live fact ids: %w", err)
+		return nil, fmt.Errorf("abstraction: live facts: %w", err)
 	}
 	defer rows.Close()
 
-	out := map[int64]struct{}{}
+	out := map[int64]string{}
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("abstraction: scan live fact id: %w", err)
+		var path string
+		if err := rows.Scan(&id, &path); err != nil {
+			return nil, fmt.Errorf("abstraction: scan live fact: %w", err)
 		}
-		out[id] = struct{}{}
+		out[id] = path
 	}
 	return out, rows.Err()
 }
@@ -224,4 +229,192 @@ func (ax *abstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64
 		out[id] = vec
 	}
 	return out, rows.Err()
+}
+
+// ── the standing restatement shortlist ────────────────────────────────────
+//
+// Candidate pairs live in the DB rather than being recomputed per session, for
+// the same reason SIMILAR_TO edges do: the structure is global, the change per
+// session is small, and rebuilding it every time would make a corpus-wide
+// question cost corpus-wide work forever. What a session pays is proportional
+// to what CHANGED.
+
+// CachedPairFactIDs returns the fact ids the pair cache was last built over.
+// Diffed against LiveEpistemicFactIDs, this IS the delta — no watermark.
+func (ax *abstractionIndex) CachedPairFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error) {
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT s.fact_id
+		   FROM restatement_cache_state s
+		   JOIN branches b ON b.id = s.branch_id
+		  WHERE b.name = ?`, branch)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: cached pair fact ids: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[int64]struct{}{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("abstraction: scan cached fact id: %w", err)
+		}
+		out[id] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// ReplaceRestatementPairs applies one delta to the cache atomically: every pair
+// touching a dropped-or-changed fact goes, the new pairs land, and the cache
+// state records what the cache now covers.
+//
+// One transaction because a half-applied delta is worse than a stale cache: a
+// cache that lost its pairs but kept its state rows would never rebuild them,
+// since the state rows are what says "already covered".
+func (ax *abstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []RestatementPair, coveredNow []int64) error {
+	if len(dropFactIDs) == 0 && len(add) == 0 && len(coveredNow) == 0 {
+		return nil
+	}
+	branchID, err := ax.branchID(ctx, branch)
+	if err != nil {
+		return err
+	}
+
+	ctx, tx, owned, err := beginTxIfNeeded(ctx, ax.rh.db)
+	if err != nil {
+		return fmt.Errorf("abstraction: begin tx: %w", err)
+	}
+	if owned {
+		defer tx.Rollback() //nolint:errcheck // rollback after commit is a no-op
+	}
+	db := conn(ctx, ax.rh.db)
+
+	for _, id := range dropFactIDs {
+		if _, err := db.ExecContext(ctx,
+			`DELETE FROM restatement_pairs
+			  WHERE branch_id = ? AND (a_fact_id = ? OR b_fact_id = ?)`,
+			branchID, id, id); err != nil {
+			return fmt.Errorf("abstraction: drop pairs for %d: %w", id, err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`DELETE FROM restatement_cache_state WHERE branch_id = ? AND fact_id = ?`,
+			branchID, id); err != nil {
+			return fmt.Errorf("abstraction: drop cache state for %d: %w", id, err)
+		}
+	}
+	for _, p := range add {
+		if _, err := db.ExecContext(ctx,
+			`INSERT OR REPLACE INTO restatement_pairs
+			     (branch_id, a_path, b_path, a_fact_id, b_fact_id, title_cos)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			branchID, p.APath, p.BPath, p.AFactID, p.BFactID, p.TitleCos); err != nil {
+			return fmt.Errorf("abstraction: insert pair %s|%s: %w", p.APath, p.BPath, err)
+		}
+	}
+	for _, id := range coveredNow {
+		if _, err := db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO restatement_cache_state(branch_id, fact_id) VALUES (?, ?)`,
+			branchID, id); err != nil {
+			return fmt.Errorf("abstraction: record cache state for %d: %w", id, err)
+		}
+	}
+	if owned {
+		return tx.Commit()
+	}
+	return nil
+}
+
+// RestatementPairsByRank returns the top pairs by title cosine.
+//
+// Ranking is the whole selection mechanism: the "operating point" is whatever
+// absolute cosine the last selected pair happens to sit at IN THIS REPO, which
+// is why no cosine threshold appears anywhere in this file.
+func (ax *abstractionIndex) RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]RestatementPair, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos
+		   FROM restatement_pairs p
+		   JOIN branches b ON b.id = p.branch_id
+		  WHERE b.name = ?
+		  ORDER BY p.title_cos DESC, p.a_path ASC, p.b_path ASC
+		  LIMIT ?`, branch, limit)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: rank pairs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RestatementPair
+	for rows.Next() {
+		var p RestatementPair
+		if err := rows.Scan(&p.APath, &p.BPath, &p.AFactID, &p.BFactID, &p.TitleCos); err != nil {
+			return nil, fmt.Errorf("abstraction: scan pair: %w", err)
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// RestatementPairStats describes the standing pair population. Every field is
+// OBSERVABILITY: reported in review health output, read by no branch. They are
+// descriptors of a corpus, and a corpus descriptor that decided anything would
+// be the corpus-property constant this design exists without.
+func (ax *abstractionIndex) RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error) {
+	var st RestatementPairStats
+	if err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+		`SELECT COUNT(*)
+		   FROM restatement_pairs p
+		   JOIN branches b ON b.id = p.branch_id
+		  WHERE b.name = ?`, branch).Scan(&st.Count); err != nil {
+		return st, fmt.Errorf("abstraction: pair count: %w", err)
+	}
+	if st.Count == 0 {
+		return st, nil
+	}
+	var err error
+	if st.P99, err = ax.pairQuantile(ctx, branch, st.Count, 0.99); err != nil {
+		return st, err
+	}
+	if st.P999, err = ax.pairQuantile(ctx, branch, st.Count, 0.999); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+// pairQuantile reads the title cosine at the given upper quantile by offsetting
+// into the descending ranking — cheap on the (branch_id, title_cos DESC) index
+// and exact, where a sampled estimate would wobble between sessions.
+func (ax *abstractionIndex) pairQuantile(ctx context.Context, branch string, count int, q float64) (float64, error) {
+	offset := int(float64(count) * (1 - q))
+	if offset >= count {
+		offset = count - 1
+	}
+	var v float64
+	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+		`SELECT p.title_cos
+		   FROM restatement_pairs p
+		   JOIN branches b ON b.id = p.branch_id
+		  WHERE b.name = ?
+		  ORDER BY p.title_cos DESC
+		  LIMIT 1 OFFSET ?`, branch, offset).Scan(&v)
+	if err != nil {
+		return 0, fmt.Errorf("abstraction: pair quantile %.3f: %w", q, err)
+	}
+	return v, nil
+}
+
+// branchID resolves a branch name to its row id. A branch the registry has
+// never seen is an error rather than a silent no-op: writing shortlist state
+// under a phantom branch id would be invisible and permanent.
+func (ax *abstractionIndex) branchID(ctx context.Context, branch string) (int64, error) {
+	var id int64
+	err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+		`SELECT id FROM branches WHERE name = ?`, branch).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("abstraction: unknown branch %q", branch)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("abstraction: branch id for %q: %w", branch, err)
+	}
+	return id, nil
 }

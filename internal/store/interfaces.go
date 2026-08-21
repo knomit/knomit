@@ -247,14 +247,46 @@ type AbstractionIndex interface {
 	PutTitleVectors(ctx context.Context, vecs []TitleVector) error
 	// TitleVectorCoverage reports (embedded, total) over live epistemic facts.
 	TitleVectorCoverage(ctx context.Context, branch string) (have, total int, err error)
-	// LiveEpistemicFactIDs is the live set the pair cache is diffed against.
-	LiveEpistemicFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error)
+	// LiveEpistemicFacts is the live set the pair cache is diffed against,
+	// keyed by fact id with its path.
+	LiveEpistemicFacts(ctx context.Context, branch string) (map[int64]string, error)
 	// TopTitleNeighbours returns up to k live epistemic neighbours of factID on
 	// the axis, self excluded, most similar first. A fact with no vector yet
 	// returns nothing rather than an error.
 	TopTitleNeighbours(ctx context.Context, branch string, factID int64, k int) ([]TitleNeighbour, error)
 	// BodyVectorsByFactID returns STORED blended vectors from facts_vec.
 	BodyVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error)
+
+	// CachedPairFactIDs returns the fact ids the standing pair cache covers.
+	CachedPairFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error)
+	// ReplaceRestatementPairs applies one cache delta atomically: pairs touching
+	// dropFactIDs are removed, add is inserted, and coveredNow is recorded as
+	// covered.
+	ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []RestatementPair, coveredNow []int64) error
+	// RestatementPairsByRank returns the top `limit` pairs by title cosine.
+	RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]RestatementPair, error)
+	// RestatementPairStats describes the standing population. Observability
+	// only — no branch reads these values.
+	RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error)
+}
+
+// RestatementPair is one standing candidate: two facts whose TITLES are close
+// on the abstraction axis while their bodies are not close enough for the
+// mechanical dedup gate to have merged them. Canonical order: APath < BPath.
+type RestatementPair struct {
+	APath    string
+	BPath    string
+	AFactID  int64
+	BFactID  int64
+	TitleCos float64
+}
+
+// RestatementPairStats describes the standing pair population for health
+// output: how many pairs stand, and where the top of the distribution sits.
+type RestatementPairStats struct {
+	Count int
+	P99   float64
+	P999  float64
 }
 
 // Embedder computes vector embeddings. Roles differ because retrieval models

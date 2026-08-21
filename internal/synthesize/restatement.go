@@ -2,6 +2,9 @@ package synthesize
 
 import (
 	"context"
+	"math"
+	"slices"
+	"sync/atomic"
 	"time"
 
 	"knomit/internal/store"
@@ -85,4 +88,156 @@ func ensureTitleVectors(ctx context.Context, d Deps, branch string, budget time.
 		}
 	}
 	return d.Abstraction.TitleVectorCoverage(ctx, branch)
+}
+
+// pairNeighbourK is how many title-neighbours are retained per fact — a
+// STRUCTURAL BUDGET with system precedent (store.knnK = 10 for SIMILAR_TO),
+// never a claim about how many restatements a corpus contains. It bounds the
+// standing cache at K·N rows and per-session work at O(Δ·K).
+const pairNeighbourK = 10
+
+// neighbourQueryCount counts KNN lookups so tests can assert that per-session
+// work is proportional to what CHANGED rather than to corpus size.
+var neighbourQueryCount atomic.Int64
+
+// refreshRestatementShortlist brings the standing candidate cache up to date.
+//
+// Pairing is CORPUS-WIDE and session-independent: the session's scope and the
+// session's clusters play no part here (scope is applied at emission,
+// cluster co-membership at selection). That separation is the point — the
+// target population is precisely the pairs a scoped view never co-presents, so
+// restricting the pairing to a session's own view would rebuild the blindness
+// this exists to fix.
+//
+// NO clustering runs in this path. The neighbour lookup is the same KNN the
+// similarity graph uses.
+func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, dedupThreshold float64) error {
+	live, err := d.Abstraction.LiveEpistemicFacts(ctx, branch)
+	if err != nil {
+		return wrapf(reviewTool, err, "shortlist: live facts")
+	}
+	cached, err := d.Abstraction.CachedPairFactIDs(ctx, branch)
+	if err != nil {
+		return wrapf(reviewTool, err, "shortlist: cached fact ids")
+	}
+
+	// The delta is the symmetric difference. An edit shows up as one added id
+	// and one dropped id, because facts rows are content-addressed — which is
+	// why nothing here needs a watermark.
+	var added []int64
+	for id := range live {
+		if _, ok := cached[id]; !ok {
+			added = append(added, id)
+		}
+	}
+	var dropped []int64
+	for id := range cached {
+		if _, ok := live[id]; !ok {
+			dropped = append(dropped, id)
+		}
+	}
+	if len(added) == 0 && len(dropped) == 0 {
+		return nil
+	}
+	// Deterministic order so two runs over the same delta produce the same
+	// cache, and so a test can talk about "the first fact".
+	slices.Sort(added)
+	slices.Sort(dropped)
+
+	var candidates []store.RestatementPair
+	for _, id := range added {
+		neighbourQueryCount.Add(1)
+		neighbours, err := d.Abstraction.TopTitleNeighbours(ctx, branch, id, pairNeighbourK)
+		if err != nil {
+			return wrapf(reviewTool, err, "shortlist: neighbours for fact %d", id)
+		}
+		for _, n := range neighbours {
+			candidates = append(candidates, newRestatementPair(id, live[id], n))
+		}
+	}
+
+	kept, err := filterByBlendedCosine(ctx, d, candidates, dedupThreshold)
+	if err != nil {
+		return err
+	}
+	return d.Abstraction.ReplaceRestatementPairs(ctx, branch, append(dropped, added...), kept, added)
+}
+
+// newRestatementPair canonicalises a pair so A-B and B-A are one row.
+func newRestatementPair(id int64, path string, n store.TitleNeighbour) store.RestatementPair {
+	p := store.RestatementPair{
+		APath: path, BPath: n.Path,
+		AFactID: id, BFactID: n.FactID,
+		TitleCos: n.Similarity,
+	}
+	if p.BPath < p.APath {
+		p.APath, p.BPath = p.BPath, p.APath
+		p.AFactID, p.BFactID = p.BFactID, p.AFactID
+	}
+	return p
+}
+
+// filterByBlendedCosine drops pairs whose BLENDED (title+body) vectors already
+// sit at or above the model's calibrated dedup threshold.
+//
+// Those pairs are not restatements the judge needs to see: mergeFacts already
+// merges them mechanically, so spending a judge slot on one is pure waste. The
+// threshold is the active model's own calibrated value
+// (internal/embeddings/params), not a constant invented here — the shortlist
+// contributes no absolute cosine of its own.
+//
+// Vectors come from the stored facts_vec rows. Nothing is re-embedded.
+func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.RestatementPair, dedupThreshold float64) ([]store.RestatementPair, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	idSet := map[int64]struct{}{}
+	for _, p := range pairs {
+		idSet[p.AFactID] = struct{}{}
+		idSet[p.BFactID] = struct{}{}
+	}
+	ids := make([]int64, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	vecs, err := d.Abstraction.BodyVectorsByFactID(ctx, ids)
+	if err != nil {
+		return nil, wrapf(reviewTool, err, "shortlist: body vectors")
+	}
+
+	out := make([]store.RestatementPair, 0, len(pairs))
+	for _, p := range pairs {
+		a, aok := vecs[p.AFactID]
+		b, bok := vecs[p.BFactID]
+		if !aok || !bok {
+			// A fact with no stored vector cannot be scored. Keeping it would
+			// mean guessing whether dedup would already have caught the pair.
+			continue
+		}
+		if cosine(a, b) >= dedupThreshold {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// cosine of two stored vectors. They are L2-normalized at embed time, so this
+// is a dot product; the norms are recomputed anyway rather than assumed,
+// because a donated vector (WithPrecomputedEmbeddings) is only validated for
+// dimension.
+func cosine(a, b []float32) float64 {
+	if len(a) != len(b) {
+		return 0
+	}
+	var dot, na, nb float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		na += float64(a[i]) * float64(a[i])
+		nb += float64(b[i]) * float64(b[i])
+	}
+	if na <= 1e-12 || nb <= 1e-12 {
+		return 0
+	}
+	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }

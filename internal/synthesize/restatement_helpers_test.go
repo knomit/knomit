@@ -199,3 +199,18 @@ func (e *restatementEnv) factIDs() map[string]int64 {
 	}
 	return out
 }
+
+// dedupThreshold is the active model's calibrated near-duplicate floor, the
+// same value reviewStrategy.Plan hands to dedupCluster.
+func (e *restatementEnv) dedupThreshold() float64 {
+	return store.EmbedderThresholds(e.ri.Embedder()).Dedup
+}
+
+func containsPair(pairs []store.RestatementPair, a, b string) bool {
+	for _, p := range pairs {
+		if (p.APath == a && p.BPath == b) || (p.APath == b && p.BPath == a) {
+			return true
+		}
+	}
+	return false
+}
