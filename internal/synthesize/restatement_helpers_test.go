@@ -214,3 +214,109 @@ func containsPair(pairs []store.RestatementPair, a, b string) bool {
 	}
 	return false
 }
+
+// seedShortlist runs the backfill + refresh the way a review session does.
+func (e *restatementEnv) seedShortlist() {
+	e.t.Helper()
+	ctx := context.Background()
+	_, _, err := ensureTitleVectors(ctx, e.deps(), e.branch, titleBackfillBudget)
+	require.NoError(e.t, err)
+	require.NoError(e.t, refreshRestatementShortlist(ctx, e.deps(), e.branch, e.dedupThreshold()))
+}
+
+// recordVerdict stores a judge outcome for a pair, resolving the fact ids the
+// way the apply path does.
+func (e *restatementEnv) recordVerdict(aPath, bPath string, merged bool) {
+	e.t.Helper()
+	ctx := context.Background()
+	ids := e.liveFactIDs()
+	require.NoError(e.t, e.svc.Abstraction().RecordRestatementVerdict(ctx, e.branch, store.RestatementVerdict{
+		APath: aPath, BPath: bPath,
+		AFactID: ids[aPath], BFactID: ids[bPath],
+		Merged: merged, JudgedAt: time.Now(),
+	}))
+}
+
+// liveFactIDs maps live paths to their current fact ids.
+func (e *restatementEnv) liveFactIDs() map[string]int64 {
+	e.t.Helper()
+	facts, err := e.svc.Abstraction().LiveEpistemicFacts(context.Background(), e.branch)
+	require.NoError(e.t, err)
+	out := make(map[string]int64, len(facts))
+	for id, path := range facts {
+		out[path] = id
+	}
+	return out
+}
+
+func (e *restatementEnv) titleOf(path string) string {
+	e.t.Helper()
+	f, err := e.svc.Search().GetByPath(context.Background(), e.branch, path)
+	require.NoError(e.t, err)
+	require.NotNil(e.t, f)
+	return f.Title
+}
+
+func (e *restatementEnv) writeFactWithDomain(path, title, body, domain string) {
+	e.t.Helper()
+	_, err := e.svc.Facts().WriteFact(context.Background(), e.branch, path,
+		"---\ntype: observation\ndomain: ["+domain+"]\n---\n# "+title+"\n\n"+body,
+		"write "+path, "test")
+	require.NoError(e.t, err)
+}
+
+// keepVerdicts is n judge outcomes that all said "keep".
+func keepVerdicts(n int) []store.RestatementVerdict {
+	out := make([]store.RestatementVerdict, 0, n)
+	for i := range n {
+		out = append(out, store.RestatementVerdict{
+			APath: fmt.Sprintf("kb/a%d.md", i), BPath: fmt.Sprintf("kb/b%d.md", i),
+			AFactID: int64(i * 2), BFactID: int64(i*2 + 1),
+		})
+	}
+	return out
+}
+
+// newRestatementEnvOnAxis builds a corpus whose TITLES sit at a controlled
+// spacing on the abstraction axis, so a test can compare what two differently
+// shaped corpora do under identical code. spacing is the angular gap in
+// radians between consecutive titles: small spacing means a corpus whose titles
+// all look alike.
+func newRestatementEnvOnAxis(t *testing.T, n int, spacing float64) *restatementEnv {
+	t.Helper()
+	titleAngles := map[string]float64{}
+	emb := &restatementEmbedder{}
+	emb.vectorFor = func(text string) []float32 {
+		angle, ok := titleAngles[text]
+		if !ok {
+			return nil // bodies keep the default hash placement
+		}
+		return axisVector(angle)
+	}
+	env := newRestatementEnvWith(t, 0, emb)
+	for i := range n {
+		title := fmt.Sprintf("Title %d", i)
+		titleAngles[title] = float64(i) * spacing
+		env.writeFact(fmt.Sprintf("kb/f%d.md", i), title, fmt.Sprintf("body %d with its own distinct wording", i))
+	}
+	return env
+}
+
+// workItems drains the session's queue for inspection.
+func (e *restatementEnv) workItems(sessionID string) []store.PipelineWorkItem {
+	e.t.Helper()
+	var out []store.PipelineWorkItem
+	seen := map[int64]bool{}
+	for range 5000 {
+		item, err := e.svc.Pipeline().NextPipelineWorkItem(context.Background(), sessionID)
+		require.NoError(e.t, err)
+		if item == nil || seen[item.ID] {
+			break
+		}
+		seen[item.ID] = true
+		out = append(out, *item)
+		_, err = e.svc.Pipeline().AnswerPipelineWorkItem(context.Background(), item.ID, "{}")
+		require.NoError(e.t, err)
+	}
+	return out
+}

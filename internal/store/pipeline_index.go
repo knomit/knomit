@@ -18,13 +18,16 @@ import (
 // Phase is what makes the reviewer stateless across MCP calls — see
 // AdvancePipelineSessionPhase for the CAS guarantee.
 type PipelineSession struct {
-	ID        string
-	Tool      string
-	Branch    string
-	Status    string // "active", "completed", "abandoned"
-	Phase     string // "work", "reflect", "done"
-	Scoped    bool   // true when session was started with a scope filter active
-	Stats     PipelineSessionStats
+	ID     string
+	Tool   string
+	Branch string
+	Status string // "active", "completed", "abandoned"
+	Phase  string // "work", "reflect", "done"
+	Scoped bool   // true when session was started with a scope filter active
+	Stats  PipelineSessionStats
+	// Health carries corpus-health descriptor lines recorded while planning the
+	// session, as a JSON array. Observability only.
+	Health    string
 	CreatedAt string
 	UpdatedAt string
 }
@@ -155,11 +158,11 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 	err := pi.sessionDB.QueryRowContext(ctx,
 		`SELECT id, tool, branch, status, phase, scoped,
 		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
-		        created_at, updated_at
+		        health, created_at, updated_at
 		 FROM pipeline_sessions WHERE id = ?`, id,
 	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped,
 		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
-		&s.CreatedAt, &s.UpdatedAt)
+		&s.Health, &s.CreatedAt, &s.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -168,6 +171,21 @@ func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*Pi
 	}
 	s.Scoped = scoped != 0
 	return &s, nil
+}
+
+// SetPipelineSessionHealth stores the session's health descriptor lines.
+//
+// On the session row rather than in memory for the same reason the stat
+// counters are: the engine is per-call stateless, so anything held on the
+// Reviewer between the plan and the result is discarded
+// (invariants/synthesize/per-call-objects-no-session-state).
+func (pi *pipelineIndex) SetPipelineSessionHealth(ctx context.Context, id, health string) error {
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET health = ?, updated_at = ? WHERE id = ?`,
+		health, time.Now().UTC().Format(time.RFC3339), id); err != nil {
+		return fmt.Errorf("SetPipelineSessionHealth: %w", err)
+	}
+	return nil
 }
 
 // MarkPipelineSessionScoped marks a session as having been started with a

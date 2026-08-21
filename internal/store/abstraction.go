@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // abstractionIndex implements AbstractionIndex: the title-embedding axis and
@@ -417,4 +418,105 @@ func (ax *abstractionIndex) branchID(ctx context.Context, branch string) (int64,
 		return 0, fmt.Errorf("abstraction: branch id for %q: %w", branch, err)
 	}
 	return id, nil
+}
+
+// ── judge verdicts ────────────────────────────────────────────────────────
+//
+// Two consumers, both of which make a corpus decide its own behaviour from its
+// own data: the trailing merge-rate that funds or defunds its shortlist, and
+// the kept-pair exclusion that stops one declined pair from occupying the
+// funded slots session after session.
+
+// RecordRestatementVerdict records what the judge did with one shortlist pair.
+func (ax *abstractionIndex) RecordRestatementVerdict(ctx context.Context, branch string, v RestatementVerdict) error {
+	branchID, err := ax.branchID(ctx, branch)
+	if err != nil {
+		return err
+	}
+	merged := 0
+	if v.Merged {
+		merged = 1
+	}
+	if _, err := conn(ctx, ax.rh.db).ExecContext(ctx,
+		`INSERT INTO restatement_verdicts
+		     (branch_id, a_path, b_path, a_fact_id, b_fact_id, merged, judged_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		branchID, v.APath, v.BPath, v.AFactID, v.BFactID, merged,
+		v.JudgedAt.UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("abstraction: record verdict: %w", err)
+	}
+	return nil
+}
+
+// RecentRestatementVerdicts returns the last `window` verdicts, newest first.
+func (ax *abstractionIndex) RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]RestatementVerdict, error) {
+	if window <= 0 {
+		return nil, nil
+	}
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT v.a_path, v.b_path, v.a_fact_id, v.b_fact_id, v.merged, v.judged_at
+		   FROM restatement_verdicts v
+		   JOIN branches b ON b.id = v.branch_id
+		  WHERE b.name = ?
+		  ORDER BY v.id DESC
+		  LIMIT ?`, branch, window)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: recent verdicts: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RestatementVerdict
+	for rows.Next() {
+		var v RestatementVerdict
+		var merged int
+		var judged string
+		if err := rows.Scan(&v.APath, &v.BPath, &v.AFactID, &v.BFactID, &merged, &judged); err != nil {
+			return nil, fmt.Errorf("abstraction: scan verdict: %w", err)
+		}
+		v.Merged = merged == 1
+		if t, perr := time.Parse(time.RFC3339, judged); perr == nil {
+			v.JudgedAt = t
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// KeptPairFactIDs returns the id-pairs this branch's judge declined to merge,
+// as "a:b" keys with a < b.
+//
+// Keyed by FACT ID rather than path on purpose. Ids are content-addressed, so
+// "the judge already looked at this and said keep" expires structurally the
+// moment either fact is edited — the pair becomes a new pair of ids and is
+// eligible again, with no hash comparison and no staleness rule to get wrong.
+func (ax *abstractionIndex) KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error) {
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT v.a_fact_id, v.b_fact_id
+		   FROM restatement_verdicts v
+		   JOIN branches b ON b.id = v.branch_id
+		  WHERE b.name = ? AND v.merged = 0`, branch)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: kept pairs: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]struct{}{}
+	for rows.Next() {
+		var a, b int64
+		if err := rows.Scan(&a, &b); err != nil {
+			return nil, fmt.Errorf("abstraction: scan kept pair: %w", err)
+		}
+		out[FactIDPairKey(a, b)] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// FactIDPairKey is the canonical key for an unordered pair of fact ids, shared
+// by the writer and the reader of the kept-pair set so the two can never
+// disagree about ordering.
+func FactIDPairKey(a, b int64) string {
+	if b < a {
+		a, b = b, a
+	}
+	return fmt.Sprintf("%d:%d", a, b)
 }

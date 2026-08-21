@@ -141,6 +141,20 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		}
 	}
 
+	// The consolidation-scope fix. Prune's judge only ever sees facts that
+	// landed in the same cluster, so restatements whose halves cluster apart are
+	// judged by nothing and live forever
+	// (gotchas/synthesize/prune-scope/c40d6748). The shortlist below is
+	// corpus-wide and cached; the only session-dependent input is the
+	// co-membership check against the clusters computed above.
+	//
+	// Every step degrades to "no candidates" rather than failing the session:
+	// this is an addition to consolidation, and a corpus that cannot embed its
+	// titles or read its own cache should still get its ordinary review.
+	if err := planRestatementShortlist(ctx, d, sess, branch, clusters, len(llmSeeds)); err != nil {
+		return err
+	}
+
 	// Store distill work items if >1 seed (lower priority than prune).
 	//
 	// Grouped by cluster, then chunked. Depth-0 distill used to pass the whole

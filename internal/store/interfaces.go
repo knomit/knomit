@@ -193,6 +193,9 @@ type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
+	// SetPipelineSessionHealth stores corpus-health descriptor lines for the
+	// session. Observability that rides back to the caller on the result.
+	SetPipelineSessionHealth(ctx context.Context, id, health string) error
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
@@ -268,6 +271,29 @@ type AbstractionIndex interface {
 	// RestatementPairStats describes the standing population. Observability
 	// only — no branch reads these values.
 	RestatementPairStats(ctx context.Context, branch string) (RestatementPairStats, error)
+
+	// RecordRestatementVerdict records what the judge did with one
+	// shortlist-originated pair.
+	RecordRestatementVerdict(ctx context.Context, branch string, v RestatementVerdict) error
+	// RecentRestatementVerdicts returns the last `window` verdicts, newest
+	// first — the input to the throttle.
+	RecentRestatementVerdicts(ctx context.Context, branch string, window int) ([]RestatementVerdict, error)
+	// KeptPairFactIDs returns pairs the judge declined, keyed by FactIDPairKey.
+	KeptPairFactIDs(ctx context.Context, branch string) (map[string]struct{}, error)
+}
+
+// RestatementVerdict is one judge outcome on a shortlist-originated pair.
+//
+// It carries fact ids as well as paths because ids are content-addressed: a
+// "keep" applies to the exact pair of versions that was judged, and editing
+// either fact makes the pair eligible again with no staleness rule needed.
+type RestatementVerdict struct {
+	APath    string
+	BPath    string
+	AFactID  int64
+	BFactID  int64
+	Merged   bool
+	JudgedAt time.Time
 }
 
 // RestatementPair is one standing candidate: two facts whose TITLES are close

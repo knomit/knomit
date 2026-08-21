@@ -167,6 +167,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 		Done:      res.Done,
 		Summary:   res.Summary,
 		Progress:  res.Progress,
+		Health:    res.Health,
 	}
 	if res.Item == nil {
 		return out, nil

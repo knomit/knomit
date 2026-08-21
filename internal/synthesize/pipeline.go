@@ -170,7 +170,18 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 		Str("effort", string(p.effort)).Dur("total", time.Since(totalStart)).
 		Msg("pipeline: session started")
 
-	return p.nextItem(ctx, sess)
+	res, err := p.nextItem(ctx, sess)
+	if err != nil {
+		return nil, err
+	}
+	// Health descriptors recorded during Plan ride the FIRST result: the
+	// session row is the only place they could survive planning (the engine is
+	// per-call stateless), and the start turn is the one the agent reads before
+	// deciding how much of this session to work through.
+	if fresh, ferr := d.Pipeline.GetPipelineSession(ctx, sess.ID); ferr == nil {
+		res.Health = sessionHealthLines(fresh)
+	}
+	return res, nil
 }
 
 // ContinueSession processes the model's response for the current work item and
