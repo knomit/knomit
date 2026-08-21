@@ -277,6 +277,11 @@ const (
 	throttleMinVerdicts = 5
 )
 
+// shortlistOverfetch is how many ranked pairs are considered per funded slot,
+// so per-candidate exclusions cannot silently shrink a funded batch. A
+// RESOURCE BUDGET on a SQL read, nothing more.
+const shortlistOverfetch = 4
+
 // Throttle states, reported in health output.
 const (
 	throttleOptimistic = "optimistic" // no history yet — the cap bounds the downside
@@ -406,11 +411,6 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	h.Emitted = len(out)
 	return out, h, nil
 }
-
-// shortlistOverfetch is how many ranked pairs are considered per funded slot,
-// so per-candidate exclusions cannot silently shrink a funded batch. A
-// RESOURCE BUDGET on a SQL read, nothing more.
-const shortlistOverfetch = 4
 
 // clusterCoMembership is the set of pairs this session's own dedupCluster
 // already places in one cluster — the exact "prune already sees them together"
