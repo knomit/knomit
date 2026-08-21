@@ -1,0 +1,32 @@
+### Motifs
+
+Facts may carry `motifs:` — names for the underlying regularity, independent
+of subject. Motifs exist so that two facts about unrelated subjects can be
+connected when they exemplify the same mechanism: a build tool silently
+mis-configuring on an unset variable and a hook guard that must fail closed
+on a missing field are different subjects with the same motif,
+zero-value-as-valid.
+
+Writing a motif:
+- Apply the transfer test: could a fact in a completely different area of
+  this corpus carry this exact phrase? If not, it is a title fragment, not a
+  motif.
+- Name the regularity, not the instance: atomic-write-via-rename, not
+  keypair-written-atomically.
+- Name the regularity, not its remedy. If a fact describes a problem and its
+  fix, the motif names the problem's shape, never the fix:
+  unmonitored-expiry, not renew-certs-automatically.
+- No subject words: a motif containing an entity name, a domain term, or a
+  path segment of its own fact will be stripped at write time.
+- Prefer the most specific phrasing that still transfers.
+- 2–4 words, kebab-case, noun phrase. One motif is normal; three is the
+  maximum. Never attach two phrasings of the same regularity to one fact —
+  pick the better one; a second motif requires a genuinely second regularity.
+- Zero is correct when the fact records only a quantity or an event (a
+  funding round, an acquisition, a release). But a specific dynamic — a time
+  window between cause and effect, a direction of failure, a feedback loop —
+  IS a general shape and deserves a motif.
+
+What motifs are not: not predictions of where the fact applies, not tags for
+retrieval, not summaries. They are consumed only by synthesis (bridging and
+discovery); a wrong motif costs a wasted discovery candidate, nothing more.

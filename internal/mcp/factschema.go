@@ -85,6 +85,43 @@ var factOriginDocs = map[fact.Origin]string{
 	fact.Discovered: "discovery-engine output from a cross-cluster bridge (type synthesis or hypothesis only)",
 }
 
+// motifFieldDescription is blueprint §2 Block A, VERBATIM. It is SHIP text:
+// the wording is the validated prompt (four models, §12-E2), not a paraphrase,
+// and every rule in it is load-bearing — including the closing "an empty list
+// is a correct answer", whose blunter v1 phrasing suppressed valid motifs in
+// two of three models.
+//
+// It is STATIC. No corpus vocabulary, no examples drawn from this repo, no
+// reuse-before-minting rule (roadmap MN1): a served list was measured to bias
+// authors toward force-fitting a new fact onto an existing name (§12-E3), and
+// cold minting converges without one (§12-E2). Phrasing convergence is
+// manufactured downstream, in derived state, where being wrong costs a rebuild
+// instead of a fact.
+//
+// Guarded byte-for-byte by TestShipBlockA_Verbatim against
+// testdata/motif_block_a.txt. Do not reflow, re-punctuate, or "fix" the
+// en-dashes: the goldens are a straight copy of §2 and any difference from it
+// is a defect.
+const motifFieldDescription = `motifs (optional, 0–3): the general regularities this fact is an instance of.
+Each motif is a 2–4 word kebab-case noun phrase naming a mechanism, failure
+shape, or pattern that a fact about a completely different subject could also
+carry — that is the test. Examples: identifier-collision,
+derived-state-liability, harness-over-model, capital-influx. NOT the fact's
+subject (that is entities), NOT its area (that is domain), NOT its claim
+compressed (that is the title). Omit entirely when the fact is a bare
+datapoint with no general shape — an empty list is a correct answer.`
+
+// motifsProperty returns the JSON-schema fragment for the `motifs` property,
+// shared by knomit_learn and knomit_update so the two cannot drift on what the
+// field means.
+func motifsProperty() map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"items":       map[string]any{"type": "string"},
+		"description": motifFieldDescription,
+	}
+}
+
 // enumValues renders a slice of string-kinded domain values as the []string
 // a JSON-schema "enum" key expects.
 func enumValues[T ~string](vals []T) []string {
