@@ -56,19 +56,63 @@ Flags accept both `-flag value` and `--flag value` styles.
 
 ### Subcommands
 
-The bridge also wraps Claude Code integration helpers (typically invoked by CC, not by hand):
+The bridge also wraps agent-host integration helpers (typically invoked by the
+host, not by hand):
 
 ```
 knomit-bridge claude init [-repo <name>]
-                                  # scaffold CC integration files in the current directory
-knomit-bridge claude hook <event> # run a CC hook; event ∈ session-start, post-edit, pre-compact
+                                  # scaffold Claude Code integration files here
+knomit-bridge claude hook <event>       # event ∈ session-start, post-edit,
+                                        #         post-ask, pre-compact
+
+knomit-bridge antigravity init [-repo <name>|-lens <name>]
+                                  # scaffold the Antigravity plugin here
+knomit-bridge antigravity hook <event>  # event ∈ pre-invocation
 ```
 
-Global flags such as `--log` are accepted before any subcommand:
+`agy` is accepted as an alias for `antigravity`. Global flags such as `--log`
+are accepted before any subcommand.
+
+## Antigravity (`agy`)
+
+`knomit-bridge antigravity init` writes a single owned plugin directory:
 
 ```
-knomit-bridge --log /tmp/bridge.log claude hook post-edit
+.agents/plugins/knomit/
+├── plugin.json
+├── mcp_config.json      knomit-bridge --repo <name> (or --lens <name>)
+├── hooks.json           PreInvocation → knomit-bridge antigravity hook pre-invocation
+├── rules/AGENTS.md      the "Working with knomit memory" block
+└── skills/knomit-*/SKILL.md
 ```
+
+Unlike the Claude Code scaffold, **nothing here is merge-required**: every file
+belongs to the integration and is overwritten on re-run. Delete the directory
+and re-run `init` to restore it. Use `agy plugin disable knomit` to switch it
+off — that setting lives in your own `config.json` and survives a re-`init`.
+
+The hook binds to a project by reading the `mcp_config.json` beside its own
+`hooks.json` and trusts its working directory unconditionally, so a
+*project-local* plugin (the `.agents/plugins/knomit/` layout above) only ever
+reads that project's scope. Do not install this plugin globally with
+`agy plugin install .agents/plugins/knomit` — that copies it to a
+machine-global location that still carries this project's `mcp_config.json`,
+so every project it then runs against would be bound to this project's scope.
+It is designed to live project-local; leave it there.
+
+> **Antigravity must have a registered workspace.** Running `agy -p …` from
+> inside the project directory is not enough — cwd alone registers nothing, and
+> agy then loads no skills, rules, hooks, or MCP tools at all, silently. Launch
+> `agy` interactively from the directory, or pass
+> `--add-dir <project directory>` on every headless run.
+
+Antigravity exposes MCP tools under bare names (`knomit_query`, not
+`mcp__…__knomit_query`), so the `/knomit-*` skills work unmodified.
+
+One further limitation: a markdown-defined custom agent that sets
+`inheritCustomizations: false` adopts none of your skills, rules, plugins, or
+MCP servers — knomit's included. Run such an agent and knomit is absent by
+design.
 
 ## MCP client configuration
 

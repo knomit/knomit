@@ -1,0 +1,11 @@
+{
+  "knomit": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "knomit-bridge antigravity hook pre-invocation",
+        "timeout": 10
+      }
+    ]
+  }
+}

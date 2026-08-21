@@ -1693,17 +1693,22 @@ const CheckMark = ({ color }: { color: string }) => (
   </svg>
 );
 
-// ConnectBody renders the "Agent access" block for a repo or a lens. It
-// covers BOTH client families, because they wire up differently:
+// ConnectBody renders the "Agent access" block for a repo or a lens. It covers
+// every client family we scaffold for, because they wire up differently:
 //   • Claude Code uses the `knomit-bridge claude init` scaffolding (skills +
 //     hooks + .mcp.json).
+//   • Antigravity (`agy`) uses `knomit-bridge antigravity init`, which writes a
+//     single owned plugin directory (.agents/plugins/knomit/).
 //   • Claude Cowork, Claude Desktop, and any other stdio MCP client just
-//     register knomit-bridge as an mcpServers entry — no `claude init`.
+//     register knomit-bridge as an mcpServers entry — no init step.
+// This card is the only place in the product where the wiring is discoverable,
+// so a host that ships without a row here is effectively invisible.
 // The scope arg is --lens <name> for a lens, --repo <name> for a repo.
 function ConnectBody({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name: string; agentBranch?: string }) {
-  const [copied, setCopied] = useState<'cc' | 'mcp' | null>(null);
+  const [copied, setCopied] = useState<'cc' | 'agy' | 'mcp' | null>(null);
   const arg = kind === 'lens' ? '--lens' : '--repo';
   const initCmd = `knomit-bridge claude init ${arg} ${name}`;
+  const agyInitCmd = `knomit-bridge antigravity init ${arg} ${name}`;
   const mcpJson = `{
   "mcpServers": {
     "knomit": {
@@ -1716,7 +1721,7 @@ function ConnectBody({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name:
     ? `/api/v1/lenses/${name}/mcp`
     : `/api/v1/repos/${name}/branches/${agentBranch || '<agent-branch>'}/mcp`;
 
-  const copy = (text: string, which: 'cc' | 'mcp') => {
+  const copy = (text: string, which: 'cc' | 'agy' | 'mcp') => {
     navigator.clipboard.writeText(text)
       .then(() => { setCopied(which); setTimeout(() => setCopied(null), 1500); })
       .catch(() => { /* clipboard unavailable — nothing to recover */ });
@@ -1732,6 +1737,21 @@ function ConnectBody({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name:
           style={copyBtn} onClick={() => copy(initCmd, 'cc')}>
           <CopyIcon color={copied === 'cc' ? '#7c9' : '#888'} size={13} />
         </button>
+      </div>
+
+      {/* Antigravity — one owned plugin directory, no merge step. */}
+      <div style={{ ...connectClient, marginTop: 12 }}>Antigravity<span style={connectHint}>scaffolds a plugin directory</span></div>
+      <div style={codeRow}>
+        <code style={codeText}>{agyInitCmd}</code>
+        <button type="button" data-testid={`${kind}-copy-agy`} title="Copy" aria-label="Copy Antigravity command"
+          style={copyBtn} onClick={() => copy(agyInitCmd, 'agy')}>
+          <CopyIcon color={copied === 'agy' ? '#7c9' : '#888'} size={13} />
+        </button>
+      </div>
+      <div style={{ fontSize: 12, color: '#666', marginTop: 6 }}>
+        Run <code style={{ fontFamily: 'var(--k-font-mono)', color: '#aaa' }}>agy</code> from the project directory, or pass{' '}
+        <code style={{ fontFamily: 'var(--k-font-mono)', color: '#aaa' }}>--add-dir</code> on headless runs — without a registered
+        workspace Antigravity loads none of it.
       </div>
 
       {/* Claude Cowork / Desktop / other MCP clients — raw mcpServers wiring. */}

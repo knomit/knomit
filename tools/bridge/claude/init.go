@@ -13,6 +13,8 @@ import (
 	"text/template"
 
 	"knomit/internal/repos"
+	"knomit/tools/bridge/knomitapi"
+	"knomit/tools/bridge/skills"
 )
 
 //go:embed all:templates
@@ -67,7 +69,7 @@ func runInit(args []string) error {
 	// a long directory name fails an otherwise flagless `claude init`. Say so —
 	// the remedy (name the repo explicitly) is not obvious from the error alone,
 	// because nothing else in the tool requires the repo to match the directory.
-	if key := serverKey(repoName, *lens); len(key) > maxServerKeyLen {
+	if key := knomitapi.ServerKey(repoName, *lens); len(key) > knomitapi.MaxServerKeyLen {
 		scope, flag := repoName, "--repo"
 		if *lens != "" {
 			scope, flag = *lens, "--lens"
@@ -75,14 +77,65 @@ func runInit(args []string) error {
 		return fmt.Errorf("derived MCP server key %q is %d characters (max %d), "+
 			"because %s name %q is %d (max %d); pass a shorter %s "+
 			"(it need not match the directory name)",
-			key, len(key), maxServerKeyLen,
-			strings.TrimPrefix(flag, "--"), scope, len(scope), maxScopeNameLen, flag)
+			key, len(key), knomitapi.MaxServerKeyLen,
+			strings.TrimPrefix(flag, "--"), scope, len(scope), knomitapi.MaxScopeNameLen, flag)
 	}
 
 	var created []string
 	var overwritten []string
 	var conflicts []string
 
+	// writeOne handles one template file: srcFS/srcPath -> its destination,
+	// applying the owned-vs-merge-required rules. Shared by both walks.
+	writeOne := func(srcFS fs.FS, srcPath, dstRel string) error {
+		data, err := fs.ReadFile(srcFS, srcPath)
+		if err != nil {
+			return err
+		}
+		// Only *.tmpl is templated; everything else is copied verbatim. A
+		// literal `{{` in a SKILL.md is ordinary prose and must not abort a
+		// scaffold half-written. See the same rule in the antigravity host.
+		rendered := string(data)
+		if strings.HasSuffix(srcPath, ".tmpl") {
+			rendered, err = renderTemplate(string(data), map[string]string{
+				"RepoName":  repoName,
+				"Lens":      *lens,
+				"ServerKey": knomitapi.ServerKey(repoName, *lens),
+			})
+			if err != nil {
+				return fmt.Errorf("render %s: %w", srcPath, err)
+			}
+		}
+		dst := filepath.Join(cwd, dstRel)
+		_, statErr := os.Stat(dst)
+		exists := statErr == nil
+
+		if isOwnedByIntegration(dstRel) {
+			if err := writeFile(dst, []byte(rendered), 0o644); err != nil {
+				return err
+			}
+			if exists {
+				overwritten = append(overwritten, dstRel)
+			} else {
+				created = append(created, dstRel)
+			}
+			return nil
+		}
+		if exists {
+			if err := writeFile(companionPath(dst), []byte(rendered), 0o644); err != nil {
+				return err
+			}
+			conflicts = append(conflicts, dstRel)
+			return nil
+		}
+		if err := writeFile(dst, []byte(rendered), 0o644); err != nil {
+			return err
+		}
+		created = append(created, dstRel)
+		return nil
+	}
+
+	// Walk 1: this package's own templates (.mcp.json, settings.json, CLAUDE.md).
 	err = fs.WalkDir(templatesFS, "templates", func(srcPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -90,9 +143,9 @@ func runInit(args []string) error {
 		if d.IsDir() {
 			return nil
 		}
+		rel := strings.TrimPrefix(srcPath, "templates/")
 		// mcp.json.tmpl and mcp.json.lens.tmpl both target .mcp.json — select
 		// exactly one based on whether a lens was requested.
-		rel := strings.TrimPrefix(srcPath, "templates/")
 		if rel == "mcp.json.tmpl" && *lens != "" {
 			return nil
 		}
@@ -103,54 +156,23 @@ func runInit(args []string) error {
 		if dstRel == "" {
 			return nil // template excluded
 		}
-		dst := filepath.Join(cwd, dstRel)
+		return writeOne(templatesFS, srcPath, dstRel)
+	})
+	if err != nil {
+		return err
+	}
 
-		data, err := templatesFS.ReadFile(srcPath)
-		if err != nil {
-			return err
+	// Walk 2: the shared skill templates, which live in their own package
+	// because //go:embed cannot reach a sibling directory.
+	err = fs.WalkDir(skills.FS, skills.Root, func(srcPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		rendered, err := renderTemplate(string(data), map[string]string{
-			"RepoName":  repoName,
-			"Lens":      *lens,
-			"ServerKey": serverKey(repoName, *lens),
-		})
-		if err != nil {
-			return fmt.Errorf("render %s: %w", srcPath, err)
-		}
-
-		mode := fs.FileMode(0o644)
-
-		_, statErr := os.Stat(dst)
-		exists := statErr == nil
-
-		if isOwnedByIntegration(dstRel) {
-			// Always write owned files (skills).
-			if err := writeFile(dst, []byte(rendered), mode); err != nil {
-				return err
-			}
-			if exists {
-				overwritten = append(overwritten, dstRel)
-			} else {
-				created = append(created, dstRel)
-			}
+		if d.IsDir() {
 			return nil
 		}
-
-		// Merge-required file: write companion if destination exists.
-		if exists {
-			companion := companionPath(dst)
-			if err := writeFile(companion, []byte(rendered), mode); err != nil {
-				return err
-			}
-			conflicts = append(conflicts, dstRel)
-			return nil
-		}
-
-		if err := writeFile(dst, []byte(rendered), mode); err != nil {
-			return err
-		}
-		created = append(created, dstRel)
-		return nil
+		rel := strings.TrimPrefix(srcPath, skills.Root+"/")
+		return writeOne(skills.FS, srcPath, ".claude/skills/"+rel)
 	})
 	if err != nil {
 		return err
@@ -160,66 +182,6 @@ func runInit(args []string) error {
 	return nil
 }
 
-// serverKey derives the `.mcp.json` mcpServers key — which Claude Code turns
-// into the tool-name prefix `mcp__<key>__knomit_learn`.
-//
-// It is DERIVED rather than the constant "knomit" because the constant made the
-// scaffolding structurally single-server: a second `claude init` in the same
-// project collided on the key, so two knomit servers could never coexist. A lens
-// scoping wins over a repo scoping because the two are mutually exclusive at the
-// flag layer and the lens is the thing actually being served.
-//
-// The prefix names the AXIS as well as the product, and is applied
-// UNCONDITIONALLY, so the mapping from scope to key is injective: distinct
-// scopes can never collide. Both halves are load-bearing.
-//
-// Naming the axis is what makes the two namespaces disjoint. Repos and lenses
-// are separate namespaces validated by the same repos.IsValidName, so nothing
-// stops a lens and a repo sharing a name — a lens named after the repo it
-// writes to is the natural naming — and a shared `knomit-` prefix would map
-// `--repo eng` and `--lens eng` to the same key. Since `knomit-repo-` and
-// `knomit-lens-` are fixed-length and differ, no repo key can ever equal a lens
-// key, whatever the names (a repo literally named `lens-eng` yields
-// `knomit-repo-lens-eng`, not `knomit-lens-eng`). See TestServerKey_IsInjective.
-//
-// Applying it unconditionally is the other half. An earlier draft skipped the
-// prefix when the name already carried it, to avoid the ugly `knomit-knomit`
-// for a repo named `knomit` — but that rule is inherently many-to-one
-// (`web` and `knomit-web` both map to `knomit-web`), which re-creates in one
-// step exactly the clobbering this function exists to remove. A cosmetic
-// objection does not outrank the correctness property.
-//
-// Skipping the prefix bought no backward compatibility either: `.mcp.json` is
-// merge-required, so an existing config is never rewritten in place — init
-// drops a companion file and lets the user merge.
-//
-// Callers must validate name/lens with repos.IsValidName first: the result is
-// interpolated into JSON, and this function does no escaping of its own.
-func serverKey(repoName, lens string) string {
-	if lens != "" {
-		return "knomit-lens-" + lens
-	}
-	return "knomit-repo-" + repoName
-}
-
-// maxServerKeyLen bounds the derived key so the fully-qualified tool name
-// Claude Code builds from it stays under the API's 64-character tool-name
-// limit. The longest tool is knomit_hypothesize, giving
-// len("mcp__") + len(key) + len("__") + len("knomit_hypothesize") = 25 + key.
-//
-// Bytes, not runes: repos.IsValidName restricts names to ASCII, so the two
-// counts coincide and the byte length is what the API actually measures.
-//
-// This could not be hit before: the key was a 6-character constant. It can now,
-// because the key derives from a repo name that defaults to the directory
-// basename, and repos.IsValidName constrains the character set but not length.
-const maxServerKeyLen = 64 - len("mcp____knomit_hypothesize")
-
-// maxScopeNameLen is the resulting budget for the repo or lens NAME itself —
-// what the error message must quote, since that is the knob the user turns.
-// Both axis prefixes are the same length, so one constant covers both.
-const maxScopeNameLen = maxServerKeyLen - len("knomit-repo-")
-
 // isOwnedByIntegration reports whether dstRel is a file that the integration
 // owns outright (skills). These are always overwritten on re-run, so deleting
 // them and re-running init restores them.
@@ -228,20 +190,17 @@ func isOwnedByIntegration(dstRel string) bool {
 }
 
 // mapDestination translates a template path under templates/ to its
-// destination path inside the project. Returns "" if the file should not
-// be copied.
+// destination inside the project. Returns "" if the file should not be copied.
+// Skills are NOT handled here; they come from the shared skills package and are
+// routed by the second walk in runInit.
 func mapDestination(srcPath string) string {
-	rel := strings.TrimPrefix(srcPath, "templates/")
-	switch rel {
+	switch strings.TrimPrefix(srcPath, "templates/") {
 	case "mcp.json.tmpl", "mcp.json.lens.tmpl":
 		return ".mcp.json"
 	case "CLAUDE-md-block.txt":
 		return "CLAUDE.md"
 	case "settings.json.tmpl":
 		return ".claude/settings.json"
-	}
-	if strings.HasPrefix(rel, "skills/") {
-		return ".claude/" + rel
 	}
 	return ""
 }

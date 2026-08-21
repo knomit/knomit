@@ -1238,6 +1238,27 @@ describe('RepoManager', () => {
     expect(writeText).toHaveBeenCalledWith('knomit-bridge claude init --lens dev');
   });
 
+  // The Agent access card is the only place in the product where host wiring is
+  // discoverable, so a shipped host missing a row here is effectively invisible.
+  it('offers the Antigravity init command alongside the Claude Code one', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    fireEvent.click(screen.getByTestId('lens-copy-agy'));
+    expect(writeText).toHaveBeenCalledWith('knomit-bridge antigravity init --lens dev');
+  });
+
+  // Without a registered workspace Antigravity silently loads nothing, and the
+  // user gets no error — so the card has to say so.
+  it('warns that Antigravity needs a registered workspace', async () => {
+    render(<RepoManager {...baseProps} />);
+    await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
+    expect(await screen.findByTestId('lens-connect')).toHaveTextContent('--add-dir');
+  });
+
   it('renders the lens note through the same block as a repo description', async () => {
     (api.getLens as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'dev', write: { uid: 'uid-work', name: 'work' }, reads: [{ uid: 'uid-core', name: 'core', branch: 'main' }, { uid: 'uid-work', name: 'work' }],

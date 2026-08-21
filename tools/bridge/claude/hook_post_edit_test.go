@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"knomit/tools/bridge/knomitapi"
 )
 
 // closedKnomit points KNOMIT_BASE_URL at an immediately-closed httptest server
@@ -203,7 +205,7 @@ func TestHookPostEdit_EmitsHookEventName(t *testing.T) {
 
 func TestFilterByEntity(t *testing.T) {
 	rel := "internal/store/foo.go"
-	facts := []factSummary{
+	facts := []knomitapi.FactSummary{
 		{Path: "kb/a", Title: "bare exact", Entities: []string{rel}},
 		{Path: "kb/b", Title: "src ref", Entities: []string{"src://knomit/" + rel}},
 		{Path: "kb/c", Title: "src ref + commit", Entities: []string{"src://knomit/" + rel + "@abc123"}},

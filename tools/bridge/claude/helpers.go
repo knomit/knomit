@@ -2,44 +2,12 @@ package claude
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
-	"github.com/rs/zerolog/log"
+	"knomit/tools/bridge/knomitapi"
 )
-
-// hookHTTPTimeout caps every hook-side HTTP call. Hooks run synchronously on
-// every CC tool event; without a timeout, an unresponsive knomit server would
-// hang CC indefinitely. The value is generous enough for warm local calls and
-// short enough that a missing/dead server feels like a no-op.
-const hookHTTPTimeout = 2 * time.Second
-
-// hookHTTPClient is the shared client every hook uses. Reusing it allows
-// connection-pool reuse across hooks within a session.
-var hookHTTPClient = &http.Client{Timeout: hookHTTPTimeout}
-
-// encodeBranch URL-encodes a branch name for inclusion in a knomit API path.
-// Branches with slashes (e.g. "machine/host") are substituted "/" → ":" per
-// the project convention; the server's branch-route handler does the reverse
-// substitution. See kb/conventions/web/branch-slash-colon-substitution.
-func encodeBranch(branch string) string {
-	return strings.ReplaceAll(branch, "/", ":")
-}
-
-// knomitBaseURL returns the knomit HTTP base URL.
-// Set KNOMIT_BASE_URL for non-default ports; otherwise the default works
-// for a standard local install.
-func knomitBaseURL() string {
-	if u := os.Getenv("KNOMIT_BASE_URL"); u != "" {
-		return u
-	}
-	return "http://localhost:19278"
-}
 
 // skipMultipleKnomitServers is the skip reason for a project configuring more
 // than one knomit server. Named because both helpers.go and the session-start
@@ -49,12 +17,10 @@ func knomitBaseURL() string {
 const skipMultipleKnomitServers = "multiple_knomit_servers"
 
 // isKnomitCommand reports whether an .mcp.json entry's COMMAND identifies the
-// knomit bridge. This is the certain signal: it names the actual process and it
-// survives the key being derived per scope. `.exe` is trimmed because the
-// Makefile builds a GOOS=windows target, where the command is knomit-bridge.exe
-// and a bare basename comparison would miss every Windows install.
+// knomit bridge. The implementation is shared with the Antigravity host — see
+// knomitapi.IsKnomitCommand — so the two cannot drift.
 func isKnomitCommand(command string) bool {
-	return strings.TrimSuffix(filepath.Base(command), ".exe") == "knomit-bridge"
+	return knomitapi.IsKnomitCommand(command)
 }
 
 // isKnomitKey reports whether an .mcp.json KEY looks like a knomit server. This
@@ -69,7 +35,7 @@ func isKnomitCommand(command string) bool {
 // treats key matches as a strictly lower tier than command matches: see the
 // selection there.
 func isKnomitKey(key string) bool {
-	return key == "knomit" || strings.HasPrefix(key, "knomit-")
+	return knomitapi.IsKnomitKey(key)
 }
 
 // isKnomitServer reports whether an .mcp.json entry is a knomit bridge by
@@ -170,43 +136,25 @@ func mcpBinding(projectDir string) (repo, lens string, ambiguous bool) {
 }
 
 // classifyArgs maps one server entry's args to its (repo, lens) target, with
-// base as the repo-mode fallback. Split out of mcpBinding so the multi-server
-// path can compare targets without duplicating the precedence rules.
+// base as the repo-mode fallback.
+//
+// The flag grammar and the lens-wins precedence live in knomitapi.ClassifyArgs,
+// shared with the Antigravity host so the two cannot drift. This wrapper adds
+// only what is specific to Claude Code: the projectDir-basename fallback when
+// no --repo was given.
+//
+// A lens-configured entry NEVER falls back to the basename, including the
+// degenerate case where the --lens value is missing — knomitapi.ClassifyArgs
+// reports that via lensMode, and an empty lens name resolves to a clean skip
+// downstream rather than the wrong-repo hazard a basename fallback would
+// reintroduce.
 func classifyArgs(args []string, base string) (repo, lens string) {
-	var repoArg string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--lens" || a == "-lens":
-			// A --lens token means lens mode even when the value is missing
-			// (a hand-mangled config): lens wins and we NEVER fall back to the
-			// basename. A degenerate --lens with no value yields an empty lens
-			// name, which resolveWriteRepo/lensWriteRepo turn into a clean skip
-			// rather than the wrong-repo hazard a basename fallback would
-			// reintroduce.
-			if i+1 < len(args) {
-				return "", args[i+1]
-			}
-			return "", "" // lens flag with no value: lens mode, empty name
-		case strings.HasPrefix(a, "--lens=") || strings.HasPrefix(a, "-lens="):
-			// Go-flag combined form. Lens wins immediately, exactly like the
-			// token arm; an empty value after '=' yields an empty lens name
-			// (clean skip downstream), never a basename fallback.
-			_, v, _ := strings.Cut(a, "=")
-			return "", v
-		case a == "--repo" || a == "-repo":
-			if repoArg == "" && i+1 < len(args) {
-				repoArg = args[i+1]
-			}
-		case strings.HasPrefix(a, "--repo=") || strings.HasPrefix(a, "-repo="):
-			if repoArg == "" {
-				_, v, _ := strings.Cut(a, "=")
-				repoArg = v
-			}
-		}
+	r, l, lensMode := knomitapi.ClassifyArgs(args)
+	if lensMode {
+		return "", l
 	}
-	if repoArg != "" {
-		return repoArg, ""
+	if r != "" {
+		return r, ""
 	}
 	return base, ""
 }
@@ -250,71 +198,11 @@ func resolveWriteRepo(projectDir string) (repo, skipReason string) {
 	// Lens mode: mcpBinding leaves repo empty. lens may itself be empty for a
 	// hand-mangled --lens with no value; that resolves to "" and skips cleanly
 	// below rather than falling back to the basename.
-	w := lensWriteRepo(lens)
+	w := knomitapi.LensWriteRepo(lens)
 	if w == "" {
 		return "", "lens_unresolved"
 	}
 	return w, ""
-}
-
-// lensWriteRepo queries knomit for a lens's write repo. The lens resource names
-// each member as a {uid, name} pair: uid is the registry key membership is stored
-// under, name is the server-resolved display name. This returns the NAME, because
-// the sole caller feeds it to agentBranch, and /api/v1/repos/{repo} is
-// name-addressed — handing it a uid would 404 on every lens-mode hook.
-//
-// Returns "" on any error — mirroring the graceful degradation of agentBranch /
-// fetchFacts — with every failure path logged at Warn so a dead server is visible
-// in the bridge log rather than silent.
-func lensWriteRepo(name string) string {
-	u := fmt.Sprintf("%s/api/v1/lenses/%s", knomitBaseURL(), name)
-	resp, err := hookHTTPClient.Get(u) //nolint:noctx
-	if err != nil {
-		log.Warn().Err(err).Str("url", u).Msg("lensWriteRepo: GET failed")
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		log.Warn().Int("status", resp.StatusCode).Str("url", u).Msg("lensWriteRepo: non-200")
-		return ""
-	}
-	var body struct {
-		Write struct {
-			UID  string `json:"uid"`
-			Name string `json:"name"`
-		} `json:"write"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		log.Warn().Err(err).Str("url", u).Msg("lensWriteRepo: decode failed")
-		return ""
-	}
-	return body.Write.Name
-}
-
-// agentBranch queries knomit for the repo's agent_branch. Returns "" on
-// error so the caller can skip operations that need a branch. Every failure
-// path emits a Warn log line so a misbehaving server is visible in the bridge
-// log even though it stays silent toward CC.
-func agentBranch(repo string) string {
-	u := fmt.Sprintf("%s/api/v1/repos/%s", knomitBaseURL(), repo)
-	resp, err := hookHTTPClient.Get(u) //nolint:noctx
-	if err != nil {
-		log.Warn().Err(err).Str("url", u).Msg("agentBranch: GET failed")
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		log.Warn().Int("status", resp.StatusCode).Str("url", u).Msg("agentBranch: non-200")
-		return ""
-	}
-	var body struct {
-		AgentBranch string `json:"agent_branch"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		log.Warn().Err(err).Str("url", u).Msg("agentBranch: decode failed")
-		return ""
-	}
-	return body.AgentBranch
 }
 
 // emitAdditionalContext writes a JSON object to w that injects ctx as a
