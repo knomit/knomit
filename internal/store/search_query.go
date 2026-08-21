@@ -18,6 +18,7 @@ type RecentFactEntry struct {
 	Type        string   `json:"type"`
 	Domain      []string `json:"domain,omitempty"`
 	Entities    []string `json:"entities,omitempty"`
+	Motifs      []string `json:"motifs,omitempty"`
 	CommittedAt int64    `json:"committed_at"`
 	CommitHash  string   `json:"commit_hash"`
 	Operation   string   `json:"operation,omitempty"`
@@ -69,7 +70,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs,
 		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
@@ -87,12 +88,13 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 	var entries []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
+		var domainJSON, entitiesJSON, motifsJSON string
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts scan: %w", err)
 		}
 		var refs []string
 		logFactJSONUnmarshal("RecentFacts", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
+		unmarshalMotifs("RecentFacts", e.Path, motifsJSON, &e.Motifs)
 		entries = append(entries, e)
 	}
 	return entries, total, rows.Err()
@@ -132,7 +134,7 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 	}
 
 	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs,
 		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
@@ -149,12 +151,13 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 	var all []RecentFactEntry
 	for rows.Next() {
 		var e RecentFactEntry
-		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
+		var domainJSON, entitiesJSON, motifsJSON string
+		if err := rows.Scan(&e.Path, &e.Title, &e.Kind, &e.Type, &domainJSON, &entitiesJSON, &motifsJSON, &e.CommittedAt, &e.Operation, &e.CommitHash); err != nil {
 			return nil, 0, fmt.Errorf("RecentFacts search scan: %w", err)
 		}
 		var refs []string
 		logFactJSONUnmarshal("RecentFacts.search", e.Path, domainJSON, entitiesJSON, "null", &e.Domain, &e.Entities, &refs)
+		unmarshalMotifs("RecentFacts.search", e.Path, motifsJSON, &e.Motifs)
 		e.Score = scoreByPath[e.Path]
 		all = append(all, e)
 	}
@@ -472,7 +475,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	if q.Text == "" && q.QueryByPath == "" && len(q.QueryVec) == 0 {
 		args := append(append([]any{blobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
-			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
+			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 			        f.confidence, f.sources, f.refs, f.evidence_weight,
 			        bf.commit_hash, o.data, COALESCE(cl.committed_at, 0)
 			 FROM branch_facts bf
@@ -637,7 +640,7 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	}
 
 	metaRows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 		        f.confidence, f.sources, f.refs, f.evidence_weight, bf.commit_hash,
 		        COALESCE(cl.committed_at, 0)
 		 FROM branch_facts bf

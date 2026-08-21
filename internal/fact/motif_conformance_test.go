@@ -158,7 +158,25 @@ var mechanicsPaths = map[string][]string{
 	"internal/synthesize/restatement.go":     nil,
 	"internal/synthesize/cluster.go":         nil,
 	"internal/synthesize/louvain.go":         nil,
-	"internal/store/search_query.go":         nil,
+
+	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
+	// these names a SELECT column list and hands the row to a scanner; carrying
+	// an authored field to a reader is the visibility side of the MN6 line,
+	// which the clarified rule does not restrict. Phase 1 left the field
+	// write-only precisely because no such entry existed, and every read
+	// surface would have shipped empty with a green suite.
+	//
+	// What stays banned in this file is the deciding: newFactFilter's
+	// WHERE-clause construction, filterByEpisodeOps, and the KNN/rerank scoring
+	// inside Search must not consult motifs. Search appears here because its
+	// text-less branch owns a column list, NOT because its ranking may read
+	// them — if a motif term ever reaches the scoring arithmetic, that is an
+	// MN6 violation this entry does not license.
+	//
+	// newFactFilter is deliberately ABSENT until the §6 motif_match filter
+	// lands: the list is bidirectional, so declaring a permission before the
+	// code needs it fails as loudly as omitting one.
+	"internal/store/search_query.go": {"RecentFacts", "recentFactsSearch", "Search"},
 }
 
 // TestMN6_MotifsDoNotDriveMechanics — MN6 as clarified by the designer on
@@ -220,6 +238,23 @@ func funcsMentioningMotifs(t *testing.T, rel string) []string {
 				}
 			case *ast.SelectorExpr:
 				if strings.Contains(strings.ToLower(id.Sel.Name), "motif") {
+					mentions = true
+				}
+			case *ast.BasicLit:
+				// String literals count (Phase 2). In internal/store every
+				// mechanical decision this rule polices is expressed as SQL
+				// TEXT, not as Go identifiers: a WHERE clause selecting on
+				// motifs is a string, and an Ident-only walk cannot see it.
+				// Without this case the check was fail-OPEN in exactly the
+				// package where MN6 has the most to catch — a motif filter
+				// added to newFactFilter's clause builder would have passed
+				// silently while the allow-list said that file touched nothing.
+				//
+				// It costs some precision: a function whose SQL merely SELECTs
+				// the column now needs an allow-list entry too. That is the
+				// right trade — the entry states, in writing, that the function
+				// carries motifs and does not decide with them.
+				if id.Kind == token.STRING && strings.Contains(strings.ToLower(id.Value), "motif") {
 					mentions = true
 				}
 			}
