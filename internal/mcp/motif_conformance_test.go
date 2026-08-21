@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -9,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // readShipText loads a SHIP block golden file.
@@ -79,4 +83,135 @@ func requireExamplesValid(t *testing.T, ship string) {
 		require.NoErrorf(t, fact.ValidateMotifs([]string{tok}),
 			"SHIP text teaches %q, which the shipped validator rejects — amend one or the other", tok)
 	}
+}
+
+// TestShipBlockB_Verbatim — the instructions section is blueprint §2 Block B,
+// byte for byte, and it actually reaches what a session is served.
+func TestShipBlockB_Verbatim(t *testing.T) {
+	want := readShipText(t, "motif_block_b.txt")
+	require.Equal(t, want, strings.TrimRight(motifInstructionsSection, "\n"))
+
+	require.Contains(t, ProfileInstructions("code", "kb", nil), want,
+		"Block B must appear in the served instructions, not merely exist as a constant")
+}
+
+func TestShipBlockB_TeachesTheShapeItEnforces(t *testing.T) {
+	requireExamplesValid(t, readShipText(t, "motif_block_b.txt"))
+}
+
+// TestMN1_InstructionsAreCorpusIndependent — the write path stays light.
+// Instructions must be byte-identical whatever the corpus holds: no served
+// vocabulary, no examples mined from the repo, no counts.
+//
+// The comparison is on BYTES rather than a grep for a motif string, because a
+// grep only catches the spelling it was written to expect; a templating change
+// that interpolated corpus data in some other shape would slip past it.
+func TestMN1_InstructionsAreCorpusIndependent(t *testing.T) {
+	empty := newInstructionsTestRepo(t, nil)
+	rich := newInstructionsTestRepo(t, []motifSeed{
+		{path: "kb/alpha/one.md", motifs: []string{"silent-fallback", "config-drift"}},
+		{path: "kb/alpha/two.md", motifs: []string{"silent-fallback"}},
+		{path: "kb/beta/three.md", motifs: []string{"unmonitored-expiry"}},
+	})
+
+	for _, profile := range []string{"code", "chat", "generic"} {
+		t.Run(profile, func(t *testing.T) {
+			a := ProfileInstructions(profile, empty.OntologyRoot(), empty.Ontology())
+			b := ProfileInstructions(profile, rich.OntologyRoot(), rich.Ontology())
+			require.Equal(t, a, b,
+				"MN1: server instructions must not vary with corpus content")
+			require.Contains(t, a, "### Motifs",
+				"the comparison is worthless if neither side carries the section")
+		})
+	}
+}
+
+// TestMN1_NoVocabularyInAnyPrompt — nothing in the served surface may
+// enumerate this corpus's motifs. Phase 2 introduces exactly one exception
+// (the backfill work item); until then the count is zero.
+func TestMN1_NoVocabularyInAnyPrompt(t *testing.T) {
+	const marker = "zzz-unique-marker"
+	rich := newInstructionsTestRepo(t, []motifSeed{
+		{path: "kb/alpha/one.md", motifs: []string{marker}},
+	})
+	require.NotContains(t,
+		ProfileInstructions("code", rich.OntologyRoot(), rich.Ontology()), marker)
+
+	for name, schema := range map[string]map[string]any{
+		"knomit_learn":  learnToolSchemaProperties(),
+		"knomit_update": updateToolSchemaProperties(),
+	} {
+		for prop, spec := range schema {
+			m, ok := spec.(map[string]any)
+			if !ok {
+				continue
+			}
+			desc, _ := m["description"].(string)
+			require.NotContainsf(t, desc, marker, "%s.%s leaks corpus vocabulary", name, prop)
+		}
+	}
+}
+
+// TestMN1_FrontmatterListNamesMotifs — the pointer bullet must be present.
+// Its absence is not cosmetic: the frontmatter list is an enumeration, and an
+// agent that reads it as complete will treat an unlisted motifs: as cruft on
+// a fact it is updating — which, since knomit_update replaces list fields
+// wholesale, deletes them.
+func TestMN1_FrontmatterListNamesMotifs(t *testing.T) {
+	instr := ProfileInstructions("code", "kb", nil)
+	require.Contains(t, instr, "- **motifs**:")
+	require.Less(t, strings.Index(instr, "- **motifs**:"), strings.Index(instr, "### Motifs"),
+		"the pointer bullet must come before the section it points at")
+}
+
+// motifSeed is one fact to plant in a corpus fixture.
+type motifSeed struct {
+	path   string
+	motifs []string
+}
+
+// newInstructionsTestRepo opens a fresh store, writes the seeded facts, and
+// returns the instance. The seeds are REAL committed facts, not a stub: MN1 is
+// a claim about what happens when a corpus actually holds motifs, and a
+// fixture that never wrote any would make the comparison trivially true.
+func newInstructionsTestRepo(t *testing.T, seeds []motifSeed) *repos.RepoInstance {
+	t.Helper()
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	for _, seed := range seeds {
+		f := fact.NewFact(seed.path)
+		f.Title = "T " + seed.path
+		f.Body = "Body of " + seed.path
+		f.Type = fact.Observation
+		f.Domain = []string{"alpha"}
+		f.Entities = []string{"Widget"}
+		f.Refs = []string{}
+		f.Confidence = 0.8
+		f.Sources = 1
+		f.Motifs = seed.motifs
+		body, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(context.Background(), "agent/test", f.Path(), body, "seed", "")
+		require.NoError(t, err)
+	}
+
+	// The seeds must have LANDED, or every assertion below is about an empty
+	// corpus wearing a rich corpus's name.
+	if len(seeds) > 0 {
+		n, err := svc.Search().TokenDF(context.Background(), "agent/test", seeds[0].motifs[0], "motif")
+		require.NoError(t, err)
+		require.Positive(t, n, "seeded motifs must be indexed, or this fixture proves nothing")
+	}
+
+	return repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "test",
+		UID:          nextTestRepoUID(),
+		AgentBranch:  "agent/test",
+		Svc:          svc,
+		OntologyRoot: "kb",
+	})
 }

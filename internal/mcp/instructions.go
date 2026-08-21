@@ -91,6 +91,56 @@ func lensInstructions(b *repos.Binding) string {
 	return sb.String()
 }
 
+// motifInstructionsSection is blueprint §2 Block B, VERBATIM and STATIC.
+//
+// "Static" is the whole constraint (roadmap MN1): not one byte of it varies
+// with what the corpus holds. There is no vocabulary listing and no
+// reuse-before-minting rule, and their absence is deliberate and measured — a
+// served list biases authors toward force-fitting a new fact onto an existing
+// name (§12-E3), and cold minting was shown to converge without one (§12-E2).
+// Phrasing convergence is manufactured downstream, in derived state, where
+// being wrong costs a rebuild instead of a fact.
+//
+// The calibrated zero rule at the end is likewise load-bearing: the blunter v1
+// wording suppressed valid motifs in two of three models.
+//
+// Written as an interpreted literal rather than a raw one because the text
+// contains backticks. Guarded byte-for-byte by TestShipBlockB_Verbatim against
+// testdata/motif_block_b.txt, and its corpus-independence by
+// TestMN1_InstructionsAreCorpusIndependent.
+const motifInstructionsSection = "### Motifs\n" +
+	"\n" +
+	"Facts may carry `motifs:` — names for the underlying regularity, independent\n" +
+	"of subject. Motifs exist so that two facts about unrelated subjects can be\n" +
+	"connected when they exemplify the same mechanism: a build tool silently\n" +
+	"mis-configuring on an unset variable and a hook guard that must fail closed\n" +
+	"on a missing field are different subjects with the same motif,\n" +
+	"zero-value-as-valid.\n" +
+	"\n" +
+	"Writing a motif:\n" +
+	"- Apply the transfer test: could a fact in a completely different area of\n" +
+	"  this corpus carry this exact phrase? If not, it is a title fragment, not a\n" +
+	"  motif.\n" +
+	"- Name the regularity, not the instance: atomic-write-via-rename, not\n" +
+	"  keypair-written-atomically.\n" +
+	"- Name the regularity, not its remedy. If a fact describes a problem and its\n" +
+	"  fix, the motif names the problem's shape, never the fix:\n" +
+	"  unmonitored-expiry, not renew-certs-automatically.\n" +
+	"- No subject words: a motif containing an entity name, a domain term, or a\n" +
+	"  path segment of its own fact will be stripped at write time.\n" +
+	"- Prefer the most specific phrasing that still transfers.\n" +
+	"- 2–4 words, kebab-case, noun phrase. One motif is normal; three is the\n" +
+	"  maximum. Never attach two phrasings of the same regularity to one fact —\n" +
+	"  pick the better one; a second motif requires a genuinely second regularity.\n" +
+	"- Zero is correct when the fact records only a quantity or an event (a\n" +
+	"  funding round, an acquisition, a release). But a specific dynamic — a time\n" +
+	"  window between cause and effect, a direction of failure, a feedback loop —\n" +
+	"  IS a general shape and deserves a motif.\n" +
+	"\n" +
+	"What motifs are not: not predictions of where the fact applies, not tags for\n" +
+	"retrieval, not summaries. They are consumed only by synthesis (bridging and\n" +
+	"discovery); a wrong motif costs a wasted discovery candidate, nothing more.\n"
+
 // baseInstructionsText returns the base MCP server instructions with the given ontology root.
 func baseInstructionsText(ontologyRoot string, ontology *fact.Ontology) string {
 	// Build dynamic topic list from ontology.
@@ -167,6 +217,9 @@ Each fact has YAML frontmatter with:
 - **sources**: number of independent sources
 - **refs**: citations. For a fact in THIS repo use the bare path as knomit_query returned it (kb/topic/.../id.md); the server rewrites it to the canonical kb://<repo-id>/<path> form on write, so you never supply this repo's id. For a fact in ANOTHER repo, copy the kb://<repo-id>/<path> form verbatim from the result that gave it to you; knomit_query and knomit_explain already return other repos' paths that way, and knomit_repos lists every mounted repo's id. For source use src://<source-repo-id>/<path>@<commit>:<blob>, where the id is the SOURCE repo's root commit, not a knomit id. A ref to a fact in THIS repo must resolve when the call lands — write the cited fact in the same call, or in an earlier one. A ref that will not resolve rejects the whole call and names every offending ref.
 - **origin**: which pipeline minted the fact — NOT where the information came from. %s Immutable after write — knomit_update cannot change it.
+- **motifs**: 0–3 general regularities this fact instantiates — see the Motifs section below.
+
+%s
 
 ## Tools
 
@@ -226,6 +279,21 @@ Important: hypotheses must only cite observations and synthesis facts as evidenc
 		instructionTypeLines(fact.AllEpistemicTypes(), "    "),
 		instructionTypeLines(fact.AllPragmaticTypes(), "    "),
 		originGlossSentence(),
+		// Block B goes here, "alongside the ontology topics" per §2: inside the
+		// frontmatter section, because that is what it documents, and before
+		// ## Tools so an agent has read the field contract before it reads the
+		// tool that writes it. Static — see the constant.
+		//
+		// The one-line motifs bullet above it is a POINTER, not a second
+		// description. It exists because the frontmatter list is an
+		// ENUMERATION, and readers treat enumerations as complete: without a
+		// motifs line, an agent whose model of a fact's fields comes from that
+		// list is one inference from reading an unlisted `motifs:` on a fact it
+		// is updating as cruft — and knomit_update replaces list fields
+		// wholesale, so that inference deletes them. The rules stay
+		// single-sourced in Block B, and the line is corpus-independent, so MN1
+		// still holds.
+		motifInstructionsSection,
 		ontologyRoot, ontologyRoot, ontologyRoot)
 }
 
