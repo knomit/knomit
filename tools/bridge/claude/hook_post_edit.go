@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/rs/zerolog/log"
+
+	"knomit/tools/bridge/knomitapi"
 )
 
 type postEditInput struct {
@@ -76,7 +78,7 @@ func hookPostEdit(r io.Reader, w io.Writer) error {
 		skipReason = skip
 		return nil
 	}
-	branch := agentBranch(repo)
+	branch := knomitapi.AgentBranch(repo)
 	if branch == "" {
 		skipReason = "no_agent_branch"
 		return nil
@@ -140,8 +142,8 @@ func relPath(cwd, abs string) string {
 // src:// entries covers all three. Bare entries (no scheme) are matched
 // exact-only, since accepting `other/internal/store/foo.go` as a hit for
 // `internal/store/foo.go` would over-match unrelated files.
-func filterByEntity(facts []factSummary, rel string) []factSummary {
-	out := make([]factSummary, 0, len(facts))
+func filterByEntity(facts []knomitapi.FactSummary, rel string) []knomitapi.FactSummary {
+	out := make([]knomitapi.FactSummary, 0, len(facts))
 	for _, f := range facts {
 		for _, e := range f.Entities {
 			if entityMatchesPath(e, rel) {
@@ -171,7 +173,7 @@ func entityMatchesPath(entity, rel string) bool {
 // a wrong-endpoint bug; keep this assertable).
 func postEditSearchURL(repo, branch, rel string) string {
 	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/search?q=%s&limit=20",
-		knomitBaseURL(), repo, encodeBranch(branch), url.QueryEscape(rel))
+		knomitapi.BaseURL(), url.PathEscape(repo), url.PathEscape(knomitapi.EncodeBranch(branch)), url.QueryEscape(rel))
 }
 
 // fetchSearchResults calls a /search HAL endpoint and returns the embedded
@@ -179,8 +181,8 @@ func postEditSearchURL(repo, branch, rel string) string {
 // etc.) — hooks must never abort CC. Each failure path logs at Warn so a
 // dead server is visible in the bridge log rather than being indistinguishable
 // from a legitimate empty result.
-func fetchSearchResults(u string) []factSummary {
-	resp, err := hookHTTPClient.Get(u) //nolint:noctx
+func fetchSearchResults(u string) []knomitapi.FactSummary {
+	resp, err := knomitapi.HTTPClient.Get(u) //nolint:noctx
 	if err != nil {
 		log.Warn().Err(err).Str("url", u).Msg("fetchSearchResults: GET failed")
 		return nil
@@ -192,7 +194,7 @@ func fetchSearchResults(u string) []factSummary {
 	}
 	var body struct {
 		Embedded struct {
-			Results []factSummary `json:"results"`
+			Results []knomitapi.FactSummary `json:"results"`
 		} `json:"_embedded"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {

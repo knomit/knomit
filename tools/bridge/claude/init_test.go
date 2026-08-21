@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"knomit/tools/bridge/knomitapi"
 )
 
 func TestRunInit_EmptyDirectory_DropsAllFiles(t *testing.T) {
@@ -244,68 +246,6 @@ func TestRunInit_RepoMode_McpJsonArgsAreExactlyRepo(t *testing.T) {
 	}
 }
 
-// TestServerKey pins the derivation. The prefix names the axis and is
-// unconditional: see TestServerKey_IsInjective for why both properties matter.
-func TestServerKey(t *testing.T) {
-	for _, tc := range []struct {
-		name, repo, lens, want string
-	}{
-		{"repo scoping prefixes", "team-kb", "", "knomit-repo-team-kb"},
-		{"lens scoping prefixes", "team-kb", "eng", "knomit-lens-eng"},
-		{"lens wins over repo", "team-kb", "eng", "knomit-lens-eng"},
-		{"repo named knomit still prefixes", "knomit", "", "knomit-repo-knomit"},
-		{"already-prefixed name prefixes again", "knomit-web", "", "knomit-repo-knomit-web"},
-		{"knomit substring is not special", "knomitten", "", "knomit-repo-knomitten"},
-		{"repo named after the other axis", "lens-eng", "", "knomit-repo-lens-eng"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := serverKey(tc.repo, tc.lens); got != tc.want {
-				t.Errorf("serverKey(%q, %q) = %q, want %q", tc.repo, tc.lens, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestServerKey_IsInjective pins the property the whole derivation exists for:
-// distinct scopes must never produce the same .mcp.json key. Duplicate keys in
-// one object silently drop an entry, which is exactly the clobbering the derived
-// key replaced — so a collision here is not cosmetic.
-//
-// Two tempting simplifications both break it, and both are covered:
-//
-//   - Sharing one `knomit-` prefix across the axes. Repos and lenses are
-//     separate namespaces validated by the same repos.IsValidName, so a repo and
-//     a lens may share a name; `--repo eng` and `--lens eng` would then collide.
-//   - Skipping the prefix when the name already carries it, to avoid
-//     `knomit-repo-knomit`. That is many-to-one by construction.
-//
-// The name set below is deliberately adversarial: names that already carry the
-// product prefix, and names that spell the OTHER axis marker.
-func TestServerKey_IsInjective(t *testing.T) {
-	names := []string{
-		"eng", "web", "knomit", "knomit-web", "knomitten",
-		"lens-eng", "repo-eng", "lens", "repo", "knomit-lens-eng",
-	}
-	type scope struct{ repo, lens string }
-	seen := make(map[string]scope, 2*len(names))
-	for _, n := range names {
-		for _, s := range []scope{{repo: n}, {repo: "unrelated", lens: n}} {
-			key := serverKey(s.repo, s.lens)
-			if prev, dup := seen[key]; dup {
-				t.Errorf("key %q derived from two distinct scopes: {repo:%q lens:%q} and {repo:%q lens:%q}",
-					key, prev.repo, prev.lens, s.repo, s.lens)
-				continue
-			}
-			seen[key] = s
-		}
-	}
-	// The specific collision the axis prefix exists to prevent, asserted
-	// directly so a regression names itself rather than surfacing as a map hit.
-	if repoKey, lensKey := serverKey("eng", ""), serverKey("eng", "eng"); repoKey == lensKey {
-		t.Errorf("repo %q and lens %q both derive %q", "eng", "eng", repoKey)
-	}
-}
-
 // TestRunInit_ScaffoldedConfigBindsHooks is the test whose absence let a real
 // bug through: every mcpBinding test hand-builds .mcp.json with a literal key,
 // so none of them noticed when runInit stopped emitting that key. This pipes
@@ -396,10 +336,10 @@ func mustSkipReason(t *testing.T, dir string) string {
 func TestRunInit_RejectsOverlongDerivedKey(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
-	long := strings.Repeat("a", maxServerKeyLen)
+	long := strings.Repeat("a", knomitapi.MaxServerKeyLen)
 	err := runInit([]string{"--repo", long})
 	if err == nil {
-		t.Fatalf("runInit accepted a repo name yielding a %d-char key", len(serverKey(long, "")))
+		t.Fatalf("runInit accepted a repo name yielding a %d-char key", len(knomitapi.ServerKey(long, "")))
 	}
 	if !strings.Contains(err.Error(), "server key") {
 		t.Errorf("error %q does not explain the key-length limit", err)
@@ -408,7 +348,7 @@ func TestRunInit_RejectsOverlongDerivedKey(t *testing.T) {
 	// all (the name defaults to the directory basename), so the message must
 	// quote the name budget and say the repo need not match the directory.
 	for _, want := range []string{
-		fmt.Sprintf("max %d", maxScopeNameLen),
+		fmt.Sprintf("max %d", knomitapi.MaxScopeNameLen),
 		"--repo",
 		"need not match the directory",
 	} {
@@ -424,13 +364,13 @@ func TestRunInit_RejectsOverlongDerivedKey(t *testing.T) {
 func TestRunInit_AcceptsMaxLengthScopeName(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
-	name := strings.Repeat("a", maxScopeNameLen)
+	name := strings.Repeat("a", knomitapi.MaxScopeNameLen)
 	if err := runInit([]string{"--repo", name}); err != nil {
 		t.Fatalf("runInit rejected a %d-char repo name at the documented max: %v", len(name), err)
 	}
-	if got := len(serverKey(name, "")); got != maxServerKeyLen {
+	if got := len(knomitapi.ServerKey(name, "")); got != knomitapi.MaxServerKeyLen {
 		t.Errorf("key for a max-length name is %d chars, want exactly %d — "+
-			"maxScopeNameLen and the axis prefix have drifted apart", got, maxServerKeyLen)
+			"maxScopeNameLen and the axis prefix have drifted apart", got, knomitapi.MaxServerKeyLen)
 	}
 }
 

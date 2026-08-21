@@ -19,7 +19,7 @@ For **predictions** (something that *might* be true but isn't observed yet): wri
 DON'T fire for:
 
 - Trivial restatements of code that's already self-evident
-- Information that belongs in CLAUDE.md (project conventions, file placement)
+- Information that belongs in the project's agent instructions file (project conventions, file placement)
 - One-off task details (in-progress state, current conversation context)
 
 ## How

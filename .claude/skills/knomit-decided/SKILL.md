@@ -1,6 +1,6 @@
 ---
 name: knomit-decided
-description: Use the moment a tradeoff is resolved — including AskUserQuestion answers — and BEFORE starting the work that decision authorized. Captures options, rationale, and choice so it isn't re-litigated.
+description: Use the moment a tradeoff is resolved — including answers to a multiple-choice question you put to the user — and BEFORE starting the work that decision authorized. Captures options, rationale, and choice so it isn't re-litigated.
 ---
 
 # /knomit-decided <slug>
@@ -9,7 +9,7 @@ description: Use the moment a tradeoff is resolved — including AskUserQuestion
 
 Fire WHEN any of these just happened, and BEFORE you start the resulting work:
 
-- **`AskUserQuestion` returned answers where the options carried different tradeoffs.** The answer set IS the decision — the choice happened the moment the user selected. This is the single highest-signal trigger.
+- **You put options to the user and they picked one, where the options carried different tradeoffs.** The answer set IS the decision — the choice happened the moment the user selected. This is the single highest-signal trigger.
 - Explicit verbal choice: "let's go with X", "we'll do A not B", "yes, that approach", "I think option 2 is right"
 - Resolution of a tradeoff: pros/cons discussed, converged on one
 - A rejected approach with a stated reason: "we won't do X because Y"
@@ -39,7 +39,7 @@ These thoughts mean fire the skill NOW, not later:
 
 Before writing the code/edit the decision authorized, summarize into three parts (plus a fourth when foreseeable):
 
-1. **Options considered** — what was on the table (verbatim from `AskUserQuestion`, or paraphrased from prose)
+1. **Options considered** — what was on the table (verbatim from the options you offered, or paraphrased from prose)
 2. **Rationale** — why the chosen option won, and why others lost if it's load-bearing
 3. **The choice** — concrete decision
 4. **Non-scope** (when foreseeable) — one line on what the decision does NOT authorize. Decisions compress into "we always do X" slogans; if the choice was conditional on context, name the boundary so it isn't stretched later.

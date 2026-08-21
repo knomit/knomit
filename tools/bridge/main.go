@@ -50,6 +50,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
 )
@@ -108,6 +109,13 @@ func main() {
 		}
 		return
 	}
+	if len(args) >= 1 && (args[0] == "antigravity" || args[0] == "agy") {
+		if err := antigravity.Run(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "knomit-bridge antigravity: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Re-seat os.Args for flag.Parse, minus the peeled --log entries.
 	os.Args = append([]string{os.Args[0]}, args...)
@@ -122,7 +130,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  claude init             Scaffold CC integration files in the current directory\n")
 		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
-		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-edit, pre-compact\n\n")
+		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-edit, post-ask, pre-compact\n\n")
+		fmt.Fprintf(os.Stderr, "  antigravity init        Scaffold the Antigravity plugin in the current directory\n")
+		fmt.Fprintf(os.Stderr, "                          knomit-bridge antigravity init [-repo <name>|-lens <name>]\n")
+		fmt.Fprintf(os.Stderr, "                          (alias: agy)\n\n")
+		fmt.Fprintf(os.Stderr, "  antigravity hook <event>  Execute an Antigravity hook (called by agy via hooks.json).\n")
+		fmt.Fprintf(os.Stderr, "                          event in: pre-invocation\n\n")
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
@@ -134,6 +147,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook post-edit\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge antigravity init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "\nflags (for the default MCP-proxy mode):\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nNote: flags accept both '-flag value' and '--flag value' styles.\n")
