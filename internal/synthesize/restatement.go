@@ -354,6 +354,13 @@ func throttleState(verdicts []store.RestatementVerdict) (float64, string) {
 func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clusters [][]factForLLM, n int) ([]store.RestatementPair, restatementHealth, error) {
 	var h restatementHealth
 
+	// Coverage is read here rather than passed in, so every caller that builds
+	// health gets a complete one. A health block that silently reports 0%
+	// because its caller forgot to fill a field is worse than no health block.
+	if have, total, cerr := d.Abstraction.TitleVectorCoverage(ctx, branch); cerr == nil && total > 0 {
+		h.Coverage = float64(have) / float64(total)
+	}
+
 	stats, err := d.Abstraction.RestatementPairStats(ctx, branch)
 	if err != nil {
 		return nil, h, wrapf(reviewTool, err, "shortlist: stats")
@@ -516,7 +523,7 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 // consolidation, and a corpus whose axis cannot be built should still get its
 // ordinary review rather than an error.
 func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, clusters [][]factForLLM, seeds int) error {
-	have, total, err := ensureTitleVectors(ctx, d, branch, titleBackfillBudget)
+	_, total, err := ensureTitleVectors(ctx, d, branch, titleBackfillBudget)
 	if err != nil {
 		log.Warn().Err(err).Str("session", sess.ID).
 			Msg("review: title backfill failed; skipping restatement shortlist")
@@ -539,7 +546,6 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 			Msg("review: restatement selection failed; continuing without candidates")
 		return nil
 	}
-	health.Coverage = float64(have) / float64(total)
 
 	if err := enqueueRestatementItems(ctx, d, sess, branch, pairs); err != nil {
 		return err
