@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/embeddings/params"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -265,6 +266,32 @@ func (e *restatementEnv) writeFactWithDomain(path, title, body, domain string) {
 	_, err := e.svc.Facts().WriteFact(context.Background(), e.branch, path,
 		"---\ntype: observation\ndomain: ["+domain+"]\n---\n# "+title+"\n\n"+body,
 		"write "+path, "test")
+	require.NoError(e.t, err)
+}
+
+// writeFactWithMotifs mirrors writeFact but carries motifs, so the motif
+// dynamics tests can drive whole sessions over a corpus that has them.
+//
+// It renders through SerializeFact rather than hand-building frontmatter like
+// its siblings above: motifs are the one field with a WRITE-TIME transform
+// (the silent subject strip), so a hand-built fixture would be a string no
+// real writer could produce.
+func (e *restatementEnv) writeFactWithMotifs(path, title, body string, motifs []string) {
+	e.t.Helper()
+	f := fact.NewFact(path)
+	f.Title = title
+	f.Body = body
+	f.Type = fact.Observation
+	f.Domain = []string{"alpha"}
+	f.Entities = []string{"Widget"}
+	f.Refs = []string{}
+	f.Confidence = 0.7
+	f.Sources = 1
+	f.Motifs = motifs
+	rendered, err := fact.SerializeFact(f)
+	require.NoError(e.t, err)
+	_, err = e.svc.Facts().WriteFact(context.Background(), e.branch, f.Path(),
+		rendered, "write "+path, "test")
 	require.NoError(e.t, err)
 }
 
