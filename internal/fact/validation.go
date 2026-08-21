@@ -57,6 +57,7 @@ func factToJS(f Fact) map[string]any {
 		"type":            string(f.Type),
 		"domain":          append([]string{}, f.Domain...),
 		"entities":        append([]string{}, f.Entities...),
+		"motifs":          append([]string{}, f.Motifs...),
 		"refs":            append([]string{}, f.Refs...),
 		"title":           f.Title,
 		"body":            f.Body,

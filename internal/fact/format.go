@@ -12,15 +12,22 @@ import (
 // Fact represents a single knomit fact file (YAML frontmatter + Markdown body).
 // path is private and always lowercase — use NewFact to construct, Path() to read.
 type Fact struct {
-	path           string   // private — always lowercase
-	Title          string   `json:"title"`
-	Body           string   `json:"body"`
-	Kind           Kind     `json:"kind,omitempty"`
-	Type           Type     `json:"type"`
-	Domain         []string `json:"domain"`
-	Confidence     float64  `json:"confidence"`
-	Sources        int      `json:"sources"`
-	Entities       []string `json:"entities"`
+	path       string   // private — always lowercase
+	Title      string   `json:"title"`
+	Body       string   `json:"body"`
+	Kind       Kind     `json:"kind,omitempty"`
+	Type       Type     `json:"type"`
+	Domain     []string `json:"domain"`
+	Confidence float64  `json:"confidence"`
+	Sources    int      `json:"sources"`
+	Entities   []string `json:"entities"`
+	// Motifs names the general regularities this fact is an instance of —
+	// the ASPECT axis, orthogonal to Entities (subject) and Domain (area).
+	// Optional and capped at MaxMotifs; see motif.go for the rules and
+	// blueprint §1 for the contract. omitempty is load-bearing: the entire
+	// pre-motif corpus must round-trip byte-identically, so an absent list
+	// and an empty list are the same thing at every boundary.
+	Motifs         []string `json:"motifs,omitempty"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	Origin         Origin   `json:"origin,omitempty"`
@@ -56,6 +63,7 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		Confidence     float64  `json:"confidence"`
 		Sources        int      `json:"sources"`
 		Entities       []string `json:"entities"`
+		Motifs         []string `json:"motifs,omitempty"`
 		Refs           []string `json:"refs"`
 		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 		Origin         Origin   `json:"origin,omitempty"`
@@ -78,6 +86,7 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		Confidence:     f.Confidence,
 		Sources:        f.Sources,
 		Entities:       f.Entities,
+		Motifs:         f.Motifs,
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
 		Origin:         origin,
@@ -97,6 +106,7 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 		Confidence     float64  `json:"confidence"`
 		Sources        int      `json:"sources"`
 		Entities       []string `json:"entities"`
+		Motifs         []string `json:"motifs,omitempty"`
 		Refs           []string `json:"refs"`
 		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 		Origin         Origin   `json:"origin,omitempty"`
@@ -117,6 +127,7 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 	f.Confidence = p.Confidence
 	f.Sources = p.Sources
 	f.Entities = p.Entities
+	f.Motifs = p.Motifs
 	f.Refs = p.Refs
 	f.EvidenceWeight = p.EvidenceWeight
 	f.Origin = p.Origin
@@ -134,6 +145,7 @@ type frontmatter struct {
 	Confidence     float64  `yaml:"confidence"`
 	Sources        int      `yaml:"sources"`
 	Entities       []string `yaml:"entities"`
+	Motifs         []string `yaml:"motifs,omitempty"`
 	Refs           []string `yaml:"refs"`
 	EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
 	Origin         string   `yaml:"origin"`
@@ -280,6 +292,10 @@ func ParseFact(path, content string) (Fact, error) {
 	f.Confidence = fm.Confidence
 	f.Sources = fm.Sources
 	f.Entities = fm.Entities
+	// Deliberately NOT normalized to []string{} when absent: motifs is the
+	// only elided list field, so nil and empty must remain indistinguishable
+	// all the way through, or a round trip changes the bytes.
+	f.Motifs = fm.Motifs
 	f.Refs = fm.Refs
 	f.EvidenceWeight = fm.EvidenceWeight
 	f.Origin = origin
@@ -418,6 +434,12 @@ func SerializeFact(f Fact) (string, error) {
 		add("origin", strScalar(string(f.Origin)))
 	}
 	add("entities", flowSeq(f.Entities))
+	// Emitted only when non-empty. `motifs: []` on the thousands of facts
+	// that predate the field would churn every file in the corpus for no
+	// information.
+	if len(f.Motifs) > 0 {
+		add("motifs", flowSeq(f.Motifs))
+	}
 	add("refs", flowSeq(f.Refs))
 
 	var buf bytes.Buffer
