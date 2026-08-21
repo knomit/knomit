@@ -14,15 +14,30 @@ import (
 //
 //   - "domain": token is the CANONICAL tag (canonicalizeDomain form). fact_domains
 //     stores the canonical form, so this is an exact indexed match.
+//
 //   - "entity": token is matched case-insensitively (fact_entities is COLLATE
 //     NOCASE); pass the authored entity form. Entities are not de-hyphenized.
-//   - "motif": token is the motif string AS WRITTEN. There is no canonical
-//     form to pass and none is computed here (MN3): a motif is stored exactly
-//     as its author typed it, and the alias resolution that maps spellings to
-//     a canonical id is derived state that resolves the token BEFORE calling
-//     this. Matching is case-insensitive (fact_motifs is COLLATE NOCASE), but
-//     motifs are validated lowercase, so that only ever forgives a
-//     hand-edited file.
+//
+//   - "motif": token is a CANONICAL MOTIF ID, and df is counted over the whole
+//     alias cluster it names — every live fact carrying any member spelling,
+//     counted once each (blueprint §3.1, "TokenDF and all matching key on
+//     canonical ids"). Matching is case-insensitive (fact_motifs is COLLATE
+//     NOCASE), but motifs are validated lowercase, so that only ever forgives
+//     a hand-edited file.
+//
+//     Resolution happens HERE rather than in the caller, and that is
+//     load-bearing rather than stylistic: a caller cannot get this right by
+//     summing per-spelling counts, because a fact carrying two spellings of
+//     one mechanism would be counted twice — inflating df exactly where the
+//     Phase-3 band is tightest. One definition of motif df, in the function
+//     bridge scoring already calls.
+//
+//     On a corpus with no alias rows this degrades exactly to the pre-alias
+//     behaviour: every spelling is its own singleton cluster, so the count is
+//     what a plain match on the as-written string would have returned.
+//
+//     Storage is unaffected (MN3): the alias table is derived state, and a
+//     motif is still stored exactly as its author typed it.
 //
 // Liveness + branch scoping come from branch_facts (UNIQUE(branch_id, path) =>
 // one row per live path per branch), exactly as BlastRadius does.
@@ -42,11 +57,29 @@ func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (
 	if err != nil {
 		return 0, fmt.Errorf("TokenDF: branchID: %w", err)
 	}
+	// Motifs resolve through the alias table: the token names a CLUSTER, so
+	// every member spelling counts, and COUNT(DISTINCT bf.path) makes a fact
+	// carrying several of them one carrier rather than several.
+	//
+	// The LEFT JOIN plus the `OR` is what makes an unresolved corpus behave
+	// exactly as it did before aliases existed — a spelling with no alias row
+	// matches only itself. An INNER JOIN here would silently return 0 for
+	// every motif until the first RebuildAliases, which is the kind of
+	// zero that reads as "no carriers" rather than "not resolved yet".
 	q := fmt.Sprintf(
 		`SELECT COUNT(DISTINCT bf.path)
 		   FROM branch_facts bf
 		   JOIN %s j ON j.fact_id = bf.fact_id
 		  WHERE bf.branch_id = ? AND j.%s = ?`, table, col)
+	if kind == "motif" {
+		q = `SELECT COUNT(DISTINCT bf.path)
+		       FROM branch_facts bf
+		       JOIN fact_motifs j ON j.fact_id = bf.fact_id
+		       LEFT JOIN motif_aliases a
+		              ON a.branch_id = bf.branch_id AND a.motif = j.motif
+		      WHERE bf.branch_id = ?
+		        AND COALESCE(a.canonical_id, j.motif) = ?`
+	}
 	var n int
 	err = conn(ctx, gs.rh.db).QueryRowContext(ctx, q, branchID, token).Scan(&n)
 	if err == sql.ErrNoRows {

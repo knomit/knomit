@@ -240,6 +240,27 @@ type TitleNeighbour struct {
 // composite: nothing on the runtime paths (query / explain / learn) may consume
 // it, and keeping it off the composite makes that structural rather than a rule
 // somebody has to remember.
+// MotifIndex is alias resolution over the corpus's motif vocabulary
+// (blueprint §3.1). Every method reads or rebuilds DERIVED state: the authored
+// strings in facts.motifs remain the claim, and nothing here writes back into
+// a fact (MN3).
+type MotifIndex interface {
+	// RebuildAliases recomputes the mechanical (stem/canonicalize) alias layer
+	// for branch from the live corpus, replacing what was there. Judge merges
+	// are not preserved — they are the LLM layer's to re-establish.
+	RebuildAliases(ctx context.Context, branch string) error
+	// CanonicalID resolves one spelling to its cluster's canonical id. An
+	// unresolved spelling resolves to ITSELF, so a corpus with no alias table
+	// behaves as one where every motif is its own singleton cluster.
+	CanonicalID(ctx context.Context, branch, motif string) (string, error)
+	// ClusterKey returns the STABLE identity of a spelling's cluster. Use this,
+	// never CanonicalID, to key state that must survive across sessions:
+	// CanonicalID is the highest-df member spelling and flips as usage shifts.
+	ClusterKey(ctx context.Context, branch, motif string) (string, error)
+	// AliasTable returns the whole spelling -> canonical id mapping.
+	AliasTable(ctx context.Context, branch string) (map[string]string, error)
+}
+
 type AbstractionIndex interface {
 	// LiveFactsMissingTitleVector returns up to limit live epistemic facts on
 	// branch that have no title vector yet, lowest fact id first.
