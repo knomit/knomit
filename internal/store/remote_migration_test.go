@@ -70,7 +70,7 @@ func TestMigration017_UpgradesPreMigrationDatabase(t *testing.T) {
 	var dirty bool
 	require.NoError(t, svc2.rh.db.QueryRow(
 		`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty))
-	require.Equal(t, 18, v, "the store must have migrated forward")
+	require.Equal(t, 19, v, "the store must have migrated forward")
 	require.False(t, dirty)
 
 	// The connection columns are gone...
