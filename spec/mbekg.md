@@ -100,6 +100,7 @@ sources: <integer>
 evidence_weight: <float>   # derived; OMITTED when 0 (see §5.2)
 origin: <origin>           # conditionally omitted (see §2.5)
 entities: [<string>, ...]
+motifs: [<kebab-phrase>, ...]  # OMITTED when empty (see §2.10)
 refs: [<string>, ...]
 ---
 # <Fact Title>
@@ -128,7 +129,7 @@ non-empty body follows after one blank line and ends with a trailing newline.
 
 ### 2.2 Emission Order
 
-Writers MUST emit frontmatter keys in exactly this order, with three
+Writers MUST emit frontmatter keys in exactly this order, with four
 conditional omissions. Note that `origin` sits between `evidence_weight` and
 `entities`, not adjacent to `kind`/`type`.
 
@@ -142,7 +143,8 @@ conditional omissions. Note that `origin` sits between `evidence_weight` and
 | 6 | `evidence_weight` | only when `> 0` | shortest numeric form |
 | 7 | `origin` | per the elision rule, §2.5.3 | plain string |
 | 8 | `entities` | always (empty → `[]`) | inline flow sequence |
-| 9 | `refs` | always (empty → `[]`) | inline flow sequence |
+| 9 | `motifs` | only when non-empty | inline flow sequence |
+| 10 | `refs` | always (empty → `[]`) | inline flow sequence |
 
 "Shortest numeric form" means `1.0` renders as `1`, and very small floats may
 render in exponent notation (valid YAML — readers must accept it).
@@ -177,6 +179,7 @@ an explicit 0 from the caller is a legal value and survives.
 | `evidence_weight` | float | `0` | **no bounds check on read or write**; the value only gates emission (`> 0`) | Derived corroboration score (§5.2). Never authored by hand. |
 | `origin` | string | type-aware default (§2.5.1) | **asymmetric**: normalized on read, rejected on write (§2.5.4) | How the fact came to exist: `authored`, `distilled`, `discovered`. |
 | `entities` | string[] | `[]` | not validated | Flat entity tags for discovery; a lightweight search index. |
+| `motifs` | string[] | absent (NOT `[]` — see §2.10) | **asymmetric**: invalid entries dropped on read, rejected on write; subject motifs silently stripped on write (§2.10) | Names for the general regularity the fact instantiates, independent of its subject (§2.10). |
 | `refs` | string[] | `[]` | not validated; stored verbatim | Evidence pointers (§2.9). |
 
 ### 2.4 Kinds and Types
@@ -283,6 +286,15 @@ direction:
 | `sources` >= 0 | strict | strict |
 | `evidence_weight` | no bounds check | no bounds check; only gates emission on `> 0` |
 | `origin` | normalized silently (§2.5.4) | strict, reject |
+| `refs` shape | warning, kept (§2.9) | strict, reject |
+| `motifs` shape and count | invalid entries dropped silently (§2.10) | strict, reject |
+| `motifs` subject-word overlap | not checked | dropped SILENTLY, never an error (§2.10) |
+
+The last row is the only place in the format where a writer changes a value
+without either rejecting it or being asked to. It is deliberate: a motif that
+restates its fact's own subject is an ordinary authoring miss, and the write
+surfaces tell authors the rule up front, so failing the write would cost more
+than it teaches.
 
 Because `confidence` and `sources` are strict in both directions, an
 out-of-range value cannot survive a round-trip, so a conformant writer can
@@ -345,7 +357,58 @@ Refs are one of **two evidence mechanisms**:
   recorded in the file itself — Git supplies *version* lineage (the history
   of one path), not *derivation* lineage (which facts fed another).
 
-### 2.10 What Is NOT in the File
+### 2.10 Motifs (`motifs`)
+
+A motif names the **general regularity the fact is an instance of** — a
+mechanism, failure shape, or pattern — independently of the fact's subject.
+Motifs exist so two facts about unrelated subjects can be connected when they
+exemplify the same mechanism. They are the *aspect* axis, orthogonal to
+`entities` (subject) and `domain` (area).
+
+**Shape.** 0–3 entries. Each entry is a 2–4 word kebab-case noun phrase whose
+segments are lowercase alphanumeric (`silent-fallback`,
+`atomic-write-via-rename`). Duplicate entries within one fact are not allowed.
+
+**Emission.** The key is emitted only when the list is non-empty. An absent
+key and an empty list are the SAME state and MUST both render as no key at
+all: every fact predating this field parses to a fact carrying no motifs and
+re-serializes byte-identically, and two writers of the same fact must not
+disagree on its blob hash over the spelling of "none".
+
+**Read/write asymmetry.** This field is asymmetric on purpose, for the same
+reason `refs` shape and `origin` are (§2.9, §2.5.4) — a version that was legal
+when it was committed must stay readable forever, and nothing a reader does
+depends on a motif being well-formed:
+
+- Readers MUST ignore invalid entries: an entry that is not a well-formed 2–4
+  word kebab phrase, a duplicate, or an entry past the third is DROPPED, and
+  the fact still parses. A file whose every motif is invalid parses as a fact
+  with no motifs — not as a parse error, and not as an empty list distinct
+  from absence.
+- Writers MUST NOT emit an invalid entry. A malformed or over-cap list is a
+  write error, not a silent correction; the caller is an agent that can retry.
+
+**Subject-word strip (writers only, SILENT).** A motif whose canonical stemmed
+tokens are a SUBSET of the fact's own `entities` ∪ `domain` ∪ path tokens is
+DROPPED at write time, without error and without report. Such a motif merely
+renames its fact's subject and so says nothing the fact has not already said
+about itself; it is structurally impossible to store. The test is subset, not
+equality: a phrase contributing at least one word that is not a subject word
+survives.
+
+Because the strip runs on every write, it is evaluated against the subject as
+it stands AT THAT WRITE. A fact whose `entities` or `domain` later grow to
+cover a motif it already carries keeps that motif until its next write, and
+loses it then. The invariant is "no stored motif restates its fact's CURRENT
+subject", and it is maintained forward, not retroactively — facts are
+immutable and nothing rewrites them in place.
+
+**Storage.** Motifs are stored exactly as written. Every normalization built
+on top of them — canonical ids, definitions, document frequency — is derived
+state rebuildable from the files, and nothing derived is ever written back
+into a fact's frontmatter.
+
+### 2.11 What Is NOT in the File
 
 The following are intentionally omitted because Git supplies them (details
 in §4.9):
@@ -361,7 +424,7 @@ in §4.9):
 | Modification history | First-parent commit ancestry of the path |
 | Retraction | The file's deletion commit — absence at HEAD plus history |
 
-### 2.11 Format Traps
+### 2.12 Format Traps
 
 1. The read/write asymmetry is per-axis (§2.6), not global.
 2. Origin elision is not "omit the default" (§2.5.3).

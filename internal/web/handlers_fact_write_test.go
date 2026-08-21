@@ -31,10 +31,17 @@ type stubFactWriter struct {
 	// rejected request never reached git.
 	writeCalls  int
 	deleteCalls int
+
+	// lastWriteContent is the exact byte string handed to git. Tests that care
+	// what the write GATE produced — as opposed to whether it returned 200 —
+	// read this, because a handler that waves bad content through still
+	// answers 200.
+	lastWriteContent string
 }
 
-func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, _, _ string) (string, error) {
+func (s *stubFactWriter) Write(_ context.Context, _ *repos.RepoInstance, _, _, content, _ string) (string, error) {
 	s.writeCalls++
+	s.lastWriteContent = content
 	return s.writeHash, s.writeErr
 }
 

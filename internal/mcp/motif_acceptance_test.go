@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -37,6 +38,7 @@ func TestAcceptance_MotifInstructions(t *testing.T) {
 	if dbPath == "" {
 		t.Skip("set KNOMIT_PHASE1_DB to a COPY of a repo database to run the acceptance measurement")
 	}
+	requireCopyNotLiveCorpus(t, dbPath)
 	ctx := context.Background()
 
 	svc, err := store.Open(dbPath)
@@ -82,7 +84,7 @@ func TestAcceptance_MotifInstructions(t *testing.T) {
 	// The LEAK check is what this harness adds over the unit test.
 	//
 	// Byte-identity across corpora is proven structurally: the corpus is not an
-	// input to ProfileInstructions at all, and TestMN1_InstructionsAreCorpusIndependent
+	// input to ProfileInstructions at all, and TestMN1_InstructionsCarryNoCorpusVocabulary
 	// builds both sides from real stores and compares bytes. Re-staging that
 	// here would be a comparison of a value with itself. What only a real
 	// corpus can test is whether any of the strings it ACTUALLY holds appear in
@@ -151,4 +153,30 @@ func corpusMotifs(ctx context.Context, svc *store.Service, branch string) ([]str
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// requireCopyNotLiveCorpus refuses to run against a database inside the user's
+// knomit home.
+//
+// "Work on a COPY" was a comment, and a comment is not enforcement. Both
+// acceptance harnesses migrate the schema, and the instructions one WRITES a
+// sentinel fact through the ordinary path — pointed at a live repo that is a
+// stray commit on someone's real knowledge base, produced by a test run they
+// thought was read-only. The check is a refusal, never a skip: a harness that
+// quietly did nothing here would look like it had passed.
+func requireCopyNotLiveCorpus(t *testing.T, dbPath string) {
+	t.Helper()
+	abs, err := filepath.Abs(dbPath)
+	require.NoError(t, err)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	live := filepath.Join(home, ".knomit")
+	rel, err := filepath.Rel(live, abs)
+	require.NoError(t, err)
+	require.Truef(t, strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == "..",
+		"refusing to run against %s: it is inside %s, which is a LIVE corpus. "+
+			"This harness migrates the schema and writes a fact. Copy the database "+
+			"out first:\n    cp %s /tmp/accept.db\n    KNOMIT_PHASE1_DB=/tmp/accept.db go test ...",
+		abs, live, abs)
 }

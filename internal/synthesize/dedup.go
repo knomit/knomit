@@ -229,6 +229,12 @@ func dedupCluster(
 		fullWinner.Entities = winnerFact.Entities
 		fullWinner.Confidence = winnerFact.Confidence
 		fullWinner.Sources = winnerFact.Sources
+		// Motifs are merged HERE rather than in mergeFacts above, because
+		// factForLLM does not carry them — only the full parsed facts do. Same
+		// helper as the learn-time merge: this is the same operation in a second
+		// location, and without it the loser's motifs are simply deleted along
+		// with the loser, losing authored data that no derived state can rebuild.
+		fullWinner.Motifs = fact.MergeMotifs(fullWinner.Motifs, fullLoser.Motifs)
 		// Refs = union of both refs + loser's path.
 		mergedRefs := fact.UnionStrings(fullWinner.Refs, fullLoser.Refs)
 		mergedRefs = fact.AppendUnique(mergedRefs, loserFact.File)

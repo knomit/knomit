@@ -99,29 +99,42 @@ func TestShipBlockB_TeachesTheShapeItEnforces(t *testing.T) {
 	requireExamplesValid(t, readShipText(t, "motif_block_b.txt"))
 }
 
-// TestMN1_InstructionsAreCorpusIndependent — the write path stays light.
-// Instructions must be byte-identical whatever the corpus holds: no served
-// vocabulary, no examples mined from the repo, no counts.
+// TestMN1_InstructionsCarryNoCorpusVocabulary — the write path stays light: no
+// served vocabulary, no examples mined from the repo, no counts.
 //
-// The comparison is on BYTES rather than a grep for a motif string, because a
-// grep only catches the spelling it was written to expect; a templating change
-// that interpolated corpus data in some other shape would slip past it.
-func TestMN1_InstructionsAreCorpusIndependent(t *testing.T) {
+// This replaces an earlier version that compared ProfileInstructions against
+// itself. Both sides passed a nil ontology and the same root, so it was a
+// tautology dressed as a corpus comparison — and it tested ProfileInstructions
+// while a real session is served BindingInstructions, which appends
+// repo-derived lens text that the tautology could never have caught.
+//
+// So this drives the ACTUALLY-SERVED function, over a corpus carrying a planted
+// sentinel motif, and asserts the sentinel does not appear. A sentinel rather
+// than "whatever the corpus happens to hold": every corpus holds zero motifs
+// until an agent writes one, so without planting, the check is a green tick
+// over an empty loop.
+func TestMN1_InstructionsCarryNoCorpusVocabulary(t *testing.T) {
+	const sentinel = "zzz-sentinel-motif"
+
 	empty := newInstructionsTestRepo(t, nil)
 	rich := newInstructionsTestRepo(t, []motifSeed{
-		{path: "kb/alpha/one.md", motifs: []string{"silent-fallback", "config-drift"}},
-		{path: "kb/alpha/two.md", motifs: []string{"silent-fallback"}},
+		{path: "kb/alpha/one.md", motifs: []string{sentinel, "config-drift"}},
+		{path: "kb/alpha/two.md", motifs: []string{sentinel}},
 		{path: "kb/beta/three.md", motifs: []string{"unmonitored-expiry"}},
 	})
 
 	for _, profile := range []string{"code", "chat", "generic"} {
 		t.Run(profile, func(t *testing.T) {
-			a := ProfileInstructions(profile, empty.OntologyRoot(), empty.Ontology())
-			b := ProfileInstructions(profile, rich.OntologyRoot(), rich.Ontology())
-			require.Equal(t, a, b,
-				"MN1: server instructions must not vary with corpus content")
-			require.Contains(t, a, "### Motifs",
-				"the comparison is worthless if neither side carries the section")
+			// The served surface, not the inner helper.
+			fromEmpty := BindingInstructions(repos.NewBindingOfRepo(empty, "agent/test"), profile)
+			fromRich := BindingInstructions(repos.NewBindingOfRepo(rich, "agent/test"), profile)
+
+			require.Contains(t, fromRich, "### Motifs",
+				"a comparison is worthless if neither side carries the section")
+			require.NotContains(t, fromRich, sentinel,
+				"MN1: a motif the corpus holds must never reach the served instructions")
+			require.Equal(t, fromEmpty, fromRich,
+				"MN1: served instructions must not vary with corpus content")
 		})
 	}
 }

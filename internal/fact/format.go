@@ -41,6 +41,12 @@ type Fact struct {
 	// invisible either, or the corpus quietly accumulates citations nobody can
 	// follow. SerializeFact still refuses to write one.
 	RefWarnings []string `json:"ref_warnings,omitempty"`
+
+	// MotifWarnings describes motifs ParseFact DROPPED, for the same reason
+	// RefWarnings exists and on the same terms: derived on read, never stored,
+	// absent from the frontmatter struct. SerializeFact still refuses to write
+	// a motif that would earn one.
+	MotifWarnings []string `json:"motif_warnings,omitempty"`
 }
 
 // NewFact is the sole constructor. path is always lowercased.
@@ -301,6 +307,7 @@ func ParseFact(path, content string) (Fact, error) {
 	// correctness depends on. Same helper as the write gate, so there is one
 	// definition of a well-formed motif, not two.
 	f.Motifs = DropInvalidMotifs(fm.Motifs)
+	f.MotifWarnings = motifShapeWarnings(fm.Motifs)
 	f.Refs = fm.Refs
 	f.EvidenceWeight = fm.EvidenceWeight
 	f.Origin = origin

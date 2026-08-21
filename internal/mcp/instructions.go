@@ -126,8 +126,9 @@ const motifInstructionsSection = "### Motifs\n" +
 	"- Name the regularity, not its remedy. If a fact describes a problem and its\n" +
 	"  fix, the motif names the problem's shape, never the fix:\n" +
 	"  unmonitored-expiry, not renew-certs-automatically.\n" +
-	"- No subject words: a motif containing an entity name, a domain term, or a\n" +
-	"  path segment of its own fact will be stripped at write time.\n" +
+	"- No subject words: a motif built entirely from its own fact's subject\n" +
+	"  words (entity names, domain terms, path segments) will be stripped at\n" +
+	"  write time.\n" +
 	"- Prefer the most specific phrasing that still transfers.\n" +
 	"- 2–4 words, kebab-case, noun phrase. One motif is normal; three is the\n" +
 	"  maximum. Never attach two phrasings of the same regularity to one fact —\n" +
@@ -235,7 +236,7 @@ Each fact has YAML frontmatter with:
   - min_confidence: minimum confidence threshold (0–1)
   - sort: set to "recent" to browse facts ordered by most recently committed (paginated, 25 per page). Use path to scope to a subtree. Pass the returned cursor to get the next page.
 - **knomit_explain**: explain a fact by walking its versioned provenance graph. Anchored at a commit — pass commit to explain the fact AS OF that version (the graph is rewound to how it stood then), or omit it for HEAD. Every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact comes back in full with its evolution history (recent revisions + confidence/content diffs); every other fact is a lean summary (no body) flagged summary:true — re-call knomit_explain with that fact's path AND commit to read it in full and walk its subtree. A summary may be flagged deleted:true (source retracted since the edge formed) or superseded:true (source still live but changed since the referrer reasoned over it). Use file to start, pass cursor for next page. External URL refs are returned for you to inspect.
-- **knomit_update**: modify an existing fact's fields. List fields (domain, entities, refs) are replaced wholesale — send the complete new list, because any existing entry you leave out is dropped; omit a field entirely to leave it unchanged. Prior revisions keep their refs in history, so replacing refs never erases past provenance. It cannot change origin or the topic/category path — fixing those requires knomit_retract plus a fresh knomit_learn.
+- **knomit_update**: modify an existing fact's fields. List fields (domain, entities, motifs, refs) are replaced wholesale — send the complete new list, because any existing entry you leave out is dropped; omit a field entirely to leave it unchanged. Prior revisions keep their refs in history, so replacing refs never erases past provenance. It cannot change origin or the topic/category path — fixing those requires knomit_retract plus a fresh knomit_learn.
 - **knomit_retract**: remove outdated knowledge
 
 ## knomit_review — Knowledge Base Maintenance

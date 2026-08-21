@@ -54,10 +54,11 @@ func updateToolSchemaProperties() map[string]any {
 		"sources":    map[string]any{"type": "integer", "description": "Number of independent sources."},
 		"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces domain tags."},
 		"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces entity list."},
-		// Block A verbatim, shared with knomit_learn. The wholesale-
-		// replacement rule this tool applies to every list field is
-		// stated once in the `updates` description above, so the field
-		// text stays identical across the two tools.
+		// Block A verbatim, shared with knomit_learn, so the two tools cannot
+		// drift on what the field means. The wholesale-replacement rule is
+		// stated once in the `updates` description above, where it covers every
+		// list field at once — keeping it out of here is what lets this string
+		// stay byte-identical to knomit_learn's.
 		"motifs": motifsProperty(),
 		"refs":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces the ENTIRE refs list. Send every ref the fact should keep — any existing ref you leave out is dropped. To add or refresh a ref, read the current refs first and resend the full merged list. Omit the field to leave refs unchanged."},
 	}

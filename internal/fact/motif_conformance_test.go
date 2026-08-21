@@ -1,6 +1,9 @@
 package fact
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -56,9 +59,38 @@ func goSources(t *testing.T) map[string]string {
 	return out
 }
 
-// motifRuleNames are the helpers that define the motif contract. Any use of
-// one outside internal/fact is a second place the rules are applied.
-var motifRuleNames = regexp.MustCompile(`\b(ValidateMotifs|StripSubjectMotifs|DropInvalidMotifs|MaxMotifs)\b`)
+// motifGateNames are the helpers that DECIDE what a valid motif is. Any use of
+// one outside internal/fact is a second place the rules are applied, which is
+// exactly what MN4 forbids.
+//
+// fact.MergeMotifs and fact.MaxMotifs are deliberately NOT here. They are
+// writer plumbing, not gate logic: MergeMotifs unions two already-validated
+// lists and MaxMotifs is the cap it trims to, and every fact-merging path needs
+// them by construction. Policing them as if they were validation is what pushed
+// the review-session merge into dropping the loser's motifs to stay "clean".
+var motifGateNames = regexp.MustCompile(`\b(ValidateMotifs|StripSubjectMotifs|DropInvalidMotifs)\b`)
+
+// motifGateCallSites are the write paths permitted to invoke the gate helpers
+// directly, with the reason each needs to.
+//
+// Calling the shared gate is not what MN4 forbids — RE-IMPLEMENTING it is. A
+// path that asks fact.StripSubjectMotifs what to drop is using the single
+// definition, not inventing a second one. The list exists so that a new direct
+// caller has to be justified, because needing one usually means the path is not
+// reaching SerializeFact, which is the actual defect.
+var motifGateCallSites = map[string]string{
+	"internal/web/handlers_fact_write.go": "the REST PUT path commits the client's bytes verbatim, so it must " +
+		"apply the gate itself and reserialize when the gate changes anything; it is the one write " +
+		"path that does not reach SerializeFact on its own",
+}
+
+// motifMergeSites are the fact-merging paths permitted to call fact.MergeMotifs.
+// Both are the SAME operation in two locations; the list exists so a third one
+// cannot appear unnoticed.
+var motifMergeSites = map[string]string{
+	"internal/mcp/learn.go":        "learn-time dedup merge",
+	"internal/synthesize/dedup.go": "review-session consolidation merge",
+}
 
 // TestMN4_MotifValidationHasOneCallSite is the roadmap's MN4 grep, as a test.
 //
@@ -67,64 +99,137 @@ var motifRuleNames = regexp.MustCompile(`\b(ValidateMotifs|StripSubjectMotifs|Dr
 // DEFINED once and still be re-applied by a handler that "just checks the
 // count first", which is exactly how per-path validation grows back.
 func TestMN4_MotifValidationHasOneCallSite(t *testing.T) {
-	callers := map[string][]string{}
+	offenders := map[string][]string{}
+	mergeCallers := map[string]bool{}
 	for rel, src := range goSources(t) {
 		if strings.HasPrefix(rel, "internal/fact/") {
 			continue // the definition site
 		}
-		if hits := motifRuleNames.FindAllString(src, -1); len(hits) > 0 {
-			callers[rel] = hits
+		if hits := motifGateNames.FindAllString(src, -1); len(hits) > 0 {
+			offenders[rel] = hits
+		}
+		if callsFunc(t, rel, "MergeMotifs") {
+			mergeCallers[rel] = true
 		}
 	}
 
-	// internal/mcp/learn.go references MaxMotifs to TRIM the dedup-merge union.
-	// That is blueprint §2.1's mechanical rule, not a second validation site,
-	// and it is the sole permitted reference.
-	permitted := callers["internal/mcp/learn.go"]
-	delete(callers, "internal/mcp/learn.go")
-	require.Empty(t, callers,
-		"MN4: the motif rules are defined AND applied in internal/fact only")
-
-	// Pin WHAT the exception may name, not how many times it says it: the trim
-	// is one rule spelled over two lines (a bound check and a slice), and
-	// re-spelling it must not fail this. What must never appear there is a
-	// rule HELPER — that would be learn.go deciding for itself what a valid
-	// motif is, which is the failure MN4 exists to prevent.
-	require.NotEmpty(t, permitted, "the trim in learn.go must still reference MaxMotifs")
-	for _, hit := range permitted {
-		require.Equalf(t, "MaxMotifs", hit,
-			"internal/mcp/learn.go may reference MaxMotifs to trim the merge union, never %s", hit)
+	for rel, hits := range offenders {
+		require.Containsf(t, motifGateCallSites, rel,
+			"MN4: %s invokes the motif gate %v outside internal/fact. Route the fact "+
+				"through SerializeFact instead — or, if this path genuinely commits bytes "+
+				"that never reach it, declare it in motifGateCallSites with the reason.", rel, hits)
 	}
+	for rel, why := range motifGateCallSites {
+		require.Containsf(t, offenders, rel,
+			"%s is declared a direct gate call site (%s) but no longer calls one — "+
+				"remove the entry, or restore the gate it was granted for", rel, why)
+	}
+
+	// The merge helper is permitted, but only where a fact merge actually
+	// happens, and every declared site must still be one.
+	for rel := range mergeCallers {
+		require.Containsf(t, motifMergeSites, rel,
+			"%s calls fact.MergeMotifs but is not a declared fact-merge site — "+
+				"add it to motifMergeSites with a reason, or stop merging motifs there", rel)
+	}
+	for rel, why := range motifMergeSites {
+		require.Truef(t, mergeCallers[rel],
+			"%s is declared a motif-merge site (%s) but no longer calls fact.MergeMotifs — "+
+				"a merge that drops the loser's motifs silently loses authored data", rel, why)
+	}
+}
+
+// mechanicsPaths are the engine's mechanical decision paths, mapped to the
+// functions within each that may legitimately touch motifs.
+//
+// Empty slice = no function in that file may mention them at all.
+var mechanicsPaths = map[string][]string{
+	// dedupCluster is a WRITER: it merges two facts and commits the survivor,
+	// so it must carry the loser's motifs across or that authored data is
+	// deleted with the loser and no derived state can rebuild it. Every OTHER
+	// function here — the similarity scoring, the threshold comparison, the
+	// greedy pair selection — must stay blind to motifs, which is the actual
+	// MN6 constraint.
+	"internal/synthesize/dedup.go":           {"dedupCluster"},
+	"internal/synthesize/bridge.go":          nil,
+	"internal/synthesize/bridge_score.go":    nil,
+	"internal/synthesize/bridge_filtered.go": nil,
+	"internal/synthesize/bridge_reshape.go":  nil,
+	"internal/synthesize/restatement.go":     nil,
+	"internal/synthesize/cluster.go":         nil,
+	"internal/synthesize/louvain.go":         nil,
+	"internal/store/search_query.go":         nil,
 }
 
 // TestMN6_MotifsDoNotDriveMechanics — MN6 as clarified by the designer on
 // 2026-08-21: the restriction is about MECHANICS, not visibility.
 //
 // Motifs may be READ by anyone — UI, query/explain output, the ontology rule
-// sandbox, serialization. None of those is a "consumer" in this rule's sense,
-// and this test deliberately does not police them. What motifs must never do
-// is influence the engine's mechanical decisions: dedup thresholds, clustering,
-// search ranking, or anything that spawns work outside the §4/§5/§7 synthesis
-// paths designed for them. The files below are those decision paths.
+// sandbox, serialization — and they may be MERGED by anything that writes
+// facts. None of that is a "consumer" in this rule's sense. What motifs must
+// never do is influence the engine's mechanical decisions: dedup thresholds,
+// clustering, search ranking, or anything that spawns work outside the
+// §4/§5/§7 synthesis paths designed for them.
+//
+// The check is per-FUNCTION rather than per-file, and that distinction is the
+// whole point. A file-level ban read MN6 as "dedup.go must not say motif",
+// which is how the review-session merge came to drop the loser's motifs: the
+// conformance test was enforcing a rule stricter than the one written down,
+// and the code obediently lost data to satisfy it.
 func TestMN6_MotifsDoNotDriveMechanics(t *testing.T) {
 	sources := goSources(t)
-	for _, rel := range []string{
-		"internal/synthesize/dedup.go",
-		"internal/synthesize/bridge.go",
-		"internal/synthesize/bridge_score.go",
-		"internal/synthesize/bridge_filtered.go",
-		"internal/synthesize/bridge_reshape.go",
-		"internal/synthesize/restatement.go",
-		"internal/store/search_query.go",
-	} {
-		src, ok := sources[rel]
+	for rel, allowed := range mechanicsPaths {
 		// ERROR, not skip: if one of these was renamed, this test has stopped
 		// checking the thing it names and must say so rather than shrink.
-		require.Truef(t, ok,
+		require.Containsf(t, sources, rel,
 			"MN6 target %s is missing — update this list, do not let the check lapse", rel)
-		require.NotContainsf(t, strings.ToLower(src), "motif",
-			"MN6: %s is a mechanical decision path and must not read motifs", rel)
+
+		offenders := funcsMentioningMotifs(t, rel)
+		for _, name := range allowed {
+			require.Containsf(t, offenders, name,
+				"%s is allow-listed to touch motifs in %s but no longer does — "+
+					"remove the entry rather than leaving a permission nothing uses", name, rel)
+		}
+		for _, fn := range offenders {
+			require.Containsf(t, allowed, fn,
+				"MN6: %s.%s is a mechanical decision path and must not read motifs. "+
+					"If it WRITES facts rather than deciding something, allow-list it in "+
+					"mechanicsPaths with a reason.", rel, fn)
+		}
 	}
+}
+
+// funcsMentioningMotifs returns the names of top-level functions in rel whose
+// body mentions a motif identifier. Parsed, not grepped, so a comment
+// explaining why a function has nothing to do with motifs does not trip it —
+// and so the check can be scoped to a function rather than a whole file.
+func funcsMentioningMotifs(t *testing.T, rel string) []string {
+	t.Helper()
+	var out []string
+	for _, decl := range parseGo(t, rel).Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		mentions := false
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch id := n.(type) {
+			case *ast.Ident:
+				if strings.Contains(strings.ToLower(id.Name), "motif") {
+					mentions = true
+				}
+			case *ast.SelectorExpr:
+				if strings.Contains(strings.ToLower(id.Sel.Name), "motif") {
+					mentions = true
+				}
+			}
+			return !mentions
+		})
+		if mentions {
+			out = append(out, fn.Name.Name)
+		}
+	}
+	return out
 }
 
 // TestMN2_NoLLMInMotifCode — vacuous this phase, and stated anyway so the
@@ -144,19 +249,107 @@ func TestMN2_NoLLMInMotifCode(t *testing.T) {
 }
 
 // TestMN13_MotifConstantsAreClassified — every numeric constant in the motif
-// path is a documented budget, never a corpus-property constant. Phase 1
-// introduces three (MaxMotifs and the two word bounds) and no float literal at
-// all; a float appearing here would be a threshold in disguise.
+// path is a documented budget, never a corpus-property constant.
+//
+// Two things it deliberately does NOT do, both fixed after review:
+//
+//   - It does not assert the ORDER of comment prose. The first version required
+//     "CONSTANT CLASSIFICATION" to appear before "const MaxMotifs" in the file
+//     text, which is a rule about paragraph layout, not about the code — moving
+//     a doc comment would have failed it while changing nothing that matters.
+//     It now checks that the constant's own doc comment says what class it is.
+//   - It does not regex the file for float literals. A float in a COMMENT
+//     ("measured 0.75 on the research corpus") is calibration evidence being
+//     cited, which MN13 explicitly permits; a float in the CODE is a threshold.
+//     Only the parser can tell those apart.
 func TestMN13_MotifConstantsAreClassified(t *testing.T) {
-	src := goSources(t)["internal/fact/motif.go"]
-	require.NotEmpty(t, src)
+	const rel = "internal/fact/motif.go"
+	file := parseGo(t, rel)
 
-	require.Regexp(t, `(?s)CONSTANT CLASSIFICATION.*const MaxMotifs`, src,
-		"MaxMotifs must state its class where it is defined")
-	require.Regexp(t, `(?s)contract, not\s*//?\s*calibration.*minMotifWords`, src,
-		"the word bounds must state that they are contract, not calibration")
+	// Each named constant must carry a doc comment declaring its class.
+	wantClassified := map[string]string{
+		"MaxMotifs":     "CONSTANT CLASSIFICATION",
+		"minMotifWords": "contract, not",
+		"maxMotifWords": "contract, not",
+	}
+	seen := map[string]bool{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		// A const block's doc comment covers every spec inside it.
+		blockDoc := gen.Doc.Text()
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			doc := blockDoc + vs.Doc.Text()
+			for _, name := range vs.Names {
+				want, tracked := wantClassified[name.Name]
+				if !tracked {
+					continue
+				}
+				seen[name.Name] = true
+				require.Containsf(t, doc, want,
+					"MN13: const %s must state its class where it is defined "+
+						"(expected its doc comment to contain %q)", name.Name, want)
+			}
+		}
+	}
+	for name := range wantClassified {
+		require.Truef(t, seen[name], "const %s no longer exists in %s — "+
+			"update this test rather than letting the classification rule lapse", name, rel)
+	}
 
-	floats := regexp.MustCompile(`\b\d+\.\d+\b`).FindAllString(src, -1)
+	// No float literal anywhere in the CODE. Comments are exempt by
+	// construction: ast.Inspect walks expressions, not trivia.
+	var floats []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
+			floats = append(floats, lit.Value)
+		}
+		return true
+	})
 	require.Emptyf(t, floats,
-		"MN13: a float literal in the motif path is a corpus-property constant in disguise: %v", floats)
+		"MN13: a float literal in the motif path is a corpus-property constant "+
+			"in disguise: %v", floats)
+}
+
+// callsFunc reports whether the file at repo-relative rel contains an actual
+// CALL to name (bare or selector-qualified), parsed rather than grepped, so
+// comments and strings mentioning the name do not count.
+func callsFunc(t *testing.T, rel, name string) bool {
+	t.Helper()
+	file := parseGo(t, rel)
+	found := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if fn.Name == name {
+				found = true
+			}
+		case *ast.SelectorExpr:
+			if fn.Sel.Name == name {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// parseGo parses one repo-relative Go file, failing (never skipping) if it
+// cannot be read or parsed.
+func parseGo(t *testing.T, rel string) *ast.File {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(repoRoot(t), rel), nil, parser.ParseComments)
+	require.NoErrorf(t, err, "parsing %s", rel)
+	return file
 }

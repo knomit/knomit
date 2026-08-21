@@ -118,6 +118,76 @@ func DropInvalidMotifs(motifs []string) []string {
 	return out
 }
 
+// MergeMotifs is the mechanical motif union every fact-merging path uses:
+// the winner's motifs first, then whatever the loser adds, trimmed to
+// MaxMotifs (blueprint §2.1).
+//
+// Winner-first, NOT incoming-first like the domain and entity unions beside
+// the call sites. Those are uncapped, so their order is cosmetic — every value
+// survives whichever way round they go. Motifs are capped, so order decides
+// what SURVIVES, and handing the loser's naming of the regularity priority
+// because it happened to arrive in a particular argument slot would contradict
+// the tiebreak philosophy every other merged field follows: the winner
+// contributes the identity.
+//
+// Trimming here rather than letting SerializeFact reject an over-cap list is
+// what keeps a routine merge from failing the whole operation that triggered
+// it — a learn call, or a review session's consolidation.
+//
+// It lives here, with one definition and two callers, because there are two
+// merge sites: learn-time dedup (internal/mcp) and review-session
+// consolidation (internal/synthesize). They are the same operation in two
+// places, and the second one silently dropped the loser's motifs until a
+// review caught it — which is what a second copy of a rule buys you.
+//
+// Returns nil when both sides are empty, so a merge of two motif-less facts
+// stays motif-less rather than becoming an empty list (see Fact.Motifs).
+//
+// Cross-parent phrasing duplicates that are not string-equal ride along and
+// cost a slot until alias resolution collapses them in derived state; that is
+// the accepted price of resolving this mechanically at merge time.
+func MergeMotifs(winner, loser []string) []string {
+	merged := UnionStrings(winner, loser)
+	if len(merged) > MaxMotifs {
+		merged = merged[:MaxMotifs]
+	}
+	return merged
+}
+
+// motifShapeWarnings describes the motifs DropInvalidMotifs would discard, as
+// ParseFact found them. It is the motif counterpart of refShapeWarnings, and it
+// exists for the reason stated on Fact.RefWarnings: ParseFact is deliberately
+// lenient, but the leniency must not be INVISIBLE, or a caller cannot tell a
+// fact that never had a motif from one whose motif was silently thrown away.
+//
+// It is also load-bearing, not merely informational. The REST PUT path stores
+// the client's bytes verbatim unless a gate changed something, and it has no
+// other way to learn that the parse dropped anything — the parsed fact is clean
+// while the bytes on the wire are not.
+func motifShapeWarnings(motifs []string) []string {
+	var problems []string
+	seen := map[string]struct{}{}
+	kept := 0
+	for _, m := range motifs {
+		if err := validateMotifShape(m); err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		if _, dup := seen[m]; dup {
+			problems = append(problems, fmt.Sprintf("motif %q: duplicate entry, dropped", m))
+			continue
+		}
+		seen[m] = struct{}{}
+		if kept == MaxMotifs {
+			problems = append(problems, fmt.Sprintf(
+				"motif %q: dropped — a fact carries at most %d", m, MaxMotifs))
+			continue
+		}
+		kept++
+	}
+	return problems
+}
+
 // StripSubjectMotifs returns f's motifs with every SUBJECT motif removed: one
 // whose stemmed token set is a subset of the fact's own subject tokens
 // (entities ∪ domain ∪ path). It never errors and never reports — a motif

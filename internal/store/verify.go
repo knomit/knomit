@@ -1207,9 +1207,9 @@ func (s *Service) loadCommitParents(ctx context.Context) (map[string][]string, e
 	return out, rows.Err()
 }
 
-// checkDerivedTables verifies the three fact_* projections that domain and
-// entity search read. Nothing else checks them, and their failure mode is the
-// quiet one: the facts are all present and correct, and searching by domain
+// checkDerivedTables verifies the four fact_* projections that domain, entity
+// and motif lookups read. Nothing else checks them, and their failure mode is
+// the quiet one: the facts are all present and correct, and searching by domain
 // returns nothing.
 //
 // The two directions differ in severity ON PURPOSE.
@@ -1229,6 +1229,7 @@ func (s *Service) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 		{"fact_domains", "fact_id"},
 		{"fact_domain_tokens", "fact_id"},
 		{"fact_entities", "fact_id"},
+		{"fact_motifs", "fact_id"},
 	}
 	for _, o := range orphans {
 		var n int
@@ -1271,6 +1272,47 @@ func (s *Service) checkDerivedTables(ctx context.Context) []IntegrityIssue {
 			issues = append(issues, IntegrityIssue{
 				Severity: SeverityError, Category: CategoryDerivedTables,
 				Detail: fmt.Sprintf("%d fact(s) present in %s but absent from %s", n, d.have, d.missing),
+			})
+		}
+	}
+
+	// fact_motifs against the facts.motifs JSON column, in BOTH directions and
+	// at (fact_id, motif) granularity — stricter than the domain comparison
+	// below, and legitimately so. Motifs are stored AS WRITTEN, with no
+	// canonicalization on either side, so there is no drift a healthy repo
+	// could exhibit: any difference means one of the two writers ran and the
+	// other did not. The incremental upsert fills the junction from the parsed
+	// record while the bulk rebuild fills it with SQL over the column, so a
+	// disagreement is exactly the "half-populated" state that leaves motif
+	// document-frequency wrong while every fact still reads correctly.
+	for _, d := range []struct{ desc, query string }{
+		{"absent from fact_motifs", `
+			SELECT f.id, j.value FROM facts f JOIN json_each(f.motifs) j
+			 WHERE j.value IS NOT NULL AND j.value != ''
+			EXCEPT
+			SELECT fact_id, motif FROM fact_motifs`},
+		{"absent from the facts.motifs column", `
+			SELECT fact_id, motif FROM fact_motifs
+			EXCEPT
+			SELECT f.id, j.value FROM facts f JOIN json_each(f.motifs) j
+			 WHERE j.value IS NOT NULL AND j.value != ''`},
+	} {
+		var n int
+		if err := s.rh.gits.DB().QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM (`+d.query+`)`).Scan(&n); err != nil {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDerivedTables,
+				Detail: fmt.Sprintf("compare motifs (%s): %v", d.desc, err),
+			})
+			continue
+		}
+		if n > 0 {
+			issues = append(issues, IntegrityIssue{
+				Severity: SeverityError, Category: CategoryDerivedTables,
+				Detail: fmt.Sprintf(
+					"%d (fact_id, motif) pair(s) %s — motif document-frequency is wrong "+
+						"for these facts while the facts themselves read correctly; a rebuild "+
+						"repopulates the junction from the column", n, d.desc),
 			})
 		}
 	}

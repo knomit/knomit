@@ -240,3 +240,50 @@ func TestFactToJS_MotifsAreResolved(t *testing.T) {
 	require.Equal(t, []string{"silent-fallback"}, js["motifs"],
 		"the rule sandbox must see what lands on disk, not the raw field")
 }
+
+// TestStripSubjectMotifs_SubjectDriftDropsAnAuthoredMotif pins as INTENDED the
+// behaviour that looks most like a bug: a motif that was legal when authored is
+// dropped on a later write, because the fact's subject grew to cover it.
+//
+// The invariant is "no STORED motif restates its fact's CURRENT subject", and
+// it is maintained forward rather than retroactively — facts are immutable, so
+// nothing rewrites the earlier revision, and the drift is resolved the next
+// time the fact is written. Silently, like every other subject strip: the
+// author of THIS write did not necessarily write the motif, and failing their
+// edit over a predecessor's word choice would be the wrong bill to hand them.
+//
+// Designer ruling 2026-08-21, in response to the Phase-1 review raising it as a
+// possible defect. Do not "fix" this into a grandfather clause; the exemption
+// would let a motif that names its own fact's subject sit in the corpus
+// permanently, which is exactly what the field contract forbids.
+func TestStripSubjectMotifs_SubjectDriftDropsAnAuthoredMotif(t *testing.T) {
+	f := NewFact("kb/gotchas/build/x.md")
+	f.Title = "A title"
+	f.Body = "Body."
+	f.Type = Observation
+	f.Domain = []string{"build"}
+	f.Entities = []string{"Bazel"}
+	f.Refs = []string{}
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Motifs = []string{"remote-caching"}
+
+	// At authoring time "remote-caching" transfers: neither word is a subject
+	// word, so it stores.
+	first, err := SerializeFact(f)
+	require.NoError(t, err)
+	require.Contains(t, first, "motifs: [remote-caching]")
+
+	// The subject later grows to cover it — someone adds the entities the fact
+	// was always about.
+	f.Entities = []string{"Bazel", "remote", "caching"}
+
+	second, err := SerializeFact(f)
+	require.NoError(t, err, "drift resolves silently; it must never fail the write")
+	require.NotContains(t, second, "motifs",
+		"once the subject covers it, the motif restates the subject and must go")
+
+	// And the earlier revision is untouched — it is a committed blob, and the
+	// invariant is about what is stored NOW, not a claim about history.
+	require.Contains(t, first, "motifs: [remote-caching]")
+}

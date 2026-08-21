@@ -278,6 +278,13 @@ func (e *restatementEnv) writeFactWithDomain(path, title, body, domain string) {
 // real writer could produce.
 func (e *restatementEnv) writeFactWithMotifs(path, title, body string, motifs []string) {
 	e.t.Helper()
+	e.writeFactWithMotifsConf(path, title, body, motifs, 0.7)
+}
+
+// writeFactWithMotifsConf is writeFactWithMotifs with an explicit confidence,
+// for tests that need to decide which of two facts wins a merge.
+func (e *restatementEnv) writeFactWithMotifsConf(path, title, body string, motifs []string, confidence float64) {
+	e.t.Helper()
 	f := fact.NewFact(path)
 	f.Title = title
 	f.Body = body
@@ -285,7 +292,7 @@ func (e *restatementEnv) writeFactWithMotifs(path, title, body string, motifs []
 	f.Domain = []string{"alpha"}
 	f.Entities = []string{"Widget"}
 	f.Refs = []string{}
-	f.Confidence = 0.7
+	f.Confidence = confidence
 	f.Sources = 1
 	f.Motifs = motifs
 	rendered, err := fact.SerializeFact(f)

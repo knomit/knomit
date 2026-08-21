@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/fact"
 )
 
 // Multi-session motif dynamics.
@@ -141,4 +143,51 @@ func TestMotifDynamics_AccumulatesAcrossSessions(t *testing.T) {
 	require.Equal(t, 5, motifDF(t, env, "silent-fallback"))
 	require.Equal(t, 1, motifDF(t, env, "unmonitored-expiry"),
 		"a hapax motif stays a hapax — the band floor depends on this being honest")
+}
+
+// TestMotifDynamics_ReviewMergePreservesLoserMotifs — the review-session
+// consolidation merge is the SECOND fact-merge site, and it deletes the loser.
+// If it does not carry the loser's motifs across, that authored data is gone
+// for good: motifs are not derived state and nothing can rebuild them.
+//
+// This is the defect the Phase-1 review found. It survived the first round
+// because the conformance test banned dedup.go from mentioning motifs at all —
+// an over-reading of MN6 that made the correct code look like a violation.
+func TestMotifDynamics_ReviewMergePreservesLoserMotifs(t *testing.T) {
+	env := newRestatementEnv(t, 0)
+	ctx := context.Background()
+
+	// Two near-identical facts. The higher-confidence one wins.
+	env.writeFactWithMotifsConf("kb/alpha/winner.md", "Cache invalidation on write",
+		"one account of it", []string{"stale-read-window"}, 0.9)
+	env.writeFactWithMotifsConf("kb/alpha/loser.md", "Cache invalidation on write",
+		"one account of it", []string{"silent-fallback"}, 0.5)
+
+	cluster := []factForLLM{
+		{File: "kb/alpha/winner.md", Title: "Cache invalidation on write", Body: "one account of it",
+			Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
+		{File: "kb/alpha/loser.md", Title: "Cache invalidation on write", Body: "one account of it",
+			Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
+	}
+
+	// threshold 0 so the pair merges on the deterministic embedder's similarity.
+	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(), 0,
+		"test", func(ProgressEvent) {}, env.branch, bareRefFixture)
+	require.NoError(t, err)
+	require.Len(t, out, 1, "the fixture must actually have merged, or this proves nothing")
+
+	survivor := readFactFromStore(t, env, out[0].File)
+	require.Equal(t, []string{"stale-read-window", "silent-fallback"}, survivor.Motifs,
+		"winner's motif first, then the loser's — the loser is deleted, so its "+
+			"motifs must travel or they are lost")
+}
+
+// readFactFromStore reads and parses the committed fact at path.
+func readFactFromStore(t *testing.T, e *restatementEnv, path string) fact.Fact {
+	t.Helper()
+	res, err := e.svc.Facts().ReadFact(context.Background(), e.branch, path, nil)
+	require.NoError(t, err)
+	f, err := fact.ParseFact(path, res.Content)
+	require.NoError(t, err)
+	return f
 }

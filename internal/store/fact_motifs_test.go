@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -150,4 +151,126 @@ func TestTokenDF_MotifKind(t *testing.T) {
 		require.NoError(t, err)
 		require.Equalf(t, tc.want, n, "df for %q", tc.token)
 	}
+}
+
+// TestMigration019_DownUpCycle pins that the rollback actually rolls back.
+//
+// The first version of this down migration DROPped the table but kept
+// facts.motifs, citing 000012 as precedent — which drops its column. Two things
+// were wrong with that: the precedent said the opposite, and re-applying the up
+// migration afterwards fails on "duplicate column name: motifs", leaving the
+// schema dirty. A down migration nothing ever exercises is a rollback nobody
+// can perform.
+func TestMigration019_DownUpCycle(t *testing.T) {
+	svc, branch := motifEnv(t)
+	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback"})
+	require.NotEmpty(t, motifRows(t, svc, branch, "kb/alpha/one.md"))
+
+	db := svc.si.rh.db
+	hasMotifsColumn := func() bool {
+		var n int
+		require.NoError(t, db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('facts') WHERE name = 'motifs'`).Scan(&n))
+		return n == 1
+	}
+	require.True(t, hasMotifsColumn())
+
+	_, err := db.Exec(migrationSQL(t, "000019_fact_motifs.down.sql"))
+	require.NoError(t, err, "the down migration must apply cleanly")
+	require.False(t, hasMotifsColumn(), "down must take the column, not only the table")
+
+	// The cycle: up must re-apply on a rolled-back schema.
+	_, err = db.Exec(migrationSQL(t, "000019_fact_motifs.up.sql"))
+	require.NoError(t, err, "re-applying up after down must not collide with a leftover column")
+	require.True(t, hasMotifsColumn())
+
+	// And the junction is rebuildable from git, which is what makes the
+	// rollback safe to perform at all.
+	require.NoError(t, svc.IndexManager().Rebuild(context.Background(), branch, nil))
+	require.Equal(t, []string{"silent-fallback"}, motifRows(t, svc, branch, "kb/alpha/one.md"))
+}
+
+// TestVerify_DetectsMotifJunctionDrift — checkDerivedTables' own doc comment
+// names this failure mode: the facts are all present and correct, and a lookup
+// over them returns nothing. For motifs the symptom is worse than silent,
+// because document-frequency is an INPUT to later phases: a half-populated
+// junction makes a motif look rarer than it is, and nothing downstream can tell.
+func TestVerify_DetectsMotifJunctionDrift(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback", "config-drift"})
+
+	clean, err := svc.Verify(ctx, VerifyOpts{})
+	require.NoError(t, err)
+	require.Empty(t, derivedTableIssues(clean),
+		"a healthy repo must report no derived-table issues, or the test below proves nothing")
+
+	// Junction row lost while the column still lists it — what a rebuild that
+	// forgot to repopulate would leave behind.
+	_, err = svc.si.rh.db.ExecContext(ctx,
+		`DELETE FROM fact_motifs WHERE motif = 'config-drift'`)
+	require.NoError(t, err)
+
+	drifted, err := svc.Verify(ctx, VerifyOpts{})
+	require.NoError(t, err)
+	issues := derivedTableIssues(drifted)
+	require.NotEmpty(t, issues, "a lost junction row must be reported")
+	require.Contains(t, issues[0].Detail, "absent from fact_motifs")
+
+	// And the reverse: a junction row for a motif the column no longer lists.
+	_, err = svc.si.rh.db.ExecContext(ctx,
+		`INSERT INTO fact_motifs(fact_id, motif) SELECT id, 'never-authored' FROM facts LIMIT 1`)
+	require.NoError(t, err)
+
+	both, err := svc.Verify(ctx, VerifyOpts{})
+	require.NoError(t, err)
+	var details []string
+	for _, i := range derivedTableIssues(both) {
+		details = append(details, i.Detail)
+	}
+	require.Len(t, details, 2, "both directions must be reported, not just the first")
+}
+
+// TestVerify_DetectsMotifOrphans — a junction row pointing at a facts row that
+// no longer exists.
+func TestVerify_DetectsMotifOrphans(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback"})
+
+	// The FK plus ON DELETE CASCADE makes an orphan impossible while foreign
+	// keys are ON, which is exactly why the check exists: SQLite's
+	// foreign_keys pragma is PER-CONNECTION and defaults OFF, so any tool that
+	// writes this DB without setting it can leave rows the schema would have
+	// refused. Reproducing that is the only honest way to test the check.
+	conn, err := svc.si.rh.db.Conn(ctx)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx,
+		`INSERT INTO fact_motifs(fact_id, motif) VALUES (999999, 'orphaned-row')`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	report, err := svc.Verify(ctx, VerifyOpts{})
+	require.NoError(t, err)
+	var found bool
+	for _, i := range derivedTableIssues(report) {
+		if strings.Contains(i.Detail, "fact_motifs has 1 row(s) referencing a missing facts row") {
+			found = true
+		}
+	}
+	require.True(t, found, "an orphaned fact_motifs row must be reported")
+}
+
+func derivedTableIssues(r IntegrityReport) []IntegrityIssue {
+	var out []IntegrityIssue
+	for _, i := range r.Issues {
+		if i.Category == CategoryDerivedTables {
+			out = append(out, i)
+		}
+	}
+	return out
 }
