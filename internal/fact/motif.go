@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"knomit/internal/textnorm"
 )
 
 // MaxMotifs is the per-fact cap from the field contract (blueprint §1).
@@ -114,4 +116,78 @@ func DropInvalidMotifs(motifs []string) []string {
 		}
 	}
 	return out
+}
+
+// StripSubjectMotifs returns f's motifs with every SUBJECT motif removed: one
+// whose stemmed token set is a subset of the fact's own subject tokens
+// (entities ∪ domain ∪ path). It never errors and never reports — a motif
+// that merely renames its fact's subject is structurally impossible to store,
+// and blueprint §2's Block B tells authors so up front, which is where that
+// correction belongs.
+//
+// The SUBSET test, not equality, is the point.
+// "antigravity-plugin-resolution" on a fact at
+// kb/.../antigravity/plugin-dir-resolution/ contributes nothing a reader
+// could not get from the path; "antigravity-shadowing" adds "shadowing", a
+// shape another fact could carry, and survives. The question the test asks
+// is: does this phrase say anything this fact has not already said about
+// ITSELF?
+//
+// Returns nil when nothing survives, so an all-stripped list is
+// indistinguishable from an absent one (see Fact.Motifs).
+func StripSubjectMotifs(f Fact) []string {
+	subject := subjectTokens(f)
+	var out []string
+	for _, m := range f.Motifs {
+		if isSubjectMotif(m, subject) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// subjectTokens is the stemmed token set of everything the fact already says
+// about its own subject: authored entities, domain tags, and path segments.
+//
+// The path is included because a fact's location IS a subject claim — the
+// ontology category is chosen to describe what the fact is about — and
+// because the most common subject motif in the wild is the category slug
+// re-typed. The ontology root and the uuid segment ride along harmlessly:
+// they are stemmed tokens like any other, and no motif of 2+ words is a
+// subset of {kb} or of a hex id.
+func subjectTokens(f Fact) map[string]struct{} {
+	set := make(map[string]struct{})
+	add := func(s string) {
+		for _, tok := range textnorm.Tokens(textnorm.Canonicalize(s)) {
+			set[tok] = struct{}{}
+		}
+	}
+	for _, e := range f.Entities {
+		add(e)
+	}
+	for _, d := range f.Domain {
+		add(d)
+	}
+	// Trim the extension first so "e5d04257.md" does not contribute a
+	// spurious "md" token — that describes the file format, not the fact.
+	// Canonicalize de-hyphenizes and Tokens splits on '/', so path segments
+	// and their words arrive already separated.
+	add(strings.TrimSuffix(f.path, ".md"))
+	return set
+}
+
+// isSubjectMotif reports whether every stemmed token of motif is already in
+// the fact's subject set.
+func isSubjectMotif(motif string, subject map[string]struct{}) bool {
+	toks := textnorm.Tokens(textnorm.Canonicalize(motif))
+	if len(toks) == 0 {
+		return false
+	}
+	for _, t := range toks {
+		if _, ok := subject[t]; !ok {
+			return false
+		}
+	}
+	return true
 }

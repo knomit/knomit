@@ -39,6 +39,10 @@ func compileRules(topic string, rules []Validation) ([]compiledRule, error) {
 
 // factToJS converts a Fact into a plain map suitable for read-only JS access.
 //
+// Two fields are exposed as their RESOLVED value rather than the raw one —
+// origin and motifs — because ValidateFact runs before SerializeFact and both
+// are rewritten there. See resolvedOrigin and resolvedMotifs.
+//
 // Every field of Fact is exposed, keyed by its json tag, with one deliberate
 // exception: RefWarnings. That field is derived on read and never stored, and
 // a rule over it could not be trusted in either direction — it is structurally
@@ -57,7 +61,7 @@ func factToJS(f Fact) map[string]any {
 		"type":            string(f.Type),
 		"domain":          append([]string{}, f.Domain...),
 		"entities":        append([]string{}, f.Entities...),
-		"motifs":          append([]string{}, f.Motifs...),
+		"motifs":          append([]string{}, resolvedMotifs(f)...),
 		"refs":            append([]string{}, f.Refs...),
 		"title":           f.Title,
 		"body":            f.Body,
@@ -68,6 +72,18 @@ func factToJS(f Fact) map[string]any {
 		"evidence_weight": f.EvidenceWeight,
 	}
 }
+
+// resolvedMotifs is the motif list a rule sees: the value that will actually
+// land on disk, never the raw field — the same discipline resolvedOrigin
+// applies below, for the same reason.
+//
+// ValidateFact runs BEFORE SerializeFact, and SerializeFact silently drops
+// any motif that merely restates its fact's own subject. A rule reading the
+// raw field would therefore judge motifs that are about to vanish:
+// `fact.motifs.length >= 1` would pass on a fact whose single motif is a
+// subject motif, and that fact would then be written carrying none. Resolving
+// here keeps the rule sandbox and the on-disk fact telling one story.
+func resolvedMotifs(f Fact) []string { return StripSubjectMotifs(f) }
 
 // resolvedOrigin is the origin a rule sees: the value that will actually land
 // on disk, never the raw field.

@@ -130,3 +130,113 @@ func TestParseFact_AllInvalidMotifsParseAsNil(t *testing.T) {
 	require.NoError(t, err, "a fact whose motifs were all dropped must still be writable")
 	require.NotContains(t, out, "motifs")
 }
+
+func stripFixture() Fact {
+	f := NewFact("kb/gotchas/integrations/antigravity/plugin-dir-resolution/e5d04257.md")
+	f.Title = "A title"
+	f.Body = "Body."
+	f.Type = Observation
+	f.Domain = []string{"integrations", "build tooling"}
+	f.Entities = []string{"Antigravity", "mcp_config.json"}
+	f.Refs = []string{}
+	f.Confidence = 0.9
+	f.Sources = 1
+	return f
+}
+
+func TestStripSubjectMotifs_DropsEntitySubsets(t *testing.T) {
+	f := stripFixture()
+	// "antigravity-shadowing" -> {antigravity, shadowing}: NOT a subset
+	// (shadowing is not a subject token), so it survives.
+	// "antigravity-plugin-resolution" -> {antigravity, plugin, resolution}:
+	// every token is an entity or path token, so it is the fact's own subject
+	// wearing a motif's clothes.
+	f.Motifs = []string{"antigravity-shadowing", "antigravity-plugin-resolution"}
+	require.Equal(t, []string{"antigravity-shadowing"}, StripSubjectMotifs(f))
+}
+
+func TestStripSubjectMotifs_DropsDomainSubsets(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"build-tooling"}
+	require.Nil(t, StripSubjectMotifs(f))
+}
+
+func TestStripSubjectMotifs_DropsPathSubsets(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"plugin-dir-resolution"}
+	require.Nil(t, StripSubjectMotifs(f))
+}
+
+func TestStripSubjectMotifs_IsStemmed(t *testing.T) {
+	f := stripFixture()
+	f.Entities = []string{"vulnerabilities"}
+	f.Domain = []string{"scanning"}
+	f.Motifs = []string{"vulnerability-scanning"}
+	require.Nil(t, StripSubjectMotifs(f), "stemming must collapse vulnerabilities/vulnerability")
+}
+
+func TestStripSubjectMotifs_KeepsGeneralRegularities(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"zero-value-as-valid", "silent-fallback", "name-collision"}
+	require.Equal(t, f.Motifs, StripSubjectMotifs(f))
+}
+
+// TestStripSubjectMotifs_ExtensionIsNotASubjectToken — "md" must not enter
+// the subject set, or a two-word motif ending in it would be judged against a
+// token that describes the file format, not the fact.
+func TestStripSubjectMotifs_ExtensionIsNotASubjectToken(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"md-rendering"}
+	require.Equal(t, []string{"md-rendering"}, StripSubjectMotifs(f))
+}
+
+// TestSerializeFact_StripIsSilent — the strip NEVER errors. A caller that
+// writes a subject-restating motif gets a stored fact, minus the motif.
+func TestSerializeFact_StripIsSilent(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"antigravity-plugin-resolution"}
+
+	out, err := SerializeFact(f)
+	require.NoError(t, err, "the subject strip drops, it never errors")
+	require.NotContains(t, out, "motifs")
+
+	back, err := ParseFact(f.Path(), out)
+	require.NoError(t, err)
+	require.Nil(t, back.Motifs)
+}
+
+// TestSerializeFact_StripDoesNotMutateInput — SerializeFact is a pure
+// renderer. The strip must not reach back into the caller's Fact.
+func TestSerializeFact_StripDoesNotMutateInput(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"antigravity-plugin-resolution", "silent-fallback"}
+
+	_, err := SerializeFact(f)
+	require.NoError(t, err)
+	require.Equal(t,
+		[]string{"antigravity-plugin-resolution", "silent-fallback"}, f.Motifs)
+}
+
+// TestSerializeFact_ValidateBeforeStrip — a malformed motif must be REPORTED
+// even when the strip would have removed it anyway. Ordering the strip first
+// would silently swallow the caller's misunderstanding of the field.
+func TestSerializeFact_ValidateBeforeStrip(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"antigravity"} // one word AND a subject word
+	_, err := SerializeFact(f)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "kebab-case words")
+}
+
+// TestFactToJS_MotifsAreResolved — ValidateFact runs BEFORE SerializeFact, so
+// a rule reading the raw field would judge motifs that are about to vanish.
+// `fact.motifs.length >= 1` must not pass on a fact that will be written with
+// none.
+func TestFactToJS_MotifsAreResolved(t *testing.T) {
+	f := stripFixture()
+	f.Motifs = []string{"antigravity-plugin-resolution", "silent-fallback"}
+
+	js := factToJS(f)
+	require.Equal(t, []string{"silent-fallback"}, js["motifs"],
+		"the rule sandbox must see what lands on disk, not the raw field")
+}

@@ -362,9 +362,15 @@ func SerializeFact(f Fact) (string, error) {
 	if err := ValidateRefs(f.Refs); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
+	// Order is load-bearing: VALIDATE first, then strip. A malformed motif is
+	// a misunderstanding of the field and the caller is told; a subject motif
+	// is an ordinary miss and is dropped in silence. Stripping first would let
+	// "antigravity" (one word AND a subject word) vanish without the caller
+	// ever learning that one-word motifs are not a thing.
 	if err := ValidateMotifs(f.Motifs); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
+	motifs := StripSubjectMotifs(f)
 	// Origin is held to the same standard as (kind, type): both
 	// well-formedness and the origin×type pairing. Without this a fact with
 	// `origin: distilled` on `type: observation` serialized cleanly and then
@@ -445,8 +451,8 @@ func SerializeFact(f Fact) (string, error) {
 	// Emitted only when non-empty. `motifs: []` on the thousands of facts
 	// that predate the field would churn every file in the corpus for no
 	// information.
-	if len(f.Motifs) > 0 {
-		add("motifs", flowSeq(f.Motifs))
+	if len(motifs) > 0 {
+		add("motifs", flowSeq(motifs))
 	}
 	add("refs", flowSeq(f.Refs))
 
