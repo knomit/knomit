@@ -610,11 +610,22 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		}
 
 	case "prune":
+		// Resolve the shortlist pair BEFORE applying: an "update" decision
+		// rewrites a fact, and a rewritten fact is a new row with a new id, so
+		// ids read afterwards would not be the versions the judge saw.
+		// Returns nil for ordinary cluster items.
+		judged := resolveShortlistPair(ctx, d, sess, item)
+
 		stats, err := ApplyPruneDecisions(ctx, d.Facts, d.Search, dec.prune.Decisions, dec.prune.Merges, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
 		if err != nil {
 			return wrapf(reviewTool, err, "apply prune")
 		}
 		recordStats(ctx, reviewTool, d, sess, stats)
+		// Attribution for the judge-outcome throttle. ONLY shortlist-originated
+		// items count: a cluster prune's merges say nothing about whether the
+		// shortlist is earning its slots, and counting them would keep a
+		// useless shortlist funded forever on any healthy corpus.
+		recordShortlistVerdict(ctx, d, sess, judged, dec.prune)
 
 	case "distill":
 		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())

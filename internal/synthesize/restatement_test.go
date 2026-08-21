@@ -481,3 +481,60 @@ func TestPlan_FloodCorpusIsBoundedByTheBudgetNotSuppressed(t *testing.T) {
 	require.Contains(t, strings.Join(res.Health, "\n"), "standing restatement pairs",
 		"and the flood is visible in the health output")
 }
+
+// TestApply_AttributesOnlyShortlistVerdicts — the throttle is only as good as
+// its attribution. If an ordinary cluster prune counted, a healthy corpus's
+// cluster merges would keep a useless shortlist funded forever.
+func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	env.writeFact("kb/pair-a.md", "Shared headline", "one account")
+	env.writeFact("kb/pair-b.md", "Shared headline", "a different account of the same thing, longer")
+	for i := range 400 {
+		env.writeFact(fmt.Sprintf("kb/filler%d.md", i), fmt.Sprintf("Filler %d", i), fmt.Sprintf("filler body %d", i))
+	}
+
+	d := env.deps()
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	require.NoError(t, err)
+	env.seedShortlist()
+
+	// An ordinary cluster item, answered with a merge: must NOT be attributed.
+	clusterItem := &store.PipelineWorkItem{
+		SessionID: sess.ID, StepType: "prune", ClusterKey: "cluster-0",
+		FactsJSON: env.factsJSON("kb/filler0.md", "kb/filler1.md"),
+	}
+	judged := resolveShortlistPair(ctx, d, sess, clusterItem)
+	require.Nil(t, judged, "a cluster item is not a shortlist outcome")
+	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
+		Merges: []MergeEntry{{Paths: []string{"kb/filler0.md", "kb/filler1.md"}}},
+	})
+
+	verdicts, err := env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	require.NoError(t, err)
+	require.Empty(t, verdicts)
+
+	// A shortlist item, answered with keep: attributed, and not merged.
+	restateItem := &store.PipelineWorkItem{
+		SessionID: sess.ID, StepType: "prune", ClusterKey: restatementClusterKeyPrefix + "0",
+		FactsJSON: env.factsJSON("kb/pair-a.md", "kb/pair-b.md"),
+	}
+	judged = resolveShortlistPair(ctx, d, sess, restateItem)
+	require.NotNil(t, judged)
+	require.NotZero(t, judged.AFactID, "the versions the judge saw are captured by id")
+	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{})
+
+	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	require.NoError(t, err)
+	require.Len(t, verdicts, 1)
+	require.False(t, verdicts[0].Merged)
+
+	// The same item answered with a merge OF THAT PAIR is attributed as merged.
+	recordShortlistVerdict(ctx, d, sess, judged, &PruneResult{
+		Merges: []MergeEntry{{Paths: []string{"kb/pair-a.md", "kb/pair-b.md"}}},
+	})
+	verdicts, err = env.svc.Abstraction().RecentRestatementVerdicts(ctx, env.branch, throttleWindow)
+	require.NoError(t, err)
+	require.Len(t, verdicts, 2)
+	require.True(t, verdicts[0].Merged, "newest first")
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -594,4 +595,85 @@ func sessionHealthLines(sess *store.PipelineSession) []string {
 		return nil
 	}
 	return lines
+}
+
+// ── verdict attribution ───────────────────────────────────────────────────
+
+// judgedPair is a shortlist pair as it stood when the judge was shown it: the
+// two paths, and the fact ids of the exact versions.
+type judgedPair struct {
+	APath, BPath     string
+	AFactID, BFactID int64
+}
+
+// resolveShortlistPair identifies the pair a shortlist-originated prune item
+// put in front of the judge, capturing the fact ids of the versions shown.
+// Returns nil for ordinary cluster items — those say nothing about whether the
+// shortlist is earning its slots.
+//
+// Called BEFORE the decisions are applied, because applying them can rewrite a
+// fact, and a rewritten fact is a new row with a new id.
+func resolveShortlistPair(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) *judgedPair {
+	if !strings.HasPrefix(item.ClusterKey, restatementClusterKeyPrefix) {
+		return nil
+	}
+	paths, err := itemInputPaths(item)
+	if err != nil || len(paths) != 2 {
+		return nil
+	}
+	live, err := d.Abstraction.LiveEpistemicFacts(ctx, sess.Branch)
+	if err != nil {
+		log.Warn().Err(err).Str("session", sess.ID).Msg("review: could not resolve shortlist verdict ids")
+		return nil
+	}
+	ids := map[string]int64{}
+	for id, path := range live {
+		ids[path] = id
+	}
+	return &judgedPair{
+		APath: paths[0], BPath: paths[1],
+		AFactID: ids[paths[0]], BFactID: ids[paths[1]],
+	}
+}
+
+// recordShortlistVerdict records what the judge did with a shortlist pair.
+//
+// "Merged" means the judge merged THE PAIR the shortlist put in front of it,
+// not merely that the item produced some merge — on a two-fact item those
+// coincide, but saying it precisely keeps the throttle measuring what it
+// claims to measure.
+func recordShortlistVerdict(ctx context.Context, d Deps, sess *store.PipelineSession, judged *judgedPair, res *PruneResult) {
+	if judged == nil || res == nil {
+		return
+	}
+	merged := false
+	for _, m := range res.Merges {
+		if pairCovered(m.Paths, judged.APath, judged.BPath) {
+			merged = true
+			break
+		}
+	}
+	if err := d.Abstraction.RecordRestatementVerdict(ctx, sess.Branch, store.RestatementVerdict{
+		APath: judged.APath, BPath: judged.BPath,
+		AFactID: judged.AFactID, BFactID: judged.BFactID,
+		Merged: merged, JudgedAt: time.Now().UTC(),
+	}); err != nil {
+		// Informational, like recordStats: the mutations are already committed,
+		// and a lost verdict only makes the throttle slightly more optimistic.
+		log.Warn().Err(err).Str("session", sess.ID).Msg("review: could not record shortlist verdict")
+	}
+}
+
+// pairCovered reports whether a merge entry covers both halves of the pair.
+func pairCovered(mergePaths []string, a, b string) bool {
+	var sawA, sawB bool
+	for _, p := range mergePaths {
+		switch p {
+		case a:
+			sawA = true
+		case b:
+			sawB = true
+		}
+	}
+	return sawA && sawB
 }

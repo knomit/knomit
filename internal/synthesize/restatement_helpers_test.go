@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"math"
@@ -319,4 +320,19 @@ func (e *restatementEnv) workItems(sessionID string) []store.PipelineWorkItem {
 		require.NoError(e.t, err)
 	}
 	return out
+}
+
+// factsJSON renders the two named facts the way a prune work item carries them.
+func (e *restatementEnv) factsJSON(paths ...string) string {
+	e.t.Helper()
+	facts := make([]factForLLM, 0, len(paths))
+	for _, p := range paths {
+		f, err := e.svc.Search().GetByPath(context.Background(), e.branch, p)
+		require.NoError(e.t, err)
+		require.NotNil(e.t, f)
+		facts = append(facts, factForLLM{File: f.Path, Title: f.Title, Body: f.Body, Type: f.Type})
+	}
+	out, err := json.Marshal(facts)
+	require.NoError(e.t, err)
+	return string(out)
 }
