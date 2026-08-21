@@ -295,7 +295,12 @@ func ParseFact(path, content string) (Fact, error) {
 	// Deliberately NOT normalized to []string{} when absent: motifs is the
 	// only elided list field, so nil and empty must remain indistinguishable
 	// all the way through, or a round trip changes the bytes.
-	f.Motifs = fm.Motifs
+	//
+	// Lenient on read for the same reason refs and origin above are lenient:
+	// a fact must never become unloadable because of a field nothing's
+	// correctness depends on. Same helper as the write gate, so there is one
+	// definition of a well-formed motif, not two.
+	f.Motifs = DropInvalidMotifs(fm.Motifs)
 	f.Refs = fm.Refs
 	f.EvidenceWeight = fm.EvidenceWeight
 	f.Origin = origin
@@ -355,6 +360,9 @@ func SerializeFact(f Fact) (string, error) {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 	if err := ValidateRefs(f.Refs); err != nil {
+		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
+	if err := ValidateMotifs(f.Motifs); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 	// Origin is held to the same standard as (kind, type): both
