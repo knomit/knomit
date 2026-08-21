@@ -210,6 +210,53 @@ type PipelineIndex interface {
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }
 
+// TitleTarget is a fact whose title still needs embedding onto the abstraction
+// axis.
+type TitleTarget struct {
+	FactID int64
+	Path   string
+	Title  string
+}
+
+// TitleVector is one fact's title embedding.
+type TitleVector struct {
+	FactID int64
+	Path   string
+	Vec    []float32
+}
+
+// TitleNeighbour is one KNN hit on the abstraction axis.
+type TitleNeighbour struct {
+	FactID     int64
+	Path       string
+	Similarity float64
+}
+
+// AbstractionIndex is the title-embedding axis ("the abstraction axis") and the
+// restatement shortlist built on it. Implemented by *abstractionIndex, exposed
+// on Service via Abstraction().
+//
+// REVIEW PIPELINE ONLY. It is deliberately not part of the SearchIndex
+// composite: nothing on the runtime paths (query / explain / learn) may consume
+// it, and keeping it off the composite makes that structural rather than a rule
+// somebody has to remember.
+type AbstractionIndex interface {
+	// LiveFactsMissingTitleVector returns up to limit live epistemic facts on
+	// branch that have no title vector yet, lowest fact id first.
+	LiveFactsMissingTitleVector(ctx context.Context, branch string, limit int) ([]TitleTarget, error)
+	PutTitleVectors(ctx context.Context, vecs []TitleVector) error
+	// TitleVectorCoverage reports (embedded, total) over live epistemic facts.
+	TitleVectorCoverage(ctx context.Context, branch string) (have, total int, err error)
+	// LiveEpistemicFactIDs is the live set the pair cache is diffed against.
+	LiveEpistemicFactIDs(ctx context.Context, branch string) (map[int64]struct{}, error)
+	// TopTitleNeighbours returns up to k live epistemic neighbours of factID on
+	// the axis, self excluded, most similar first. A fact with no vector yet
+	// returns nothing rather than an error.
+	TopTitleNeighbours(ctx context.Context, branch string, factID int64, k int) ([]TitleNeighbour, error)
+	// BodyVectorsByFactID returns STORED blended vectors from facts_vec.
+	BodyVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error)
+}
+
 // Embedder computes vector embeddings. Roles differ because retrieval models
 // embed queries and documents with different prompts.
 //

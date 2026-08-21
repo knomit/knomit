@@ -50,10 +50,14 @@ type Service struct {
 	// The four query sub-services carved out of searchIndex (P1.3). searchIndex
 	// (si) keeps IndexManager + the write/rebuild path; these own the read
 	// surface. search composes all four for the Search() composite.
-	fq     *factQuery
-	gq     *graphStore
-	hq     *historyQuery
-	mq     *methodologyMatcher
+	fq *factQuery
+	gq *graphStore
+	hq *historyQuery
+	mq *methodologyMatcher
+	// ax is the abstraction axis + restatement shortlist. Kept OFF the search
+	// facade on purpose: it is review-pipeline state, and composing it would
+	// hand it to every mcp/web consumer of Search().
+	ax     *abstractionIndex
 	search *searchFacade
 	pi     *pipelineIndex
 	ti     *toolIndex
@@ -154,6 +158,7 @@ func Open(path string) (*Service, error) {
 	gq := &graphStore{rh: rh}
 	hq := &historyQuery{rh: rh}
 	mq := &methodologyMatcher{rh: rh}
+	ax := &abstractionIndex{rh: rh}
 	search := &searchFacade{factQuery: fq, graphStore: gq, historyQuery: hq, methodologyMatcher: mq}
 	canonPath := canonicalizePath(path)
 
@@ -176,6 +181,7 @@ func Open(path string) (*Service, error) {
 		gq:            gq,
 		hq:            hq,
 		mq:            mq,
+		ax:            ax,
 		search:        search,
 		pi:            &pipelineIndex{rh: rh, sessionDB: sessionDB},
 		ti:            &toolIndex{db: sessionDB},
@@ -354,6 +360,10 @@ func (s *Service) HistoryQuery() HistoryQuery { return s.hq }
 
 // Methodology returns the methodology-matching query sub-service.
 func (s *Service) Methodology() MethodologyMatcher { return s.mq }
+
+// Abstraction returns the title-embedding axis and the restatement shortlist
+// built on it. REVIEW PIPELINE ONLY — no runtime path may consume it.
+func (s *Service) Abstraction() AbstractionIndex { return s.ax }
 
 // IndexManager returns the IndexManager for search index lifecycle operations.
 func (s *Service) IndexManager() IndexManager { return s.si }

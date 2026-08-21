@@ -66,7 +66,7 @@ func TestEnsureFactsVecCreatesAtDim(t *testing.T) {
 	// Open created facts_vec at the default dim; recreate at 1024.
 	require.NoError(t, si.ensureFactsVec(ctx, "m", 1024))
 
-	exists, err := si.factsVecExists(ctx)
+	exists, err := si.vecTableExists(ctx, factsVecTable)
 	require.NoError(t, err)
 	require.True(t, exists, "facts_vec must exist after ensureFactsVec")
 
