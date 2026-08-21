@@ -334,7 +334,9 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // the identity — title, body, kind, type, origin — while the metadata is
 // always pooled, because both facts are evidence of the same thing. Confidence
 // takes the max rather than the winner's, and sources add: two independent
-// observations of one fact are worth more than either alone. Pure.
+// observations of one fact are worth more than either alone. Motifs are the
+// one field that unions WINNER-first, because they are capped and so their
+// order decides what survives — see the call site. Pure.
 //
 // existingPath is the existing fact's RAW on-disk path and is deliberately
 // distinct from existing.Path(). The two differ in case: existing came from
@@ -347,23 +349,39 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // names nothing on disk, so every provenance walk through that edge dangles.
 func mergeFacts(newFact, existing fact.Fact, existingPath string) fact.Fact {
 	merged := fact.NewFact(existing.Path())
+	winner, loser := existing, newFact
 	if newFactWins(newFact, existing) {
-		merged.Title = newFact.Title
-		merged.Body = newFact.Body
-		merged.Kind = newFact.Kind
-		merged.Type = newFact.Type
-		// New fact's identity wins, so its origin wins too.
-		merged.Origin = newFact.Origin
-	} else {
-		merged.Title = existing.Title
-		merged.Body = existing.Body
-		merged.Kind = existing.Kind
-		merged.Type = existing.Type
-		// Existing fact's identity wins, so its origin wins too.
-		merged.Origin = existing.Origin
+		winner, loser = newFact, existing
 	}
+	merged.Title = winner.Title
+	merged.Body = winner.Body
+	merged.Kind = winner.Kind
+	merged.Type = winner.Type
+	// The winner's identity wins, so its origin wins too.
+	merged.Origin = winner.Origin
+
 	merged.Domain = fact.UnionStrings(newFact.Domain, existing.Domain)
 	merged.Entities = fact.UnionStrings(newFact.Entities, existing.Entities)
+	// Motifs union WINNER-first — not incoming-first like domain and entities
+	// on the two lines above — and are then trimmed to the cap (§2.1).
+	//
+	// The inconsistency with its immediate neighbours is deliberate, and it is
+	// the spec's. Domain and entities are uncapped, so their order is cosmetic:
+	// every value survives whichever way round they go. Motifs are capped at
+	// three, so order decides what SURVIVES. Dropping the winner's own naming
+	// of its regularity in favour of the loser's, because the loser happened to
+	// arrive in the newFact slot, would contradict the tiebreak philosophy
+	// every other field here follows — the winner contributes the identity.
+	//
+	// Trimming here rather than letting SerializeFact reject the over-cap list
+	// is what keeps a routine merge from failing a caller's whole learn call.
+	// Cross-parent phrasing duplicates that are not string-equal ride along and
+	// cost a slot until alias resolution collapses them in derived state; that
+	// is the accepted price of doing this mechanically at learn time.
+	merged.Motifs = fact.UnionStrings(winner.Motifs, loser.Motifs)
+	if len(merged.Motifs) > fact.MaxMotifs {
+		merged.Motifs = merged.Motifs[:fact.MaxMotifs]
+	}
 	merged.Confidence = max(newFact.Confidence, existing.Confidence)
 	merged.Sources = newFact.Sources + existing.Sources
 	// Raw path, not existing.Path(): see the doc comment above.
