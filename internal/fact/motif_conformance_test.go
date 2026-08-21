@@ -97,10 +97,16 @@ func TestMN4_MotifValidationHasOneCallSite(t *testing.T) {
 	}
 }
 
-// TestMN6_NoMotifConsumers — motifs are stored and counted this phase and
-// consumed by nothing. Not by dedup thresholds, not by clustering, not by
-// search ranking, and not by the bridge engine, which is phase 3.
-func TestMN6_NoMotifConsumers(t *testing.T) {
+// TestMN6_MotifsDoNotDriveMechanics — MN6 as clarified by the designer on
+// 2026-08-21: the restriction is about MECHANICS, not visibility.
+//
+// Motifs may be READ by anyone — UI, query/explain output, the ontology rule
+// sandbox, serialization. None of those is a "consumer" in this rule's sense,
+// and this test deliberately does not police them. What motifs must never do
+// is influence the engine's mechanical decisions: dedup thresholds, clustering,
+// search ranking, or anything that spawns work outside the §4/§5/§7 synthesis
+// paths designed for them. The files below are those decision paths.
+func TestMN6_MotifsDoNotDriveMechanics(t *testing.T) {
 	sources := goSources(t)
 	for _, rel := range []string{
 		"internal/synthesize/dedup.go",
@@ -117,7 +123,7 @@ func TestMN6_NoMotifConsumers(t *testing.T) {
 		require.Truef(t, ok,
 			"MN6 target %s is missing — update this list, do not let the check lapse", rel)
 		require.NotContainsf(t, strings.ToLower(src), "motif",
-			"MN6: %s must not consume motifs in phase 1", rel)
+			"MN6: %s is a mechanical decision path and must not read motifs", rel)
 	}
 }
 
