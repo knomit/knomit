@@ -253,7 +253,8 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 
 // storeIndices returns the store indices under the repo read lock.
 func (r *Reviewer) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex) {
-	return r.p.storeIndices()
+	gs, idx, pipelineIdx, branches, _ := r.p.storeIndices()
+	return gs, idx, pipelineIdx, branches
 }
 
 // dirtyFacts returns the review seed facts (changed since watermark, or the

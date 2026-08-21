@@ -55,14 +55,17 @@ type SearchQuery interface {
 // invariants/synthesize/session-branch-binding — nothing below StartSession
 // may consult RI.AgentBranch().
 type Deps struct {
-	RI         *repos.RepoInstance
-	Facts      store.FactIndex
-	Search     SearchQuery
-	Pipeline   store.PipelineIndex
-	Branches   store.BranchIndex
-	Effort     Effort
-	Scope      ScopeFilter
-	OnProgress func(ProgressEvent)
+	RI       *repos.RepoInstance
+	Facts    store.FactIndex
+	Search   SearchQuery
+	Pipeline store.PipelineIndex
+	Branches store.BranchIndex
+	// Abstraction is the title-embedding axis and the restatement shortlist
+	// built on it (the consolidation-scope fix). Review-pipeline only.
+	Abstraction store.AbstractionIndex
+	Effort      Effort
+	Scope       ScopeFilter
+	OnProgress  func(ProgressEvent)
 }
 
 // pagedStrategy is the optional half of Strategy: implemented only by
