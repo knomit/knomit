@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store"
 )
 
 // ── the over-merge guard ──────────────────────────────────────────────────
@@ -161,9 +163,17 @@ func TestMotifAliasDecode_WrongEnvelopeKeyIsLoud(t *testing.T) {
 
 // ── health ────────────────────────────────────────────────────────────────
 
-// recordRestatementHealth ASSIGNS sess.Health; this phase's appends. If either
-// starts clobbering the other, a whole subsystem's only report channel goes
-// silent — and a broken subsystem then looks exactly like a clean corpus.
+// Both health recorders must APPEND. If either starts assigning, whichever runs
+// last silently deletes the other's lines — and health is the only channel
+// through which either mechanism reports "I ran and found nothing", so a broken
+// subsystem then looks exactly like a clean corpus.
+//
+// TestHealthRecorders_NeverDestroyExistingLines below is the real guard. THIS
+// test only proves the two compose in the order Plan happens to call them, and
+// that is worth stating: when recordRestatementHealth still assigned, this test
+// passed anyway, because the test called it first — the safe order. A test that
+// guards an arrangement rather than a property survives its own subject
+// regressing.
 func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary+4)
 	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.branch)
@@ -243,4 +253,38 @@ func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 1, n)
+}
+
+// TestHealthRecorders_NeverDestroyExistingLines is the property test the
+// co-existence test above is not.
+//
+// It seeds sess.Health with a line neither recorder produces, then calls each
+// one, and requires the seed to survive. That holds regardless of call order,
+// of how many producers exist, and of which one runs first — which is what
+// makes it a guard on the RULE ("a health recorder appends") rather than on
+// today's arrangement of callers.
+//
+// The distinction is not academic. This file's first version tested only the
+// arrangement, and it passed with recordRestatementHealth still assigning.
+func TestHealthRecorders_NeverDestroyExistingLines(t *testing.T) {
+	const seed = "seeded by another producer"
+
+	for name, record := range map[string]func(*store.PipelineSession){
+		"restatement": func(s *store.PipelineSession) {
+			recordRestatementHealth(s, restatementHealth{StandingPairs: 3})
+		},
+		"motif-alias": func(s *store.PipelineSession) {
+			recordMotifAliasHealth(s, motifAliasHealth{Vocabulary: 20, Emitted: 2})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sess := &store.PipelineSession{Health: []string{seed}}
+			record(sess)
+			require.Contains(t, sess.Health, seed,
+				"%s destroyed a line it did not write — health recorders must append, "+
+					"or the last one to run silences every other subsystem's only report channel",
+				name)
+			require.Greater(t, len(sess.Health), 1, "%s recorded nothing at all", name)
+		})
+	}
 }

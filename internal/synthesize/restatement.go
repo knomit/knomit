@@ -728,11 +728,26 @@ func probeSuffix(h restatementHealth) string {
 // round trip would buy nothing. Health is read once, by the turn that produced
 // it (invariants/synthesize/per-call-objects-no-session-state is about state
 // that must SURVIVE a call — this deliberately does not).
+// APPENDS rather than assigns (Phase 2, designer ruling 2026-08-21). From
+// Phase 2 this field has more than one producer, and an assignment silently
+// deletes whatever another mechanism already reported. Health is the only
+// channel through which any of them says "I ran and found nothing", so losing
+// a set of lines makes a broken subsystem indistinguishable from a clean
+// corpus — the exact failure these descriptors exist to prevent.
+//
+// Ordering the callers correctly would also have worked, and did for one
+// commit. It was rejected as the wrong fix: the ordering dependency is
+// invisible at both call sites and a test can only guard the arrangement that
+// exists today, so the trap survives its own fix. Appending removes the class.
+//
+// Called once per session, so this is behaviourally identical for the
+// shortlist itself. TestMotifAliasHealth_CoexistsWithRestatementLines covers
+// the interaction.
 func recordRestatementHealth(sess *store.PipelineSession, h restatementHealth) {
 	if sess == nil {
 		return
 	}
-	sess.Health = healthLines(h)
+	sess.Health = append(sess.Health, healthLines(h)...)
 }
 
 // ── verdict attribution ───────────────────────────────────────────────────

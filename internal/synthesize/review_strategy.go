@@ -155,10 +155,9 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		return err
 	}
 
-	// Alias resolution, AFTER the shortlist: recordRestatementHealth ASSIGNS
-	// sess.Health and recordMotifAliasHealth appends, so this order is what
-	// keeps both sets of lines. The co-existence test guards it rather than
-	// leaving it to whoever next edits this function.
+	// Alias resolution. Both health recorders APPEND, so this ordering is a
+	// readability choice and not load-bearing — an earlier version depended on
+	// it, which is why recordRestatementHealth stopped assigning.
 	if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
 		return err
 	}
