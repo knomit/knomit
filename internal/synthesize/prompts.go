@@ -25,6 +25,12 @@ type PromptData struct {
 	// carrying "0 clusters, recurrence 0%" invites the model to reason about a
 	// mechanism the corpus is not using.
 	MotifVocabulary string
+	// SharedMotifs is the motifs already carried by two or more facts in a
+	// distill cluster (§6 "distill enrichment"). Free context for an LLM that
+	// is running anyway: if several members instantiate one regularity, the
+	// synthesized claim probably does too. Empty when the cluster shares none,
+	// and the template omits the line entirely then.
+	SharedMotifs string
 }
 
 // RenderTemplate loads and renders a prompt template.

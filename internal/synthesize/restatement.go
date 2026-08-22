@@ -363,6 +363,26 @@ const (
 // RESOURCE BUDGET on a SQL read, nothing more.
 const shortlistOverfetch = 4
 
+// shortlistMotifWiden is the §6 motif signal: how much further down THIS
+// repo's own title-cosine ranking a pair is considered when its two facts
+// share an exact canonical motif.
+//
+// An ELIGIBILITY WIDENER, not a score bonus (designer ruling Q2). A bonus
+// added to title_cos would be a corpus-property constant wearing a different
+// hat — it would claim to know how much a shared motif is worth in cosine
+// units, on every corpus. This claims only that a shared motif is worth
+// LOOKING further, and how far "further" reaches is still decided entirely by
+// the repo's own distribution: the band is a rank cut, so on a corpus with a
+// tight distribution it reaches a shorter absolute distance than on a loose
+// one.
+//
+// The judge-slot budget is unchanged. Widening changes what may be considered,
+// never how much is spent — a motif-rich corpus gets better candidates for the
+// same money, not more of them.
+//
+// A SELECTION-POLICY constant, the same class as judgePairPermille (MN13).
+const shortlistMotifWiden = 3
+
 // Throttle states, reported in health output.
 const (
 	throttleOptimistic = "optimistic" // no history yet — the cap bounds the downside
@@ -394,6 +414,10 @@ type restatementHealth struct {
 	Emitted        int
 	ResolutionRate float64
 	ThrottleState  string
+	// MotifWidened counts pairs admitted ONLY because their facts share a
+	// canonical motif — candidates the title axis alone would not have reached.
+	// Reported so the signal's contribution is visible rather than inferred.
+	MotifWidened int
 	// Probing is true when a defunded corpus spent its periodic probe slot —
 	// the one path by which its own evidence can change.
 	Probing bool
@@ -491,9 +515,33 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		return nil, h, wrapf(reviewTool, err, "shortlist: rank")
 	}
 
+	// The motif widener (§6): pairs sharing an exact canonical motif are
+	// considered further down this repo's own ranking than pairs that do not.
+	// Fetched as one wider read and split below, so the ordinary band is
+	// exactly what it was before motifs existed.
+	widened, err := d.Abstraction.RestatementPairsByRank(ctx, branch, budget*shortlistOverfetch*shortlistMotifWiden)
+	if err != nil {
+		return nil, h, wrapf(reviewTool, err, "shortlist: widened rank")
+	}
+	ordinary := len(raw)
+
 	coGrouped := clusterCoMembership(clusters)
 	var out []store.RestatementPair
-	for _, p := range raw {
+	for i, p := range widened {
+		if len(out) == budget {
+			break
+		}
+		if i >= ordinary {
+			// Past the ordinary band. Only a shared canonical motif buys a look
+			// this far down — and only an EXACT one: the loose tiers are for a
+			// reader who judges what comes back, never for something that
+			// spends a judge slot (§6).
+			shared, serr := pairSharesCanonicalMotif(ctx, d, branch, p)
+			if serr != nil || !shared {
+				continue
+			}
+			h.MotifWidened++
+		}
 		if _, ok := coGrouped[pathPairKey(p.APath, p.BPath)]; ok {
 			continue
 		}
@@ -501,9 +549,6 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 			continue
 		}
 		out = append(out, p)
-		if len(out) == budget {
-			break
-		}
 	}
 	if probing && len(out) > 0 {
 		// The probe is spent only if it actually put something in front of the
@@ -888,4 +933,46 @@ func probeAllowed(ctx context.Context, d Deps, branch string) (bool, error) {
 	// At the interval: hold the counter here so every subsequent session is
 	// also eligible until one of them actually emits.
 	return true, nil
+}
+
+// pairSharesCanonicalMotif reports whether both facts in a pair carry a motif
+// resolving to the same canonical cluster.
+//
+// EXACT tier only. The loose tiers exist for a reader who judges what comes
+// back; this decides whether to spend a judge slot, which §6 puts squarely on
+// the automation side of that line.
+//
+// Degrades to false on any error: the widener is an ADDITION to the shortlist,
+// and a corpus whose vocabulary cannot be read should still get its ordinary
+// candidates rather than none.
+func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p store.RestatementPair) (bool, error) {
+	if d.Motifs == nil {
+		return false, nil
+	}
+	a, err := d.Search.GetByPath(ctx, branch, p.APath)
+	if err != nil || a == nil || len(a.Motifs) == 0 {
+		return false, nil
+	}
+	b, err := d.Search.GetByPath(ctx, branch, p.BPath)
+	if err != nil || b == nil || len(b.Motifs) == 0 {
+		return false, nil
+	}
+	seen := make(map[string]struct{}, len(a.Motifs))
+	for _, m := range a.Motifs {
+		canonical, cerr := d.Motifs.CanonicalID(ctx, branch, m)
+		if cerr != nil {
+			continue
+		}
+		seen[canonical] = struct{}{}
+	}
+	for _, m := range b.Motifs {
+		canonical, cerr := d.Motifs.CanonicalID(ctx, branch, m)
+		if cerr != nil {
+			continue
+		}
+		if _, ok := seen[canonical]; ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }

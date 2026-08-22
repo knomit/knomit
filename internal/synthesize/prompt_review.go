@@ -185,6 +185,7 @@ func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 // on the wire. Compact, not indented: it ships as structural JSON now, and the
 // delivering envelope does its own formatting.
 func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string) (*WorkItemContent, error) {
+	shared := sharedClusterMotifs(facts)
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for distill work item: %w", err)
@@ -193,6 +194,7 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 	prompt, err := RenderTemplate("distill", "user", PromptData{
 		OntologyRoot:          ontologyRoot,
 		ApplicableMethodology: applicableMethodology,
+		SharedMotifs:          shared,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)

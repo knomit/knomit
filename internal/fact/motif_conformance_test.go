@@ -155,7 +155,25 @@ var mechanicsPaths = map[string][]string{
 	"internal/synthesize/bridge_score.go":    nil,
 	"internal/synthesize/bridge_filtered.go": nil,
 	"internal/synthesize/bridge_reshape.go":  nil,
-	"internal/synthesize/restatement.go":     nil,
+	// The §7 shortlist is a path MN6 names EXPLICITLY as designed for motifs
+	// ("anything that spawns work outside the §4/§5/§7 synthesis paths designed
+	// for them"), so this is the rule's exemption rather than an exception to
+	// it. Blueprint §6 puts a shared exact motif into §7 as an added
+	// restatement signal.
+	//
+	// Scoped to the two functions that implement the widener. Everything else
+	// in this file — the pair cache, the percentile ranking, the judge-outcome
+	// throttle, the probe — stays blind to motifs, and the widener changes
+	// ELIGIBILITY only: the judge-slot budget is untouched, so a motif-rich
+	// corpus gets better candidates for the same spend, never more of them.
+	//
+	// What this does NOT license is a motif term entering the SCORING. A shared
+	// motif buys a look further down this repo's own ranking; it does not
+	// change where a pair sits in that ranking, which would be a corpus-property
+	// claim in disguise (MN13, Q2 ruling).
+	"internal/synthesize/restatement.go": {
+		"selectRestatementCandidates", "pairSharesCanonicalMotif",
+	},
 	// ScopedCluster is a CARRIER, and only the projection inside it (Phase 2).
 	// It builds the factForLLM payload from search results, and §2.1 requires
 	// that payload to show members' motifs — without it prune and distill
