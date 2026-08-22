@@ -19,6 +19,12 @@ type PromptData struct {
 	OntologyRoot          string
 	ExistingMethodology   string // for reflect_user.txt
 	ApplicableMethodology string // for distill_user.txt
+	// MotifVocabulary is the §3.3 health picture, for reflect_user.txt. Empty
+	// on a corpus with no motif vocabulary, and the template omits the section
+	// entirely in that case rather than printing zeroes — a reflection prompt
+	// carrying "0 clusters, recurrence 0%" invites the model to reason about a
+	// mechanism the corpus is not using.
+	MotifVocabulary string
 }
 
 // RenderTemplate loads and renders a prompt template.

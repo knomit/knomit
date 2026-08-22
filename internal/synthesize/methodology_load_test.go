@@ -229,7 +229,7 @@ func TestLoadDistillMethodology_ThresholdComparesAgainstScore_NotTagOrVector(t *
 func TestRenderReflectWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	bullets := "• score=0.40  Existing  (kb/meta/reasoning/existing.md)\n"
 
-	content, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", bullets)
+	content, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", bullets, "")
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "Existing methodology candidates")
 	require.Contains(t, content.Prompt, "Existing")
@@ -239,7 +239,7 @@ func TestRenderReflectWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	require.Contains(t, content.Prompt, "EVERY candidate",
 		"prompt must use forcing language, not 'if useful'")
 
-	contentEmpty, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "")
+	contentEmpty, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "", "")
 	require.NoError(t, err)
 	require.NotContains(t, contentEmpty.Prompt, "Existing methodology candidates",
 		"empty section must not render an orphan heading")

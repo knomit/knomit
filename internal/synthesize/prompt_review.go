@@ -156,11 +156,12 @@ const reflectResponseSchema = `{
 // RenderReflectWorkItem renders a reflect prompt for hypothesis transition
 // review. existingMethodology is the pre-formatted methodology section to
 // inject; pass an empty string when none is relevant.
-func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology string) (*WorkItemContent, error) {
+func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary string) (*WorkItemContent, error) {
 	prompt, err := RenderTemplate("reflect", "user", PromptData{
 		Facts:               string(transitionsJSON),
 		OntologyRoot:        ontologyRoot,
 		ExistingMethodology: existingMethodology,
+		MotifVocabulary:     motifVocabulary,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render reflect work item: %w", err)

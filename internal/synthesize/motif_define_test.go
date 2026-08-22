@@ -233,3 +233,66 @@ func TestMotifDefine_RegisterRejectsCarrierEntityNames(t *testing.T) {
 	require.True(t, ok)
 	require.NotContains(t, strings.ToLower(def), "postgres")
 }
+
+// ── §3.3 metrics reaching their surfaces ──────────────────────────────────
+
+// The reflect payload carries recurrence and mint-to-link (§3.3). Reflect is
+// where the corpus reasons about its own habits, and "are we naming the same
+// mechanisms as each other" is one.
+func TestMotifVocabulary_ReachesTheReflectPayload(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	env.writeFactWithMotifs("kb/a.md", "A", "body", []string{"silent-fallback"})
+	env.writeFactWithMotifs("kb/b.md", "B", "body", []string{"silent-fallback"})
+	env.writeFactWithMotifs("kb/c.md", "C", "body", []string{"config-drift"})
+	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+
+	section := motifVocabularySection(ctx, env.deps(), env.branch)
+	require.Contains(t, section, "motif clusters")
+	require.Contains(t, section, "Recurrence")
+	require.Contains(t, section, "Mint-to-link")
+
+	content, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "", section)
+	require.NoError(t, err)
+	require.Contains(t, content.Prompt, "Recurrence",
+		"the reflect prompt must carry the vocabulary metrics when there is a vocabulary")
+}
+
+// A corpus with no motif vocabulary gets NO section — not a section of zeroes.
+// "0 clusters, recurrence 0%" invites the model to reason about a mechanism the
+// corpus is not using.
+func TestMotifVocabulary_AbsentSectionOnAMotiflessCorpus(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 3) // plain facts, no motifs
+	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+
+	section := motifVocabularySection(ctx, env.deps(), env.branch)
+	require.Empty(t, section)
+
+	content, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "", section)
+	require.NoError(t, err)
+	require.NotContains(t, content.Prompt, "Recurrence")
+	require.NotContains(t, content.Prompt, "motif clusters",
+		"a motif-free corpus must see no motif section at all")
+}
+
+// The metrics also land in the session's health lines, alongside every other
+// producer's — appended, per TestHealthRecorders_NeverDestroyExistingLines.
+func TestMotifVocabulary_ReachesTheHealthLines(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	env.writeFactWithMotifs("kb/a.md", "A", "body", []string{"silent-fallback"})
+	env.writeFactWithMotifs("kb/b.md", "B", "body", []string{"silent-fallback"})
+	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	require.NoError(t, err)
+	sess.Health = []string{"a line from another producer"}
+	require.NoError(t, planMotifDefineWork(ctx, env.deps(), sess, env.branch))
+
+	joined := strings.Join(sess.Health, "\n")
+	require.Contains(t, joined, "motif vocabulary:")
+	require.Contains(t, joined, "recurrence")
+	require.Contains(t, joined, "a line from another producer",
+		"the vocabulary lines must be appended, not substituted")
+}

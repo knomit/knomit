@@ -146,3 +146,91 @@ func (mi *motifIndex) Definition(ctx context.Context, branch, clusterKey string)
 	}
 	return def, true, nil
 }
+
+// MotifVocabularyHealth is the §3.3 health picture of a corpus's motif
+// vocabulary. Diagnostic only — nothing branches on it (MN6).
+type MotifVocabularyHealth struct {
+	// Clusters is the size of the resolved vocabulary.
+	Clusters int
+	// Recurring is how many clusters have df >= 2 — the ones that actually
+	// connect two facts. Recurrence is the kill-switch signal: a vocabulary
+	// where this stays near zero is one where every write mints a name nothing
+	// ever reuses, and the axis is dead (§3.4).
+	Recurring int
+	// Mints is one per cluster: every cluster was minted exactly once, by
+	// whichever fact first used it.
+	Mints int
+	// Links is every SUBSEQUENT use — total motif instances minus the mints.
+	//
+	// Distinct from Recurring, and the difference is the point: Recurring
+	// counts CLUSTERS that recur, Links counts USES that reused. A corpus with
+	// one heavily-shared motif and fifty hapax has low recurrence and high
+	// links; one where every cluster has exactly two carriers has high
+	// recurrence and modest links. Both numbers are needed to tell those apart.
+	Links int
+}
+
+// RecurrenceRate is the fraction of clusters carried by more than one fact.
+func (h MotifVocabularyHealth) RecurrenceRate() float64 {
+	if h.Clusters == 0 {
+		return 0
+	}
+	return float64(h.Recurring) / float64(h.Clusters)
+}
+
+// MintToLinkRatio is mints per link. Above 1 means the vocabulary is growing
+// faster than it is being reused.
+func (h MotifVocabularyHealth) MintToLinkRatio() float64 {
+	if h.Links == 0 {
+		// No reuse at all. Reported as the mint count rather than as an
+		// infinity or a zero: both of those read as "nothing to see", and this
+		// is precisely the state §3.4's kill switch is watching for.
+		return float64(h.Mints)
+	}
+	return float64(h.Mints) / float64(h.Links)
+}
+
+// VocabularyHealth computes §3.3's metrics over AUTHORED facts only.
+//
+// Authored-only is load-bearing, not a refinement. Distilled and discovered
+// facts inherit or are prompted toward motifs the corpus already holds, so
+// counting them would report the engine's own carry-over as evidence that
+// humans are converging on a shared vocabulary — the metric would measure the
+// mechanism instead of the thing the mechanism exists to detect, and would
+// climb most on exactly the corpora where the axis is doing least.
+func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error) {
+	var h MotifVocabularyHealth
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return h, fmt.Errorf("VocabularyHealth: %w", err)
+	}
+	// df per CLUSTER over authored facts: distinct carrier paths, so a fact
+	// using two spellings of one mechanism counts once — the same rule TokenDF
+	// and Clusters apply.
+	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+		SELECT a.cluster_key, COUNT(DISTINCT bf.path)
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
+		  JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
+		 WHERE bf.branch_id = ? AND f.origin = 'authored'
+		 GROUP BY a.cluster_key`, branchID)
+	if err != nil {
+		return h, fmt.Errorf("VocabularyHealth: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var df int
+		if err := rows.Scan(&key, &df); err != nil {
+			return h, fmt.Errorf("VocabularyHealth: scan: %w", err)
+		}
+		h.Clusters++
+		h.Mints++ // one mint per cluster, by whichever fact first used it
+		if df >= 2 {
+			h.Recurring++
+		}
+		h.Links += df - 1 // every use after the first
+	}
+	return h, rows.Err()
+}

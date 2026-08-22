@@ -154,6 +154,20 @@ func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motif
 	return nil
 }
 
+// motifVocabularyHealthLines renders the §3.3 metrics for the session's health
+// output. Reported, never read by a branch (MN6): these are the numbers a
+// designer looks at to decide whether the axis is alive, and §3.4's kill switch
+// is a human decision, not an automatic one.
+func motifVocabularyHealthLines(h store.MotifVocabularyHealth) []string {
+	if h.Clusters == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"motif vocabulary: %d clusters, recurrence %.0f%% (%d recur), mint-to-link %.2f (%d mints / %d links), authored facts only",
+		h.Clusters, 100*h.RecurrenceRate(), h.Recurring,
+		h.MintToLinkRatio(), h.Mints, h.Links)}
+}
+
 // motifDefineHealth reports what the pass did. Nothing branches on it.
 type motifDefineHealth struct {
 	Queued  int
@@ -183,6 +197,13 @@ func planMotifDefineWork(ctx context.Context, d Deps, sess *store.PipelineSessio
 	}
 	health := motifDefineHealth{Queued: len(targets)}
 	defer func() { recordMotifDefineHealth(sess, health) }()
+
+	// §3.3's vocabulary metrics ride the same pass — they are computed from the
+	// same resolved vocabulary, and reporting them anywhere else would mean a
+	// second read of it.
+	if vh, vErr := d.Motifs.VocabularyHealth(ctx, branch); vErr == nil && sess != nil {
+		sess.Health = append(sess.Health, motifVocabularyHealthLines(vh)...)
+	}
 	if len(targets) == 0 {
 		return nil
 	}
@@ -243,4 +264,29 @@ func motifDefineItemsFromPayload(raw string) ([]motifDefineItem, error) {
 		out[i] = motifDefineItem{Name: e.Name, Current: e.Current, clusterKey: e.ClusterKey}
 	}
 	return out, nil
+}
+
+// motifVocabularySection renders the §3.3 metrics for the reflect prompt, or
+// "" when the corpus has no motif vocabulary.
+//
+// Empty rather than zeroes: a reflection prompt carrying "0 clusters,
+// recurrence 0%" invites the model to reason about a mechanism this corpus is
+// not using, and the template omits the whole section when this is empty.
+//
+// Reflect is the right home for these numbers. It is the pass that reasons
+// about the corpus's own habits, and recurrence is exactly such a habit — the
+// question "are we naming the same mechanisms as each other" is a methodology
+// question, not a fact-level one.
+func motifVocabularySection(ctx context.Context, d Deps, branch string) string {
+	if d.Motifs == nil {
+		return ""
+	}
+	h, err := d.Motifs.VocabularyHealth(ctx, branch)
+	if err != nil || h.Clusters == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%d motif clusters across authored facts. Recurrence %.0f%% (%d of %d carried by more than one fact). Mint-to-link %.2f (%d names minted, %d reuses).",
+		h.Clusters, 100*h.RecurrenceRate(), h.Recurring, h.Clusters,
+		h.MintToLinkRatio(), h.Mints, h.Links)
 }

@@ -790,7 +790,8 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology)
 	case "reflect":
 		existingMethodology := reflectMethodologySection(ctx, d.RI, branch, []byte(item.FactsJSON))
-		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
+		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot,
+			existingMethodology, motifVocabularySection(ctx, d, branch))
 	case motifAliasStepType:
 		content, err = RenderMotifAliasWorkItem()
 	case motifDefineStepType:
