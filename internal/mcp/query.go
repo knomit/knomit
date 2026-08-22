@@ -248,6 +248,9 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
+	if msg := motifMatchUnavailable(q); msg != "" {
+		return mcpgo.NewToolResultError(msg), nil
+	}
 	targets, err := federate.ReadTargetsFor(b, q.Path)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -412,6 +415,9 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	q, err := parseQueryFilters(req)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
+	}
+	if msg := motifMatchUnavailable(q); msg != "" {
+		return mcpgo.NewToolResultError(msg), nil
 	}
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, motifs, or min_confidence is required"), nil
@@ -810,6 +816,25 @@ func motifMatchEnum() []string {
 		out = append(out, string(t))
 	}
 	return out
+}
+
+// motifMatchUnavailable returns the reason a requested tier cannot run, or "".
+//
+// `soft` is accepted as a parameter and answers with WHY it is not available,
+// rather than returning an empty result set. Those two are very different to a
+// caller: an empty result reads as "nothing matches", which is a claim about
+// the corpus. This is a claim about the tier, and only one of them is true.
+//
+// It cannot be a parse error either — that would say the value is invalid,
+// when it is a valid tier that is not yet calibrated. The distinction is the
+// difference between "you asked wrongly" and "we cannot answer that yet".
+func motifMatchUnavailable(q store.SearchOptions) string {
+	if q.MotifMatch != store.MotifMatchSoft || len(q.Motifs) == 0 {
+		return ""
+	}
+	return "motif_match=soft is not available: it needs an operating point calibrated " +
+		"on real motif definitions, which is Phase-4 work. Use exact (default), stem, " +
+		"token-2, or token-1."
 }
 
 // parseMotifMatch validates the caller's tier.

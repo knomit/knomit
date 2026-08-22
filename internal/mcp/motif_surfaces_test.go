@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,23 +69,80 @@ func TestMotifQuery_MotifAloneCountsAsAFilter(t *testing.T) {
 		"...but an empty query is still an empty query")
 }
 
-// TestMotifMatch_LooseTiersAreNeverReachedByAutomation is the §6 grep: no
-// non-test code may name token-1 or soft. They exist for a caller who types
-// them, and for nobody else.
+// looseTierRefusers are the functions permitted to NAME a loose tier, with the
+// reason each needs to.
 //
-// The check is over CALL SITES, not over the constants' definitions — the
-// tiers must be nameable, or the parameter could not accept them. What must
-// not exist is code that SELECTS one.
+// The distinction this list encodes is the whole point: a violation is code
+// that SELECTS a loose tier, and a function that REFUSES one is the opposite of
+// a violation. A raw grep cannot tell them apart — the first version of this
+// test failed on motifMatchUnavailable, whose entire job is declining to run
+// soft — so the check is per-FUNCTION with declared exceptions, the same shape
+// as MN6's, and for the same reason: a check must inspect the form a violation
+// would actually be written in.
+var looseTierRefusers = map[string]string{
+	"motifMatchUnavailable": "refuses soft and explains why; naming the tier is how it declines",
+	"parseMotifMatch":       "validates the caller's own value against the tier list; selects nothing",
+	"motifMatchEnum":        "renders the tier list for the schema; selects nothing",
+}
+
+// TestMotifMatch_LooseTiersAreNeverReachedByAutomation is the §6 rule as a
+// test: no code may SELECT token-1 or soft. They exist for a caller who types
+// them, and for nobody else — token-1 measured 15 false pairs on the eval set,
+// which is acceptable for a human reading results and never for automation.
 func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
-	for _, rel := range []string{"query.go", "explain.go", "learn.go", "update.go", "review.go"} {
-		src := readMCPSource(t, rel)
-		for _, loose := range []string{"MotifMatchToken1", "MotifMatchSoft", `"token-1"`, `"soft"`} {
-			require.NotContainsf(t, src, loose,
-				"%s names the loose tier %s. Loose tiers are reachable ONLY by explicit "+
-					"caller parameter — measured at 15 false pairs on the eval set, which is "+
-					"acceptable for a human reading results and never for automation.",
-				rel, loose)
+	files := []string{"query.go", "explain.go", "learn.go", "update.go", "review.go"}
+	checked := 0
+	for _, rel := range files {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, filepath.Clean(rel), nil, 0)
+		require.NoErrorf(t, err, "parse %s", rel)
+		checked++
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			var named []string
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch v := n.(type) {
+				case *ast.Ident:
+					if v.Name == "MotifMatchToken1" || v.Name == "MotifMatchSoft" {
+						named = append(named, v.Name)
+					}
+				case *ast.SelectorExpr:
+					if v.Sel.Name == "MotifMatchToken1" || v.Sel.Name == "MotifMatchSoft" {
+						named = append(named, v.Sel.Name)
+					}
+				case *ast.BasicLit:
+					if v.Kind == token.STRING && (v.Value == `"token-1"` || v.Value == `"soft"`) {
+						named = append(named, v.Value)
+					}
+				}
+				return true
+			})
+			if len(named) == 0 {
+				continue
+			}
+			require.Containsf(t, looseTierRefusers, fn.Name.Name,
+				"%s.%s names the loose tier(s) %v. Loose tiers are reachable ONLY by "+
+					"explicit caller parameter. If this function REFUSES one rather than "+
+					"selecting it, declare it in looseTierRefusers with the reason.",
+				rel, fn.Name.Name, named)
 		}
+	}
+	require.Equal(t, len(files), checked, "the scan must cover every file it names")
+
+	// Bidirectional, like the fact package's lists: a declared refuser that no
+	// longer exists is a permission nobody needs and nobody notices going stale.
+	for name, why := range looseTierRefusers {
+		found := false
+		for _, rel := range files {
+			if strings.Contains(readMCPSource(t, rel), "func "+name+"(") {
+				found = true
+			}
+		}
+		require.Truef(t, found, "%s is declared a loose-tier refuser (%s) but no longer exists", name, why)
 	}
 }
 
