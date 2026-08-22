@@ -156,8 +156,20 @@ var mechanicsPaths = map[string][]string{
 	"internal/synthesize/bridge_filtered.go": nil,
 	"internal/synthesize/bridge_reshape.go":  nil,
 	"internal/synthesize/restatement.go":     nil,
-	"internal/synthesize/cluster.go":         nil,
-	"internal/synthesize/louvain.go":         nil,
+	// ScopedCluster is a CARRIER, and only the projection inside it (Phase 2).
+	// It builds the factForLLM payload from search results, and §2.1 requires
+	// that payload to show members' motifs — without it prune and distill
+	// cannot carry a motif over to the fact that replaces them, and the merged
+	// claim silently loses the regularity its members named.
+	//
+	// It does not CLUSTER on motifs. The community detection, the similarity
+	// scoring, and the resolution parameter are all untouched and stay banned,
+	// as does every other function in this file. The entry licenses copying the
+	// field into a payload, not consulting it in a decision — if a motif term
+	// ever reaches the clustering arithmetic that is an MN6 violation this does
+	// not cover.
+	"internal/synthesize/cluster.go": {"ScopedCluster"},
+	"internal/synthesize/louvain.go": nil,
 
 	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
 	// these names a SELECT column list and hands the row to a scanner; carrying

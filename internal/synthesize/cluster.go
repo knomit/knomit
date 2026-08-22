@@ -94,7 +94,7 @@ func ScopedCluster(ctx context.Context,
 					factByPath[r.Path] = factForLLM{
 						File: r.Path, Title: r.Title, Body: r.Body,
 						Type: r.Type, Domain: r.Domain, Entities: r.Entities,
-						Confidence: r.Confidence, Sources: r.Sources,
+						Motifs: r.Motifs, Confidence: r.Confidence, Sources: r.Sources,
 					}
 				}
 			}

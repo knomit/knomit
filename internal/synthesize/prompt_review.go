@@ -44,6 +44,7 @@ const pruneResponseSchema = `{
               "confidence": {"type": "number"},
               "sources": {"type": "integer"},
               "entities": {"type": "array", "items": {"type": "string"}},
+              "motifs": {"type": "array", "items": {"type": "string"}, "description": "Motifs name the general regularity the claim instantiates, independent of its subject. Carry over member motifs still true of the new claim; author a new one only if the merged claim exemplifies a regularity no member named; at most 3; zero is correct."},
               "refs": {"type": "array", "items": {"type": "string"}}
             },
             "required": ["path", "title", "body"]
@@ -70,6 +71,7 @@ const distillResponseSchema = `{
           "domain": {"type": "array", "items": {"type": "string"}},
           "confidence": {"type": "number"},
           "entities": {"type": "array", "items": {"type": "string"}},
+          "motifs": {"type": "array", "items": {"type": "string"}, "description": "Motifs name the general regularity the claim instantiates, independent of its subject. Carry over member motifs still true of the new claim; author a new one only if the synthesized claim exemplifies a regularity no member named; at most 3; zero is correct."},
           "refs": {"type": "array", "items": {"type": "string"}}
         },
         "required": ["path", "title", "body"]

@@ -406,6 +406,7 @@ func factsForLLM(seeds []fact.Fact) []factForLLM {
 			Type:       string(f.Type),
 			Domain:     f.Domain,
 			Entities:   f.Entities,
+			Motifs:     f.Motifs,
 			Confidence: f.Confidence,
 			Sources:    f.Sources,
 			Origin:     string(f.Origin),
@@ -725,7 +726,7 @@ func enqueueRaptorFollowups(
 		newFacts = append(newFacts, factForLLM{
 			File: df.Path, Title: df.Title, Body: df.Body,
 			Type: df.Type, Domain: df.Domain, Entities: df.Entities,
-			Confidence: df.Confidence, Sources: 1,
+			Motifs: df.Motifs, Confidence: df.Confidence, Sources: 1,
 		})
 	}
 

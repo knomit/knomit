@@ -59,6 +59,12 @@ type DiscoveredFact struct {
 	Confidence float64     `json:"confidence"`
 	Entities   flexStrings `json:"entities"`
 	Refs       flexStrings `json:"refs"`
+	// Optional; absence means none. There is deliberately NO mechanical
+	// stamping of the seed's motif (§2.1): wrong for a consequence whose
+	// regularity is not the seed's, and futile for a keystone, whose subject IS
+	// the mechanism and whose motif the ordinary subject strip therefore
+	// removes. Keystones stay motif-less by design, with no strip exemption.
+	Motifs flexStrings `json:"motifs"`
 }
 
 // parseDiscoverResponse is the symmetric companion of parseDistillResponse.
@@ -121,6 +127,7 @@ const discoverResponseSchema = `{
           "type": {"type": "string"},
           "domain": {"type": "array", "items": {"type": "string"}},
           "entities": {"type": "array", "items": {"type": "string"}},
+          "motifs": {"type": "array", "items": {"type": "string"}, "description": "Motifs name the general regularity the claim instantiates, independent of its subject. The group's shared motif is a natural candidate if your proposal instantiates it. At most 3; zero is correct."},
           "confidence": {"type": "number"},
           "refs": {"type": "array", "items": {"type": "string"}}
         },
@@ -291,6 +298,7 @@ func applyDiscoveredProposals(
 		// Pooling would double-count it by construction.
 		f.Sources = 1
 		f.Entities = p.Entities
+		f.Motifs = p.Motifs
 		f.EvidenceWeight = weight
 		f.Origin = fact.Discovered
 

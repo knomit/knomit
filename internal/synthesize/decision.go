@@ -190,6 +190,7 @@ func ApplyPruneDecisions(ctx context.Context,
 		merged.Confidence = mf.Confidence
 		merged.Sources = pooled
 		merged.Entities = mf.Entities
+		merged.Motifs = mf.Motifs
 		merged.EvidenceWeight = weight
 
 		// Same gate as every other write path. The merged fact is NEW and its
@@ -292,6 +293,7 @@ func ApplyDistillDecisions(ctx context.Context,
 		// carried by EvidenceWeight above.
 		f.Sources = 1
 		f.Entities = df.Entities
+		f.Motifs = df.Motifs
 		f.EvidenceWeight = weight
 		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
 
