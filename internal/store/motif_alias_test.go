@@ -242,3 +242,80 @@ func TestMotifAliases_UnresolvedClusterKeyMatchesTheRebuiltOne(t *testing.T) {
 	require.Equal(t, before, after,
 		"the pre-rebuild fallback and the stored key must be the same identity")
 }
+
+// TestMotifAliases_MN3_RebuildsIdenticallyAtEveryStage is the cross-session
+// form of the MN3 guarantee: the derived layer is a pure function of (live
+// facts, recorded judge decisions) at EVERY point in a corpus's history, not
+// merely at the one moment a single-shot test happens to check.
+//
+// It lives here rather than with the other Phase-2 dynamics tests because
+// dropping the derived layer needs the store's own handle, and a rebuild test
+// that cannot first destroy what it is rebuilding proves only idempotence.
+func TestMotifAliases_MN3_RebuildsIdenticallyAtEveryStage(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+
+	stages := []struct {
+		name string
+		do   func()
+	}{
+		{"first fact", func() {
+			writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
+		}},
+		{"an aliased spelling", func() {
+			writeMotifFact(t, svc, branch, "kb/b.md", []string{"silent-fallbacks"})
+		}},
+		{"a judge merge", func() {
+			require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
+				"silent-fallback", "quiet-degradation", "one mechanism, two names"))
+		}},
+		{"the merged vocabulary arrives", func() {
+			writeMotifFact(t, svc, branch, "kb/c.md", []string{"quiet-degradation"})
+		}},
+		{"an unrelated mechanism", func() {
+			writeMotifFact(t, svc, branch, "kb/d.md", []string{"config-drift"})
+		}},
+		{"vocabulary retires", func() {
+			writeMotifFact(t, svc, branch, "kb/c.md", []string{"config-drift"})
+		}},
+	}
+
+	paths := []string{"kb/a.md", "kb/b.md", "kb/c.md", "kb/d.md"}
+	for _, stage := range stages {
+		stage.do()
+		require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+		before, err := svc.Motifs().AliasRows(ctx, branch)
+		require.NoError(t, err)
+		require.NotEmptyf(t, before, "%s: the stage must produce alias rows", stage.name)
+
+		blobs := map[string]string{}
+		for _, p := range paths {
+			if rec, rerr := svc.FactQuery().GetByPath(ctx, branch, p); rerr == nil && rec != nil {
+				blobs[p] = rec.BlobHash
+			}
+		}
+
+		// Destroy the derived layer entirely. What remains is the facts and the
+		// recorded decisions — the two inputs MN3 says it is a function of.
+		_, err = svc.si.rh.db.ExecContext(ctx, `DELETE FROM motif_aliases`)
+		require.NoError(t, err)
+		empty, err := svc.Motifs().AliasRows(ctx, branch)
+		require.NoError(t, err)
+		require.Emptyf(t, empty, "%s: the drop must actually empty the table", stage.name)
+
+		require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+		after, err := svc.Motifs().AliasRows(ctx, branch)
+		require.NoError(t, err)
+		require.Equalf(t, before, after,
+			"%s: the derived layer must rebuild identically from facts and recorded "+
+				"decisions alone", stage.name)
+
+		for p, want := range blobs {
+			rec, rerr := svc.FactQuery().GetByPath(ctx, branch, p)
+			require.NoError(t, rerr)
+			require.Equalf(t, want, rec.BlobHash,
+				"%s: MN3 — rebuilding derived state must not rewrite %s", stage.name, p)
+		}
+	}
+}
