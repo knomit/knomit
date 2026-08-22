@@ -240,6 +240,69 @@ type TitleNeighbour struct {
 // composite: nothing on the runtime paths (query / explain / learn) may consume
 // it, and keeping it off the composite makes that structural rather than a rule
 // somebody has to remember.
+// MotifIndex is alias resolution over the corpus's motif vocabulary
+// (blueprint §3.1). Every method reads or rebuilds DERIVED state: the authored
+// strings in facts.motifs remain the claim, and nothing here writes back into
+// a fact (MN3).
+type MotifIndex interface {
+	// RebuildAliases recomputes the mechanical (stem/canonicalize) alias layer
+	// for branch from the live corpus, replacing what was there. Judge merges
+	// are not preserved — they are the LLM layer's to re-establish.
+	RebuildAliases(ctx context.Context, branch string) error
+	// CanonicalID resolves one spelling to its cluster's canonical id. An
+	// unresolved spelling resolves to ITSELF, so a corpus with no alias table
+	// behaves as one where every motif is its own singleton cluster.
+	CanonicalID(ctx context.Context, branch, motif string) (string, error)
+	// RecordJudgeMerge records that the LLM clustering pass judged two clusters
+	// to name the same mechanism. Takes spellings, stores cluster keys. The
+	// decision takes effect at the next RebuildAliases.
+	//
+	// rationale is the judge's own words for the shared mechanism and is
+	// REQUIRED: a merge nobody could justify in a sentence is the hallucinated
+	// merge the guard exists to stop, and over-merge is invisible downstream.
+	RecordJudgeMerge(ctx context.Context, branch, motifA, motifB, rationale string) error
+	// RecordJudgeDecline records that the judge saw a pair and said no, so the
+	// pair is not re-offered while both clusters still mean what they meant.
+	RecordJudgeDecline(ctx context.Context, branch, motifA, motifB string) error
+	// AnsweredPairs returns the cluster pairs whose verdict still binds, keyed
+	// by pairKey. The selector subtracts these from what it offers.
+	AnsweredPairs(ctx context.Context, branch string) (map[string]struct{}, error)
+	// Clusters returns the resolved vocabulary — one row per CLUSTER, most
+	// frequent first, deterministic on ties.
+	Clusters(ctx context.Context, branch string) ([]MotifCluster, error)
+	// CarrierTitles returns up to limit titles of live facts carrying the
+	// cluster. The judge sees these: string-only clustering keeps
+	// adjacent-family false merges (§12-E3), and the titles are what expose it.
+	CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error)
+	// ClustersNeedingDefinition returns live clusters whose definition is
+	// missing or was authored over a different membership. Staleness is a
+	// comparison, not a flag — so it catches every cause of drift.
+	ClustersNeedingDefinition(ctx context.Context, branch string) ([]DefinitionTarget, error)
+	// PutDefinition stores a definition, stamped with the membership it was
+	// authored over.
+	PutDefinition(ctx context.Context, branch, clusterKey, definition string) error
+	// Definition returns a cluster's standing definition, INCLUDING a stale one
+	// — a stale sentence is used as interim rather than gapping the cluster.
+	Definition(ctx context.Context, branch, clusterKey string) (string, bool, error)
+	// VocabularyHealth computes the §3.3 metrics over AUTHORED facts only.
+	// Diagnostic; nothing branches on it.
+	VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error)
+	// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
+	// oldest first, for the backfill pass.
+	LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error)
+	// MotifCoverage reports how many live authored facts carry a motif.
+	MotifCoverage(ctx context.Context, branch string) (with, total int, err error)
+	// AliasRows returns the alias table with its audit columns (method and the
+	// merge rationale).
+	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)
+	// ClusterKey returns the STABLE identity of a spelling's cluster. Use this,
+	// never CanonicalID, to key state that must survive across sessions:
+	// CanonicalID is the highest-df member spelling and flips as usage shifts.
+	ClusterKey(ctx context.Context, branch, motif string) (string, error)
+	// AliasTable returns the whole spelling -> canonical id mapping.
+	AliasTable(ctx context.Context, branch string) (map[string]string, error)
+}
+
 type AbstractionIndex interface {
 	// LiveFactsMissingTitleVector returns up to limit live epistemic facts on
 	// branch that have no title vector yet, lowest fact id first.

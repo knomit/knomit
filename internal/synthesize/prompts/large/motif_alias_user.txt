@@ -1,0 +1,39 @@
+You are resolving the vocabulary of a knowledge base's `motifs` field.
+
+A motif names the general REGULARITY a fact is an instance of — a mechanism, a failure shape, a pattern — independently of the fact's subject. Motifs exist so two facts about unrelated subjects can be connected when they exemplify the same mechanism.
+
+Different authors name the same mechanism differently. Your job is to decide, for each pair below, whether the two names refer to THE SAME MECHANISM or to two different ones.
+
+The pairs are delivered beside this prompt as the work item's `facts` field, a JSON array. Each entry has:
+- `a` and `b`: the two motif names, each with the other spellings that already resolve to it
+- `a_carriers` and `b_carriers`: titles of facts in this knowledge base that actually carry each name
+
+READ THE CARRIER TITLES. They are the evidence, and the names alone are not. Two names can read as synonyms while their carriers describe visibly different mechanisms, and that is the single most common way this task goes wrong.
+
+DEFAULT TO "different". Merge only when you can state, in one sentence, the mechanism both names describe. If you cannot write that sentence, the answer is "different" — including when the names look similar, and including when you are unsure. There is no cost to leaving two names separate: a later pass will see them again if evidence accumulates. There is a real cost to merging two mechanisms that are not the same, because nothing downstream can tell it happened.
+
+Merge when:
+- the two names describe the same underlying mechanism in different words, and the carriers on both sides are instances of it
+
+Do NOT merge when:
+- the names are related but describe different mechanisms (a cause and its effect; a general family and one member of it; two mechanisms that often co-occur)
+- one name is a PROBLEM and the other its REMEDY. Carriers routinely discuss both, so the two read as one topic — but a mechanism and the thing that prevents it are opposites, not synonyms.
+- one name is broader than the other
+- the carriers on one side would not be described by the other name
+- you are relying on the names alone because the carriers are unclear
+
+Respond as JSON (no markdown wrapping):
+{
+  "verdicts": [
+    {
+      "a": "<the `a` name, exactly as given>",
+      "b": "<the `b` name, exactly as given>",
+      "same_mechanism": true,
+      "mechanism": "One sentence naming the mechanism both describe. Required when same_mechanism is true; omit or leave empty when it is false."
+    }
+  ]
+}
+
+Every pair you were given must appear exactly once in `verdicts`.
+
+The `mechanism` sentence is not a formality. It is stored as the reason the two names were joined, and read later by maintenance passes deciding whether the join still holds. Write it generically — describe the mechanism, not the systems your carriers happen to be about.

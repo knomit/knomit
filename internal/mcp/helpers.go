@@ -23,6 +23,10 @@ type mcpStore struct {
 	toolSession store.ToolSessionIndex
 	pipeline    store.PipelineIndex
 	branches    store.BranchIndex
+	// motifs is alias resolution over the motif vocabulary — read-only here.
+	// The §6 explain surface resolves a fact's motifs to their cluster,
+	// definition and siblings; nothing on this path writes derived state.
+	motifs store.MotifIndex
 }
 
 // storeIndices acquires the mount's store and returns its indices plus the
@@ -46,5 +50,6 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 		toolSession: svc.ToolSession(),
 		pipeline:    svc.Pipeline(),
 		branches:    svc.Branches(),
+		motifs:      svc.Motifs(),
 	}, release, nil
 }

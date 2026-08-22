@@ -19,6 +19,18 @@ type PromptData struct {
 	OntologyRoot          string
 	ExistingMethodology   string // for reflect_user.txt
 	ApplicableMethodology string // for distill_user.txt
+	// MotifVocabulary is the §3.3 health picture, for reflect_user.txt. Empty
+	// on a corpus with no motif vocabulary, and the template omits the section
+	// entirely in that case rather than printing zeroes — a reflection prompt
+	// carrying "0 clusters, recurrence 0%" invites the model to reason about a
+	// mechanism the corpus is not using.
+	MotifVocabulary string
+	// SharedMotifs is the motifs already carried by two or more facts in a
+	// distill cluster (§6 "distill enrichment"). Free context for an LLM that
+	// is running anyway: if several members instantiate one regularity, the
+	// synthesized claim probably does too. Empty when the cluster shares none,
+	// and the template omits the line entirely then.
+	SharedMotifs string
 }
 
 // RenderTemplate loads and renders a prompt template.

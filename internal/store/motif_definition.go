@@ -1,0 +1,315 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"time"
+)
+
+// Blind definitions, one per motif cluster (blueprint §3.2).
+//
+// Everything here keys on cluster_key, never on canonical_id. The
+// representative spelling flips as usage shifts; the cluster it names does not,
+// and a definition keyed to the representative would be orphaned by a change
+// that meant nothing (designer rider 2026-08-21).
+
+// DefinitionTarget is one cluster the definition pass should author for, with
+// the name it will be shown.
+//
+// Name is the ONLY corpus content that reaches the definition prompt. Carriers
+// are deliberately absent: a writer who never saw them cannot name the systems
+// they are about, which is what makes the generic register achievable rather
+// than merely requested.
+type DefinitionTarget struct {
+	ClusterKey string
+	Name       string
+	// Interim is the definition currently standing for this cluster, if any.
+	// Non-empty means the cluster HAS a usable sentence and is queued because
+	// its membership moved — not because it has nothing.
+	Interim string
+}
+
+// ClustersNeedingDefinition returns the live clusters whose definition is
+// missing or was authored over a different membership.
+//
+// Staleness is a COMPARISON, not a flag. Nothing has to remember to mark a
+// cluster dirty, and nothing can forget: a judge merge, a spelling joining
+// mechanically, and a member retiring all move membership, and all three should
+// prompt a fresh sentence. A flag set by the merge path would have caught only
+// the first.
+func (mi *motifIndex) ClustersNeedingDefinition(ctx context.Context, branch string) ([]DefinitionTarget, error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("ClustersNeedingDefinition: %w", err)
+	}
+	membership, err := mi.clusterMembership(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	clusters, err := mi.Clusters(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	stored, err := mi.definitionRows(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	// Ordered by the Clusters ordering (most frequent first), so a bounded
+	// pass spends its budget on the vocabulary the corpus actually leans on.
+	var out []DefinitionTarget
+	for _, c := range clusters {
+		row, defined := stored[c.ClusterKey]
+		if defined && row.members == membership[c.ClusterKey] {
+			continue
+		}
+		out = append(out, DefinitionTarget{
+			ClusterKey: c.ClusterKey,
+			Name:       c.CanonicalID,
+			Interim:    row.definition, // empty when never defined
+		})
+	}
+	return out, nil
+}
+
+type definitionRow struct {
+	definition string
+	members    string
+}
+
+func (mi *motifIndex) definitionRows(ctx context.Context, branchID int64) (map[string]definitionRow, error) {
+	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+		`SELECT cluster_key, definition, members FROM motif_definitions WHERE branch_id = ?`,
+		branchID)
+	if err != nil {
+		return nil, fmt.Errorf("definitionRows: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]definitionRow{}
+	for rows.Next() {
+		var key string
+		var r definitionRow
+		if err := rows.Scan(&key, &r.definition, &r.members); err != nil {
+			return nil, fmt.Errorf("definitionRows: scan: %w", err)
+		}
+		out[key] = r
+	}
+	return out, rows.Err()
+}
+
+// PutDefinition stores a cluster's definition, stamped with the membership it
+// was authored over.
+func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, definition string) error {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("PutDefinition: %w", err)
+	}
+	membership, err := mi.clusterMembership(ctx, branchID)
+	if err != nil {
+		return err
+	}
+	if _, err := conn(ctx, mi.rh.db).ExecContext(ctx,
+		`INSERT INTO motif_definitions(branch_id, cluster_key, definition, members, authored_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(branch_id, cluster_key) DO UPDATE SET
+		     definition  = excluded.definition,
+		     members     = excluded.members,
+		     authored_at = excluded.authored_at`,
+		branchID, clusterKey, definition, membership[clusterKey],
+		time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("PutDefinition: %w", err)
+	}
+	return nil
+}
+
+// Definition returns a cluster's standing definition, if it has one.
+//
+// Returns a STALE definition rather than nothing (designer ruling): a judge
+// merge asserts the phrasings name the same mechanism, so the survivor's
+// sentence is approximately right for the union, and gapping the cluster is
+// worse than a slightly wide sentence. ClustersNeedingDefinition is what
+// queues it for refresh.
+func (mi *motifIndex) Definition(ctx context.Context, branch, clusterKey string) (string, bool, error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return "", false, fmt.Errorf("Definition: %w", err)
+	}
+	var def string
+	err = conn(ctx, mi.rh.db).QueryRowContext(ctx,
+		`SELECT definition FROM motif_definitions WHERE branch_id = ? AND cluster_key = ?`,
+		branchID, clusterKey).Scan(&def)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("Definition: %w", err)
+	}
+	return def, true, nil
+}
+
+// MotifVocabularyHealth is the §3.3 health picture of a corpus's motif
+// vocabulary. Diagnostic only — nothing branches on it (MN6).
+type MotifVocabularyHealth struct {
+	// Clusters is the size of the resolved vocabulary.
+	Clusters int
+	// Recurring is how many clusters have df >= 2 — the ones that actually
+	// connect two facts. Recurrence is the kill-switch signal: a vocabulary
+	// where this stays near zero is one where every write mints a name nothing
+	// ever reuses, and the axis is dead (§3.4).
+	Recurring int
+	// Mints is one per cluster: every cluster was minted exactly once, by
+	// whichever fact first used it.
+	Mints int
+	// Links is every SUBSEQUENT use — total motif instances minus the mints.
+	//
+	// Distinct from Recurring, and the difference is the point: Recurring
+	// counts CLUSTERS that recur, Links counts USES that reused. A corpus with
+	// one heavily-shared motif and fifty hapax has low recurrence and high
+	// links; one where every cluster has exactly two carriers has high
+	// recurrence and modest links. Both numbers are needed to tell those apart.
+	Links int
+}
+
+// RecurrenceRate is the fraction of clusters carried by more than one fact.
+func (h MotifVocabularyHealth) RecurrenceRate() float64 {
+	if h.Clusters == 0 {
+		return 0
+	}
+	return float64(h.Recurring) / float64(h.Clusters)
+}
+
+// MintToLinkRatio is mints per link. Above 1 means the vocabulary is growing
+// faster than it is being reused.
+func (h MotifVocabularyHealth) MintToLinkRatio() float64 {
+	if h.Links == 0 {
+		// No reuse at all. Reported as the mint count rather than as an
+		// infinity or a zero: both of those read as "nothing to see", and this
+		// is precisely the state §3.4's kill switch is watching for.
+		return float64(h.Mints)
+	}
+	return float64(h.Mints) / float64(h.Links)
+}
+
+// VocabularyHealth computes §3.3's metrics over AUTHORED facts only.
+//
+// Authored-only is load-bearing, not a refinement. Distilled and discovered
+// facts inherit or are prompted toward motifs the corpus already holds, so
+// counting them would report the engine's own carry-over as evidence that
+// humans are converging on a shared vocabulary — the metric would measure the
+// mechanism instead of the thing the mechanism exists to detect, and would
+// climb most on exactly the corpora where the axis is doing least.
+func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error) {
+	var h MotifVocabularyHealth
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return h, fmt.Errorf("VocabularyHealth: %w", err)
+	}
+	// df per CLUSTER over authored facts: distinct carrier paths, so a fact
+	// using two spellings of one mechanism counts once — the same rule TokenDF
+	// and Clusters apply.
+	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+		SELECT a.cluster_key, COUNT(DISTINCT bf.path)
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
+		  JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
+		 WHERE bf.branch_id = ? AND f.origin = 'authored'
+		 GROUP BY a.cluster_key`, branchID)
+	if err != nil {
+		return h, fmt.Errorf("VocabularyHealth: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var df int
+		if err := rows.Scan(&key, &df); err != nil {
+			return h, fmt.Errorf("VocabularyHealth: scan: %w", err)
+		}
+		h.Clusters++
+		h.Mints++ // one mint per cluster, by whichever fact first used it
+		if df >= 2 {
+			h.Recurring++
+		}
+		h.Links += df - 1 // every use after the first
+	}
+	return h, rows.Err()
+}
+
+// BackfillTarget is one fact the backfill pass may offer motifs for.
+//
+// Domain and Entities ride along because the §11 subtraction residue is
+// computed against them — title tokens MINUS subject tokens. Reading them from
+// the indexed columns rather than re-parsing the blob keeps the residue
+// computed over the same values every other subject-aware path uses.
+type BackfillTarget struct {
+	FactID   int64
+	Path     string
+	Title    string
+	Domain   []string
+	Entities []string
+}
+
+// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
+// oldest fact id first, for the backfill pass.
+//
+// Authored-only, for the same reason the health metrics are: a distilled or
+// discovered fact without motifs is the pipeline having decided it needed none,
+// and re-asking would be the engine second-guessing itself rather than filling
+// a gap a human left.
+//
+// Oldest-first is deterministic and gives a corpus a stable sweep order across
+// sessions — a bounded pass that started somewhere different each time would
+// re-offer the same facts and never reach the tail.
+func (mi *motifIndex) LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("LiveFactsWithoutMotifs: %w", err)
+	}
+	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+		SELECT f.id, bf.path, f.title, f.domain, f.entities
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ?
+		   AND f.origin = 'authored'
+		   AND NOT EXISTS (SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id)
+		 ORDER BY f.id ASC
+		 LIMIT ?`, branchID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("LiveFactsWithoutMotifs: %w", err)
+	}
+	defer rows.Close()
+	var out []BackfillTarget
+	for rows.Next() {
+		var t BackfillTarget
+		var domainJSON, entitiesJSON string
+		if err := rows.Scan(&t.FactID, &t.Path, &t.Title, &domainJSON, &entitiesJSON); err != nil {
+			return nil, fmt.Errorf("LiveFactsWithoutMotifs: scan: %w", err)
+		}
+		var refs []string
+		logFactJSONUnmarshal("LiveFactsWithoutMotifs", t.Path, domainJSON, entitiesJSON, "null",
+			&t.Domain, &t.Entities, &refs)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// MotifCoverage reports how many live AUTHORED facts carry at least one motif.
+// Reported in health; nothing branches on it.
+func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, total int, err error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+	}
+	err = conn(ctx, mi.rh.db).QueryRowContext(ctx, `
+		SELECT
+		  COUNT(DISTINCT CASE WHEN EXISTS (
+		      SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id) THEN bf.path END),
+		  COUNT(DISTINCT bf.path)
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ? AND f.origin = 'authored'`, branchID).Scan(&with, &total)
+	if err != nil {
+		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+	}
+	return with, total, nil
+}

@@ -12,7 +12,11 @@ For EVERY candidate above with score ≥ 0.50, call knomit_query on its path and
 1. New higher-order facts that capture patterns
 2. Which original facts are fully subsumed and can be forgotten
 
-Respond as JSON (no markdown wrapping):
+{{if .SharedMotifs}}Motifs already shared by several of these facts: {{.SharedMotifs}}
+
+A motif names the general regularity a fact instantiates, independent of its subject. If the claim you synthesize instantiates one of these too, carry it over.
+
+{{end}}Respond as JSON (no markdown wrapping):
 {
   "synthesize": [
     {

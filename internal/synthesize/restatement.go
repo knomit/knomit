@@ -363,6 +363,26 @@ const (
 // RESOURCE BUDGET on a SQL read, nothing more.
 const shortlistOverfetch = 4
 
+// shortlistMotifWiden is the §6 motif signal: how much further down THIS
+// repo's own title-cosine ranking a pair is considered when its two facts
+// share an exact canonical motif.
+//
+// An ELIGIBILITY WIDENER, not a score bonus (designer ruling Q2). A bonus
+// added to title_cos would be a corpus-property constant wearing a different
+// hat — it would claim to know how much a shared motif is worth in cosine
+// units, on every corpus. This claims only that a shared motif is worth
+// LOOKING further, and how far "further" reaches is still decided entirely by
+// the repo's own distribution: the band is a rank cut, so on a corpus with a
+// tight distribution it reaches a shorter absolute distance than on a loose
+// one.
+//
+// The judge-slot budget is unchanged. Widening changes what may be considered,
+// never how much is spent — a motif-rich corpus gets better candidates for the
+// same money, not more of them.
+//
+// A SELECTION-POLICY constant, the same class as judgePairPermille (MN13).
+const shortlistMotifWiden = 3
+
 // Throttle states, reported in health output.
 const (
 	throttleOptimistic = "optimistic" // no history yet — the cap bounds the downside
@@ -394,6 +414,16 @@ type restatementHealth struct {
 	Emitted        int
 	ResolutionRate float64
 	ThrottleState  string
+	// MotifWidened counts pairs admitted ONLY because their facts share a
+	// canonical motif — candidates the title axis alone would not have reached.
+	// Reported so the signal's contribution is visible rather than inferred.
+	MotifWidened int
+	// MotifSlotUsed is true when the reserved slot DISPLACED an ordinary
+	// candidate — i.e. the ordinary band could have filled the budget and a
+	// widened pair took a slot anyway. That is the case where the signal cost
+	// something, and the one worth reporting: a widened pair admitted into a
+	// slot nothing else wanted is free.
+	MotifSlotUsed bool
 	// Probing is true when a defunded corpus spent its periodic probe slot —
 	// the one path by which its own evidence can change.
 	Probing bool
@@ -491,20 +521,89 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		return nil, h, wrapf(reviewTool, err, "shortlist: rank")
 	}
 
+	// The motif widener (§6): pairs sharing an exact canonical motif are
+	// considered further down this repo's own ranking than pairs that do not.
+	// Fetched as one wider read and split below, so the ordinary band is
+	// exactly what it was before motifs existed.
+	widened, err := d.Abstraction.RestatementPairsByRank(ctx, branch, budget*shortlistOverfetch*shortlistMotifWiden)
+	if err != nil {
+		return nil, h, wrapf(reviewTool, err, "shortlist: widened rank")
+	}
+	ordinaryDepth := len(raw)
+
+	// Classify first, select second. An earlier version selected in one pass
+	// and stopped at the budget, which meant a widened pair — below the
+	// ordinary band by construction — was only ever reached when the ordinary
+	// band underfilled. That made the signal contribute nothing in exactly the
+	// case it exists for: pairs the title axis UNDER-RANKS (designer ruling
+	// Q10).
 	coGrouped := clusterCoMembership(clusters)
-	var out []store.RestatementPair
-	for _, p := range raw {
+	eligible := func(p store.RestatementPair) bool {
 		if _, ok := coGrouped[pathPairKey(p.APath, p.BPath)]; ok {
-			continue
+			return false
 		}
 		if !d.Scope.IsEmpty() && !pairTouchesScope(ctx, d, branch, p) {
+			return false
+		}
+		return true
+	}
+
+	var ordinary, motifPairs []store.RestatementPair
+	for i, p := range widened {
+		if !eligible(p) {
 			continue
 		}
-		out = append(out, p)
-		if len(out) == budget {
-			break
+		if i < ordinaryDepth {
+			ordinary = append(ordinary, p)
+			continue
+		}
+		// Past the ordinary band. Only a shared canonical motif buys a look
+		// this far down — and only an EXACT one: the loose tiers are for a
+		// reader who judges what comes back, never for something that spends a
+		// judge slot (§6).
+		shared, serr := pairSharesCanonicalMotif(ctx, d, branch, p)
+		if serr == nil && shared {
+			motifPairs = append(motifPairs, p)
 		}
 	}
+
+	// RESERVE one slot for a widened pair when one exists. A shared canonical
+	// motif is evidence ORTHOGONAL to title similarity — evidence the title
+	// axis cannot see — so the pairs it identifies are below the title-ranked
+	// band by definition, and a widener that fires only on underfill is
+	// decorative. The reservation is a BUDGET ALLOCATION, not a threshold
+	// (MN13), and it is the probe pattern's shape: a bounded slot spent for
+	// information the main ranking cannot produce. A bad widened pair costs one
+	// judgment, and the kept-pair exclusion retires it.
+	//
+	// Never at budget 1. There the reserved slot would BE the whole budget, and
+	// a corpus that can afford one judgment should spend it on its
+	// best-evidenced candidate rather than on orthogonal evidence about a
+	// lower-ranked one.
+	reserved := 0
+	if budget >= 2 && len(motifPairs) > 0 {
+		reserved = 1
+	}
+
+	var out []store.RestatementPair
+	for _, p := range ordinary {
+		if len(out) >= budget-reserved {
+			break
+		}
+		out = append(out, p)
+	}
+	for _, p := range motifPairs {
+		if len(out) >= budget {
+			break
+		}
+		out = append(out, p)
+		h.MotifWidened++
+	}
+	// A reserved slot the ordinary band could not have used is not "reserved"
+	// in any meaningful sense — report only when the signal actually displaced
+	// something (designer rider).
+	h.MotifSlotUsed = h.MotifWidened > 0 && len(ordinary) >= budget
+
 	if probing && len(out) > 0 {
 		// The probe is spent only if it actually put something in front of the
 		// judge. A session that found nothing to offer produced no evidence,
@@ -710,6 +809,24 @@ func healthLines(h restatementHealth) []string {
 		fmt.Sprintf("restatement candidates emitted: %d", h.Emitted),
 		fmt.Sprintf("shortlist throttle: %s%s (trailing resolution-rate %.0f%% over last %d judged)",
 			h.ThrottleState, probeSuffix(h), h.ResolutionRate*100, throttleWindow),
+		// The motif signal's actual contribution, not its existence (designer
+		// rider Q10). The GATE package needs to state how often it FIRED, and
+		// a line that only ever said "enabled" could not support that claim.
+		motifSignalLine(h),
+	}
+}
+
+// motifSignalLine reports what the §7 motif widener contributed this session.
+func motifSignalLine(h restatementHealth) string {
+	switch {
+	case h.MotifWidened == 0:
+		return "motif signal: no pair admitted by shared motif this session"
+	case h.MotifSlotUsed:
+		return fmt.Sprintf("motif signal: %d pair(s) admitted by shared motif, "+
+			"using the reserved slot (displaced an ordinary candidate)", h.MotifWidened)
+	default:
+		return fmt.Sprintf("motif signal: %d pair(s) admitted by shared motif, "+
+			"into slots the ordinary band did not fill", h.MotifWidened)
 	}
 }
 
@@ -728,11 +845,26 @@ func probeSuffix(h restatementHealth) string {
 // round trip would buy nothing. Health is read once, by the turn that produced
 // it (invariants/synthesize/per-call-objects-no-session-state is about state
 // that must SURVIVE a call — this deliberately does not).
+// APPENDS rather than assigns (Phase 2, designer ruling 2026-08-21). From
+// Phase 2 this field has more than one producer, and an assignment silently
+// deletes whatever another mechanism already reported. Health is the only
+// channel through which any of them says "I ran and found nothing", so losing
+// a set of lines makes a broken subsystem indistinguishable from a clean
+// corpus — the exact failure these descriptors exist to prevent.
+//
+// Ordering the callers correctly would also have worked, and did for one
+// commit. It was rejected as the wrong fix: the ordering dependency is
+// invisible at both call sites and a test can only guard the arrangement that
+// exists today, so the trap survives its own fix. Appending removes the class.
+//
+// Called once per session, so this is behaviourally identical for the
+// shortlist itself. TestMotifAliasHealth_CoexistsWithRestatementLines covers
+// the interaction.
 func recordRestatementHealth(sess *store.PipelineSession, h restatementHealth) {
 	if sess == nil {
 		return
 	}
-	sess.Health = healthLines(h)
+	sess.Health = append(sess.Health, healthLines(h)...)
 }
 
 // ── verdict attribution ───────────────────────────────────────────────────
@@ -873,4 +1005,46 @@ func probeAllowed(ctx context.Context, d Deps, branch string) (bool, error) {
 	// At the interval: hold the counter here so every subsequent session is
 	// also eligible until one of them actually emits.
 	return true, nil
+}
+
+// pairSharesCanonicalMotif reports whether both facts in a pair carry a motif
+// resolving to the same canonical cluster.
+//
+// EXACT tier only. The loose tiers exist for a reader who judges what comes
+// back; this decides whether to spend a judge slot, which §6 puts squarely on
+// the automation side of that line.
+//
+// Degrades to false on any error: the widener is an ADDITION to the shortlist,
+// and a corpus whose vocabulary cannot be read should still get its ordinary
+// candidates rather than none.
+func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p store.RestatementPair) (bool, error) {
+	if d.Motifs == nil {
+		return false, nil
+	}
+	a, err := d.Search.GetByPath(ctx, branch, p.APath)
+	if err != nil || a == nil || len(a.Motifs) == 0 {
+		return false, nil
+	}
+	b, err := d.Search.GetByPath(ctx, branch, p.BPath)
+	if err != nil || b == nil || len(b.Motifs) == 0 {
+		return false, nil
+	}
+	seen := make(map[string]struct{}, len(a.Motifs))
+	for _, m := range a.Motifs {
+		canonical, cerr := d.Motifs.CanonicalID(ctx, branch, m)
+		if cerr != nil {
+			continue
+		}
+		seen[canonical] = struct{}{}
+	}
+	for _, m := range b.Motifs {
+		canonical, cerr := d.Motifs.CanonicalID(ctx, branch, m)
+		if cerr != nil {
+			continue
+		}
+		if _, ok := seen[canonical]; ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -57,7 +57,10 @@ type Service struct {
 	// ax is the abstraction axis + restatement shortlist. Kept OFF the search
 	// facade on purpose: it is review-pipeline state, and composing it would
 	// hand it to every mcp/web consumer of Search().
-	ax     *abstractionIndex
+	ax *abstractionIndex
+	// mo is alias resolution: motif spelling -> canonical id. Derived state
+	// (MN3), rebuildable from fact_motifs alone.
+	mo     *motifIndex
 	search *searchFacade
 	pi     *pipelineIndex
 	ti     *toolIndex
@@ -159,6 +162,7 @@ func Open(path string) (*Service, error) {
 	hq := &historyQuery{rh: rh}
 	mq := &methodologyMatcher{rh: rh}
 	ax := &abstractionIndex{rh: rh}
+	mo := &motifIndex{rh: rh}
 	search := &searchFacade{factQuery: fq, graphStore: gq, historyQuery: hq, methodologyMatcher: mq}
 	canonPath := canonicalizePath(path)
 
@@ -182,6 +186,7 @@ func Open(path string) (*Service, error) {
 		hq:            hq,
 		mq:            mq,
 		ax:            ax,
+		mo:            mo,
 		search:        search,
 		pi:            &pipelineIndex{rh: rh, sessionDB: sessionDB},
 		ti:            &toolIndex{db: sessionDB},
@@ -364,6 +369,9 @@ func (s *Service) Methodology() MethodologyMatcher { return s.mq }
 // Abstraction returns the title-embedding axis and the restatement shortlist
 // built on it. REVIEW PIPELINE ONLY — no runtime path may consume it.
 func (s *Service) Abstraction() AbstractionIndex { return s.ax }
+
+// Motifs is alias resolution over the corpus's motif vocabulary.
+func (s *Service) Motifs() MotifIndex { return s.mo }
 
 // IndexManager returns the IndexManager for search index lifecycle operations.
 func (s *Service) IndexManager() IndexManager { return s.si }

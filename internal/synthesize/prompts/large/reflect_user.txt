@@ -17,6 +17,12 @@ For EVERY candidate above with score ≥ 0.50, call knomit_query on its path
 and read the body BEFORE deciding it doesn't fit. Titles alone are not
 enough.
 
+{{end}}{{if .MotifVocabulary}}This corpus's motif vocabulary, for context:
+
+{{.MotifVocabulary}}
+
+Motifs name the general regularity a fact instantiates. Low recurrence means authors are minting names nobody reuses — if a transition suggests a reason for that, it is a methodology lesson worth naming.
+
 {{end}}Decide for each transition (or group of transitions):
 
   - If an existing methodology already captures the lesson → put it under

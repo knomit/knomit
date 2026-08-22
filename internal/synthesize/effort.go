@@ -43,6 +43,25 @@ func (e Effort) Discovers() bool {
 	return e == EffortMedium || e == EffortHigh
 }
 
+// MaintainsVocabulary reports whether this effort level runs the motif
+// vocabulary passes — alias resolution, blind definitions, and backfill.
+//
+// EffortNormal never does, and that is a HARD contract rather than a tuning
+// choice. All three spend LLM budget, and EffortNormal's guarantee is
+// zero-discovery-spend with byte-identical output (MN5). Backfill in
+// particular fires on any authored fact lacking a motif — which is EVERY fact
+// on a motif-free corpus, precisely the corpus MN5's test uses — so an
+// ungated pass does not merely add cost, it changes what a normal-effort
+// session produces.
+//
+// Deliberately a separate predicate from Discovers(), despite matching it
+// today: these passes maintain DERIVED STATE about the corpus's own
+// vocabulary, while discovery proposes new FACTS. If either dial moves, the
+// two reasons should be able to move apart.
+func (e Effort) MaintainsVocabulary() bool {
+	return e == EffortMedium || e == EffortHigh
+}
+
 // NormalizeEffort returns e if it is well-known, or DefaultEffort if e is the
 // empty string. Callers at trust boundaries should still Validate() — this
 // helper exists for downstream code that has already validated upstream and

@@ -139,9 +139,38 @@ func TestMN1_InstructionsCarryNoCorpusVocabulary(t *testing.T) {
 	}
 }
 
-// TestMN1_NoVocabularyInAnyPrompt — nothing in the served surface may
-// enumerate this corpus's motifs. Phase 2 introduces exactly one exception
-// (the backfill work item); until then the count is zero.
+// vocabularyBearingPrompts are the prompt templates permitted to enumerate this
+// corpus's motifs, with the reason each is allowed to.
+//
+// THE RULE (designer ruling Q8, 2026-08-21): no prompt on a FACT-WRITING path
+// may contain vocabulary; backfill is the single declared exception.
+//
+// Why backfill and nothing else. MN1's concern is write-time bias: an agent
+// AUTHORING a fact must not be shown the vocabulary, because reuse-before-
+// minting distorts what gets written. Backfill is genuinely INSIDE that rule —
+// it writes motifs onto facts — and genuinely excepted, because at backfill the
+// fact already exists and its claim is fixed, so the only thing vocabulary can
+// bias is which existing name gets reused, which is the entire purpose. The
+// trade is knowing and narrow, not an oversight being tolerated.
+//
+// The alias and definition passes carry vocabulary too and are NOT listed here,
+// because they are not fact-writing paths at all: they operate on derived
+// state whose subject IS the vocabulary, and §3.1/§3.2 structurally require it
+// in front of the judge and the definer. They could not function otherwise.
+var vocabularyBearingPrompts = map[string]string{
+	"motif_backfill_user.txt": "the one write path where reuse-before-minting is correct: the fact " +
+		"already exists, so vocabulary can only bias which name is reused",
+}
+
+// TestMN1_NoVocabularyInAnyPrompt — nothing an agent is shown may enumerate
+// this corpus's motifs, except the one declared exception.
+//
+// This enumerates every prompt SOURCE rather than trusting a description of
+// what they contain: the served instructions, both write-tool schemas, every
+// template under prompts/large, and every response schema. An earlier version
+// checked only the instructions and two tool schemas while its own comment
+// spoke of "the count" — a test that names an exception it never enumerated
+// against cannot detect a second one appearing.
 func TestMN1_NoVocabularyInAnyPrompt(t *testing.T) {
 	const marker = "zzz-unique-marker"
 	rich := newInstructionsTestRepo(t, []motifSeed{
@@ -163,7 +192,73 @@ func TestMN1_NoVocabularyInAnyPrompt(t *testing.T) {
 			require.NotContainsf(t, desc, marker, "%s.%s leaks corpus vocabulary", name, prop)
 		}
 	}
+
+	// Every prompt TEMPLATE. A template is static text, so any motif-shaped
+	// vocabulary in one is baked in for every corpus that ever runs it — which
+	// is a stronger failure than a payload leak and needs no fixture to detect.
+	dir := filepath.Join("..", "synthesize", "prompts", "large")
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "the prompt scan must actually be reading files")
+
+	scanned := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".txt") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		require.NoError(t, err)
+		scanned++
+
+		_, excepted := vocabularyBearingPrompts[e.Name()]
+		for _, planted := range plantedVocabulary(string(body)) {
+			require.Truef(t, excepted,
+				"prompt template %s enumerates what looks like corpus vocabulary (%q). "+
+					"No prompt on a fact-writing path may carry vocabulary; if this one "+
+					"legitimately must, declare it in vocabularyBearingPrompts with the reason.",
+				e.Name(), planted)
+		}
+	}
+	require.Greater(t, scanned, 8, "the prompt scan must cover the whole directory")
+
+	// Bidirectional: an exception nobody needs is one nobody notices going
+	// stale, and this list is the record of a deliberate trade.
+	for name, why := range vocabularyBearingPrompts {
+		_, err := os.Stat(filepath.Join(dir, name))
+		require.NoErrorf(t, err,
+			"%s is declared a vocabulary-bearing prompt (%s) but does not exist", name, why)
+	}
 }
+
+// plantedVocabulary returns kebab-case phrases in a prompt that look like motif
+// names — the shape the field contract defines (2-4 lowercase alphanumeric
+// words joined by hyphens).
+//
+// Illustrative examples inside a rule are NOT vocabulary: the do-not lists in
+// these prompts teach by contrast ("database-indexing is a topic;
+// write-amplification is a mechanism"), and a check that could not tell an
+// example from an enumeration would force the prompts to be worse at their job.
+// The distinction drawn here is quoted-in-prose versus listed-as-data.
+func plantedVocabulary(body string) []string {
+	var out []string
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		// A vocabulary ENUMERATION is a bare list of names. A rule that quotes
+		// an example wraps it in quotes and surrounding prose.
+		if !strings.HasPrefix(trimmed, "- ") || strings.Contains(trimmed, `"`) {
+			continue
+		}
+		candidate := strings.TrimPrefix(trimmed, "- ")
+		if kebabMotifShape.MatchString(candidate) {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+// kebabMotifShape matches the field contract's motif shape: 2-4 lowercase
+// alphanumeric words joined by hyphens, and nothing else on the line.
+var kebabMotifShape = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+){1,3}$`)
 
 // TestMN1_FrontmatterListNamesMotifs — the pointer bullet must be present.
 // Its absence is not cosmetic: the frontmatter list is an enumeration, and an

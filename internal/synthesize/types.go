@@ -57,6 +57,13 @@ type mergedFact struct {
 	Sources    int         `json:"sources"`
 	Entities   flexStrings `json:"entities"`
 	Refs       flexStrings `json:"refs"`
+	// Motifs is OPTIONAL and its absence is meaningful: §2.1 says zero is
+	// correct. That is why it gets no requireResponseKey probe — the probe
+	// exists for ENVELOPE keys, where a missing key means content was lost
+	// under a wrong name (invariant 51d85fcd). Here a missing key means the
+	// merged claim exemplifies no regularity its members named, which is a
+	// legitimate answer and the commonest one.
+	Motifs flexStrings `json:"motifs"`
 }
 
 // MergeEntry groups source paths with the merged replacement fact.
@@ -80,12 +87,17 @@ type PruneResult struct {
 // discovered fact must never become the seed for another discovery, otherwise
 // the engine drifts away from the human-authored substrate.
 type factForLLM struct {
-	File       string   `json:"path"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Type       string   `json:"type"`
-	Domain     []string `json:"domain"`
-	Entities   []string `json:"entities"`
+	File     string   `json:"path"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body"`
+	Type     string   `json:"type"`
+	Domain   []string `json:"domain"`
+	Entities []string `json:"entities"`
+	// Motifs is what the judges see of the members' aspect axis (§2.1). It is
+	// shown so prune and distill can carry a motif over to the fact that
+	// replaces them; without it the merged claim silently loses the regularity
+	// its members named, and no derived state can rebuild it.
+	Motifs     []string `json:"motifs,omitempty"`
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
 	Origin     string   `json:"origin,omitempty"`
@@ -330,6 +342,8 @@ type distillFact struct {
 	Confidence float64     `json:"confidence"`
 	Entities   flexStrings `json:"entities"`
 	Refs       flexStrings `json:"refs"`
+	// Optional; absence means none. See mergedFact.Motifs.
+	Motifs flexStrings `json:"motifs"`
 }
 
 // parseDistillResponse parses the LLM JSON response for a distill step.

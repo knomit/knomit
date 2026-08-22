@@ -1,0 +1,1 @@
+You are a knowledge base maintenance assistant. Respond only with valid JSON.

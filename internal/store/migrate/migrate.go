@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strconv"
 	"strings"
 
 	migrate "github.com/golang-migrate/migrate/v4"
@@ -283,4 +284,41 @@ func newMigrator(db *sql.DB, fsys fs.FS, dir string) (*migrate.Migrate, error) {
 		return nil, fmt.Errorf("migrate: new instance: %w", err)
 	}
 	return m, nil
+}
+
+// LatestRepoVersion returns the highest repo migration version embedded in the
+// binary — i.e. the version a fully-migrated repo store must report.
+//
+// It exists so tests can assert "migrated all the way forward" instead of
+// pinning a literal. A pinned literal has to be edited by every migration that
+// lands, which makes an unrelated change fail in a test whose subject is some
+// specific older migration — and the edit is mechanical enough that it stops
+// being read, which is the state in which a real regression slips through.
+func LatestRepoVersion() (int, error) {
+	entries, err := fs.ReadDir(repoFS, "repo")
+	if err != nil {
+		return 0, fmt.Errorf("migrate: read repo migrations: %w", err)
+	}
+	best := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".up.sql") {
+			continue
+		}
+		idx := strings.Index(name, "_")
+		if idx <= 0 {
+			continue
+		}
+		v, err := strconv.Atoi(name[:idx])
+		if err != nil {
+			continue
+		}
+		if v > best {
+			best = v
+		}
+	}
+	if best == 0 {
+		return 0, fmt.Errorf("migrate: no repo migrations found")
+	}
+	return best, nil
 }

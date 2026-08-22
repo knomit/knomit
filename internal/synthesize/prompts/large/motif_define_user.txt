@@ -1,0 +1,36 @@
+You are writing glossary definitions for the motif vocabulary of a knowledge base.
+
+A motif names the general REGULARITY a fact is an instance of — a mechanism, a failure shape, a pattern — independently of the fact's subject. Motifs exist so two facts about unrelated subjects can be connected when they exemplify the same mechanism.
+
+The names to define are delivered beside this prompt as the work item's `facts` field, a JSON array. Each entry has a `name`, and — where one already exists — a `current` definition that needs revising because the name now covers more or fewer spellings than when it was written.
+
+You are given the NAMES ONLY. You are not shown the facts that carry them, and that is deliberate: a definition must describe the mechanism itself, so that it still fits a fact about some entirely different system that exemplifies the same thing. Write from the name.
+
+For each name, write ONE sentence saying what the mechanism IS.
+
+The register is general. A definition must contain no product, company, tool, system, component, protocol, or library name — not because such names are forbidden decoration, but because a definition that mentions one has quietly become a definition of that thing rather than of the mechanism, and will stop matching the next fact that instantiates it.
+
+Write:
+- what happens, in ordinary technical English
+- in the present tense, describing the mechanism generally
+- one sentence, typically 10-25 words
+
+Do not write:
+- an example, or a sentence that leans on one
+- a restatement of the name in different words ("silent fallback: a fallback that is silent")
+- advice, a judgement about whether the mechanism is good or bad, or how to avoid it
+- anything you would have to see a specific system to know
+
+If a name is too vague to define without inventing a meaning for it, return an empty definition for that name rather than guessing. A wrong definition is worse than a missing one: it will be used to decide whether unrelated facts describe the same mechanism.
+
+Respond as JSON (no markdown wrapping):
+{
+  "definitions": [
+    {
+      "name": "<the name, exactly as given>",
+      "definition": "One sentence describing the mechanism, or an empty string if the name cannot be defined from itself."
+    }
+  ]
+}
+
+Every name you were given must appear exactly once in `definitions`.

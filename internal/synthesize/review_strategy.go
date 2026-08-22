@@ -155,6 +155,32 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		return err
 	}
 
+	// The motif vocabulary passes: resolve the vocabulary, define it, then
+	// offer it. In that order, because each wants the previous one's output —
+	// backfill offers definitions, and definitions are written over clusters.
+	//
+	// Gated at effort >= medium. All three spend LLM budget, and EffortNormal
+	// guarantees zero discovery spend with byte-identical output (MN5).
+	// Backfill makes that concrete: it fires on any authored fact lacking a
+	// motif, which is every fact on a motif-free corpus — exactly the corpus
+	// MN5's test uses — so running it at normal would change what a
+	// normal-effort session produces, not merely what it costs.
+	//
+	// Both health recorders APPEND, so their ordering is a readability choice
+	// and not load-bearing — an earlier version depended on it, which is why
+	// recordRestatementHealth stopped assigning.
+	if d.Effort.MaintainsVocabulary() {
+		if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
+			return err
+		}
+		if err := planMotifDefineWork(ctx, d, sess, branch); err != nil {
+			return err
+		}
+		if err := planMotifBackfillWork(ctx, d, sess, branch); err != nil {
+			return err
+		}
+	}
+
 	// Store distill work items if >1 seed (lower priority than prune).
 	//
 	// Grouped by cluster, then chunked. Depth-0 distill used to pass the whole
@@ -396,6 +422,7 @@ func factsForLLM(seeds []fact.Fact) []factForLLM {
 			Type:       string(f.Type),
 			Domain:     f.Domain,
 			Entities:   f.Entities,
+			Motifs:     f.Motifs,
 			Confidence: f.Confidence,
 			Sources:    f.Sources,
 			Origin:     string(f.Origin),
@@ -488,6 +515,16 @@ type itemDecision struct {
 	prune    *PruneResult
 	distill  *DistillResult
 	discover *discoverDecision
+	// motifAlias carries the vocabulary judge's verdicts (blueprint §3.1).
+	motifAlias *motifAliasResult
+	// motifDefine carries the blind definition pass's sentences (§3.2), with
+	// the items they answer so each can be routed back to its cluster.
+	motifDefine        *motifDefineResult
+	motifDefineOffered []motifDefineItem
+	// motifBackfill carries the backfill pass's assignments, with the payload
+	// they answer so an invented path can be refused.
+	motifBackfill        *motifBackfillResult
+	motifBackfillOffered backfillPayload
 }
 
 // Decode parses and validates a response against its work item. It is
@@ -545,6 +582,48 @@ func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any
 			return nil, "", wrapf(reviewTool, err, "validate distill")
 		}
 		return &itemDecision{distill: &result}, response, nil
+
+	case motifAliasStepType:
+		var offered []motifJudgeItem
+		if err := json.Unmarshal([]byte(item.FactsJSON), &offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "unmarshal motif alias pairs")
+		}
+		result, err := parseMotifAliasResponse(response)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "parse motif alias response")
+		}
+		if err := validateMotifAliasVerdicts(result, offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "validate motif alias")
+		}
+		return &itemDecision{motifAlias: &result}, response, nil
+
+	case motifDefineStepType:
+		offered, err := motifDefineItemsFromPayload(item.FactsJSON)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "unmarshal motif define names")
+		}
+		result, err := parseMotifDefineResponse(response)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "parse motif define response")
+		}
+		if err := validateMotifDefinitions(result, offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "validate motif define")
+		}
+		return &itemDecision{motifDefine: &result, motifDefineOffered: offered}, response, nil
+
+	case motifBackfillStepType:
+		var offered backfillPayload
+		if err := json.Unmarshal([]byte(item.FactsJSON), &offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "unmarshal motif backfill payload")
+		}
+		result, err := parseMotifBackfillResponse(response)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "parse motif backfill response")
+		}
+		if err := validateMotifBackfill(result, offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "validate motif backfill")
+		}
+		return &itemDecision{motifBackfill: &result, motifBackfillOffered: offered}, response, nil
 
 	case "discover":
 		// An empty response is "no bridges panned out", not a malformed one.
@@ -635,6 +714,21 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		recordStats(ctx, reviewTool, d, sess, stats)
 		enqueueRaptorFollowups(ctx, d, sess, item, writtenFacts)
 
+	case motifAliasStepType:
+		if err := applyMotifAliasVerdicts(ctx, d, branch, *dec.motifAlias); err != nil {
+			return wrapf(reviewTool, err, "apply motif alias")
+		}
+
+	case motifDefineStepType:
+		if err := applyMotifDefinitions(ctx, d, branch, *dec.motifDefine, dec.motifDefineOffered); err != nil {
+			return wrapf(reviewTool, err, "apply motif define")
+		}
+
+	case motifBackfillStepType:
+		if err := applyMotifBackfill(ctx, d, branch, *dec.motifBackfill); err != nil {
+			return wrapf(reviewTool, err, "apply motif backfill")
+		}
+
 	case "discover":
 		return applyDiscoverStep(ctx, reviewTool, d, sess, dec.discover)
 
@@ -671,7 +765,7 @@ func enqueueRaptorFollowups(
 		newFacts = append(newFacts, factForLLM{
 			File: df.Path, Title: df.Title, Body: df.Body,
 			Type: df.Type, Domain: df.Domain, Entities: df.Entities,
-			Confidence: df.Confidence, Sources: 1,
+			Motifs: df.Motifs, Confidence: df.Confidence, Sources: 1,
 		})
 	}
 
@@ -736,7 +830,14 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology)
 	case "reflect":
 		existingMethodology := reflectMethodologySection(ctx, d.RI, branch, []byte(item.FactsJSON))
-		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
+		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot,
+			existingMethodology, motifVocabularySection(ctx, d, branch))
+	case motifAliasStepType:
+		content, err = RenderMotifAliasWorkItem()
+	case motifDefineStepType:
+		content, err = RenderMotifDefineWorkItem()
+	case motifBackfillStepType:
+		content, err = RenderMotifBackfillWorkItem()
 	case "discover":
 		var payload DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
