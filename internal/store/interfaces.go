@@ -256,7 +256,20 @@ type MotifIndex interface {
 	// RecordJudgeMerge records that the LLM clustering pass judged two clusters
 	// to name the same mechanism. Takes spellings, stores cluster keys. The
 	// decision takes effect at the next RebuildAliases.
-	RecordJudgeMerge(ctx context.Context, branch, motifA, motifB string) error
+	//
+	// rationale is the judge's own words for the shared mechanism and is
+	// REQUIRED: a merge nobody could justify in a sentence is the hallucinated
+	// merge the guard exists to stop, and over-merge is invisible downstream.
+	RecordJudgeMerge(ctx context.Context, branch, motifA, motifB, rationale string) error
+	// RecordJudgeDecline records that the judge saw a pair and said no, so the
+	// pair is not re-offered while both clusters still mean what they meant.
+	RecordJudgeDecline(ctx context.Context, branch, motifA, motifB string) error
+	// AnsweredPairs returns the cluster pairs whose verdict still binds, keyed
+	// by pairKey. The selector subtracts these from what it offers.
+	AnsweredPairs(ctx context.Context, branch string) (map[string]struct{}, error)
+	// AliasRows returns the alias table with its audit columns (method and the
+	// merge rationale).
+	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)
 	// ClusterKey returns the STABLE identity of a spelling's cluster. Use this,
 	// never CanonicalID, to key state that must survive across sessions:
 	// CanonicalID is the highest-df member spelling and flips as usage shifts.

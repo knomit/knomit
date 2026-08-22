@@ -27,7 +27,7 @@ func TestMotifJudge_MergeUnifiesTwoMechanicalClusters(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, a, b, "precondition: the mechanical layer must keep these apart")
 
-	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation"))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation", "same mechanism under two names"))
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
 
 	a, err = svc.Motifs().CanonicalID(ctx, branch, "silent-fallback")
@@ -45,7 +45,7 @@ func TestMotifJudge_MergeSurvivesLaterRebuilds(t *testing.T) {
 	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback"})
 	writeMotifFact(t, svc, branch, "kb/alpha/two.md", []string{"quiet-degradation"})
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
-	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation"))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation", "same mechanism under two names"))
 
 	// Three more rebuilds, and a corpus change in between.
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
@@ -75,7 +75,7 @@ func TestMotifJudge_MergeGoesInertWhenItsVocabularyVanishes(t *testing.T) {
 	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback"})
 	writeMotifFact(t, svc, branch, "kb/alpha/two.md", []string{"quiet-degradation"})
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
-	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation"))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation", "same mechanism under two names"))
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
 
 	// The second mechanism leaves the corpus entirely.
@@ -119,8 +119,8 @@ func TestMotifJudge_MergesAreTransitive(t *testing.T) {
 	writeMotifFact(t, svc, branch, "kb/alpha/three.md", []string{"mute-failover"})
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
 
-	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation"))
-	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "quiet-degradation", "mute-failover"))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation", "same mechanism under two names"))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "quiet-degradation", "mute-failover", "same mechanism under two names"))
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
 
 	a, err := svc.Motifs().CanonicalID(ctx, branch, "silent-fallback")
@@ -151,7 +151,7 @@ func TestMotifJudge_MN3_MergeTouchesNoFact(t *testing.T) {
 		before[p] = rec.BlobHash
 	}
 
-	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation"))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch, "silent-fallback", "quiet-degradation", "same mechanism under two names"))
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
 
 	for p, want := range before {
