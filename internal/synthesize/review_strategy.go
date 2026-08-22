@@ -155,14 +155,30 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		return err
 	}
 
-	// Alias resolution. Both health recorders APPEND, so this ordering is a
-	// readability choice and not load-bearing — an earlier version depended on
-	// it, which is why recordRestatementHealth stopped assigning.
-	if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
-		return err
-	}
-	if err := planMotifDefineWork(ctx, d, sess, branch); err != nil {
-		return err
+	// The motif vocabulary passes: resolve the vocabulary, define it, then
+	// offer it. In that order, because each wants the previous one's output —
+	// backfill offers definitions, and definitions are written over clusters.
+	//
+	// Gated at effort >= medium. All three spend LLM budget, and EffortNormal
+	// guarantees zero discovery spend with byte-identical output (MN5).
+	// Backfill makes that concrete: it fires on any authored fact lacking a
+	// motif, which is every fact on a motif-free corpus — exactly the corpus
+	// MN5's test uses — so running it at normal would change what a
+	// normal-effort session produces, not merely what it costs.
+	//
+	// Both health recorders APPEND, so their ordering is a readability choice
+	// and not load-bearing — an earlier version depended on it, which is why
+	// recordRestatementHealth stopped assigning.
+	if d.Effort.MaintainsVocabulary() {
+		if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
+			return err
+		}
+		if err := planMotifDefineWork(ctx, d, sess, branch); err != nil {
+			return err
+		}
+		if err := planMotifBackfillWork(ctx, d, sess, branch); err != nil {
+			return err
+		}
 	}
 
 	// Store distill work items if >1 seed (lower priority than prune).
@@ -505,6 +521,10 @@ type itemDecision struct {
 	// the items they answer so each can be routed back to its cluster.
 	motifDefine        *motifDefineResult
 	motifDefineOffered []motifDefineItem
+	// motifBackfill carries the backfill pass's assignments, with the payload
+	// they answer so an invented path can be refused.
+	motifBackfill        *motifBackfillResult
+	motifBackfillOffered backfillPayload
 }
 
 // Decode parses and validates a response against its work item. It is
@@ -590,6 +610,20 @@ func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any
 			return nil, "", wrapf(reviewTool, err, "validate motif define")
 		}
 		return &itemDecision{motifDefine: &result, motifDefineOffered: offered}, response, nil
+
+	case motifBackfillStepType:
+		var offered backfillPayload
+		if err := json.Unmarshal([]byte(item.FactsJSON), &offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "unmarshal motif backfill payload")
+		}
+		result, err := parseMotifBackfillResponse(response)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "parse motif backfill response")
+		}
+		if err := validateMotifBackfill(result, offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "validate motif backfill")
+		}
+		return &itemDecision{motifBackfill: &result, motifBackfillOffered: offered}, response, nil
 
 	case "discover":
 		// An empty response is "no bridges panned out", not a malformed one.
@@ -688,6 +722,11 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 	case motifDefineStepType:
 		if err := applyMotifDefinitions(ctx, d, branch, *dec.motifDefine, dec.motifDefineOffered); err != nil {
 			return wrapf(reviewTool, err, "apply motif define")
+		}
+
+	case motifBackfillStepType:
+		if err := applyMotifBackfill(ctx, d, branch, *dec.motifBackfill); err != nil {
+			return wrapf(reviewTool, err, "apply motif backfill")
 		}
 
 	case "discover":
@@ -797,6 +836,8 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		content, err = RenderMotifAliasWorkItem()
 	case motifDefineStepType:
 		content, err = RenderMotifDefineWorkItem()
+	case motifBackfillStepType:
+		content, err = RenderMotifBackfillWorkItem()
 	case "discover":
 		var payload DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {

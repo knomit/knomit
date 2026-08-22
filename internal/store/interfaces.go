@@ -287,6 +287,11 @@ type MotifIndex interface {
 	// VocabularyHealth computes the §3.3 metrics over AUTHORED facts only.
 	// Diagnostic; nothing branches on it.
 	VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error)
+	// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
+	// oldest first, for the backfill pass.
+	LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error)
+	// MotifCoverage reports how many live authored facts carry a motif.
+	MotifCoverage(ctx context.Context, branch string) (with, total int, err error)
 	// AliasRows returns the alias table with its audit columns (method and the
 	// merge rationale).
 	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)

@@ -234,3 +234,82 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 	}
 	return h, rows.Err()
 }
+
+// BackfillTarget is one fact the backfill pass may offer motifs for.
+//
+// Domain and Entities ride along because the §11 subtraction residue is
+// computed against them — title tokens MINUS subject tokens. Reading them from
+// the indexed columns rather than re-parsing the blob keeps the residue
+// computed over the same values every other subject-aware path uses.
+type BackfillTarget struct {
+	FactID   int64
+	Path     string
+	Title    string
+	Domain   []string
+	Entities []string
+}
+
+// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
+// oldest fact id first, for the backfill pass.
+//
+// Authored-only, for the same reason the health metrics are: a distilled or
+// discovered fact without motifs is the pipeline having decided it needed none,
+// and re-asking would be the engine second-guessing itself rather than filling
+// a gap a human left.
+//
+// Oldest-first is deterministic and gives a corpus a stable sweep order across
+// sessions — a bounded pass that started somewhere different each time would
+// re-offer the same facts and never reach the tail.
+func (mi *motifIndex) LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("LiveFactsWithoutMotifs: %w", err)
+	}
+	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+		SELECT f.id, bf.path, f.title, f.domain, f.entities
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ?
+		   AND f.origin = 'authored'
+		   AND NOT EXISTS (SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id)
+		 ORDER BY f.id ASC
+		 LIMIT ?`, branchID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("LiveFactsWithoutMotifs: %w", err)
+	}
+	defer rows.Close()
+	var out []BackfillTarget
+	for rows.Next() {
+		var t BackfillTarget
+		var domainJSON, entitiesJSON string
+		if err := rows.Scan(&t.FactID, &t.Path, &t.Title, &domainJSON, &entitiesJSON); err != nil {
+			return nil, fmt.Errorf("LiveFactsWithoutMotifs: scan: %w", err)
+		}
+		var refs []string
+		logFactJSONUnmarshal("LiveFactsWithoutMotifs", t.Path, domainJSON, entitiesJSON, "null",
+			&t.Domain, &t.Entities, &refs)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// MotifCoverage reports how many live AUTHORED facts carry at least one motif.
+// Reported in health; nothing branches on it.
+func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, total int, err error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+	}
+	err = conn(ctx, mi.rh.db).QueryRowContext(ctx, `
+		SELECT
+		  COUNT(DISTINCT CASE WHEN EXISTS (
+		      SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id) THEN bf.path END),
+		  COUNT(DISTINCT bf.path)
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		 WHERE bf.branch_id = ? AND f.origin = 'authored'`, branchID).Scan(&with, &total)
+	if err != nil {
+		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+	}
+	return with, total, nil
+}
