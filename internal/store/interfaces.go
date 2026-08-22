@@ -274,6 +274,16 @@ type MotifIndex interface {
 	// cluster. The judge sees these: string-only clustering keeps
 	// adjacent-family false merges (§12-E3), and the titles are what expose it.
 	CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error)
+	// ClustersNeedingDefinition returns live clusters whose definition is
+	// missing or was authored over a different membership. Staleness is a
+	// comparison, not a flag — so it catches every cause of drift.
+	ClustersNeedingDefinition(ctx context.Context, branch string) ([]DefinitionTarget, error)
+	// PutDefinition stores a definition, stamped with the membership it was
+	// authored over.
+	PutDefinition(ctx context.Context, branch, clusterKey, definition string) error
+	// Definition returns a cluster's standing definition, INCLUDING a stale one
+	// — a stale sentence is used as interim rather than gapping the cluster.
+	Definition(ctx context.Context, branch, clusterKey string) (string, bool, error)
 	// AliasRows returns the alias table with its audit columns (method and the
 	// merge rationale).
 	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)
