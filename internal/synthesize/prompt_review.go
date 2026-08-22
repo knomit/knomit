@@ -220,3 +220,19 @@ func RenderMotifAliasWorkItem() (*WorkItemContent, error) {
 		ResponseSchema: motifAliasResponseSchema,
 	}, nil
 }
+
+// RenderMotifDefineWorkItem renders the blind definition prompt.
+//
+// Takes no arguments for the same reason RenderMotifAliasWorkItem does: the
+// names ride in the work item's `facts` field, so the TEMPLATE carries no
+// corpus vocabulary and the MN1 enumeration over templates stays a clean check.
+func RenderMotifDefineWorkItem() (*WorkItemContent, error) {
+	prompt, err := RenderTemplate("motif_define", "user", PromptData{})
+	if err != nil {
+		return nil, fmt.Errorf("render motif define work item: %w", err)
+	}
+	return &WorkItemContent{
+		Prompt:         prompt,
+		ResponseSchema: motifDefineResponseSchema,
+	}, nil
+}

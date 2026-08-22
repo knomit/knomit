@@ -161,6 +161,9 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
 		return err
 	}
+	if err := planMotifDefineWork(ctx, d, sess, branch); err != nil {
+		return err
+	}
 
 	// Store distill work items if >1 seed (lower priority than prune).
 	//
@@ -497,6 +500,10 @@ type itemDecision struct {
 	discover *discoverDecision
 	// motifAlias carries the vocabulary judge's verdicts (blueprint §3.1).
 	motifAlias *motifAliasResult
+	// motifDefine carries the blind definition pass's sentences (§3.2), with
+	// the items they answer so each can be routed back to its cluster.
+	motifDefine        *motifDefineResult
+	motifDefineOffered []motifDefineItem
 }
 
 // Decode parses and validates a response against its work item. It is
@@ -568,6 +575,20 @@ func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any
 			return nil, "", wrapf(reviewTool, err, "validate motif alias")
 		}
 		return &itemDecision{motifAlias: &result}, response, nil
+
+	case motifDefineStepType:
+		offered, err := motifDefineItemsFromPayload(item.FactsJSON)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "unmarshal motif define names")
+		}
+		result, err := parseMotifDefineResponse(response)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "parse motif define response")
+		}
+		if err := validateMotifDefinitions(result, offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "validate motif define")
+		}
+		return &itemDecision{motifDefine: &result, motifDefineOffered: offered}, response, nil
 
 	case "discover":
 		// An empty response is "no bridges panned out", not a malformed one.
@@ -661,6 +682,11 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 	case motifAliasStepType:
 		if err := applyMotifAliasVerdicts(ctx, d, branch, *dec.motifAlias); err != nil {
 			return wrapf(reviewTool, err, "apply motif alias")
+		}
+
+	case motifDefineStepType:
+		if err := applyMotifDefinitions(ctx, d, branch, *dec.motifDefine, dec.motifDefineOffered); err != nil {
+			return wrapf(reviewTool, err, "apply motif define")
 		}
 
 	case "discover":
@@ -767,6 +793,8 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
 	case motifAliasStepType:
 		content, err = RenderMotifAliasWorkItem()
+	case motifDefineStepType:
+		content, err = RenderMotifDefineWorkItem()
 	case "discover":
 		var payload DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
