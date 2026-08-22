@@ -418,6 +418,12 @@ type restatementHealth struct {
 	// canonical motif — candidates the title axis alone would not have reached.
 	// Reported so the signal's contribution is visible rather than inferred.
 	MotifWidened int
+	// MotifSlotUsed is true when the reserved slot DISPLACED an ordinary
+	// candidate — i.e. the ordinary band could have filled the budget and a
+	// widened pair took a slot anyway. That is the case where the signal cost
+	// something, and the one worth reporting: a widened pair admitted into a
+	// slot nothing else wanted is free.
+	MotifSlotUsed bool
 	// Probing is true when a defunded corpus spent its periodic probe slot —
 	// the one path by which its own evidence can change.
 	Probing bool
@@ -523,33 +529,81 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	if err != nil {
 		return nil, h, wrapf(reviewTool, err, "shortlist: widened rank")
 	}
-	ordinary := len(raw)
+	ordinaryDepth := len(raw)
 
+	// Classify first, select second. An earlier version selected in one pass
+	// and stopped at the budget, which meant a widened pair — below the
+	// ordinary band by construction — was only ever reached when the ordinary
+	// band underfilled. That made the signal contribute nothing in exactly the
+	// case it exists for: pairs the title axis UNDER-RANKS (designer ruling
+	// Q10).
 	coGrouped := clusterCoMembership(clusters)
-	var out []store.RestatementPair
-	for i, p := range widened {
-		if len(out) == budget {
-			break
-		}
-		if i >= ordinary {
-			// Past the ordinary band. Only a shared canonical motif buys a look
-			// this far down — and only an EXACT one: the loose tiers are for a
-			// reader who judges what comes back, never for something that
-			// spends a judge slot (§6).
-			shared, serr := pairSharesCanonicalMotif(ctx, d, branch, p)
-			if serr != nil || !shared {
-				continue
-			}
-			h.MotifWidened++
-		}
+	eligible := func(p store.RestatementPair) bool {
 		if _, ok := coGrouped[pathPairKey(p.APath, p.BPath)]; ok {
-			continue
+			return false
 		}
 		if !d.Scope.IsEmpty() && !pairTouchesScope(ctx, d, branch, p) {
+			return false
+		}
+		return true
+	}
+
+	var ordinary, motifPairs []store.RestatementPair
+	for i, p := range widened {
+		if !eligible(p) {
 			continue
+		}
+		if i < ordinaryDepth {
+			ordinary = append(ordinary, p)
+			continue
+		}
+		// Past the ordinary band. Only a shared canonical motif buys a look
+		// this far down — and only an EXACT one: the loose tiers are for a
+		// reader who judges what comes back, never for something that spends a
+		// judge slot (§6).
+		shared, serr := pairSharesCanonicalMotif(ctx, d, branch, p)
+		if serr == nil && shared {
+			motifPairs = append(motifPairs, p)
+		}
+	}
+
+	// RESERVE one slot for a widened pair when one exists. A shared canonical
+	// motif is evidence ORTHOGONAL to title similarity — evidence the title
+	// axis cannot see — so the pairs it identifies are below the title-ranked
+	// band by definition, and a widener that fires only on underfill is
+	// decorative. The reservation is a BUDGET ALLOCATION, not a threshold
+	// (MN13), and it is the probe pattern's shape: a bounded slot spent for
+	// information the main ranking cannot produce. A bad widened pair costs one
+	// judgment, and the kept-pair exclusion retires it.
+	//
+	// Never at budget 1. There the reserved slot would BE the whole budget, and
+	// a corpus that can afford one judgment should spend it on its
+	// best-evidenced candidate rather than on orthogonal evidence about a
+	// lower-ranked one.
+	reserved := 0
+	if budget >= 2 && len(motifPairs) > 0 {
+		reserved = 1
+	}
+
+	var out []store.RestatementPair
+	for _, p := range ordinary {
+		if len(out) >= budget-reserved {
+			break
 		}
 		out = append(out, p)
 	}
+	for _, p := range motifPairs {
+		if len(out) >= budget {
+			break
+		}
+		out = append(out, p)
+		h.MotifWidened++
+	}
+	// A reserved slot the ordinary band could not have used is not "reserved"
+	// in any meaningful sense — report only when the signal actually displaced
+	// something (designer rider).
+	h.MotifSlotUsed = h.MotifWidened > 0 && len(ordinary) >= budget
+
 	if probing && len(out) > 0 {
 		// The probe is spent only if it actually put something in front of the
 		// judge. A session that found nothing to offer produced no evidence,
@@ -755,6 +809,24 @@ func healthLines(h restatementHealth) []string {
 		fmt.Sprintf("restatement candidates emitted: %d", h.Emitted),
 		fmt.Sprintf("shortlist throttle: %s%s (trailing resolution-rate %.0f%% over last %d judged)",
 			h.ThrottleState, probeSuffix(h), h.ResolutionRate*100, throttleWindow),
+		// The motif signal's actual contribution, not its existence (designer
+		// rider Q10). The GATE package needs to state how often it FIRED, and
+		// a line that only ever said "enabled" could not support that claim.
+		motifSignalLine(h),
+	}
+}
+
+// motifSignalLine reports what the §7 motif widener contributed this session.
+func motifSignalLine(h restatementHealth) string {
+	switch {
+	case h.MotifWidened == 0:
+		return "motif signal: no pair admitted by shared motif this session"
+	case h.MotifSlotUsed:
+		return fmt.Sprintf("motif signal: %d pair(s) admitted by shared motif, "+
+			"using the reserved slot (displaced an ordinary candidate)", h.MotifWidened)
+	default:
+		return fmt.Sprintf("motif signal: %d pair(s) admitted by shared motif, "+
+			"into slots the ordinary band did not fill", h.MotifWidened)
 	}
 }
 

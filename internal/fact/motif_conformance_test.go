@@ -173,6 +173,11 @@ var mechanicsPaths = map[string][]string{
 	// claim in disguise (MN13, Q2 ruling).
 	"internal/synthesize/restatement.go": {
 		"selectRestatementCandidates", "pairSharesCanonicalMotif",
+		// REPORTING, not deciding. These render the signal's contribution into
+		// the session's health lines so the GATE package can state how often it
+		// fired rather than that it exists. No branch reads them — which is the
+		// MN6 property, and is itself asserted by the no-branch grep.
+		"healthLines", "motifSignalLine",
 	},
 	// ScopedCluster is a CARRIER, and only the projection inside it (Phase 2).
 	// It builds the factForLLM payload from search results, and §2.1 requires
