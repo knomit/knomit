@@ -267,6 +267,13 @@ type MotifIndex interface {
 	// AnsweredPairs returns the cluster pairs whose verdict still binds, keyed
 	// by pairKey. The selector subtracts these from what it offers.
 	AnsweredPairs(ctx context.Context, branch string) (map[string]struct{}, error)
+	// Clusters returns the resolved vocabulary — one row per CLUSTER, most
+	// frequent first, deterministic on ties.
+	Clusters(ctx context.Context, branch string) ([]MotifCluster, error)
+	// CarrierTitles returns up to limit titles of live facts carrying the
+	// cluster. The judge sees these: string-only clustering keeps
+	// adjacent-family false merges (§12-E3), and the titles are what expose it.
+	CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error)
 	// AliasRows returns the alias table with its audit columns (method and the
 	// merge rationale).
 	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)

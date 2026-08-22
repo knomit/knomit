@@ -527,7 +527,8 @@ func (mi *motifIndex) AnsweredPairs(ctx context.Context, branch string) (map[str
 // partial edits.
 func (mi *motifIndex) RecordJudgeMerge(ctx context.Context, branch, motifA, motifB, rationale string) error {
 	if strings.TrimSpace(rationale) == "" {
-		// Enforced here, not asked for in the prompt and hoped for. A merge
+		// Enforced here, not asked for in the prompt and hoped for: a rule the
+		// caller can decline to follow is a convention, not a guard. A merge
 		// whose shared mechanism nobody could name is exactly the hallucinated
 		// merge the guard exists to stop, and over-merge is the invisible
 		// failure — nothing downstream can tell that two mechanisms were fused.
@@ -586,4 +587,102 @@ func (mi *motifIndex) recordVerdict(ctx context.Context, branch, motifA, motifB 
 		return fmt.Errorf("recordVerdict: %w", err)
 	}
 	return nil
+}
+
+// MotifCluster is one resolved cluster: what the judge is shown, and what the
+// §6 surfaces display.
+type MotifCluster struct {
+	CanonicalID string   // representative spelling — DISPLAYED
+	ClusterKey  string   // stable identity — KEY state on this
+	Members     []string // every spelling resolving here, sorted
+	DF          int      // live facts carrying any member, counted once each
+}
+
+// Clusters returns this branch's resolved motif vocabulary, most frequent
+// first, ties broken by canonical id so the order is deterministic.
+//
+// One row per CLUSTER, not per spelling: the vocabulary a reader or a judge
+// deals in is mechanisms, and two spellings of one mechanism are one entry.
+func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifCluster, error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("Clusters: %w", err)
+	}
+	// df counts DISTINCT carrier paths across the cluster, so a fact using two
+	// spellings of one mechanism is one carrier — the same rule TokenDF applies,
+	// for the same reason.
+	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+		SELECT a.cluster_key,
+		       a.canonical_id,
+		       GROUP_CONCAT(DISTINCT a.motif),
+		       (SELECT COUNT(DISTINCT bf.path)
+		          FROM branch_facts bf
+		          JOIN fact_motifs m ON m.fact_id = bf.fact_id
+		          JOIN motif_aliases a2
+		                 ON a2.branch_id = bf.branch_id AND a2.motif = m.motif
+		         WHERE bf.branch_id = a.branch_id AND a2.cluster_key = a.cluster_key)
+		  FROM motif_aliases a
+		 WHERE a.branch_id = ?
+		 GROUP BY a.cluster_key, a.canonical_id`, branchID)
+	if err != nil {
+		return nil, fmt.Errorf("Clusters: %w", err)
+	}
+	defer rows.Close()
+	var out []MotifCluster
+	for rows.Next() {
+		var c MotifCluster
+		var members string
+		if err := rows.Scan(&c.ClusterKey, &c.CanonicalID, &members, &c.DF); err != nil {
+			return nil, fmt.Errorf("Clusters: scan: %w", err)
+		}
+		c.Members = strings.Split(members, ",")
+		sort.Strings(c.Members)
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DF != out[j].DF {
+			return out[i].DF > out[j].DF
+		}
+		return out[i].CanonicalID < out[j].CanonicalID
+	})
+	return out, nil
+}
+
+// CarrierTitles returns up to limit titles of live facts carrying any spelling
+// in the cluster, most recent first.
+//
+// The judge sees these, and that is not decoration: string-only clustering
+// demonstrably keeps adjacent-family false merges (blueprint §12-E3). Two
+// motifs can read as synonyms and be carried by facts about visibly different
+// mechanisms, and the titles are what makes that visible.
+func (mi *motifIndex) CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("CarrierTitles: %w", err)
+	}
+	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
+		SELECT DISTINCT f.title
+		  FROM branch_facts bf
+		  JOIN facts f ON f.id = bf.fact_id
+		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
+		  JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
+		 WHERE bf.branch_id = ? AND a.cluster_key = ?
+		 ORDER BY f.title
+		 LIMIT ?`, branchID, clusterKey, limit)
+	if err != nil {
+		return nil, fmt.Errorf("CarrierTitles: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("CarrierTitles: scan: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
 }
