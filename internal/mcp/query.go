@@ -112,6 +112,14 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Filter by fact origin: authored (hand-written), distilled (synthesis-pipeline output), or discovered (emergent — surfaced by the discovery engine). Accepts a single value or a list."),
 			mcpgo.WithStringItems(),
 		),
+		mcpgo.WithArray("motifs",
+			mcpgo.Description("Filter by motif — the general regularity a fact instantiates (mechanism, failure shape, pattern), independent of its subject. Use to find facts about DIFFERENT subjects that exemplify the same thing."),
+			mcpgo.WithStringItems(),
+		),
+		mcpgo.WithString("motif_match",
+			mcpgo.Description("How strictly `motifs` must match, loosest last: exact (default; the same motif, however it is spelled), stem, token-2, token-1 (noisiest), soft (not yet available). Only meaningful alongside `motifs`."),
+			mcpgo.Enum(motifMatchEnum()...),
+		),
 	)
 }
 
@@ -131,10 +139,13 @@ type factOutput struct {
 }
 
 type frontmatterOutput struct {
-	Domain         []string `json:"domain"`
-	Confidence     float64  `json:"confidence"`
-	Sources        int      `json:"sources"`
-	Entities       []string `json:"entities"`
+	Domain     []string `json:"domain"`
+	Confidence float64  `json:"confidence"`
+	Sources    int      `json:"sources"`
+	Entities   []string `json:"entities"`
+	// Motifs is omitted when empty, so a motif-free corpus's responses are
+	// byte-identical to what they were before the axis existed.
+	Motifs         []string `json:"motifs,omitempty"`
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	CommittedAt    int64    `json:"committed_at,omitempty"`
@@ -233,7 +244,10 @@ func mountLabel(rt repos.ReadTarget) string {
 // DESC), snapshots it into a session, and serves the first page through the
 // shared resume path so body hydration and pagination match relevance mode.
 func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
-	q := parseQueryFilters(req)
+	q, err := parseQueryFilters(req)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 	targets, err := federate.ReadTargetsFor(b, q.Path)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -347,7 +361,11 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 
 // parseQueryFilters reads the shared filter arguments into SearchOptions.
 // Limit is set by the caller per mode.
-func parseQueryFilters(req mcpgo.CallToolRequest) store.SearchOptions {
+func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
+	tier, err := parseMotifMatch(req.GetString("motif_match", ""))
+	if err != nil {
+		return store.SearchOptions{}, err
+	}
 	return store.SearchOptions{
 		Text:           req.GetString("text", ""),
 		Entities:       req.GetStringSlice("entities", nil),
@@ -359,7 +377,9 @@ func parseQueryFilters(req mcpgo.CallToolRequest) store.SearchOptions {
 		IncludeTypes:   req.GetStringSlice("type", nil),
 		IncludeOrigins: stringOrSlice(req, "origin"),
 		DomainExact:    req.GetBool("domain_exact", false),
-	}
+		Motifs:         stringOrSlice(req, "motifs"),
+		MotifMatch:     tier,
+	}, nil
 }
 
 // stringOrSlice reads an argument that may be either a single string or a
@@ -377,7 +397,11 @@ func stringOrSlice(req mcpgo.CallToolRequest, key string) []string {
 func hasAnyFilter(q store.SearchOptions) bool {
 	return q.Text != "" || len(q.Entities) > 0 || len(q.Domain) > 0 ||
 		len(q.DomainAncestor) > 0 || q.Path != "" || q.MinConfidence > 0 ||
-		len(q.IncludeTypes) > 0 || len(q.IncludeOrigins) > 0
+		len(q.IncludeTypes) > 0 || len(q.IncludeOrigins) > 0 ||
+		// A motif-only query is a legitimate query: "what else instantiates
+		// this mechanism?" is the question the axis exists to answer, and
+		// omitting it here would reject that as "no filter supplied".
+		len(q.Motifs) > 0
 }
 
 // queryFirstCall fans a relevance query out across every read mount in
@@ -385,9 +409,12 @@ func hasAnyFilter(q store.SearchOptions) bool {
 // returns the first page, and (only when the fused set exceeds one page)
 // snapshots the remainder into the write repo's session DB with WIRE paths.
 func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
-	q := parseQueryFilters(req)
+	q, err := parseQueryFilters(req)
+	if err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 	if !hasAnyFilter(q) {
-		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required"), nil
+		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, motifs, or min_confidence is required"), nil
 	}
 	targets, err := federate.ReadTargetsFor(b, q.Path)
 	if err != nil {
@@ -688,6 +715,7 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 			Confidence:     r.Confidence,
 			Sources:        r.Sources,
 			Entities:       orEmpty(r.Entities),
+			Motifs:         r.Motifs,
 			Refs:           orEmpty(r.Refs),
 			EvidenceWeight: r.EvidenceWeight,
 			CommittedAt:    r.CommittedAt,
@@ -714,6 +742,7 @@ func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, co
 			Confidence:     f.Confidence,
 			Sources:        f.Sources,
 			Entities:       orEmpty(f.Entities),
+			Motifs:         f.Motifs,
 			Refs:           orEmpty(f.Refs),
 			EvidenceWeight: f.EvidenceWeight,
 			CommittedAt:    committedAt,
@@ -769,4 +798,35 @@ func orEmpty(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// motifMatchEnum is the motif_match tier list for the tool schema, read from
+// the store's own definition so the parameter surface and the implementation
+// cannot drift — the fact-schema single-source pattern (invariant 2061717e)
+// applied to this knob.
+func motifMatchEnum() []string {
+	out := make([]string, 0, len(store.AllMotifMatchTiers))
+	for _, t := range store.AllMotifMatchTiers {
+		out = append(out, string(t))
+	}
+	return out
+}
+
+// parseMotifMatch validates the caller's tier.
+//
+// An unrecognised value is an ERROR, not a silent fall back to the default.
+// Falling back would answer a differently-scoped question than the one asked
+// while looking like it succeeded — and for this knob specifically, a typo in
+// a loose tier would silently return the strict tier's results, which a caller
+// checking for breadth cannot distinguish from "there is nothing looser".
+func parseMotifMatch(raw string) (store.MotifMatchTier, error) {
+	if raw == "" {
+		return store.MotifMatchExact, nil
+	}
+	for _, t := range store.AllMotifMatchTiers {
+		if string(t) == raw {
+			return t, nil
+		}
+	}
+	return "", fmt.Errorf("motif_match must be one of %v", motifMatchEnum())
 }

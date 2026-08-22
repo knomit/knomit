@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/textnorm"
+
 	"github.com/rs/zerolog/log"
 )
 
@@ -41,6 +43,9 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 		return nil, 0, fmt.Errorf("RecentFacts: %w", err)
 	}
 
+	if opts.resolvedMotifs, err = fq.expandMotifQuery(ctx, branchID, opts); err != nil {
+		return nil, 0, err
+	}
 	flt := newFactFilter(opts)
 
 	// Build the ep filter clause (operates on cl.operation from the LEFT JOIN).
@@ -251,6 +256,59 @@ type SearchOptions struct {
 	ExcludeKinds   []string  // exclude facts with these kinds
 	IncludeOrigins []string  // only return facts with these origins (empty = all)
 	EpisodeOps     []string  // filter by episode operation type (e.g. "learn", "update", "retract"); filtered post-query in Go
+
+	// Motifs filters by the aspect axis (blueprint §6). Empty means no motif
+	// filtering at all — the field is inert unless a caller asks for it, which
+	// is what keeps motifs out of every ordinary search.
+	Motifs []string
+	// resolvedMotifs is Motifs expanded to the concrete spellings that satisfy
+	// MotifMatch in this branch's vocabulary. Populated by the query path, not
+	// by callers — an unexported field so no caller can hand-set it and bypass
+	// the tier.
+	resolvedMotifs []string
+	// MotifMatch is the strictness tier, ordered loosest-last. Empty means
+	// MotifMatchExact.
+	//
+	// The default is deliberately the strictest tier. Loose tiers are for a
+	// human or agent READING results, who judges what comes back; anything
+	// that triggers automation stays on the §5 operating points. That is why
+	// they are reachable only by naming them.
+	MotifMatch MotifMatchTier
+}
+
+// MotifMatchTier is the §6 strictness knob for motif filtering.
+type MotifMatchTier string
+
+const (
+	// MotifMatchExact is canonical-id equality: the query motif and the fact's
+	// motif resolve to the same cluster. Default.
+	MotifMatchExact MotifMatchTier = "exact"
+	// MotifMatchStem is stemmed-token multiset equality.
+	//
+	// This tier is free, and the reason is worth knowing: the alias layer's
+	// mechanical grouping key IS the sorted stemmed token multiset, so two
+	// motifs match under `stem` exactly when they share a cluster_key. The
+	// tier is a different question with the same answer — which also means it
+	// can differ from `exact` only where a JUDGE merged two clusters string
+	// similarity kept apart.
+	MotifMatchStem MotifMatchTier = "stem"
+	// MotifMatchToken2 matches on two or more shared stemmed tokens.
+	MotifMatchToken2 MotifMatchTier = "token-2"
+	// MotifMatchToken1 matches on any single shared stemmed token. The noisiest
+	// mechanical tier — measured at 15 false pairs on the eval set — and
+	// acceptable for a reader, never for automation.
+	MotifMatchToken1 MotifMatchTier = "token-1"
+	// MotifMatchSoft is name+def embedding similarity. Declared so the
+	// parameter surface is complete and the tier is gated; see
+	// motifMatchSoftUnavailable for why it does not yet run.
+	MotifMatchSoft MotifMatchTier = "soft"
+)
+
+// AllMotifMatchTiers is every tier, loosest last. The single source the MCP
+// schema's enum and the validation both read, so a tier cannot be added in one
+// place and forgotten in the other.
+var AllMotifMatchTiers = []MotifMatchTier{
+	MotifMatchExact, MotifMatchStem, MotifMatchToken2, MotifMatchToken1, MotifMatchSoft,
 }
 
 // SearchResult is a FactWithBody paired with a relevance score in [0, 100].
@@ -380,13 +438,173 @@ func newFactFilter(q SearchOptions) *factFilter {
 			canon, canon,
 		)
 	}
+	f.addMotifClause(q)
 	return f
 }
 
-// filterByEpisodeOps removes results whose latest commit operation is not in
-// the allowed set. It performs a single bulk SQL lookup of operations by
-// commit_hash from commit_log (same database). If ops is empty, all results
-// are kept unchanged.
+// addMotifClause adds the §6 motif filter, and NOTHING unless the caller asked
+// for one.
+//
+// MN6 (designer ruling Q1, 2026-08-21): this function is allow-listed for
+// EXPLICIT user-supplied motif_match ONLY; never consulted unless the caller
+// passed the parameter. A user-requested filter is expressed intent — the
+// visibility side of the MN6 line — and §6 governs read surfaces by design.
+// What that entry does NOT license is motifs reaching the scoring or KNN paths,
+// which decide RANKING rather than answering a question the caller asked.
+//
+// The early return is therefore load-bearing rather than an optimisation: it is
+// what makes "inert unless asked" true of the compiled query and not merely of
+// the documentation.
+//
+// Every tier arrives here already RESOLVED to a concrete set of motif
+// spellings by expandMotifQuery, so the SQL is one shape for all of them. That
+// split is deliberate: tokenization and alias resolution live in Go where the
+// tokenizer already is, and the corpus grows no second normalization of the
+// motif strings (MN3 — a motif token index would be exactly that).
+func (f *factFilter) addMotifClause(q SearchOptions) {
+	if len(q.Motifs) == 0 {
+		return
+	}
+	if len(q.resolvedMotifs) == 0 {
+		// The query named motifs and nothing in the corpus matches its tier.
+		// Match nothing rather than relaxing: a filter that quietly widens
+		// answers a question the caller did not ask.
+		f.add(" AND 0 = 1")
+		return
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(q.resolvedMotifs)), ",")
+	args := make([]any, 0, len(q.resolvedMotifs))
+	for _, m := range q.resolvedMotifs {
+		args = append(args, m)
+	}
+	f.add(" AND EXISTS (SELECT 1 FROM fact_motifs fm WHERE fm.fact_id = f.id"+
+		" AND fm.motif IN ("+ph+"))", args...)
+}
+
+// expandMotifQuery resolves the caller's motif terms to the concrete set of
+// spellings in this branch's vocabulary that satisfy the requested tier.
+//
+// Done in Go, over the vocabulary rather than the corpus: the vocabulary is
+// small (one row per distinct spelling), and this is where the tokenizer and
+// the alias table already live. The alternative — a motif-token junction —
+// would be a second normalization of strings MN3 says are stored as written.
+func (fq *factQuery) expandMotifQuery(ctx context.Context, branchID int64, q SearchOptions) ([]string, error) {
+	if len(q.Motifs) == 0 {
+		return nil, nil
+	}
+	if q.MotifMatch == MotifMatchSoft {
+		// Declared, gated, and not yet calibrated. Guarded TWICE — here, and by
+		// the switch default below that any unrecognised tier also falls to.
+		// That redundancy is deliberate: this is the tier a future implementer
+		// is most likely to reach for, and a single guard removed while wiring
+		// it up would ship soft silently behaving as exact. Matching nothing is the
+		// honest behaviour: falling back to another tier would answer a
+		// question the caller did not ask, and doing so under the name "soft"
+		// is worse than an empty result the caller can see.
+		return nil, nil
+	}
+
+	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx, `
+		SELECT DISTINCT fm.motif,
+		       COALESCE(a.canonical_id, fm.motif),
+		       COALESCE(a.cluster_key, '')
+		  FROM branch_facts bf
+		  JOIN fact_motifs fm ON fm.fact_id = bf.fact_id
+		  LEFT JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = fm.motif
+		 WHERE bf.branch_id = ?`, branchID)
+	if err != nil {
+		return nil, fmt.Errorf("expandMotifQuery: %w", err)
+	}
+	defer rows.Close()
+
+	type vocabEntry struct{ motif, canonical, clusterKey string }
+	var vocab []vocabEntry
+	for rows.Next() {
+		var v vocabEntry
+		if err := rows.Scan(&v.motif, &v.canonical, &v.clusterKey); err != nil {
+			return nil, fmt.Errorf("expandMotifQuery: scan: %w", err)
+		}
+		if v.clusterKey == "" {
+			// No alias row: the spelling is its own singleton cluster, exactly
+			// as it would be after a rebuild.
+			v.clusterKey = groupingKey(v.motif)
+		}
+		vocab = append(vocab, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// The query's own terms are resolved the same way, so a caller may name any
+	// member spelling.
+	canonicalOf := map[string]string{}
+	for _, v := range vocab {
+		canonicalOf[v.motif] = v.canonical
+	}
+
+	match := map[string]struct{}{}
+	for _, term := range q.Motifs {
+		switch q.MotifMatch {
+		case "", MotifMatchExact:
+			want, ok := canonicalOf[term]
+			if !ok {
+				want = term // not in this corpus: its own singleton
+			}
+			for _, v := range vocab {
+				if strings.EqualFold(v.canonical, want) {
+					match[v.motif] = struct{}{}
+				}
+			}
+		case MotifMatchStem:
+			want := groupingKey(term)
+			for _, v := range vocab {
+				if v.clusterKey == want {
+					match[v.motif] = struct{}{}
+				}
+			}
+		case MotifMatchToken2, MotifMatchToken1:
+			need := 2
+			if q.MotifMatch == MotifMatchToken1 {
+				need = 1
+			}
+			want := map[string]struct{}{}
+			for _, t := range textnorm.Tokens(textnorm.Canonicalize(term)) {
+				want[t] = struct{}{}
+			}
+			if len(want) < need {
+				// A term that cannot satisfy its own tier matches nothing,
+				// rather than silently relaxing to a looser one.
+				continue
+			}
+			for _, v := range vocab {
+				shared := 0
+				for _, t := range textnorm.Tokens(textnorm.Canonicalize(v.motif)) {
+					if _, ok := want[t]; ok {
+						shared++
+					}
+				}
+				if shared >= need {
+					match[v.motif] = struct{}{}
+				}
+			}
+		default:
+			// Unrecognised tier: match nothing. Validation upstream should have
+			// caught it; failing closed is the safe direction.
+			return nil, nil
+		}
+	}
+
+	out := make([]string, 0, len(match))
+	for m := range match {
+		out = append(out, m)
+	}
+	// Sorted so the compiled SQL and its bind args are deterministic — an
+	// unstable IN-list makes two identical queries different statements to the
+	// planner and to anyone reading a log.
+	sort.Strings(out)
+	return out, nil
+}
+
 func (fq *factQuery) filterByEpisodeOps(ctx context.Context, results []SearchResult, ops []string) ([]SearchResult, error) {
 	if len(ops) == 0 || len(results) == 0 {
 		return results, nil
@@ -469,6 +687,9 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 		limit = 100
 	}
 
+	if q.resolvedMotifs, err = fq.expandMotifQuery(ctx, branchID, q); err != nil {
+		return nil, err
+	}
 	flt := newFactFilter(q)
 
 	// ── Text-less path: return all facts matching filters with score 100 ──

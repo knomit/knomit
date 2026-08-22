@@ -185,10 +185,23 @@ var mechanicsPaths = map[string][]string{
 	// them — if a motif term ever reaches the scoring arithmetic, that is an
 	// MN6 violation this entry does not license.
 	//
-	// newFactFilter is deliberately ABSENT until the §6 motif_match filter
-	// lands: the list is bidirectional, so declaring a permission before the
-	// code needs it fails as loudly as omitting one.
-	"internal/store/search_query.go": {"RecentFacts", "recentFactsSearch", "Search"},
+	// newFactFilter and addMotifClause are the §6 motif_match filter, added in
+	// Phase 2 with the designer's Q1 scoping sentence: EXPLICIT user-supplied
+	// motif_match ONLY; never consulted unless the caller passed the parameter.
+	// A user-requested filter is expressed intent — the visibility side of the
+	// MN6 line — and §6 governs read surfaces by design.
+	//
+	// expandMotifQuery resolves the caller's terms to concrete spellings per
+	// tier. Same licence: it answers the question asked, it does not decide
+	// what ranks.
+	//
+	// None of these entries licenses motifs reaching the SCORING or KNN paths.
+	// Those decide ranking rather than answering a caller's question, and a
+	// motif term arriving there is an MN6 violation this list does not cover.
+	"internal/store/search_query.go": {
+		"RecentFacts", "recentFactsSearch", "Search",
+		"newFactFilter", "addMotifClause", "expandMotifQuery",
+	},
 }
 
 // TestMN6_MotifsDoNotDriveMechanics — MN6 as clarified by the designer on
