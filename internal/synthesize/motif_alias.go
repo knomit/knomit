@@ -2,8 +2,13 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
+	"strings"
+
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
 )
@@ -263,4 +268,224 @@ func dot(a, b []float32) float64 {
 		s += float64(a[i]) * float64(b[i])
 	}
 	return s
+}
+
+// ── the work item ─────────────────────────────────────────────────────────
+
+// motifAliasStepType is the work-item step type for the alias judge.
+const motifAliasStepType = "motif_alias"
+
+// motifAliasPriority places alias items just below prune's cluster band and
+// above the discover/reflect band: vocabulary resolution informs the surfaces
+// and the §7 signal, so it is worth doing before discovery spends on bridges,
+// but never at the expense of consolidation itself.
+const motifAliasPriority = 1.2
+
+// motifJudgeItem is one pair as the judge sees it. Field names match the
+// response schema's `a`/`b` so a small model does not have to map between them.
+type motifJudgeItem struct {
+	A         string   `json:"a"`
+	AAlso     []string `json:"a_also,omitempty"`
+	ACarriers []string `json:"a_carriers"`
+	B         string   `json:"b"`
+	BAlso     []string `json:"b_also,omitempty"`
+	BCarriers []string `json:"b_carriers"`
+}
+
+// motifAliasResponseSchema is what the judge must return.
+//
+// `mechanism` is required-in-practice rather than required-in-schema: the
+// schema cannot express "required only when same_mechanism is true", and the
+// write path refuses a merge without it anyway. Stating it in the description
+// and enforcing it at the write path is the honest arrangement — a schema that
+// claimed to require it unconditionally would reject every legitimate decline.
+const motifAliasResponseSchema = `{
+  "type": "object",
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "a": {"type": "string", "description": "The a name, exactly as given."},
+          "b": {"type": "string", "description": "The b name, exactly as given."},
+          "same_mechanism": {"type": "boolean"},
+          "mechanism": {"type": "string", "description": "One sentence naming the mechanism both describe. Required when same_mechanism is true."}
+        },
+        "required": ["a", "b", "same_mechanism"]
+      }
+    }
+  },
+  "required": ["verdicts"]
+}`
+
+// motifAliasVerdict is one decoded verdict.
+type motifAliasVerdict struct {
+	A             string `json:"a"`
+	B             string `json:"b"`
+	SameMechanism bool   `json:"same_mechanism"`
+	Mechanism     string `json:"mechanism"`
+}
+
+type motifAliasResult struct {
+	Verdicts []motifAliasVerdict `json:"verdicts"`
+}
+
+// parseMotifAliasResponse decodes and probes the envelope.
+//
+// The probe is not redundant with the typed unmarshal (invariant 51d85fcd): a
+// response carrying its content under the wrong key unmarshals to a
+// zero-valued result, applies as a silent no-op, and the item advances with the
+// work gone. Presence on the raw object is what makes that loud and retryable.
+func parseMotifAliasResponse(raw string) (motifAliasResult, error) {
+	var out motifAliasResult
+	text := extractJSON(raw)
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		return out, fmt.Errorf("parse motif alias response: %w", err)
+	}
+	if err := requireResponseKey(text, "verdicts"); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// validateMotifAliasVerdicts checks the response against what was actually
+// offered.
+//
+// Every verdict must name a pair this item asked about. A judge that invents a
+// pair — or answers about one from a previous item — would otherwise merge two
+// clusters nobody put in front of it, and over-merge is the failure nothing
+// downstream can detect.
+func validateMotifAliasVerdicts(res motifAliasResult, offered []motifJudgeItem) error {
+	valid := map[string]struct{}{}
+	for _, it := range offered {
+		valid[motifPairKey(it.A, it.B)] = struct{}{}
+	}
+	seen := map[string]struct{}{}
+	for _, v := range res.Verdicts {
+		key := motifPairKey(v.A, v.B)
+		if _, ok := valid[key]; !ok {
+			return fmt.Errorf("verdict names %q/%q, which was not offered in this item", v.A, v.B)
+		}
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("verdict for %q/%q appears more than once", v.A, v.B)
+		}
+		seen[key] = struct{}{}
+		if v.SameMechanism && strings.TrimSpace(v.Mechanism) == "" {
+			return fmt.Errorf("merge of %q/%q names no shared mechanism", v.A, v.B)
+		}
+	}
+	return nil
+}
+
+// applyMotifAliasVerdicts records the judge's decisions and rebuilds.
+//
+// A verdict that fails to record does not fail the item: the rest of the batch
+// is still good work, and the pair will simply be offered again. Losing a whole
+// batch to one bad row is the worse trade.
+func applyMotifAliasVerdicts(ctx context.Context, d Deps, branch string, res motifAliasResult) error {
+	for _, v := range res.Verdicts {
+		var err error
+		if v.SameMechanism {
+			err = d.Motifs.RecordJudgeMerge(ctx, branch, v.A, v.B, v.Mechanism)
+		} else {
+			err = d.Motifs.RecordJudgeDecline(ctx, branch, v.A, v.B)
+		}
+		if err != nil {
+			log.Warn().Err(err).Str("a", v.A).Str("b", v.B).
+				Msg("motif alias: verdict not recorded; the pair will be offered again")
+		}
+	}
+	// Decisions take effect here, together: the mechanical layer and the judge
+	// overlay are applied in one rebuild so the result is a deterministic
+	// function of (facts, decisions) rather than an accumulation of edits.
+	return d.Motifs.RebuildAliases(ctx, branch)
+}
+
+// planMotifAliasWork selects pairs and enqueues at most one alias item per
+// session.
+//
+// One item, not one per pair: §3.1 specifies ONE bounded prompt, and a judge
+// deciding several pairs together can see that two of them are the same
+// question asked twice.
+//
+// Degrades to "no item" rather than failing the session, and records health on
+// every path — a corpus whose vocabulary could not be read must not look like
+// one with nothing to resolve.
+func planMotifAliasWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) error {
+	pairs, health, err := selectMotifJudgePairs(ctx, d, branch)
+	recordMotifAliasHealth(sess, health)
+	if err != nil || len(pairs) == 0 {
+		return nil
+	}
+	items := make([]motifJudgeItem, 0, len(pairs))
+	for _, p := range pairs {
+		items = append(items, motifJudgeItem{
+			A:         p.A.CanonicalID,
+			AAlso:     otherMembers(p.A.Members, p.A.CanonicalID),
+			ACarriers: p.ATitle,
+			B:         p.B.CanonicalID,
+			BAlso:     otherMembers(p.B.Members, p.B.CanonicalID),
+			BCarriers: p.BTitle,
+		})
+	}
+	payload, err := json.Marshal(items)
+	if err != nil {
+		return wrapf(reviewTool, err, "motif alias: marshal pairs")
+	}
+	return d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		SessionID:  sess.ID,
+		StepType:   motifAliasStepType,
+		ClusterKey: "motif-alias",
+		FactsJSON:  string(payload),
+		Priority:   motifAliasPriority,
+	})
+}
+
+// otherMembers is the cluster's spellings apart from the one being displayed —
+// what "already resolves to this name" means in the prompt.
+func otherMembers(members []string, canonical string) []string {
+	var out []string
+	for _, m := range members {
+		if m != canonical {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// recordMotifAliasHealth APPENDS this phase's descriptors to the session's
+// health lines.
+//
+// Appends rather than assigns, unlike recordRestatementHealth: by Phase 2 the
+// field has two independent producers, and the last writer to ASSIGN silently
+// deletes the other's lines. Health is the only channel through which either
+// mechanism reports "I ran and found nothing" — losing it makes a broken
+// subsystem indistinguishable from a clean corpus, which is the failure the
+// Phase-0 descriptors exist to prevent in the first place.
+//
+// TestMotifAliasHealth_CoexistsWithRestatementLines is the guard; it fails if
+// either producer starts clobbering the other.
+func recordMotifAliasHealth(sess *store.PipelineSession, h motifAliasHealth) {
+	if sess == nil {
+		return
+	}
+	sess.Health = append(sess.Health, motifAliasHealthLines(h)...)
+}
+
+func motifAliasHealthLines(h motifAliasHealth) []string {
+	if h.Failure != "" {
+		return []string{fmt.Sprintf("motif aliases: %s (vocabulary %d)", h.Failure, h.Vocabulary)}
+	}
+	if h.BelowFloor {
+		return []string{fmt.Sprintf(
+			"motif aliases: vocabulary %d below the %d-cluster validity floor; mechanical layer only",
+			h.Vocabulary, minJudgeVocabulary)}
+	}
+	return []string{
+		fmt.Sprintf("motif aliases: vocabulary %d, %d candidates, %d offered",
+			h.Vocabulary, h.Candidates, h.Emitted),
+		fmt.Sprintf("motif aliases: operating point name-cos %.3f (this corpus, this session)",
+			h.OperatingPoint),
+	}
 }

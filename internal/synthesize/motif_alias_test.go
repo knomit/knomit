@@ -250,6 +250,7 @@ var motifBudgetLiterals = map[string]string{
 	"50":    "judgePairPermille: selection policy, per-mille of THIS corpus's own distribution",
 	"6":     "maxJudgePairs: judge-slot budget",
 	"4":     "carrierTitlesPerCluster: prompt-size budget",
+	"1.2":   "motifAliasPriority: ordering within the work queue, below prune's cluster band",
 	"1e-12": "degenerate-norm guard in cosine; a numerical floor, not a similarity threshold",
 	"1000":  "per-mille denominator",
 	"0":     "loop and slice bounds",

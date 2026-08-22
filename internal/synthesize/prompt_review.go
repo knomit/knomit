@@ -201,3 +201,22 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 		Facts:          string(factsJSON),
 	}, nil
 }
+
+// RenderMotifAliasWorkItem renders the vocabulary judge's prompt.
+//
+// Takes no arguments: the pairs ride in the work item's `facts` field like
+// every other step's payload, and the prompt says so rather than interpolating
+// them. That is also what keeps this the ONE prompt in the system that can
+// legitimately contain corpus vocabulary — the vocabulary is in the payload,
+// not in the template, so the MN1 enumeration over prompt TEMPLATES stays a
+// clean check.
+func RenderMotifAliasWorkItem() (*WorkItemContent, error) {
+	prompt, err := RenderTemplate("motif_alias", "user", PromptData{})
+	if err != nil {
+		return nil, fmt.Errorf("render motif alias work item: %w", err)
+	}
+	return &WorkItemContent{
+		Prompt:         prompt,
+		ResponseSchema: motifAliasResponseSchema,
+	}, nil
+}

@@ -155,6 +155,14 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		return err
 	}
 
+	// Alias resolution, AFTER the shortlist: recordRestatementHealth ASSIGNS
+	// sess.Health and recordMotifAliasHealth appends, so this order is what
+	// keeps both sets of lines. The co-existence test guards it rather than
+	// leaving it to whoever next edits this function.
+	if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
+		return err
+	}
+
 	// Store distill work items if >1 seed (lower priority than prune).
 	//
 	// Grouped by cluster, then chunked. Depth-0 distill used to pass the whole
@@ -488,6 +496,8 @@ type itemDecision struct {
 	prune    *PruneResult
 	distill  *DistillResult
 	discover *discoverDecision
+	// motifAlias carries the vocabulary judge's verdicts (blueprint §3.1).
+	motifAlias *motifAliasResult
 }
 
 // Decode parses and validates a response against its work item. It is
@@ -545,6 +555,20 @@ func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any
 			return nil, "", wrapf(reviewTool, err, "validate distill")
 		}
 		return &itemDecision{distill: &result}, response, nil
+
+	case motifAliasStepType:
+		var offered []motifJudgeItem
+		if err := json.Unmarshal([]byte(item.FactsJSON), &offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "unmarshal motif alias pairs")
+		}
+		result, err := parseMotifAliasResponse(response)
+		if err != nil {
+			return nil, "", wrapf(reviewTool, err, "parse motif alias response")
+		}
+		if err := validateMotifAliasVerdicts(result, offered); err != nil {
+			return nil, "", wrapf(reviewTool, err, "validate motif alias")
+		}
+		return &itemDecision{motifAlias: &result}, response, nil
 
 	case "discover":
 		// An empty response is "no bridges panned out", not a malformed one.
@@ -634,6 +658,11 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		}
 		recordStats(ctx, reviewTool, d, sess, stats)
 		enqueueRaptorFollowups(ctx, d, sess, item, writtenFacts)
+
+	case motifAliasStepType:
+		if err := applyMotifAliasVerdicts(ctx, d, branch, *dec.motifAlias); err != nil {
+			return wrapf(reviewTool, err, "apply motif alias")
+		}
 
 	case "discover":
 		return applyDiscoverStep(ctx, reviewTool, d, sess, dec.discover)
@@ -737,6 +766,8 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 	case "reflect":
 		existingMethodology := reflectMethodologySection(ctx, d.RI, branch, []byte(item.FactsJSON))
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot, existingMethodology)
+	case motifAliasStepType:
+		content, err = RenderMotifAliasWorkItem()
 	case "discover":
 		var payload DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {
