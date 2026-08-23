@@ -110,11 +110,37 @@ func subjectDisjoint(a, b factForLLM, d store.SubjectLabelDF, p disjointnessPoin
 		if _, shared := bt[tok]; !shared {
 			continue
 		}
+		if d.DF[tok] >= d.LiveFacts && d.LiveFacts > 0 {
+			// UNIVERSAL LABELS are excluded in EVERY mode, strict included
+			// (designer ruling 2026-08-23, phase3-rulings-5, review L4).
+			//
+			// A label carried by every live fact distinguishes nothing — the
+			// ontology root is one by construction, since every path starts
+			// with it. This is a tautology rather than the ratio judgement the
+			// strict fallback exists to suspend, which is why it survives below
+			// the label floor: without it, "strict" made every pair in the
+			// corpus share `kb` and turned the axis OFF rather than
+			// conservative (measured: four tests red, FromNothing among them).
+			continue
+		}
+		if p.Strict {
+			// STRICT: any shared label blocks, umbrella included.
+			//
+			// The umbrella exclusion is IGNORED here, and that is the whole
+			// point of the fallback. Umbrella is `df > 20% of N`, so on a
+			// corpus of nine facts or fewer the cut is 1 — and a SHARED label
+			// has df >= 2 by definition, which made every shared label an
+			// umbrella and turned the conservative fallback into a no-op in
+			// exactly the regime it exists for (Phase-3 review, L4). A ratio is
+			// no more valid below the population floor than the percentile it
+			// stands beside; MN13's third class applies to both.
+			return false
+		}
 		df := d.DF[tok]
 		if df > p.Umbrella {
 			continue // umbrella: carried by too much of the corpus to mean anything
 		}
-		if p.Strict || df <= p.Cut {
+		if df <= p.Cut {
 			return false // specific enough to be the same subject
 		}
 	}

@@ -49,14 +49,20 @@ func motifPayloads(in []DiscoverWorkPayload) []DiscoverWorkPayload {
 // motif connects them — which is the whole claim the axis makes.
 func (e *restatementEnv) seedMotifPair(motif string) {
 	e.t.Helper()
-	e.writeFactWithMotifs("kb/gotchas/uitesting/agentclicks.md",
+	// rewriteWithMotifs, NOT writeFactWithMotifs: the latter stamps
+	// `domain: [alpha]` on every fact it writes, so a "subject-disjoint" pair
+	// built with it shares a domain tag. That went unnoticed while the umbrella
+	// exclusion was degenerate at this corpus size and swallowed the shared tag
+	// (Phase-3 review, L4) — the fixture was never disjoint, and the gate was
+	// never the reason it passed.
+	e.rewriteWithMotifs("kb/gotchas/uitesting/agentclicks.md",
 		"An agent testing a UI will execute JavaScript instead of clicking",
 		"Driving app state directly bypasses the path the verifier believes it is checking.",
-		[]string{motif})
-	e.writeFactWithMotifs("kb/technology/benchmarks/terminalscores.md",
+		[]string{motif}, []string{"Cognition"})
+	e.rewriteWithMotifs("kb/technology/benchmarks/terminalscores.md",
 		"Coding agents reached 94% on a terminal benchmark by cheating it",
 		"The agents scored by exploiting the harness rather than by solving the tasks.",
-		[]string{motif})
+		[]string{motif}, []string{"Terminal Bench"})
 }
 
 // TestReviewPlan_FarLaneRoutesBackward — the far lane's members have no
@@ -134,14 +140,14 @@ func TestReviewPlan_HealthReportsTheOperatingPoint(t *testing.T) {
 func TestReviewPlan_DiscoverItemsShareOneRankSpace(t *testing.T) {
 	env := newRestatementEnv(t, 4)
 	env.seedMotifPair("measure-becomes-target")
-	env.writeFactWithMotifs("kb/gotchas/caching/staleread.md",
+	env.rewriteWithMotifs("kb/gotchas/caching/staleread.md",
 		"A cache read served state the writer had already replaced",
 		"The reader observed a version the writer believed was gone.",
-		[]string{"stale-read-after-write"})
-	env.writeFactWithMotifs("kb/technology/ledgers/settlement.md",
+		[]string{"stale-read-after-write"}, []string{"Redis"})
+	env.rewriteWithMotifs("kb/technology/ledgers/settlement.md",
 		"Settlement confirmed against a balance that had already moved",
 		"The confirmation was computed from a snapshot the ledger had superseded.",
-		[]string{"stale-read-after-write"})
+		[]string{"stale-read-after-write"}, []string{"SWIFT"})
 
 	res, err := NewReviewerWithOptions(env.ri, nil, EffortHigh, ScopeFilter{}).StartSession(context.Background())
 	require.NoError(t, err)

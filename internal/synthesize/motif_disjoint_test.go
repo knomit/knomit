@@ -16,11 +16,18 @@ import (
 // the preconditions below caught: it made every filler label df=1, which is a
 // corpus where 95% of labels are hapax, and a p90 over that is 1 — a cut no
 // shared label can ever fall under, since a shared label has df >= 2 by
-// definition. Measured on knomit-kb at 406 live facts (live index, raw
-// domain+entity labels): 2010 distinct labels, 69% hapax, p90 = df 3, umbrella
-// = df 81. The tail below reproduces that shape — roughly seven in ten hapax, a
-// middle band, and a thin common head — so a fixture built on it exercises the
-// same arithmetic production will.
+// definition.
+//
+// Calibrated on knomit-kb at 406 live facts. The first measurement counted RAW
+// DOMAIN+ENTITY labels (2010 distinct, 69% hapax, p90 = df 3, umbrella = df
+// 81), which is NOT the population the shipped SubjectLabelDF counts — it also
+// tokenises paths, uuid segments included. The review re-measured both, across
+// three real corpora: with paths, knomit-kb has 2936 labels / 69.9% hapax /
+// p90 = 3; agentic-engineering 1370 / 61.2% / p90 = 5; core 4806 / 68.6% /
+// p90 = 5. The uuid inflation moves the cut by at most 1 df, always toward the
+// weaker gate, and the ~69% hapax shape this tail reproduces does match
+// production — so the fixture stands, and the population it was calibrated on
+// is now named correctly.
 //
 // Keys are STEMMED tokens, because that is what SubjectLabelDF stores and what
 // fact.SubjectTokens looks up: "agents" is keyed "agent", "gotchas" is keyed
@@ -138,19 +145,50 @@ func TestSubjectDisjoint_FallsBackToStrictBelowTheFloor(t *testing.T) {
 	require.True(t, subjectDisjoint(a, b, graded, gp))
 }
 
-// TestSubjectDisjoint_StrictStillExcludesUmbrellas — the umbrella rule sits
-// ABOVE the operating point, so it holds in the fallback too. Without this,
-// strict mode would block every pair in the corpus on the ontology root that
-// every path carries, and "conservative" would mean "off".
-func TestSubjectDisjoint_StrictStillExcludesUmbrellas(t *testing.T) {
-	labels := store.SubjectLabelDF{LiveFacts: 6, DF: map[string]int{"kb": 6, "alpha": 1, "beta": 1}}
+// TestSubjectDisjoint_StrictExcludesOnlyUniversalLabels — below the label floor
+// strict blocks on any shared label EXCEPT one carried by every live fact.
+//
+// This test previously asserted that strict still honoured the umbrella RATIO,
+// on a six-fact fixture where every shared label is an umbrella by arithmetic —
+// so it could not tell "the ontology root is correctly excluded" from "the gate
+// is entirely off", and it passed while the fallback was a no-op (review L4:
+// lesson 5's coinciding values). The ruling that followed replaced both: the
+// ratio is suspended below the floor, the universal-label tautology is not.
+func TestSubjectDisjoint_StrictExcludesOnlyUniversalLabels(t *testing.T) {
+	labels := store.SubjectLabelDF{LiveFacts: 40,
+		DF: map[string]int{"kb": 40, "evaluation": 4, "alpha": 1, "beta": 1}}
+	p := resolveDisjointnessPoint(labels)
+	require.True(t, p.Strict, "precondition: too few labels for a percentile")
+	require.Equal(t, labels.LiveFacts, labels.DF["kb"],
+		"precondition: the root is carried by every fact — the universal case")
+	require.Less(t, labels.DF["evaluation"], labels.LiveFacts,
+		"precondition: the other shared label is NOT universal")
+
+	// Sharing only the root: admitted, because the root says nothing.
+	rootOnly := factForLLM{File: "kb/alpha/1.md", Entities: []string{"Alpha"}}
+	rootOnly2 := factForLLM{File: "kb/beta/2.md", Entities: []string{"Beta"}}
+	require.True(t, subjectDisjoint(rootOnly, rootOnly2, labels, p))
+
+	// Sharing a non-universal label: blocked, because strict blocks on
+	// everything else — including labels the 20% ratio would have excused.
+	a := factForLLM{File: "kb/alpha/1.md", Domain: []string{"evaluation"}, Entities: []string{"Alpha"}}
+	b := factForLLM{File: "kb/beta/2.md", Domain: []string{"evaluation"}}
+	require.False(t, subjectDisjoint(a, b, labels, p))
+}
+
+// The reviewer's original leak case, pinned: a rare shared entity blocks even at
+// six facts, where the umbrella ratio alone excused everything.
+func TestSubjectDisjoint_StrictIsNotANoOpOnTinyCorpora(t *testing.T) {
+	labels := store.SubjectLabelDF{LiveFacts: 6, DF: map[string]int{"kb": 6, "cognition": 2}}
 	p := resolveDisjointnessPoint(labels)
 	require.True(t, p.Strict)
+	require.Greater(t, labels.DF["cognition"], p.Umbrella,
+		"precondition: at six facts even a two-carrier entity clears the 20%% cut")
 
-	a := factForLLM{File: "kb/alpha/1.md", Entities: []string{"Alpha"}}
-	b := factForLLM{File: "kb/beta/2.md", Entities: []string{"Beta"}}
-	require.True(t, subjectDisjoint(a, b, labels, p),
-		"the shared ontology root is an umbrella even when the gate is strict")
+	a := factForLLM{File: "kb/alpha/1.md", Entities: []string{"Cognition"}}
+	b := factForLLM{File: "kb/beta/2.md", Entities: []string{"Cognition"}}
+	require.False(t, subjectDisjoint(a, b, labels, p),
+		"two facts about the same rare entity must not bridge, however small the corpus")
 }
 
 // TestSubjectDisjoint_PathTokensAreSubjectClaims — a fact's location is a
