@@ -233,10 +233,30 @@ func dedupCluster(
 		mergedRefs := fact.UnionStrings(fullWinner.Refs, fullLoser.Refs)
 		mergedRefs = fact.AppendUnique(mergedRefs, loserFact.File)
 
-		// Same gate as every other write path. The loser is passed as retracted
-		// because it is deleted immediately below and the winner cites it as
-		// lineage — that citation is the record of the merge, not a dead ref.
-		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, []string{loserFact.File})
+		// Same gate as every other write path — but this merge ADDS no
+		// citation, so the whole union goes in as prior.
+		//
+		// Both operands are facts already in the corpus: each carried its refs
+		// from its own commit, where they were checked once, and grafting the
+		// loser's lineage onto the winner is a transfer, not the author making
+		// a fresh claim about today's index. internal/refs is explicit that
+		// such refs are never re-judged, "a retraction anywhere in history
+		// makes every fact that ever cited it uneditable" being exactly the
+		// failure re-judging produces. Here it was worse than uneditable: one
+		// cluster member citing a fact that no longer resolves aborted the
+		// whole review session — every pass in the run lost, and lost again on
+		// every retry (#103). Dropping the offending refs instead would trade
+		// the abort for silent provenance loss, and these targets are usually
+		// still reachable through the commit their referrer pinned.
+		//
+		// The loser's own path is prior for the reason it always was: it is
+		// deleted immediately below and the winner cites it as lineage — that
+		// citation is the record of the merge, not a dead ref.
+		//
+		// The check is therefore structurally satisfied today. The call stays
+		// for Canonicalize, and so this write path still meets the gate if a
+		// genuinely new ref is ever introduced here.
+		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, mergedRefs)
 		if gerr != nil {
 			return nil, fmt.Errorf("dedupCluster: refs for winner %q: %w", winnerFact.File, gerr)
 		}
