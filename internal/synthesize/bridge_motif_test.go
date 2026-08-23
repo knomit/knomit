@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -423,4 +424,264 @@ func TestSharedMotifSpecificity_OneMemberCannotVoteTwiceForACluster(t *testing.T
 	got, err := sharedMotifSpecificity(context.Background(), idx, "main", cand, resolve)
 	require.NoError(t, err)
 	require.InDelta(t, 0.5, got, 1e-9, "one cluster, one term")
+}
+
+// ── effort binding and per-lane sub-budgets (§5) ──────────────────────────
+
+func TestMotifSubBudget_IsMonotoneAndLaneBound(t *testing.T) {
+	nN, fN := motifSubBudget(EffortNormal)
+	nM, fM := motifSubBudget(EffortMedium)
+	nH, fH := motifSubBudget(EffortHigh)
+
+	require.Equal(t, 2, nN, "§5: normal's bounded 6ce866f8 amendment is a hard cap of 2")
+	require.Zero(t, fN, "normal is near lane only")
+	require.Equal(t, 4, nM)
+	require.Zero(t, fM, "medium stays on the validated forward shape — never conjecture")
+	require.Positive(t, fH, "the far lane opens only at high")
+
+	// MN10: monotone in budget as well as in kind.
+	require.LessOrEqual(t, nN, nM)
+	require.LessOrEqual(t, nM, nH)
+	require.LessOrEqual(t, fM, fH)
+}
+
+// MN8: the motif budgets are ADDITIONAL, never carved out of the entity/domain
+// pool — the axes have different df distributions and one pool would let the
+// densest starve the others.
+func TestMotifSubBudget_DoesNotDrawOnTheEntityDomainBudget(t *testing.T) {
+	require.Equal(t, 48, effortBudget(EffortHigh))
+	require.Equal(t, 12, effortBudget(EffortMedium))
+	require.Zero(t, effortBudget(EffortNormal))
+}
+
+func TestMotifTier_IsMonotoneInEffort(t *testing.T) {
+	require.Equal(t, tierExact, motifTier(EffortNormal))
+	require.Equal(t, tierExact, motifTier(EffortMedium))
+	require.Equal(t, tierToken2, motifTier(EffortHigh))
+}
+
+// MN10 as a PROPERTY, not an arrangement: each level's candidate set is a
+// subset of the next level's, before any budget truncation.
+func TestMotifCandidates_AreMonotoneAcrossEffort(t *testing.T) {
+	seeds := []factForLLM{
+		// A verbatim pair — matches at every tier.
+		{File: "kb/alpha/1.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/beta/2.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
+		// A token-2-only pair — matches only at high.
+		{File: "kb/gamma/3.md", Motifs: []string{"stale-cache-capture"}, Entities: []string{"Gamma"}},
+		{File: "kb/delta/4.md", Motifs: []string{"cache-capture-drift"}, Entities: []string{"Delta"}},
+	}
+	clusters := ClusterResult{Clusters: map[int][]string{
+		0: {"kb/alpha/1.md"}, 1: {"kb/beta/2.md"}, 2: {"kb/gamma/3.md"}, 3: {"kb/delta/4.md"}}}
+	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2, "gamma": 2, "delta": 2})
+
+	setOf := func(e Effort) map[string]struct{} {
+		got, _ := enumerateMotifCandidates(seeds, clusters, identityResolver, constDF(2), labels, motifTier(e))
+		out := map[string]struct{}{}
+		for _, b := range got {
+			for _, m := range b.Members {
+				out[m.File] = struct{}{}
+			}
+		}
+		return out
+	}
+	normal, medium, high := setOf(EffortNormal), setOf(EffortMedium), setOf(EffortHigh)
+
+	require.NotEmpty(t, normal, "a vacuous subset assertion tests nothing")
+	require.Subset(t, medium, normal)
+	require.Subset(t, high, medium)
+	require.Greater(t, len(high), len(normal), "high must actually admit more, or the ladder is flat")
+}
+
+// ── the builder ───────────────────────────────────────────────────────────
+
+// countingSearchIndex records whether the builder touched the index at all.
+type countingSearchIndex struct {
+	SearchQuery
+	calls int
+}
+
+func (c *countingSearchIndex) TokenDF(context.Context, string, string, string) (int, error) {
+	c.calls++
+	return 2, nil
+}
+
+func (c *countingSearchIndex) SimilarityAdjacency(context.Context, []string) (store.SimilarityGraph, error) {
+	c.calls++
+	return store.NewSimilarityGraph(nil), nil
+}
+
+// No DERIVED_FROM edges between members, so the derivation gap is 1.0 — nobody
+// has already made the connection these candidates propose.
+func (c *countingSearchIndex) ReverseDependentPaths(context.Context, string) (map[string]struct{}, error) {
+	c.calls++
+	return map[string]struct{}{}, nil
+}
+
+// MN5's own mechanism, asserted directly rather than left as a consequence of
+// later gates: on a corpus with no motifs the tier does nothing and costs
+// nothing — which is why the EffortNormal contract test passes vacuously.
+func TestBuildMotifBridges_MotifFreeCorpusDoesNoWork(t *testing.T) {
+	idx := &countingSearchIndex{}
+	seeds := []factForLLM{{File: "kb/alpha/1.md"}, {File: "kb/beta/2.md"}}
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		twoCommunities("kb/alpha/1.md", "kb/beta/2.md"), EffortNormal, motifQualityConfig(),
+		identityResolver, labelsWith(200, nil), nil)
+
+	require.NoError(t, err)
+	require.Empty(t, near)
+	require.Empty(t, far)
+	require.Zero(t, health.Candidates)
+	require.Zero(t, idx.calls, "a motif-free corpus must not cost a single index call")
+}
+
+// saturatedMotifCorpus builds n verbatim-matching, subject-disjoint,
+// cross-community pairs — more than any lane's budget.
+func saturatedMotifCorpus(n int) ([]factForLLM, ClusterResult, store.SubjectLabelDF) {
+	var seeds []factForLLM
+	clusters := ClusterResult{Clusters: map[int][]string{}}
+	labels := labelsWith(400, nil)
+	com := 0
+	for i := 0; i < n; i++ {
+		// Motif tokens are unique per pair. Deliberate: at high effort the
+		// token-2 tier merges any two canonical ids sharing two stemmed tokens,
+		// so a family like "shape00-of-kind"/"shape01-of-kind" collapses into
+		// ONE group on the connectives — spec-conformant (§4's permissive
+		// prefilter) but not what a BUDGET test means to measure.
+		motif := fmt.Sprintf("shape%02d-alpha%02d", i, i)
+		for _, side := range []string{"a", "b"} {
+			// Distinct FILENAMES as well as distinct directories: a fact's
+			// whole path is a subject claim, so two facts both called "1.md"
+			// share a subject token and the gate correctly rejects the pair.
+			path := fmt.Sprintf("kb/%s%02d/f%s%02d.md", side, i, side, i)
+			ent := fmt.Sprintf("ent%s%02d", side, i)
+			seeds = append(seeds, factForLLM{File: path, Motifs: []string{motif},
+				Entities: []string{ent}})
+			clusters.Clusters[com] = []string{path}
+			labels.DF[ent] = 2
+			labels.DF[fmt.Sprintf("%s%02d", side, i)] = 2
+			com++
+		}
+	}
+	return seeds, clusters, labels
+}
+
+func TestBuildMotifBridges_NormalEmitsAtMostTwoNearAndNoFar(t *testing.T) {
+	seeds, clusters, labels := saturatedMotifCorpus(6)
+	idx := &allAdjacentIndex{} // every group is a near-lane group
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0))
+
+	require.NoError(t, err)
+	require.Equal(t, 6, health.Candidates, "precondition: more candidates than the budget")
+	require.Len(t, near, 2, "§5: hard cap 2 at normal")
+	require.Empty(t, far, "normal is near lane only")
+}
+
+// The far lane is CLOSED below high effort, so a corpus whose motif groups are
+// all far produces nothing at normal — however many candidates it has. Without
+// this, "normal is near lane only" would be satisfied by a build that simply
+// never produced a far group.
+func TestBuildMotifBridges_NormalEmitsNothingForFarLaneGroups(t *testing.T) {
+	seeds, clusters, labels := saturatedMotifCorpus(6)
+	idx := &countingSearchIndex{} // no adjacency: every group is far
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 6, health.Candidates, "precondition: the candidates exist")
+	require.Empty(t, near)
+	require.Empty(t, far, "the far lane opens only at high effort")
+}
+
+func TestBuildMotifBridges_HighOpensBothLanesWithinTheirBudgets(t *testing.T) {
+	seeds, clusters, labels := saturatedMotifCorpus(20)
+	idx := &countingSearchIndex{} // no SIMILAR_TO edges => every group is far
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 20, health.Candidates)
+	require.Empty(t, near, "no adjacency was offered, so nothing is in the near lane")
+	nearBudget, farBudget := motifSubBudget(EffortHigh)
+	require.Len(t, far, farBudget)
+	require.LessOrEqual(t, len(near), nearBudget)
+}
+
+// A saturated far lane must not consume the near lane's slots, and vice versa
+// (MN8). Asserted on a corpus that saturates BOTH.
+func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
+	seeds, clusters, labels := saturatedMotifCorpus(20)
+	// Give the first pair a SIMILAR_TO edge, so exactly one group is near.
+	idx := &laneSplittingIndex{nearPair: [2]string{"kb/a00/fa00.md", "kb/b00/fb00.md"}}
+
+	near, far, _, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Len(t, near, 1, "the one adjacent group takes a near slot")
+	nearBudget, farBudget := motifSubBudget(EffortHigh)
+	require.Len(t, far, farBudget, "the far lane still fills its own budget in full")
+	require.LessOrEqual(t, len(near), nearBudget)
+}
+
+// allAdjacentIndex reports every member set as mutually adjacent, so every
+// group lands in the near lane.
+type allAdjacentIndex struct {
+	SearchQuery
+}
+
+func (a *allAdjacentIndex) TokenDF(context.Context, string, string, string) (int, error) {
+	return 2, nil
+}
+
+func (a *allAdjacentIndex) ReverseDependentPaths(context.Context, string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
+
+func (a *allAdjacentIndex) SimilarityAdjacency(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+	var pairs [][2]string
+	for i := 0; i < len(paths); i++ {
+		for j := i + 1; j < len(paths); j++ {
+			pairs = append(pairs, [2]string{paths[i], paths[j]})
+		}
+	}
+	return store.NewSimilarityGraph(pairs), nil
+}
+
+// laneSplittingIndex reports adjacency for exactly one pair.
+type laneSplittingIndex struct {
+	SearchQuery
+	nearPair [2]string
+}
+
+func (l *laneSplittingIndex) TokenDF(context.Context, string, string, string) (int, error) {
+	return 2, nil
+}
+
+func (l *laneSplittingIndex) ReverseDependentPaths(context.Context, string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
+
+func (l *laneSplittingIndex) SimilarityAdjacency(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+	hits := 0
+	for _, p := range paths {
+		if p == l.nearPair[0] || p == l.nearPair[1] {
+			hits++
+		}
+	}
+	if hits == 2 {
+		return store.NewSimilarityGraph([][2]string{l.nearPair}), nil
+	}
+	return store.NewSimilarityGraph(nil), nil
+}
+
+// permissiveMotifConfig keeps the quality gates out of the way so that budget
+// tests measure budgets and nothing else.
+func permissiveMotifConfig() QualityConfig {
+	return QualityConfig{CohFloor: 0, QualityFloor: 0, WCoh: 1, WGap: 1, WSpec: 1, MaxMembers: 5}
 }

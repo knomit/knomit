@@ -371,3 +371,158 @@ func sharedMotifSpecificity(ctx context.Context, idx SearchQuery, branch string,
 	}
 	return total, nil
 }
+
+// ── effort binding (§5) ───────────────────────────────────────────────────
+
+// motifTier binds the §4 stage-1 matching tier to the effort dial.
+//
+// The §5 table's medium and high operating points were calibrated as noise-pass
+// rates on the name+def EMBEDDING cascade, and the Q9 ruling DEFERRED that tier
+// until real vocabularies exist to calibrate against. What ships here is the
+// mechanical half of §4's prefilter, which needs no calibration and no
+// constant: exact canonical-id equality, widened at high effort by ">= 2 shared
+// stemmed motif tokens".
+//
+// Monotone by construction (MN10): exact is a subset of exact-union-token-2, so
+// raising effort can only add candidates, never change what a bridge means.
+//
+// RECORDED EXPECTATION (designer, 2026-08-23): until Phase-4 calibration,
+// high-effort matching sits at the measured token-2 floor rather than the
+// research 68% — the delta is what calibration buys back, not a regression.
+func motifTier(e Effort) motifMatchTier {
+	if e == EffortHigh {
+		return tierToken2
+	}
+	return tierExact
+}
+
+// motifSubBudget returns the per-lane caps for motif bridging.
+//
+// CONSTANT CLASSIFICATION (MN13, class 2): RESOURCE BUDGETS — agent work-item
+// slots. They allocate spend and claim nothing about any corpus's
+// distribution.
+//
+// Per-lane, and ADDITIONAL to the entity/domain budget rather than carved out
+// of it (MN8): the three axes have different df distributions, and one shared
+// pool would let whichever is densest starve the others. The sum stays inside
+// the forward-discover priority band, which TestEffortBudget_StaysBelowPriorityBand
+// asserts on the total rather than on any one budget.
+//
+// normal is the bounded 6ce866f8 amendment: verbatim matches only, at most two
+// items, near lane only. On any corpus without motifs it enumerates nothing,
+// which is why the EffortNormal contract test still passes vacuously (MN5).
+func motifSubBudget(e Effort) (near, far int) {
+	switch e {
+	case EffortHigh:
+		// "Carved from 48" (§5): a sixth of the entity/domain budget to each
+		// lane, so motif bridging adds at most a third again to a session's
+		// discover items.
+		return effortBudget(EffortHigh) / 6, effortBudget(EffortHigh) / 6
+	case EffortMedium:
+		return min(4, effortBudget(EffortMedium)/3), 0
+	}
+	return 2, 0
+}
+
+// buildMotifBridges is the production builder: enumerate, split by lane, score
+// per lane, rank, and cap each lane at its OWN sub-budget.
+//
+// Unlike buildScoredBridges it is NOT gated on eff.Discovers(): normal effort
+// runs the verbatim tier (§5), bounded at two items. What keeps that honest is
+// the motif-free short circuit below, not an effort check.
+func buildMotifBridges(
+	ctx context.Context,
+	idx SearchQuery,
+	branch string,
+	seeds []factForLLM,
+	clusters ClusterResult,
+	eff Effort,
+	cfg QualityConfig,
+	resolve motifResolver,
+	labels store.SubjectLabelDF,
+	meanSim meanSimFn,
+) ([]BridgeSeedSet, []BridgeSeedSet, motifEnumHealth, error) {
+	// A corpus with no motifs costs nothing at all — not one index call. This
+	// is the mechanism behind MN5's vacuous pass, so it is stated here rather
+	// than left to emerge from the gates downstream.
+	if !anyMotifs(seeds) {
+		return nil, nil, motifEnumHealth{}, nil
+	}
+
+	dfOf := func(canon string) int {
+		n, err := idx.TokenDF(ctx, branch, canon, string(BridgeMotif))
+		if err != nil {
+			// An unreadable df cannot bridge: 0 falls below the band's floor,
+			// which drops the candidate. Silence would be wrong in the other
+			// direction — a huge df would read as "gone generic" and land the
+			// motif in the over-ceiling review list it does not belong in.
+			return 0
+		}
+		return n
+	}
+
+	cands, health := enumerateMotifCandidates(seeds, clusters, resolve, dfOf, labels, motifTier(eff))
+	clusterOf := bridgePathCommunities(seeds, clusters)
+
+	var near, far []BridgeSeedSet
+	for _, cand := range cands {
+		paths := make([]string, 0, len(cand.Members))
+		for _, m := range cand.Members {
+			paths = append(paths, m.File)
+		}
+		g, err := idx.SimilarityAdjacency(ctx, paths)
+		if err != nil {
+			return nil, nil, health, err
+		}
+		lane := laneOf(paths, g)
+
+		spec, err := sharedMotifSpecificity(ctx, idx, branch, cand, resolve)
+		if err != nil {
+			return nil, nil, health, err
+		}
+		q, kept, err := scoreMotifCandidate(ctx, cand, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
+		if err != nil {
+			return nil, nil, health, err
+		}
+		if !kept {
+			continue
+		}
+		cand.Q = q
+		if lane == LaneNear {
+			near = append(near, cand)
+		} else {
+			far = append(far, cand)
+		}
+	}
+
+	nearBudget, farBudget := motifSubBudget(eff)
+	return rankAndCap(near, nearBudget), rankAndCap(far, farBudget), health, nil
+}
+
+// anyMotifs reports whether the seed pool carries a motif at all.
+func anyMotifs(seeds []factForLLM) bool {
+	for _, f := range seeds {
+		if len(f.Motifs) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// rankAndCap orders by Q descending, Token ascending, and truncates to the
+// lane's own budget. A zero budget means the lane is closed at this effort.
+func rankAndCap(in []BridgeSeedSet, budget int) []BridgeSeedSet {
+	if budget == 0 {
+		return nil
+	}
+	sort.SliceStable(in, func(i, j int) bool {
+		if in[i].Q != in[j].Q {
+			return in[i].Q > in[j].Q
+		}
+		return in[i].Token < in[j].Token
+	})
+	if len(in) > budget {
+		in = in[:budget]
+	}
+	return in
+}
