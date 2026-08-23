@@ -37,6 +37,11 @@ type DiscoverWorkPayload struct {
 	Direction  DiscoverDirection `json:"direction"`
 	Bridge     BridgeSeedSet     `json:"bridge"`
 	ScopeLabel string            `json:"scope_label,omitempty"`
+	// Lane is set for motif bridges only (§4). It is carried EXPLICITLY rather
+	// than re-derived from Kind+Direction so that the prompt renderer and the
+	// health reporter read the same value the builder decided, and so a future
+	// bridge kind with two lanes does not silently inherit this one's mapping.
+	Lane BridgeLane `json:"lane,omitempty"`
 }
 
 // DiscoverResponse is the LLM JSON contract for one discover work item. The
@@ -46,6 +51,27 @@ type DiscoverWorkPayload struct {
 // gates before any write.
 type DiscoverResponse struct {
 	Proposals []DiscoveredFact `json:"proposals"`
+	// Reinforcements is discovery's THIRD outcome (GATE rider 3): facts the
+	// corpus already holds that these seeds independently re-derive. Absent is
+	// the common case and is not an error.
+	Reinforcements []FactReinforcement `json:"reinforcements"`
+}
+
+// FactReinforcement records that the seeds of this bridge are an INDEPENDENT
+// derivation of a fact the corpus already states.
+//
+// Reason is REQUIRED, and it is not decoration: the equivalence claim gets the
+// same discipline the alias judge's merges get, because an equivalence nobody
+// could justify in a sentence is the hallucinated one, and an over-merge is
+// invisible everywhere downstream. Absence of a reason is a rejection, not a
+// blank field.
+type FactReinforcement struct {
+	// Path is the existing corpus fact being reinforced.
+	Path string `json:"path"`
+	// Reason is the agent's one sentence on why the two claims are the same.
+	Reason string `json:"reason"`
+	// Refs are the seeds to join the fact's derivation paths.
+	Refs flexStrings `json:"refs"`
 }
 
 // DiscoveredFact is one proposed emergent fact. Mirrors distillFact so prompt
@@ -133,6 +159,17 @@ const discoverResponseSchema = `{
         },
         "required": ["path", "title", "body", "type", "confidence", "refs"]
       }
+    },
+    "reinforcements": {
+      "type": "array",
+      "items": {
+        "properties": {
+          "path": {"type": "string", "description": "An EXISTING corpus fact that already states what you would have proposed."},
+          "reason": {"type": "string", "description": "One sentence on why the existing fact states the same claim. Required — if you cannot write it, they are not the same claim."},
+          "refs": {"type": "array", "items": {"type": "string"}, "description": "Every seed fact above, joining that fact's refs as an independent derivation path."}
+        },
+        "required": ["path", "reason", "refs"]
+      }
     }
   }
 }`
@@ -169,6 +206,16 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 			b.WriteString("The facts below all share the structural token shown. They live in DIFFERENT cluster communities, so the shared token is a 'bridge' across regions of the knowledge base. We are looking for an UNSTATED CONSEQUENCE — a synthesis fact strictly entailed by the cited facts that nobody has written down yet.\n\n")
 		}
 		fmt.Fprintf(&b, "Bridge token: %q (kind=%s)\n", payload.Bridge.Token, payload.Bridge.Kind)
+		// Far-lane SHIP line, blueprint §4 verbatim.
+		//
+		// It goes HERE — after the token line, before the members — because
+		// its members have cohesion 0 by construction while the preamble just
+		// above says they "share the structural token". A model reading only
+		// that would reasonably infer they are also SIMILAR, which is the exact
+		// inference the far lane exists to prevent.
+		if payload.Lane == LaneFar {
+			fmt.Fprintf(&b, "\nThese facts are NOT semantically similar. Each claims motif %q. Propose a keystone only if one mechanism genuinely underlies all members — default to NO.\n", payload.Bridge.Token)
+		}
 	} else {
 		// Token-optional variant: scope-framed preamble.
 		switch payload.Direction {
@@ -187,6 +234,15 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 			fmt.Fprintf(&b, "      %s\n", firstLine(m.Body))
 		}
 	}
+	// GATE rider 2 (designer, 2026-08-23). The far-lane demo established that
+	// condition (c) below is not answerable from this prompt at all: novelty
+	// rests on the agent's default-skip rather than on the 0.92 dedup gate
+	// (90d69628), and a cold agent with no corpus access would have proposed a
+	// semantic duplicate that every shipped gate would then have passed.
+	// Novelty is verified here, never assumed from context luck. It binds every
+	// discover item — the hole is in the prompt, not in any one bridge kind.
+	b.WriteString("\nBEFORE YOU ANSWER — QUERY THE CORPUS.\n")
+	b.WriteString("Condition (c) below cannot be answered from this prompt. Query the corpus (knomit_query) for the claim you are considering, in the words you would use to state it, before you decide anything. The most likely failure of this task is re-deriving something the corpus already holds, and it will not look like a duplicate: an existing fact stating the same premise usually shares almost none of your wording.\n")
 	b.WriteString("\nDECISION RULE — DEFAULT TO NO.\n")
 	b.WriteString("Propose a fact ONLY IF ALL of these hold:\n")
 	if payload.Direction == DiscoverBackward {
@@ -196,9 +252,23 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 		b.WriteString("  (a) The proposed consequence is strictly ENTAILED by the cited facts — it follows necessarily from their conjunction, not as a plausible extension.\n")
 		b.WriteString("  (b) The consequence is LOAD-BEARING — its falsity invalidates ≥2 of the cited facts.\n")
 	}
-	b.WriteString("  (c) Not already in the corpus — no existing fact already states it.\n")
+	b.WriteString("  (c) Not already in the corpus — you QUERIED for it above and no existing fact states it. If one does, REINFORCE it instead of proposing (below).\n")
 	b.WriteString("  (d) You can cite every seed fact above in refs. An empty refs array indicates you did not engage with the inputs.\n\n")
 	b.WriteString("If any condition fails, return an empty proposals array. Skipping is the expected outcome.\n\n")
+	// GATE rider 3 (designer, 2026-08-23): discovery's third outcome. On a
+	// recall hit the answer is neither propose nor decline — the seeds are an
+	// INDEPENDENT derivation of a claim the corpus already holds, and recording
+	// that is corroboration. The equivalence claim gets alias-judge discipline
+	// for the same reason the alias judge does: an equivalence nobody could
+	// justify in a sentence is the hallucinated one, and over-merge is
+	// invisible downstream.
+	b.WriteString("REINFORCE — the third outcome, for when the corpus already states it.\n")
+	b.WriteString("If your query found a fact that already states what you would have proposed, do not propose it again and do not simply fall silent: REINFORCE that fact. Reinforcement records these seeds as an INDEPENDENT derivation of a claim the corpus already holds — one more proof that the wheel is round — by adding them to its refs, incrementing its sources and strengthening its evidence. Nothing else about the fact changes.\n")
+	b.WriteString("Reinforce ONLY IF ALL of these hold:\n")
+	b.WriteString("  (a) The existing fact states the SAME claim, not a neighbouring one. Say why in one sentence; if you cannot write that sentence, they are not the same claim.\n")
+	b.WriteString("  (b) You would otherwise have proposed it here. Reinforcement replaces a proposal; it is never a note about something you happened to read.\n")
+	b.WriteString("  (c) You can cite every seed fact above in refs.\n")
+	b.WriteString("DEFAULT TO NO on sameness. When you are torn between \"the same claim\" and \"a claim near it\", PROPOSE AND LINK instead of reinforcing: a false link is recoverable, a false merge is not.\n\n")
 	b.WriteString("PERSISTENCE — origin reflects how this group was formed.\n")
 	b.WriteString("These facts were grouped by a cross-cluster BRIDGE, so any fact you persist from them is discovery-engine output (origin: discovered). Submit your proposals back via knomit_hypothesize/knomit_review to record them automatically. If you instead save one directly with knomit_learn after previewing, you MUST set origin: discovered and cite every seed fact above in refs.\n\n")
 	b.WriteString("RESPONSE SCHEMA: {\"proposals\":[{\"path\":\"" + ontologyRoot + "/.../slug.md\",\"title\":\"...\",\"body\":\"...\",\"type\":\"")
@@ -207,7 +277,7 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 	} else {
 		b.WriteString("synthesis")
 	}
-	b.WriteString("\",\"domain\":[],\"entities\":[],\"confidence\":0.0,\"refs\":[]}]}\n")
+	b.WriteString("\",\"domain\":[],\"entities\":[],\"confidence\":0.0,\"refs\":[]}],\"reinforcements\":[{\"path\":\"" + ontologyRoot + "/.../existing.md\",\"reason\":\"...\",\"refs\":[]}]}\n")
 	return b.String()
 }
 
