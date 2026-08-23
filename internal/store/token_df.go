@@ -61,39 +61,64 @@ func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (
 	// every member spelling counts, and COUNT(DISTINCT bf.path) makes a fact
 	// carrying several of them one carrier rather than several.
 	//
-	// The LEFT JOIN plus the `OR` is what makes an unresolved corpus behave
-	// exactly as it did before aliases existed — a spelling with no alias row
-	// matches only itself. An INNER JOIN here would silently return 0 for
-	// every motif until the first RebuildAliases, which is the kind of
-	// zero that reads as "no carriers" rather than "not resolved yet".
+	// READ IT THE WAY THE NEXT REBUILD WILL (designer ruling, 2026-08-23).
 	//
-	// OPEN QUESTION, raised by the 2026-08-23 review remediation and NOT
-	// resolved here. This matches on canonical id, so on an UNRESOLVED corpus
-	// two spellings of one mechanism each report df 1, while Clusters and
-	// VocabularyHealth — which key by cluster (motifClusterKeyExpr) — report
-	// one cluster with df 2. Both readings are defensible: this one is "a
-	// spelling nothing has resolved is its own cluster" and is pinned by
-	// TestTokenDF_Motif_UnresolvedCorpusBehavesAsBefore; theirs is "read it the
-	// way the next rebuild will". They disagree only in the window between a
-	// fact being written and the next session's rebuild. Changing this one is a
-	// contract change with an explicit test asserting the current answer, so it
-	// is the designer's call, not a remediation's.
+	// Both sides key by CLUSTER — the mechanical grouping key as the floor, the
+	// stored alias overlay on top — rather than by canonical id. The grouping is
+	// a PURE FUNCTION of the spellings: "silent-fallback" and "silent-fallbacks"
+	// stem to the same key whether or not anything has written that down, so the
+	// rebuild CACHES the answer and does not create it. No reader may give a
+	// different number according to whether the cache job has run.
+	//
+	// Matching COALESCE(a.canonical_id, j.motif) did exactly that. On a corpus
+	// with facts written since the last rebuild — which is any live corpus, most
+	// of the time — the two spellings reported df 1 each here while Clusters and
+	// VocabularyHealth reported one cluster with df 2. The file header's own Q5
+	// rationale already ruled that out ("a df counting one spelling would bench a
+	// motif written three ways at df=1 three times"); this query simply had a
+	// window where it did that anyway.
+	//
+	// The judge layer is untouched by this. Token-disjoint spellings still merge
+	// only by a recorded judge decision, which arrives through a.cluster_key —
+	// the overlay this expression prefers whenever it is present.
+	//
+	// The LEFT JOIN still matters for a different reason: an INNER JOIN would
+	// return 0 for every motif until the first RebuildAliases, and that zero
+	// reads as "no carriers" rather than "not resolved yet".
+	//
+	// The old posture, and why it is gone: it described the world before the
+	// alias rebuild ran in every Plan. When the rebuild was reachable only from
+	// the judge item's apply path (the C1 deadlock), "unresolved" was a lasting
+	// state a reader had to have an answer for, and "each spelling is its own
+	// cluster" was that answer. The rebuild is now unconditional at the top of
+	// every medium-effort Plan, so unresolved is a window between a write and
+	// the next session — not a state to design a second posture around.
 	q := fmt.Sprintf(
 		`SELECT COUNT(DISTINCT bf.path)
 		   FROM branch_facts bf
 		   JOIN %s j ON j.fact_id = bf.fact_id
 		  WHERE bf.branch_id = ? AND j.%s = ?`, table, col)
+	args := []any{branchID, token}
 	if kind == "motif" {
+		// The QUERY TOKEN resolves through the same three steps as each stored
+		// spelling, so a caller may name any member and gets the cluster either
+		// way. Written out rather than shared with motifClusterKeyExpr because
+		// this side reads a parameter, not a joined column — the steps are the
+		// same and the shapes are not.
 		q = `SELECT COUNT(DISTINCT bf.path)
 		       FROM branch_facts bf
 		       JOIN fact_motifs j ON j.fact_id = bf.fact_id
 		       LEFT JOIN motif_aliases a
 		              ON a.branch_id = bf.branch_id AND a.motif = j.motif
 		      WHERE bf.branch_id = ?
-		        AND COALESCE(a.canonical_id, j.motif) = ?`
+		        AND ` + motifClusterKeyExpr("j.motif") + ` = COALESCE(
+		              NULLIF((SELECT a2.cluster_key FROM motif_aliases a2
+		                       WHERE a2.branch_id = bf.branch_id AND a2.motif = ?), ''),
+		              NULLIF(knomit_motif_key(?), ''), ?)`
+		args = []any{branchID, token, token, token}
 	}
 	var n int
-	err = conn(ctx, gs.rh.db).QueryRowContext(ctx, q, branchID, token).Scan(&n)
+	err = conn(ctx, gs.rh.db).QueryRowContext(ctx, q, args...).Scan(&n)
 	if err == sql.ErrNoRows {
 		return 0, nil
 	}

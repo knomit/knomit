@@ -216,30 +216,44 @@ func TestMotifClusters_UnresolvedCorpusReadsTheSameEverywhere(t *testing.T) {
 		"Clusters and VocabularyHealth must agree on how many mechanisms this corpus has")
 	require.Equal(t, 1, vh.Recurring, "the collapsed cluster has two carriers even unresolved")
 
-	// TokenDF DELIBERATELY DISAGREES here, and is pinned so the divergence is a
-	// recorded position rather than an accident nobody tested.
+	// EVERY reader agrees, including the point readers.
 	//
-	// It matches on canonical id, so an unresolved spelling counts only itself:
-	// df 1 per spelling where the cluster readers say 2. Both readings are
-	// defensible and they differ only between a fact being written and the next
-	// rebuild. The earlier version of THIS test asserted Clusters == TokenDF for
-	// every cluster and passed — because its fixture used one spelling twice, so
-	// nothing could ever collapse and the two could not be caught disagreeing.
-	// Which of the two postures is right is a designer call; that it is asserted
-	// on both sides is not.
-	df, err := svc.Search().TokenDF(ctx, branch, "silent-fallback", "motif")
-	require.NoError(t, err)
-	require.Equal(t, 1, df,
-		"TokenDF's documented unresolved posture: a spelling with no alias row matches "+
-			"only itself (see TestTokenDF_Motif_UnresolvedCorpusBehavesAsBefore). If this "+
-			"is ever changed to match the cluster readers, change it deliberately")
+	// This is the assertion the earlier version of this test reached for and
+	// could not make honestly: its fixture spelled one motif twice, so nothing
+	// could ever collapse and Clusters and TokenDF could not be caught
+	// disagreeing. With spellings that DO group, they were caught — TokenDF
+	// matched on canonical id and reported 1 where the cluster readers reported
+	// 2 — and the designer ruled (2026-08-23) that the mechanical grouping key
+	// is the floor in every reader at every moment.
+	for _, c := range clusters {
+		df, err := svc.Search().TokenDF(ctx, branch, c.CanonicalID, "motif")
+		require.NoError(t, err)
+		require.Equalf(t, df, c.DF,
+			"Clusters and TokenDF must not disagree about %q on an unresolved corpus",
+			c.CanonicalID)
+	}
 
-	// On a RESOLVED corpus — the steady state — every reader agrees.
+	// AND THE REBUILD CHANGES NOTHING. That is the ruling's real content: the
+	// grouping is a pure function of the spellings, so the cache job records the
+	// answer rather than producing it. A test that only checked the two readers
+	// agree BEFORE the rebuild would pass for a pair that agreed on a wrong
+	// answer and then both moved.
 	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
 	resolved, err := svc.Motifs().Clusters(ctx, branch)
 	require.NoError(t, err)
 	require.Len(t, resolved, 2, "the rebuild reproduces the same two clusters")
 	for _, c := range resolved {
+		var before MotifCluster
+		for _, b := range clusters {
+			if b.ClusterKey == c.ClusterKey {
+				before = b
+			}
+		}
+		require.Equalf(t, before.DF, c.DF,
+			"cluster %q read df %d before the rebuild and %d after; the rebuild must "+
+				"record the grouping, never change it", c.ClusterKey, before.DF, c.DF)
+		require.Equalf(t, before.Members, c.Members,
+			"and its membership must not move either", c.ClusterKey)
 		rdf, err := svc.Search().TokenDF(ctx, branch, c.CanonicalID, "motif")
 		require.NoError(t, err)
 		require.Equalf(t, rdf, c.DF,
