@@ -219,8 +219,14 @@ var mechanicsPaths = map[string][]string{
 	// buildMotifBridges is the §4/§5 entry point: it reads the seed pool's
 	// motifs to decide whether the axis does anything at all, then drives
 	// enumeration, the lane split and the per-lane budgets.
+	// The wiring half of the same file: motifResolverFor closes over the alias
+	// table, and motifBridgeHealthLines RENDERS what the axis did into the
+	// session's health output. Reporting is not deciding — the no-branch
+	// property is what MN6 is about, and it holds: nothing in this package
+	// reads a health line.
 	"internal/synthesize/bridge_motif.go": {
 		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
+		"motifResolverFor", "motifBridgeHealthLines",
 	},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and

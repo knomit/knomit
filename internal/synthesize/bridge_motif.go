@@ -11,7 +11,12 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sort"
+	"strings"
+
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
@@ -525,4 +530,135 @@ func rankAndCap(in []BridgeSeedSet, budget int) []BridgeSeedSet {
 		in = in[:budget]
 	}
 	return in
+}
+
+// ── review-pipeline wiring ────────────────────────────────────────────────
+
+// enqueueDiscover writes one discover work item. One definition, so the
+// entity/domain path and both motif lanes cannot drift apart in how an item is
+// shaped, keyed, or prioritised.
+func enqueueDiscover(ctx context.Context, d Deps, sess *store.PipelineSession, payload DiscoverWorkPayload, clusterKey string, priority float64) error {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return wrapf(reviewTool, err, "marshal discover payload %s", clusterKey)
+	}
+	if err := d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+		SessionID:  sess.ID,
+		StepType:   "discover",
+		ClusterKey: clusterKey,
+		FactsJSON:  string(payloadJSON),
+		Priority:   priority,
+	}); err != nil {
+		return wrapf(reviewTool, err, "insert discover item %s", clusterKey)
+	}
+	return nil
+}
+
+// motifResolverFor closes over this session's alias table.
+//
+// Read ONCE: the resolver is called per motif per fact, and a per-call query
+// would turn enumeration into a round-trip storm over a table that does not
+// change mid-session.
+func motifResolverFor(ctx context.Context, d Deps, branch string) motifResolver {
+	table, err := d.Motifs.AliasTable(ctx, branch)
+	if err != nil {
+		// Degrade, but never silently: without the table every spelling is its
+		// own cluster, so synonyms stop bridging and the session's motif output
+		// is quietly narrower than it should be. A reader comparing two
+		// sessions needs to know which one ran blind.
+		log.Warn().Err(err).Str("branch", branch).
+			Msg("review: motif alias table unreadable; bridging on verbatim spellings only")
+		table = nil
+	}
+	return func(m string) string {
+		if c, ok := table[m]; ok && c != "" {
+			return c
+		}
+		// An unresolved spelling resolves to ITSELF, so a corpus with no alias
+		// table behaves as one where every motif is its own singleton cluster —
+		// which is exactly what the verbatim tier wants at normal effort.
+		return m
+	}
+}
+
+// subjectLabelsFor reads the corpus's own label distribution for the
+// disjointness gate. On failure it returns the zero value, whose operating
+// point is STRICT — the conservative direction, and the one that keeps a
+// near-duplicate out rather than letting it through.
+func subjectLabelsFor(ctx context.Context, d Deps, branch string) store.SubjectLabelDF {
+	labels, err := d.Search.SubjectLabelDF(ctx, branch)
+	if err != nil {
+		log.Warn().Err(err).Str("branch", branch).
+			Msg("review: subject-label distribution unreadable; disjointness gate falls back to strict")
+		return store.SubjectLabelDF{}
+	}
+	return labels
+}
+
+// meanSimFor reads REAL cosines from the stored blended vectors.
+//
+// The far lane cannot get them from the SIMILAR_TO graph — that graph is empty
+// there by definition — so this reaches for the vectors the graph was built
+// from.
+func meanSimFor(d Deps, branch string) meanSimFn {
+	return func(ctx context.Context, paths []string) (float64, error) {
+		ids, err := d.Abstraction.FactIDsByPath(ctx, branch, paths)
+		if err != nil {
+			return 0, err
+		}
+		idList := make([]int64, 0, len(ids))
+		for _, id := range ids {
+			idList = append(idList, id)
+		}
+		vecs, err := d.Abstraction.BodyVectorsByFactID(ctx, idList)
+		if err != nil {
+			return 0, err
+		}
+		var sum float64
+		var n int
+		for i := 0; i < len(idList); i++ {
+			for j := i + 1; j < len(idList); j++ {
+				a, b := vecs[idList[i]], vecs[idList[j]]
+				if len(a) == 0 || len(b) == 0 {
+					continue
+				}
+				sum += dot(a, b)
+				n++
+			}
+		}
+		if n == 0 {
+			// No vectors is NOT "maximally dissimilar". Returning 0 would hand
+			// every un-embedded group the highest far-lane score there is,
+			// which is the opposite of what missing evidence should buy.
+			return 1, nil
+		}
+		return sum / float64(n), nil
+	}
+}
+
+// motifBridgeHealthLines are DESCRIPTORS: no branch in this package reads any
+// of them. The operating point is printed precisely because it is a
+// fingerprint — the same code on two corpora prints two different df cuts,
+// which is what it means for the gate to be a percentile of each repo's own
+// distribution rather than a threshold someone picked (MN13).
+func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
+	if h.Candidates == 0 && len(h.OverCeilingNames) == 0 {
+		return nil
+	}
+	point := fmt.Sprintf("df <= %d (p%d of %d labels)", h.Point.Cut, disjointnessPercentile, h.Point.Labels)
+	if h.Point.Strict {
+		point = fmt.Sprintf("STRICT fallback — %d labels is below the %d-label validity floor, so any shared label blocks",
+			h.Point.Labels, minLabelsForPercentile)
+	}
+	lines := []string{
+		fmt.Sprintf("motif bridges: %d candidates, %d near, %d far (df band 2..%d)",
+			h.Candidates, near, far, h.Ceiling),
+		fmt.Sprintf("motif disjointness: %s; umbrella df > %d", point, h.Point.Umbrella),
+	}
+	if len(h.OverCeilingNames) > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif df ceiling: %d motif(s) over the band, flagged for review splitting rather than bridged: %s",
+			len(h.OverCeilingNames), strings.Join(h.OverCeilingNames, ", ")))
+	}
+	return lines
 }

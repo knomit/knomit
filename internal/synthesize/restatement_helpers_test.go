@@ -155,6 +155,13 @@ func newRestatementEnvWith(t *testing.T, n int, emb *restatementEmbedder) *resta
 		AgentBranch:  branch,
 		Svc:          svc,
 		OntologyRoot: "kb",
+		// The production discovery.quality defaults (config.Defaults()). A bare
+		// test instance leaves these zero, and a zero MaxMembers gates out
+		// EVERY bridge candidate on every axis — so a discovery test on a bare
+		// instance measures an engine that cannot emit anything, and passes.
+		Quality: &repos.TestQualityConfig{
+			CohFloor: 0.5, QualityFloor: 0.0, WCoh: 1.0, WGap: 1.0, WSpec: 1.0, MaxMembers: 5,
+		},
 	}
 	if emb != nil {
 		cfg.Embedder = emb

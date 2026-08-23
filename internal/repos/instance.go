@@ -560,6 +560,24 @@ type TestInstanceConfig struct {
 	OntologyRoot        string
 	MethodologyMinScore float64
 	StartSync           func(url string) error
+	// Quality carries the bridge-quality knobs (CohFloor, MaxMembers, the Q
+	// weights). Optional and zero by default, which is the historical
+	// behaviour — but note that a zero MaxMembers gates out EVERY bridge
+	// candidate, so a test driving the discovery path through a bare instance
+	// is measuring an engine that can never emit anything. Set it when the
+	// test is about bridges. Mirrors the two knobs above, which carry
+	// production defaults for the same reason.
+	Quality *TestQualityConfig
+}
+
+// TestQualityConfig mirrors the discovery.quality block for test instances.
+type TestQualityConfig struct {
+	CohFloor     float64
+	QualityFloor float64
+	WCoh         float64
+	WGap         float64
+	WSpec        float64
+	MaxMembers   int
 }
 
 // NewTestInstanceWithDeps creates a RepoInstance pre-populated with the given
@@ -587,6 +605,14 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		syncWg:                        &sync.WaitGroup{},
 		indexCancel:                   func() {},
 		indexWg:                       &sync.WaitGroup{},
+	}
+	if q := cfg.Quality; q != nil {
+		ri.discoveryCohFloor = q.CohFloor
+		ri.discoveryQualityFloor = q.QualityFloor
+		ri.discoveryWCoh = q.WCoh
+		ri.discoveryWGap = q.WGap
+		ri.discoveryWSpec = q.WSpec
+		ri.discoveryMaxMembers = q.MaxMembers
 	}
 	ri.setName(cfg.Name)
 	return ri
