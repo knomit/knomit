@@ -83,16 +83,26 @@ type motifEnumHealth struct {
 	OverCeilingNames []string
 	// Point is the subject-disjointness operating point this corpus derived.
 	Point disjointnessPoint
-	// NearFloorDropped counts groups assigned to the NEAR lane and then
-	// dropped below the cohesion floor — the crack between the lanes
-	// (Phase-3 review, M4).
+	// NearFloorDropped counts groups assigned to the NEAR lane and then dropped
+	// BECAUSE OF THE COHESION FLOOR — the crack between the lanes (Phase-3
+	// review, M4).
 	//
 	// laneOf is binary on `Density > 0`, so a group with one stray SIMILAR_TO
 	// edge among otherwise dissimilar members lands in the near lane and is
 	// then killed by a 0.5 floor. Such a group is far-lane material by any
 	// reading of §4 and disappears with no trace. Visibility now; the lane
-	// semantics are redesigned in Phase 4 on these counts.
+	// semantics are redesigned in Phase 4 on this count.
+	//
+	// It counts ONE cause. The first version incremented on any near-lane
+	// rejection, so oversize and quality-floor drops rode in under a label that
+	// said "cohesion" — and Phase 4 is going to read this number as evidence
+	// for a lane redesign (review M4 counter-finding). A number that does not
+	// mean its label is worse than no number.
 	NearFloorDropped int
+	// NearOtherDropped counts near-lane groups rejected for any OTHER reason —
+	// over the member cap, or under the quality floor. Separate because it is
+	// not evidence about the lane split.
+	NearOtherDropped int
 }
 
 // enumerateMotifCandidates is the §4 enumeration loop, with the gates applied
@@ -401,14 +411,14 @@ func scoreMotifCandidate(
 	cfg QualityConfig,
 	sharedSpec float64,
 	meanSim meanSimFn,
-) (float64, bool, error) {
+) (BridgeComponents, float64, bool, error) {
 	paths := make([]string, 0, len(cand.Members))
 	for _, m := range cand.Members {
 		paths = append(paths, m.File)
 	}
 	gap, err := derivationGap(ctx, paths, idx)
 	if err != nil {
-		return 0, false, err
+		return BridgeComponents{}, 0, false, err
 	}
 	comp := BridgeComponents{
 		Coh:     cohesion(paths, g),
@@ -419,20 +429,20 @@ func scoreMotifCandidate(
 	}
 	if lane == LaneNear {
 		q, kept := bridgeQ(comp, cfg)
-		return q, kept, nil
+		return comp, q, kept, nil
 	}
 	if comp.Sep < 2 || comp.Members > cfg.MaxMembers {
-		return 0, false, nil
+		return comp, 0, false, nil
 	}
 	ms, err := meanSim(ctx, paths)
 	if err != nil {
 		// Propagated, never defaulted. A similarity that could not be read is
 		// not "maximally dissimilar", and treating it as 0 would hand every
 		// unreadable group the highest far-lane score there is.
-		return 0, false, err
+		return comp, 0, false, err
 	}
 	q := cfg.WSpec*comp.Spec + cfg.WGap*comp.Gap + cfg.WCoh*(1-ms)
-	return q, q >= cfg.QualityFloor, nil
+	return comp, q, q >= cfg.QualityFloor, nil
 }
 
 // sharedMotifSpecificity is §4's `Sum(1/df_canonical)` over every canonical
@@ -607,13 +617,19 @@ func buildMotifBridges(
 		if err != nil {
 			return nil, nil, health, err
 		}
-		q, kept, err := scoreMotifCandidate(ctx, cand, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
+		comp, q, kept, err := scoreMotifCandidate(ctx, cand, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
 		if err != nil {
 			return nil, nil, health, err
 		}
 		if !kept {
+			// Attributed by CAUSE, from the components the scorer computed,
+			// rather than by "it was near and it went".
 			if lane == LaneNear {
-				health.NearFloorDropped++
+				if comp.Coh < cfg.CohFloor {
+					health.NearFloorDropped++
+				} else {
+					health.NearOtherDropped++
+				}
 			}
 			continue
 		}
@@ -791,6 +807,11 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 			"motif near-lane floor: %d group(s) assigned near and dropped below the "+
 				"cohesion floor — sparse-similarity groups the lane split does not yet "+
 				"route to the far lane", h.NearFloorDropped))
+	}
+	if h.NearOtherDropped > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif near-lane other: %d group(s) dropped over the member cap or under "+
+				"the quality floor — not evidence about the lane split", h.NearOtherDropped))
 	}
 	if len(h.OverCeilingNames) > 0 {
 		lines = append(lines, fmt.Sprintf(

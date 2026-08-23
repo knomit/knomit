@@ -260,13 +260,13 @@ func TestScoreMotifCandidate_FarLaneRewardsDissimilarity(t *testing.T) {
 	g := store.NewSimilarityGraph(nil)
 	clusterOf := map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1}
 
-	distant, keptA, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
+	_, distant, keptA, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
 		clusterOf, motifQualityConfig(), 0.5, constMeanSim(0.1))
 	require.NoError(t, err)
 	require.True(t, keptA,
 		"the far lane must not apply the cohesion floor — cohesion is 0 there by construction")
 
-	close, keptB, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
+	_, close, keptB, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
 		clusterOf, motifQualityConfig(), 0.5, constMeanSim(0.9))
 	require.NoError(t, err)
 	require.True(t, keptB)
@@ -281,7 +281,7 @@ func TestScoreMotifCandidate_NearLaneKeepsTheCohesionFloor(t *testing.T) {
 	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
 	g := store.NewSimilarityGraph(nil) // density 0, below the floor
 
-	_, kept, err := scoreMotifCandidate(ctx, motifCandidate(), LaneNear, g, idx, "main",
+	_, _, kept, err := scoreMotifCandidate(ctx, motifCandidate(), LaneNear, g, idx, "main",
 		map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1}, motifQualityConfig(), 0.5, nil)
 	require.NoError(t, err)
 	require.False(t, kept)
@@ -295,12 +295,12 @@ func TestScoreMotifCandidate_SeparationIsAGateInBothLanes(t *testing.T) {
 	cfg := motifQualityConfig()
 	cfg.CohFloor = 0 // so only separation can be what rejects
 
-	_, keptFar, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar,
+	_, _, keptFar, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar,
 		store.NewSimilarityGraph(nil), idx, "main", sameCommunity, cfg, 0.5, constMeanSim(0))
 	require.NoError(t, err)
 	require.False(t, keptFar)
 
-	_, keptNear, err := scoreMotifCandidate(ctx, motifCandidate(), LaneNear,
+	_, _, keptNear, err := scoreMotifCandidate(ctx, motifCandidate(), LaneNear,
 		store.NewSimilarityGraph([][2]string{{"kb/alpha/1.md", "kb/beta/2.md"}}),
 		idx, "main", sameCommunity, cfg, 0.5, nil)
 	require.NoError(t, err)
@@ -323,7 +323,7 @@ func TestScoreMotifCandidate_FarLaneDropsOversizedGroups(t *testing.T) {
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3
 
-	_, kept, err := scoreMotifCandidate(ctx, cand, LaneFar, store.NewSimilarityGraph(nil),
+	_, _, kept, err := scoreMotifCandidate(ctx, cand, LaneFar, store.NewSimilarityGraph(nil),
 		idx, "main", clusterOf, cfg, 0.5, constMeanSim(0.1))
 	require.NoError(t, err)
 	require.False(t, kept)
@@ -334,7 +334,7 @@ func TestScoreMotifCandidate_FarLaneDropsOversizedGroups(t *testing.T) {
 // caller's meanSim contract says so; this pins the scorer's half of it.
 func TestScoreMotifCandidate_FarLanePropagatesMeanSimErrors(t *testing.T) {
 	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
-	_, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, store.NewSimilarityGraph(nil),
+	_, _, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, store.NewSimilarityGraph(nil),
 		idx, "main", map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1},
 		motifQualityConfig(), 0.5,
 		func(context.Context, []string) (float64, error) { return 0, errors.New("no vectors") })
@@ -782,6 +782,93 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 	require.Equal(t, 1, health.NearFloorDropped,
 		"the group must be COUNTED where it disappears, not merely absent")
 
+	require.Zero(t, health.NearOtherDropped, "and attributed to the floor, not to 'other'")
+
 	lines := motifBridgeHealthLines(health, 0, 0)
 	require.Contains(t, strings.Join(lines, "\n"), "motif near-lane floor: 1 group(s)")
+}
+
+// TestBuildMotifBridges_AttributesNearLaneDropsByCause — the counter must mean
+// its label (review M4 counter-finding).
+//
+// The first version incremented NearFloorDropped on ANY near-lane rejection, so
+// an oversize group rode in under a label that said "cohesion". Phase 4 reads
+// this number as evidence for a lane redesign, and a number that does not mean
+// its label is worse than no number at all.
+//
+// Two groups, dropped for two different reasons, counted separately.
+func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
+	// Group A: three members, one edge => density 0.33, under the floor.
+	// Group B: four mutually adjacent members => cohesion 1.0, over the cap.
+	seeds := []factForLLM{
+		{File: "kb/a/one.md", Motifs: []string{"sparse-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/two.md", Motifs: []string{"sparse-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/three.md", Motifs: []string{"sparse-shape"}, Entities: []string{"Gamma"}},
+		{File: "kb/d/four.md", Motifs: []string{"crowded-shape"}, Entities: []string{"Delta"}},
+		{File: "kb/e/five.md", Motifs: []string{"crowded-shape"}, Entities: []string{"Epsilon"}},
+		{File: "kb/f/six.md", Motifs: []string{"crowded-shape"}, Entities: []string{"Zeta"}},
+		{File: "kb/g/seven.md", Motifs: []string{"crowded-shape"}, Entities: []string{"Eta"}},
+	}
+	clusters := ClusterResult{Clusters: map[int][]string{}}
+	labels := labelsWith(200, nil)
+	for i, f := range seeds {
+		clusters.Clusters[i] = []string{f.File}
+		labels.DF[strings.ToLower(f.Entities[0])] = 2
+	}
+
+	idx := &pairwiseIndex{
+		edges: [][2]string{
+			{"kb/a/one.md", "kb/b/two.md"}, // group A: one edge among three
+			// group B: all six pairs, so cohesion is 1.0 and only the cap bites
+			{"kb/d/four.md", "kb/e/five.md"}, {"kb/d/four.md", "kb/f/six.md"},
+			{"kb/d/four.md", "kb/g/seven.md"}, {"kb/e/five.md", "kb/f/six.md"},
+			{"kb/e/five.md", "kb/g/seven.md"}, {"kb/f/six.md", "kb/g/seven.md"},
+		},
+	}
+	cfg := motifQualityConfig()
+	cfg.MaxMembers = 3 // group B has four
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 2, health.Candidates, "precondition: both groups enumerated")
+	require.Empty(t, near)
+	require.Empty(t, far)
+	require.Equal(t, 1, health.NearFloorDropped, "the sparse group, and only it")
+	require.Equal(t, 1, health.NearOtherDropped, "the oversize group, counted apart")
+
+	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	require.Contains(t, lines, "motif near-lane floor: 1 group(s)")
+	require.Contains(t, lines, "motif near-lane other: 1 group(s)")
+}
+
+// pairwiseIndex reports adjacency for an explicit edge list.
+type pairwiseIndex struct {
+	SearchQuery
+	edges [][2]string
+}
+
+func (p *pairwiseIndex) TokenDF(context.Context, string, string, string) (int, error) {
+	return 2, nil
+}
+
+func (p *pairwiseIndex) ReverseDependentPaths(context.Context, string) (map[string]struct{}, error) {
+	return map[string]struct{}{}, nil
+}
+
+func (p *pairwiseIndex) SimilarityAdjacency(_ context.Context, paths []string) (store.SimilarityGraph, error) {
+	in := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		in[path] = struct{}{}
+	}
+	var kept [][2]string
+	for _, e := range p.edges {
+		_, a := in[e[0]]
+		_, b := in[e[1]]
+		if a && b {
+			kept = append(kept, e)
+		}
+	}
+	return store.NewSimilarityGraph(kept), nil
 }
