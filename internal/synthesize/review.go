@@ -185,7 +185,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 		return out, nil
 	}
 
-	pages, err := factPages(res.Item.Facts)
+	pages, err := factPages(res.Item.Type, res.Item.Facts)
 	if err != nil {
 		return nil, err
 	}

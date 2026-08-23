@@ -323,7 +323,7 @@ func (reviewStrategy) RequireCompletion(item *store.PipelineWorkItem, completion
 	if !pagedStepTypes[item.StepType] {
 		return nil
 	}
-	return requireCompletionToken(item.ID, item.FactsJSON, completionToken)
+	return requireCompletionToken(item.StepType, item.ID, item.FactsJSON, completionToken)
 }
 
 // RenderPayload implements pagedStrategy: the facts a paged item ships beside

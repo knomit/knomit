@@ -149,3 +149,100 @@ func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 func pipelineSessionFor(env *restatementEnv, id string) store.PipelineSession {
 	return store.PipelineSession{ID: id, Branch: env.branch}
 }
+
+// What the ENGINE SERVES, not what Render returns.
+//
+// C2 was "the renderer shipped no payload". This is its sibling one layer
+// deeper: the renderer shipped the right payload and the PAGING layer replaced
+// it with blanks on the way out.
+//
+// factPages unmarshalled any payload into []factForLLM to split it into pages.
+// That SUCCEEDS for any JSON array of objects — Go ignores unknown fields — so
+// the alias and define payloads (both arrays) decoded to slices of EMPTY
+// structs and were re-marshalled over the real content. Backfill survived only
+// because its payload is an object, where the unmarshal fails and the verbatim
+// fall-through catches it.
+//
+// Every layer looked correct in isolation: Render returned the payload, the
+// item stored the payload, and only the served result was wrong. The C2 test
+// asserted Render's output and passed throughout.
+func TestBootstrap_EngineServesTheRealPayloadNotABlankedOne(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	env.writeFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
+	env.writeFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallbacks"})
+	for i := range 16 {
+		env.writeFactWithMotifs(
+			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
+			fmt.Sprintf("A distinct body about subject number %d.", i),
+			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
+	}
+	env.writeFact("kb/bare.md", "Bare fact", "a body with no motif")
+
+	rv := NewReviewerWithOptions(env.ri, nil, EffortMedium, ScopeFilter{})
+	res, err := rv.StartSession(ctx)
+	require.NoError(t, err)
+
+	checked := map[string]bool{}
+	for range 200 {
+		if res.Done || res.Item == nil {
+			break
+		}
+		if motifStepForTest(res.Item.Type) {
+			checked[res.Item.Type] = true
+			// The payload the MODEL receives must carry real content, not a
+			// well-formed shell. Emptiness here is invisible to every other
+			// check: the JSON is valid, the field is present, the length is
+			// plausible.
+			require.NotEmptyf(t, res.Item.Facts, "%s served an empty payload", res.Item.Type)
+			require.NotContainsf(t, string(res.Item.Facts), `"path":"","title":"","body":""`,
+				"%s served BLANKED factForLLM structs — the paging layer replaced the "+
+					"real payload with empty ones", res.Item.Type)
+			switch res.Item.Type {
+			case motifAliasStepType:
+				require.Contains(t, string(res.Item.Facts), `"a_carriers"`,
+					"the judge must receive carrier titles — they are the over-merge guard")
+			case motifDefineStepType:
+				require.Contains(t, string(res.Item.Facts), `"cluster_key"`,
+					"the definer's answer must be routable back to a cluster")
+			case motifBackfillStepType:
+				require.Contains(t, string(res.Item.Facts), `"vocabulary"`)
+			}
+		}
+		res, err = rv.ContinueSessionForItem(ctx, res.SessionID, emptyResponseForTest(res.Item.Type), res.Item.ID)
+		if err != nil {
+			// A paged ordinary item needs its token; not this test's subject.
+			break
+		}
+	}
+	require.Containsf(t, checked, motifDefineStepType,
+		"the fixture must serve a define item — it is the payload that was being blanked")
+}
+
+func motifStepForTest(t string) bool {
+	switch t {
+	case motifAliasStepType, motifDefineStepType, motifBackfillStepType:
+		return true
+	}
+	return false
+}
+
+func emptyResponseForTest(stepType string) string {
+	switch stepType {
+	case motifAliasStepType:
+		return `{"verdicts":[]}`
+	case motifDefineStepType:
+		return `{"definitions":[]}`
+	case motifBackfillStepType:
+		return `{"assignments":[]}`
+	case "prune":
+		return `{"decisions":[],"merges":[]}`
+	case "distill":
+		return `{"synthesize":[],"retract":[]}`
+	case "reflect":
+		return `{"reasoning":"x","reinforce":[],"propose":[]}`
+	case "discover":
+		return `{"proposals":[]}`
+	}
+	return `{}`
+}
