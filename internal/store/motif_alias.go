@@ -340,7 +340,7 @@ func applyJudgeMerges(groups map[string][]spelling, merges []judgeMergePair) (ma
 	if len(merges) == 0 {
 		return groups, nil, nil
 	}
-	parent := make(map[string]string, len(groups))
+	parent := map[string]string{}
 	var find func(string) string
 	find = func(k string) string {
 		p, ok := parent[k]
@@ -356,43 +356,61 @@ func applyJudgeMerges(groups map[string][]spelling, merges []judgeMergePair) (ma
 		if rx == ry {
 			return
 		}
-		// Smaller key wins, so the survivor is min() over the whole union
-		// regardless of the order decisions were recorded in.
 		if ry < rx {
 			rx, ry = ry, rx
 		}
 		parent[ry] = rx
 	}
+
+	// Union EVERY recorded merge, including ones naming vocabulary the corpus
+	// no longer carries.
+	//
+	// The earlier version skipped a merge unless both endpoints were live,
+	// which SPLIT a transitive chain when its middle retired: a judge that
+	// merged A~B and B~C asserted all three name one mechanism, and retiring
+	// B's spelling silently undid that — leaving A and C in separate clusters
+	// with nothing recording that a judge had said otherwise. The merges are
+	// decisions about MECHANISMS; a spelling leaving the corpus does not
+	// withdraw one.
 	var applied []judgeMergePair
 	for _, m := range merges {
-		// Both endpoints must still exist in the live vocabulary. A decision
-		// about vocabulary that has left the corpus is inert, not an error.
-		if _, okA := groups[m.a]; !okA {
-			continue
-		}
-		if _, okB := groups[m.b]; !okB {
-			continue
-		}
 		union(m.a, m.b)
 		applied = append(applied, m)
 	}
+
+	// Group the LIVE keys by their component, then key each component by the
+	// smallest key that is actually live.
+	//
+	// That last part is what keeps a dead key from naming a live cluster. Union
+	// alone would let a retired endpoint win min() and identify a cluster no
+	// spelling has — measured earlier in this phase: "silent-fallback" came
+	// back keyed "degradation-quiet" after that spelling had left the corpus.
+	liveKeysByRoot := map[string][]string{}
+	for key := range groups {
+		root := find(key)
+		liveKeysByRoot[root] = append(liveKeysByRoot[root], key)
+	}
+	survivorOf := map[string]string{}
+	for root, keys := range liveKeysByRoot {
+		sort.Strings(keys)
+		survivorOf[root] = keys[0]
+	}
+
 	merged := make(map[string][]spelling, len(groups))
 	mergedKeys := map[string]struct{}{}
 	for key, members := range groups {
-		root := find(key)
-		merged[root] = append(merged[root], members...)
-		if root != key {
-			mergedKeys[root] = struct{}{}
+		survivor := survivorOf[find(key)]
+		merged[survivor] = append(merged[survivor], members...)
+		if survivor != key {
+			mergedKeys[survivor] = struct{}{}
 		}
 	}
-	// Attribute each applied merge's rationale to the cluster it produced, so
-	// the audit trail lands where method='judge' is read. A cluster formed by
-	// several merges carries all their reasons, joined and deduplicated by
-	// order of application.
+
+	// Attribute each applied merge's rationale to the cluster it produced.
 	rationales := map[string]string{}
 	for _, m := range applied {
-		root := find(m.a)
-		if m.rationale == "" {
+		root, ok := survivorOf[find(m.a)]
+		if !ok || m.rationale == "" {
 			continue
 		}
 		if existing := rationales[root]; existing != "" {
@@ -629,19 +647,36 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 	// df counts DISTINCT carrier paths across the cluster, so a fact using two
 	// spellings of one mechanism is one carrier — the same rule TokenDF applies,
 	// for the same reason.
+	// Driven from fact_motifs with a LEFT JOIN, not from motif_aliases — so an
+	// UNRESOLVED spelling appears as its own singleton cluster rather than
+	// vanishing.
+	//
+	// One posture everywhere (review remediation, 2026-08-23). TokenDF,
+	// CanonicalID, ClusterKey and the query tiers all degrade to "every motif
+	// is its own cluster" on an unresolved corpus; Clusters, VocabularyHealth
+	// and CarrierTitles used to return NOTHING instead, so the same corpus
+	// reported a real vocabulary through one API and an empty one through
+	// another. An empty alias table means "no review session has run yet" — a
+	// transient bootstrap state, never a fact about the corpus — and the
+	// singleton reading is what a rebuild would produce for a corpus with no
+	// aliasing anyway.
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
-		SELECT a.cluster_key,
-		       a.canonical_id,
-		       GROUP_CONCAT(DISTINCT a.motif),
-		       (SELECT COUNT(DISTINCT bf.path)
-		          FROM branch_facts bf
-		          JOIN fact_motifs m ON m.fact_id = bf.fact_id
-		          JOIN motif_aliases a2
-		                 ON a2.branch_id = bf.branch_id AND a2.motif = m.motif
-		         WHERE bf.branch_id = a.branch_id AND a2.cluster_key = a.cluster_key)
-		  FROM motif_aliases a
-		 WHERE a.branch_id = ?
-		 GROUP BY a.cluster_key, a.canonical_id`, branchID)
+		WITH resolved AS (
+		  SELECT bf.path,
+		         m.motif,
+		         COALESCE(a.cluster_key, '') AS cluster_key,
+		         COALESCE(a.canonical_id, m.motif) AS canonical_id
+		    FROM branch_facts bf
+		    JOIN fact_motifs m ON m.fact_id = bf.fact_id
+		    LEFT JOIN motif_aliases a
+		           ON a.branch_id = bf.branch_id AND a.motif = m.motif
+		   WHERE bf.branch_id = ?
+		)
+		SELECT cluster_key, canonical_id,
+		       GROUP_CONCAT(DISTINCT motif),
+		       COUNT(DISTINCT path)
+		  FROM resolved
+		 GROUP BY cluster_key, canonical_id`, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("Clusters: %w", err)
 	}
@@ -652,6 +687,10 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 		var members string
 		if err := rows.Scan(&c.ClusterKey, &c.CanonicalID, &members, &c.DF); err != nil {
 			return nil, fmt.Errorf("Clusters: scan: %w", err)
+		}
+		if c.ClusterKey == "" {
+			// Unresolved: its own singleton, keyed the way a rebuild would key it.
+			c.ClusterKey = groupingKey(c.CanonicalID)
 		}
 		c.Members = strings.Split(members, ",")
 		sort.Strings(c.Members)
@@ -670,25 +709,42 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 }
 
 // CarrierTitles returns up to limit titles of live facts carrying any spelling
-// in the cluster, most recent first.
+// in the cluster, MOST RECENT FIRST.
 //
 // The judge sees these, and that is not decoration: string-only clustering
 // demonstrably keeps adjacent-family false merges (blueprint §12-E3). Two
 // motifs can read as synonyms and be carried by facts about visibly different
 // mechanisms, and the titles are what makes that visible.
+//
+// Order is load-bearing because the list is CAPPED: whichever titles the cap
+// admits are the entire evidence the judge gets, and explain's sibling list
+// inherits the same ordering. Alphabetical would show a cluster's oldest,
+// least representative carriers whenever their titles sorted early. This
+// documented most-recent-first and ordered by title, which is the kind of
+// mismatch that reads as correct in both the doc and the code.
 func (mi *motifIndex) CarrierTitles(ctx context.Context, branch, clusterKey string, limit int) ([]string, error) {
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("CarrierTitles: %w", err)
 	}
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
-		SELECT DISTINCT f.title
+		SELECT f.title,
+		       MAX(COALESCE(cl.committed_at, 0)) AS cl_committed_at,
+		       MAX(f.id) AS newest_id
 		  FROM branch_facts bf
 		  JOIN facts f ON f.id = bf.fact_id
 		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
-		  JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
-		 WHERE bf.branch_id = ? AND a.cluster_key = ?
-		 ORDER BY f.title
+		  LEFT JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
+		  LEFT JOIN commit_log cl ON cl.commit_hash = bf.commit_hash AND cl.path = bf.path
+		 WHERE bf.branch_id = ?
+		   AND COALESCE(NULLIF(a.cluster_key, ''), knomit_motif_key(m.motif)) = ?
+		 GROUP BY f.title
+		 -- fact id breaks the timestamp tie. commit_log timestamps are
+		 -- second-granularity, so a burst of writes — a bulk import, an agent
+		 -- session, or a test fixture — lands them all on the same second and
+		 -- the sort silently falls back to whatever comes next. Facts rows are
+		 -- append-only and content-addressed, so a higher id is strictly later.
+		 ORDER BY cl_committed_at DESC, newest_id DESC, f.title ASC
 		 LIMIT ?`, branchID, clusterKey, limit)
 	if err != nil {
 		return nil, fmt.Errorf("CarrierTitles: %w", err)
@@ -697,7 +753,8 @@ func (mi *motifIndex) CarrierTitles(ctx context.Context, branch, clusterKey stri
 	var out []string
 	for rows.Next() {
 		var t string
-		if err := rows.Scan(&t); err != nil {
+		var committedAt, newestID int64
+		if err := rows.Scan(&t, &committedAt, &newestID); err != nil {
 			return nil, fmt.Errorf("CarrierTitles: scan: %w", err)
 		}
 		out = append(out, t)

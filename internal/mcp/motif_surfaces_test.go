@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -83,6 +84,13 @@ var looseTierRefusers = map[string]string{
 	"motifMatchUnavailable": "refuses soft and explains why; naming the tier is how it declines",
 	"parseMotifMatch":       "validates the caller's own value against the tier list; selects nothing",
 	"motifMatchEnum":        "renders the tier list for the schema; selects nothing",
+	"expandMotifQuery": "IMPLEMENTS the tiers — it dispatches on the tier the CALLER supplied. " +
+		"Naming them is how a switch over them is written; what it never does is " +
+		"choose one. Found the moment the scan was widened past the MCP package, " +
+		"which is the point: the original scan opened only the files least likely " +
+		"to offend.",
+	"pairSharesCanonicalMotif": "documents in a comment that it uses the EXACT tier only; the " +
+		"loose-tier names appear in that reasoning, not in a selection",
 }
 
 // TestMotifMatch_LooseTiersAreNeverReachedByAutomation is the §6 rule as a
@@ -90,7 +98,16 @@ var looseTierRefusers = map[string]string{
 // them, and for nobody else — token-1 measured 15 false pairs on the eval set,
 // which is acceptable for a human reading results and never for automation.
 func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
-	files := []string{"query.go", "explain.go", "learn.go", "update.go", "review.go"}
+	// The MCP files, plus the two packages where a violation would ACTUALLY
+	// appear. Automation that selected a loose tier would do so in the
+	// synthesis pipeline or the store's own query path — neither of which the
+	// original scan opened, so it checked the files least likely to offend.
+	files := []string{
+		"query.go", "explain.go", "learn.go", "update.go", "review.go",
+		"../synthesize/motif_alias.go", "../synthesize/motif_backfill.go",
+		"../synthesize/motif_define.go", "../synthesize/restatement.go",
+		"../store/search_query.go", "../store/motif_alias.go",
+	}
 	checked := 0
 	for _, rel := range files {
 		fset := token.NewFileSet()
@@ -136,9 +153,14 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	// Bidirectional, like the fact package's lists: a declared refuser that no
 	// longer exists is a permission nobody needs and nobody notices going stale.
 	for name, why := range looseTierRefusers {
+		// Matches plain functions AND methods. The first version looked for
+		// "func NAME(" only, so a declared METHOD read as missing — which is
+		// how the widened scan's first legitimate entry appeared to be stale
+		// the moment it was added.
+		decl := regexp.MustCompile(`func (\([^)]*\) )?` + regexp.QuoteMeta(name) + `\(`)
 		found := false
 		for _, rel := range files {
-			if strings.Contains(readMCPSource(t, rel), "func "+name+"(") {
+			if decl.MatchString(readMCPSource(t, rel)) {
 				found = true
 			}
 		}

@@ -240,14 +240,30 @@ type TitleNeighbour struct {
 // composite: nothing on the runtime paths (query / explain / learn) may consume
 // it, and keeping it off the composite makes that structural rather than a rule
 // somebody has to remember.
-// MotifIndex is alias resolution over the corpus's motif vocabulary
-// (blueprint §3.1). Every method reads or rebuilds DERIVED state: the authored
-// strings in facts.motifs remain the claim, and nothing here writes back into
-// a fact (MN3).
+// MotifIndex is alias resolution, definitions and vocabulary health over the
+// corpus's motif vocabulary (blueprint §3.1–§3.3).
+//
+// Every method reads or rebuilds DERIVED state: the authored strings in
+// facts.motifs remain the claim, and nothing here writes back into a fact
+// (MN3).
+//
+// Unlike AbstractionIndex, this is NOT review-pipeline-only. knomit_explain
+// consumes it on the read path to resolve a fact's motifs to their cluster,
+// definition, df and siblings (§6) — read-only, consulting no mechanical
+// decision and spawning no work, which is what MN6 permits without
+// restriction.
 type MotifIndex interface {
-	// RebuildAliases recomputes the mechanical (stem/canonicalize) alias layer
-	// for branch from the live corpus, replacing what was there. Judge merges
-	// are not preserved — they are the LLM layer's to re-establish.
+	// RebuildAliases recomputes the alias layer for branch from the live corpus,
+	// replacing what was there: the mechanical (stem/canonicalize) grouping with
+	// the recorded judge merges overlaid on top.
+	//
+	// Judge merges ARE preserved. That is load-bearing rather than incidental —
+	// the MN3 argument is that this layer is a pure function of (live facts,
+	// recorded decisions), and recomputing the decisions instead would make
+	// every session re-judge the whole vocabulary.
+	//
+	// Called by the review pipeline at effort >= medium, BEFORE the vocabulary
+	// passes select anything, so verdicts bind to current membership.
 	RebuildAliases(ctx context.Context, branch string) error
 	// CanonicalID resolves one spelling to its cluster's canonical id. An
 	// unresolved spelling resolves to ITSELF, so a corpus with no alias table

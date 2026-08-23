@@ -65,8 +65,22 @@ const judgeNeighboursPerCluster = 3
 // thousand. It derives an absolute cosine PER CORPUS and is itself no claim
 // about any of them — the same shape as Phase 0's shortlistPerMille.
 //
-// Deliberately loose. It is a coarse pre-filter over what the budget then
-// ranks; tightening it would start doing the judge's job, which is the one
+// HONEST NOTE ON WHEN IT BINDS. The eligible slice is len(pairs)*permille/1000,
+// and the budgets downstream cap the offered set at maxJudgePairs. Above
+// roughly sixteen clusters the percentile slice already exceeds what the
+// budgets will spend, so the budgets bind and this does not. It is doing real
+// work only on SMALL vocabularies — between the statistical-validity floor and
+// that crossover — where it keeps a handful of clusters from offering their
+// entire pair space.
+//
+// Left in rather than removed, and documented rather than quietly retained:
+// it is the mechanism that keeps selection percentile-derived by construction
+// (MN13), so a future change to the budgets cannot silently turn the pre-block
+// into a rank-only cut. But a reader should not believe it is filtering a large
+// corpus, because it is not.
+//
+// Deliberately loose regardless. It is a coarse pre-filter over what the budget
+// then ranks; tightening it would start doing the judge's job, which is the one
 // thing the pre-block must not do.
 const judgePairPermille = 50
 
@@ -74,6 +88,12 @@ const judgePairPermille = 50
 // session will ever put in front of the judge, whatever the corpus looks like.
 // It bounds what a corpus where name similarity does not discriminate can waste.
 const maxJudgePairs = 6
+
+// maxPairsMaterialized is a MEMORY BUDGET on the pair scan: the most cluster
+// pairs held in memory at once. At the default it bounds the vocabulary
+// actually compared to a few hundred of the corpus's most-used names, which is
+// where aliasing matters — a name nothing reuses has nothing to alias with.
+const maxPairsMaterialized = 200_000
 
 // carrierTitlesPerCluster is a PROMPT-SIZE BUDGET: how many carrier titles are
 // shown per cluster. Enough to expose an adjacent-family mismatch, few enough
@@ -96,7 +116,10 @@ type motifAliasHealth struct {
 	Candidates     int
 	Emitted        int
 	OperatingPoint float64 // the cosine the last offered pair sits at, THIS corpus
-	Failure        string
+	// Truncated counts clusters dropped from the pair scan by the memory
+	// budget. Reported because a silent cap reads as full coverage.
+	Truncated int
+	Failure   string
 }
 
 // selectMotifJudgePairs picks the cluster comparisons this session may spend.
@@ -153,13 +176,27 @@ func selectMotifJudgePairs(ctx context.Context, d Deps, branch string) ([]motifJ
 	// All pairs, scored. The distribution this builds is what the percentile is
 	// taken over — this corpus's own, recomputed every session, never a stored
 	// or configured number.
+	// Materialising every pair is O(V^2) in MEMORY, not just time: a 2,000-word
+	// vocabulary is two million structs. maxPairsMaterialized is a RESOURCE
+	// BUDGET (MN13) bounding that, and the truncation is SAFE because the
+	// vocabulary is ordered most-frequent-first — so what is dropped is the
+	// tail of rarely-used names, which the df>=2 reasoning already treats as the
+	// least valuable end. Reported, never silent: a cap nothing mentions reads
+	// as complete coverage.
 	type scored struct {
 		i, j int
 		cos  float64
 	}
-	var all []scored
-	for i := range clusters {
-		for j := i + 1; j < len(clusters); j++ {
+	scanned := len(clusters)
+	for scanned > 1 && scanned*(scanned-1)/2 > maxPairsMaterialized {
+		scanned--
+	}
+	if scanned < len(clusters) {
+		h.Truncated = len(clusters) - scanned
+	}
+	all := make([]scored, 0, scanned*(scanned-1)/2)
+	for i := range scanned {
+		for j := i + 1; j < scanned; j++ {
 			all = append(all, scored{i, j, dot(vecs[i], vecs[j])})
 		}
 	}
@@ -490,10 +527,23 @@ func motifAliasHealthLines(h motifAliasHealth) []string {
 			"motif aliases: vocabulary %d below the %d-cluster validity floor; mechanical layer only",
 			h.Vocabulary, minJudgeVocabulary)}
 	}
-	return []string{
+	lines := []string{
 		fmt.Sprintf("motif aliases: vocabulary %d, %d candidates, %d offered",
 			h.Vocabulary, h.Candidates, h.Emitted),
-		fmt.Sprintf("motif aliases: operating point name-cos %.3f (this corpus, this session)",
-			h.OperatingPoint),
 	}
+	// The operating point is meaningless when nothing was offered — there is no
+	// "last funded pair" to read it off. Printing 0.000 invited it to be read as
+	// a corpus whose names are all dissimilar, which is a claim about the
+	// corpus rather than about the session.
+	if h.Emitted > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif aliases: operating point name-cos %.3f (this corpus, this session)",
+			h.OperatingPoint))
+	}
+	if h.Truncated > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif aliases: %d least-used clusters dropped from the pair scan (memory budget)",
+			h.Truncated))
+	}
+	return lines
 }

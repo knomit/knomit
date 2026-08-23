@@ -21,7 +21,18 @@ func registerSQLFuncs(conn *sqlite3.SQLiteConn) error {
 	}
 	// knomit_canon_domain canonicalises a domain tag (NFC + fold + de-hyphenize)
 	// so the bulk rebuild SQL can store canonical fact_domains values.
-	return conn.RegisterFunc("knomit_canon_domain", canonicalizeDomain, true)
+	if err := conn.RegisterFunc("knomit_canon_domain", canonicalizeDomain, true); err != nil {
+		return err
+	}
+	// knomit_motif_key computes a motif's mechanical cluster key, so SQL that
+	// reads an UNRESOLVED motif can key it exactly as a rebuild would.
+	//
+	// It exists so every motif API degrades the same way on a corpus whose
+	// alias table has not been built yet: each spelling is its own singleton
+	// cluster. Without it, the aggregate readers returned nothing while the
+	// point readers returned singletons, so one corpus reported two different
+	// vocabularies depending on which API you asked.
+	return conn.RegisterFunc("knomit_motif_key", groupingKey, true)
 }
 
 // parsedFact is the JSON structure returned by knomit_parse_fact.

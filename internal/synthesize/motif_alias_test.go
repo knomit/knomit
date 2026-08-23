@@ -245,17 +245,18 @@ func TestMotifJudgeSelection_MN9_NamesEmbedThroughTheShortStringTemplate(t *test
 // kind of code grows every time it is written, and it looks reasonable on every
 // occasion.
 var motifBudgetLiterals = map[string]string{
-	"12":    "minJudgeVocabulary: statistical-validity floor — a percentile over fewer points is not an estimate",
-	"3":     "judgeNeighboursPerCluster: prompt-size budget",
-	"50":    "judgePairPermille: selection policy, per-mille of THIS corpus's own distribution",
-	"6":     "maxJudgePairs: judge-slot budget",
-	"4":     "carrierTitlesPerCluster: prompt-size budget",
-	"1.2":   "motifAliasPriority: ordering within the work queue, below prune's cluster band",
-	"1e-12": "degenerate-norm guard in cosine; a numerical floor, not a similarity threshold",
-	"1000":  "per-mille denominator",
-	"0":     "loop and slice bounds",
-	"1":     "loop and slice bounds",
-	"2":     "loop and slice bounds",
+	"12":      "minJudgeVocabulary: statistical-validity floor — a percentile over fewer points is not an estimate",
+	"3":       "judgeNeighboursPerCluster: prompt-size budget",
+	"50":      "judgePairPermille: selection policy, per-mille of THIS corpus's own distribution",
+	"6":       "maxJudgePairs: judge-slot budget",
+	"4":       "carrierTitlesPerCluster: prompt-size budget",
+	"1.2":     "motifAliasPriority: ordering within the work queue, below prune's cluster band",
+	"200_000": "maxPairsMaterialized: memory budget on the pair scan, not a claim about any corpus",
+	"1e-12":   "degenerate-norm guard in cosine; a numerical floor, not a similarity threshold",
+	"1000":    "per-mille denominator",
+	"0":       "loop and slice bounds",
+	"1":       "loop and slice bounds",
+	"2":       "loop and slice bounds",
 }
 
 // TestMN13_NoCorpusPropertyConstantsInAliasSelection fails if a numeric literal

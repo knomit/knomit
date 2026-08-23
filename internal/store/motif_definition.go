@@ -230,13 +230,13 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 	// using two spellings of one mechanism counts once — the same rule TokenDF
 	// and Clusters apply.
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
-		SELECT a.cluster_key, COUNT(DISTINCT bf.path)
+		SELECT COALESCE(NULLIF(a.cluster_key, ''), knomit_motif_key(m.motif)), COUNT(DISTINCT bf.path)
 		  FROM branch_facts bf
 		  JOIN facts f ON f.id = bf.fact_id
 		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
-		  JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
+		  LEFT JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
 		 WHERE bf.branch_id = ? AND f.origin = 'authored'
-		 GROUP BY a.cluster_key`, branchID)
+		 GROUP BY COALESCE(NULLIF(a.cluster_key, ''), knomit_motif_key(m.motif))`, branchID)
 	if err != nil {
 		return h, fmt.Errorf("VocabularyHealth: %w", err)
 	}

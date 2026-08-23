@@ -3,6 +3,7 @@ package synthesize
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -333,38 +334,50 @@ func TestBackfillApply_PreservesEveryOtherField(t *testing.T) {
 // unrelated pipeline tests failed the moment the passes were wired without
 // this gate, which is how it was found.
 func TestMotifPasses_NeverRunAtEffortNormal(t *testing.T) {
-	require.False(t, EffortNormal.MaintainsVocabulary())
-	require.True(t, EffortMedium.MaintainsVocabulary())
-	require.True(t, EffortHigh.MaintainsVocabulary())
-
 	ctx := context.Background()
 	env := newRestatementEnv(t, 0)
 	// A corpus where all three passes would have plenty to do.
-	for i := range 3 {
-		env.writeFact("kb/plain"+string(rune('a'+i))+".md", "Plain", "body")
+	for i := range 18 {
+		env.writeFactWithMotifs(fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
+			fmt.Sprintf("A distinct body about subject number %d.", i),
+			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
 	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
+	env.writeFact("kb/bare.md", "Bare", "a body with no motif")
 
-	targets, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, 8)
-	require.NoError(t, err)
-	require.NotEmpty(t, targets,
-		"precondition: backfill must have work available, or this proves nothing "+
-			"about the gate")
-
-	d := env.deps()
-	d.Effort = EffortNormal
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	// Through PLAN, which is what gates. The first version of this test
+	// asserted MaintainsVocabulary() twice and never ran the pipeline — so it
+	// tested the predicate, which was never in doubt, and not the gate, which
+	// was the thing that had been missing.
+	normal := NewReviewerWithOptions(env.ri, nil, EffortNormal, ScopeFilter{})
+	res, err := normal.StartSession(ctx)
 	require.NoError(t, err)
 
-	// Plan is what gates; calling the planners directly would bypass it. This
-	// asserts the GATE, not the planners.
-	require.False(t, d.Effort.MaintainsVocabulary())
+	for _, item := range env.workItems(res.SessionID) {
+		require.NotContainsf(t,
+			[]string{motifAliasStepType, motifDefineStepType, motifBackfillStepType},
+			item.StepType,
+			"EffortNormal planned a %s item. All three passes spend LLM budget, and "+
+				"EffortNormal guarantees zero discovery spend with byte-identical output "+
+				"(MN5) — backfill alone would fire on every fact of a motif-free corpus, "+
+				"which is exactly the corpus MN5's test uses.", item.StepType)
+	}
 
-	// And with the gate open, the same corpus does produce work.
-	d.Effort = EffortMedium
-	require.NoError(t, planMotifBackfillWork(ctx, d, sess, env.branch))
-	item, err := env.svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
+	// And the alias table stays untouched, since the rebuild is inside the gate.
+	aliases, err := env.svc.Motifs().AliasTable(ctx, env.branch)
 	require.NoError(t, err)
-	require.NotNil(t, item, "at medium effort the same corpus must yield a backfill item")
-	require.Equal(t, motifBackfillStepType, item.StepType)
+	require.Empty(t, aliases, "EffortNormal must not build derived vocabulary either")
+
+	// With the gate open, the same corpus DOES produce the passes — otherwise
+	// this test would pass against a build where they had been deleted.
+	medium := env.vocabSession()
+	var planned int
+	for _, item := range medium.restatementItems {
+		switch item.StepType {
+		case motifAliasStepType, motifDefineStepType, motifBackfillStepType:
+			planned++
+		}
+	}
+	require.Positive(t, planned,
+		"at medium effort the same corpus must produce motif work — a gate that is "+
+			"closed at every level is indistinguishable from a feature that was removed")
 }

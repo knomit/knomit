@@ -161,3 +161,56 @@ func TestMotifJudge_MN3_MergeTouchesNoFact(t *testing.T) {
 			"MN3: a judge merge must never rewrite a fact — %s changed", p)
 	}
 }
+
+// A judge chain must survive the RETIREMENT of its middle.
+//
+// A~B and B~C is an assertion that all three name ONE mechanism. Retiring B's
+// spelling withdraws a word from the corpus, not a judgement about mechanisms —
+// so A and C must stay together, with nothing left recording the judge's view
+// if they do not.
+//
+// The earlier implementation skipped any merge whose endpoints were not both
+// live, which split the chain silently.
+func TestMotifJudge_ChainSurvivesTheRetirementOfItsMiddle(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"quiet-degradation"})
+	writeMotifFact(t, svc, branch, "kb/c.md", []string{"mute-failover"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
+		"silent-fallback", "quiet-degradation", "one mechanism"))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
+		"quiet-degradation", "mute-failover", "the same one"))
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	a, err := svc.Motifs().CanonicalID(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+	c, err := svc.Motifs().CanonicalID(ctx, branch, "mute-failover")
+	require.NoError(t, err)
+	require.Equal(t, a, c, "precondition: the chain joins all three")
+
+	// The MIDDLE spelling leaves the corpus entirely.
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"config-drift"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	a, err = svc.Motifs().CanonicalID(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+	c, err = svc.Motifs().CanonicalID(ctx, branch, "mute-failover")
+	require.NoError(t, err)
+	require.Equal(t, a, c,
+		"A and C must stay one cluster: the judge asserted they name one mechanism, "+
+			"and retiring the spelling that linked them withdraws a word, not a judgement")
+
+	// ...and the surviving key must be one a LIVE spelling has, not the
+	// retired middle's.
+	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+	require.Contains(t, []string{groupingKey("silent-fallback"), groupingKey("mute-failover")}, key,
+		"the surviving cluster must be keyed by live vocabulary")
+
+	// The retired spelling itself is gone.
+	tbl, err := svc.Motifs().AliasTable(ctx, branch)
+	require.NoError(t, err)
+	require.NotContains(t, tbl, "quiet-degradation")
+}
