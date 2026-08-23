@@ -25,8 +25,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"knomit/internal/embeddings"
@@ -661,6 +663,14 @@ func rewindWatermark(ctx context.Context, corpus, scratch string) error {
 // facts that were NEVER written in core — a past agent citing work it never
 // did. The count is reported rather than buried, because it is the merged
 // corpus's one construction-time distortion.
+// mergeSampleSize/Seed: a proportional, reproducible sample of the merged-in
+// corpus. Size chosen so the sweep reaches the dominant subject region within a
+// bounded run; the seed so two runs measure the same corpus.
+const (
+	mergeSampleSize = 500
+	mergeSampleSeed = 20260823
+)
+
 func merge(ctx context.Context, scratch string) error {
 	base := copyPath(scratch, "agentic-engineering")
 	dst := copyPath(scratch, "merged")
@@ -721,53 +731,87 @@ func merge(ctx context.Context, scratch string) error {
 		if err != nil {
 			continue
 		}
-		var internal []string
+		var local []string
 		for _, r := range parsed.Refs {
-			if !strings.Contains(r, "://") && strings.HasPrefix(r, "kb/") {
-				internal = append(internal, r)
+			// localRepoID "" so kb://<id>/ classifies FOREIGN — those point at
+			// another corpus and are never checked locally. Only bare
+			// repo-relative paths are the local gate's business.
+			if c := fact.ClassifyRef(r, ""); c.Kind == fact.RefLocalFact {
+				local = append(local, c.Path)
 			}
 		}
-		all = append(all, srcFact{path: f.Path, content: rec.Content, refs: internal})
+		all = append(all, srcFact{path: f.Path, content: rec.Content, refs: local})
 	}
 
-	// Transitive closure: drop anything citing something that will not exist.
-	live := map[string]bool{}
-	for _, f := range all {
-		live[f.path] = true
-	}
-	for p := range present {
-		live[p] = true
-	}
+	// Drop a fact only if a ref of its own genuinely fails to resolve — asked
+	// with knomit's TEMPORAL predicate, FactExistsAt, which walks back past
+	// retractions to the last valid blob.
+	//
+	// The first version of this tool tested ref targets for membership in the
+	// set of LIVE paths. That is the same live-index read that produced a
+	// four-times-too-high damage figure for this corpus: "absent from the live
+	// index" is also what a RETRACTED or SUPERSEDED fact looks like, and refs
+	// resolve at the referrer's commit, not at HEAD. It dropped 99 facts where
+	// the honest number is 21.
+	resolves := map[string]bool{}
 	dropped := map[string]bool{}
-	for round := 1; ; round++ {
-		n := 0
-		for _, f := range all {
-			if dropped[f.path] {
-				continue
-			}
-			for _, r := range f.refs {
-				if !live[r] || dropped[r] {
-					dropped[f.path] = true
-					n++
-					break
+	for _, f := range all {
+		for _, r := range f.refs {
+			if _, seen := resolves[r]; !seen {
+				ok, err := srcSvc.FactQuery().FactExistsAt(ctx, srcBranch, r, "")
+				if err != nil {
+					return fmt.Errorf("FactExistsAt %s: %w", r, err)
 				}
+				resolves[r] = ok
+			}
+			if !resolves[r] {
+				dropped[f.path] = true
 			}
 		}
-		if n == 0 {
-			break
+	}
+	nResolve := 0
+	for _, ok := range resolves {
+		if ok {
+			nResolve++
 		}
-		fmt.Printf("dangling-ref closure round %d: dropped %d\n", round, n)
+	}
+	fmt.Printf("refs: %d distinct local targets, %d resolve via FactExistsAt, %d do not\n",
+		len(resolves), nResolve, len(resolves)-nResolve)
+	fmt.Printf("facts dropped for a genuinely unresolvable ref: %d\n", len(dropped))
+
+	// PROPORTIONAL fixed-seed sample. The sweep is oldest-fact-id first, which
+	// in a freshly built corpus is path order, so an unsampled core would spend
+	// ~38 sessions in its alphabetically-first regions before reaching
+	// kb/technology — 80.7% of the corpus and the part that carries mechanisms.
+	// A proportional sample preserves the composition while putting technology
+	// within reach of a bounded run.
+	//
+	// Fixed seed: the sample must be the same on a rerun, or no two runs of
+	// this annex measure the same corpus.
+	eligible := make([]srcFact, 0, len(all))
+	for _, f := range all {
+		if !dropped[f.path] {
+			eligible = append(eligible, f)
+		}
+	}
+	sort.Slice(eligible, func(i, j int) bool { return eligible[i].path < eligible[j].path })
+	rng := rand.New(rand.NewSource(mergeSampleSeed))
+	perm := rng.Perm(len(eligible))
+	keep := mergeSampleSize
+	if keep > len(eligible) {
+		keep = len(eligible)
+	}
+	sampled := make([]srcFact, 0, keep)
+	for _, i := range perm[:keep] {
+		sampled = append(sampled, eligible[i])
 	}
 
 	files := map[string]string{}
-	for _, f := range all {
-		if dropped[f.path] {
-			continue
-		}
+	for _, f := range sampled {
 		files[f.path] = f.content
 	}
-	fmt.Printf("core: %d facts, %d path collisions skipped, %d dropped for unresolvable refs, %d written\n",
-		len(coreFacts), collided, len(dropped), len(files))
+	fmt.Printf("core: %d facts, %d path collisions skipped, %d dropped for unresolvable refs, %d eligible, %d SAMPLED and written (seed %d)\n",
+		len(coreFacts), collided, len(dropped), len(eligible), len(files), mergeSampleSeed)
 
 	if _, _, err := dstSvc.Facts().BatchWriteFacts(ctx, dstBranch, files, nil,
 		"annex: merge core into agentic-engineering", "create"); err != nil {
