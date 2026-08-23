@@ -198,8 +198,26 @@ var mechanicsPaths = map[string][]string{
 	// field into a payload, not consulting it in a decision — if a motif term
 	// ever reaches the clustering arithmetic that is an MN6 violation this does
 	// not cover.
-	"internal/synthesize/cluster.go": {"ScopedCluster"},
-	"internal/synthesize/louvain.go": nil,
+	// The §4/§5 path itself — the axis MN6 names as DESIGNED for motifs
+	// ("anything that spawns work outside the §4/§5/§7 synthesis paths designed
+	// for them"). Listed rather than left unpoliced, so this map stays the one
+	// register of which functions read motifs and a future helper here has to
+	// be declared rather than appearing quietly.
+	//
+	// What no entry here licenses: a motif term reaching dedup, clustering or
+	// search ranking. Those files stay nil below and this list does not touch
+	// them.
+	// mergeToken2Groups is deliberately NOT listed: its body names no motif
+	// identifier (it folds groups keyed by canonical id, using the shared
+	// tokeniser), and this list rejects a permission nothing uses.
+	"internal/synthesize/bridge_motif.go": {"enumerateMotifCandidates"},
+	// The gate that decides which motif groups the agent ever sees. It reads
+	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
+	// names motifs only in describing what it gates. Listed with no permitted
+	// function so that a motif-reading function added here must be declared.
+	"internal/synthesize/motif_disjoint.go": {},
+	"internal/synthesize/cluster.go":        {"ScopedCluster"},
+	"internal/synthesize/louvain.go":        nil,
 
 	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
 	// these names a SELECT column list and hands the row to a scanner; carrying
