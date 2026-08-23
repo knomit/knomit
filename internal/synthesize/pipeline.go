@@ -516,6 +516,12 @@ func factFromSearchResult(sr store.SearchResult) fact.Fact {
 	f.Type = fact.Type(sr.Type)
 	f.Domain = sr.Domain
 	f.Entities = sr.Entities
+	// Motifs travel with the fact, like every other authored field above.
+	// They were missing here until Phase 3 (designer ruling 2026-08-23,
+	// .claude/plans/motif/2026-08-23-phase3-rulings-3.md), which meant the
+	// full-scan path and the incremental path disagreed about what a seed IS —
+	// and a full scan is what every FIRST session on a corpus runs.
+	f.Motifs = sr.Motifs
 	f.Confidence = sr.Confidence
 	f.Sources = sr.Sources
 	f.Refs = sr.Refs
