@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"knomit/internal/embeddings"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -41,6 +42,9 @@ var corpora = map[string]string{
 	"core":                "3HhAGRep1sec4EUtxRGxmwgwiAh",
 	"agentic-engineering": "3HhAGVQUHeeYpvvxXXCb7Zs3WCL",
 	"knomit-io-kb":        "3HhAGT67HoGHpnSaScYXsbNEH6o",
+	// Derived corpora: built by `merge`, never copied from a live home.
+	"merged":        "",
+	"core.pristine": "",
 }
 
 func main() {
@@ -54,6 +58,9 @@ func main() {
 	scratch := fs.String("scratch", defaultScratch(), "working directory for copies")
 	_ = fs.Parse(os.Args[2:])
 
+	if *corpus == "" && cmd != "merge" {
+		*corpus = "merged"
+	}
 	if *corpus == "" {
 		fatal(fmt.Errorf("-corpus is required"))
 	}
@@ -65,6 +72,9 @@ func main() {
 	ctx := context.Background()
 	switch cmd {
 	case "snapshot":
+		if id == "" {
+			fatal(fmt.Errorf("%s is derived, not snapshotted", *corpus))
+		}
 		fatal(snapshot(ctx, *corpus, id, *scratch))
 	case "session":
 		fatal(session(ctx, *corpus, *scratch))
@@ -74,6 +84,10 @@ func main() {
 		fatal(apply(ctx, *corpus, *scratch, *in))
 	case "answer":
 		fatal(answer(ctx, *corpus, *scratch, *in))
+	case "merge":
+		fatal(merge(ctx, *scratch))
+	case "prunebase":
+		fatal(prunebase(ctx, *scratch))
 	case "report":
 		fatal(report(ctx, *corpus, *scratch))
 	default:
@@ -623,4 +637,227 @@ func rewindWatermark(ctx context.Context, corpus, scratch string) error {
 	}
 	defer closeAll()
 	return svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, "")
+}
+
+// ── merge ─────────────────────────────────────────────────────────────────
+//
+// Builds the SEEDED merged corpus: agentic-engineering (carrying whatever
+// motifs its own run assigned) as the base, with core's facts written in on
+// top. This is the centrepiece the gate turns on — whether a shared motif
+// forms across two genuinely different subject domains, and whether the pairs
+// it produces are carries a working agent would want.
+//
+// Two rules, both from the ruling:
+//
+//   - The base is a COPY. Neither live home is ever opened.
+//   - Which corpus a fact came from is recorded in a SIDECAR map, never in a
+//     fact field. A source tag inside the fact would be a subject word the
+//     strip could see and, worse, a term motifs could form around — the
+//     merged corpus would then measure its own construction.
+//
+// Facts are written with ONE BatchWriteFacts call, so core's mutual internal
+// refs resolve against each other (the write path checks a batch as a unit).
+// What cannot resolve is dropped, transitively, and counted: those are refs to
+// facts that were NEVER written in core — a past agent citing work it never
+// did. The count is reported rather than buried, because it is the merged
+// corpus's one construction-time distortion.
+func merge(ctx context.Context, scratch string) error {
+	base := copyPath(scratch, "agentic-engineering")
+	dst := copyPath(scratch, "merged")
+	if err := copyFile(base, dst); err != nil {
+		return fmt.Errorf("seed merged from agentic-engineering: %w", err)
+	}
+	if err := copyFile(base, pristinePath(scratch, "merged")); err != nil {
+		return err
+	}
+
+	// Read core from its PRISTINE copy — the one untouched by any session.
+	srcSvc, _, srcBranch, srcClose, err := open(ctx, "core.pristine", scratch)
+	if err != nil {
+		return fmt.Errorf("open core: %w", err)
+	}
+	defer srcClose()
+
+	coreFacts, err := srcSvc.FactQuery().Search(ctx, srcBranch, store.SearchOptions{Limit: 100_000})
+	if err != nil {
+		return err
+	}
+
+	dstSvc, _, dstBranch, dstClose, err := open(ctx, "merged", scratch)
+	if err != nil {
+		return err
+	}
+	defer dstClose()
+
+	agFacts, err := dstSvc.FactQuery().Search(ctx, dstBranch, store.SearchOptions{Limit: 100_000})
+	if err != nil {
+		return err
+	}
+	present := map[string]bool{}
+	for _, f := range agFacts {
+		present[f.Path] = true
+	}
+	fmt.Printf("base: %d agentic-engineering facts\n", len(agFacts))
+
+	// Read every core fact's FULL SOURCE. Not the indexed body — that is the
+	// husk mistake backfill already paid for once.
+	type srcFact struct {
+		path    string
+		content string
+		refs    []string
+	}
+	all := make([]srcFact, 0, len(coreFacts))
+	collided := 0
+	for _, f := range coreFacts {
+		if present[f.Path] {
+			collided++
+			continue
+		}
+		rec, err := srcSvc.Facts().ReadFact(ctx, srcBranch, f.Path, nil)
+		if err != nil {
+			continue
+		}
+		parsed, err := fact.ParseFact(f.Path, rec.Content)
+		if err != nil {
+			continue
+		}
+		var internal []string
+		for _, r := range parsed.Refs {
+			if !strings.Contains(r, "://") && strings.HasPrefix(r, "kb/") {
+				internal = append(internal, r)
+			}
+		}
+		all = append(all, srcFact{path: f.Path, content: rec.Content, refs: internal})
+	}
+
+	// Transitive closure: drop anything citing something that will not exist.
+	live := map[string]bool{}
+	for _, f := range all {
+		live[f.path] = true
+	}
+	for p := range present {
+		live[p] = true
+	}
+	dropped := map[string]bool{}
+	for round := 1; ; round++ {
+		n := 0
+		for _, f := range all {
+			if dropped[f.path] {
+				continue
+			}
+			for _, r := range f.refs {
+				if !live[r] || dropped[r] {
+					dropped[f.path] = true
+					n++
+					break
+				}
+			}
+		}
+		if n == 0 {
+			break
+		}
+		fmt.Printf("dangling-ref closure round %d: dropped %d\n", round, n)
+	}
+
+	files := map[string]string{}
+	for _, f := range all {
+		if dropped[f.path] {
+			continue
+		}
+		files[f.path] = f.content
+	}
+	fmt.Printf("core: %d facts, %d path collisions skipped, %d dropped for unresolvable refs, %d written\n",
+		len(coreFacts), collided, len(dropped), len(files))
+
+	if _, _, err := dstSvc.Facts().BatchWriteFacts(ctx, dstBranch, files, nil,
+		"annex: merge core into agentic-engineering", "create"); err != nil {
+		return fmt.Errorf("batch write: %w", err)
+	}
+
+	// The sidecar. Path -> source corpus, outside the facts entirely.
+	sources := map[string]string{}
+	for p := range present {
+		sources[p] = "agentic-engineering"
+	}
+	for p := range files {
+		sources[p] = "core"
+	}
+	blob, err := json.MarshalIndent(sources, "", " ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(scratch, "merged.sources.json"), blob, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("sidecar: %d paths -> source corpus\n", len(sources))
+	return report(ctx, "merged", scratch)
+}
+
+// prunebase drops the base corpus's UNMOTIFED facts from `merged`.
+//
+// Backfill sweeps oldest-fact-id first, deterministically, so a corpus that
+// keeps its base's 208 motif-free facts spends ~26 sessions on them before it
+// ever offers a fact from the corpus that was merged in. That order is right
+// for a real corpus and fatal for this measurement: the merged run exists to
+// ask whether a fact from one domain reuses a motif minted in another, and it
+// cannot ask that until it reaches the second domain.
+//
+// So the seeded corpus is the base's MOTIF-BEARING facts — the vocabulary
+// being seeded — plus everything merged in. A base fact with no motif carries
+// no vocabulary; it can only consume a backfill slot. Dropping it costs the
+// measurement nothing and buys it the question.
+//
+// Deleted through BatchWriteFacts, so history stays consistent and the dedup
+// pass that walks it does not trip on a fact the index forgot.
+func prunebase(ctx context.Context, scratch string) error {
+	blob, err := os.ReadFile(filepath.Join(scratch, "merged.sources.json"))
+	if err != nil {
+		return fmt.Errorf("sidecar: %w (run `merge` first)", err)
+	}
+	var sources map[string]string
+	if err := json.Unmarshal(blob, &sources); err != nil {
+		return err
+	}
+	svc, _, branch, closeFn, err := open(ctx, "merged", scratch)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	facts, err := svc.FactQuery().Search(ctx, branch, store.SearchOptions{Limit: 100_000})
+	if err != nil {
+		return err
+	}
+	var drop []string
+	kept, fromBase := 0, 0
+	for _, f := range facts {
+		if sources[f.Path] != "agentic-engineering" {
+			continue
+		}
+		fromBase++
+		if len(f.Motifs) == 0 {
+			drop = append(drop, f.Path)
+			continue
+		}
+		kept++
+	}
+	fmt.Printf("base facts %d: keeping %d motif-bearing, dropping %d motif-free\n", fromBase, kept, len(drop))
+	if len(drop) == 0 {
+		return report(ctx, "merged", scratch)
+	}
+	if _, _, err := svc.Facts().BatchWriteFacts(ctx, branch, nil, drop,
+		"annex: drop motif-free base facts from the seeded corpus", "delete"); err != nil {
+		return fmt.Errorf("batch delete: %w", err)
+	}
+	for _, p := range drop {
+		delete(sources, p)
+	}
+	out, err := json.MarshalIndent(sources, "", " ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(scratch, "merged.sources.json"), out, 0o644); err != nil {
+		return err
+	}
+	return report(ctx, "merged", scratch)
 }
