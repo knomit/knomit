@@ -244,9 +244,10 @@ type Strategy interface {
 // not parse on a retry either, so leaving it unanswered would wedge the
 // session on an unanswerable item.
 type discoverDecision struct {
-	payload   DiscoverWorkPayload
-	parsed    bool
-	proposals []DiscoveredFact
+	payload        DiscoverWorkPayload
+	parsed         bool
+	proposals      []DiscoveredFact
+	reinforcements []FactReinforcement
 }
 
 // decodeDiscoverStep is the shared Decode half of the discover step. tool
@@ -269,6 +270,7 @@ func decodeDiscoverStep(tool string, item *store.PipelineWorkItem, response stri
 	}
 	d.parsed = true
 	d.proposals = parsed.Proposals
+	d.reinforcements = parsed.Reinforcements
 	return d, nil
 }
 
@@ -299,6 +301,26 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 	// created rather than leaving invisible.
 	if len(written) > 0 {
 		recordStats(ctx, tool, d, sess, &ReviewStats{Synthesized: len(written)})
+	}
+
+	// REINFORCE runs after the proposals, on the same decision. An agent that
+	// found the corpus already holds its keystone returns no proposal and one
+	// reinforcement, so this is usually the only half that does anything.
+	reinforced, rErr := applyReinforcements(ctx, d.Facts, d.Search, dec.payload,
+		dec.reinforcements, sess.Branch, fact.ID12(d.RI.ID()), d.OnProgress)
+	if rErr != nil {
+		log.Warn().Err(rErr).Str("tool", tool).Str("session", sess.ID).
+			Msg("apply reinforcements failed; continuing")
+	}
+	if len(reinforced) > 0 {
+		// Deliberately NOT counted into ReviewStats. Reinforcement creates no
+		// fact, so counting it as Synthesized would overstate what the session
+		// added; and store.PipelineSessionStats has no column of its own for
+		// it, so a new ReviewStats field would be dropped silently by
+		// recordStats — recorded-looking and gone. It surfaces as a
+		// detail-discover progress event per fact, and as this line.
+		log.Info().Str("tool", tool).Str("session", sess.ID).
+			Strs("facts", reinforced).Msg("discover: reinforced existing facts")
 	}
 	return nil
 }
