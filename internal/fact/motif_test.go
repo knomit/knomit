@@ -287,3 +287,18 @@ func TestStripSubjectMotifs_SubjectDriftDropsAnAuthoredMotif(t *testing.T) {
 	// invariant is about what is stored NOW, not a claim about history.
 	require.Contains(t, first, "motifs: [remote-caching]")
 }
+
+// TestSubjectTokens_IsTheStripsOwnDefinition — the Phase-3 subject-disjointness
+// gate asks of a PAIR of facts what StripSubjectMotifs asks of one, so the two
+// must not be able to disagree about what a subject token is. One definition,
+// asserted here rather than hoped for.
+func TestSubjectTokens_IsTheStripsOwnDefinition(t *testing.T) {
+	f := stripFixture()
+
+	got := SubjectTokens(f.Entities, f.Domain, "kb/gotchas/integrations/antigravity/plugin-dir-resolution/e5d04257.md")
+
+	require.Equal(t, subjectTokens(f), got)
+	require.Contains(t, got, "resolution", "path segments are subject claims")
+	require.Contains(t, got, "antigravity", "entities are subject claims")
+	require.NotContains(t, got, "md", "the .md extension is not a subject claim")
+}
