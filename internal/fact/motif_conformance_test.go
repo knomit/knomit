@@ -79,6 +79,13 @@ var motifGateNames = regexp.MustCompile(`\b(ValidateMotifs|StripSubjectMotifs|Dr
 // caller has to be justified, because needing one usually means the path is not
 // reaching SerializeFact, which is the actual defect.
 var motifGateCallSites = map[string]string{
+	"internal/synthesize/decision.go": "prune-merge and distill consume LLM-PROPOSED motifs on facts whose " +
+		"other content is good; DropInvalidMotifs drops what SerializeFact would " +
+		"reject so one malformed name cannot discard an entire consolidation. It " +
+		"uses the gate's own definition rather than re-implementing one, which is " +
+		"what MN4 forbids",
+	"internal/synthesize/discovery.go": "same, for discovered facts — which cost a bridge enumeration and an " +
+		"LLM call each, so discarding one over a malformed motif spends both for nothing",
 	"internal/web/handlers_fact_write.go": "the REST PUT path commits the client's bytes verbatim, so it must " +
 		"apply the gate itself and reserialize when the gate changes anything; it is the one write " +
 		"path that does not reach SerializeFact on its own",

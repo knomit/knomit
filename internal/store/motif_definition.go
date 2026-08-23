@@ -24,6 +24,17 @@ import (
 type DefinitionTarget struct {
 	ClusterKey string
 	Name       string
+	// Members is the cluster's membership AT THE MOMENT THIS TARGET WAS
+	// SELECTED. It travels with the target and is what PutDefinition stamps.
+	//
+	// Reading membership at write time instead was a race with a real window:
+	// the define payload is built during Plan, and a judge merge applied later
+	// in the SAME session changes the cluster before the definition comes back.
+	// The definition — authored for the pre-merge cluster — would then be
+	// stamped with post-merge membership, marked current, and never refreshed.
+	// The staleness comparison would have been defeated for precisely the merge
+	// case it was built to catch.
+	Members string
 	// Interim is the definition currently standing for this cluster, if any.
 	// Non-empty means the cluster HAS a usable sentence and is queued because
 	// its membership moved — not because it has nothing.
@@ -66,6 +77,7 @@ func (mi *motifIndex) ClustersNeedingDefinition(ctx context.Context, branch stri
 		out = append(out, DefinitionTarget{
 			ClusterKey: c.ClusterKey,
 			Name:       c.CanonicalID,
+			Members:    membership[c.ClusterKey],
 			Interim:    row.definition, // empty when never defined
 		})
 	}
@@ -98,15 +110,25 @@ func (mi *motifIndex) definitionRows(ctx context.Context, branchID int64) (map[s
 }
 
 // PutDefinition stores a cluster's definition, stamped with the membership it
-// was authored over.
-func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, definition string) error {
+// was AUTHORED AGAINST.
+//
+// members is supplied by the caller — carried from the DefinitionTarget the
+// authoring pass was given — rather than read here. Reading it here would stamp
+// whatever the cluster looks like NOW, and a judge merge applied between
+// planning and applying would mark a pre-merge definition as current for a
+// post-merge cluster. Passing an empty string re-reads current membership, for
+// callers writing a definition outside a pass.
+func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, definition, members string) error {
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("PutDefinition: %w", err)
 	}
-	membership, err := mi.clusterMembership(ctx, branchID)
-	if err != nil {
-		return err
+	if members == "" {
+		current, merr := mi.clusterMembership(ctx, branchID)
+		if merr != nil {
+			return merr
+		}
+		members = current[clusterKey]
 	}
 	if _, err := conn(ctx, mi.rh.db).ExecContext(ctx,
 		`INSERT INTO motif_definitions(branch_id, cluster_key, definition, members, authored_at)
@@ -115,7 +137,7 @@ func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, def
 		     definition  = excluded.definition,
 		     members     = excluded.members,
 		     authored_at = excluded.authored_at`,
-		branchID, clusterKey, definition, membership[clusterKey],
+		branchID, clusterKey, definition, members,
 		time.Now().UTC().Format(time.RFC3339)); err != nil {
 		return fmt.Errorf("PutDefinition: %w", err)
 	}

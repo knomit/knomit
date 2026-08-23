@@ -279,8 +279,10 @@ type MotifIndex interface {
 	// comparison, not a flag — so it catches every cause of drift.
 	ClustersNeedingDefinition(ctx context.Context, branch string) ([]DefinitionTarget, error)
 	// PutDefinition stores a definition, stamped with the membership it was
-	// authored over.
-	PutDefinition(ctx context.Context, branch, clusterKey, definition string) error
+	// AUTHORED AGAINST — carried from the DefinitionTarget, not read at write
+	// time, so a merge applied between planning and applying cannot mark a
+	// pre-merge definition current. Empty members re-reads current membership.
+	PutDefinition(ctx context.Context, branch, clusterKey, definition, members string) error
 	// Definition returns a cluster's standing definition, INCLUDING a stale one
 	// — a stale sentence is used as interim rather than gapping the cluster.
 	Definition(ctx context.Context, branch, clusterKey string) (string, bool, error)

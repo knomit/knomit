@@ -67,8 +67,14 @@ func TestDerivedWriters_FactForLLMShowsMotifs(t *testing.T) {
 func TestDerivedWriters_NoMechanicalSeedStamping(t *testing.T) {
 	src := readSourceFile(t, "discovery.go")
 	// The proposal's own motifs are read; the SEED's are never copied onto it.
-	require.Contains(t, src, "f.Motifs = p.Motifs",
-		"a discovered fact carries the motifs the model proposed")
+	//
+	// Asserted on the SOURCE of the value (p.Motifs, the proposal) rather than
+	// on an exact line: the first version pinned the literal "f.Motifs =
+	// p.Motifs" and broke when M3 wrapped it in DropInvalidMotifs — a change
+	// that strengthened the very property this test exists to protect. A test
+	// that fails on a correct change is testing the spelling, not the rule.
+	require.Regexp(t, `f\.Motifs = .*p\.Motifs`, src,
+		"a discovered fact carries the motifs the MODEL proposed")
 	for _, forbidden := range []string{"seed.Motifs", "Seed.Motifs", "seedMotifs"} {
 		require.NotContainsf(t, src, forbidden,
 			"discovery must not stamp the seed's motif mechanically (%s): wrong for a "+
@@ -77,20 +83,33 @@ func TestDerivedWriters_NoMechanicalSeedStamping(t *testing.T) {
 	}
 }
 
-// MN4: no derived writer validates motifs itself. The count, the shape and the
-// subject strip live in SerializeFact and nowhere else — which is what the
-// fact-package conformance test enforces globally; this is the local statement
-// of the same rule for the three paths added here.
+// MN4: no derived writer RE-IMPLEMENTS the motif rules.
+//
+// The distinction this test now draws is the one MN4 actually makes, and it
+// took M3 to sharpen it. Calling the shared gate is not what MN4 forbids —
+// RE-IMPLEMENTING it is. DropInvalidMotifs asks fact's own definition what is
+// invalid; a hand-rolled count check or shape regex here would be a second
+// place the rules live, which is the defect MN4 exists to stop.
+//
+// The earlier version forbade the gate helpers outright and would have blocked
+// the M3 fix — a conformance test enforcing a rule STRICTER than the written
+// one, which the Phase-1 lesson says does not merely miss bugs but causes
+// them. It nearly caused this one: the strict reading is what left the derived
+// writers assigning raw LLM motifs and discarding whole facts.
 func TestDerivedWriters_NoLocalMotifValidation(t *testing.T) {
 	for _, rel := range []string{"decision.go", "discovery.go"} {
 		src := readSourceFile(t, rel)
-		for _, gate := range []string{"ValidateMotifs", "DropInvalidMotifs", "StripSubjectMotifs", "MaxMotifs"} {
+		// Re-implementations: forbidden.
+		require.NotContainsf(t, strings.ToLower(src), "len(motifs) >",
+			"%s hand-rolls a motif count check — that is per-path validation by "+
+				"another name (MN4)", rel)
+		require.NotContainsf(t, src, "MaxMotifs",
+			"%s reaches for the cap directly; SerializeFact applies it", rel)
+		for _, gate := range []string{"ValidateMotifs", "StripSubjectMotifs"} {
 			require.NotContainsf(t, src, gate,
-				"%s applies the motif gate itself; route through SerializeFact instead "+
-					"(MN4 — validation has ONE entry point)", rel)
+				"%s applies %s itself. Route the fact through SerializeFact — the count, "+
+					"the shape and the subject strip belong to the single entry point", rel, gate)
 		}
-		require.NotContains(t, strings.ToLower(src), "len(motifs) >",
-			"a hand-rolled count check is per-path validation by another name")
 	}
 }
 
@@ -148,4 +167,61 @@ func TestDerivedWriters_MergedFactMotifsFlowThroughSerializeFact(t *testing.T) {
 	require.Error(t, err,
 		"an over-cap list must be refused at the single entry point — a writer is an "+
 			"agent that can retry, and a silent trim would lose an authored motif")
+}
+
+// M3: a malformed LLM-proposed motif must not destroy the fact carrying it.
+//
+// The assertion is about what the CALLER DOES, not that SerializeFact rejects
+// the motif — the earlier test asserted the rejection and passed, while the
+// caller's warn+continue silently discarded an entire consolidation. Testing
+// the gate proved the gate works; nobody had tested what happens next.
+func TestDerivedWriters_OneBadMotifDoesNotDiscardTheFact(t *testing.T) {
+	// A merged fact whose motif list is part good, part malformed.
+	merged := fact.NewFact("kb/alpha/merged.md")
+	merged.Title = "A consolidated claim"
+	merged.Body = "The body the judge asked for."
+	merged.Type = fact.Observation
+	merged.Domain = []string{"alpha"}
+	merged.Entities = []string{"Widget"}
+	merged.Refs = []string{}
+	merged.Confidence = 0.8
+	merged.Sources = 2
+
+	proposed := []string{
+		"silent fallback",  // spaces, not kebab — SerializeFact refuses it
+		"config-drift",     // good
+		"UPPER-CASE-MOTIF", // not lowercase — refused
+	}
+	merged.Motifs = fact.DropInvalidMotifs(proposed)
+
+	content, err := fact.SerializeFact(merged)
+	require.NoError(t, err,
+		"the fact must still serialize — dropping the bad motifs is what keeps the "+
+			"consolidation alive, and losing it would silently undo work the judge asked for")
+
+	parsed, err := fact.ParseFact("kb/alpha/merged.md", content)
+	require.NoError(t, err)
+	require.Equal(t, []string{"config-drift"}, parsed.Motifs,
+		"the GOOD motif survives and the malformed ones are gone")
+	require.Contains(t, parsed.Body, "The body the judge asked for",
+		"...and the fact's actual content is untouched")
+}
+
+// The three derived writers must all take that path. A writer that assigns
+// LLM-proposed motifs raw is one malformed name away from discarding its fact.
+func TestDerivedWriters_AllThreeDropRatherThanDiscard(t *testing.T) {
+	for _, rel := range []string{"decision.go", "discovery.go"} {
+		src := readSourceFile(t, rel)
+		require.Containsf(t, src, "fact.DropInvalidMotifs",
+			"%s assigns LLM-proposed motifs without dropping invalid ones — one "+
+				"malformed name would fail SerializeFact and the caller's warn+continue "+
+				"would discard the whole fact", rel)
+	}
+	// Backfill already had the right semantics: it skips the fact and requeues
+	// it, so a later session offers it again. Named here so the difference is
+	// deliberate rather than accidental.
+	src := readSourceFile(t, "motif_backfill.go")
+	require.Contains(t, src, "rejected by the write gate",
+		"backfill keeps drop-and-requeue: unlike a merge, its fact already exists "+
+			"and nothing is lost by trying again")
 }

@@ -190,7 +190,21 @@ func ApplyPruneDecisions(ctx context.Context,
 		merged.Confidence = mf.Confidence
 		merged.Sources = pooled
 		merged.Entities = mf.Entities
-		merged.Motifs = mf.Motifs
+		// DROP bad motifs rather than losing the fact. These are LLM-proposed
+		// and effectively untrusted input; the rest of this merged claim — its
+		// body, its refs, the consolidation decision behind it — is good work.
+		//
+		// Without this, one malformed name ("silent fallback", a space instead
+		// of a hyphen) fails SerializeFact and the caller's warn+continue
+		// discards the entire merged fact, silently undoing a consolidation the
+		// judge asked for. §2.10's read/write asymmetry exists for exactly this
+		// shape of input: ignore what you cannot use, keep what you can.
+		//
+		// The count cap, the shape rule and the subject strip still live in
+		// SerializeFact alone (MN4) — this drops entries THAT gate would
+		// reject, using that gate's own definition, rather than re-implementing
+		// one.
+		merged.Motifs = fact.DropInvalidMotifs(mf.Motifs)
 		merged.EvidenceWeight = weight
 
 		// Same gate as every other write path. The merged fact is NEW and its
@@ -293,7 +307,7 @@ func ApplyDistillDecisions(ctx context.Context,
 		// carried by EvidenceWeight above.
 		f.Sources = 1
 		f.Entities = df.Entities
-		f.Motifs = df.Motifs
+		f.Motifs = fact.DropInvalidMotifs(df.Motifs) // see the merge path above
 		f.EvidenceWeight = weight
 		df.Path = f.Path() // sync df so written slice reflects the canonical (lowercase) path
 

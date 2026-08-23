@@ -298,7 +298,10 @@ func applyDiscoveredProposals(
 		// Pooling would double-count it by construction.
 		f.Sources = 1
 		f.Entities = p.Entities
-		f.Motifs = p.Motifs
+		// Drop rather than lose the proposal — see ApplyPruneDecisions. A
+		// discovered fact costs a bridge enumeration and an LLM call to
+		// produce; discarding it over a malformed motif spends both for nothing.
+		f.Motifs = fact.DropInvalidMotifs(p.Motifs)
 		f.EvidenceWeight = weight
 		f.Origin = fact.Discovered
 

@@ -150,7 +150,7 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 
 	key, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, env.svc.Motifs().PutDefinition(ctx, env.branch, key, "A generic sentence."))
+	require.NoError(t, env.svc.Motifs().PutDefinition(ctx, env.branch, key, "A generic sentence.", ""))
 
 	// Sessions 2 and 3: unrelated corpus growth. The definition must stay off
 	// the queue.

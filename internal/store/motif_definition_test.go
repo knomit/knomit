@@ -22,7 +22,7 @@ func TestMotifDefinitions_UndefinedClustersNeedDefining(t *testing.T) {
 	require.Len(t, need, 2, "every cluster starts undefined")
 
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, need[0].ClusterKey,
-		"A component continues serving after a dependency fails, without signalling."))
+		"A component continues serving after a dependency fails, without signalling.", ""))
 
 	need, err = svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestMotifDefinitions_MembershipChangeMakesADefinitionStale(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence."))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
 
 	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestMotifDefinitions_RepresentativeFlipDoesNotStaleADefinition(t *testing.T
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "atomic-write")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence."))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
 
 	repBefore, err := svc.Motifs().CanonicalID(ctx, branch, "atomic-write")
 	require.NoError(t, err)
@@ -104,8 +104,8 @@ func TestMotifDefinitions_MergedClusterKeepsAnInterimDefinition(t *testing.T) {
 	require.NoError(t, err)
 	keyB, err := svc.Motifs().ClusterKey(ctx, branch, "quiet-degradation")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A."))
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B."))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", ""))
 
 	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
 		"silent-fallback", "quiet-degradation", "both name serving on after a dependency fails"))
@@ -141,7 +141,7 @@ func TestMotifDefinitions_MN3_TouchesNoFact(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence."))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
 
 	rec, err = svc.FactQuery().GetByPath(ctx, branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestMotifDefinitions_VanishedClusterIsNotOffered(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "config-drift")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence."))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
 
 	// The mechanism leaves the corpus.
 	writeMotifFact(t, svc, branch, "kb/alpha/two.md", []string{"silent-fallback"})
@@ -171,4 +171,101 @@ func TestMotifDefinitions_VanishedClusterIsNotOffered(t *testing.T) {
 		require.NotEqual(t, key, c.ClusterKey,
 			"a cluster no live fact carries must not be queued for definition")
 	}
+}
+
+// M2: a definition authored in the SAME session as a judge merge must be
+// stamped with the membership it was AUTHORED AGAINST, not the membership the
+// cluster has by the time it is written.
+//
+// The race has a real window: the define payload is built during Plan, and the
+// alias item's verdicts are applied later in the same session. Reading
+// membership at write time marked a pre-merge definition as current for a
+// post-merge cluster — defeating the staleness comparison for precisely the
+// merge case it was built to catch, and permanently, since nothing would ever
+// re-queue it.
+func TestMotifDefinitions_SameSessionMergeDoesNotMarkAStaleDefinitionCurrent(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"quiet-degradation"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	// Plan time: the pass is handed a target for the PRE-merge cluster.
+	targets, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
+	require.NoError(t, err)
+	// Target the cluster that will SURVIVE the merge (the key that wins min()).
+	// A definition authored for the ABSORBED key is a different case: that
+	// cluster ceases to exist, and its row is correctly retired rather than
+	// re-queued — which is what the orphan test below covers. Choosing the
+	// wrong side here made this test fail against a correct fix, which is
+	// exactly how a fixture hides the behaviour it means to check.
+	var target DefinitionTarget
+	for _, c := range targets {
+		if c.Name == "quiet-degradation" {
+			target = c
+		}
+	}
+	require.NotEmpty(t, target.ClusterKey, "fixture must offer the cluster to define")
+	require.NotEmpty(t, target.Members, "the target must carry the membership it was selected with")
+
+	// Later in the same session: a judge merge changes the cluster.
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
+		"silent-fallback", "quiet-degradation", "both name serving on after a failure"))
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	// The definition comes back, authored for what the pass was SHOWN.
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch,
+		target.ClusterKey, "A sentence written for the pre-merge cluster.", target.Members))
+
+	// It must be recognised as stale, because the cluster it describes has
+	// changed underneath it.
+	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
+	require.NoError(t, err)
+	var queued bool
+	for _, c := range need {
+		if c.Interim == "A sentence written for the pre-merge cluster." {
+			queued = true
+		}
+	}
+	require.True(t, queued,
+		"a definition authored before a same-session merge must be re-queued — "+
+			"stamping it with post-merge membership marks it current forever")
+}
+
+// A judge merge leaves the ABSORBED key with no members. Its definition row
+// must not linger: nothing queues or serves a cluster outside the vocabulary,
+// so the row is invisible, accumulating, and liable to be resurrected if that
+// key ever returns meaning something else.
+func TestMotifDefinitions_OrphanedRowsAreRetiredOnRebuild(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"quiet-degradation"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	keyA, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+	keyB, err := svc.Motifs().ClusterKey(ctx, branch, "quiet-degradation")
+	require.NoError(t, err)
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", ""))
+
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
+		"silent-fallback", "quiet-degradation", "one mechanism"))
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	survivor, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+	absorbed := keyA
+	if survivor == keyA {
+		absorbed = keyB
+	}
+
+	_, ok, err := svc.Motifs().Definition(ctx, branch, absorbed)
+	require.NoError(t, err)
+	require.False(t, ok, "the absorbed key's definition must be retired, not left orphaned")
+
+	_, ok, err = svc.Motifs().Definition(ctx, branch, survivor)
+	require.NoError(t, err)
+	require.True(t, ok, "...while the survivor keeps its interim definition, as ruled")
 }

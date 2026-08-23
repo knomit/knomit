@@ -51,6 +51,11 @@ type motifDefineItem struct {
 	// clusterKey is not sent to the model — it is how the response is routed
 	// back to a cluster whose representative may have flipped meanwhile.
 	clusterKey string
+	// members is the cluster's membership when this item was PLANNED. Not sent
+	// to the model either; it is what the stored definition is stamped with, so
+	// a judge merge applied later in the same session cannot mark a pre-merge
+	// definition as current for a post-merge cluster.
+	members string
 }
 
 const motifDefineResponseSchema = `{
@@ -129,9 +134,10 @@ func validateMotifDefinitions(res motifDefineResult, offered []motifDefineItem) 
 // canonical_id does — and storing by name would then write the sentence
 // against a cluster nobody asked about.
 func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motifDefineResult, offered []motifDefineItem) error {
-	keyByName := make(map[string]string, len(offered))
+	type route struct{ key, members string }
+	keyByName := make(map[string]route, len(offered))
 	for _, it := range offered {
-		keyByName[it.Name] = it.clusterKey
+		keyByName[it.Name] = route{key: it.clusterKey, members: it.members}
 	}
 	for _, def := range res.Definitions {
 		text := strings.TrimSpace(def.Definition)
@@ -142,11 +148,11 @@ func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motif
 			// Storing nothing leaves the cluster queued for a later pass.
 			continue
 		}
-		key := keyByName[def.Name]
-		if key == "" {
+		r := keyByName[def.Name]
+		if r.key == "" {
 			continue // validated above; belt and braces
 		}
-		if err := d.Motifs.PutDefinition(ctx, branch, key, text); err != nil {
+		if err := d.Motifs.PutDefinition(ctx, branch, r.key, text, r.members); err != nil {
 			log.Warn().Err(err).Str("motif", def.Name).
 				Msg("motif define: definition not stored; the cluster stays queued")
 		}
@@ -216,6 +222,7 @@ func planMotifDefineWork(ctx context.Context, d Deps, sess *store.PipelineSessio
 			Name:       t.Name,
 			Current:    t.Interim,
 			clusterKey: t.ClusterKey,
+			members:    t.Members,
 		})
 	}
 	health.Offered = len(items)
@@ -244,12 +251,19 @@ type motifDefinePayloadEntry struct {
 	Name       string `json:"name"`
 	Current    string `json:"current,omitempty"`
 	ClusterKey string `json:"cluster_key"`
+	// Members rides the payload for the same reason ClusterKey does: an
+	// unexported field would marshal away, and the stamp would silently fall
+	// back to current membership — the exact race this carries it to avoid.
+	Members string `json:"members"`
 }
 
 func motifDefinePayload(items []motifDefineItem) []motifDefinePayloadEntry {
 	out := make([]motifDefinePayloadEntry, len(items))
 	for i, it := range items {
-		out[i] = motifDefinePayloadEntry{Name: it.Name, Current: it.Current, ClusterKey: it.clusterKey}
+		out[i] = motifDefinePayloadEntry{
+			Name: it.Name, Current: it.Current,
+			ClusterKey: it.clusterKey, Members: it.members,
+		}
 	}
 	return out
 }
@@ -261,7 +275,10 @@ func motifDefineItemsFromPayload(raw string) ([]motifDefineItem, error) {
 	}
 	out := make([]motifDefineItem, len(entries))
 	for i, e := range entries {
-		out[i] = motifDefineItem{Name: e.Name, Current: e.Current, clusterKey: e.ClusterKey}
+		out[i] = motifDefineItem{
+			Name: e.Name, Current: e.Current,
+			clusterKey: e.ClusterKey, members: e.Members,
+		}
 	}
 	return out, nil
 }

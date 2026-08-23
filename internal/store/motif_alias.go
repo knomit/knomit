@@ -198,6 +198,24 @@ func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
 			return fmt.Errorf("RebuildAliases: insert %q: %w", motif, err)
 		}
 	}
+	// Retire definitions whose cluster no longer exists. A judge merge leaves
+	// the ABSORBED key with no members, and its definition row would otherwise
+	// linger forever — invisible, since nothing queues or serves a cluster that
+	// is not in the vocabulary, but accumulating and liable to be resurrected
+	// if that key ever came back meaning something else.
+	//
+	// The SURVIVOR's definition is deliberately kept: it is the interim the
+	// designer ruled for, still approximately right for the union, and
+	// ClustersNeedingDefinition queues its refresh.
+	if _, err := conn(ctx, mi.rh.db).ExecContext(ctx, `
+		DELETE FROM motif_definitions
+		 WHERE branch_id = ?
+		   AND cluster_key NOT IN (
+		       SELECT DISTINCT cluster_key FROM motif_aliases WHERE branch_id = ?)`,
+		branchID, branchID); err != nil {
+		return fmt.Errorf("RebuildAliases: retire orphaned definitions: %w", err)
+	}
+
 	if ownTx {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("RebuildAliases: commit: %w", err)
