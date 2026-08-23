@@ -2,9 +2,13 @@ package synthesize
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
+
+	"github.com/stretchr/testify/require"
 )
 
 // ctxCapturingSearchIndex is a minimal SearchIndex stub that records
@@ -120,4 +124,63 @@ func errorsIs(err, target error) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// TestDedupCluster_SkipsUnparsableMember regresses the other half of knomit#103:
+// the run must survive a bad member, not just a bad ref. dedupCluster used to
+// return an error from every per-merge step, so one cluster member whose stored
+// content no longer parses — frontmatter from an older serializer, a hand-edit
+// on the KB branch — aborted StartSession before it planned anything, and did
+// so again on every retry. Every sibling write path in decision.go and
+// discovery.go warns and continues; this one now does too.
+func TestDedupCluster_SkipsUnparsableMember(t *testing.T) {
+	ctx := context.Background()
+	branch := "agent/test"
+
+	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, branch))
+
+	const (
+		winnerPath = "kb/technology/winner.md"
+		loserPath  = "kb/technology/loser.md"
+	)
+
+	seedFactWithRefs(t, svc, branch, winnerPath, 0.9, nil)
+	seedFactWithRefs(t, svc, branch, loserPath, 0.5, nil)
+
+	// Corrupt the loser in place: still a blob at that path, no longer a
+	// parsable fact. The cluster and the index still know about it, which is
+	// exactly the state that used to be unrecoverable.
+	_, err = svc.Facts().WriteFact(ctx, branch, loserPath, "not a fact any more\n", "corrupt", "")
+	require.NoError(t, err)
+
+	cluster := []factForLLM{
+		{File: winnerPath, Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
+		{File: loserPath, Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
+	}
+	idx := &fixedPairSearch{
+		SearchQuery: svc.Search(),
+		results: []store.SearchResult{
+			searchHit(winnerPath),
+			searchHit(loserPath),
+		},
+	}
+
+	var warnings []string
+	surviving, err := dedupCluster(ctx, cluster, svc.Facts(), idx, 0.92, "test",
+		func(e ProgressEvent) {
+			if e.Phase == "warn" {
+				warnings = append(warnings, e.Message)
+			}
+		}, branch, bareRefFixture)
+	require.NoError(t, err, "an unparsable cluster member must cost its own merge, not the whole pass")
+
+	require.Len(t, warnings, 1, "the skipped merge must be reported, not swallowed")
+	require.Contains(t, warnings[0], loserPath)
+
+	// The merge was skipped whole: both facts are still live and still in the
+	// surviving cluster, so a later pass can try the pair again.
+	require.Len(t, surviving, 2)
 }
