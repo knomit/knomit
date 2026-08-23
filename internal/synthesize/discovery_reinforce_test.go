@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -51,6 +53,11 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 	target.Title = "The verifier is inside the agent's action space"
 	target.Body = "Every recorded form of eval gaming is an action taken ON the measurement apparatus."
 	target.Type = fact.Synthesis
+	// Origin EXPLICIT. A synthesis fact with the line elided does not
+	// round-trip — ParseFact defaults it to distilled and SerializeFact then
+	// writes it — so under the write contract such a target is SKIPPED. Every
+	// pipeline-written synthesis fact carries it; the fixture matches.
+	target.Origin = fact.Distilled
 	target.Confidence = 0.75
 	target.Sources = 1
 	target.Domain = []string{"evaluation"}
@@ -149,15 +156,33 @@ func TestApplyReinforcements_ChangesNothingButRefsSourcesAndWeight(t *testing.T)
 }
 
 // 0ee925f4: passing the SAME slice as refs and prior silently disables the
-// gate. Proved by planting a ref that cannot resolve — the gate must refuse the
-// whole write rather than let it through.
+// gate. It must still be live on this path — and after H2's fix that can only
+// be shown by INJECTION, which is worth stating plainly rather than dressing a
+// weaker test as a strong one.
+//
+// Two reasons no ordinary input reaches it. Extras are discarded before the
+// gate sees them, so a bogus ref the model names never gets there. And a
+// retracted seed still RESOLVES: refs are historical by design (a ref is
+// `fact` rather than `broken` when the target has any version visible at the
+// source's anchor), so retracting a seed does not break the edge that cites it.
+//
+// So the gate is defence in depth against a future path that supplies refs some
+// other way, and this drives it with a bridge member that never existed. Keep
+// it for the same reason the origin fence is kept: it is what stops the next
+// caller from writing a broken edge, and a check nothing exercises is a check
+// nobody notices going missing.
 func TestApplyReinforcements_RefsGateIsLiveOnThisPath(t *testing.T) {
 	env := newReinforceEnv(t)
 	before := env.read(reinforcePath)
 
+	const ghost = "kb/gotchas/never/existed.md"
+	env.payload.Bridge.Members = append(env.payload.Bridge.Members, factForLLM{File: ghost})
+
 	r := goodReinforcement()
-	r.Refs = append(r.Refs, "kb/does/not/exist.md")
-	require.Empty(t, env.apply(r))
+	r.Refs = flexStrings{seedOnePath, seedTwoPath, ghost}
+
+	require.Empty(t, env.apply(r),
+		"a seed that resolves to nothing must refuse the write, not be written as a broken edge")
 
 	after := env.read(reinforcePath)
 	require.Equal(t, before.Refs, after.Refs, "a refused write changes nothing")
@@ -257,4 +282,217 @@ func TestApplyReinforcements_ADifferentDerivationStillCounts(t *testing.T) {
 // would miss them.
 func contains(ref, path string) bool {
 	return len(ref) >= len(path) && ref[len(ref)-len(path):] == path
+}
+
+// storedBytes reads the fact exactly as the corpus holds it. The guard below
+// compares THESE, not parsed structs — see the test's own comment for why.
+func (e *reinforceEnv) storedBytes(path string) string {
+	e.t.Helper()
+	res, err := e.svc.Facts().ReadFact(context.Background(), e.branch, path, nil)
+	require.NoError(e.t, err)
+	return res.Content
+}
+
+// changedLines returns the lines that differ between two versions of a fact.
+func changedLines(before, after string) []string {
+	b := strings.Split(before, "\n")
+	a := strings.Split(after, "\n")
+	seen := map[string]struct{}{}
+	for _, l := range b {
+		seen[l] = struct{}{}
+	}
+	var out []string
+	for _, l := range a {
+		if _, ok := seen[l]; !ok {
+			out = append(out, l)
+		}
+	}
+	for _, l := range b {
+		if !slices.Contains(a, l) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// TestApplyReinforcements_ChangesOnlyPermittedStoredLines — the guard at the
+// boundary the CORPUS reads (lesson 8, review H1).
+//
+// Its predecessor compared parsed structs, and passed while the write was
+// deleting motifs: the lenient parser dropped the malformed motif on BOTH sides
+// of the comparison, so it compared two already-truncated lists. That history
+// is why this assertion is on bytes and why the struct comparison is kept only
+// as a secondary check.
+func TestApplyReinforcements_ChangesOnlyPermittedStoredLines(t *testing.T) {
+	env := newReinforceEnv(t)
+	before := env.storedBytes(reinforcePath)
+
+	require.Equal(t, []string{reinforcePath}, env.apply(goodReinforcement()))
+	after := env.storedBytes(reinforcePath)
+
+	require.NotEqual(t, before, after, "precondition: the write must have done something")
+	for _, line := range changedLines(before, after) {
+		field := strings.SplitN(strings.TrimSpace(line), ":", 2)[0]
+		require.Containsf(t, []string{"refs", "sources", "evidence_weight", "-"}, field,
+			"a reinforcement changed the stored line %q — only refs, sources and "+
+				"evidence_weight may differ", line)
+	}
+}
+
+// H1: a target whose motifs do not survive the lenient parser is SKIPPED, not
+// silently normalised. A fact carrying legacy data is not this path's to clean.
+func TestApplyReinforcements_SkipsALossyTarget(t *testing.T) {
+	env := newReinforceEnv(t)
+
+	// A motif that today's rules reject, as a pre-Phase-1 fact or one synced
+	// from a remote written by another version would carry it. Written as raw
+	// bytes because SerializeFact would refuse it — which is the point.
+	lossy := strings.Replace(env.storedBytes(reinforcePath),
+		"motifs: [measure-becomes-target]", "motifs: [measure-becomes-target, legacy]", 1)
+	require.Contains(t, lossy, ", legacy]", "precondition: the fixture planted the motif")
+	_, err := env.svc.Facts().WriteFact(context.Background(), env.branch, reinforcePath,
+		lossy, "plant legacy motif", "test")
+	require.NoError(t, err)
+
+	require.Empty(t, env.apply(goodReinforcement()), "a lossy target is skipped")
+	require.Equal(t, lossy, env.storedBytes(reinforcePath),
+		"and its bytes are untouched — including the motif the parser would have dropped")
+
+	// WHICH check refused it. The meaning-preservation check would also catch
+	// this (the motifs line changes), so a test that only observes the skip
+	// cannot tell the two apart — sabotaging the tripwire leaves it green. The
+	// tripwire's value is the REASON it gives, so the reason is what is
+	// asserted: "rewritten outside the permitted lines" would send a reader
+	// hunting a formatting problem instead of a deleted motif.
+	var warnings []string
+	applyReinforcements(context.Background(), env.svc.Facts(), env.svc.Search(),
+		env.payload, []FactReinforcement{goodReinforcement()}, env.branch, env.repoID,
+		func(e ProgressEvent) {
+			if e.Phase == "warn" {
+				warnings = append(warnings, e.Message)
+			}
+		})
+	require.NotEmpty(t, warnings)
+	require.Contains(t, strings.Join(warnings, "\n"), "cannot round-trip",
+		"the skip must name the motifs it protected, not just report a rewrite")
+	require.Contains(t, strings.Join(warnings, "\n"), "legacy")
+}
+
+// L9, as ruled in phase3-rulings-5: an origin line materialising to exactly the
+// parse default is a SEMANTIC NO-OP and is permitted — the measured 144 facts.
+// The fact reinforces normally, and the materialised line says what ParseFact
+// already said the fact meant.
+func TestApplyReinforcements_PermitsAnOriginMaterialisingToTheParseDefault(t *testing.T) {
+	env := newReinforceEnv(t)
+
+	elided := env.storedBytes(reinforcePath)
+	require.Contains(t, elided, "origin: distilled", "precondition: the fixture has one to remove")
+	elided = strings.Replace(elided, "origin: distilled\n", "", 1)
+	_, err := env.svc.Facts().WriteFact(context.Background(), env.branch, reinforcePath,
+		elided, "elide origin", "test")
+	require.NoError(t, err)
+	require.Equal(t, fact.Distilled, env.read(reinforcePath).Origin,
+		"precondition: the parse default for this fact IS what would materialise")
+
+	require.Equal(t, []string{reinforcePath}, env.apply(goodReinforcement()),
+		"a semantic no-op does not cost the corroboration")
+	require.Contains(t, env.storedBytes(reinforcePath), "origin: distilled")
+}
+
+// The fence on that exception, driven through the comparison helper DIRECTLY.
+//
+// It has to be: on the reinforcement path nothing mutates Origin between parse
+// and serialize, so no ordinary input can make the two parsed origins differ,
+// and a test that reinforces a normal fact and observes success would not touch
+// this clause at all — the Phase-1 MN4 shape, where a comment satisfied a check
+// that never ran (reviewer note, rulings-5).
+//
+// The case it fences is measured and real: 66 core facts whose stored
+// type/origin pairing is illegal, which ParseFact coerces to `authored`. A
+// rewrite there would silently reattribute someone's provenance.
+func TestRewriteIsMeaningPreserving_FencesAnOriginThatWouldCHANGE(t *testing.T) {
+	const stored = "---\ntype: synthesis\nconfidence: 0.75\nsources: 1\nrefs: []\n---\n# T\n\nBody.\n"
+	const rewritten = "---\ntype: synthesis\nconfidence: 0.75\nsources: 2\norigin: authored\nrefs: []\n---\n# T\n\nBody.\n"
+
+	// Same parsed origin on both sides: the measured no-op, permitted.
+	why, ok := rewriteIsMeaningPreserving(stored, rewritten, fact.Authored, fact.Authored)
+	require.True(t, ok, "a materialised origin equal to the parse default is a no-op: %s", why)
+
+	// DIFFERING parsed origins — the mutation injected, since the live path
+	// cannot produce it. This is the clause the fence exists for.
+	why, ok = rewriteIsMeaningPreserving(stored, rewritten, fact.Distilled, fact.Authored)
+	require.False(t, ok, "an origin materialising to something other than the parse default must skip")
+	require.Contains(t, why, "not the parsed default")
+}
+
+// And the neighbouring clauses of the same helper, each with a real diff.
+func TestRewriteIsMeaningPreserving_RefusesEveryOtherLineChange(t *testing.T) {
+	const stored = "---\ntype: observation\nconfidence: 0.8\nsources: 1\nmotifs: [shape-of-thing]\nrefs: []\n---\n# T\n\nBody.\n"
+
+	for name, rewritten := range map[string]string{
+		"a dropped motif":      "---\ntype: observation\nconfidence: 0.8\nsources: 2\nrefs: []\n---\n# T\n\nBody.\n",
+		"a changed motif":      "---\ntype: observation\nconfidence: 0.8\nsources: 2\nmotifs: [other-shape]\nrefs: []\n---\n# T\n\nBody.\n",
+		"a changed confidence": "---\ntype: observation\nconfidence: 0.9\nsources: 2\nmotifs: [shape-of-thing]\nrefs: []\n---\n# T\n\nBody.\n",
+		"a changed body":       "---\ntype: observation\nconfidence: 0.8\nsources: 2\nmotifs: [shape-of-thing]\nrefs: []\n---\n# T\n\nDifferent body.\n",
+	} {
+		_, ok := rewriteIsMeaningPreserving(stored, rewritten, fact.Authored, fact.Authored)
+		require.Falsef(t, ok, "%s must skip", name)
+	}
+
+	// The permitted lines, and the rendering difference the ruling names
+	// explicitly: quote style on the refs line is not a value change.
+	for name, rewritten := range map[string]string{
+		"only the permitted lines": "---\ntype: observation\nconfidence: 0.8\nsources: 2\nmotifs: [shape-of-thing]\nrefs: [kb/a.md]\nevidence_weight: 0.5\n---\n# T\n\nBody.\n",
+		"refs quote style":         "---\ntype: observation\nconfidence: 0.8\nsources: 1\nmotifs: [shape-of-thing]\nrefs: ['kb/a.md']\n---\n# T\n\nBody.\n",
+	} {
+		why, ok := rewriteIsMeaningPreserving(stored, rewritten, fact.Authored, fact.Authored)
+		require.Truef(t, ok, "%s must be permitted: %s", name, why)
+	}
+}
+
+// H2: refs the model names beyond the bridge's seeds are DISCARDED, and the
+// valid reinforcement still lands. Surplus citation does not kill it.
+func TestApplyReinforcements_DiscardsRefsBeyondTheSeeds(t *testing.T) {
+	env := newReinforceEnv(t)
+
+	// A live fact with no relationship to this bridge — the shape an agent
+	// produces when it lists what it read while deciding.
+	const unrelated = "kb/gotchas/unrelated/somethingelse.md"
+	f := fact.NewFact(unrelated)
+	f.Title = "An unrelated fact"
+	f.Body = "Nothing to do with the bridge."
+	f.Type = fact.Observation
+	f.Confidence = 0.8
+	f.Sources = 1
+	content, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = env.svc.Facts().WriteFact(context.Background(), env.branch, unrelated, content, "write", "test")
+	require.NoError(t, err)
+
+	r := goodReinforcement()
+	r.Refs = flexStrings{seedOnePath, seedTwoPath, unrelated}
+
+	require.Equal(t, []string{reinforcePath}, env.apply(r), "the reinforcement still lands")
+
+	after := env.read(reinforcePath)
+	require.Len(t, after.Refs, 3, "existing + two seeds, and nothing else")
+	for _, ref := range after.Refs {
+		require.NotContains(t, ref, "somethingelse",
+			"a ref the model named beyond the seeds must never become a derivation edge")
+	}
+}
+
+// L8: the strings already on the fact are written back exactly as they were.
+func TestApplyReinforcements_DoesNotRewriteExistingRefs(t *testing.T) {
+	env := newReinforceEnv(t)
+	before := env.read(reinforcePath)
+	require.Equal(t, []string{existingRef}, before.Refs,
+		"precondition: the existing ref is stored in bare-path form")
+
+	require.Equal(t, []string{reinforcePath}, env.apply(goodReinforcement()))
+
+	after := env.read(reinforcePath)
+	require.Contains(t, after.Refs, existingRef,
+		"the existing ref keeps its exact string — canonicalising it would be a "+
+			"mutation of authored data outside 'append the seeds'")
 }
