@@ -399,6 +399,14 @@ func applyMotifAliasVerdicts(ctx context.Context, d Deps, branch string, res mot
 	// Decisions take effect here, together: the mechanical layer and the judge
 	// overlay are applied in one rebuild so the result is a deterministic
 	// function of (facts, decisions) rather than an accumulation of edits.
+	//
+	// This is the SECOND rebuild of a session that records verdicts. The first
+	// runs in Plan, before selection, and is what makes these verdicts bind to
+	// CURRENT membership — a session that rebuilt only here would record every
+	// verdict against membership one session stale, so a decline would stop
+	// binding the moment anything in the corpus moved and the pass would
+	// re-offer it forever. That is the exact incrementality RecordJudgeDecline
+	// exists to buy.
 	return d.Motifs.RebuildAliases(ctx, branch)
 }
 

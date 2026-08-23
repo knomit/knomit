@@ -366,7 +366,7 @@ func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBac
 // (MN1, designer ruling Q8). The template itself carries none — the vocabulary
 // rides in the work item's facts field like every other payload — so the MN1
 // enumeration over templates stays a clean check either way.
-func RenderMotifBackfillWorkItem() (*WorkItemContent, error) {
+func RenderMotifBackfillWorkItem(factsJSON string) (*WorkItemContent, error) {
 	prompt, err := RenderTemplate("motif_backfill", "user", PromptData{})
 	if err != nil {
 		return nil, fmt.Errorf("render motif backfill work item: %w", err)
@@ -374,6 +374,11 @@ func RenderMotifBackfillWorkItem() (*WorkItemContent, error) {
 	return &WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: motifBackfillResponseSchema,
+		// The facts AND the vocabulary. This payload is the one place corpus
+		// vocabulary legitimately reaches a model (MN1, Q8); shipping it empty
+		// meant the backfill agent was asked to prefer existing names while
+		// being shown none.
+		Facts: factsJSON,
 	}, nil
 }
 

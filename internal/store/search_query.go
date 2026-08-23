@@ -538,59 +538,88 @@ func (fq *factQuery) expandMotifQuery(ctx context.Context, branchID int64, q Sea
 	// The query's own terms are resolved the same way, so a caller may name any
 	// member spelling.
 	canonicalOf := map[string]string{}
+	clusterKeyOf := map[string]string{}
 	for _, v := range vocab {
 		canonicalOf[v.motif] = v.canonical
+		clusterKeyOf[v.motif] = v.clusterKey
 	}
 
+	// CUMULATIVE, not exclusive. "Ordered by strictness, loosest last" means a
+	// looser tier returns everything a stricter one does and more; a tier that
+	// returned something DIFFERENT would make widening a query lose results,
+	// which is the opposite of what a caller reaching for a looser tier wants.
+	//
+	// That is not automatic once judge merges exist. A merged cluster's two
+	// spellings may share no tokens at all — the judge merged them precisely
+	// because string similarity could not — so the token tiers alone find
+	// strictly LESS than exact for exactly the clusters aliasing was built to
+	// join. Each tier therefore includes every stricter tier's matches.
 	match := map[string]struct{}{}
-	for _, term := range q.Motifs {
-		switch q.MotifMatch {
-		case "", MotifMatchExact:
-			want, ok := canonicalOf[term]
-			if !ok {
-				want = term // not in this corpus: its own singleton
-			}
-			for _, v := range vocab {
-				if strings.EqualFold(v.canonical, want) {
-					match[v.motif] = struct{}{}
-				}
-			}
-		case MotifMatchStem:
-			want := groupingKey(term)
-			for _, v := range vocab {
-				if v.clusterKey == want {
-					match[v.motif] = struct{}{}
-				}
-			}
-		case MotifMatchToken2, MotifMatchToken1:
-			need := 2
-			if q.MotifMatch == MotifMatchToken1 {
-				need = 1
-			}
-			want := map[string]struct{}{}
-			for _, t := range textnorm.Tokens(textnorm.Canonicalize(term)) {
-				want[t] = struct{}{}
-			}
-			if len(want) < need {
-				// A term that cannot satisfy its own tier matches nothing,
-				// rather than silently relaxing to a looser one.
-				continue
-			}
-			for _, v := range vocab {
-				shared := 0
-				for _, t := range textnorm.Tokens(textnorm.Canonicalize(v.motif)) {
-					if _, ok := want[t]; ok {
-						shared++
-					}
-				}
-				if shared >= need {
-					match[v.motif] = struct{}{}
-				}
-			}
-		default:
+	tierRank := map[MotifMatchTier]int{
+		MotifMatchExact: 0, MotifMatchStem: 1, MotifMatchToken2: 2, MotifMatchToken1: 3,
+	}
+	want, known := tierRank[q.MotifMatch]
+	if !known {
+		if q.MotifMatch != "" {
 			// Unrecognised tier: match nothing. Validation upstream should have
 			// caught it; failing closed is the safe direction.
 			return nil, nil
+		}
+		want = 0 // empty means exact
+	}
+
+	for _, term := range q.Motifs {
+		// exact — always included, at every tier.
+		canonical, ok := canonicalOf[term]
+		if !ok {
+			canonical = term // not in this corpus: its own singleton
+		}
+		for _, v := range vocab {
+			if strings.EqualFold(v.canonical, canonical) {
+				match[v.motif] = struct{}{}
+			}
+		}
+
+		if want >= tierRank[MotifMatchStem] {
+			// Resolve the TERM through the same grouping AND overlay the stored
+			// cluster keys came from — not through groupingKey alone. A judge
+			// merge sets every member's cluster_key to min() of the union, so
+			// the losing key's own grouping key no longer equals what the table
+			// stores for it, and comparing the raw key returned NOTHING for
+			// that spelling.
+			key, hit := clusterKeyOf[term]
+			if !hit {
+				key = groupingKey(term)
+			}
+			for _, v := range vocab {
+				if v.clusterKey == key {
+					match[v.motif] = struct{}{}
+				}
+			}
+		}
+
+		if want >= tierRank[MotifMatchToken2] {
+			need := 2
+			if want >= tierRank[MotifMatchToken1] {
+				need = 1
+			}
+			termToks := map[string]struct{}{}
+			for _, t := range textnorm.Tokens(textnorm.Canonicalize(term)) {
+				termToks[t] = struct{}{}
+			}
+			if len(termToks) >= need {
+				for _, v := range vocab {
+					shared := 0
+					for _, t := range textnorm.Tokens(textnorm.Canonicalize(v.motif)) {
+						if _, in := termToks[t]; in {
+							shared++
+						}
+					}
+					if shared >= need {
+						match[v.motif] = struct{}{}
+					}
+				}
+			}
 		}
 	}
 

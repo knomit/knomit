@@ -129,3 +129,41 @@ func TestMotifMatch_UnresolvedCorpusStillMatchesExactly(t *testing.T) {
 		"before the vocabulary is resolved every motif is its own cluster, and the "+
 			"filter must still work rather than returning nothing")
 }
+
+// TIER ORDERING AFTER A JUDGE MERGE — the case the tier ordering was silently
+// broken for, and which no test covered.
+//
+// A merge sets every member's cluster_key to min() of the union, so the LOSING
+// key's own grouping key no longer equals what the table stores for it.
+// Comparing the raw grouping key returned NOTHING for the losing spelling
+// while exact returned the whole cluster — stem was not merely narrower than
+// exact, it was empty, which inverts "loosest last" entirely.
+//
+// The rule, asserted for EVERY spelling rather than a representative one:
+// each tier must include what the stricter tier found.
+func TestMotifMatch_TierOrderingHoldsAfterAJudgeMerge(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"quiet-degradation"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
+		"silent-fallback", "quiet-degradation", "both name serving on after a failure"))
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	// Both spellings, because the defect was asymmetric: only the losing key
+	// broke, so a test that checked one spelling had a 50% chance of passing.
+	for _, term := range []string{"silent-fallback", "quiet-degradation"} {
+		exact := motifSearch(t, svc, branch, term, MotifMatchExact)
+		require.ElementsMatchf(t, []string{"kb/a.md", "kb/b.md"}, exact,
+			"exact must span the merged cluster from %q", term)
+
+		for _, looser := range []MotifMatchTier{MotifMatchStem, MotifMatchToken2, MotifMatchToken1} {
+			got := motifSearch(t, svc, branch, term, looser)
+			require.Subsetf(t, got, exact,
+				"tier %q must include everything exact found for %q — the tiers are "+
+					"ordered by strictness, and a looser one returning less is not a "+
+					"narrower answer but a wrong one", looser, term)
+		}
+	}
+}

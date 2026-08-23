@@ -170,6 +170,28 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// and not load-bearing — an earlier version depended on it, which is why
 	// recordRestatementHealth stopped assigning.
 	if d.Effort.MaintainsVocabulary() {
+		// REBUILD FIRST, and unconditionally. The mechanical alias layer is
+		// model-less and cheap — grouping strings the corpus already holds —
+		// and every motif consumer reads the table it writes.
+		//
+		// Its absence from the pipeline was a bootstrap DEADLOCK, not a missing
+		// optimisation: the rebuild's only caller was the judge item's apply
+		// path, the judge item was planned only when the resolved vocabulary
+		// exceeded a floor, and the vocabulary was read from the table the
+		// rebuild writes. A closed loop with no entry, and every consumer
+		// degrades to a correct-LOOKING zero when the table is empty — df of 1,
+		// no clusters needing definition, "below floor" health, empty explain
+		// siblings — so nothing anywhere reported a problem.
+		//
+		// Before selection, not after: the judge's verdicts are recorded
+		// against the membership their clusters have NOW, and a rebuild that
+		// ran only after recording would stamp every verdict with membership
+		// one session stale — retiring decisions the moment they were made.
+		if err := d.Motifs.RebuildAliases(ctx, branch); err != nil {
+			// An addition to review: a corpus whose vocabulary cannot be
+			// resolved should still get its ordinary session.
+			log.Warn().Err(err).Msg("review: motif alias rebuild failed; vocabulary passes degrade")
+		}
 		if err := planMotifAliasWork(ctx, d, sess, branch); err != nil {
 			return err
 		}
@@ -833,11 +855,11 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot,
 			existingMethodology, motifVocabularySection(ctx, d, branch))
 	case motifAliasStepType:
-		content, err = RenderMotifAliasWorkItem()
+		content, err = RenderMotifAliasWorkItem(item.FactsJSON)
 	case motifDefineStepType:
-		content, err = RenderMotifDefineWorkItem()
+		content, err = RenderMotifDefineWorkItem(item.FactsJSON)
 	case motifBackfillStepType:
-		content, err = RenderMotifBackfillWorkItem()
+		content, err = RenderMotifBackfillWorkItem(item.FactsJSON)
 	case "discover":
 		var payload DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {

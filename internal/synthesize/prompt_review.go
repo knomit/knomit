@@ -215,7 +215,7 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 // legitimately contain corpus vocabulary — the vocabulary is in the payload,
 // not in the template, so the MN1 enumeration over prompt TEMPLATES stays a
 // clean check.
-func RenderMotifAliasWorkItem() (*WorkItemContent, error) {
+func RenderMotifAliasWorkItem(factsJSON string) (*WorkItemContent, error) {
 	prompt, err := RenderTemplate("motif_alias", "user", PromptData{})
 	if err != nil {
 		return nil, fmt.Errorf("render motif alias work item: %w", err)
@@ -223,6 +223,9 @@ func RenderMotifAliasWorkItem() (*WorkItemContent, error) {
 	return &WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: motifAliasResponseSchema,
+		// The pairs themselves. The prompt says they ride here; omitting them
+		// asked the judge to decide about content it never received.
+		Facts: factsJSON,
 	}, nil
 }
 
@@ -231,7 +234,7 @@ func RenderMotifAliasWorkItem() (*WorkItemContent, error) {
 // Takes no arguments for the same reason RenderMotifAliasWorkItem does: the
 // names ride in the work item's `facts` field, so the TEMPLATE carries no
 // corpus vocabulary and the MN1 enumeration over templates stays a clean check.
-func RenderMotifDefineWorkItem() (*WorkItemContent, error) {
+func RenderMotifDefineWorkItem(factsJSON string) (*WorkItemContent, error) {
 	prompt, err := RenderTemplate("motif_define", "user", PromptData{})
 	if err != nil {
 		return nil, fmt.Errorf("render motif define work item: %w", err)
@@ -239,5 +242,6 @@ func RenderMotifDefineWorkItem() (*WorkItemContent, error) {
 	return &WorkItemContent{
 		Prompt:         prompt,
 		ResponseSchema: motifDefineResponseSchema,
+		Facts:          factsJSON,
 	}, nil
 }
