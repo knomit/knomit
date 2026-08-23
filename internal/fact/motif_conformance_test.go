@@ -207,10 +207,16 @@ var mechanicsPaths = map[string][]string{
 	// What no entry here licenses: a motif term reaching dedup, clustering or
 	// search ranking. Those files stay nil below and this list does not touch
 	// them.
-	// mergeToken2Groups, laneOf, scoreMotifCandidate and rankAndCap are
-	// deliberately NOT listed: their bodies name no motif identifier (they work
-	// on canonical ids, paths and scores), and this list rejects a permission
-	// nothing uses.
+	// laneOf, scoreMotifCandidate, rankAndCap, disjointMembers and
+	// copyMembers are deliberately NOT listed: their bodies name no motif
+	// identifier (they work on canonical ids, paths and scores), and this list
+	// rejects a permission nothing uses.
+	//
+	// The names in this paragraph are prose, and the bidirectional machinery
+	// checks the allow-LIST rather than the reasoning beside it — so a rename
+	// leaves a ghost here that nothing catches. One did: the Phase-3 review
+	// (L3) found this sentence still citing mergeToken2Groups, deleted two
+	// commits earlier and replaced by token2Families.
 	//
 	// Of the two listed, enumerateMotifCandidates reads members' motifs to
 	// GROUP them and sharedMotifSpecificity reads them to SCORE the group it

@@ -45,6 +45,18 @@ const (
 // it says where the estimate stops being one.
 const motifDFCeilingFloor = 12
 
+// motifDFCeilingPerCent is the df band's ceiling as a share of the corpus
+// (§4: `2 <= df <= max(12, 2%*N)`) — above it a motif has gone generic.
+//
+// CONSTANT CLASSIFICATION (MN13): a RATIO of the corpus's own size, the same
+// class as umbrellaPerCent in the sibling file, and it resolves to a different
+// df on every corpus. It was an unnamed inline `* 2 / 100` until the Phase-3
+// review (L2) pointed out that the MN13 check bans FLOAT literals and an
+// integer-written ratio is invisible to it — lesson 3 turned on the check
+// itself: ask in what form the violation would appear, and does the check read
+// that form.
+const motifDFCeilingPerCent = 2
+
 // motifResolver maps one authored motif spelling to its canonical cluster id.
 // An unresolved spelling resolves to ITSELF, so a corpus with no alias table
 // behaves as one where every motif is its own singleton cluster.
@@ -82,7 +94,7 @@ func enumerateMotifCandidates(
 	tier motifMatchTier,
 ) ([]BridgeSeedSet, motifEnumHealth) {
 	point := resolveDisjointnessPoint(labels)
-	ceiling := labels.LiveFacts * 2 / 100
+	ceiling := labels.LiveFacts * motifDFCeilingPerCent / 100
 	if ceiling < motifDFCeilingFloor {
 		ceiling = motifDFCeilingFloor
 	}

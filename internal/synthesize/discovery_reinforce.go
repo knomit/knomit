@@ -45,7 +45,7 @@ func applyReinforcements(
 	branch string,
 	localRepoID string,
 	onProgress func(ProgressEvent),
-) ([]string, error) {
+) []string {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
@@ -130,7 +130,7 @@ func applyReinforcements(
 		onProgress(ProgressEvent{Phase: "detail-discover", Message: "reinforce " + f.Path()})
 		written = append(written, f.Path())
 	}
-	return written, nil
+	return written
 }
 
 // dedupeRefs preserves order and drops repeats, so a seed the fact already

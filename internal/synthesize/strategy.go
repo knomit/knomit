@@ -306,12 +306,13 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 	// REINFORCE runs after the proposals, on the same decision. An agent that
 	// found the corpus already holds its keystone returns no proposal and one
 	// reinforcement, so this is usually the only half that does anything.
-	reinforced, rErr := applyReinforcements(ctx, d.Facts, d.Search, dec.payload,
+	// No error return: every rejection inside is per-reinforcement, warned and
+	// skipped, exactly like the proposal loop above. It returned one until the
+	// Phase-3 review (L7) pointed out the branch handling it was unreachable —
+	// a handled failure mode that did not exist reads as a risk that was
+	// considered, which is worse than no branch at all.
+	reinforced := applyReinforcements(ctx, d.Facts, d.Search, dec.payload,
 		dec.reinforcements, sess.Branch, fact.ID12(d.RI.ID()), d.OnProgress)
-	if rErr != nil {
-		log.Warn().Err(rErr).Str("tool", tool).Str("session", sess.ID).
-			Msg("apply reinforcements failed; continuing")
-	}
 	if len(reinforced) > 0 {
 		// Deliberately NOT counted into ReviewStats. Reinforcement creates no
 		// fact, so counting it as Synthesized would overstate what the session

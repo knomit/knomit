@@ -81,10 +81,8 @@ func newReinforceEnv(t *testing.T) *reinforceEnv {
 
 func (e *reinforceEnv) apply(rs ...FactReinforcement) []string {
 	e.t.Helper()
-	written, err := applyReinforcements(context.Background(), e.svc.Facts(), e.svc.Search(),
+	return applyReinforcements(context.Background(), e.svc.Facts(), e.svc.Search(),
 		e.payload, rs, e.branch, e.repoID, func(ProgressEvent) {})
-	require.NoError(e.t, err)
-	return written
 }
 
 func (e *reinforceEnv) read(path string) fact.Fact {
