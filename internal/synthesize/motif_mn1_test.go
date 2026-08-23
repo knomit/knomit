@@ -51,6 +51,16 @@ var vocabularyBearingItems = map[string]string{
 		"names the model would not otherwise have seen, because those motifs are " +
 		"already in front of it on the facts themselves.",
 
+	"discover": "§4/§5 bridging, and the exposure is DISTILL's class rather than " +
+		"backfill's (Phase-3 review, M2). The prompt names the group's OWN shared " +
+		"motif — the token the members are grouped BY, already on every member fact " +
+		"in the payload beside it — never candidates drawn from the wider corpus. It " +
+		"cannot bias minting toward a name the model would not otherwise have seen. " +
+		"Q8's concern is vocabulary shown at AUTHORING time distorting what gets " +
+		"written; here the vocabulary shown IS the input. Covered deterministically " +
+		"by TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif, because a session " +
+		"produces a discover item only when a bridge happens to form.",
+
 	"reflect": "§3.3 health metrics. Reflect writes methodology, not facts about the " +
 		"corpus's subjects, and it receives aggregate COUNTS plus the vocabulary as " +
 		"context for reasoning about the corpus's own habits.",
@@ -124,14 +134,15 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 	// prune's response schema once passed here for want of the opportunity to
 	// fail.
 	//
-	// NOT COVERED: the DISCOVER renderer. Discovery does not run at
-	// EffortMedium, so no discover item exists to inspect here, and no
-	// deterministic render test covers it either. A vocabulary leak in
-	// discover's prompt or response schema would be invisible to this suite.
-	// Phase 2 adds `motifs` to discover's OUTPUT schema (MN11) but no
-	// vocabulary to its input, so there is nothing to leak today — this is a
-	// gap in the guard, not a known defect, and it is named so that whoever
-	// gives discover a vocabulary-bearing payload finds it named.
+	// STILL NOT COVERED HERE: the DISCOVER renderer. Discovery does not run at
+	// EffortMedium, so no discover item exists in THIS session to inspect.
+	//
+	// Phase 2 named this gap in advance — "whoever gives discover a
+	// vocabulary-bearing payload finds it named" — and Phase 3 is whoever: the
+	// far-lane prompt now prints the group's shared motif. The gap is closed by
+	// TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif below, which renders
+	// the item directly rather than waiting for a bridge to form, and by the
+	// declared register entry above. Naming it worked; it is left named.
 	//
 	// markedReached is recorded rather than asserted for the reason above: it
 	// is a property of what this corpus clustered into, not of the rule.
@@ -141,9 +152,9 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 	// permission nobody needs, and one nobody notices going stale — the
 	// os.Stat-and-continue shape counts as no test.
 	for step := range vocabularyBearingItems {
-		if step == "distill" || step == "reflect" {
-			continue // covered by the template assertions below; not every
-			// session produces one
+		if step == "distill" || step == "reflect" || step == "discover" {
+			continue // covered by the deterministic renderer tests below; not
+			// every session produces one
 		}
 		require.Containsf(t, seen, step,
 			"%s is a declared vocabulary-bearing item but this session produced none — "+
@@ -259,4 +270,49 @@ func TestMN1_OrdinaryItemsNeverCarryVocabulary(t *testing.T) {
 	require.NotContains(t, clean.Prompt, marker,
 		"distill must never see a motif none of its input facts carries — that would "+
 			"be the corpus vocabulary, which is backfill's exception and not distill's")
+}
+
+// TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif closes the gap Phase 2
+// named and Phase 3 walked into (review M2).
+//
+// Rendered directly rather than through a session: a session produces a discover
+// item only when a bridge happens to form, and a guard that depends on a gate
+// upstream of it can pass for want of the opportunity to fail — which is
+// exactly how a planted leak once survived the scan above.
+func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
+	const marker = "zzzmarker-unique-shape"
+	const foreign = "zzzforeign-other-shape"
+
+	members := []factForLLM{
+		{File: "kb/a.md", Title: "Alpha", Body: "a body", Motifs: []string{marker}},
+		{File: "kb/b.md", Title: "Bravo", Body: "another body", Motifs: []string{marker}},
+	}
+	payload := DiscoverWorkPayload{
+		Direction: DiscoverBackward, Lane: LaneFar,
+		Bridge: BridgeSeedSet{Token: marker, Kind: BridgeMotif, Members: members},
+	}
+	view := RenderDiscoverWorkItem(payload, "kb")
+
+	// The group's own token appears — that is the authorized exposure, and the
+	// far-lane SHIP line cannot say what the members claim without naming it.
+	require.Contains(t, view.Prompt, marker)
+
+	// The distinction that makes it distill's class rather than backfill's: a
+	// motif no member carries must never appear. If the corpus's vocabulary
+	// ever reaches this renderer, this is the assertion that fails.
+	require.NotContains(t, view.Prompt, foreign)
+	require.NotContains(t, view.ResponseSchema, foreign)
+	require.NotContains(t, view.ResponseSchema, marker,
+		"the response schema asks for motifs in the ABSTRACT; naming this corpus's "+
+			"vocabulary there would be the leak MN1 forbids")
+
+	// And a group whose members carry no motifs at all renders no motif
+	// vocabulary anywhere — the entity/domain bridges that share this renderer.
+	bare := RenderDiscoverWorkItem(DiscoverWorkPayload{
+		Direction: DiscoverForward,
+		Bridge: BridgeSeedSet{Token: "some-entity", Kind: BridgeEntity, Members: []factForLLM{
+			{File: "kb/c.md", Title: "Charlie", Body: "body"}}},
+	}, "kb")
+	require.NotContains(t, bare.Prompt, marker)
+	require.NotContains(t, bare.Prompt, foreign)
 }

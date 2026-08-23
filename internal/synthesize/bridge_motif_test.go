@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -751,4 +752,36 @@ func TestRankAndCap_SuppressionPrecedesTheBudget(t *testing.T) {
 	require.Len(t, got[0].Members, 3)
 	require.Equal(t, "other-shape", got[1].Token,
 		"the slot freed by suppression goes to a different question, not to the duplicate")
+}
+
+// ── M4: the crack between the lanes is counted, not silent ────────────────
+
+// A group with ONE similarity edge among three members is assigned near
+// (density 0.33 > 0) and then dropped by the 0.5 cohesion floor. It is
+// two-thirds mutually dissimilar — far-lane material by any reading of §4 — and
+// it used to vanish with no trace. It still vanishes; now it is counted.
+func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
+	seeds := []factForLLM{
+		{File: "kb/a/one.md", Motifs: []string{"shared-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/two.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/three.md", Motifs: []string{"shared-shape"}, Entities: []string{"Gamma"}},
+	}
+	clusters := ClusterResult{Clusters: map[int][]string{
+		0: {"kb/a/one.md"}, 1: {"kb/b/two.md"}, 2: {"kb/c/three.md"}}}
+	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2, "gamma": 2})
+	idx := &laneSplittingIndex{nearPair: [2]string{"kb/a/one.md", "kb/b/two.md"}}
+	cfg := motifQualityConfig() // CohFloor 0.5
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, health.Candidates, "precondition: the group enumerated")
+	require.Empty(t, near, "density 0.33 is below the 0.5 floor")
+	require.Empty(t, far, "and the binary lane split never offered it to the far lane")
+	require.Equal(t, 1, health.NearFloorDropped,
+		"the group must be COUNTED where it disappears, not merely absent")
+
+	lines := motifBridgeHealthLines(health, 0, 0)
+	require.Contains(t, strings.Join(lines, "\n"), "motif near-lane floor: 1 group(s)")
 }

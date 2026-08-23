@@ -83,6 +83,16 @@ type motifEnumHealth struct {
 	OverCeilingNames []string
 	// Point is the subject-disjointness operating point this corpus derived.
 	Point disjointnessPoint
+	// NearFloorDropped counts groups assigned to the NEAR lane and then
+	// dropped below the cohesion floor — the crack between the lanes
+	// (Phase-3 review, M4).
+	//
+	// laneOf is binary on `Density > 0`, so a group with one stray SIMILAR_TO
+	// edge among otherwise dissimilar members lands in the near lane and is
+	// then killed by a 0.5 floor. Such a group is far-lane material by any
+	// reading of §4 and disappears with no trace. Visibility now; the lane
+	// semantics are redesigned in Phase 4 on these counts.
+	NearFloorDropped int
 }
 
 // enumerateMotifCandidates is the §4 enumeration loop, with the gates applied
@@ -516,6 +526,18 @@ func motifTier(e Effort) motifMatchTier {
 // normal is the bounded 6ce866f8 amendment: verbatim matches only, at most two
 // items, near lane only. On any corpus without motifs it enumerates nothing,
 // which is why the EffortNormal contract test still passes vacuously (MN5).
+//
+// WHAT MN10 DOES AND DOES NOT PROMISE HERE (designer ruling, review M3).
+// MN10 governs CANDIDATE sets: each level's enumerated candidates are a strict
+// subset of the next level's, which holds and is tested. It does NOT promise
+// that a bridge SERVED at medium is served again at high — the budgets below
+// are the same kind of cap the entity/domain axis has always had, and at high
+// effort many more candidates compete for them. On the measured corpus that is
+// 113 token-2 groups for 8 near + 8 far slots against 20 at medium for 4, so a
+// medium-served item CAN lose its slot to a better-ranked family. That is
+// budget arithmetic, not a monotonicity break. Phase 4 measures how often it
+// happens and whether the budgets should grow; exact-first ranking was
+// considered and rejected — it would starve token-2 families out entirely.
 func motifSubBudget(e Effort) (near, far int) {
 	switch e {
 	case EffortHigh:
@@ -590,6 +612,9 @@ func buildMotifBridges(
 			return nil, nil, health, err
 		}
 		if !kept {
+			if lane == LaneNear {
+				health.NearFloorDropped++
+			}
 			continue
 		}
 		cand.Q = q
@@ -760,6 +785,12 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 		fmt.Sprintf("motif bridges: %d candidates, %d near, %d far (df band 2..%d)",
 			h.Candidates, near, far, h.Ceiling),
 		fmt.Sprintf("motif disjointness: %s; umbrella df > %d", point, h.Point.Umbrella),
+	}
+	if h.NearFloorDropped > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif near-lane floor: %d group(s) assigned near and dropped below the "+
+				"cohesion floor — sparse-similarity groups the lane split does not yet "+
+				"route to the far lane", h.NearFloorDropped))
 	}
 	if len(h.OverCeilingNames) > 0 {
 		lines = append(lines, fmt.Sprintf(
