@@ -10,6 +10,7 @@ package synthesize
 // database.
 
 import (
+	"context"
 	"sort"
 
 	"knomit/internal/fact"
@@ -226,4 +227,98 @@ func mergeToken2Groups(byToken map[string]map[string]factForLLM) {
 			delete(byToken, ids[j])
 		}
 	}
+}
+
+// ── the lane split (§4) ───────────────────────────────────────────────────
+
+// BridgeLane is the §4 lane split. Members that are SIMILAR_TO neighbours form
+// the NEAR lane; members with no edge between them form the FAR lane, where
+// cohesion is 0 by construction.
+//
+// The two lanes mean different things and route differently: near is "similar
+// AND sharing a named mechanism", which plausibly supports an entailed
+// consequence and routes forward; far is the novel-analogy class this design
+// exists for, and routes backward as a hypothesis under default-NO.
+type BridgeLane string
+
+const (
+	LaneNear BridgeLane = "near"
+	LaneFar  BridgeLane = "far"
+)
+
+// laneOf assigns a candidate to its lane.
+func laneOf(paths []string, g store.SimilarityGraph) BridgeLane {
+	if g.Density(paths) > 0 {
+		return LaneNear
+	}
+	return LaneFar
+}
+
+// meanSimFn returns the mean pairwise similarity of the members.
+//
+// It is injected because the far lane needs REAL cosines and the SIMILAR_TO
+// graph cannot supply them: that graph is a top-K edge set, and in the far lane
+// it is empty by definition, so a "similarity" read off it would be the same
+// constant for every far candidate — a term that ranks nothing.
+type meanSimFn func(ctx context.Context, paths []string) (float64, error)
+
+// scoreMotifCandidate scores one candidate on its lane.
+//
+// Near lane: the existing bridgeQ, unchanged — cohesion floor, separation >= 2,
+// size cap. A near-lane group below the cohesion floor is DROPPED, not
+// re-routed to the far lane: the lanes partition the candidates, they are not a
+// retry.
+//
+// Far lane: Q = WSpec*sharedSpec + WGap*Gap + WCoh*(1 - meanSim). The cohesion
+// FLOOR is not applied — cohesion is 0 there by construction and the floor
+// would reject every far candidate — but separation and the size cap still are.
+// The dissimilarity term takes cohesion's weight rather than adding a knob, so
+// both lanes' scores stay on one scale and neither needs its own calibration.
+//
+// reshapeCohesiveSubset is NEVER used on this path (§4): it is cohesion-driven
+// and would reassemble the near subset out of a far group. Oversized far groups
+// are dropped by the size cap; the §4 trim is carried forward to Phase 4.
+func scoreMotifCandidate(
+	ctx context.Context,
+	cand BridgeSeedSet,
+	lane BridgeLane,
+	g store.SimilarityGraph,
+	idx SearchQuery,
+	branch string,
+	clusterOf map[string]int,
+	cfg QualityConfig,
+	sharedSpec float64,
+	meanSim meanSimFn,
+) (float64, bool, error) {
+	paths := make([]string, 0, len(cand.Members))
+	for _, m := range cand.Members {
+		paths = append(paths, m.File)
+	}
+	gap, err := derivationGap(ctx, paths, idx)
+	if err != nil {
+		return 0, false, err
+	}
+	comp := BridgeComponents{
+		Coh:     cohesion(paths, g),
+		Sep:     separation(paths, clusterOf),
+		Gap:     gap,
+		Spec:    sharedSpec,
+		Members: len(paths),
+	}
+	if lane == LaneNear {
+		q, kept := bridgeQ(comp, cfg)
+		return q, kept, nil
+	}
+	if comp.Sep < 2 || comp.Members > cfg.MaxMembers {
+		return 0, false, nil
+	}
+	ms, err := meanSim(ctx, paths)
+	if err != nil {
+		// Propagated, never defaulted. A similarity that could not be read is
+		// not "maximally dissimilar", and treating it as 0 would hand every
+		// unreadable group the highest far-lane score there is.
+		return 0, false, err
+	}
+	q := cfg.WSpec*comp.Spec + cfg.WGap*comp.Gap + cfg.WCoh*(1-ms)
+	return q, q >= cfg.QualityFloor, nil
 }
