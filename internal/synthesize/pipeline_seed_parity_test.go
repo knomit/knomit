@@ -2,6 +2,8 @@ package synthesize
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -39,6 +41,8 @@ func TestSeedScanPaths_ProduceTheSameFact(t *testing.T) {
 	f.Motifs = []string{"measure-becomes-target"}
 	f.Confidence = 0.8
 	f.Sources = 1
+	f.EvidenceWeight = 2.5
+	f.Refs = []string{"kb/gotchas/uitesting/other.md"}
 	content, err := fact.SerializeFact(f)
 	require.NoError(t, err)
 	_, err = env.svc.Facts().WriteFact(ctx, env.branch, path, content, "write", "test")
@@ -56,41 +60,65 @@ func TestSeedScanPaths_ProduceTheSameFact(t *testing.T) {
 	fromParse, err := fact.ParseFact(path, read.Content)
 	require.NoError(t, err)
 
-	// Field by field, but exhaustively and by NAME, so a field added to
-	// fact.Fact and forgotten in one projection shows up here.
-	require.Equal(t, fromParse.Path(), fromSearch.Path())
-	require.Equal(t, fromParse.Title, fromSearch.Title)
-	require.Equal(t, fromParse.Body, fromSearch.Body)
-	require.Equal(t, fromParse.Kind, fromSearch.Kind)
-	require.Equal(t, fromParse.Type, fromSearch.Type)
-	require.Equal(t, fromParse.Domain, fromSearch.Domain)
-	require.Equal(t, fromParse.Entities, fromSearch.Entities)
-	require.Equal(t, fromParse.Motifs, fromSearch.Motifs)
-	require.Equal(t, fromParse.Confidence, fromSearch.Confidence)
-	require.Equal(t, fromParse.Sources, fromSearch.Sources)
-	require.Equal(t, fromParse.Refs, fromSearch.Refs)
+	// GENERIC, by reflection over fact.Fact's exported fields.
+	//
+	// The first version of this test hand-enumerated the fields, under a
+	// comment claiming it was generic — and the review proved the claim false
+	// by finding EvidenceWeight divergent at HEAD and absent from the list.
+	// A field added to fact.Fact and forgotten in one projection now fails here
+	// without anyone remembering to add a line.
+	//
+	// Two divergences are DECLARED rather than compared, each with its reason;
+	// everything else must match exactly.
+	declared := map[string]string{
+		// ParseFact applies the type-aware default on read; the projection
+		// carries the elided value. Harmless at HEAD — every consumer tests for
+		// Discovered specifically, and SerializeFact never elides that — and
+		// owned by the origin contract, not by this phase (review M1).
+		"Origin": "parse defaults it, the projection carries the elided value",
+	}
 
-	// ORIGIN — a SECOND, DIFFERENT divergence this test found once it was
-	// written generically, and one this phase has deliberately not changed.
-	//
-	// ParseFact applies the type-aware default on read (an authored
-	// observation with no `origin:` in its frontmatter parses as "authored"),
-	// while the index stores the elided value and the projection copies it
-	// verbatim, so the full-scan path yields "". Nothing today is misled: every
-	// consumer tests for fact.Discovered specifically, and neither "" nor
-	// "authored" is that. It is pinned here rather than normalised away,
-	// because the day a consumer starts asking "is this authored?" the two scan
-	// paths will answer differently and this is the line that says so.
-	//
-	// Reported to the design authority; changing it is a decision for whoever
-	// owns the origin contract, not for the phase that noticed.
+	pv := reflect.ValueOf(fromParse)
+	sv := reflect.ValueOf(fromSearch)
+	typ := pv.Type()
+	compared := 0
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		if why, ok := declared[f.Name]; ok {
+			t.Logf("declared divergence on %s: %s", f.Name, why)
+			continue
+		}
+		// PARSE DIAGNOSTICS are not fact data: RefWarnings and MotifWarnings
+		// record what the lenient parser DISCARDED, they are never persisted,
+		// and no projection can carry them. They are asserted EMPTY on both
+		// sides rather than skipped — a clean fixture that starts producing
+		// warnings is a finding, and skipping them by name would hide it.
+		if strings.HasSuffix(f.Name, "Warnings") {
+			require.Emptyf(t, pv.Field(i).Interface(), "clean fixture produced %s", f.Name)
+			require.Emptyf(t, sv.Field(i).Interface(), "projection produced %s", f.Name)
+			continue
+		}
+		// PRECONDITION (lesson 5): the fixture must give this field a
+		// non-zero value, or "equal" is two zero values agreeing and the
+		// comparison proves nothing. EvidenceWeight was divergent AND unset by
+		// the old fixture — both halves of the miss.
+		require.Falsef(t, pv.Field(i).IsZero(),
+			"fixture must set %s to a non-zero value, or comparing it tests nothing "+
+				"(add it to the fixture above, do NOT exempt it here)", f.Name)
+		require.Equalf(t, pv.Field(i).Interface(), sv.Field(i).Interface(),
+			"scan paths disagree about %s", f.Name)
+		compared++
+	}
+	require.Positive(t, compared, "a parity test that compared no fields is not a test")
+
+	// The unexported path is not reachable by reflection; assert it directly.
+	require.Equal(t, fromParse.Path(), fromSearch.Path())
+
+	// And the declared divergence is asserted rather than merely excused, so it
+	// fails loudly the day someone fixes it and forgets this list.
 	require.Equal(t, fact.Authored, fromParse.Origin, "the parse path defaults it")
 	require.Empty(t, string(fromSearch.Origin), "the projection carries the elided value")
-
-	// And the precondition that makes the assertions above mean something: the
-	// fixture must actually CARRY the fields it claims to compare (lesson 5 —
-	// two empty values are equal and prove nothing).
-	require.NotEmpty(t, fromParse.Motifs)
-	require.NotEmpty(t, fromParse.Entities)
-	require.NotEmpty(t, fromParse.Domain)
 }

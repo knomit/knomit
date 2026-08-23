@@ -525,6 +525,12 @@ func factFromSearchResult(sr store.SearchResult) fact.Fact {
 	f.Confidence = sr.Confidence
 	f.Sources = sr.Sources
 	f.Refs = sr.Refs
+	// EvidenceWeight is authored data like every field above it. It was missing
+	// here until the Phase-3 fresh-eyes review (finding M1a) — the identical
+	// omission the same commit had just repaired for Motifs, in the same
+	// function, found because the parity test was rebuilt to compare fields it
+	// was not told about.
+	f.EvidenceWeight = sr.EvidenceWeight
 	f.Origin = fact.Origin(sr.Origin)
 	return f
 }
