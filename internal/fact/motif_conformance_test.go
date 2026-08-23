@@ -226,7 +226,7 @@ var mechanicsPaths = map[string][]string{
 	// reads a health line.
 	"internal/synthesize/bridge_motif.go": {
 		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
-		"motifResolverFor", "motifBridgeHealthLines",
+		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
 	},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
@@ -362,7 +362,13 @@ func funcsMentioningMotifs(t *testing.T, rel string) []string {
 // needing one written under deadline.
 func TestMN2_NoLLMInMotifCode(t *testing.T) {
 	sources := goSources(t)
-	for _, rel := range []string{"internal/fact/motif.go", "internal/textnorm/textnorm.go"} {
+	for _, rel := range []string{
+		"internal/fact/motif.go", "internal/textnorm/textnorm.go",
+		// Phase 3's enumeration and its gate. The detector stays mechanical:
+		// the connected agent is the only reasoner in the read path, and it
+		// already exists (cf455b8f).
+		"internal/synthesize/bridge_motif.go", "internal/synthesize/motif_disjoint.go",
+	} {
 		src, ok := sources[rel]
 		require.Truef(t, ok, "MN2 target %s is missing", rel)
 		lower := strings.ToLower(src)
@@ -477,4 +483,70 @@ func parseGo(t *testing.T, rel string) *ast.File {
 	file, err := parser.ParseFile(fset, filepath.Join(repoRoot(t), rel), nil, parser.ParseComments)
 	require.NoErrorf(t, err, "parsing %s", rel)
 	return file
+}
+
+// TestMN13_MotifBridgeConstantsAreClassified — the Phase-3 half of the same
+// rule. Every numeric constant on the bridging path states its class where it
+// is defined, and no float literal appears in either file's CODE: a float here
+// would be the corpus-property constant MN13 forbids, wearing a threshold's
+// clothes.
+func TestMN13_MotifBridgeConstantsAreClassified(t *testing.T) {
+	for rel, want := range map[string]map[string]string{
+		"internal/synthesize/motif_disjoint.go": {
+			"disjointnessPercentile": "SELECTION POINT",
+			"minLabelsForPercentile": "STATISTICAL-VALIDITY FLOOR",
+			"umbrellaPerCent":        "RATIO",
+		},
+		"internal/synthesize/bridge_motif.go": {
+			"motifDFCeilingFloor": "STATISTICAL-VALIDITY FLOOR",
+		},
+	} {
+		requireConstantsClassified(t, rel, want)
+
+		var floats []string
+		ast.Inspect(parseGo(t, rel), func(n ast.Node) bool {
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
+				floats = append(floats, lit.Value)
+			}
+			return true
+		})
+		require.Emptyf(t, floats,
+			"MN13: a float literal in %s is a corpus-property constant in disguise: %v", rel, floats)
+	}
+}
+
+// requireConstantsClassified checks that each named constant in rel carries a
+// doc comment declaring its class. Shared by both MN13 tests so the rule has
+// one implementation and cannot drift between the phases that use it.
+func requireConstantsClassified(t *testing.T, rel string, want map[string]string) {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, decl := range parseGo(t, rel).Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		blockDoc := gen.Doc.Text()
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			doc := blockDoc + vs.Doc.Text()
+			for _, name := range vs.Names {
+				phrase, tracked := want[name.Name]
+				if !tracked {
+					continue
+				}
+				seen[name.Name] = true
+				require.Containsf(t, doc, phrase,
+					"MN13: const %s in %s must state its class where it is defined "+
+						"(expected its doc comment to contain %q)", name.Name, rel, phrase)
+			}
+		}
+	}
+	for name := range want {
+		require.Truef(t, seen[name], "const %s no longer exists in %s — "+
+			"update this test rather than letting the classification rule lapse", name, rel)
+	}
 }

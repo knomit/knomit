@@ -109,16 +109,37 @@ func enumerateMotifCandidates(
 			byToken[c][f.File] = f
 		}
 	}
+	// The token-2 tier is a UNION, not a replacement (§4: "Union with >= 2
+	// shared stemmed motif tokens"). Merging alone would REPLACE each verbatim
+	// group with a larger family group, and a larger group is not a superset of
+	// the smaller one once the pairwise disjointness pass has run over it: an
+	// added member can collide with a member the smaller group kept, and greedy
+	// keeps the earlier one. That breaks MN10's "each level's candidates are a
+	// strict subset of the next level's" — found on the real knomit-kb corpus,
+	// where pairs present at the exact tier vanished at token-2.
+	//
+	// So the family groups are ADDED to the verbatim ones, and a family whose
+	// members are already covered by a verbatim group is dropped as redundant.
+	groups := verbatimGroups(byToken)
 	if tier == tierToken2 {
-		mergeToken2Groups(byToken)
+		groups = append(groups, token2Families(byToken)...)
 	}
 
 	var out []BridgeSeedSet
-	for canon, members := range byToken {
+	for _, g := range groups {
+		canon, members := g.key, g.members
 		// GATE 1 — the df band, `2 <= df <= max(12, 2%*N)` (§4). Below the
 		// floor a motif has one carrier and cannot bridge yet. Above the
 		// ceiling it has gone generic: excluded, and flagged for splitting.
 		d := df(canon)
+		// A FAMILY is keyed by one of its ids, whose own df says nothing about
+		// how often the family recurs — two hapax spellings of one mechanism
+		// are exactly the case this tier exists to catch. Its carriers ARE its
+		// recurrence. A verbatim group is NOT promoted this way: there the df
+		// is the motif's own, and the floor is what stops a hapax bridging.
+		if g.family && len(members) > d {
+			d = len(members)
+		}
 		if d > ceiling {
 			health.OverCeilingNames = append(health.OverCeilingNames, canon)
 			continue
@@ -187,15 +208,49 @@ func disjointMembers(members map[string]factForLLM, labels store.SubjectLabelDF,
 	return kept
 }
 
-// mergeToken2Groups folds canonical ids sharing >= 2 stemmed tokens into one
-// group — the mechanical half of §4's permissive prefilter, reachable only at
-// high effort.
+// motifGroup is one candidate grouping before the gates run: a key, its
+// members, and whether the key names a single canonical id or a token-2 family
+// of them.
+type motifGroup struct {
+	key     string
+	members map[string]factForLLM
+	family  bool
+}
+
+// verbatimGroups projects the exact-tier map into groups, sorted by key so the
+// output order never depends on map iteration.
+func verbatimGroups(byToken map[string]map[string]factForLLM) []motifGroup {
+	keys := make([]string, 0, len(byToken))
+	for k := range byToken {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]motifGroup, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, motifGroup{key: k, members: byToken[k]})
+	}
+	return out
+}
+
+// token2Families returns one group per family of canonical ids sharing >= 2
+// stemmed tokens — §4's permissive prefilter, reachable only at high effort.
 //
-// The surviving key is the lexicographically smallest id of a merged set, so
-// the choice is deterministic and independent of map order. Merging is
-// transitive by construction: ids are processed in sorted order and each fold
-// moves members into the earlier key, so a chain a~b~c lands entirely on a.
-func mergeToken2Groups(byToken map[string]map[string]factForLLM) {
+// They are ADDED to the verbatim groups rather than replacing them (§4:
+// "Union with >= 2 shared stemmed motif tokens"). Replacement would break MN10:
+// a family group is larger, and a larger group is not a superset of the smaller
+// one once the pairwise disjointness pass has run over it — an added member can
+// collide with one the smaller group kept, and greedy keeps the earlier. That
+// was found on the real knomit-kb corpus, where pairs present at the exact tier
+// vanished at token-2.
+//
+// The family's key is the lexicographically smallest id in it, so the choice is
+// deterministic and independent of map order. Families are transitive by
+// construction: ids are walked in sorted order and each fold moves members onto
+// the earliest key, so a chain a~b~c lands entirely on a.
+//
+// A family that adds no members beyond its verbatim group is dropped: it would
+// be the same candidate under a second name, and the agent would judge it twice.
+func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
 	ids := make([]string, 0, len(byToken))
 	for id := range byToken {
 		ids = append(ids, id)
@@ -209,12 +264,16 @@ func mergeToken2Groups(byToken map[string]map[string]factForLLM) {
 			toks[i][t] = struct{}{}
 		}
 	}
+
+	// families[i] accumulates the members of the family keyed by ids[i].
+	families := make([]map[string]factForLLM, len(ids))
+	folded := make([]bool, len(ids))
 	for i := range ids {
-		if byToken[ids[i]] == nil {
-			continue // already folded into an earlier id
+		if folded[i] {
+			continue
 		}
 		for j := i + 1; j < len(ids); j++ {
-			if byToken[ids[j]] == nil {
+			if folded[j] {
 				continue
 			}
 			shared := 0
@@ -226,12 +285,32 @@ func mergeToken2Groups(byToken map[string]map[string]factForLLM) {
 			if shared < 2 {
 				continue
 			}
-			for p, f := range byToken[ids[j]] {
-				byToken[ids[i]][p] = f
+			if families[i] == nil {
+				families[i] = copyMembers(byToken[ids[i]])
 			}
-			delete(byToken, ids[j])
+			for p, f := range byToken[ids[j]] {
+				families[i][p] = f
+			}
+			folded[j] = true
 		}
 	}
+
+	var out []motifGroup
+	for i, fam := range families {
+		if fam == nil || len(fam) <= len(byToken[ids[i]]) {
+			continue // adds nothing the verbatim group did not already have
+		}
+		out = append(out, motifGroup{key: ids[i], members: fam, family: true})
+	}
+	return out
+}
+
+func copyMembers(in map[string]factForLLM) map[string]factForLLM {
+	out := make(map[string]factForLLM, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // ── the lane split (§4) ───────────────────────────────────────────────────
@@ -366,7 +445,10 @@ func sharedMotifSpecificity(ctx context.Context, idx SearchQuery, branch string,
 	}
 	sort.Strings(shared)
 
-	total := 0.0
+	// var, not `:= 0.0`: MN13's check on this file forbids float literals in
+	// the code outright, and a blanket rule with no carve-out for "but this one
+	// is only a zero" is worth more than the keystroke it costs.
+	var total float64
 	for _, c := range shared {
 		s, err := specificity(ctx, branch, c, string(BridgeMotif), idx)
 		if err != nil {
