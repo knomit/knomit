@@ -47,6 +47,25 @@ func main() {
 
 	// "paths" mode: dump every live path, so a set comparison against an
 	// external artefact does not need a raw index read.
+	if len(os.Args) > 3 && os.Args[2] == "blast" {
+		for _, path := range os.Args[3:] {
+			r, err := svc.GraphStore().BlastRadius(ctx, branch, path)
+			must(err)
+			fmt.Printf("BLAST %d  %s\n", r, path)
+		}
+		return
+	}
+	if len(os.Args) > 3 && os.Args[2] == "show" {
+		for _, path := range os.Args[3:] {
+			rec, err := svc.Facts().ReadFact(ctx, branch, path, nil)
+			must(err)
+			pf, err := fact.ParseFact(path, rec.Content)
+			must(err)
+			fmt.Printf("FILE %s\nTITLE %s\nTYPE %s\nDOMAIN %v\nENTITIES %v\nMOTIFS %v\nBODY %s\n---\n",
+				path, pf.Title, pf.Type, pf.Domain, pf.Entities, pf.Motifs, pf.Body)
+		}
+		return
+	}
 	if len(os.Args) > 2 && os.Args[2] == "paths" {
 		for _, f := range facts {
 			fmt.Println(f.Path)
