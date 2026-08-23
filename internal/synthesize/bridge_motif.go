@@ -322,3 +322,52 @@ func scoreMotifCandidate(
 	q := cfg.WSpec*comp.Spec + cfg.WGap*comp.Gap + cfg.WCoh*(1-ms)
 	return q, q >= cfg.QualityFloor, nil
 }
+
+// sharedMotifSpecificity is §4's `Sum(1/df_canonical)` over every canonical
+// motif that ALL members carry.
+//
+// This is where "two shared canonical motifs = rank boost, never a gate" lives:
+// the group already exists on the motif it is keyed by, and a second shared one
+// only adds a term. Nothing in here can reject a candidate.
+//
+// A member spelling the same cluster two ways votes once — otherwise a group
+// would be strengthened by one author's phrasing habit rather than by a second
+// regularity. Terms are summed in sorted order so the float accumulation is
+// identical run to run.
+func sharedMotifSpecificity(ctx context.Context, idx SearchQuery, branch string, cand BridgeSeedSet, resolve motifResolver) (float64, error) {
+	if len(cand.Members) == 0 {
+		return 0, nil
+	}
+	counts := map[string]int{}
+	for _, m := range cand.Members {
+		seen := map[string]struct{}{}
+		for _, raw := range m.Motifs {
+			c := resolve(raw)
+			if c == "" {
+				continue
+			}
+			if _, dup := seen[c]; dup {
+				continue
+			}
+			seen[c] = struct{}{}
+			counts[c]++
+		}
+	}
+	shared := make([]string, 0, len(counts))
+	for c, n := range counts {
+		if n == len(cand.Members) {
+			shared = append(shared, c)
+		}
+	}
+	sort.Strings(shared)
+
+	total := 0.0
+	for _, c := range shared {
+		s, err := specificity(ctx, branch, c, string(BridgeMotif), idx)
+		if err != nil {
+			return 0, err
+		}
+		total += s
+	}
+	return total, nil
+}

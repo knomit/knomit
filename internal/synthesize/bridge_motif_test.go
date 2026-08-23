@@ -342,3 +342,85 @@ func TestScoreMotifCandidate_FarLanePropagatesMeanSimErrors(t *testing.T) {
 func constMeanSim(v float64) meanSimFn {
 	return func(context.Context, []string) (float64, error) { return v, nil }
 }
+
+// ── shared-motif specificity: a rank boost, never a gate (§4) ─────────────
+
+func TestSharedMotifSpecificity_SecondSharedMotifBoostsNeverGates(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", gomock.Any(), string(BridgeMotif)).
+		Return(2, nil).AnyTimes()
+
+	one := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape"}},
+		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape"}}}}
+	two := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
+		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape", "bravo-shape"}}}}
+
+	sOne, err := sharedMotifSpecificity(ctx, idx, "main", one, identityResolver)
+	require.NoError(t, err)
+	sTwo, err := sharedMotifSpecificity(ctx, idx, "main", two, identityResolver)
+	require.NoError(t, err)
+
+	require.Greater(t, sTwo, sOne, "a second shared motif raises the score")
+	require.Positive(t, sOne, "and one shared motif still scores — it is never a gate")
+}
+
+func TestSharedMotifSpecificity_OnlyMotifsEveryMemberCarriesCount(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", gomock.Any(), string(BridgeMotif)).
+		Return(2, nil).AnyTimes()
+
+	cand := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "bravo-shape"}},
+		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape"}}}}
+
+	got, err := sharedMotifSpecificity(ctx, idx, "main", cand, identityResolver)
+	require.NoError(t, err)
+	require.InDelta(t, 0.5, got, 1e-9, "bravo-shape is not carried by ALL members")
+}
+
+// Rarity is what the term measures: a motif on fewer facts contributes more.
+func TestSharedMotifSpecificity_IsInverseInDF(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", "rare-shape", string(BridgeMotif)).Return(2, nil)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", "common-shape", string(BridgeMotif)).Return(10, nil)
+
+	mk := func(m string) BridgeSeedSet {
+		return BridgeSeedSet{Token: m, Members: []factForLLM{
+			{File: "kb/alpha/1.md", Motifs: []string{m}}, {File: "kb/beta/2.md", Motifs: []string{m}}}}
+	}
+	rare, err := sharedMotifSpecificity(context.Background(), idx, "main", mk("rare-shape"), identityResolver)
+	require.NoError(t, err)
+	common, err := sharedMotifSpecificity(context.Background(), idx, "main", mk("common-shape"), identityResolver)
+	require.NoError(t, err)
+	require.Greater(t, rare, common)
+}
+
+// One member spelling the same cluster two ways must not vote twice — that
+// would be a member reinforcing a group on its own authorship habit.
+func TestSharedMotifSpecificity_OneMemberCannotVoteTwiceForACluster(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	idx := NewMockSearchIndex(ctrl)
+	idx.EXPECT().TokenDF(gomock.Any(), "main", "alpha-shape", string(BridgeMotif)).
+		Return(2, nil).AnyTimes()
+
+	// Both spellings resolve to one canonical id.
+	resolve := func(string) string { return "alpha-shape" }
+	cand := BridgeSeedSet{Token: "alpha-shape", Members: []factForLLM{
+		{File: "kb/alpha/1.md", Motifs: []string{"alpha-shape", "alpha-shaped"}},
+		{File: "kb/beta/2.md", Motifs: []string{"alpha-shape"}}}}
+
+	got, err := sharedMotifSpecificity(context.Background(), idx, "main", cand, resolve)
+	require.NoError(t, err)
+	require.InDelta(t, 0.5, got, 1e-9, "one cluster, one term")
+}
