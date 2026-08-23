@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -109,21 +110,41 @@ func (mi *motifIndex) definitionRows(ctx context.Context, branchID int64) (map[s
 	return out, rows.Err()
 }
 
+// DefinitionStamp is the membership a definition is recorded against.
+//
+// A STRUCT rather than a bare string because the two cases an empty string was
+// being asked to cover are genuinely different, and conflating them silently
+// disabled the protection this stamp exists to provide. "The caller carried a
+// membership and it happens to be empty" is an unresolved cluster — real, and
+// exactly the state a corpus is in when the alias rebuild has not run or has
+// failed. "The caller has no membership" is a definition written outside a
+// pass. The first must be stamped as given; only the second may fall back to
+// reading current membership, which is the read-at-write-time behaviour the
+// stamp was introduced to remove.
+type DefinitionStamp struct {
+	Members string
+	// Known says the Members field is the caller's answer, empty or not. False
+	// means "I have none; read the current membership" — the zero value, so a
+	// caller that has not thought about it gets the old, safe-for-them
+	// behaviour rather than an accidental empty stamp.
+	Known bool
+}
+
 // PutDefinition stores a cluster's definition, stamped with the membership it
 // was AUTHORED AGAINST.
 //
-// members is supplied by the caller — carried from the DefinitionTarget the
-// authoring pass was given — rather than read here. Reading it here would stamp
-// whatever the cluster looks like NOW, and a judge merge applied between
+// The membership is supplied by the caller — carried from the DefinitionTarget
+// the authoring pass was given — rather than read here. Reading it here would
+// stamp whatever the cluster looks like NOW, and a judge merge applied between
 // planning and applying would mark a pre-merge definition as current for a
-// post-merge cluster. Passing an empty string re-reads current membership, for
-// callers writing a definition outside a pass.
-func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, definition, members string) error {
+// post-merge cluster, permanently: nothing would ever re-queue it.
+func (mi *motifIndex) PutDefinition(ctx context.Context, branch, clusterKey, definition string, stamp DefinitionStamp) error {
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("PutDefinition: %w", err)
 	}
-	if members == "" {
+	members := stamp.Members
+	if !stamp.Known {
 		current, merr := mi.clusterMembership(ctx, branchID)
 		if merr != nil {
 			return merr
@@ -229,14 +250,21 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 	// df per CLUSTER over authored facts: distinct carrier paths, so a fact
 	// using two spellings of one mechanism counts once — the same rule TokenDF
 	// and Clusters apply.
+	// The SAME key expression Clusters uses, including the final fallback to the
+	// spelling itself: a motif whose every token normalizes away has no
+	// mechanical cluster to join, and letting them all share the empty key would
+	// report one cluster where the point readers see several singletons. The two
+	// queries agree because they compute the same thing, not because they were
+	// written on the same day.
+	key := motifClusterKeyExpr("m.motif")
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
-		SELECT COALESCE(NULLIF(a.cluster_key, ''), knomit_motif_key(m.motif)), COUNT(DISTINCT bf.path)
+		SELECT `+key+`, COUNT(DISTINCT bf.path)
 		  FROM branch_facts bf
 		  JOIN facts f ON f.id = bf.fact_id
 		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
 		  LEFT JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
 		 WHERE bf.branch_id = ? AND f.origin = 'authored'
-		 GROUP BY COALESCE(NULLIF(a.cluster_key, ''), knomit_motif_key(m.motif))`, branchID)
+		 GROUP BY `+key, branchID)
 	if err != nil {
 		return h, fmt.Errorf("VocabularyHealth: %w", err)
 	}
@@ -362,11 +390,17 @@ func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, t
 // fixed. Silence about an offered fact is likewise not an answer about it.
 //
 // Idempotent: re-judging the same version is the same answer.
-// Takes PATHS and resolves the fact id from the branch's live pointer, so the
-// judgement binds to the version that was actually judged. A caller holding a
-// stale id could otherwise record a verdict against content the agent never saw.
-func (mi *motifIndex) RecordBackfillJudgedEmpty(ctx context.Context, branch string, paths []string) error {
-	if len(paths) == 0 {
+//
+// Takes FACT IDS — the versions the agent was actually shown — and never
+// resolves a path here. Resolving the branch's live pointer at write time was
+// exactly wrong: the pass offers a fact, the agent answers minutes later, and
+// an ordinary learn/update in between makes the live pointer a DIFFERENT
+// version. Stamping that one records a verdict against content nobody read,
+// and because the stamp is what removes a fact from the backlog, the new claim
+// then goes permanently unjudged. The caller owns the binding (see
+// LiveFactIDs) because the caller is the only layer that knows what it offered.
+func (mi *motifIndex) RecordBackfillJudgedEmpty(ctx context.Context, branch string, factIDs []int64) error {
+	if len(factIDs) == 0 {
 		return nil
 	}
 	branchID, err := mi.rh.branchID(ctx, branch)
@@ -374,15 +408,65 @@ func (mi *motifIndex) RecordBackfillJudgedEmpty(ctx context.Context, branch stri
 		return fmt.Errorf("RecordBackfillJudgedEmpty: %w", err)
 	}
 	now := time.Now().Unix()
-	for _, p := range paths {
+	for _, id := range factIDs {
 		if _, err := conn(ctx, mi.rh.db).ExecContext(ctx, `
 			INSERT INTO motif_backfill_judged (branch_id, fact_id, judged_at)
-			SELECT ?, bf.fact_id, ?
-			  FROM branch_facts bf
-			 WHERE bf.branch_id = ? AND bf.path = ?
-			ON CONFLICT(branch_id, fact_id) DO NOTHING`, branchID, now, branchID, p); err != nil {
+			VALUES (?, ?, ?)
+			ON CONFLICT(branch_id, fact_id) DO NOTHING`, branchID, id, now); err != nil {
 			return fmt.Errorf("RecordBackfillJudgedEmpty: %w", err)
 		}
 	}
 	return nil
+}
+
+// LiveFactIDs resolves paths to the fact ids this branch currently points at.
+//
+// A path missing from the result is a path the branch no longer carries; the
+// caller must treat that as "not the version I was handed" rather than as an
+// error, since a fact can legitimately be retracted mid-session.
+//
+// Not AbstractionIndex.FactIDsByPath: that query carries an
+// `f.kind = 'epistemic'` filter it needs for the title-vector work and backfill
+// does not want. Reusing it would make every pragmatic fact look absent, and a
+// staleness guard reading "absent" would skip facts that are present and
+// current — the quiet half of a wrong answer.
+func (mi *motifIndex) LiveFactIDs(ctx context.Context, branch string, paths []string) (map[string]int64, error) {
+	out := make(map[string]int64, len(paths))
+	if len(paths) == 0 {
+		return out, nil
+	}
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("LiveFactIDs: %w", err)
+	}
+	for start := 0; start < len(paths); start += sqlIDChunk {
+		chunk := paths[start:min(start+sqlIDChunk, len(paths))]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+		args := make([]any, 0, len(chunk)+1)
+		args = append(args, branchID)
+		for _, p := range chunk {
+			args = append(args, p)
+		}
+		rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
+			`SELECT path, fact_id FROM branch_facts
+			  WHERE branch_id = ? AND path IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("LiveFactIDs: %w", err)
+		}
+		for rows.Next() {
+			var path string
+			var id int64
+			if err := rows.Scan(&path, &id); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("LiveFactIDs: scan: %w", err)
+			}
+			out[path] = id
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("LiveFactIDs: %w", err)
+		}
+		rows.Close()
+	}
+	return out, nil
 }

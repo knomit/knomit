@@ -91,9 +91,36 @@ type backfillMotifHint struct {
 // backfillItem is one fact offered for backfill.
 type backfillItem struct {
 	Path string `json:"path"`
+	// FactID is the VERSION this item was planned against. It rides the payload
+	// for the same reason the define pass carries its cluster key: the payload
+	// round-trips through the work item's JSON, and the answer has to be
+	// routable back to the thing it was about.
+	//
+	// `facts` rows are immutable and unique on (path, blob_hash), so this id IS
+	// the content address. Comparing it at apply time is what stops a judgement
+	// — or an assignment — landing on a version the agent never saw, which an
+	// ordinary learn/update between planning and answering will produce.
+	FactID int64 `json:"fact_id"`
 	// Residue is the §11 subtraction residue — the fact's own title words that
 	// are not about its subject.
 	Residue []string `json:"residue,omitempty"`
+}
+
+// backfillFactsFor builds the offered-facts half of the payload.
+//
+// One derivation, shared by the planner and by anything that needs to know what
+// a session WOULD have offered. Two constructions that happen to agree are a
+// test asserting an arrangement; one construction used twice is the rule.
+func backfillFactsFor(targets []store.BackfillTarget) []backfillItem {
+	out := make([]backfillItem, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, backfillItem{
+			Path:    t.Path,
+			FactID:  t.FactID,
+			Residue: subtractionResidue(t),
+		})
+	}
+	return out
 }
 
 // backfillPayload is the work item's facts field.
@@ -207,12 +234,9 @@ func planMotifBackfillWork(ctx context.Context, d Deps, sess *store.PipelineSess
 		return nil
 	}
 
-	payload := backfillPayload{Vocabulary: buildBackfillHints(ctx, d, branch, targets)}
-	for _, t := range targets {
-		payload.Facts = append(payload.Facts, backfillItem{
-			Path:    t.Path,
-			Residue: subtractionResidue(t),
-		})
+	payload := backfillPayload{
+		Facts:      backfillFactsFor(targets),
+		Vocabulary: buildBackfillHints(ctx, d, branch, targets),
 	}
 	health.Offered = len(payload.Facts)
 	health.Vocabulary = len(payload.Vocabulary)
@@ -314,14 +338,50 @@ func validateMotifBackfill(res motifBackfillResult, offered backfillPayload) err
 // A fact that has GAINED motifs since the item was rendered is skipped rather
 // than overwritten: something else — a human, an update — has answered the
 // question this item was asking, and the fresher answer wins.
-func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBackfillResult) error {
+//
+// EVERY branch binds to the version that was OFFERED. The answer is about the
+// content the agent read, and between rendering and answering an ordinary
+// learn/update can replace it — so a fact whose live version has moved is
+// skipped whole: no write, and no judgement. The edited version is a new,
+// never-judged row and returns to the backlog on its own, which is the
+// content-addressing the drain record was always supposed to rest on. The
+// "gained motifs" check above is NOT this guard and does not subsume it: an
+// edit need not add a motif.
+func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBackfillResult, offered backfillPayload) error {
+	offeredID := make(map[string]int64, len(offered.Facts))
+	for _, f := range offered.Facts {
+		offeredID[f.Path] = f.FactID
+	}
+	paths := make([]string, 0, len(res.Assignments))
+	for _, a := range res.Assignments {
+		paths = append(paths, a.Path)
+	}
+	liveID, err := d.Motifs.LiveFactIDs(ctx, branch, paths)
+	if err != nil {
+		return fmt.Errorf("motif backfill: resolve live versions: %w", err)
+	}
+
 	// "No regularity here" is an ANSWER, and it is recorded. Without the record
 	// the pass cannot tell it from "not yet asked", and re-offers the fact every
-	// session for the life of the corpus.
-	var judgedEmpty []string
+	// session for the life of the corpus. Recorded against the fact ID that was
+	// JUDGED, never against whatever is live now.
+	var judgedEmpty []int64
 	for _, a := range res.Assignments {
+		want, offeredHere := offeredID[a.Path]
+		if !offeredHere || want == 0 {
+			// Not in this item's payload, or an item planned before the id was
+			// carried. Neither is a version this pass can vouch for.
+			log.Debug().Str("path", a.Path).
+				Msg("motif backfill: assignment has no offered version to bind to; skipping")
+			continue
+		}
+		if liveID[a.Path] != want {
+			log.Debug().Str("path", a.Path).Int64("offered", want).Int64("live", liveID[a.Path]).
+				Msg("motif backfill: fact changed since the item was rendered; skipping")
+			continue
+		}
 		if len(a.Motifs) == 0 {
-			judgedEmpty = append(judgedEmpty, a.Path)
+			judgedEmpty = append(judgedEmpty, want)
 			continue
 		}
 		rec, err := d.Search.GetByPath(ctx, branch, a.Path)
@@ -355,6 +415,30 @@ func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBac
 			// fact keeps no motifs and is offered again next session, which is
 			// the same outcome as the agent having returned none.
 			log.Warn().Err(err).Str("path", a.Path).Msg("motif backfill: rejected by the write gate")
+			continue
+		}
+		// Did the SILENT half of the gate take the whole answer?
+		//
+		// SerializeFact validates and then strips subject motifs without
+		// reporting it, so an answer made entirely of subject-restatements
+		// serializes CLEANLY to a fact with no motifs. That is not the refusal
+		// case above and must not be treated like one: a refused NAME can be
+		// fixed by naming it better next time, while a subject restatement has
+		// nothing to fix — the same content, offered again with the same hints,
+		// draws the same answer forever. The agent judged this fact and only
+		// restatements came back, which is "no regularity here".
+		//
+		// Read off what the write WOULD STORE rather than re-deriving the rule:
+		// parsing SerializeFact's own output cannot drift from it, and MN4 keeps
+		// the strip defined in exactly one place.
+		stored, perr := fact.ParseFact(a.Path, content)
+		if perr == nil && len(stored.Motifs) == 0 {
+			log.Debug().Str("path", a.Path).Strs("proposed", a.Motifs).
+				Msg("motif backfill: the subject strip absorbed the whole answer; judged empty")
+			judgedEmpty = append(judgedEmpty, want)
+			// Nothing to write — the fact is unchanged. Writing anyway would
+			// mint a new version, and the judgement below would then name a
+			// version that is no longer live.
 			continue
 		}
 		if _, err := d.Facts.WriteFact(ctx, branch, a.Path, content,

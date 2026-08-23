@@ -22,7 +22,7 @@ func TestMotifDefinitions_UndefinedClustersNeedDefining(t *testing.T) {
 	require.Len(t, need, 2, "every cluster starts undefined")
 
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, need[0].ClusterKey,
-		"A component continues serving after a dependency fails, without signalling.", ""))
+		"A component continues serving after a dependency fails, without signalling.", DefinitionStamp{}))
 
 	need, err = svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestMotifDefinitions_MembershipChangeMakesADefinitionStale(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
 
 	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestMotifDefinitions_RepresentativeFlipDoesNotStaleADefinition(t *testing.T
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "atomic-write")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
 
 	repBefore, err := svc.Motifs().CanonicalID(ctx, branch, "atomic-write")
 	require.NoError(t, err)
@@ -104,8 +104,8 @@ func TestMotifDefinitions_MergedClusterKeepsAnInterimDefinition(t *testing.T) {
 	require.NoError(t, err)
 	keyB, err := svc.Motifs().ClusterKey(ctx, branch, "quiet-degradation")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", ""))
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", DefinitionStamp{}))
 
 	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
 		"silent-fallback", "quiet-degradation", "both name serving on after a dependency fails"))
@@ -141,7 +141,7 @@ func TestMotifDefinitions_MN3_TouchesNoFact(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
 
 	rec, err = svc.FactQuery().GetByPath(ctx, branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestMotifDefinitions_VanishedClusterIsNotOffered(t *testing.T) {
 
 	key, err := svc.Motifs().ClusterKey(ctx, branch, "config-drift")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key, "A generic sentence.", DefinitionStamp{}))
 
 	// The mechanism leaves the corpus.
 	writeMotifFact(t, svc, branch, "kb/alpha/two.md", []string{"silent-fallback"})
@@ -215,7 +215,8 @@ func TestMotifDefinitions_SameSessionMergeDoesNotMarkAStaleDefinitionCurrent(t *
 
 	// The definition comes back, authored for what the pass was SHOWN.
 	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch,
-		target.ClusterKey, "A sentence written for the pre-merge cluster.", target.Members))
+		target.ClusterKey, "A sentence written for the pre-merge cluster.",
+		DefinitionStamp{Members: target.Members, Known: true}))
 
 	// It must be recognised as stale, because the cluster it describes has
 	// changed underneath it.
@@ -247,8 +248,8 @@ func TestMotifDefinitions_OrphanedRowsAreRetiredOnRebuild(t *testing.T) {
 	require.NoError(t, err)
 	keyB, err := svc.Motifs().ClusterKey(ctx, branch, "quiet-degradation")
 	require.NoError(t, err)
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", ""))
-	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", ""))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyA, "Definition of A.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyB, "Definition of B.", DefinitionStamp{}))
 
 	require.NoError(t, svc.Motifs().RecordJudgeMerge(ctx, branch,
 		"silent-fallback", "quiet-degradation", "one mechanism"))
@@ -268,4 +269,81 @@ func TestMotifDefinitions_OrphanedRowsAreRetiredOnRebuild(t *testing.T) {
 	_, ok, err = svc.Motifs().Definition(ctx, branch, survivor)
 	require.NoError(t, err)
 	require.True(t, ok, "...while the survivor keeps its interim definition, as ruled")
+}
+
+// m2. An UNRESOLVED cluster genuinely has no recorded membership, and a caller
+// that carries that answer must have it stamped as given.
+//
+// The empty string used to mean "I have nothing, read the current membership",
+// so a pass holding a real-but-empty membership silently got read-at-write-time
+// — the exact behaviour the stamp was introduced to remove, reappearing for the
+// corpora least able to afford it (alias table unbuilt, or the Plan rebuild
+// failed and was logged-and-continued).
+//
+// The two cases must produce DIFFERENT results here, or the test is not about
+// the distinction: current membership is non-empty, so stamping "" leaves the
+// definition stale and re-queued, while re-reading marks it current forever.
+func TestMotifDefinitions_AnEmptyMembershipIsAnAnswerWhenTheCallerSaysSo(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"silent-fallbacks"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+
+	// The precondition that makes the two cases distinguishable.
+	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
+	require.NoError(t, err)
+	var target DefinitionTarget
+	for _, c := range need {
+		if c.ClusterKey == key {
+			target = c
+		}
+	}
+	require.NotEmpty(t, target.Members,
+		"precondition: this cluster's CURRENT membership is non-empty, so an empty "+
+			"stamp and a re-read cannot coincide")
+
+	// The caller's answer is "no membership", and it means it.
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key,
+		"A component keeps serving after a dependency fails.",
+		DefinitionStamp{Members: "", Known: true}))
+
+	need, err = svc.Motifs().ClustersNeedingDefinition(ctx, branch)
+	require.NoError(t, err)
+	var queued bool
+	for _, c := range need {
+		if c.ClusterKey == key {
+			queued = true
+		}
+	}
+	require.True(t, queued,
+		"a definition stamped with an EMPTY membership must read as stale against a "+
+			"non-empty one. If the empty stamp were quietly replaced by current "+
+			"membership, this cluster would be marked current and never refreshed")
+}
+
+// The other half: a caller with nothing to say still gets current membership,
+// which is what keeps a definition written outside a pass from being born stale.
+func TestMotifDefinitions_NoStampReadsCurrentMembership(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"silent-fallbacks"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	key, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, key,
+		"A component keeps serving after a dependency fails.", DefinitionStamp{}))
+
+	need, err := svc.Motifs().ClustersNeedingDefinition(ctx, branch)
+	require.NoError(t, err)
+	for _, c := range need {
+		require.NotEqualf(t, key, c.ClusterKey,
+			"a definition written with no stamp is recorded against the membership it "+
+				"was written over, so it is current until that membership moves")
+	}
 }

@@ -48,14 +48,23 @@ type motifDefineItem struct {
 	// would wobble downstream operating points. Blindness to CARRIERS is
 	// preserved either way, which is the property that matters.
 	Current string `json:"current,omitempty"`
-	// clusterKey is not sent to the model — it is how the response is routed
-	// back to a cluster whose representative may have flipped meanwhile.
+	// clusterKey routes the response back to a cluster whose representative may
+	// have flipped meanwhile. It is not one of the fields the prompt asks the
+	// model to reason about — though since C2 the whole payload IS served, so
+	// the model does see it. (An earlier comment here said it was not sent at
+	// all; that was true only while the renderers shipped no payload.)
 	clusterKey string
-	// members is the cluster's membership when this item was PLANNED. Not sent
-	// to the model either; it is what the stored definition is stamped with, so
-	// a judge merge applied later in the same session cannot mark a pre-merge
-	// definition as current for a post-merge cluster.
+	// members is the cluster's membership when this item was PLANNED. Like
+	// clusterKey it rides the served payload; it is what
+	// the stored definition is stamped with, so a judge merge applied later in
+	// the same session cannot mark a pre-merge definition as current for a
+	// post-merge cluster.
 	members string
+	// membersKnown says members came from a DefinitionTarget. An unresolved
+	// cluster legitimately HAS no members, and an empty string cannot tell that
+	// apart from an item planned before this field existed — which is the
+	// conflation that silently reverted the stamp to read-at-write-time.
+	membersKnown bool
 }
 
 const motifDefineResponseSchema = `{
@@ -134,10 +143,19 @@ func validateMotifDefinitions(res motifDefineResult, offered []motifDefineItem) 
 // canonical_id does — and storing by name would then write the sentence
 // against a cluster nobody asked about.
 func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motifDefineResult, offered []motifDefineItem) error {
-	type route struct{ key, members string }
+	type route struct {
+		key   string
+		stamp store.DefinitionStamp
+	}
 	keyByName := make(map[string]route, len(offered))
 	for _, it := range offered {
-		keyByName[it.Name] = route{key: it.clusterKey, members: it.members}
+		keyByName[it.Name] = route{
+			key: it.clusterKey,
+			// Known tracks whether THIS ITEM carried a membership, so an item
+			// planned by a build that did not yet stamp one falls back to
+			// reading current membership instead of stamping a false empty.
+			stamp: store.DefinitionStamp{Members: it.members, Known: it.membersKnown},
+		}
 	}
 	for _, def := range res.Definitions {
 		text := strings.TrimSpace(def.Definition)
@@ -152,7 +170,7 @@ func applyMotifDefinitions(ctx context.Context, d Deps, branch string, res motif
 		if r.key == "" {
 			continue // validated above; belt and braces
 		}
-		if err := d.Motifs.PutDefinition(ctx, branch, r.key, text, r.members); err != nil {
+		if err := d.Motifs.PutDefinition(ctx, branch, r.key, text, r.stamp); err != nil {
 			log.Warn().Err(err).Str("motif", def.Name).
 				Msg("motif define: definition not stored; the cluster stays queued")
 		}
@@ -223,6 +241,9 @@ func planMotifDefineWork(ctx context.Context, d Deps, sess *store.PipelineSessio
 			Current:    t.Interim,
 			clusterKey: t.ClusterKey,
 			members:    t.Members,
+			// Every target came from ClustersNeedingDefinition, which always
+			// carries the membership it selected against — empty included.
+			membersKnown: true,
 		})
 	}
 	health.Offered = len(items)
@@ -239,8 +260,12 @@ func planMotifDefineWork(ctx context.Context, d Deps, sess *store.PipelineSessio
 	})
 }
 
-// motifDefinePayloadEntry is the on-the-wire form, carrying the cluster key
-// alongside the model-visible fields so the answer can be routed back.
+// motifDefinePayloadEntry is the on-the-wire form, carrying the routing fields
+// alongside the ones the prompt asks about.
+//
+// "On-the-wire" is literal: this payload is the work item's facts field, which
+// since C2 is served to the model verbatim. The routing fields are not secret,
+// they are simply not what the definer is asked to reason about.
 //
 // The key is a separate exported field rather than an unexported one on
 // motifDefineItem because the payload round-trips through the work item's
@@ -255,6 +280,10 @@ type motifDefinePayloadEntry struct {
 	// unexported field would marshal away, and the stamp would silently fall
 	// back to current membership — the exact race this carries it to avoid.
 	Members string `json:"members"`
+	// MembersKnown rides the payload so the distinction survives the work
+	// item's JSON. Without it, an item planned by an older build and an item
+	// for an unresolved cluster decode identically.
+	MembersKnown bool `json:"members_known"`
 }
 
 func motifDefinePayload(items []motifDefineItem) []motifDefinePayloadEntry {
@@ -263,6 +292,7 @@ func motifDefinePayload(items []motifDefineItem) []motifDefinePayloadEntry {
 		out[i] = motifDefinePayloadEntry{
 			Name: it.Name, Current: it.Current,
 			ClusterKey: it.clusterKey, Members: it.members,
+			MembersKnown: it.membersKnown,
 		}
 	}
 	return out
@@ -278,6 +308,7 @@ func motifDefineItemsFromPayload(raw string) ([]motifDefineItem, error) {
 		out[i] = motifDefineItem{
 			Name: e.Name, Current: e.Current,
 			clusterKey: e.ClusterKey, members: e.Members,
+			membersKnown: e.MembersKnown,
 		}
 	}
 	return out, nil

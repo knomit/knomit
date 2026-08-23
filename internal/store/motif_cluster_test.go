@@ -151,10 +151,30 @@ func TestMotifClusters_CarrierTitlesAreMostRecentFirst(t *testing.T) {
 func TestMotifClusters_UnresolvedCorpusReadsTheSameEverywhere(t *testing.T) {
 	svc, branch := motifEnv(t)
 	ctx := context.Background()
+	// TWO SPELLINGS OF ONE MECHANISM, plus an unrelated third.
+	//
+	// The earlier fixture used "silent-fallback" twice and "config-drift" once:
+	// three motifs, no two of which could possibly group together. Clusters and
+	// VocabularyHealth were then compared on a corpus where the thing they
+	// disagree about — COLLAPSING two spellings — could not arise, so the
+	// comparison passed while the two APIs genuinely differed (Clusters split
+	// them and claimed one key for both rows; health counted one). A fixture
+	// where the values a test must distinguish coincide tests nothing about the
+	// distinction.
 	writeMotifFact(t, svc, branch, "kb/a.md", []string{"silent-fallback"})
-	writeMotifFact(t, svc, branch, "kb/b.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/b.md", []string{"silent-fallbacks"})
 	writeMotifFact(t, svc, branch, "kb/c.md", []string{"config-drift"})
-	// Deliberately NO RebuildAliases: this is the pre-first-session state.
+	// Deliberately NO RebuildAliases: this is the pre-first-session state, and
+	// also the state of any corpus with a fact written since the last rebuild.
+
+	// The precondition the fixture rests on, asserted rather than assumed: the
+	// two spellings DIFFER and share a grouping key. A fixture that can
+	// degenerate silently, will.
+	require.NotEqual(t, "silent-fallback", "silent-fallbacks")
+	require.Equal(t, groupingKey("silent-fallback"), groupingKey("silent-fallbacks"),
+		"the fixture only exercises collapsing if the two spellings group together")
+	require.NotEqual(t, groupingKey("silent-fallback"), groupingKey("config-drift"),
+		"...and only exercises separation if the third does not")
 
 	table, err := svc.Motifs().AliasTable(ctx, branch)
 	require.NoError(t, err)
@@ -163,23 +183,68 @@ func TestMotifClusters_UnresolvedCorpusReadsTheSameEverywhere(t *testing.T) {
 	clusters, err := svc.Motifs().Clusters(ctx, branch)
 	require.NoError(t, err)
 	require.Len(t, clusters, 2,
-		"an unresolved corpus still HAS a vocabulary — two distinct motifs, each its "+
-			"own singleton — and reporting none is a claim about the corpus that is false")
+		"an unresolved corpus still HAS a vocabulary — one mechanism spelled two ways "+
+			"plus one other — and reporting none is a claim about the corpus that is false")
 
-	// df agrees with what TokenDF reports for the same name.
+	// Every cluster key is distinct. Two rows sharing a key is the specific
+	// shape of the bug: it means the grouping happened after the key did.
+	keys := map[string]bool{}
 	for _, c := range clusters {
-		df, err := svc.Search().TokenDF(ctx, branch, c.CanonicalID, "motif")
-		require.NoError(t, err)
-		require.Equalf(t, df, c.DF,
-			"Clusters and TokenDF must not disagree about %q on an unresolved corpus",
-			c.CanonicalID)
+		require.Falsef(t, keys[c.ClusterKey],
+			"two clusters share the key %q — they are one cluster reported twice",
+			c.ClusterKey)
+		keys[c.ClusterKey] = true
 	}
 
-	// Health sees the same vocabulary.
+	// The collapsed cluster carries BOTH spellings and counts BOTH carriers.
+	var collapsed MotifCluster
+	for _, c := range clusters {
+		if len(c.Members) > 1 {
+			collapsed = c
+		}
+	}
+	require.Equal(t, []string{"silent-fallback", "silent-fallbacks"}, collapsed.Members,
+		"two spellings of one mechanism are one cluster, resolved or not — this is the "+
+			"answer the next rebuild will give, and a reader should not see a different "+
+			"one merely because no session has run yet")
+	require.Equal(t, 2, collapsed.DF, "and its df spans both carriers")
+
+	// Health sees the same vocabulary, because it computes the same key.
 	vh, err := svc.Motifs().VocabularyHealth(ctx, branch)
 	require.NoError(t, err)
-	require.Equal(t, len(clusters), vh.Clusters)
-	require.Equal(t, 1, vh.Recurring, "silent-fallback has two carriers even unresolved")
+	require.Equal(t, len(clusters), vh.Clusters,
+		"Clusters and VocabularyHealth must agree on how many mechanisms this corpus has")
+	require.Equal(t, 1, vh.Recurring, "the collapsed cluster has two carriers even unresolved")
+
+	// TokenDF DELIBERATELY DISAGREES here, and is pinned so the divergence is a
+	// recorded position rather than an accident nobody tested.
+	//
+	// It matches on canonical id, so an unresolved spelling counts only itself:
+	// df 1 per spelling where the cluster readers say 2. Both readings are
+	// defensible and they differ only between a fact being written and the next
+	// rebuild. The earlier version of THIS test asserted Clusters == TokenDF for
+	// every cluster and passed — because its fixture used one spelling twice, so
+	// nothing could ever collapse and the two could not be caught disagreeing.
+	// Which of the two postures is right is a designer call; that it is asserted
+	// on both sides is not.
+	df, err := svc.Search().TokenDF(ctx, branch, "silent-fallback", "motif")
+	require.NoError(t, err)
+	require.Equal(t, 1, df,
+		"TokenDF's documented unresolved posture: a spelling with no alias row matches "+
+			"only itself (see TestTokenDF_Motif_UnresolvedCorpusBehavesAsBefore). If this "+
+			"is ever changed to match the cluster readers, change it deliberately")
+
+	// On a RESOLVED corpus — the steady state — every reader agrees.
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+	resolved, err := svc.Motifs().Clusters(ctx, branch)
+	require.NoError(t, err)
+	require.Len(t, resolved, 2, "the rebuild reproduces the same two clusters")
+	for _, c := range resolved {
+		rdf, err := svc.Search().TokenDF(ctx, branch, c.CanonicalID, "motif")
+		require.NoError(t, err)
+		require.Equalf(t, rdf, c.DF,
+			"once resolved, Clusters and TokenDF must not disagree about %q", c.CanonicalID)
+	}
 
 	// And carriers resolve for a singleton key.
 	var target MotifCluster

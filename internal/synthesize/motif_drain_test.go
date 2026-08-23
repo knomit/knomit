@@ -45,7 +45,7 @@ func TestMotifDrain_EmptyJudgmentIsNotReOffered(t *testing.T) {
 	// reach — a distinction the next test pins down.
 	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: nil}},
-	}))
+	}, offeredBackfillForTest(t, ctx, env)))
 
 	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
 	require.NoError(t, err)
@@ -93,7 +93,7 @@ func TestMotifDrain_QuietCorpusDrainsThenGoesSilent(t *testing.T) {
 			// leave no trace at all.
 			res.Assignments = append(res.Assignments, motifAssignment{Path: tgt.Path})
 		}
-		require.NoError(t, applyMotifBackfill(ctx, d, env.branch, res))
+		require.NoError(t, applyMotifBackfill(ctx, d, env.branch, res, offeredBackfillForTest(t, ctx, env)))
 	}
 	require.Len(t, judged, total, "every fact must have been reached")
 	require.Equal(t, 3, sessions, "a %d-fact backlog at %d per session is three sessions",
@@ -126,7 +126,7 @@ func TestMotifDrain_EditedFactReturnsToBacklog(t *testing.T) {
 
 	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md"}},
-	}))
+	}, offeredBackfillForTest(t, ctx, env)))
 	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
 	require.NoError(t, err)
 	require.NotContains(t, backfillPaths(after), "kb/a.md", "precondition: it is judged")
@@ -158,7 +158,7 @@ func TestMotifDrain_RefusedAssignmentIsReOffered(t *testing.T) {
 	const tooLong = "instrument-fault-reads-as-signal"
 	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: []string{tooLong}}},
-	}))
+	}, offeredBackfillForTest(t, ctx, env)))
 
 	rec, err := env.svc.Search().GetByPath(ctx, env.branch, "kb/a.md")
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestMotifDrain_UnansweredFactIsReOffered(t *testing.T) {
 
 	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md"}},
-	}))
+	}, offeredBackfillForTest(t, ctx, env)))
 
 	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
 	require.NoError(t, err)
@@ -201,7 +201,7 @@ func TestMotifDrain_AssignedFactLeavesTheBacklogByItsMotif(t *testing.T) {
 
 	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: []string{"silent-fallback"}}},
-	}))
+	}, offeredBackfillForTest(t, ctx, env)))
 	rec, err := env.svc.Search().GetByPath(ctx, env.branch, "kb/a.md")
 	require.NoError(t, err)
 	require.NotEmpty(t, rec.Motifs, "precondition: the motif landed")
@@ -217,4 +217,140 @@ func backfillPaths(targets []store.BackfillTarget) []string {
 		out = append(out, t.Path)
 	}
 	return out
+}
+
+// ── The judgement binds to the version that was judged ───────────────────────
+
+// M-A. A judgement is about CONTENT. The pass offers a fact, an agent answers
+// about what it was shown, and between those two moments an ordinary
+// knomit_learn/update can rewrite the fact.
+//
+// Resolving the path to whatever is live AT APPLY TIME stamps a verdict on
+// content nobody read — and because the stamp is what removes a fact from the
+// backlog, the new claim is then permanently silent. The offered fact id is
+// carried through the payload for the same reason the define pass carries its
+// cluster key: it is how an answer is routed back to the thing it was about.
+func TestMotifDrain_EmptyJudgementBindsToTheVersionThatWasJudged(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	env.writeFact("kb/a.md", "Alpha", "the body the agent was shown")
+	d := env.deps()
+
+	offered := offeredBackfillForTest(t, ctx, env)
+	require.Len(t, offered.Facts, 1)
+	require.NotZero(t, offered.Facts[0].FactID, "the payload must carry the offered version's id")
+
+	// Between render and apply, a learn/update rewrites the fact.
+	env.writeFact("kb/a.md", "Alpha", "a materially different claim the agent never saw")
+
+	// The agent's answer about the OLD content arrives.
+	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+		Assignments: []motifAssignment{{Path: "kb/a.md"}},
+	}, offered))
+
+	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
+	require.NoError(t, err)
+	require.Contains(t, backfillPaths(after), "kb/a.md",
+		"the fact was edited after it was offered, so the agent's 'none apply' is about "+
+			"content that no longer exists. Stamping the CURRENT version buries a claim "+
+			"nobody judged — the exact failure the content-addressing was supposed to prevent")
+}
+
+// The same rule on the POSITIVE branch. Motifs chosen for one claim must not be
+// written onto a different one; the existing guard only skips a fact that has
+// GAINED motifs, which an edit need not do.
+func TestMotifDrain_AssignmentBindsToTheVersionThatWasJudged(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	env.writeFact("kb/a.md", "Alpha", "the body the agent was shown")
+	d := env.deps()
+
+	offered := offeredBackfillForTest(t, ctx, env)
+	env.writeFact("kb/a.md", "Alpha", "a materially different claim the agent never saw")
+
+	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: []string{"silent-fallback"}}},
+	}, offered))
+
+	rec, err := env.svc.Search().GetByPath(ctx, env.branch, "kb/a.md")
+	require.NoError(t, err)
+	require.Empty(t, rec.Motifs,
+		"a motif named for the previous claim must not be written onto the new one")
+
+	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
+	require.NoError(t, err)
+	require.Contains(t, backfillPaths(after), "kb/a.md",
+		"and the new version returns to the backlog, never having been judged")
+}
+
+// ── A fully-stripped answer is a judgement ───────────────────────────────────
+
+// M-B. The subject strip is SILENT by contract: a motif that merely renames its
+// fact's subject is dropped without telling anyone. When it absorbs the agent's
+// ENTIRE answer, the fact ends the pass with no motif and — before this — no
+// record, so it came back next session with identical content, identical hints,
+// and every reason to draw the identical answer. A permanent slot occupant.
+//
+// The agent DID judge it. Only subject-restatements came back, which is "no
+// regularity here" in every sense that matters to the backlog.
+func TestMotifDrain_FullyStrippedAssignmentIsAJudgement(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	// The path IS the subject, so "silent-fallback" restates it and the strip
+	// takes the whole answer. It passes the shape gate — this is not a refusal.
+	env.writeFact("kb/silent/fallback.md", "Alpha", "body alpha")
+	d := env.deps()
+
+	offered := offeredBackfillForTest(t, ctx, env)
+	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+		Assignments: []motifAssignment{{Path: "kb/silent/fallback.md", Motifs: []string{"silent-fallback"}}},
+	}, offered))
+
+	rec, err := env.svc.Search().GetByPath(ctx, env.branch, "kb/silent/fallback.md")
+	require.NoError(t, err)
+	require.Empty(t, rec.Motifs, "precondition: the subject strip absorbed the whole answer")
+
+	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
+	require.NoError(t, err)
+	require.NotContains(t, backfillPaths(after), "kb/silent/fallback.md",
+		"an answer the subject strip absorbed entirely is still an ANSWER. Re-offering it "+
+			"asks the same question of the same content and gets the same reply forever, "+
+			"which is the standing-job pathology the drain exists to end")
+}
+
+// The distinction that keeps M-B honest: a PARTIAL strip is not a judgement of
+// emptiness, because something survived and the fact leaves by carrying it.
+func TestMotifDrain_PartiallyStrippedAssignmentKeepsWhatSurvived(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, 0)
+	env.writeFact("kb/silent/fallback.md", "Alpha", "body alpha")
+	d := env.deps()
+
+	offered := offeredBackfillForTest(t, ctx, env)
+	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+		Assignments: []motifAssignment{{
+			Path:   "kb/silent/fallback.md",
+			Motifs: []string{"silent-fallback", "unbounded-retry"},
+		}},
+	}, offered))
+
+	rec, err := env.svc.Search().GetByPath(ctx, env.branch, "kb/silent/fallback.md")
+	require.NoError(t, err)
+	require.Equal(t, []string{"unbounded-retry"}, rec.Motifs,
+		"the subject restatement is stripped and the real regularity is kept")
+
+	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
+	require.NoError(t, err)
+	require.NotContains(t, backfillPaths(after), "kb/silent/fallback.md",
+		"and it leaves the backlog by CARRYING a motif, not by being judged empty")
+}
+
+// offeredBackfillForTest builds the payload the pass would have been planned
+// with, through the same construction planMotifBackfillWork uses — so a test
+// cannot drift from what production actually offers.
+func offeredBackfillForTest(t *testing.T, ctx context.Context, env *restatementEnv) backfillPayload {
+	t.Helper()
+	targets, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
+	require.NoError(t, err)
+	return backfillPayload{Facts: backfillFactsFor(targets)}
 }

@@ -70,6 +70,51 @@ func groupingKey(motif string) string {
 	return strings.Join(stemmed, "-")
 }
 
+// motifClusterKeyExpr renders the ONE SQL expression that keys a motif
+// spelling to its cluster, for the readers that must agree with each other.
+//
+// Three steps, and each is a posture decision rather than defensiveness:
+//   - the STORED key, when the vocabulary has been resolved;
+//   - else the key a rebuild WOULD compute (knomit_motif_key is groupingKey),
+//     so a corpus with facts written since the last rebuild reads the way it
+//     will read a moment later rather than a different way in the meantime;
+//   - else the spelling itself, for a motif whose every token normalizes away.
+//     Those have no mechanical cluster to join, and letting them share the
+//     empty key would fuse unrelated motifs into one; RebuildAliases makes the
+//     same call by skipping them.
+//
+// Shared as TEXT because the alternative is three hand-written COALESCEs that
+// agree until one of them is edited. The caller supplies the motif column
+// (queries name it differently) and must alias motif_aliases as `a`.
+func motifClusterKeyExpr(motifCol string) string {
+	return `COALESCE(NULLIF(a.cluster_key, ''), NULLIF(knomit_motif_key(` + motifCol + `), ''), ` + motifCol + `)`
+}
+
+// electCanonical picks a cluster's DISPLAYED representative: the highest-df
+// member spelling, ties broken lexicographically.
+//
+// One definition, two callers, deliberately. RebuildAliases elects the
+// representative it STORES, and Clusters must elect the same one for a cluster
+// the alias table does not cover yet — otherwise an unresolved corpus is named
+// one way by the reader and another way by the next rebuild. Two functions that
+// happen to agree today would drift; sharing the derivation is what makes them
+// agree by construction (the reasoning invariant 7a6af15e states).
+//
+// Deterministic on ties, so a rebuild on an unchanged corpus reproduces its
+// previous answer exactly.
+func electCanonical(members []spelling) string {
+	if len(members) == 0 {
+		return ""
+	}
+	best := members[0]
+	for _, m := range members[1:] {
+		if m.df > best.df || (m.df == best.df && m.name < best.name) {
+			best = m
+		}
+	}
+	return best.name
+}
+
 // RebuildAliases recomputes the mechanical alias layer for branch from the
 // live corpus, replacing whatever was there.
 //
@@ -166,13 +211,7 @@ func (mi *motifIndex) RebuildAliases(ctx context.Context, branch string) error {
 	type assignment struct{ canonical, clusterKey string }
 	assignments := make(map[string]assignment, len(vocab))
 	for key, members := range groups {
-		sort.Slice(members, func(i, j int) bool {
-			if members[i].df != members[j].df {
-				return members[i].df > members[j].df
-			}
-			return members[i].name < members[j].name
-		})
-		rep := members[0].name
+		rep := electCanonical(members)
 		for _, m := range members {
 			assignments[m.name] = assignment{canonical: rep, clusterKey: key}
 		}
@@ -660,44 +699,95 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 	// transient bootstrap state, never a fact about the corpus — and the
 	// singleton reading is what a rebuild would produce for a corpus with no
 	// aliasing anyway.
+	//
+	// The KEY IS COMPUTED IN SQL, via knomit_motif_key, and that is the whole
+	// point rather than a detail. Grouping on the stored key and repairing the
+	// blank afterwards in Go put the repair AFTER the GROUP BY, so two
+	// unresolved spellings of one mechanism came back as two rows that then
+	// claimed the SAME cluster key — while VocabularyHealth, which keys inside
+	// its query, reported them as one. Same corpus, two vocabularies, which is
+	// exactly what "one posture" was supposed to end. Any corpus with facts
+	// written since the last rebuild is in this state.
+	//
+	// The three-step COALESCE is the singleton rule spelled out: the stored key
+	// if the vocabulary is resolved, else the key a rebuild would compute, else
+	// — for a motif whose every token normalizes away — the spelling itself, so
+	// such motifs stay separate singletons instead of collapsing into one
+	// bogus empty-key group. RebuildAliases makes the same choice by skipping
+	// them.
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
 		WITH resolved AS (
-		  SELECT bf.path,
-		         m.motif,
-		         COALESCE(a.cluster_key, '') AS cluster_key,
-		         COALESCE(a.canonical_id, m.motif) AS canonical_id
+		  SELECT bf.path AS path,
+		         m.motif AS motif,
+		         `+motifClusterKeyExpr("m.motif")+` AS cluster_key,
+		         a.canonical_id AS canonical_id
 		    FROM branch_facts bf
 		    JOIN fact_motifs m ON m.fact_id = bf.fact_id
 		    LEFT JOIN motif_aliases a
 		           ON a.branch_id = bf.branch_id AND a.motif = m.motif
 		   WHERE bf.branch_id = ?
+		),
+		per_motif AS (
+		  SELECT cluster_key, motif,
+		         COUNT(DISTINCT path) AS motif_df,
+		         MAX(canonical_id) AS canonical_id
+		    FROM resolved GROUP BY cluster_key, motif
+		),
+		per_cluster AS (
+		  SELECT cluster_key, COUNT(DISTINCT path) AS cluster_df
+		    FROM resolved GROUP BY cluster_key
 		)
-		SELECT cluster_key, canonical_id,
-		       GROUP_CONCAT(DISTINCT motif),
-		       COUNT(DISTINCT path)
-		  FROM resolved
-		 GROUP BY cluster_key, canonical_id`, branchID)
+		SELECT pm.cluster_key, pm.motif, pm.motif_df,
+		       COALESCE(pm.canonical_id, ''), pc.cluster_df
+		  FROM per_motif pm
+		  JOIN per_cluster pc ON pc.cluster_key = pm.cluster_key`, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("Clusters: %w", err)
 	}
 	defer rows.Close()
-	var out []MotifCluster
+	// Assembled per cluster in Go, because the representative is ELECTED and
+	// the election has a tiebreak SQL would have to reproduce. electCanonical
+	// is the same function RebuildAliases uses, so an unresolved cluster is
+	// named here exactly as the next rebuild will name it.
+	type acc struct {
+		members []spelling
+		stored  string // canonical_id from the alias table, when resolved
+		df      int
+	}
+	byKey := map[string]*acc{}
+	var order []string
 	for rows.Next() {
-		var c MotifCluster
-		var members string
-		if err := rows.Scan(&c.ClusterKey, &c.CanonicalID, &members, &c.DF); err != nil {
+		var key, motif, stored string
+		var motifDF, clusterDF int
+		if err := rows.Scan(&key, &motif, &motifDF, &stored, &clusterDF); err != nil {
 			return nil, fmt.Errorf("Clusters: scan: %w", err)
 		}
-		if c.ClusterKey == "" {
-			// Unresolved: its own singleton, keyed the way a rebuild would key it.
-			c.ClusterKey = groupingKey(c.CanonicalID)
+		a, seen := byKey[key]
+		if !seen {
+			a = &acc{df: clusterDF}
+			byKey[key] = a
+			order = append(order, key)
 		}
-		c.Members = strings.Split(members, ",")
-		sort.Strings(c.Members)
-		out = append(out, c)
+		a.members = append(a.members, spelling{name: motif, df: motifDF})
+		if stored != "" {
+			a.stored = stored
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	out := make([]MotifCluster, 0, len(order))
+	for _, key := range order {
+		a := byKey[key]
+		c := MotifCluster{ClusterKey: key, CanonicalID: a.stored, DF: a.df}
+		if c.CanonicalID == "" {
+			c.CanonicalID = electCanonical(a.members)
+		}
+		for _, m := range a.members {
+			c.Members = append(c.Members, m.name)
+		}
+		sort.Strings(c.Members)
+		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].DF != out[j].DF {

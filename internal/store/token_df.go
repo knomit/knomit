@@ -66,6 +66,18 @@ func (gs *graphStore) TokenDF(ctx context.Context, branch, token, kind string) (
 	// matches only itself. An INNER JOIN here would silently return 0 for
 	// every motif until the first RebuildAliases, which is the kind of
 	// zero that reads as "no carriers" rather than "not resolved yet".
+	//
+	// OPEN QUESTION, raised by the 2026-08-23 review remediation and NOT
+	// resolved here. This matches on canonical id, so on an UNRESOLVED corpus
+	// two spellings of one mechanism each report df 1, while Clusters and
+	// VocabularyHealth — which key by cluster (motifClusterKeyExpr) — report
+	// one cluster with df 2. Both readings are defensible: this one is "a
+	// spelling nothing has resolved is its own cluster" and is pinned by
+	// TestTokenDF_Motif_UnresolvedCorpusBehavesAsBefore; theirs is "read it the
+	// way the next rebuild will". They disagree only in the window between a
+	// fact being written and the next session's rebuild. Changing this one is a
+	// contract change with an explicit test asserting the current answer, so it
+	// is the designer's call, not a remediation's.
 	q := fmt.Sprintf(
 		`SELECT COUNT(DISTINCT bf.path)
 		   FROM branch_facts bf

@@ -150,7 +150,7 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 
 	key, err := env.svc.Motifs().ClusterKey(ctx, env.branch, "silent-fallback")
 	require.NoError(t, err)
-	require.NoError(t, env.svc.Motifs().PutDefinition(ctx, env.branch, key, "A generic sentence.", ""))
+	require.NoError(t, env.svc.Motifs().PutDefinition(ctx, env.branch, key, "A generic sentence.", store.DefinitionStamp{}))
 
 	// Sessions 2 and 3: unrelated corpus growth. The definition must stay off
 	// the queue.
@@ -221,7 +221,7 @@ func TestPhase2Dynamics_BackfillCoverageClosesOverSessions(t *testing.T) {
 			})
 		}
 		_ = offered
-		require.NoError(t, applyMotifBackfill(ctx, d, env.branch, res))
+		require.NoError(t, applyMotifBackfill(ctx, d, env.branch, res, offeredBackfillForTest(t, ctx, env)))
 		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 	}
 
@@ -258,7 +258,7 @@ func TestPhase2Dynamics_AuthoredMotifSurvivesLaterSessions(t *testing.T) {
 			Assignments: []motifAssignment{
 				{Path: "kb/authored.md", Motifs: []string{"config-drift"}},
 			},
-		}))
+		}, offeredBackfillForTest(t, ctx, env)))
 		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 	}
 

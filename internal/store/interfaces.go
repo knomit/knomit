@@ -297,8 +297,9 @@ type MotifIndex interface {
 	// PutDefinition stores a definition, stamped with the membership it was
 	// AUTHORED AGAINST — carried from the DefinitionTarget, not read at write
 	// time, so a merge applied between planning and applying cannot mark a
-	// pre-merge definition current. Empty members re-reads current membership.
-	PutDefinition(ctx context.Context, branch, clusterKey, definition, members string) error
+	// pre-merge definition current. See DefinitionStamp for why the "I have no
+	// membership" case is a flag rather than an empty string.
+	PutDefinition(ctx context.Context, branch, clusterKey, definition string, stamp DefinitionStamp) error
 	// Definition returns a cluster's standing definition, INCLUDING a stale one
 	// — a stale sentence is used as interim rather than gapping the cluster.
 	Definition(ctx context.Context, branch, clusterKey string) (string, bool, error)
@@ -308,12 +309,25 @@ type MotifIndex interface {
 	// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
 	// oldest first, for the backfill pass.
 	LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error)
-	// RecordBackfillJudgedEmpty records that backfill asked about these facts
-	// and the answer was "no regularity here" — the negative judgement, which
-	// is what makes the pass a one-time drain rather than a standing job. A
-	// motif the write gate REFUSED is not this, and neither is silence about an
-	// offered fact; both must come back.
-	RecordBackfillJudgedEmpty(ctx context.Context, branch string, paths []string) error
+	// RecordBackfillJudgedEmpty records that backfill asked about these FACT
+	// VERSIONS and the answer was "no regularity here" — the negative
+	// judgement, which is what makes the pass a one-time drain rather than a
+	// standing job. A motif the write gate REFUSED is not this, and neither is
+	// silence about an offered fact; both must come back.
+	//
+	// Takes fact IDS, not paths. A judgement is about CONTENT, and the caller
+	// is the only layer that knows which version its agent was shown — see
+	// LiveFactIDs.
+	RecordBackfillJudgedEmpty(ctx context.Context, branch string, factIDs []int64) error
+	// LiveFactIDs resolves paths to the fact ids the branch currently points
+	// at, so a pass can tell whether the version it is about to act on is
+	// still the version it was handed.
+	//
+	// Deliberately NOT AbstractionIndex.FactIDsByPath, which filters
+	// f.kind = 'epistemic': backfill's targets are every AUTHORED live fact,
+	// so reusing that query would silently skip every pragmatic one and the
+	// staleness guard would read "vanished" for a fact that is right there.
+	LiveFactIDs(ctx context.Context, branch string, paths []string) (map[string]int64, error)
 	// MotifCoverage reports how many live authored facts carry a motif.
 	MotifCoverage(ctx context.Context, branch string) (with, total int, err error)
 	// AliasRows returns the alias table with its audit columns (method and the

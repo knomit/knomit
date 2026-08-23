@@ -158,7 +158,7 @@ func TestBackfillApply_SubjectMotifIsStrippedByTheOneGate(t *testing.T) {
 	res := motifBackfillResult{Assignments: []motifAssignment{
 		{Path: "kb/alpha/one.md", Motifs: []string{"widget-alpha", "silent-fallback"}},
 	}}
-	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, res))
+	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, res, offeredBackfillForTest(t, ctx, env)))
 
 	rec, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestBackfillApply_SkipsAFactThatGainedMotifsMeanwhile(t *testing.T) {
 	res := motifBackfillResult{Assignments: []motifAssignment{
 		{Path: "kb/alpha/one.md", Motifs: []string{"silent-fallback"}},
 	}}
-	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, res))
+	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, res, offeredBackfillForTest(t, ctx, env)))
 
 	rec, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -197,7 +197,7 @@ func TestBackfillApply_EmptyAssignmentWritesNothing(t *testing.T) {
 
 	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/alpha/one.md", Motifs: []string{}}},
-	}))
+	}, offeredBackfillForTest(t, ctx, env)))
 
 	after, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -308,7 +308,7 @@ func TestBackfillApply_PreservesEveryOtherField(t *testing.T) {
 		Assignments: []motifAssignment{
 			{Path: "kb/alpha/one.md", Motifs: []string{"silent-fallback"}},
 		},
-	}))
+	}, offeredBackfillForTest(t, ctx, env)))
 
 	after, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/alpha/one.md")
 	require.NoError(t, err)
