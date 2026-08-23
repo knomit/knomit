@@ -207,10 +207,21 @@ var mechanicsPaths = map[string][]string{
 	// What no entry here licenses: a motif term reaching dedup, clustering or
 	// search ranking. Those files stay nil below and this list does not touch
 	// them.
-	// mergeToken2Groups is deliberately NOT listed: its body names no motif
-	// identifier (it folds groups keyed by canonical id, using the shared
-	// tokeniser), and this list rejects a permission nothing uses.
-	"internal/synthesize/bridge_motif.go": {"enumerateMotifCandidates"},
+	// mergeToken2Groups, laneOf, scoreMotifCandidate and rankAndCap are
+	// deliberately NOT listed: their bodies name no motif identifier (they work
+	// on canonical ids, paths and scores), and this list rejects a permission
+	// nothing uses.
+	//
+	// Of the two listed, enumerateMotifCandidates reads members' motifs to
+	// GROUP them and sharedMotifSpecificity reads them to SCORE the group it
+	// was already given — both inside the §4/§5 cascade, neither reachable from
+	// dedup, clustering or search ranking.
+	// buildMotifBridges is the §4/§5 entry point: it reads the seed pool's
+	// motifs to decide whether the axis does anything at all, then drives
+	// enumeration, the lane split and the per-lane budgets.
+	"internal/synthesize/bridge_motif.go": {
+		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
+	},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
 	// names motifs only in describing what it gates. Listed with no permitted
