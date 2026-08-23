@@ -496,3 +496,69 @@ func TestApplyReinforcements_DoesNotRewriteExistingRefs(t *testing.T) {
 		"the existing ref keeps its exact string — canonicalising it would be a "+
 			"mutation of authored data outside 'append the seeds'")
 }
+
+// warnsOf runs a reinforcement and returns what was written alongside the
+// warnings raised, so a test can assert WHICH gate refused rather than only
+// that something did.
+func warnsOf(env *reinforceEnv, rs ...FactReinforcement) ([]string, []string) {
+	var warns []string
+	written := applyReinforcements(context.Background(), env.svc.Facts(), env.svc.Search(),
+		env.payload, rs, env.branch, env.repoID, func(e ProgressEvent) {
+			if e.Phase == "warn" {
+				warns = append(warns, e.Message)
+			}
+		})
+	return written, warns
+}
+
+// TestApplyReinforcements_SkipsAnIllegalTypeOriginPairing binds the fidelity
+// check to the WRITE PATH (review M5).
+//
+// rewriteIsMeaningPreserving had thorough tests of its own, and none of them
+// reached it through applyReinforcements: deleting the call left the entire
+// repo suite green. The two write-path tests that should have caught it each
+// shadowed the other — the lossy-motif case is refused by the tripwire before
+// the fidelity check runs, and the byte-guard fixture round-trips cleanly, so
+// nothing arrived at the check by the front door. This test is that binding.
+//
+// The population is measured, not hypothetical: 66 live facts on `core` are
+// stored with a type/origin pairing ValidateForType rejects (33 `observation` +
+// `discovered`, 33 `observation` + `distilled`). ParseFact coerces them to
+// `authored` and SerializeFact then ELIDES the now-default line, so a write
+// that does not refuse moves 33 discovery-engine facts to human-authored
+// provenance — the belief-level discipline designer-intent item 3 forbids.
+func TestApplyReinforcements_SkipsAnIllegalTypeOriginPairing(t *testing.T) {
+	env := newReinforceEnv(t)
+
+	// The exact illegal pairing, planted as RAW BYTES: SerializeFact would
+	// refuse to produce it, which is why such facts can only arrive from an
+	// older version or another writer.
+	raw := "---\ntype: observation\ndomain: [evaluation]\nconfidence: 0.75\nsources: 1\n" +
+		"origin: discovered\nentities: [verifier gaming]\nrefs: [" + existingRef + "]\n---\n" +
+		"# The verifier is inside the agent's action space\n\nBody text.\n"
+	_, err := env.svc.Facts().WriteFact(context.Background(), env.branch, reinforcePath, raw, "plant", "test")
+	require.NoError(t, err)
+
+	// PRECONDITIONS, asserted rather than logged. If ParseFact ever stops
+	// coercing this pairing, or SerializeFact stops eliding the default line,
+	// the assertions below would go on passing while testing nothing.
+	parsed := env.read(reinforcePath)
+	require.Equal(t, fact.Authored, parsed.Origin,
+		"precondition: the stored `discovered` is coerced on read — that coercion is the danger")
+	round, err := fact.SerializeFact(parsed)
+	require.NoError(t, err)
+	require.NotContains(t, round, "origin:",
+		"precondition: the round trip DELETES the line, which is what a write would persist")
+
+	written, warns := warnsOf(env, goodReinforcement())
+
+	require.Empty(t, written, "an illegal-pairing target must be SKIPPED, not reattributed")
+	require.Equal(t, raw, env.storedBytes(reinforcePath),
+		"and its bytes untouched, byte for byte — `origin: discovered` survives. "+
+			"Compared against the planted BYTES, not a parsed struct: ParseFact coerces "+
+			"the origin on both sides, so a struct comparison would read authored == "+
+			"authored and pass while the file was rewritten (the H1 mistake)")
+	require.Contains(t, strings.Join(warns, "\n"), "origin",
+		"the refusal must name the origin, or the assertion cannot tell the fidelity "+
+			"check from any other refusal — which is the shadowing that produced M5")
+}
