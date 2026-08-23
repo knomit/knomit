@@ -110,11 +110,31 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 		}
 	}
 	require.Greater(t, len(seen), 1, "the scan must cover more than one step type")
-	// Whether an ORDINARY item happens to receive the marked facts depends on
-	// what this corpus clusters into, which is not something a vocabulary test
-	// should depend on. TestMN1_OrdinaryItemsNeverCarryVocabulary below covers
-	// that path deterministically instead. Recorded here only so a reader knows
-	// which half this scan is doing.
+	// WHAT THIS SCAN DOES AND DOES NOT COVER — stated exactly, because the
+	// honest boundary is the whole value of a conformance test.
+	//
+	// COVERED, deterministically: every step type this session actually
+	// produced, inspected on all three surfaces a model receives. At
+	// EffortMedium that is prune, distill, reflect and the three motif steps.
+	//
+	// COVERED elsewhere, deterministically: prune and distill as renderers,
+	// by TestMN1_OrdinaryItemsNeverCarryVocabulary below — which exists
+	// because THIS scan's coverage of ordinary passes depends on the fixture
+	// producing an item that receives the marked facts, and a leak planted in
+	// prune's response schema once passed here for want of the opportunity to
+	// fail.
+	//
+	// NOT COVERED: the DISCOVER renderer. Discovery does not run at
+	// EffortMedium, so no discover item exists to inspect here, and no
+	// deterministic render test covers it either. A vocabulary leak in
+	// discover's prompt or response schema would be invisible to this suite.
+	// Phase 2 adds `motifs` to discover's OUTPUT schema (MN11) but no
+	// vocabulary to its input, so there is nothing to leak today — this is a
+	// gap in the guard, not a known defect, and it is named so that whoever
+	// gives discover a vocabulary-bearing payload finds it named.
+	//
+	// markedReached is recorded rather than asserted for the reason above: it
+	// is a property of what this corpus clustered into, not of the rule.
 	t.Logf("ordinary item saw the marked facts: %v", markedReached)
 
 	// Bidirectional. A declared exception that never carries vocabulary is a

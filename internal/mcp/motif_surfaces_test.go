@@ -98,22 +98,38 @@ var looseTierRefusers = map[string]string{
 // them, and for nobody else — token-1 measured 15 false pairs on the eval set,
 // which is acceptable for a human reading results and never for automation.
 func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
-	// The MCP files, plus the two packages where a violation would ACTUALLY
-	// appear. Automation that selected a loose tier would do so in the
-	// synthesis pipeline or the store's own query path — neither of which the
-	// original scan opened, so it checked the files least likely to offend.
-	files := []string{
-		"query.go", "explain.go", "learn.go", "update.go", "review.go",
-		"../synthesize/motif_alias.go", "../synthesize/motif_backfill.go",
-		"../synthesize/motif_define.go", "../synthesize/restatement.go",
-		"../store/search_query.go", "../store/motif_alias.go",
+	// WALKED, not listed. Automation that selected a loose tier would do so in
+	// the MCP surface, the synthesis pipeline, or the store's own query path —
+	// and a hand-written file list only covers the files someone remembered,
+	// which is never the new one. The previous version named eleven files; a
+	// twelfth selecting token-1 would have been invisible to it.
+	//
+	// The three package directories ARE the rule's scope, so the scan reads the
+	// scope rather than a sample of it.
+	dirs := []string{".", "../synthesize", "../store"}
+	var files []string
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		require.NoErrorf(t, err, "read %s", dir)
+		found := 0
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			files = append(files, filepath.Join(dir, name))
+			found++
+		}
+		// Fail closed: a directory that suddenly yields nothing is a moved
+		// package or a broken relative path, and a scan over zero files reports
+		// success just as loudly as a scan that found no violations.
+		require.Positivef(t, found, "no Go sources found under %s — the scan is not reading its subject", dir)
 	}
-	checked := 0
+
 	for _, rel := range files {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, filepath.Clean(rel), nil, 0)
 		require.NoErrorf(t, err, "parse %s", rel)
-		checked++
 
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -148,7 +164,11 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 				rel, fn.Name.Name, named)
 		}
 	}
-	require.Equal(t, len(files), checked, "the scan must cover every file it names")
+	// No "checked == len(files)" assertion here. There was one, and it could not
+	// fail: the counter was incremented once per iteration immediately after the
+	// parse, so it equalled the length by construction. A check a comment could
+	// satisfy. The real coverage guard is the per-directory Positive above,
+	// which fails when the scan stops reading its subject.
 
 	// Bidirectional, like the fact package's lists: a declared refuser that no
 	// longer exists is a permission nobody needs and nobody notices going stale.

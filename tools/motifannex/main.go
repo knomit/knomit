@@ -115,6 +115,20 @@ func pristinePath(scratch, corpus string) string {
 // Copy, never open-in-place: these are the user's real knowledge bases, and
 // the annex writes motifs onto facts. Opening a live home would also migrate
 // its schema, which is a change no measurement is worth.
+//
+// CHECKPOINT FIRST. The stores run in WAL mode, so a live corpus's most recent
+// writes can be sitting in a `-wal` sidecar that a file copy of the `.db` does
+// not take. Service.Checkpoint exists for exactly this ("before file-level
+// copy") and was not being called, so a snapshot could silently omit the
+// newest facts — a measurement reading low with nothing to say it had.
+//
+// HONEST NOTE ON EARLIER RUNS: annex snapshots taken before this fix may be
+// missing an uncheckpointed WAL tail. The direction is knowable even though the
+// amount is not — a snapshot can only LOSE recent facts, never invent them, so
+// coverage and vocabulary figures from those runs are floors rather than
+// point estimates. It does not change any gate conclusion in the direction that
+// would matter (more facts can only add candidates), but the numbers should be
+// read as such rather than as exact.
 func snapshot(ctx context.Context, corpus, id, scratch string) error {
 	if err := os.MkdirAll(scratch, 0o755); err != nil {
 		return err
@@ -124,12 +138,36 @@ func snapshot(ctx context.Context, corpus, id, scratch string) error {
 		return err
 	}
 	src := filepath.Join(home, ".knomit", "repos", id+".db")
+
+	// Open the live home ONLY to flush its WAL, and close it again before the
+	// copy. This is the one moment the annex touches a real home, it takes no
+	// write of its own, and skipping it would be the silent-truncation failure
+	// this tool exists to measure around.
+	if err := checkpointLiveHome(src); err != nil {
+		return fmt.Errorf("checkpoint %s before copy: %w", corpus, err)
+	}
+
 	dst := copyPath(scratch, corpus)
 	if err := copyFile(src, dst); err != nil {
 		return fmt.Errorf("copy %s: %w", corpus, err)
 	}
-	fmt.Printf("copied %s -> %s\n", src, dst)
+	fmt.Printf("copied %s -> %s (WAL checkpointed first)\n", src, dst)
 	return report(ctx, corpus, scratch)
+}
+
+// checkpointLiveHome flushes a live corpus's WAL into its .db file so a
+// file-level copy is self-contained.
+//
+// Reported rather than ignored on failure: a snapshot that could not checkpoint
+// is a snapshot that may be short of facts, and the whole point of the annex is
+// that its inputs are what they claim to be.
+func checkpointLiveHome(path string) error {
+	svc, err := store.Open(path)
+	if err != nil {
+		return err
+	}
+	defer svc.Close()
+	return svc.Checkpoint()
 }
 
 func copyFile(src, dst string) error {
