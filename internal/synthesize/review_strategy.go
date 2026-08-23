@@ -296,8 +296,13 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	if mErr != nil {
 		// Degrade rather than fail the session: the grounded work above is
 		// already queued, and an unavailable axis is not a reason to lose it.
+		// The failure is RECORDED in health, not just logged — a reader
+		// comparing two sessions must be able to tell an axis that found
+		// nothing from one that could not look (L6).
 		log.Warn().Err(mErr).Str("session", sess.ID).
 			Msg("review: motif bridging skipped this session")
+		motifHealth.Failure = mErr.Error()
+		nearMotif, farMotif = nil, nil
 	}
 	// Both motif lanes ride the FORWARD-discover priority band, backward items
 	// included. That is deliberate: the band is a property of the REVIEW

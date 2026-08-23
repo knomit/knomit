@@ -685,3 +685,70 @@ func (l *laneSplittingIndex) SimilarityAdjacency(_ context.Context, paths []stri
 func permissiveMotifConfig() QualityConfig {
 	return QualityConfig{CohFloor: 0, QualityFloor: 0, WCoh: 1, WGap: 1, WSpec: 1, MaxMembers: 5}
 }
+
+// ── L6: a failed pass must not read like an empty one ─────────────────────
+
+func TestMotifBridgeHealthLines_FailureIsNotSuccessShapedZeros(t *testing.T) {
+	failed := motifBridgeHealthLines(motifEnumHealth{
+		Failure: "similarity adjacency unavailable", Candidates: 3, Ceiling: 12}, 0, 0)
+	require.Len(t, failed, 1)
+	require.Contains(t, failed[0], "motif bridges unavailable this session")
+	require.Contains(t, failed[0], "NOT a statement about the corpus")
+	require.NotContains(t, failed[0], "0 near, 0 far",
+		"a failed pass must not report the shape of an axis that looked and found nothing")
+
+	// The complement: an axis that genuinely found nothing stays silent, and one
+	// that found something reports it. Without these the assertion above is
+	// satisfied by a function that always says "unavailable".
+	require.Empty(t, motifBridgeHealthLines(motifEnumHealth{Ceiling: 12}, 0, 0))
+	found := motifBridgeHealthLines(motifEnumHealth{Candidates: 2, Ceiling: 12}, 1, 1)
+	require.Contains(t, found[0], "motif bridges: 2 candidates, 1 near, 1 far")
+}
+
+// ── L1: nested duplicate groups ───────────────────────────────────────────
+
+// Every token-2 family strictly CONTAINS its key's verbatim group by
+// construction, so the two compete for the same scarce slots and render the
+// same `Bridge token:` line with nested member sets. The contained one is
+// suppressed: an agent judging {A,B} and then {A,B,C} spends two of eight slots
+// on one question.
+func TestRankAndCap_SuppressesStrictlyContainedGroups(t *testing.T) {
+	small := BridgeSeedSet{Token: "shared-shape", Q: 9, Members: []factForLLM{
+		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}}
+	big := BridgeSeedSet{Token: "shared-shape", Q: 1, Members: []factForLLM{
+		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}, {File: "kb/c/3.md"}}}
+
+	got := rankAndCap([]BridgeSeedSet{small, big}, 8)
+
+	require.Len(t, got, 1, "the contained group goes, whichever ranks higher")
+	require.Len(t, got[0].Members, 3, "the SUPERSET survives — it carries strictly more evidence")
+}
+
+// Overlapping-but-not-contained groups both survive: they are different
+// questions, and suppressing either would lose a bridge.
+func TestRankAndCap_KeepsOverlappingGroupsThatAreNotContained(t *testing.T) {
+	a := BridgeSeedSet{Token: "alpha-shape", Q: 2, Members: []factForLLM{
+		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}}
+	b := BridgeSeedSet{Token: "bravo-shape", Q: 1, Members: []factForLLM{
+		{File: "kb/b/2.md"}, {File: "kb/c/3.md"}}}
+
+	require.Len(t, rankAndCap([]BridgeSeedSet{a, b}, 8), 2)
+}
+
+// Suppression happens BEFORE the budget is spent, or it saves no slots.
+func TestRankAndCap_SuppressionPrecedesTheBudget(t *testing.T) {
+	contained := BridgeSeedSet{Token: "shared-shape", Q: 9, Members: []factForLLM{
+		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}}
+	superset := BridgeSeedSet{Token: "shared-shape", Q: 8, Members: []factForLLM{
+		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}, {File: "kb/c/3.md"}}}
+	other := BridgeSeedSet{Token: "other-shape", Q: 1, Members: []factForLLM{
+		{File: "kb/d/4.md"}, {File: "kb/e/5.md"}}}
+
+	got := rankAndCap([]BridgeSeedSet{contained, superset, other}, 2)
+
+	require.Len(t, got, 2)
+	require.Equal(t, "shared-shape", got[0].Token)
+	require.Len(t, got[0].Members, 3)
+	require.Equal(t, "other-shape", got[1].Token,
+		"the slot freed by suppression goes to a different question, not to the duplicate")
+}

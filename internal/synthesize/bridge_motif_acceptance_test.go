@@ -189,6 +189,20 @@ func TestMotifAcceptance_BridgeYieldPairs(t *testing.T) {
 	sort.Strings(tokens)
 	t.Logf("exact-tier groups: %s", strings.Join(tokens, " "))
 
+	// L1 on real data: how many of the token-2 groups are strictly contained in
+	// another, and therefore never reach a slot. The reviewer measured 12 of
+	// 113 at enumeration; this asserts the suppression actually removes them
+	// before the budget is spent.
+	kept := suppressContained(high)
+	t.Logf("contained-group suppression: %d of %d token-2 groups dropped",
+		len(high)-len(kept), len(high))
+	require.Positive(t, len(high)-len(kept),
+		"token-2 makes contained groups by construction — a run that suppresses none "+
+			"means the suppression is not reaching them")
+	require.Equal(t, pairsOf(high), pairsOf(kept),
+		"suppression must not lose a PAIR — a contained group's members all "+
+			"survive inside the superset that displaced it")
+
 	// The measurement's headline: ten subject-disjoint pairs on knomit-kb. The
 	// shipped gate is FINER than the one that produced it (df-graded rather
 	// than any-shared-token), so it should find at least as many.

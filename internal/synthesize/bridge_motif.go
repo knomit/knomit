@@ -68,6 +68,12 @@ type motifDFFn func(canonicalID string) int
 // motifEnumHealth is what enumeration observed. Every field is a DESCRIPTOR:
 // nothing in this package branches on any of them.
 type motifEnumHealth struct {
+	// Failure names why the pass could not run, when it could not. A failed
+	// pass that reported "N candidates, 0 near, 0 far" was indistinguishable
+	// from an axis that enumerated and found nothing (Phase-3 review, L6) —
+	// the same distinction motifResolverFor's warning exists to preserve, one
+	// layer up.
+	Failure string
 	// Candidates is how many groups survived every gate.
 	Candidates int
 	// Ceiling is the df band's upper bound on this corpus.
@@ -614,6 +620,7 @@ func rankAndCap(in []BridgeSeedSet, budget int) []BridgeSeedSet {
 	if budget == 0 {
 		return nil
 	}
+	in = suppressContained(in)
 	sort.SliceStable(in, func(i, j int) bool {
 		if in[i].Q != in[j].Q {
 			return in[i].Q > in[j].Q
@@ -736,6 +743,11 @@ func meanSimFor(d Deps, branch string) meanSimFn {
 // which is what it means for the gate to be a percentile of each repo's own
 // distribution rather than a threshold someone picked (MN13).
 func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
+	if h.Failure != "" {
+		return []string{fmt.Sprintf(
+			"motif bridges unavailable this session: %s "+
+				"(no candidates — this is NOT a statement about the corpus)", h.Failure)}
+	}
 	if h.Candidates == 0 && len(h.OverCeilingNames) == 0 {
 		return nil
 	}
@@ -755,4 +767,54 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 			len(h.OverCeilingNames), strings.Join(h.OverCeilingNames, ", ")))
 	}
 	return lines
+}
+
+// suppressContained drops any group whose members are a strict subset of
+// another group's.
+//
+// The token-2 tier makes these by construction: a family is kept only when it
+// has more members than its key's verbatim group, so the verbatim group is
+// always strictly contained in it, and both carry the SAME Bridge token. On the
+// measured corpus that was 12 of 113 groups, with three tokens each producing
+// two items (Phase-3 review, L1). On an axis judged as an observation-window
+// feeder with eight slots a lane, spending two of them on {A,B} and {A,B,C} is
+// spending two on one question.
+//
+// The SUPERSET survives: it carries strictly more evidence for the same shared
+// mechanism, and the agent can still decline the members it finds unconvincing.
+// Runs before ranking and truncation, or it would free no slots.
+func suppressContained(in []BridgeSeedSet) []BridgeSeedSet {
+	sets := make([]map[string]struct{}, len(in))
+	for i, g := range in {
+		sets[i] = make(map[string]struct{}, len(g.Members))
+		for _, m := range g.Members {
+			sets[i][m.File] = struct{}{}
+		}
+	}
+	out := make([]BridgeSeedSet, 0, len(in))
+	for i := range in {
+		contained := false
+		for j := range in {
+			if i == j || len(sets[j]) <= len(sets[i]) {
+				continue
+			}
+			if subsetOf(sets[i], sets[j]) {
+				contained = true
+				break
+			}
+		}
+		if !contained {
+			out = append(out, in[i])
+		}
+	}
+	return out
+}
+
+func subsetOf(small, big map[string]struct{}) bool {
+	for k := range small {
+		if _, ok := big[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
