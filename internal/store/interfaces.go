@@ -308,6 +308,12 @@ type MotifIndex interface {
 	// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
 	// oldest first, for the backfill pass.
 	LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error)
+	// RecordBackfillJudgedEmpty records that backfill asked about these facts
+	// and the answer was "no regularity here" — the negative judgement, which
+	// is what makes the pass a one-time drain rather than a standing job. A
+	// motif the write gate REFUSED is not this, and neither is silence about an
+	// offered fact; both must come back.
+	RecordBackfillJudgedEmpty(ctx context.Context, branch string, paths []string) error
 	// MotifCoverage reports how many live authored facts carry a motif.
 	MotifCoverage(ctx context.Context, branch string) (with, total int, err error)
 	// AliasRows returns the alias table with its audit columns (method and the

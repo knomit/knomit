@@ -315,9 +315,14 @@ func validateMotifBackfill(res motifBackfillResult, offered backfillPayload) err
 // than overwritten: something else — a human, an update — has answered the
 // question this item was asking, and the fresher answer wins.
 func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBackfillResult) error {
+	// "No regularity here" is an ANSWER, and it is recorded. Without the record
+	// the pass cannot tell it from "not yet asked", and re-offers the fact every
+	// session for the life of the corpus.
+	var judgedEmpty []string
 	for _, a := range res.Assignments {
 		if len(a.Motifs) == 0 {
-			continue // "no regularity here" is an answer, and needs no write
+			judgedEmpty = append(judgedEmpty, a.Path)
+			continue
 		}
 		rec, err := d.Search.GetByPath(ctx, branch, a.Path)
 		if err != nil || rec == nil {
@@ -357,7 +362,9 @@ func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBac
 			log.Warn().Err(err).Str("path", a.Path).Msg("motif backfill: write failed")
 		}
 	}
-	return nil
+	// Recorded AFTER the writes: a fact that gained a motif leaves the backlog
+	// by carrying one, and only the genuinely empty answers need the record.
+	return d.Motifs.RecordBackfillJudgedEmpty(ctx, branch, judgedEmpty)
 }
 
 // RenderMotifBackfillWorkItem renders the backfill prompt.

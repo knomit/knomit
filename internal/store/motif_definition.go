@@ -282,6 +282,20 @@ type BackfillTarget struct {
 // Oldest-first is deterministic and gives a corpus a stable sweep order across
 // sessions — a bounded pass that started somewhere different each time would
 // re-offer the same facts and never reach the tail.
+//
+// This is the BACKLOG, and the backlog is what makes a session non-empty:
+// facts that have never been judged. Two ways out of it, and they are
+// different answers rather than one answer twice — a fact that GAINED a motif
+// leaves via fact_motifs, and a fact an agent judged to carry none leaves via
+// motif_backfill_judged. Without the second, "answered, none apply" was
+// indistinguishable from "not yet asked", and such a fact was re-offered every
+// session forever; on a corpus with enough of them they hold every slot and the
+// sweep never reaches the tail.
+//
+// The judged record is keyed on fact_id, which is content-addressed: an edited
+// fact is a new immutable row that has never been judged and correctly returns
+// here. Level-triggered throughout — "backlog" is this comparison, not state
+// anyone maintains.
 func (mi *motifIndex) LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error) {
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
@@ -294,6 +308,8 @@ func (mi *motifIndex) LiveFactsWithoutMotifs(ctx context.Context, branch string,
 		 WHERE bf.branch_id = ?
 		   AND f.origin = 'authored'
 		   AND NOT EXISTS (SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id)
+		   AND NOT EXISTS (SELECT 1 FROM motif_backfill_judged j
+		                    WHERE j.branch_id = bf.branch_id AND j.fact_id = f.id)
 		 ORDER BY f.id ASC
 		 LIMIT ?`, branchID, limit)
 	if err != nil {
@@ -334,4 +350,39 @@ func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, t
 		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
 	}
 	return with, total, nil
+}
+
+// RecordBackfillJudgedEmpty records that the backfill pass asked about these
+// facts and the answer was "no regularity here".
+//
+// ONLY that answer. A motif the write gate REFUSED is not this: the agent found
+// a regularity and named it, and the name failed a shape rule. Recording that
+// as judged would bury the fact with no motif and no trace of why, which is the
+// opposite of what should happen — it must come back so the naming can be
+// fixed. Silence about an offered fact is likewise not an answer about it.
+//
+// Idempotent: re-judging the same version is the same answer.
+// Takes PATHS and resolves the fact id from the branch's live pointer, so the
+// judgement binds to the version that was actually judged. A caller holding a
+// stale id could otherwise record a verdict against content the agent never saw.
+func (mi *motifIndex) RecordBackfillJudgedEmpty(ctx context.Context, branch string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("RecordBackfillJudgedEmpty: %w", err)
+	}
+	now := time.Now().Unix()
+	for _, p := range paths {
+		if _, err := conn(ctx, mi.rh.db).ExecContext(ctx, `
+			INSERT INTO motif_backfill_judged (branch_id, fact_id, judged_at)
+			SELECT ?, bf.fact_id, ?
+			  FROM branch_facts bf
+			 WHERE bf.branch_id = ? AND bf.path = ?
+			ON CONFLICT(branch_id, fact_id) DO NOTHING`, branchID, now, branchID, p); err != nil {
+			return fmt.Errorf("RecordBackfillJudgedEmpty: %w", err)
+		}
+	}
+	return nil
 }
