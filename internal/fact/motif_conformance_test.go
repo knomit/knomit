@@ -509,15 +509,7 @@ func TestMN13_MotifBridgeConstantsAreClassified(t *testing.T) {
 	} {
 		requireConstantsClassified(t, rel, want)
 
-		var floats []string
-		ast.Inspect(parseGo(t, rel), func(n ast.Node) bool {
-			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
-				floats = append(floats, lit.Value)
-			}
-			return true
-		})
-		require.Emptyf(t, floats,
-			"MN13: a float literal in %s is a corpus-property constant in disguise: %v", rel, floats)
+		requireNoUnnamedRatios(t, rel)
 	}
 }
 
@@ -555,4 +547,62 @@ func requireConstantsClassified(t *testing.T, rel string, want map[string]string
 		require.Truef(t, seen[name], "const %s no longer exists in %s — "+
 			"update this test rather than letting the classification rule lapse", name, rel)
 	}
+}
+
+// requireNoUnnamedRatios is MN13's literal check, in BOTH forms a ratio can
+// take.
+//
+// A float literal was the only form the first version looked for, and the
+// Phase-3 review (L2) found the gap by walking through it: the df band's
+// ceiling was written `LiveFacts * 2 / 100` — a ratio of the corpus's own size,
+// in bare integers, invisible to a float scan. That is lesson 3 turned on the
+// check itself: ask in what form the violation would appear, and does the check
+// read that form.
+//
+// So it bans float literals outright, and bans the integer-ratio SHAPE
+// (`<expr> * N / M`) when the MULTIPLIER N is a bare number. N is the ratio
+// someone chose and must therefore be named and classified; the divisor is the
+// unit's own denominator — `x * umbrellaPerCent / 100` is what a correctly
+// classified per-cent ratio looks like, and a `const hundred = 100` would be
+// ceremony, not clarity.
+func requireNoUnnamedRatios(t *testing.T, rel string) {
+	t.Helper()
+	file := parseGo(t, rel)
+
+	var offenders []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
+			offenders = append(offenders, "float literal "+lit.Value)
+			return true
+		}
+		// `x * N / M` parses as (x * N) / M — a division whose left operand is
+		// a multiplication. Either bare number makes it an unnamed ratio.
+		div, ok := n.(*ast.BinaryExpr)
+		if !ok || div.Op != token.QUO {
+			return true
+		}
+		mul, ok := div.X.(*ast.BinaryExpr)
+		if !ok || mul.Op != token.MUL {
+			return true
+		}
+		if lit, ok := mul.Y.(*ast.BasicLit); ok && lit.Kind == token.INT {
+			offenders = append(offenders,
+				"unnamed integer ratio "+lit.Value+"/"+exprText(div.Y))
+		}
+		return true
+	})
+	require.Emptyf(t, offenders,
+		"MN13: %s must not carry an unclassified ratio — name it as a constant and "+
+			"state its class where it is defined: %v", rel, offenders)
+}
+
+// exprText renders a small expression for an error message.
+func exprText(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		return v.Value
+	case *ast.Ident:
+		return v.Name
+	}
+	return "?"
 }
