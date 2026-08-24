@@ -69,10 +69,36 @@ func loadCanonCorpus(t *testing.T, corpus string) []factForLLM {
 			Domain:   quotedList(reDomain, row.Input),
 			Entities: quotedList(reEntities, row.Input),
 			Motifs:   row.Output,
+			// Title and body are inert for enumeration — which is why they
+			// were not extracted until now — but the H-track pack cannot be
+			// judged without them, and a pack of empty pairs is what the blind
+			// judge received on the first run.
+			Title: canonField(row.Input, "title: "),
+			Body:  canonField(row.Input, "body: "),
 		})
 	}
 	require.NoError(t, sc.Err())
 	return out
+}
+
+// canonField pulls one labelled line out of the fixture's flattened input
+// blob. The body runs to the end of the record, so it is taken whole.
+func canonField(input, prefix string) string {
+	i := strings.Index(input, "\n"+prefix)
+	if i < 0 {
+		if !strings.HasPrefix(input, prefix) {
+			return ""
+		}
+		i = -1
+	}
+	rest := input[i+1+len(prefix):]
+	if prefix == "body: " {
+		return strings.TrimSpace(rest)
+	}
+	if j := strings.Index(rest, "\n"); j >= 0 {
+		rest = rest[:j]
+	}
+	return strings.TrimSpace(rest)
 }
 
 func quotedList(re *regexp.Regexp, input string) []string {
@@ -478,6 +504,13 @@ func TestMotifMeasurement_WriteSupplementaryHarnessPack(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, pack)
+	// A pack of blank pairs is judgeable-looking and worthless — the first run
+	// emitted twelve of them and the blind judge is what noticed. Assert the
+	// content is there rather than trusting the projection.
+	for _, it := range pack {
+		require.NotEmptyf(t, it.ATitle, "%s: pair A has no title", it.ID)
+		require.NotEmptyf(t, it.BTitle, "%s: pair B has no title", it.ID)
+	}
 
 	payload := map[string]any{
 		"arm": "MOTIF-FIXTURE (SUPPLEMENTARY — never pooled with the primary arms)",

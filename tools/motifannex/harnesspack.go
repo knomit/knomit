@@ -41,13 +41,28 @@ type harnessPair struct {
 //   - MOTIF-NEAR / MOTIF-FAR — the SERVED sets from the shipped engine on the
 //     real corpora. This is the PRIMARY evidence and it is reported at whatever
 //     size it has.
+//
 //   - TOKEN — the production entity/domain axis on the same corpora, via the
 //     shipped BridgeComponentReport. E1's own comparison arm.
+//
 //   - RANDOM — seeded uniform pairs. The floor control.
-//   - TRAP — pairs that SHARE a canonical motif and ALSO share a subject label.
-//     Drawn from real data rather than fabricated: these are what the
-//     disjointness gate exists to reject, so a judge calling them MECH is
-//     visible and the MECH rates have an upper control (349c0ab6).
+//
+//   - SAME-SUBJECT — pairs that share a canonical motif AND at least one raw
+//     subject label. Drawn from real data rather than fabricated.
+//
+//     NAMED FOR WHAT IT IS, not for what it was first assumed to be. It was
+//     called TRAP, on the belief that these are pairs the disjointness gate
+//     rejects. They are not: the gate is df-GRADED (rider 1), so a shared label
+//     blocks only when it is SPECIFIC — below a per-corpus percentile, not
+//     umbrella, not universal. Measured on the served near pair, the four
+//     shared labels were df 284 (universal, = LiveFacts), 66 (umbrella, > 56),
+//     26 and 28 (both > the cut of 5). Every one deliberately permitted.
+//
+//     So a MECH verdict in this arm is NOT evidence of a gate failure, and
+//     reporting it as one would indict the rider for working. What the arm
+//     still does — its actual job — is bound the MECH rate from above: a judge
+//     that calls same-subject pairs MECH is visible, and without that the other
+//     arms' rates cannot be read (349c0ab6).
 //
 // Group→pair projection: one pair per served group, chosen by a seeded draw
 // over the group's member pairs, so no group can dominate an arm. That matches
@@ -55,6 +70,25 @@ type harnessPair struct {
 func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 	rng := rand.New(rand.NewSource(harnessSeed))
 	var motifNear, motifFar, token, random, trap []harnessPair
+
+	// DEDUPE ACROSS CORPORA. merged was seeded from agentic-engineering, so the
+	// same facts and the same bridges exist in both and the naive draw emits
+	// each twice — three pairs of the first pack were exact repeats, which the
+	// blind judge noticed before I did. A repeated pair is not extra evidence;
+	// it is one pair counted twice, and in an arm of three that is most of the
+	// arm.
+	// Deduping happens ONCE, at the end, in ARM PRIORITY order — not inline as
+	// each corpus is read.
+	//
+	// Inline deduping silently cost the primary evidence: merged is read before
+	// agentic-engineering, so a TOKEN pair from merged claimed a pair that was
+	// also ag's only MOTIF-NEAR bridge, and the scarce arm lost its single
+	// member to a control. Priority order means the arm that can least afford
+	// to lose a pair keeps it.
+	//
+	// A pair claimed by two arms is also worth KNOWING about rather than
+	// quietly resolving — the motif and entity/domain axes agreeing on the same
+	// two facts is a finding — so collisions are reported.
 
 	for _, corpus := range corpora {
 		svc, ri, branch, closeAll, err := open(ctx, corpus, scratch)
@@ -119,10 +153,37 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 			closeAll()
 			return err
 		}
+		// fresh() applies to EVERY arm, not just the two it was written for.
+		// The first fix deduped MOTIF and TOKEN and left RANDOM and TRAP alone,
+		// which still let one duplicate through — a guard applied to some of
+		// the things it protects is a guard with a hole in it.
 		random = append(random, randomPairs(ctx, svc, branch, corpus, seeds, rng, harnessArmN)...)
 		trap = append(trap, trapPairs(ctx, svc, branch, corpus, seeds, rng)...)
 		closeAll()
 	}
+
+	// Priority order: the scarce primary arms first, then the comparison arm,
+	// then the controls.
+	claimedBy := map[string]string{}
+	droppedTo := map[string]int{} // "TOKEN->MOTIF-FAR" etc.
+	dedupe := func(in []harnessPair) []harnessPair {
+		var out []harnessPair
+		for _, p := range in {
+			k := p.APath + "\x00" + p.BPath
+			if first, dup := claimedBy[k]; dup {
+				droppedTo[p.Arm+"->"+first]++
+				continue
+			}
+			claimedBy[k] = p.Arm
+			out = append(out, p)
+		}
+		return out
+	}
+	motifNear = dedupe(motifNear)
+	motifFar = dedupe(motifFar)
+	token = dedupe(token)
+	trap = dedupe(trap)
+	random = dedupe(random)
 
 	pick := func(in []harnessPair, n int) []harnessPair {
 		sort.Slice(in, func(a, b int) bool { return in[a].APath+in[a].BPath < in[b].APath+in[b].BPath })
@@ -155,18 +216,31 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 	}
 
 	counts := map[string]int{}
+	uniq := map[string]bool{}
 	for _, p := range all {
 		counts[p.Arm]++
+		uniq[p.APath+"\x00"+p.BPath] = true
+	}
+	if len(uniq) != len(all) {
+		return fmt.Errorf("pack contains %d duplicate pair(s): a repeated pair is one pair "+
+			"counted twice, and in a three-pair arm that is most of the arm", len(all)-len(uniq))
 	}
 	fmt.Fprintf(os.Stderr, "arms=%v total=%d\n", counts, len(all))
 	return emit(map[string]any{
-		"seed":        harnessSeed,
-		"arm_target":  harnessArmN,
-		"arm_counts":  counts,
-		"projection":  "one pair per served group, seeded draw over its member pairs (E1's TOKEN-arm shape)",
-		"populations": "PRIMARY: real lab corpora only. The fixture supplement is a separate pack and is never pooled with this one.",
-		"pack":        pack,
-		"key":         key,
+		"seed":       harnessSeed,
+		"arm_target": harnessArmN,
+		"arm_counts": counts,
+		// Every drop, by WHICH arm lost the pair and WHICH kept it. The first
+		// version reported a single "token pairs also claimed by a motif arm"
+		// number that was really "token pairs dropped for any reason" —
+		// including token-vs-token duplicates between merged and the corpus it
+		// was seeded from, which is most of them. A count that does not mean
+		// its label is worse than no count.
+		"deduped_by_arm_pair": droppedTo,
+		"projection":          "one pair per served group, seeded draw over its member pairs (E1's TOKEN-arm shape)",
+		"populations":         "PRIMARY: real lab corpora only. The fixture supplement is a separate pack and is never pooled with this one.",
+		"pack":                pack,
+		"key":                 key,
 	})
 }
 
@@ -240,12 +314,9 @@ func randomPairs(ctx context.Context, svc *store.Service, branch, corpus string,
 	return out
 }
 
-// trapPairs are the ceiling control: two facts that share a canonical motif AND
-// share a subject label, i.e. exactly what subject-disjointness rejects.
-//
-// Drawn from real data rather than fabricated. A judge who calls these
-// MECH is calling "same subject, same mechanism" a bridge, and the MECH rate
-// on the real arms cannot be read without knowing that.
+// trapPairs builds the SAME-SUBJECT ceiling control: two facts sharing a
+// canonical motif and at least one raw subject label. See the arm's note above
+// for why raw overlap is NOT the same as "what the gate rejects".
 func trapPairs(ctx context.Context, svc *store.Service, branch, corpus string,
 	seeds []store.SearchResult, rng *rand.Rand) []harnessPair {
 	byMotif := map[string][]store.SearchResult{}
@@ -272,7 +343,7 @@ func trapPairs(ctx context.Context, svc *store.Service, branch, corpus string,
 				if !ok {
 					continue
 				}
-				p.Arm = "TRAP"
+				p.Arm = "SAME-SUBJECT"
 				out = append(out, p)
 			}
 		}
