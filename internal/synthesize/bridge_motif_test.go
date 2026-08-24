@@ -1570,3 +1570,56 @@ func TestNoveltyOf_UnknownDedupThresholdIsNotADefault(t *testing.T) {
 		"precondition: the two thresholds genuinely disagree on this pair, or the "+
 			"test proves nothing about which one is used")
 }
+
+// M-7. Evaluated exists so a motif-FREE corpus is not announced as "inactive".
+// Only one direction was guarded: flipping Evaluated to false in motifActive
+// reddened a test, but making the motif-free short circuit claim
+// Evaluated=true left the suite green — as did deleting that short circuit
+// outright, since the floor then evaluates zero clusters and reports
+// "inactive" for a corpus that has no motifs to be inactive about.
+//
+// The corpus this protects is real: `core` holds 1683 seeds and zero motifs,
+// kept out of every live session by #103. Without this it would emit "0
+// recurring motif(s) … too little repeated vocabulary", sending an operator to
+// look at a vocabulary when the truth is that backfill has never run.
+func TestBuildMotifBridges_MotifFreeCorpusIsNotEvaluatedAtAll(t *testing.T) {
+	seeds := []factForLLM{
+		{File: "kb/a/1.md", Entities: []string{"Alpha"}},
+		{File: "kb/b/2.md", Entities: []string{"Beta"}},
+	}
+	clusters, labels := oneCommunityEach(seeds)
+
+	near, far, health, err := buildMotifBridges(context.Background(), &countingIndex{}, "main",
+		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+
+	require.NoError(t, err)
+	require.Empty(t, near)
+	require.Empty(t, far)
+	require.False(t, health.Activation.Evaluated,
+		"a corpus with no motifs was never ASKED about its recurrence — "+
+			"'never asked' and 'asked, and below the floor' are different statements")
+	require.False(t, health.Activation.Active)
+
+	require.Empty(t, motifBridgeHealthLines(health, 0, 0),
+		"and so it says nothing at all — an inactive line here would send a reader "+
+			"to the vocabulary when the truth is that backfill has never run")
+}
+
+// The complement, so the pair covers both directions: a corpus that DOES carry
+// motifs and falls below the floor must say so.
+func TestBuildMotifBridges_BelowFloorCorpusIsEvaluatedAndSpeaks(t *testing.T) {
+	seeds := []factForLLM{
+		{File: "kb/a/1.md", Motifs: []string{"lone-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/2.md", Motifs: []string{"lone-shape"}, Entities: []string{"Beta"}},
+	}
+	clusters, labels := oneCommunityEach(seeds)
+
+	_, _, health, err := buildMotifBridges(context.Background(), &pairwiseIndex{}, "main",
+		seeds, clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+
+	require.NoError(t, err)
+	require.True(t, health.Activation.Evaluated, "this corpus WAS asked")
+	require.False(t, health.Activation.Active)
+	require.Contains(t, strings.Join(motifBridgeHealthLines(health, 0, 0), "\n"),
+		"motif bridging inactive", "and the answer is worth reporting")
+}
