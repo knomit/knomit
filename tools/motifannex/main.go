@@ -677,6 +677,15 @@ func skipBodyFor(af answerFile) string {
 // ── report ────────────────────────────────────────────────────────────────
 
 type corpusReport struct {
+	// Population states what every count below is over. It is ITS OWN
+	// sentence, deliberately not shared with MotifReport.Population: the two
+	// reports count different things under near-identical labels — this one's
+	// bridgeable_pairs is over live AUTHORED facts (8 / 16 / 2 / 2 / 0 on the
+	// lab corpora) while MotifReport's seed_bridgeable_pairs is over the
+	// post-AcceptSeed pool (6 / 13 / 1 / 0 / 0). Up to 3x apart, and honesty
+	// item 7 records that exactly this confusion nearly set K on the wrong
+	// population (review finding L-3).
+	Population   string  `json:"population"`
 	Corpus       string  `json:"corpus"`
 	Branch       string  `json:"branch"`
 	AuthoredLive int     `json:"authored_live"`
@@ -702,7 +711,13 @@ func report(ctx context.Context, corpus, scratch string) error {
 	}
 	defer closeAll()
 
-	r := corpusReport{Corpus: corpus, Branch: branch}
+	r := corpusReport{
+		Corpus: corpus, Branch: branch,
+		Population: "live AUTHORED facts on the branch — NOT the post-AcceptSeed bridging pool. " +
+			"bridgeable_pairs here counts pairs over authored facts; the axis enumerates over " +
+			"epistemic seeds only, so MotifReport.seed_bridgeable_pairs is the smaller number " +
+			"and the one an activation decision is made on.",
+	}
 	if with, total, err := svc.Motifs().MotifCoverage(ctx, branch); err == nil {
 		r.WithMotifs, r.AuthoredLive = with, total
 		if total > 0 {

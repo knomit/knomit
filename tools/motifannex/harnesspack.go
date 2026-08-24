@@ -104,27 +104,26 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 			return fmt.Errorf("%s motif report: %w", corpus, err)
 		}
 
-		served := map[string]bool{}
-		for _, t := range rep.NearServed {
-			served[t] = true
-		}
-		farServed := map[string]bool{}
-		for _, t := range rep.FarServed {
-			farServed[t] = true
-		}
+		// Arm membership comes from the ROW, never from a token lookup
+		// (review finding L-4). A token-2 family is keyed by one of the
+		// canonical ids it folded, so two candidates can share a Token; if the
+		// disjointness trim drops one of an edged pair from the family, the
+		// two land in DIFFERENT lanes and a token lookup labels both by
+		// whichever map it checked first — putting a near-lane group under the
+		// far arm's verdict. Served and Lane are per-candidate facts and cannot
+		// be ambiguous.
 		for _, c := range rep.Candidates {
-			if !served[c.Token] && !farServed[c.Token] {
+			if !c.Served {
 				continue
 			}
 			p, ok := projectPair(ctx, svc, branch, corpus, c.Token, c.Members, rng)
 			if !ok {
 				continue
 			}
-			if farServed[c.Token] {
-				p.Arm = "MOTIF-FAR"
+			p.Arm = motifArmOf(c)
+			if p.Arm == "MOTIF-FAR" {
 				motifFar = append(motifFar, p)
 			} else {
-				p.Arm = "MOTIF-NEAR"
 				motifNear = append(motifNear, p)
 			}
 		}
@@ -362,4 +361,16 @@ func sharesSubjectLabel(a, b store.SearchResult) bool {
 		}
 	}
 	return false
+}
+
+// motifArmOf names a served candidate's arm from the candidate itself.
+//
+// Keyed on Lane, which the scorer assigned to THIS row, rather than on whether
+// some served-token list contains its Token. See the call site for why the
+// token is ambiguous.
+func motifArmOf(c synthesize.ScoredMotifBridge) string {
+	if c.Lane == string(synthesize.LaneFar) {
+		return "MOTIF-FAR"
+	}
+	return "MOTIF-NEAR"
 }

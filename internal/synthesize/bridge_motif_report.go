@@ -35,6 +35,11 @@ type ScoredMotifBridge struct {
 	Members []string
 	// Lane is "near" or "far", as laneOf assigned it.
 	Lane string
+	// Family reports that this candidate came from the token-2 tier. Exposed
+	// because Token cannot tell you: a family is keyed by one of the canonical
+	// ids it folded, so its Token is indistinguishable from the verbatim
+	// group's (review finding L-4).
+	Family bool
 	// Comp holds the raw signal values the scorer computed.
 	Comp BridgeComponents
 	// Q is the lane's weighted quality score (0 when gated out).
@@ -214,6 +219,7 @@ func MotifComponentReport(
 			Token:   r.cand.Token,
 			Members: paths,
 			Lane:    string(r.lane),
+			Family:  r.cand.family,
 			Comp:    r.comp,
 			Q:       r.q,
 			Kept:    r.kept,
