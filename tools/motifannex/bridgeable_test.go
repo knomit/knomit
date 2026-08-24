@@ -58,14 +58,21 @@ func TestBridgeablePairs_AgenticEngineeringIsEightNotSeven(t *testing.T) {
 }
 
 // L-1. The T7 record and the acceptance package both said the lab
-// vocabularies hold "155 clusters". They hold 156: 37 + 71 + 26 + 20 is not
-// the sum — it is 37 + 71 + 26 + 22, and the 22 is knomit-io-kb's cluster
-// count, not its definition count (18).
+// vocabularies hold "155 clusters". They hold 156 — 37 + 71 + 26 + 22.
+//
+// WHERE THE 155 CAME FROM (corrected; the first version of this comment got
+// its own arithmetic wrong and said "37 + 71 + 26 + 20", which is 154, not the
+// 155 that was actually published). The 155 is 37 + **70** + 26 + 22: merged's
+// RAW-SQL cluster count, not the shipped VocabularyHealth figure of 71. That
+// is precisely the discrepancy the T0-T2 record documented and resolved in
+// favour of the shipped API — "correct instrument, wrong habit" — and it then
+// leaked into a sibling record's total anyway.
 //
 // Pinned by a test for the same reason the gate annex's 7→8 correction was:
-// the T0-T2 record's own words are that "a number nobody re-derived is
-// exactly how the annex's own §11 item 4 happened", and that applies to its
-// sibling record verbatim. The 133 definitions figure was always right
+// the T0-T2 record's own words are that "a number nobody re-derived is exactly
+// how the annex's own §11 item 4 happened". Which applies to the first draft of
+// this very comment: a causal story nobody re-derived, inside the test built
+// against that failure mode. The 133 definitions figure was always right
 // (34+61+20+18).
 func TestLabVocabularyTotals(t *testing.T) {
 	clusters := map[string]int{
@@ -76,8 +83,19 @@ func TestLabVocabularyTotals(t *testing.T) {
 	}
 	require.Equal(t, 156, sumOf(clusters), "the T7/T8 cluster population is 156, not 155")
 	require.Equal(t, 133, sumOf(definitions), "the real-definition count was always right")
+	// The published 155 is reproducible from the raw-SQL merged count, which is
+	// what makes the causal story above checkable rather than asserted.
+	rawSQLMerged := map[string]int{} // a COPY: assigning the map would alias it
+	for k, v := range clusters {
+		rawSQLMerged[k] = v
+	}
+	rawSQLMerged["merged"] = 70
+	require.Equal(t, 155, sumOf(rawSQLMerged),
+		"the published 155 is the shipped total with merged's raw-SQL count substituted")
+	require.Equal(t, 156, sumOf(clusters), "and the original is untouched by that substitution")
 	require.NotEqual(t, sumOf(clusters), sumOf(definitions),
-		"precondition: the two totals differ, which is how 22 and 18 got swapped")
+		"precondition: cluster and definition totals differ, or this test could not "+
+			"tell one from the other")
 }
 
 func sumOf(m map[string]int) int {
