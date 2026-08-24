@@ -103,6 +103,29 @@ type motifEnumHealth struct {
 	// over the member cap, or under the quality floor. Separate because it is
 	// not evidence about the lane split.
 	NearOtherDropped int
+	// FarOversizeDropped counts groups assigned to the FAR lane and then
+	// dropped BECAUSE OF THE MEMBER CAP — the population §4's unimplemented
+	// trim would act on (carried-forward register entry 5).
+	//
+	// §4 specifies that an oversized far group is TRIMMED ("maximum community
+	// spread, then minimum mean similarity") rather than discarded. The trim
+	// was ruled deliberate-to-defer, and the group is dropped by MaxMembers
+	// instead — but nothing counted the drops, so the redesign that is supposed
+	// to happen on measured data had no denominator at all.
+	//
+	// IT IS AN UPPER BOUND, twice over, and both matter to whoever reads it as
+	// "bridges the trim would recover". A group counted here may also have been
+	// failing another gate (the cap is checked first, exactly as the near lane
+	// checks its floor first), and a group the trim shrank to fit could still
+	// fall under the quality floor afterwards. What the number means is "far
+	// groups the member cap rejected" — nothing more.
+	FarOversizeDropped int
+	// FarOtherDropped counts far-lane groups rejected for any other reason —
+	// under the quality floor, or spanning fewer than two communities. Kept
+	// apart for the same reason the near lane keeps its two apart: a counter
+	// purpose-built for one Phase-4 decision must not quietly carry a second
+	// cause under the first one's label (review M4's counter-finding).
+	FarOtherDropped int
 }
 
 // enumerateMotifCandidates is the §4 enumeration loop, with the gates applied
@@ -623,13 +646,20 @@ func buildMotifBridges(
 		}
 		if !kept {
 			// Attributed by CAUSE, from the components the scorer computed,
-			// rather than by "it was near and it went".
-			if lane == LaneNear {
-				if comp.Coh < cfg.CohFloor {
-					health.NearFloorDropped++
-				} else {
-					health.NearOtherDropped++
-				}
+			// rather than by "it was near and it went". Each lane names the
+			// cause its own Phase-4 decision turns on first — the near lane's
+			// cohesion floor (the crack between the lanes), the far lane's
+			// member cap (the unimplemented trim) — so each counter is an upper
+			// bound when a group trips both, and says so at its definition.
+			switch {
+			case lane == LaneNear && comp.Coh < cfg.CohFloor:
+				health.NearFloorDropped++
+			case lane == LaneNear:
+				health.NearOtherDropped++
+			case comp.Members > cfg.MaxMembers:
+				health.FarOversizeDropped++
+			default:
+				health.FarOtherDropped++
 			}
 			continue
 		}
@@ -812,6 +842,19 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 		lines = append(lines, fmt.Sprintf(
 			"motif near-lane other: %d group(s) dropped over the member cap or under "+
 				"the quality floor — not evidence about the lane split", h.NearOtherDropped))
+	}
+	if h.FarOversizeDropped > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif far-lane oversize: %d group(s) assigned far and dropped over the "+
+				"member cap — the population §4's unimplemented trim would act on "+
+				"(upper bound: a trimmed group could still fail another gate)",
+			h.FarOversizeDropped))
+	}
+	if h.FarOtherDropped > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif far-lane other: %d group(s) dropped under the quality floor or "+
+				"spanning one community — not evidence about the trim",
+			h.FarOtherDropped))
 	}
 	if len(h.OverCeilingNames) > 0 {
 		lines = append(lines, fmt.Sprintf(

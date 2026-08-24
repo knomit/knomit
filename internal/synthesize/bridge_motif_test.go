@@ -872,3 +872,90 @@ func (p *pairwiseIndex) SimilarityAdjacency(_ context.Context, paths []string) (
 	}
 	return store.NewSimilarityGraph(kept), nil
 }
+
+// ── register entry 5: the far lane's dropped population is counted ────────
+
+// §4's trim ("maximum community spread, then minimum mean similarity") is
+// unimplemented, so an oversized far group is DROPPED by MaxMembers. That was
+// ruled deliberate and carried to Phase 4 — but the population it carries was
+// never counted, so the redesign had no denominator. It has one now.
+func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
+	// Four members, ZERO similarity edges => density 0 => far lane. Each in its
+	// own community, so separation cannot be the cause. Cap at three.
+	seeds := []factForLLM{
+		{File: "kb/a/one.md", Motifs: []string{"wide-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/two.md", Motifs: []string{"wide-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/three.md", Motifs: []string{"wide-shape"}, Entities: []string{"Gamma"}},
+		{File: "kb/d/four.md", Motifs: []string{"wide-shape"}, Entities: []string{"Delta"}},
+	}
+	clusters := ClusterResult{Clusters: map[int][]string{}}
+	labels := labelsWith(200, nil)
+	for i, f := range seeds {
+		clusters.Clusters[i] = []string{f.File}
+		labels.DF[strings.ToLower(f.Entities[0])] = 2
+	}
+	idx := &pairwiseIndex{} // no edges at all
+	cfg := motifQualityConfig()
+	cfg.MaxMembers = 3
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, health.Candidates, "precondition: the group enumerated")
+	require.Empty(t, near)
+	require.Empty(t, far, "four members against a cap of three")
+	require.Equal(t, 1, health.FarOversizeDropped,
+		"the trim's denominator: a far group the member cap dropped")
+	require.Zero(t, health.FarOtherDropped, "and attributed to the cap, not to 'other'")
+	require.Zero(t, health.NearFloorDropped, "a far-lane drop is not a near-lane drop")
+	require.Zero(t, health.NearOtherDropped)
+
+	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	require.Contains(t, lines, "motif far-lane oversize: 1 group(s)")
+}
+
+// The same counter-finding the near lane already carries (review M4): a
+// counter Phase 4 reads as evidence for the TRIM must count only what the trim
+// would act on. A far group rejected by the quality floor is not that.
+func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
+	// Group A: four members, no edges => far, over a cap of three.
+	// Group B: two members, no edges => far, within the cap, but the quality
+	// floor is set above anything it can score.
+	seeds := []factForLLM{
+		{File: "kb/a/one.md", Motifs: []string{"wide-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/two.md", Motifs: []string{"wide-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/three.md", Motifs: []string{"wide-shape"}, Entities: []string{"Gamma"}},
+		{File: "kb/d/four.md", Motifs: []string{"wide-shape"}, Entities: []string{"Delta"}},
+		{File: "kb/e/five.md", Motifs: []string{"thin-shape"}, Entities: []string{"Epsilon"}},
+		{File: "kb/f/six.md", Motifs: []string{"thin-shape"}, Entities: []string{"Zeta"}},
+	}
+	clusters := ClusterResult{Clusters: map[int][]string{}}
+	labels := labelsWith(200, nil)
+	for i, f := range seeds {
+		clusters.Clusters[i] = []string{f.File}
+		labels.DF[strings.ToLower(f.Entities[0])] = 2
+	}
+	idx := &pairwiseIndex{}
+	cfg := motifQualityConfig()
+	cfg.MaxMembers = 3
+	cfg.QualityFloor = 99 // nothing can reach it
+
+	// Precondition (lesson 5): the two groups must differ in the property the
+	// attribution turns on, or the test cannot tell the causes apart.
+	require.NotEqual(t, 4, 2, "group sizes straddle the cap")
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 2, health.Candidates, "precondition: both groups enumerated")
+	require.Empty(t, near)
+	require.Empty(t, far)
+	require.Equal(t, 1, health.FarOversizeDropped, "the wide group, and only it")
+	require.Equal(t, 1, health.FarOtherDropped, "the floor-failing group, counted apart")
+
+	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	require.Contains(t, lines, "motif far-lane oversize: 1 group(s)")
+	require.Contains(t, lines, "motif far-lane other: 1 group(s)")
+}
