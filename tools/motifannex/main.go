@@ -19,6 +19,7 @@
 //	motifannex report    -corpus <name>            vocabulary/coverage/health snapshot
 //	motifannex bridges   -corpus <name> -effort h  motif bridge candidates, served and dropped
 //	motifannex namedef   -corpus <name>            name / name+def cosine ladders, centered and not
+//	motifannex calibpack                           T8 stratified labelling pack + key (all lab corpora)
 package main
 
 import (
@@ -100,6 +101,10 @@ func main() {
 		fatal(bridges(ctx, *corpus, *scratch, *effort))
 	case "namedef":
 		fatal(namedef(ctx, *corpus, *scratch))
+	case "calibpack":
+		fatal(calibpack(ctx, *scratch, []string{
+			"merged", "agentic-engineering", "knomit-kb", "knomit-io-kb",
+		}))
 	default:
 		fatal(fmt.Errorf("unknown command %q", cmd))
 	}
