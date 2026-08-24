@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
 )
 
@@ -1341,4 +1342,74 @@ func TestMeanEntityJaccard_DisjointAndOverlapping(t *testing.T) {
 	// not perfect disjointness. Scoring them 1.0 would reward a corpus for
 	// being unlabelled.
 	require.Zero(t, meanEntityJaccard([]factForLLM{{}, {}}))
+}
+
+// H-2. seedRecurrence excludes discovered-origin facts, matching the §7
+// exclusion enumeration applies (cf455b8f). The fix was ratified by name in
+// rulings-5 and shipped with NO test: deleting the exclusion left the whole
+// suite green, because no lab corpus holds a motif-bearing discovered fact —
+// the annex never answered a discover item — so neither the fixtures nor the
+// measurements could see it.
+//
+// AcceptSeed filters on Kind == Epistemic only, never on origin, so discovered
+// facts genuinely do reach the seed pool. Without the exclusion a corpus can
+// ACTIVATE on recurrence that enumeration cannot see: the axis switches on,
+// announces "3 recurring motifs", enumerates nothing, and does it again every
+// session. It is also self-amplifying — the corpus activating on its own
+// discovery output is cf455b8f's idempotency concern one layer out.
+func TestSeedRecurrence_DoesNotCountDiscoveredFacts(t *testing.T) {
+	authored := []factForLLM{
+		{File: "kb/a/1.md", Motifs: []string{"first-shape"}},
+		{File: "kb/b/2.md", Motifs: []string{"first-shape"}},
+		{File: "kb/c/3.md", Motifs: []string{"second-shape"}},
+		{File: "kb/d/4.md", Motifs: []string{"second-shape"}},
+	}
+	// The case no lab corpus holds: a DISCOVERED fact carrying motifs. MN11 puts
+	// `motifs` on discover's output schema, so this is reachable the moment
+	// discovery answers an item.
+	discovered := []factForLLM{
+		{File: "kb/e/5.md", Motifs: []string{"third-shape"}, Origin: string(fact.Discovered)},
+		{File: "kb/f/6.md", Motifs: []string{"third-shape"}, Origin: string(fact.Discovered)},
+	}
+
+	base, basePairs := seedRecurrence(authored, identityResolver)
+	require.Equal(t, 2, base, "precondition: two recurring clusters from authored facts")
+	require.Equal(t, 2, basePairs)
+
+	withDiscovered, pairs := seedRecurrence(append(append([]factForLLM{}, authored...), discovered...),
+		identityResolver)
+	require.Equal(t, base, withDiscovered,
+		"a discovered fact's motifs must not count toward recurrence — enumeration cannot see them, "+
+			"so an activation counting them does not mean its label")
+	require.Equal(t, basePairs, pairs)
+}
+
+// The consequence at the boundary that matters: a corpus whose third recurring
+// cluster exists only on discovered facts must NOT activate.
+//
+// Asserted through buildMotifBridges rather than through seedRecurrence alone,
+// because "the axis switched on and found nothing" is the failure, and that is
+// visible only where activation meets enumeration (lesson 8).
+func TestBuildMotifBridges_DiscoveredRecurrenceDoesNotActivateTheAxis(t *testing.T) {
+	seeds := []factForLLM{
+		{File: "kb/a/1.md", Motifs: []string{"first-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/2.md", Motifs: []string{"first-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/3.md", Motifs: []string{"second-shape"}, Entities: []string{"Gamma"}},
+		{File: "kb/d/4.md", Motifs: []string{"second-shape"}, Entities: []string{"Delta"}},
+		{File: "kb/e/5.md", Motifs: []string{"third-shape"}, Entities: []string{"Epsilon"},
+			Origin: string(fact.Discovered)},
+		{File: "kb/f/6.md", Motifs: []string{"third-shape"}, Entities: []string{"Zeta"},
+			Origin: string(fact.Discovered)},
+	}
+	clusters, labels := oneCommunityEach(seeds)
+
+	near, far, health, err := buildMotifBridges(context.Background(), &pairwiseIndex{}, "main", seeds,
+		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 2, health.Activation.DF2Clusters,
+		"the discovered pair's cluster is not a third recurring motif")
+	require.False(t, health.Activation.Active, "so the axis stays off")
+	require.Empty(t, near)
+	require.Empty(t, far)
 }
