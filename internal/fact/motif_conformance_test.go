@@ -233,7 +233,30 @@ var mechanicsPaths = map[string][]string{
 	"internal/synthesize/bridge_motif.go": {
 		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
 		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
+		// Phase 4: buildMotifBridges' own loop, extracted so the measurement
+		// instrument and production drive the SAME enumeration and scoring
+		// rather than two implementations that agree until they do not. It IS
+		// the §4/§5 path MN6 designs motifs into — the same licence
+		// buildMotifBridges has always had, now naming the function that does
+		// the work instead of the wrapper that calls it.
+		"scoreMotifCandidates",
+		// The drop-cause taxonomy and its tally. They read the SCORER's
+		// components (cohesion, member count) and the lane, never a motif's
+		// content; they name motifs only in describing what was dropped.
+		// Declared rather than exempted, because the register's value is that
+		// a motif-touching function cannot appear here undeclared.
+		"motifDropCauseOf", "tallyMotifDrops",
 	},
+	// Phase 4's measurement entry point (Q3's sibling report). It is a
+	// read-only calibrate/dev path: it enumerates and scores through the
+	// shipped §4/§5 functions and returns rows. It decides nothing, writes
+	// nothing, and no production branch reads it — the same standing as
+	// BridgeComponentReport on the entity/domain axis. Listed so a function
+	// added to this file has to be declared rather than inheriting the file's
+	// silence.
+	// Summary renders the report as one human line and names the
+	// seeds-with-motifs count in it.
+	"internal/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary"},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
 	// names motifs only in describing what it gates. Listed with no permitted

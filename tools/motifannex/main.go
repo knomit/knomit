@@ -17,6 +17,7 @@
 //	motifannex session   -corpus <name>            run one session, dump its items
 //	motifannex answer    -corpus <name> -in a.json apply answers, report health
 //	motifannex report    -corpus <name>            vocabulary/coverage/health snapshot
+//	motifannex bridges   -corpus <name> -effort h  motif bridge candidates, served and dropped
 package main
 
 import (
@@ -31,6 +32,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -51,12 +53,13 @@ var corpora = map[string]string{
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal(fmt.Errorf("usage: motifannex <snapshot|session|answer|report> -corpus <name>"))
+		fatal(fmt.Errorf("usage: motifannex <snapshot|session|answer|report|bridges> -corpus <name>"))
 	}
 	cmd := os.Args[1]
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	corpus := fs.String("corpus", "", "corpus name")
 	in := fs.String("in", "", "answers JSON (answer)")
+	effort := fs.String("effort", "high", "discovery effort for `bridges` (normal|medium|high)")
 	scratch := fs.String("scratch", defaultScratch(), "working directory for copies")
 	_ = fs.Parse(os.Args[2:])
 
@@ -92,6 +95,8 @@ func main() {
 		fatal(prunebase(ctx, *scratch))
 	case "report":
 		fatal(report(ctx, *corpus, *scratch))
+	case "bridges":
+		fatal(bridges(ctx, *corpus, *scratch, *effort))
 	default:
 		fatal(fmt.Errorf("unknown command %q", cmd))
 	}
@@ -230,8 +235,36 @@ func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.R
 	}
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: corpus, AgentBranch: branch, Svc: svc, OntologyRoot: "kb", Embedder: emb,
+		Quality: productionQuality(),
 	})
 	return svc, ri, branch, func() { emb.Close(); svc.Close() }, nil
+}
+
+// productionQuality gives the instance the SHIPPED bridge-quality knobs.
+//
+// WITHOUT IT THE TOOL MEASURES AN ENGINE THAT CANNOT EMIT. A bare test
+// instance leaves MaxMembers at zero, and a zero member cap gates out every
+// bridge candidate there is — so a `bridges` run reports "0 near, 0 far" on
+// every corpus and it reads as a finding about the corpora. It is not; it is a
+// finding about the harness. Phase-3's rulings-3 already caught this once in
+// the test harness (deviation #3) and TestInstanceConfig.Quality's own doc
+// comment warns about it in as many words; this tool walked into it anyway,
+// which is why the values are now READ rather than re-typed.
+//
+// Read from config.Defaults() rather than restated: the Phase-3 review noted
+// that the test harness's re-typed copies could drift from the real defaults
+// and only a sibling test pinned them. A measurement tool that drifts from
+// production configuration is measuring a different engine, quietly.
+func productionQuality() *repos.TestQualityConfig {
+	d := config.Defaults().Discovery
+	return &repos.TestQualityConfig{
+		CohFloor:     d.CohFloor,
+		QualityFloor: d.QualityFloor,
+		WCoh:         d.WCoh,
+		WGap:         d.WGap,
+		WSpec:        d.WSpec,
+		MaxMembers:   d.MaxMembers,
+	}
 }
 
 // branchOf finds the branch carrying the most facts — the corpus's own agent
@@ -612,16 +645,16 @@ func skipBodyFor(af answerFile) string {
 // ── report ────────────────────────────────────────────────────────────────
 
 type corpusReport struct {
-	Corpus       string   `json:"corpus"`
-	Branch       string   `json:"branch"`
-	AuthoredLive int      `json:"authored_live"`
-	WithMotifs   int      `json:"with_motifs"`
-	Coverage     float64  `json:"coverage"`
-	Clusters     int      `json:"clusters"`
-	Recurring    int      `json:"recurring_df2plus"`
-	Recurrence   float64  `json:"recurrence_rate"`
-	MintToLink   float64  `json:"mint_to_link"`
-	NeedDefine   int      `json:"clusters_needing_definition"`
+	Corpus       string  `json:"corpus"`
+	Branch       string  `json:"branch"`
+	AuthoredLive int     `json:"authored_live"`
+	WithMotifs   int     `json:"with_motifs"`
+	Coverage     float64 `json:"coverage"`
+	Clusters     int     `json:"clusters"`
+	Recurring    int     `json:"recurring_df2plus"`
+	Recurrence   float64 `json:"recurrence_rate"`
+	MintToLink   float64 `json:"mint_to_link"`
+	NeedDefine   int     `json:"clusters_needing_definition"`
 	// BridgeablePairs is the CEILING on motif bridging — see bridgeablePairs.
 	// Reported next to Recurring because the two answer different questions:
 	// Recurring counts CLUSTERS that could bridge, this counts the PAIRS they

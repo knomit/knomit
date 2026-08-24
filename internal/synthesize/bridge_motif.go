@@ -602,11 +602,80 @@ func buildMotifBridges(
 	labels store.SubjectLabelDF,
 	meanSim meanSimFn,
 ) ([]BridgeSeedSet, []BridgeSeedSet, motifEnumHealth, error) {
+	rows, health, err := scoreMotifCandidates(ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, meanSim)
+	if err != nil {
+		return nil, nil, health, err
+	}
+	var near, far []BridgeSeedSet
+	for _, r := range rows {
+		if !r.kept {
+			continue
+		}
+		cand := r.cand
+		cand.Q = r.q
+		if r.lane == LaneNear {
+			near = append(near, cand)
+		} else {
+			far = append(far, cand)
+		}
+	}
+	nearBudget, farBudget := motifSubBudget(eff)
+	return rankAndCap(near, nearBudget), rankAndCap(far, farBudget), health, nil
+}
+
+// scoredMotifRow is one enumerated candidate and everything the scorer decided
+// about it — INCLUDING the ones that were dropped, with the cause.
+//
+// Production throws the dropped rows away; measurement is mostly about them.
+// Both read this one function, so the numbers Phase 4 sets constants on come
+// from the engine that serves the bridges rather than from a second
+// implementation that agrees with it until it does not.
+type scoredMotifRow struct {
+	cand  BridgeSeedSet
+	lane  BridgeLane
+	comp  BridgeComponents
+	q     float64
+	kept  bool
+	cause motifDropCause
+}
+
+// motifDropCause names why a candidate was not served. Empty when it was.
+//
+// One taxonomy, and the health counters are TALLIED FROM IT rather than
+// incremented alongside it — so a counter and the row it came from cannot
+// drift into disagreeing about the same group, which is the shape of the
+// review's M4 counter-finding.
+type motifDropCause string
+
+const (
+	motifKept        motifDropCause = ""
+	motifNearFloor   motifDropCause = "near-cohesion-floor"
+	motifNearOther   motifDropCause = "near-other"
+	motifFarOversize motifDropCause = "far-oversize"
+	motifFarOther    motifDropCause = "far-other"
+)
+
+// scoreMotifCandidates enumerates, lane-splits and scores every motif bridge
+// candidate, returning one row per candidate. It applies no budget and no
+// ranking: those belong to the caller that serves items, not to the caller
+// that measures them.
+func scoreMotifCandidates(
+	ctx context.Context,
+	idx SearchQuery,
+	branch string,
+	seeds []factForLLM,
+	clusters ClusterResult,
+	eff Effort,
+	cfg QualityConfig,
+	resolve motifResolver,
+	labels store.SubjectLabelDF,
+	meanSim meanSimFn,
+) ([]scoredMotifRow, motifEnumHealth, error) {
 	// A corpus with no motifs costs nothing at all — not one index call. This
 	// is the mechanism behind MN5's vacuous pass, so it is stated here rather
 	// than left to emerge from the gates downstream.
 	if !anyMotifs(seeds) {
-		return nil, nil, motifEnumHealth{}, nil
+		return nil, motifEnumHealth{}, nil
 	}
 
 	dfOf := func(canon string) int {
@@ -624,7 +693,7 @@ func buildMotifBridges(
 	cands, health := enumerateMotifCandidates(seeds, clusters, resolve, dfOf, labels, motifTier(eff))
 	clusterOf := bridgePathCommunities(seeds, clusters)
 
-	var near, far []BridgeSeedSet
+	rows := make([]scoredMotifRow, 0, len(cands))
 	for _, cand := range cands {
 		paths := make([]string, 0, len(cand.Members))
 		for _, m := range cand.Members {
@@ -632,47 +701,65 @@ func buildMotifBridges(
 		}
 		g, err := idx.SimilarityAdjacency(ctx, paths)
 		if err != nil {
-			return nil, nil, health, err
+			return nil, health, err
 		}
 		lane := laneOf(paths, g)
 
 		spec, err := sharedMotifSpecificity(ctx, idx, branch, cand, resolve)
 		if err != nil {
-			return nil, nil, health, err
+			return nil, health, err
 		}
 		comp, q, kept, err := scoreMotifCandidate(ctx, cand, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
 		if err != nil {
-			return nil, nil, health, err
+			return nil, health, err
 		}
-		if !kept {
-			// Attributed by CAUSE, from the components the scorer computed,
-			// rather than by "it was near and it went". Each lane names the
-			// cause its own Phase-4 decision turns on first — the near lane's
-			// cohesion floor (the crack between the lanes), the far lane's
-			// member cap (the unimplemented trim) — so each counter is an upper
-			// bound when a group trips both, and says so at its definition.
-			switch {
-			case lane == LaneNear && comp.Coh < cfg.CohFloor:
-				health.NearFloorDropped++
-			case lane == LaneNear:
-				health.NearOtherDropped++
-			case comp.Members > cfg.MaxMembers:
-				health.FarOversizeDropped++
-			default:
-				health.FarOtherDropped++
-			}
-			continue
-		}
-		cand.Q = q
-		if lane == LaneNear {
-			near = append(near, cand)
-		} else {
-			far = append(far, cand)
+		rows = append(rows, scoredMotifRow{
+			cand: cand, lane: lane, comp: comp, q: q, kept: kept,
+			cause: motifDropCauseOf(lane, comp, cfg, kept),
+		})
+	}
+	tallyMotifDrops(&health, rows)
+	return rows, health, nil
+}
+
+// motifDropCauseOf names why the scorer rejected a candidate.
+//
+// Attributed by CAUSE, from the components the scorer computed, rather than by
+// "it was near and it went". Each lane names the cause its own Phase-4
+// decision turns on FIRST — the near lane's cohesion floor (the crack between
+// the lanes), the far lane's member cap (§4's unimplemented trim) — so each is
+// an upper bound when a group trips both conditions, as the counters they feed
+// say at their definitions.
+func motifDropCauseOf(lane BridgeLane, comp BridgeComponents, cfg QualityConfig, kept bool) motifDropCause {
+	switch {
+	case kept:
+		return motifKept
+	case lane == LaneNear && comp.Coh < cfg.CohFloor:
+		return motifNearFloor
+	case lane == LaneNear:
+		return motifNearOther
+	case comp.Members > cfg.MaxMembers:
+		return motifFarOversize
+	default:
+		return motifFarOther
+	}
+}
+
+// tallyMotifDrops derives the health counters from the rows, so a counter and
+// the row it came from cannot disagree about the same group.
+func tallyMotifDrops(h *motifEnumHealth, rows []scoredMotifRow) {
+	for _, r := range rows {
+		switch r.cause {
+		case motifNearFloor:
+			h.NearFloorDropped++
+		case motifNearOther:
+			h.NearOtherDropped++
+		case motifFarOversize:
+			h.FarOversizeDropped++
+		case motifFarOther:
+			h.FarOtherDropped++
 		}
 	}
-
-	nearBudget, farBudget := motifSubBudget(eff)
-	return rankAndCap(near, nearBudget), rankAndCap(far, farBudget), health, nil
 }
 
 // anyMotifs reports whether the seed pool carries a motif at all.
@@ -731,8 +818,8 @@ func enqueueDiscover(ctx context.Context, d Deps, sess *store.PipelineSession, p
 // Read ONCE: the resolver is called per motif per fact, and a per-call query
 // would turn enumeration into a round-trip storm over a table that does not
 // change mid-session.
-func motifResolverFor(ctx context.Context, d Deps, branch string) motifResolver {
-	table, err := d.Motifs.AliasTable(ctx, branch)
+func motifResolverFor(ctx context.Context, motifs store.MotifIndex, branch string) motifResolver {
+	table, err := motifs.AliasTable(ctx, branch)
 	if err != nil {
 		// Degrade, but never silently: without the table every spelling is its
 		// own cluster, so synonyms stop bridging and the session's motif output
@@ -757,8 +844,8 @@ func motifResolverFor(ctx context.Context, d Deps, branch string) motifResolver 
 // disjointness gate. On failure it returns the zero value, whose operating
 // point is STRICT — the conservative direction, and the one that keeps a
 // near-duplicate out rather than letting it through.
-func subjectLabelsFor(ctx context.Context, d Deps, branch string) store.SubjectLabelDF {
-	labels, err := d.Search.SubjectLabelDF(ctx, branch)
+func subjectLabelsFor(ctx context.Context, search SearchQuery, branch string) store.SubjectLabelDF {
+	labels, err := search.SubjectLabelDF(ctx, branch)
 	if err != nil {
 		log.Warn().Err(err).Str("branch", branch).
 			Msg("review: subject-label distribution unreadable; disjointness gate falls back to strict")
@@ -772,9 +859,9 @@ func subjectLabelsFor(ctx context.Context, d Deps, branch string) store.SubjectL
 // The far lane cannot get them from the SIMILAR_TO graph — that graph is empty
 // there by definition — so this reaches for the vectors the graph was built
 // from.
-func meanSimFor(d Deps, branch string) meanSimFn {
+func meanSimFor(abstraction store.AbstractionIndex, branch string) meanSimFn {
 	return func(ctx context.Context, paths []string) (float64, error) {
-		ids, err := d.Abstraction.FactIDsByPath(ctx, branch, paths)
+		ids, err := abstraction.FactIDsByPath(ctx, branch, paths)
 		if err != nil {
 			return 0, err
 		}
@@ -782,7 +869,7 @@ func meanSimFor(d Deps, branch string) meanSimFn {
 		for _, id := range ids {
 			idList = append(idList, id)
 		}
-		vecs, err := d.Abstraction.BodyVectorsByFactID(ctx, idList)
+		vecs, err := abstraction.BodyVectorsByFactID(ctx, idList)
 		if err != nil {
 			return 0, err
 		}

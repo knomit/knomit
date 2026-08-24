@@ -291,8 +291,8 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// hypothesize tool's synthesis-only seed pool is untouched by this
 	// (designer ruling 2026-08-23, phase3-rulings-1 Q2).
 	nearMotif, farMotif, motifHealth, mErr := buildMotifBridges(ctx, d.Search, branch,
-		llmSeeds, cr, d.Effort, cfg, motifResolverFor(ctx, d, branch),
-		subjectLabelsFor(ctx, d, branch), meanSimFor(d, branch))
+		llmSeeds, cr, d.Effort, cfg, motifResolverFor(ctx, d.Motifs, branch),
+		subjectLabelsFor(ctx, d.Search, branch), meanSimFor(d.Abstraction, branch))
 	if mErr != nil {
 		// Degrade rather than fail the session: the grounded work above is
 		// already queued, and an unavailable axis is not a reason to lose it.

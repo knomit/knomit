@@ -959,3 +959,135 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 	require.Contains(t, lines, "motif far-lane oversize: 1 group(s)")
 	require.Contains(t, lines, "motif far-lane other: 1 group(s)")
 }
+
+// ── T1: the measurement reads the engine, not a second implementation ─────
+
+// The rule this asserts: what the Phase-4 instrument measures is what a review
+// session would serve. Production filters and ranks the rows; if it ever grew
+// a filter of its own, the numbers the phase sets constants on would quietly
+// stop describing the shipped axis. Both sides drive scoreMotifCandidates, and
+// this is what pins that they still do.
+func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.T) {
+	seeds, clusters, labels, idx, cfg := laneMixtureFixture(t)
+
+	rows, rowHealth, err := scoreMotifCandidates(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+	require.NoError(t, err)
+
+	near, far, buildHealth, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+	require.NoError(t, err)
+	require.Equal(t, rowHealth, buildHealth, "one enumeration, one health picture")
+
+	// Rebuild what production serves, from the rows alone.
+	var wantNear, wantFar []BridgeSeedSet
+	for _, r := range rows {
+		if !r.kept {
+			continue
+		}
+		c := r.cand
+		c.Q = r.q
+		if r.lane == LaneNear {
+			wantNear = append(wantNear, c)
+		} else {
+			wantFar = append(wantFar, c)
+		}
+	}
+	nb, fb := motifSubBudget(EffortHigh)
+
+	require.NotEmpty(t, wantNear, "precondition: the fixture must serve something on each lane")
+	require.NotEmpty(t, wantFar, "precondition: the fixture must serve something on each lane")
+	// PRECONDITION, and it is load-bearing: the served groups must DIFFER in
+	// member count. A fixture whose served groups all have two members cannot
+	// see a production-side filter on member count, and the first version of
+	// this test could not — the sabotage passed. Assert the difference rather
+	// than trusting the fixture to keep it (lesson 5).
+	sizes := map[int]bool{}
+	for _, b := range append(append([]BridgeSeedSet{}, wantNear...), wantFar...) {
+		sizes[len(b.Members)] = true
+	}
+	require.Greater(t, len(sizes), 1,
+		"precondition: served groups must vary in member count, or this test is blind to a size filter")
+	require.Equal(t, rankAndCap(wantNear, nb), near)
+	require.Equal(t, rankAndCap(wantFar, fb), far)
+}
+
+// The rows carry the DROPPED candidates too, with the cause — which is the
+// whole reason the instrument exists, since production throws them away and
+// every carried-forward measurement is about them.
+func TestScoreMotifCandidates_CarryDroppedCandidatesWithTheirCause(t *testing.T) {
+	seeds, clusters, labels, idx, cfg := laneMixtureFixture(t)
+
+	rows, health, err := scoreMotifCandidates(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+	require.NoError(t, err)
+
+	byCause := map[motifDropCause]int{}
+	for _, r := range rows {
+		byCause[r.cause]++
+		require.Equal(t, r.kept, r.cause == motifKept,
+			"a row is kept exactly when it has no drop cause")
+	}
+	require.Positive(t, byCause[motifKept], "precondition: something survived")
+	require.Positive(t, byCause[motifNearFloor], "precondition: the fixture drops one at the near floor")
+	require.Positive(t, byCause[motifFarOversize], "precondition: and one over the far cap")
+
+	// The counters are TALLIED from these rows, so they cannot disagree about
+	// the same group — the M4 counter-finding made structurally impossible
+	// rather than re-checked by hand.
+	require.Equal(t, byCause[motifNearFloor], health.NearFloorDropped)
+	require.Equal(t, byCause[motifNearOther], health.NearOtherDropped)
+	require.Equal(t, byCause[motifFarOversize], health.FarOversizeDropped)
+	require.Equal(t, byCause[motifFarOther], health.FarOtherDropped)
+	require.Equal(t, byCause[motifKept], health.Candidates-
+		(health.NearFloorDropped+health.NearOtherDropped+health.FarOversizeDropped+health.FarOtherDropped),
+		"every enumerated candidate is either served or attributed to one cause")
+}
+
+// laneMixtureFixture builds a corpus that exercises every outcome at once: a
+// cohesive near group that survives, a sparse near group killed by the floor, a
+// dissimilar far group that survives, and an oversized far group killed by the
+// cap. Deliberately non-degenerate (lesson 5) — the four groups differ in the
+// properties the attribution turns on, and the test asserts that as a
+// precondition rather than trusting the construction.
+func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, store.SubjectLabelDF, *pairwiseIndex, QualityConfig) {
+	t.Helper()
+	mk := func(file, motif, entity string) factForLLM {
+		return factForLLM{File: file, Motifs: []string{motif}, Entities: []string{entity}}
+	}
+	seeds := []factForLLM{
+		// tight-shape: two members, one edge => cohesion 1.0 => near, survives.
+		mk("kb/a/1.md", "tight-shape", "Alpha"), mk("kb/b/2.md", "tight-shape", "Beta"),
+		// dense-shape: THREE members, all three pairs edged => cohesion 1.0 =>
+		// near, survives, and is the only served group with more than two
+		// members. Without it every served group coincides at size 2 and a
+		// production-side member filter is invisible to the equivalence test
+		// (lesson 5, found by sabotaging exactly that).
+		mk("kb/l/12.md", "dense-shape", "Mu"), mk("kb/m/13.md", "dense-shape", "Nu"),
+		mk("kb/n/14.md", "dense-shape", "Xi"),
+		// sparse-shape: three members, one edge => density 0.33 => near, floored.
+		mk("kb/c/3.md", "sparse-shape", "Gamma"), mk("kb/d/4.md", "sparse-shape", "Delta"),
+		mk("kb/e/5.md", "sparse-shape", "Epsilon"),
+		// apart-shape: two members, no edge => far, survives.
+		mk("kb/f/6.md", "apart-shape", "Zeta"), mk("kb/g/7.md", "apart-shape", "Eta"),
+		// wide-shape: four members, no edges => far, over the cap of three.
+		mk("kb/h/8.md", "wide-shape", "Theta"), mk("kb/i/9.md", "wide-shape", "Iota"),
+		mk("kb/j/10.md", "wide-shape", "Kappa"), mk("kb/k/11.md", "wide-shape", "Lambda"),
+	}
+	clusters := ClusterResult{Clusters: map[int][]string{}}
+	labels := labelsWith(200, nil)
+	for i, f := range seeds {
+		clusters.Clusters[i] = []string{f.File}
+		labels.DF[strings.ToLower(f.Entities[0])] = 2
+	}
+	idx := &pairwiseIndex{edges: [][2]string{
+		{"kb/a/1.md", "kb/b/2.md"}, // tight-shape: the only pair, so cohesion 1.0
+		{"kb/c/3.md", "kb/d/4.md"}, // sparse-shape: one of three pairs
+		// dense-shape: all three pairs, so cohesion is 1.0 at three members
+		{"kb/l/12.md", "kb/m/13.md"}, {"kb/l/12.md", "kb/n/14.md"},
+		{"kb/m/13.md", "kb/n/14.md"},
+	}}
+	cfg := motifQualityConfig()
+	cfg.MaxMembers = 3
+	return seeds, clusters, labels, idx, cfg
+}
