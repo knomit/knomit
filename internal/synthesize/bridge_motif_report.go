@@ -86,6 +86,20 @@ type MotifReport struct {
 	PointStrict        bool     `json:"disjointness_strict"`
 	HealthLines        []string `json:"health_lines"`
 
+	// SeedDF2Clusters and SeedBridgeablePairs are the ACTIVATION POPULATION:
+	// recurring clusters, and the fact pairs they could bridge, counted over
+	// the seed pool rather than over all authored facts.
+	//
+	// The distinction is the whole point and it is not small. The store's
+	// MotifCoverage/VocabularyHealth count AUTHORED facts; the bridging
+	// population is the review seed pool, which AcceptSeed filters to
+	// Kind == Epistemic. Between a quarter and a half of every measured
+	// corpus's motif-bearing facts are pragmatic and can never bridge, so a
+	// floor set on the authored counts would be set on a population the axis
+	// cannot act on.
+	SeedDF2Clusters     int `json:"seed_df2_clusters"`
+	SeedBridgeablePairs int `json:"seed_bridgeable_pairs"`
+
 	// Token2Pairs is every pair of canonical ids the token-2 tier would join,
 	// with the stems they share — carried-forward register entry 6's "readers
 	// of tier numbers must know what produced them".
@@ -223,6 +237,7 @@ func MotifComponentReport(
 	rep.PointStrict = health.Point.Strict
 	rep.HealthLines = motifBridgeHealthLines(health, len(near), len(far))
 	rep.Token2Pairs = token2PairsOf(seeds, resolve)
+	rep.SeedDF2Clusters, rep.SeedBridgeablePairs = seedRecurrence(seeds, resolve)
 
 	return rep, nil
 }
@@ -268,4 +283,36 @@ func token2PairsOf(seeds []factForLLM, resolve motifResolver) []Token2Pair {
 		}
 	}
 	return out
+}
+
+// seedRecurrence counts recurring clusters and the pairs they could bridge,
+// over the SEED POOL — the population the activation floor is set on.
+//
+// A carrier is counted once per canonical id however many spellings of it the
+// fact carries, matching what TokenDF and the vocabulary health both do: a
+// fact using two spellings of one mechanism is one carrier, not two, or a
+// single author's phrasing habit would read as recurrence.
+func seedRecurrence(seeds []factForLLM, resolve motifResolver) (df2Clusters, pairs int) {
+	carriers := map[string]map[string]struct{}{}
+	for _, f := range seeds {
+		for _, m := range f.Motifs {
+			c := resolve(m)
+			if c == "" {
+				continue
+			}
+			if carriers[c] == nil {
+				carriers[c] = map[string]struct{}{}
+			}
+			carriers[c][f.File] = struct{}{}
+		}
+	}
+	for _, set := range carriers {
+		n := len(set)
+		if n < 2 {
+			continue
+		}
+		df2Clusters++
+		pairs += n * (n - 1) / 2
+	}
+	return df2Clusters, pairs
 }

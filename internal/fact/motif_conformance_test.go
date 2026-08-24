@@ -264,7 +264,7 @@ var mechanicsPaths = map[string][]string{
 	// token2PairsOf reports which canonical ids the token-2 tier WOULD fold,
 	// using the tier's own predicate. It decides nothing — the report is
 	// read-only and no branch consults it.
-	"internal/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf"},
+	"internal/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf", "seedRecurrence"},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
 	// names motifs only in describing what it gates. Listed with no permitted
