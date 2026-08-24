@@ -466,7 +466,100 @@ func laneOf(paths []string, g store.SimilarityGraph) BridgeLane {
 // graph cannot supply them: that graph is a top-K edge set, and in the far lane
 // it is empty by definition, so a "similarity" read off it would be the same
 // constant for every far candidate — a term that ranks nothing.
-type meanSimFn func(ctx context.Context, paths []string) (float64, error)
+// pairCosFn returns EVERY member-pair body cosine, not just their mean.
+//
+// The far lane only ever wanted the mean, but §8's novelty signals need the
+// distribution: "any pair over dedup" is a question about individual pairs that
+// a mean cannot answer — a group with one near-duplicate pair and three distant
+// ones has an unremarkable mean and is exactly the case the signal exists to
+// surface.
+type pairCosFn func(ctx context.Context, paths []string) ([]float64, error)
+
+// dedupThresholdFor reads the dedup cosine OverDedup is measured against.
+//
+// It is the model-dependent threshold discovery's own duplicate check uses
+// (store.EmbedderThresholds), never a number of this file's own — a novelty
+// signal calibrated against a different threshold from the gate it describes
+// would be measuring nothing anybody acts on.
+func dedupThresholdFor(idx SearchQuery) float64 {
+	if e, ok := idx.(interface{ Embedder() store.Embedder }); ok {
+		return store.EmbedderThresholds(e.Embedder()).Dedup
+	}
+	return store.EmbedderThresholds(nil).Dedup
+}
+
+// noveltyOf computes §8's seed-set novelty signals for one candidate.
+//
+// EntityJaccard needs no vectors and is always computed. The other two need a
+// vector source, so VectorsRead reports whether they mean anything — a zero
+// SeedCos from "no vectors" and a zero from "genuinely dissimilar" are opposite
+// findings and must not share a representation.
+func noveltyOf(ctx context.Context, members []factForLLM, paths []string, pairCos pairCosFn, dedup float64) (NoveltySignals, error) {
+	n := NoveltySignals{EntityJaccard: meanEntityJaccard(members)}
+	if pairCos == nil {
+		return n, nil
+	}
+	cs, err := pairCos(ctx, paths)
+	if err != nil {
+		return n, err
+	}
+	if len(cs) == 0 {
+		return n, nil
+	}
+	n.VectorsRead = true
+	var sum float64
+	over := 0
+	for _, c := range cs {
+		sum += c
+		if c >= dedup {
+			over++
+		}
+	}
+	n.SeedCos = sum / float64(len(cs))
+	n.OverDedup = float64(over) / float64(len(cs))
+	return n, nil
+}
+
+// meanEntityJaccard is the mean Jaccard overlap of member ENTITY sets over all
+// member pairs — the subject-axis counterpart to SeedCos.
+//
+// A pair with no entities on either side contributes 0, not 1: "two facts that
+// name nothing" is an absence of evidence about their subjects, and scoring it
+// as perfect disjointness would reward the corpus for being unlabelled.
+func meanEntityJaccard(members []factForLLM) float64 {
+	if len(members) < 2 {
+		return 0
+	}
+	sets := make([]map[string]struct{}, len(members))
+	for i, m := range members {
+		sets[i] = map[string]struct{}{}
+		for _, e := range m.Entities {
+			sets[i][strings.ToLower(e)] = struct{}{}
+		}
+	}
+	var sum float64
+	pairs := 0
+	for i := range sets {
+		for j := i + 1; j < len(sets); j++ {
+			inter, union := 0, len(sets[j])
+			for t := range sets[i] {
+				if _, ok := sets[j][t]; ok {
+					inter++
+				} else {
+					union++
+				}
+			}
+			pairs++
+			if union > 0 {
+				sum += float64(inter) / float64(union)
+			}
+		}
+	}
+	if pairs == 0 {
+		return 0
+	}
+	return sum / float64(pairs)
+}
 
 // scoreMotifCandidate scores one candidate on its lane.
 //
@@ -494,7 +587,7 @@ func scoreMotifCandidate(
 	clusterOf map[string]int,
 	cfg QualityConfig,
 	sharedSpec float64,
-	meanSim meanSimFn,
+	pairCos pairCosFn,
 ) (BridgeComponents, float64, bool, error) {
 	paths := make([]string, 0, len(cand.Members))
 	for _, m := range cand.Members {
@@ -511,6 +604,14 @@ func scoreMotifCandidate(
 		Spec:    sharedSpec,
 		Members: len(paths),
 	}
+	// §8's novelty signals. Computed for EVERY candidate, on both lanes and
+	// whether or not it is kept, because `calibrate bridges` is about the
+	// distribution the scorer sees rather than the slice it serves.
+	nov, err := noveltyOf(ctx, cand.Members, paths, pairCos, dedupThresholdFor(idx))
+	if err != nil {
+		return comp, 0, false, err
+	}
+	comp.Novelty = nov
 	if lane == LaneNear {
 		q, kept := bridgeQ(comp, cfg)
 		return comp, q, kept, nil
@@ -518,7 +619,7 @@ func scoreMotifCandidate(
 	if comp.Sep < 2 || comp.Members > cfg.MaxMembers {
 		return comp, 0, false, nil
 	}
-	ms, err := meanSim(ctx, paths)
+	ms, err := meanPairCos(ctx, paths, pairCos)
 	if err != nil {
 		// Propagated, never defaulted. A similarity that could not be read is
 		// not "maximally dissimilar", and treating it as 0 would hand every
@@ -661,9 +762,9 @@ func buildMotifBridges(
 	cfg QualityConfig,
 	resolve motifResolver,
 	labels store.SubjectLabelDF,
-	meanSim meanSimFn,
+	pairCos pairCosFn,
 ) ([]BridgeSeedSet, []BridgeSeedSet, motifEnumHealth, error) {
-	rows, health, err := scoreMotifCandidates(ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, meanSim)
+	rows, health, err := scoreMotifCandidates(ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, pairCos)
 	if err != nil {
 		return nil, nil, health, err
 	}
@@ -733,7 +834,7 @@ func scoreMotifCandidates(
 	cfg QualityConfig,
 	resolve motifResolver,
 	labels store.SubjectLabelDF,
-	meanSim meanSimFn,
+	pairCos pairCosFn,
 ) ([]scoredMotifRow, motifEnumHealth, error) {
 	// A corpus with no motifs costs nothing at all — not one index call. This
 	// is the mechanism behind MN5's vacuous pass, so it is stated here rather
@@ -785,7 +886,7 @@ func scoreMotifCandidates(
 		if err != nil {
 			return nil, health, err
 		}
-		comp, q, kept, err := scoreMotifCandidate(ctx, cand.BridgeSeedSet, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
+		comp, q, kept, err := scoreMotifCandidate(ctx, cand.BridgeSeedSet, lane, g, idx, branch, clusterOf, cfg, spec, pairCos)
 		if err != nil {
 			return nil, health, err
 		}
@@ -1051,11 +1152,11 @@ func subjectLabelsFor(ctx context.Context, search SearchQuery, branch string) st
 // The far lane cannot get them from the SIMILAR_TO graph — that graph is empty
 // there by definition — so this reaches for the vectors the graph was built
 // from.
-func meanSimFor(abstraction store.AbstractionIndex, branch string) meanSimFn {
-	return func(ctx context.Context, paths []string) (float64, error) {
+func pairCosFor(abstraction store.AbstractionIndex, branch string) pairCosFn {
+	return func(ctx context.Context, paths []string) ([]float64, error) {
 		ids, err := abstraction.FactIDsByPath(ctx, branch, paths)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		idList := make([]int64, 0, len(ids))
 		for _, id := range ids {
@@ -1063,28 +1164,45 @@ func meanSimFor(abstraction store.AbstractionIndex, branch string) meanSimFn {
 		}
 		vecs, err := abstraction.BodyVectorsByFactID(ctx, idList)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
-		var sum float64
-		var n int
+		var out []float64
 		for i := 0; i < len(idList); i++ {
 			for j := i + 1; j < len(idList); j++ {
 				a, b := vecs[idList[i]], vecs[idList[j]]
 				if len(a) == 0 || len(b) == 0 {
 					continue
 				}
-				sum += dot(a, b)
-				n++
+				out = append(out, dot(a, b))
 			}
 		}
-		if n == 0 {
-			// No vectors is NOT "maximally dissimilar". Returning 0 would hand
-			// every un-embedded group the highest far-lane score there is,
-			// which is the opposite of what missing evidence should buy.
-			return 1, nil
-		}
-		return sum / float64(n), nil
+		return out, nil
 	}
+}
+
+// meanPairCos is the far lane's view of the pair distribution.
+//
+// AN EMPTY DISTRIBUTION SCORES 1, NOT 0. No vectors is not "maximally
+// dissimilar": returning 0 would hand every un-embedded group the highest
+// far-lane score there is, which is the opposite of what missing evidence
+// should buy. That rule lived inside the old mean-only provider and is kept
+// here rather than lost in the refactor.
+func meanPairCos(ctx context.Context, paths []string, pairCos pairCosFn) (float64, error) {
+	if pairCos == nil {
+		return 1, nil
+	}
+	cs, err := pairCos(ctx, paths)
+	if err != nil {
+		return 0, err
+	}
+	if len(cs) == 0 {
+		return 1, nil
+	}
+	var sum float64
+	for _, c := range cs {
+		sum += c
+	}
+	return sum / float64(len(cs)), nil
 }
 
 // motifBridgeHealthLines are DESCRIPTORS: no branch in this package reads any

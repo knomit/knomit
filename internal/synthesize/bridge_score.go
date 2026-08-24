@@ -15,6 +15,39 @@ type BridgeComponents struct {
 	Gap     float64 // derivation gap (computed in Task 8; zero until then)
 	Spec    float64 // specificity signal (computed in Task 8; zero until then)
 	Members int     // number of member facts in the seed set
+	// Novelty holds §8's per-seed-set novelty signals, for `calibrate bridges`.
+	// Diagnostic only: bridgeQ does not read them and no gate consults them.
+	Novelty NoveltySignals
+}
+
+// NoveltySignals are blueprint §8's novelty measures for one bridge seed set.
+//
+// SEED-SET properties, computed at scoring time. §8 also asks for SURVIVAL,
+// which is deliberately NOT here: survival is a property of a fact that does
+// not exist yet when a candidate is scored, so a field for it would be filled
+// in before there was anything to survive (Phase-4 Q4 ruling). It is reported
+// separately, against discovered facts, by the survival report.
+type NoveltySignals struct {
+	// VectorsRead reports whether a vector source was available. Without it
+	// SeedCos and OverDedup are not computed, and their zeros mean "unknown"
+	// rather than "zero" — opposite findings that must not share a shape.
+	VectorsRead bool
+	// SeedCos is the mean body cosine over member pairs. Low means the members
+	// are textually unalike, which on the far lane is the point.
+	SeedCos float64
+	// EntityJaccard is the mean entity-set overlap over member pairs. Computed
+	// whether or not vectors are available.
+	EntityJaccard float64
+	// OverDedup is the fraction of member pairs at or above the dedup
+	// threshold.
+	//
+	// READ IT AS A FLOOR, NOT AN ALL-CLEAR. The dedup gate catches VERBATIM
+	// duplicates only — semantic restatements sail past it, which is why
+	// discovery's novelty rests on the agent's default-skip rather than on the
+	// gate (gotcha 90d69628). So OverDedup > 0 does mean this group contains a
+	// near-copy; OverDedup == 0 does NOT mean the members are saying different
+	// things.
+	OverDedup float64
 }
 
 // QualityConfig holds the tunable knobs for the bridge quality scorer. Fields

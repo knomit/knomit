@@ -58,6 +58,15 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 			if err := eff.Validate(); err != nil {
 				return fmt.Errorf("--effort: %w", err)
 			}
+			// MOTIF is a SIBLING report, not a kind of this one (Phase-4 Q3).
+			// The two enumerate different populations over different pools with
+			// different engines, and 8ad54ee8 is precisely an aggregate whose
+			// population was not the production population, surviving because
+			// nothing forced the population into the output. Folding a second
+			// population behind a flag on one function is how that recurs.
+			if kindStr == "motif" {
+				return runMotifReport(cmd, dbPath, branch, effortStr, resolution, minCommunity, cfg)
+			}
 			kind := synthesize.BridgeKindFromString(kindStr)
 
 			// Open the index without an embedder — the scoring path is embedder-free.
@@ -76,6 +85,14 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 			}
 
 			out := cmd.OutOrStdout()
+			// POPULATION FIRST, before any number. A figure that travels
+			// without the population it was computed over is how 8ad54ee8
+			// happened: a suggested floor derived from unreshaped candidates,
+			// read as if it described the production ones.
+			fmt.Fprintf(out, "POPULATION: %s bridge candidates over live SYNTHESIS facts on %q, "+
+				"scored UNRESHAPED (production applies cohFloor AFTER reshapeCohesiveSubset, "+
+				"so the suggested floor below is a lower bound, not the production floor)\n\n",
+				kindStr, branch)
 			if len(report) == 0 {
 				fmt.Fprintln(out, "no bridge candidates found")
 				return nil
@@ -133,7 +150,7 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 	f.String("db", "", "path to knomit index DB (required)")
 	f.String("branch", "main", "branch name to query")
 	f.String("effort", "medium", "discovery effort level (normal/medium/high)")
-	f.String("kind", "both", "bridge kind to enumerate (domain/entity/both)")
+	f.String("kind", "both", "bridge kind to enumerate (domain/entity/both/motif)")
 	f.Float64("resolution", 2.0, "Louvain resolution for clustering")
 	f.Int("min-community", 2, "minimum community size for clustering")
 	// Q-knob overrides: register with config.Defaults().Discovery values as the
@@ -204,4 +221,71 @@ func sortedCopy(vs []float64) []float64 {
 	copy(cp, vs)
 	sort.Float64s(cp)
 	return cp
+}
+
+// runMotifReport prints the motif axis's component report.
+//
+// Separate from the entity/domain path deliberately (Phase-4 Q3): different
+// population, different pool, different engine. It states all three in its own
+// header rather than inheriting a sentence written about another axis.
+func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
+	resolution float64, minCommunity int, cfg synthesize.QualityConfig) error {
+	eff := synthesize.NormalizeEffort(synthesize.Effort(effortStr))
+	if err := eff.Validate(); err != nil {
+		return fmt.Errorf("--effort: %w", err)
+	}
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open index %q: %w", dbPath, err)
+	}
+	defer svc.Close()
+
+	rep, err := synthesize.MotifComponentReport(cmd.Context(), svc.Search(), svc.Motifs(),
+		svc.Abstraction(), branch, eff, resolution, minCommunity, cfg)
+	if err != nil {
+		return fmt.Errorf("motif component report: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "POPULATION: %s\n\n", rep.Population)
+	fmt.Fprintf(out, "%s\n", rep.Summary())
+	if !rep.ActivationActive {
+		fmt.Fprintf(out, "\nAXIS INACTIVE: %d recurring motif(s) — below the activation floor. "+
+			"Nothing below is a statement about this corpus's bridges; the axis did not run.\n",
+			rep.SeedDF2Clusters)
+	}
+	fmt.Fprintf(out, "activation population: %d recurring motif(s), %d bridgeable pair(s)\n\n",
+		rep.SeedDF2Clusters, rep.SeedBridgeablePairs)
+
+	if len(rep.Candidates) == 0 {
+		fmt.Fprintln(out, "no motif bridge candidates found")
+		return nil
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "TOKEN\tLANE\tMEMBERS\tCOH\tSEP\tGAP\tSPEC\tSEEDCOS\tEJACC\tOVERDUP\tQ\tKEPT/CAUSE")
+	for _, b := range rep.Candidates {
+		verdict := "yes"
+		if !b.Kept {
+			verdict = b.Cause
+		}
+		seedCos, overDup := "n/a", "n/a"
+		if b.Comp.Novelty.VectorsRead {
+			seedCos = fmt.Sprintf("%.3f", b.Comp.Novelty.SeedCos)
+			overDup = fmt.Sprintf("%.3f", b.Comp.Novelty.OverDedup)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%.3f\t%d\t%.3f\t%.3f\t%s\t%.3f\t%s\t%.3f\t%s\n",
+			b.Token, b.Lane, len(b.Members), b.Comp.Coh, b.Comp.Sep, b.Comp.Gap, b.Comp.Spec,
+			seedCos, b.Comp.Novelty.EntityJaccard, overDup, b.Q, verdict)
+	}
+	tw.Flush()
+
+	fmt.Fprintf(out, "\nserved: %d near, %d far (budgets %d/%d)\n",
+		len(rep.NearServed), len(rep.FarServed), rep.NearBudget, rep.FarBudget)
+	fmt.Fprintln(out, "\nNOTE: OVERDUP counts member pairs at or above the dedup cosine, which "+
+		"catches VERBATIM duplicates only (90d69628). A zero does NOT mean the members say "+
+		"different things.")
+	for _, l := range rep.HealthLines {
+		fmt.Fprintf(out, "  health: %s\n", l)
+	}
+	return nil
 }

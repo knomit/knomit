@@ -261,13 +261,13 @@ func TestScoreMotifCandidate_FarLaneRewardsDissimilarity(t *testing.T) {
 	clusterOf := map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1}
 
 	_, distant, keptA, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
-		clusterOf, motifQualityConfig(), 0.5, constMeanSim(0.1))
+		clusterOf, motifQualityConfig(), 0.5, constPairCos(0.1))
 	require.NoError(t, err)
 	require.True(t, keptA,
 		"the far lane must not apply the cohesion floor — cohesion is 0 there by construction")
 
 	_, close, keptB, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
-		clusterOf, motifQualityConfig(), 0.5, constMeanSim(0.9))
+		clusterOf, motifQualityConfig(), 0.5, constPairCos(0.9))
 	require.NoError(t, err)
 	require.True(t, keptB)
 
@@ -296,7 +296,7 @@ func TestScoreMotifCandidate_SeparationIsAGateInBothLanes(t *testing.T) {
 	cfg.CohFloor = 0 // so only separation can be what rejects
 
 	_, _, keptFar, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar,
-		store.NewSimilarityGraph(nil), idx, "main", sameCommunity, cfg, 0.5, constMeanSim(0))
+		store.NewSimilarityGraph(nil), idx, "main", sameCommunity, cfg, 0.5, constPairCos(0))
 	require.NoError(t, err)
 	require.False(t, keptFar)
 
@@ -324,25 +324,34 @@ func TestScoreMotifCandidate_FarLaneDropsOversizedGroups(t *testing.T) {
 	cfg.MaxMembers = 3
 
 	_, _, kept, err := scoreMotifCandidate(ctx, cand, LaneFar, store.NewSimilarityGraph(nil),
-		idx, "main", clusterOf, cfg, 0.5, constMeanSim(0.1))
+		idx, "main", clusterOf, cfg, 0.5, constPairCos(0.1))
 	require.NoError(t, err)
 	require.False(t, kept)
 }
 
 // A far-lane group whose members carry no vectors must not read as maximally
 // dissimilar — that would hand every unembedded group the top score. The
-// caller's meanSim contract says so; this pins the scorer's half of it.
-func TestScoreMotifCandidate_FarLanePropagatesMeanSimErrors(t *testing.T) {
+// caller's pair-cosine contract says so; this pins the scorer's half of it.
+func TestScoreMotifCandidate_FarLanePropagatesPairCosErrors(t *testing.T) {
 	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
 	_, _, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, store.NewSimilarityGraph(nil),
 		idx, "main", map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1},
 		motifQualityConfig(), 0.5,
-		func(context.Context, []string) (float64, error) { return 0, errors.New("no vectors") })
+		func(context.Context, []string) ([]float64, error) { return nil, errors.New("no vectors") })
 	require.Error(t, err, "an unreadable similarity is not a licence to score the group high")
 }
 
-func constMeanSim(v float64) meanSimFn {
-	return func(context.Context, []string) (float64, error) { return v, nil }
+// constPairCos gives every member pair the same cosine, so the far-lane mean
+// is exactly v however many members a fixture has.
+func constPairCos(v float64) pairCosFn {
+	return func(_ context.Context, paths []string) ([]float64, error) {
+		n := len(paths) * (len(paths) - 1) / 2
+		out := make([]float64, n)
+		for i := range out {
+			out[i] = v
+		}
+		return out, nil
+	}
 }
 
 // ── shared-motif specificity: a rank boost, never a gate (§4) ─────────────
@@ -573,7 +582,7 @@ func TestBuildMotifBridges_NormalEmitsAtMostTwoNearAndNoFar(t *testing.T) {
 	idx := &allAdjacentIndex{} // every group is a near-lane group
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0))
+		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0))
 
 	require.NoError(t, err)
 	require.Equal(t, 6, health.Candidates, "precondition: more candidates than the budget")
@@ -590,7 +599,7 @@ func TestBuildMotifBridges_NormalEmitsNothingForFarLaneGroups(t *testing.T) {
 	idx := &countingSearchIndex{} // no adjacency: every group is far
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortNormal, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 6, health.Candidates, "precondition: the candidates exist")
@@ -603,7 +612,7 @@ func TestBuildMotifBridges_HighOpensBothLanesWithinTheirBudgets(t *testing.T) {
 	idx := &countingSearchIndex{} // no SIMILAR_TO edges => every group is far
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 20, health.Candidates)
@@ -621,7 +630,7 @@ func TestBuildMotifBridges_LanesCannotStarveEachOther(t *testing.T) {
 	idx := &laneSplittingIndex{nearPair: [2]string{"kb/a00/fa00.md", "kb/b00/fb00.md"}}
 
 	near, far, _, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, permissiveMotifConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Len(t, near, 1, "the one adjacent group takes a near slot")
@@ -816,7 +825,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 	cfg := motifQualityConfig() // CohFloor 0.5
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 1, health.Candidates, "precondition: the group enumerated")
@@ -873,7 +882,7 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 	cfg.MaxMembers = 3 // group B has four
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, health.Candidates, "precondition: both groups enumerated")
@@ -944,7 +953,7 @@ func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 	cfg.MaxMembers = 3
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 1, health.Candidates, "precondition: the group enumerated")
@@ -992,7 +1001,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 	require.NotEqual(t, 4, 2, "group sizes straddle the cap")
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, health.Candidates, "precondition: both groups enumerated")
@@ -1017,11 +1026,11 @@ func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.
 	seeds, clusters, labels, idx, cfg := laneMixtureFixture(t)
 
 	rows, rowHealth, err := scoreMotifCandidates(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 
 	near, far, buildHealth, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 	// buildMotifBridges' health carries ONE field the rows' does not:
 	// FamilySuppressedByExact, which only exists once suppression has run. Set
@@ -1075,7 +1084,7 @@ func TestScoreMotifCandidates_CarryDroppedCandidatesWithTheirCause(t *testing.T)
 	seeds, clusters, labels, idx, cfg := laneMixtureFixture(t)
 
 	rows, health, err := scoreMotifCandidates(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, cfg, identityResolver, labels, constPairCos(0.1))
 	require.NoError(t, err)
 
 	byCause := map[motifDropCause]int{}
@@ -1165,7 +1174,7 @@ func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T
 	idx := &countingIndex{pairwiseIndex: pairwiseIndex{edges: nil}}
 
 	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, 2, health.Activation.DF2Clusters, "precondition: below the floor of 3")
@@ -1195,7 +1204,7 @@ func TestBuildMotifBridges_AtTheActivationFloorEnumeratesNormally(t *testing.T) 
 	idx := &pairwiseIndex{}
 
 	_, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
-		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constMeanSim(0.1))
+		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constPairCos(0.1))
 
 	require.NoError(t, err)
 	require.Equal(t, motifActivationFloor, health.Activation.DF2Clusters,
@@ -1282,4 +1291,54 @@ func activationFillers() []factForLLM {
 		{File: "kb/fill/b1.md", Motifs: []string{"filler-shape-two"}, Entities: []string{"FillerBeta"}},
 		{File: "kb/fill/b2.md", Motifs: []string{"filler-shape-two"}, Entities: []string{"FillerBeta"}},
 	}
+}
+
+// ── P3: §8's novelty signals ──────────────────────────────────────────────
+
+func TestNoveltyOf_VectorsReadDistinguishesUnknownFromZero(t *testing.T) {
+	members := []factForLLM{{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}
+	paths := []string{"kb/a/1.md", "kb/b/2.md"}
+
+	// No provider at all: SeedCos and OverDedup are UNKNOWN, and the flag is
+	// what says so. Their zeros must not be read as measurements.
+	none, err := noveltyOf(context.Background(), members, paths, nil, 0.92)
+	require.NoError(t, err)
+	require.False(t, none.VectorsRead)
+	require.Zero(t, none.SeedCos)
+
+	// A provider returning genuinely-zero cosines: same zeros, opposite meaning.
+	zeroed, err := noveltyOf(context.Background(), members, paths, constPairCos(0), 0.92)
+	require.NoError(t, err)
+	require.True(t, zeroed.VectorsRead, "the flag is the ONLY thing separating these two results")
+	require.Zero(t, zeroed.SeedCos)
+}
+
+func TestNoveltyOf_OverDedupIsAFractionOfPairs(t *testing.T) {
+	members := []factForLLM{{File: "a"}, {File: "b"}, {File: "c"}}
+	paths := []string{"a", "b", "c"}
+	// Three pairs; one of them at/above the threshold.
+	pc := func(context.Context, []string) ([]float64, error) {
+		return []float64{0.95, 0.10, 0.20}, nil
+	}
+	got, err := noveltyOf(context.Background(), members, paths, pc, 0.92)
+	require.NoError(t, err)
+	require.InDelta(t, 1.0/3.0, got.OverDedup, 1e-9)
+	require.InDelta(t, (0.95+0.10+0.20)/3, got.SeedCos, 1e-9,
+		"SeedCos is the MEAN, so one near-duplicate pair does not dominate it — "+
+			"which is exactly why OverDedup is reported beside it")
+}
+
+func TestMeanEntityJaccard_DisjointAndOverlapping(t *testing.T) {
+	disjoint := []factForLLM{
+		{Entities: []string{"Redis"}}, {Entities: []string{"SWIFT"}}}
+	require.Zero(t, meanEntityJaccard(disjoint))
+
+	overlap := []factForLLM{
+		{Entities: []string{"Redis", "Kafka"}}, {Entities: []string{"Redis"}}}
+	require.InDelta(t, 0.5, meanEntityJaccard(overlap), 1e-9, "one shared of two distinct")
+
+	// Two facts naming NOTHING are an absence of evidence about their subjects,
+	// not perfect disjointness. Scoring them 1.0 would reward a corpus for
+	// being unlabelled.
+	require.Zero(t, meanEntityJaccard([]factForLLM{{}, {}}))
 }

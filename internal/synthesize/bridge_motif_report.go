@@ -97,8 +97,9 @@ type MotifReport struct {
 	// corpus's motif-bearing facts are pragmatic and can never bridge, so a
 	// floor set on the authored counts would be set on a population the axis
 	// cannot act on.
-	SeedDF2Clusters     int `json:"seed_df2_clusters"`
-	SeedBridgeablePairs int `json:"seed_bridgeable_pairs"`
+	ActivationActive    bool `json:"activation_active"`
+	SeedDF2Clusters     int  `json:"seed_df2_clusters"`
+	SeedBridgeablePairs int  `json:"seed_bridgeable_pairs"`
 
 	// Token2Pairs is every pair of canonical ids the token-2 tier would join,
 	// with the stems they share — carried-forward register entry 6's "readers
@@ -185,9 +186,9 @@ func MotifComponentReport(
 
 	resolve := motifResolverFor(ctx, motifs, branch)
 	labels := subjectLabelsFor(ctx, idx, branch)
-	meanSim := meanSimFor(abstraction, branch)
+	pairCos := pairCosFor(abstraction, branch)
 
-	rows, _, err := scoreMotifCandidates(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, meanSim)
+	rows, _, err := scoreMotifCandidates(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, pairCos)
 	if err != nil {
 		return rep, err
 	}
@@ -212,7 +213,7 @@ func MotifComponentReport(
 	// would enqueue, not only what enumeration found.
 	// buildMotifBridges' health is the SUPERSET: same enumeration, plus what
 	// suppression did — which only exists once the served set is built.
-	near, far, health, err := buildMotifBridges(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, meanSim)
+	near, far, health, err := buildMotifBridges(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, pairCos)
 	if err != nil {
 		return rep, err
 	}
@@ -238,6 +239,7 @@ func MotifComponentReport(
 	rep.HealthLines = motifBridgeHealthLines(health, len(near), len(far))
 	rep.Token2Pairs = token2PairsOf(seeds, resolve)
 	rep.SeedDF2Clusters, rep.SeedBridgeablePairs = seedRecurrence(seeds, resolve)
+	rep.ActivationActive = health.Activation.Active
 
 	return rep, nil
 }
