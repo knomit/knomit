@@ -56,3 +56,34 @@ func TestBridgeablePairs_AgenticEngineeringIsEightNotSeven(t *testing.T) {
 	require.Equal(t, 8, bridgeablePairs(dfs))
 	require.NotEqual(t, 7, bridgeablePairs(dfs))
 }
+
+// L-1. The T7 record and the acceptance package both said the lab
+// vocabularies hold "155 clusters". They hold 156: 37 + 71 + 26 + 20 is not
+// the sum — it is 37 + 71 + 26 + 22, and the 22 is knomit-io-kb's cluster
+// count, not its definition count (18).
+//
+// Pinned by a test for the same reason the gate annex's 7→8 correction was:
+// the T0-T2 record's own words are that "a number nobody re-derived is
+// exactly how the annex's own §11 item 4 happened", and that applies to its
+// sibling record verbatim. The 133 definitions figure was always right
+// (34+61+20+18).
+func TestLabVocabularyTotals(t *testing.T) {
+	clusters := map[string]int{
+		"agentic-engineering": 37, "merged": 71, "knomit-kb": 26, "knomit-io-kb": 22,
+	}
+	definitions := map[string]int{
+		"agentic-engineering": 34, "merged": 61, "knomit-kb": 20, "knomit-io-kb": 18,
+	}
+	require.Equal(t, 156, sumOf(clusters), "the T7/T8 cluster population is 156, not 155")
+	require.Equal(t, 133, sumOf(definitions), "the real-definition count was always right")
+	require.NotEqual(t, sumOf(clusters), sumOf(definitions),
+		"precondition: the two totals differ, which is how 22 and 18 got swapped")
+}
+
+func sumOf(m map[string]int) int {
+	n := 0
+	for _, v := range m {
+		n += v
+	}
+	return n
+}
