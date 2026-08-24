@@ -19,6 +19,7 @@
 //	motifannex report    -corpus <name>            vocabulary/coverage/health snapshot
 //	motifannex bridges   -corpus <name> -effort h  motif bridge candidates, served and dropped
 //	motifannex namedef   -corpus <name>            name / name+def cosine ladders, centered and not
+//	motifannex harnesspack                         the Phase-4 blind judging pack (primary arms)
 //	motifannex survival  -corpus <name>            discovered-fact survival per bridge axis
 //	motifannex calibpack                           T8 stratified labelling pack + key (all lab corpora)
 package main
@@ -102,6 +103,8 @@ func main() {
 		fatal(bridges(ctx, *corpus, *scratch, *effort))
 	case "namedef":
 		fatal(namedef(ctx, *corpus, *scratch))
+	case "harnesspack":
+		fatal(harnesspack(ctx, *scratch, []string{"merged", "agentic-engineering", "knomit-kb"}))
 	case "survival":
 		fatal(survival(ctx, *corpus, *scratch))
 	case "calibpack":

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -390,4 +391,104 @@ func TestMotifMeasurement_Token2FoldStems(t *testing.T) {
 		}
 		t.Logf("  %4d x  %s", k.n, k.stems)
 	}
+}
+
+// TestMotifMeasurement_WriteSupplementaryHarnessPack emits the H-track's
+// SUPPLEMENTARY arm: motif pairs from the harness fixture corpus.
+//
+// Why a supplement rather than more of the primary arm (Phase-4 rulings-6):
+// the real corpora serve one to three motif pairs each, so the primary MOTIF
+// arms cannot reach E1's size. This answers the different question — "when the
+// axis HAS population, are the pairs it produces good?" — and is never pooled
+// with the primary evidence.
+//
+// TWO CAVEATS, both structural and both stated in the emitted file so they
+// travel with the numbers:
+//
+//  1. LANELESS. The fixture is a labels file with no vectors, so there is no
+//     SIMILAR_TO graph, laneOf assigns everything FAR by construction and the
+//     cohesion floor never engages. These are ENUMERATED candidates, not
+//     SERVED ones — no scoring, no budget, no lane.
+//
+//  2. Its facts are titles and bodies from the harness's own extraction, not
+//     the corpus text a production judge would see.
+//
+//     KNOMIT_MOTIF_ACCEPTANCE=1 go test ./internal/synthesize/ -run TestMotifMeasurement_Write -v
+func TestMotifMeasurement_WriteSupplementaryHarnessPack(t *testing.T) {
+	if os.Getenv("KNOMIT_MOTIF_ACCEPTANCE") != "1" {
+		t.Skip("fixture replay; set KNOMIT_MOTIF_ACCEPTANCE=1")
+	}
+	outDir := os.Getenv("KNOMIT_HARNESS_OUT")
+	if outDir == "" {
+		t.Skip("set KNOMIT_HARNESS_OUT to the directory the pack should be written to")
+	}
+	facts := loadCanonCorpus(t, "knomit-kb")
+	require.NotEmpty(t, facts)
+
+	cands, _ := enumerateMotifCandidates(facts, ClusterResult{}, identityResolver,
+		motifDFFor(facts), labelsFor(facts), tierToken2)
+	kept, _ := suppressContained(cands)
+	require.NotEmpty(t, kept)
+
+	byPath := map[string]factForLLM{}
+	for _, f := range facts {
+		byPath[f.File] = f
+	}
+
+	// One pair per group, deterministic: the first two members in path order.
+	// No rng here — the fixture has no scoring to break ties with, so an
+	// arbitrary-but-fixed rule is more honest than a seeded draw that looks
+	// like sampling.
+	type item struct {
+		ID     string `json:"id"`
+		ATitle string `json:"a_title"`
+		ABody  string `json:"a_body"`
+		BTitle string `json:"b_title"`
+		BBody  string `json:"b_body"`
+	}
+	type keyRow struct {
+		ID    string `json:"id"`
+		Arm   string `json:"arm"`
+		Token string `json:"token"`
+		A     string `json:"a"`
+		B     string `json:"b"`
+	}
+	var pack []item
+	var key []keyRow
+	for _, g := range kept {
+		if len(g.Members) < 2 {
+			continue
+		}
+		ms := append([]factForLLM(nil), g.Members...)
+		sort.Slice(ms, func(i, j int) bool { return ms[i].File < ms[j].File })
+		a, b := ms[0], ms[1]
+		id := fmt.Sprintf("S%03d", len(pack)+1)
+		clip := func(s string) string {
+			s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+			if len(s) > 400 {
+				s = s[:400]
+			}
+			return s
+		}
+		pack = append(pack, item{ID: id, ATitle: a.Title, ABody: clip(a.Body),
+			BTitle: b.Title, BBody: clip(b.Body)})
+		key = append(key, keyRow{ID: id, Arm: "MOTIF-FIXTURE", Token: g.Token, A: a.File, B: b.File})
+		if len(pack) >= 12 {
+			break
+		}
+	}
+	require.NotEmpty(t, pack)
+
+	payload := map[string]any{
+		"arm": "MOTIF-FIXTURE (SUPPLEMENTARY — never pooled with the primary arms)",
+		"n":   len(pack),
+		"caveat": "ENUMERATED candidates, not served: the fixture carries no vectors, so there is no " +
+			"SIMILAR_TO graph, every group is assigned FAR by construction, and neither the cohesion " +
+			"floor nor the per-lane budget ever runs. Text is the harness's own extraction.",
+		"pack": pack, "key": key,
+	}
+	blob, err := json.MarshalIndent(payload, "", " ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(outDir, "supplementary.json"), blob, 0o644))
+	t.Logf("wrote %d supplementary pairs from %d kept groups", len(pack), len(kept))
 }
