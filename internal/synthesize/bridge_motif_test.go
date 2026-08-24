@@ -1302,13 +1302,13 @@ func TestNoveltyOf_VectorsReadDistinguishesUnknownFromZero(t *testing.T) {
 
 	// No provider at all: SeedCos and OverDedup are UNKNOWN, and the flag is
 	// what says so. Their zeros must not be read as measurements.
-	none, err := noveltyOf(context.Background(), members, paths, nil, 0.92)
+	none, err := noveltyOf(context.Background(), members, paths, nil, 0.92, true)
 	require.NoError(t, err)
 	require.False(t, none.VectorsRead)
 	require.Zero(t, none.SeedCos)
 
 	// A provider returning genuinely-zero cosines: same zeros, opposite meaning.
-	zeroed, err := noveltyOf(context.Background(), members, paths, constPairCos(0), 0.92)
+	zeroed, err := noveltyOf(context.Background(), members, paths, constPairCos(0), 0.92, true)
 	require.NoError(t, err)
 	require.True(t, zeroed.VectorsRead, "the flag is the ONLY thing separating these two results")
 	require.Zero(t, zeroed.SeedCos)
@@ -1321,7 +1321,7 @@ func TestNoveltyOf_OverDedupIsAFractionOfPairs(t *testing.T) {
 	pc := func(context.Context, []string) ([]float64, error) {
 		return []float64{0.95, 0.10, 0.20}, nil
 	}
-	got, err := noveltyOf(context.Background(), members, paths, pc, 0.92)
+	got, err := noveltyOf(context.Background(), members, paths, pc, 0.92, true)
 	require.NoError(t, err)
 	require.InDelta(t, 1.0/3.0, got.OverDedup, 1e-9)
 	require.InDelta(t, (0.95+0.10+0.20)/3, got.SeedCos, 1e-9,
@@ -1539,4 +1539,34 @@ func TestBuildMotifBridgesWithRows_SuppressionReportsIntoTheRow(t *testing.T) {
 	}
 	require.Positive(t, suppressed,
 		"precondition: this fixture must actually suppress something, or it proves nothing")
+}
+
+// M-5. An unresolved dedup threshold must leave OverDedup UNCOMPUTED, never
+// silently defaulted. params.Defaults() is nomic's geometry (Dedup 0.92) and
+// every corpus in this campaign is embeddinggemma (0.82), so a default would
+// report 0.000 for a pair genuinely above its corpus's own gate — breaking the
+// one direction OverDedup's doc promises is safe.
+func TestNoveltyOf_UnknownDedupThresholdIsNotADefault(t *testing.T) {
+	members := []factForLLM{{File: "a"}, {File: "b"}}
+	paths := []string{"a", "b"}
+	// A pair at 0.85: above embeddinggemma's 0.82, below the 0.92 default.
+	pc := func(context.Context, []string) ([]float64, error) { return []float64{0.85}, nil }
+
+	unknown, err := noveltyOf(context.Background(), members, paths, pc, 0, false)
+	require.NoError(t, err)
+	require.False(t, unknown.DedupKnown)
+	require.Zero(t, unknown.OverDedup, "not computed — and the flag is what says so")
+
+	known, err := noveltyOf(context.Background(), members, paths, pc, 0.82, true)
+	require.NoError(t, err)
+	require.True(t, known.DedupKnown)
+	require.Equal(t, 1.0, known.OverDedup,
+		"at the corpus's own threshold this pair IS a near-copy — which the nomic "+
+			"default would have hidden")
+
+	wrongDefault, err := noveltyOf(context.Background(), members, paths, pc, 0.92, true)
+	require.NoError(t, err)
+	require.Zero(t, wrongDefault.OverDedup,
+		"precondition: the two thresholds genuinely disagree on this pair, or the "+
+			"test proves nothing about which one is used")
 }

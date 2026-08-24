@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"knomit/internal/config"
+	"knomit/internal/embeddings"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
@@ -240,7 +242,15 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	}
 	defer svc.Close()
 
-	rep, err := synthesize.MotifComponentReport(cmd.Context(), svc.Search(), svc.Motifs(),
+	// M-5: resolve the CORPUS's own model thresholds. This command opens the
+	// store without an embedder — correct, the scoring path needs none — but
+	// OverDedup is measured against a cosine, and the default is nomic's while
+	// every corpus in this campaign is embeddinggemma (0.82 vs 0.92). An
+	// unknown model yields "not computed", never a default.
+	idx := motifThresholdIndex{SearchQuery: svc.Search()}
+	idx.dedup, idx.known = corpusDedupThreshold(dbPath)
+
+	rep, err := synthesize.MotifComponentReport(cmd.Context(), idx, svc.Motifs(),
 		svc.Abstraction(), branch, eff, resolution, minCommunity, cfg)
 	if err != nil {
 		return fmt.Errorf("motif component report: %w", err)
@@ -254,8 +264,15 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 			"Nothing below is a statement about this corpus's bridges; the axis did not run.\n",
 			rep.SeedDF2Clusters)
 	}
-	fmt.Fprintf(out, "activation population: %d recurring motif(s), %d bridgeable pair(s)\n\n",
+	fmt.Fprintf(out, "activation population: %d recurring motif(s), %d bridgeable pair(s)\n",
 		rep.SeedDF2Clusters, rep.SeedBridgeablePairs)
+	if idx.known {
+		fmt.Fprintf(out, "dedup threshold: %.3f (this corpus's own embedding model)\n\n", idx.dedup)
+	} else {
+		fmt.Fprintf(out, "dedup threshold: UNKNOWN — OverDedup not computed. "+
+			"The corpus does not record a recognised embedding model, and the shipped "+
+			"default belongs to a different one.\n\n")
+	}
 
 	if len(rep.Candidates) == 0 {
 		fmt.Fprintln(out, "no motif bridge candidates found")
@@ -278,7 +295,9 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 		seedCos, overDup := "n/a", "n/a"
 		if b.Comp.Novelty.VectorsRead {
 			seedCos = fmt.Sprintf("%.3f", b.Comp.Novelty.SeedCos)
-			overDup = fmt.Sprintf("%.3f", b.Comp.Novelty.OverDedup)
+			if b.Comp.Novelty.DedupKnown {
+				overDup = fmt.Sprintf("%.3f", b.Comp.Novelty.OverDedup)
+			}
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%d\t%.3f\t%d\t%.3f\t%.3f\t%s\t%.3f\t%s\t%.3f\t%s\n",
 			b.Token, b.Lane, len(b.Members), b.Comp.Coh, b.Comp.Sep, b.Comp.Gap, b.Comp.Spec,
@@ -295,4 +314,41 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 		fmt.Fprintf(out, "  health: %s\n", l)
 	}
 	return nil
+}
+
+// motifThresholdIndex carries the corpus's own dedup threshold to the scorer,
+// which otherwise has no embedder to ask.
+//
+// Structural rather than a new parameter: synthesize looks for the method, so
+// nothing had to thread a threshold through four call layers, and "the caller
+// knows it" cannot be confused with "there is an embedder".
+type motifThresholdIndex struct {
+	synthesize.SearchQuery
+	dedup float64
+	known bool
+}
+
+func (m motifThresholdIndex) MotifDedupThreshold() (float64, bool) { return m.dedup, m.known }
+
+// corpusDedupThreshold reads meta.embed_model_id from the corpus and resolves
+// that model's Dedup.
+//
+// Raw read, and read-only: this command is documented as needing no embedding
+// model, which stays true — a model IDENTITY is not a model. UNKNOWN is a real
+// answer here and is reported as one.
+func corpusDedupThreshold(dbPath string) (float64, bool) {
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro")
+	if err != nil {
+		return 0, false
+	}
+	defer db.Close()
+	var id string
+	if err := db.QueryRow(`SELECT value FROM meta WHERE key = 'embed_model_id'`).Scan(&id); err != nil {
+		return 0, false
+	}
+	m, err := embeddings.Lookup(id)
+	if err != nil {
+		return 0, false
+	}
+	return m.Thresholds.Dedup, true
 }

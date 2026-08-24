@@ -481,11 +481,28 @@ type pairCosFn func(ctx context.Context, paths []string) ([]float64, error)
 // (store.EmbedderThresholds), never a number of this file's own — a novelty
 // signal calibrated against a different threshold from the gate it describes
 // would be measuring nothing anybody acts on.
-func dedupThresholdFor(idx SearchQuery) float64 {
-	if e, ok := idx.(interface{ Embedder() store.Embedder }); ok {
-		return store.EmbedderThresholds(e.Embedder()).Dedup
+func dedupThresholdFor(idx SearchQuery) (float64, bool) {
+	// A caller with no embedder but with the corpus's model identity — the
+	// calibrate surface — supplies the threshold itself. Structural, so no
+	// signature has to thread it through four layers, and it cannot be
+	// confused with "there is an embedder".
+	if s, ok := idx.(interface {
+		MotifDedupThreshold() (float64, bool)
+	}); ok {
+		return s.MotifDedupThreshold()
 	}
-	return store.EmbedderThresholds(nil).Dedup
+	if e, ok := idx.(interface{ Embedder() store.Embedder }); ok {
+		if emb := e.Embedder(); emb != nil {
+			return emb.Thresholds().Dedup, true
+		}
+	}
+	// UNKNOWN, not defaulted (review finding M-5). params.Defaults() is nomic's
+	// geometry; every corpus in this campaign is embeddinggemma, whose Dedup is
+	// 0.82 against the default 0.92. Returning the default here made
+	// `calibrate --kind motif` — which opens a store with no embedder — report
+	// OverDedup 0.000 for a pair genuinely above its corpus's own gate, breaking
+	// the one direction OverDedup's doc promises is safe.
+	return 0, false
 }
 
 // noveltyOf computes §8's seed-set novelty signals for one candidate.
@@ -494,8 +511,9 @@ func dedupThresholdFor(idx SearchQuery) float64 {
 // vector source, so VectorsRead reports whether they mean anything — a zero
 // SeedCos from "no vectors" and a zero from "genuinely dissimilar" are opposite
 // findings and must not share a representation.
-func noveltyOf(ctx context.Context, members []factForLLM, paths []string, pairCos pairCosFn, dedup float64) (NoveltySignals, error) {
-	n := NoveltySignals{EntityJaccard: meanEntityJaccard(members)}
+func noveltyOf(ctx context.Context, members []factForLLM, paths []string, pairCos pairCosFn,
+	dedup float64, dedupKnown bool) (NoveltySignals, error) {
+	n := NoveltySignals{EntityJaccard: meanEntityJaccard(members), DedupKnown: dedupKnown}
 	if pairCos == nil {
 		return n, nil
 	}
@@ -516,7 +534,9 @@ func noveltyOf(ctx context.Context, members []factForLLM, paths []string, pairCo
 		}
 	}
 	n.SeedCos = sum / float64(len(cs))
-	n.OverDedup = float64(over) / float64(len(cs))
+	if dedupKnown {
+		n.OverDedup = float64(over) / float64(len(cs))
+	}
 	return n, nil
 }
 
@@ -607,7 +627,8 @@ func scoreMotifCandidate(
 	// §8's novelty signals. Computed for EVERY candidate, on both lanes and
 	// whether or not it is kept, because `calibrate bridges` is about the
 	// distribution the scorer sees rather than the slice it serves.
-	nov, err := noveltyOf(ctx, cand.Members, paths, pairCos, dedupThresholdFor(idx))
+	dedup, dedupKnown := dedupThresholdFor(idx)
+	nov, err := noveltyOf(ctx, cand.Members, paths, pairCos, dedup, dedupKnown)
 	if err != nil {
 		return comp, 0, false, err
 	}

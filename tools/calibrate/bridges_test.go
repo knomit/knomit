@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
+	"knomit/internal/embeddings"
+	"knomit/internal/embeddings/params"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -93,4 +97,53 @@ func TestBridgesMissingDB(t *testing.T) {
 		strings.Contains(err.Error(), "db") || strings.Contains(buf.String(), "db"),
 		"error should mention 'db', got err=%q out=%q", err, buf.String(),
 	)
+}
+
+// M-5. The command opens a store with no embedder, so the dedup threshold has
+// to come from the corpus's recorded model identity. Unknown must stay
+// unknown: params.Defaults() is nomic's geometry and every corpus in this
+// campaign is embeddinggemma, so a silent default reports OverDedup 0.000 for
+// a pair genuinely above its corpus's own gate.
+func TestCorpusDedupThreshold_UnknownIsNotADefault(t *testing.T) {
+	dir := t.TempDir()
+
+	// No meta table at all.
+	empty := filepath.Join(dir, "empty.db")
+	db, err := sql.Open("sqlite3", empty)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE unrelated (x TEXT)`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	_, known := corpusDedupThreshold(empty)
+	require.False(t, known, "no meta table is unknown, not default")
+
+	// A meta table naming a model nothing registers.
+	unknown := filepath.Join(dir, "unknown.db")
+	db, err = sql.Open("sqlite3", unknown)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE meta (key TEXT, value TEXT)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO meta VALUES ('embed_model_id','no-such-model')`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	_, known = corpusDedupThreshold(unknown)
+	require.False(t, known, "an unrecognised model is unknown, not default")
+
+	// A recognised one resolves, and to the model's own value.
+	real := filepath.Join(dir, "real.db")
+	db, err = sql.Open("sqlite3", real)
+	require.NoError(t, err)
+	_, err = db.Exec(`CREATE TABLE meta (key TEXT, value TEXT)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO meta VALUES ('embed_model_id','embeddinggemma')`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+	got, known := corpusDedupThreshold(real)
+	require.True(t, known)
+	m, err := embeddings.Lookup("embeddinggemma")
+	require.NoError(t, err)
+	require.Equal(t, m.Thresholds.Dedup, got)
+	require.NotEqual(t, params.Defaults().Dedup, got,
+		"precondition: this model's threshold must DIFFER from the default, or the "+
+			"test cannot tell which one was used")
 }

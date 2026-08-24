@@ -260,6 +260,10 @@ var mechanicsPaths = map[string][]string{
 		// to. Same §4/§5 licence buildMotifBridges has always had; theyname the
 		// functions that now do the work.
 		"buildMotifBridgesWithRows",
+		// dedupThresholdFor now names motifs in its own doc (M-5: the
+		// MotifDedupThreshold override). It resolves a model's cosine
+		// threshold and reads no motif content.
+		"dedupThresholdFor",
 		// Phase 4: the activation floor. seedRecurrence counts the corpus's
 		// recurring motifs and motifActive decides whether the axis runs at
 		// all — both read motifs to answer "is there enough repeated
