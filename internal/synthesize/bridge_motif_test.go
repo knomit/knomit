@@ -1413,3 +1413,58 @@ func TestBuildMotifBridges_DiscoveredRecurrenceDoesNotActivateTheAxis(t *testing
 	require.Empty(t, near)
 	require.Empty(t, far)
 }
+
+// H-3. "No vectors scores 1, never 0" had no test in either branch, and the
+// rule was MOVED this phase in the pairCosFn refactor — rulings-6 ratified it
+// as "preserved", and nothing proved it arrived.
+//
+// Why 0 would be a production ranking inversion rather than a rounding
+// difference: the far lane scores Q = WSpec·Spec + WGap·Gap + WCoh·(1 − meanSim).
+// At meanSim 0 an un-embedded group collects the maximum dissimilarity reward
+// available, so on a corpus mid-backfill — or one whose vectors were dropped by
+// the model-drift drop-and-recreate path — every group with NO evidence
+// outranks every group with evidence and takes all eight far slots. Missing
+// evidence would buy the top of the lane the axis exists for.
+func TestMeanPairCos_NoVectorsScoresOneNotZero(t *testing.T) {
+	paths := []string{"kb/a/1.md", "kb/b/2.md"}
+
+	// Branch 1: no provider at all.
+	got, err := meanPairCos(context.Background(), paths, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, got, "a nil provider is missing evidence, not maximal dissimilarity")
+
+	// Branch 2: a provider that returns no pairs — the un-embedded corpus.
+	empty := func(context.Context, []string) ([]float64, error) { return nil, nil }
+	got, err = meanPairCos(context.Background(), paths, empty)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, got, "an empty distribution is missing evidence, not maximal dissimilarity")
+
+	// And the rule must not swallow a real reading: a genuine 0 stays 0.
+	real := func(context.Context, []string) ([]float64, error) { return []float64{0}, nil }
+	got, err = meanPairCos(context.Background(), paths, real)
+	require.NoError(t, err)
+	require.Zero(t, got,
+		"a measured zero is a measurement — only ABSENT evidence scores 1, or the rule "+
+			"would hide the far lane's best case")
+}
+
+// The consequence at the scorer, which is where the inversion would happen:
+// an un-embedded far group must not outrank an embedded dissimilar one.
+func TestScoreMotifCandidate_UnembeddedFarGroupDoesNotOutrankAnEmbeddedOne(t *testing.T) {
+	ctx, idx := motifScoreEnv(t, "kb/alpha/1.md", "kb/beta/2.md")
+	g := store.NewSimilarityGraph(nil)
+	clusterOf := map[string]int{"kb/alpha/1.md": 0, "kb/beta/2.md": 1}
+
+	_, embedded, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
+		clusterOf, motifQualityConfig(), 0.5, constPairCos(0.1))
+	require.NoError(t, err)
+
+	noVectors := func(context.Context, []string) ([]float64, error) { return nil, nil }
+	_, unembedded, _, err := scoreMotifCandidate(ctx, motifCandidate(), LaneFar, g, idx, "main",
+		clusterOf, motifQualityConfig(), 0.5, noVectors)
+	require.NoError(t, err)
+
+	require.Less(t, unembedded, embedded,
+		"a group with no vectors must not outrank a genuinely dissimilar one — missing "+
+			"evidence cannot buy the top of the far lane")
+}
