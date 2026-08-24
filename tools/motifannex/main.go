@@ -186,8 +186,15 @@ func copyFile(src, dst string) error {
 }
 
 // open builds a store + repo instance over the COPY, with the real embedder.
+//
+// The lab guard runs FIRST — before the stat, and before store.Open, because
+// store.Open migrates the schema of whatever it is handed. See refuseLivePath.
 func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.RepoInstance, string, func(), error) {
+	home, _ := os.UserHomeDir()
 	path := copyPath(scratch, corpus)
+	if err := refuseLivePath(path, home); err != nil {
+		return nil, nil, "", nil, err
+	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, nil, "", nil, fmt.Errorf("no snapshot for %s — run `snapshot` first: %w", corpus, err)
 	}
@@ -195,7 +202,6 @@ func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.R
 	if err != nil {
 		return nil, nil, "", nil, err
 	}
-	home, _ := os.UserHomeDir()
 	// The corpora were embedded with this model (meta.embed_model_id); the
 	// annex must use the SAME one or every stored vector is unreadable and
 	// every similarity is nonsense.
@@ -616,7 +622,12 @@ type corpusReport struct {
 	Recurrence   float64  `json:"recurrence_rate"`
 	MintToLink   float64  `json:"mint_to_link"`
 	NeedDefine   int      `json:"clusters_needing_definition"`
-	TopMotifs    []string `json:"top_motifs"`
+	// BridgeablePairs is the CEILING on motif bridging — see bridgeablePairs.
+	// Reported next to Recurring because the two answer different questions:
+	// Recurring counts CLUSTERS that could bridge, this counts the PAIRS they
+	// could bridge, and one heavily-shared motif separates them sharply.
+	BridgeablePairs int      `json:"bridgeable_pairs"`
+	TopMotifs       []string `json:"top_motifs"`
 }
 
 func report(ctx context.Context, corpus, scratch string) error {
@@ -641,6 +652,11 @@ func report(ctx context.Context, corpus, scratch string) error {
 		r.NeedDefine = len(need)
 	}
 	if cs, err := svc.Motifs().Clusters(ctx, branch); err == nil {
+		dfs := make([]int, 0, len(cs))
+		for _, c := range cs {
+			dfs = append(dfs, c.DF)
+		}
+		r.BridgeablePairs = bridgeablePairs(dfs)
 		for i, c := range cs {
 			if i >= 20 {
 				break
