@@ -554,12 +554,65 @@ func TestMN13_MotifBridgeConstantsAreClassified(t *testing.T) {
 			"umbrellaPerCent":        "RATIO",
 		},
 		"internal/synthesize/bridge_motif.go": {
-			"motifDFCeilingFloor": "STATISTICAL-VALIDITY FLOOR",
+			"motifDFCeilingFloor":   "STATISTICAL-VALIDITY FLOOR",
+			"motifDFCeilingPerCent": "RATIO",
+			"motifActivationFloor":  "STATISTICAL-VALIDITY FLOOR",
+			"token2SharedStems":     "STRUCTURAL K",
 		},
 	} {
 		requireConstantsClassified(t, rel, want)
-
+		requireEveryNumericConstantClassified(t, rel)
 		requireNoUnnamedRatios(t, rel)
+	}
+}
+
+// requireEveryNumericConstantClassified closes the opt-in hole (review finding
+// M-6).
+//
+// requireConstantsClassified skips any constant absent from its map, so the
+// phase added three numeric constants and the test that is named after the
+// rule stayed green while none of them was checked — and the acceptance
+// package claimed otherwise. Adding three map entries would satisfy the ruling
+// once; making UNTRACKED constants fail stops the class recurring, which is
+// what a conformance check is for.
+//
+// Scope is numeric LITERALS, which is MN13's own subject ("every numeric
+// constant"). String enums and iota discriminants are excluded structurally
+// rather than by an exemption list: they carry no tuned value, so there is no
+// class to state, and a list would be one more thing to forget.
+func requireEveryNumericConstantClassified(t *testing.T, rel string) {
+	t.Helper()
+	for _, decl := range parseGo(t, rel).Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		blockDoc := gen.Doc.Text()
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			numeric := false
+			for _, v := range vs.Values {
+				if lit, ok := v.(*ast.BasicLit); ok &&
+					(lit.Kind == token.INT || lit.Kind == token.FLOAT) {
+					numeric = true
+				}
+			}
+			if !numeric {
+				continue
+			}
+			doc := blockDoc + vs.Doc.Text()
+			for _, name := range vs.Names {
+				require.Containsf(t, doc, "CONSTANT CLASSIFICATION",
+					"MN13: numeric const %s in %s states no class. Every numeric constant is a "+
+						"corpus-property constant (forbidden), a resource budget, or a "+
+						"statistical-validity floor, and the class must be stated where it is "+
+						"defined — a value whose paragraph is deleted is indistinguishable from "+
+						"the forbidden kind", name.Name, rel)
+			}
+		}
 	}
 }
 
