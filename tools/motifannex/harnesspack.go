@@ -104,6 +104,15 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 			return fmt.Errorf("%s motif report: %w", corpus, err)
 		}
 
+		// CROSS-CHECK: the motif arms must total exactly what the report says
+		// was served. Not circular — the arms are built from per-row Served
+		// while this compares against NearServed/FarServed, which the builder
+		// produced from the ranked-and-capped output. When Served was
+		// unbound, hardcoding it true admitted the cross-tier-suppressed
+		// family as a third MOTIF-FAR pair and nothing noticed (M-8).
+		wantMotif := len(rep.NearServed) + len(rep.FarServed)
+		gotMotif := 0
+
 		// Arm membership comes from the ROW, never from a token lookup
 		// (review finding L-4). A token-2 family is keyed by one of the
 		// canonical ids it folded, so two candidates can share a Token; if the
@@ -121,11 +130,18 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 				continue
 			}
 			p.Arm = motifArmOf(c)
+			gotMotif++
 			if p.Arm == "MOTIF-FAR" {
 				motifFar = append(motifFar, p)
 			} else {
 				motifNear = append(motifNear, p)
 			}
+		}
+		if gotMotif != wantMotif {
+			closeAll()
+			return fmt.Errorf("%s: %d candidates report Served but the builder served %d — "+
+				"the arms and the served set disagree, so one of them is not measuring "+
+				"what it says", corpus, gotMotif, wantMotif)
 		}
 
 		// TOKEN — the shipped entity/domain report, kept bridges only.

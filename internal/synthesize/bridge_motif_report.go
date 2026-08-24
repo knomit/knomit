@@ -143,6 +143,32 @@ type Token2Pair struct {
 	Shared []string `json:"shared_stems"`
 }
 
+// scoredMotifBridgeOf projects one internal row to its reported shape.
+//
+// Extracted so the projection can be tested (review finding M-8). It was
+// inline, and every field it carries was bound EXCEPT Served: hardcoding
+// `Served: true` left the whole suite green while harnesspack then admitted
+// the cross-tier-suppressed family into MOTIF-FAR as a third pair, and the
+// vanish-rate population — Kept && !Served — read empty by construction.
+// M-4's shape one field over.
+func scoredMotifBridgeOf(r scoredMotifRow) ScoredMotifBridge {
+	paths := make([]string, 0, len(r.cand.Members))
+	for _, m := range r.cand.Members {
+		paths = append(paths, m.File)
+	}
+	return ScoredMotifBridge{
+		Token:   r.cand.Token,
+		Members: paths,
+		Lane:    string(r.lane),
+		Family:  r.cand.family,
+		Comp:    r.comp,
+		Q:       r.q,
+		Kept:    r.kept,
+		Served:  r.served,
+		Cause:   string(r.cause),
+	}
+}
+
 // motifReportPopulation is the one-line population statement.
 //
 // It says "a FIRST session" deliberately. Production enumerates over the
@@ -224,21 +250,7 @@ func MotifComponentReport(
 	}
 
 	for _, r := range rows {
-		paths := make([]string, 0, len(r.cand.Members))
-		for _, m := range r.cand.Members {
-			paths = append(paths, m.File)
-		}
-		rep.Candidates = append(rep.Candidates, ScoredMotifBridge{
-			Token:   r.cand.Token,
-			Members: paths,
-			Lane:    string(r.lane),
-			Family:  r.cand.family,
-			Comp:    r.comp,
-			Q:       r.q,
-			Kept:    r.kept,
-			Served:  r.served,
-			Cause:   string(r.cause),
-		})
+		rep.Candidates = append(rep.Candidates, scoredMotifBridgeOf(r))
 	}
 
 	// The served set, from the same engine — so the report shows what a session

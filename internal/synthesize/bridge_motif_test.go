@@ -1623,3 +1623,47 @@ func TestBuildMotifBridges_BelowFloorCorpusIsEvaluatedAndSpeaks(t *testing.T) {
 	require.Contains(t, strings.Join(motifBridgeHealthLines(health, 0, 0), "\n"),
 		"motif bridging inactive", "and the answer is worth reporting")
 }
+
+// M-8. Every field the report projects must come from the row. Served was the
+// one that did not: hardcoding it true left the suite green, admitted the
+// cross-tier-suppressed family into MOTIF-FAR as a third pair, and emptied the
+// vanish-rate population (Kept && !Served) by construction.
+func TestScoredMotifBridgeOf_CarriesTheRowsOwnDisposition(t *testing.T) {
+	cand := enumeratedMotif{
+		BridgeSeedSet: BridgeSeedSet{Token: "shape", Members: []factForLLM{
+			{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}},
+		family: true,
+	}
+
+	suppressed := scoredMotifBridgeOf(scoredMotifRow{
+		cand: cand, lane: LaneFar, q: 9,
+		kept: false, served: false, cause: motifSuppressedCrossTier,
+	})
+	served := scoredMotifBridgeOf(scoredMotifRow{
+		cand: cand, lane: LaneFar, q: 1, kept: true, served: true,
+	})
+	budgeted := scoredMotifBridgeOf(scoredMotifRow{
+		cand: cand, lane: LaneNear, q: 1, kept: true, served: false,
+	})
+
+	// Precondition: the three rows must DIFFER in served, or a hardcoded value
+	// would satisfy the assertions (lesson 5 — twice already this phase).
+	require.NotEqual(t, suppressed.Served, served.Served,
+		"precondition: the fixture must contain both served and unserved rows")
+
+	require.False(t, suppressed.Served, "a suppressed candidate reached no agent")
+	require.False(t, suppressed.Kept)
+	require.Equal(t, string(motifSuppressedCrossTier), suppressed.Cause)
+
+	require.True(t, served.Served)
+	require.True(t, served.Kept)
+	require.Empty(t, served.Cause)
+
+	require.True(t, budgeted.Kept, "kept is the pre-budget verdict")
+	require.False(t, budgeted.Served,
+		"Kept && !Served IS the vanish-rate population — if Served is hardcoded, "+
+			"register entry 3 can never be measured")
+
+	require.True(t, suppressed.Family, "and the tier comes from the row too")
+	require.Equal(t, string(LaneNear), budgeted.Lane)
+}
