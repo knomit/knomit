@@ -71,6 +71,16 @@ type MotifReport struct {
 	Effort     string `json:"effort"`
 	// Seeds is the size of the pool the enumeration ran over.
 	Seeds int `json:"seeds"`
+	// SeedPaths is that pool, by path.
+	//
+	// Exported so a caller drawing CONTROL arms can draw them from the same
+	// population the measured arms came from. The H-track's RANDOM floor was
+	// drawn from a raw branch scan — 284 facts against the pool's 221 on
+	// agentic-engineering — so it could contain pragmatic and discovered facts
+	// the motif and token arms structurally cannot (review finding M-3). A
+	// floor measured on a different population than the thing it floors is the
+	// 8ad54ee8 class, in the instrument built to prevent it.
+	SeedPaths []string `json:"seed_paths"`
 	// SeedsWithMotifs is how many of them carried a motif at all. The axis can
 	// only act on these, and the gap between the two numbers is the coverage
 	// story restated in the population that matters.
@@ -185,6 +195,9 @@ func MotifComponentReport(
 		seeds = append(seeds, factsForLLM([]fact.Fact{f})...)
 	}
 	rep.Seeds = len(seeds)
+	for _, s := range seeds {
+		rep.SeedPaths = append(rep.SeedPaths, s.File)
+	}
 	for _, s := range seeds {
 		if len(s.Motifs) > 0 {
 			rep.SeedsWithMotifs++

@@ -146,8 +146,14 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 			}
 		}
 
-		// RANDOM and TRAP need the seed pool, so read it the way the report does.
-		seeds, err := harnessSeeds(ctx, svc, branch)
+		// RANDOM and SAME-SUBJECT are drawn from the SAME post-AcceptSeed pool
+		// the measured arms came from (review finding M-3). harnessSeeds used
+		// to run a raw branch Search — 284 facts against the pool's 221 on
+		// agentic-engineering, 440 against 313 on knomit-kb — so the controls
+		// could contain pragmatic and discovered facts the MOTIF and TOKEN
+		// arms structurally cannot. A floor measured on a different population
+		// than the thing it floors flatters every rate against it.
+		seeds, err := harnessSeeds(ctx, svc, branch, rep.SeedPaths)
 		if err != nil {
 			closeAll()
 			return err
@@ -281,11 +287,31 @@ func factText(ctx context.Context, svc *store.Service, branch, path string) (tit
 	return f.Title, strings.ReplaceAll(b, "\n", " "), true
 }
 
-// harnessSeeds reads the corpus's bridging population — the same projection and
-// filter the motif report uses, so RANDOM and TRAP are drawn from the same pool
-// the other arms came from rather than from a different corpus view.
-func harnessSeeds(ctx context.Context, svc *store.Service, branch string) ([]store.SearchResult, error) {
-	return svc.Search().Search(ctx, branch, store.SearchOptions{Limit: 100000})
+// harnessSeeds narrows a branch scan to the report's own seed pool, so the
+// controls are drawn from the population the measured arms came from.
+//
+// Filtering a full scan rather than re-deriving the pool: the paths come from
+// MotifComponentReport, which built them with production's projection and
+// filter, and SearchResult carries the motifs and labels SAME-SUBJECT needs.
+// Re-deriving would be a second implementation of AcceptSeed in a measurement
+// tool, which is the drift this phase spent its instrument work avoiding.
+func harnessSeeds(ctx context.Context, svc *store.Service, branch string,
+	pool []string) ([]store.SearchResult, error) {
+	all, err := svc.Search().Search(ctx, branch, store.SearchOptions{Limit: 100000})
+	if err != nil {
+		return nil, err
+	}
+	keep := make(map[string]struct{}, len(pool))
+	for _, p := range pool {
+		keep[p] = struct{}{}
+	}
+	out := make([]store.SearchResult, 0, len(pool))
+	for _, r := range all {
+		if _, ok := keep[r.Path]; ok {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 func randomPairs(ctx context.Context, svc *store.Service, branch, corpus string,

@@ -20,6 +20,7 @@
 //	motifannex bridges   -corpus <name> -effort h  motif bridge candidates, served and dropped
 //	motifannex namedef   -corpus <name>            name / name+def cosine ladders, centered and not
 //	motifannex roundtrip -corpus <name>            READ-ONLY parse/serialize fidelity audit
+//	motifannex judgepack -scratch <dir>            combine primary+supplementary into one blind pack
 //	motifannex harnesspack                         the Phase-4 blind judging pack (primary arms)
 //	motifannex survival  -corpus <name>            discovered-fact survival per bridge axis
 //	motifannex calibpack                           T8 stratified labelling pack + key (all lab corpora)
@@ -107,6 +108,8 @@ func main() {
 		fatal(namedef(ctx, *corpus, *scratch))
 	case "roundtrip":
 		fatal(roundtrip(ctx, *corpus, *scratch))
+	case "judgepack":
+		fatal(judgepack(*scratch))
 	case "harnesspack":
 		fatal(harnesspack(ctx, *scratch, []string{"merged", "agentic-engineering", "knomit-kb"}))
 	case "survival":
