@@ -246,6 +246,11 @@ var mechanicsPaths = map[string][]string{
 		// Declared rather than exempted, because the register's value is that
 		// a motif-touching function cannot appear here undeclared.
 		"motifDropCauseOf", "tallyMotifDrops",
+		// Phase-4 rulings-3: suppression became TIER-AWARE, so it now reads the
+		// motif tier a candidate came from (enumeratedMotif.family) to decide
+		// which of two nested groups is served. It reads the tier, never a
+		// motif's content, and it is inside the §4/§5 path.
+		"suppressContained",
 	},
 	// Phase 4's measurement entry point (Q3's sibling report). It is a
 	// read-only calibrate/dev path: it enumerates and scores through the

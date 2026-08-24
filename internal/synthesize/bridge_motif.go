@@ -126,6 +126,31 @@ type motifEnumHealth struct {
 	// purpose-built for one Phase-4 decision must not quietly carry a second
 	// cause under the first one's label (review M4's counter-finding).
 	FarOtherDropped int
+	// FamilySuppressedByExact counts token-2 families dropped because they
+	// strictly contained a verbatim group (Phase-4 rulings-3, amending L1).
+	//
+	// WHAT READS IT AND WHAT IT MEANS: it is the visible cost of the cross-tier
+	// rule. Each one is a looser grouping that did NOT reach an agent, and with
+	// it went whatever extra members it had — so a rising count means the token-2
+	// tier is mostly re-wrapping groups the exact tier already found, which is
+	// evidence about the TIER's value, not about the corpus. It does NOT mean
+	// "bridges lost": the exact group each of these contained was served in its
+	// place.
+	FamilySuppressedByExact int
+}
+
+// enumeratedMotif is an enumerated group plus the TIER that produced it.
+//
+// The tier is carried rather than re-derived because it cannot be re-derived:
+// a token-2 family is keyed by one of the canonical ids it folded, so its
+// Token is indistinguishable from a verbatim group's. Suppression has to know
+// which is which (see suppressContained), and a wrong guess there drops the
+// better group.
+type enumeratedMotif struct {
+	BridgeSeedSet
+	// family reports that this group came from the token-2 tier — a fold of
+	// several canonical ids — rather than from one id's own carriers.
+	family bool
 }
 
 // enumerateMotifCandidates is the §4 enumeration loop, with the gates applied
@@ -141,7 +166,7 @@ func enumerateMotifCandidates(
 	df motifDFFn,
 	labels store.SubjectLabelDF,
 	tier motifMatchTier,
-) ([]BridgeSeedSet, motifEnumHealth) {
+) ([]enumeratedMotif, motifEnumHealth) {
 	point := resolveDisjointnessPoint(labels)
 	ceiling := labels.LiveFacts * motifDFCeilingPerCent / 100
 	if ceiling < motifDFCeilingFloor {
@@ -186,7 +211,7 @@ func enumerateMotifCandidates(
 		groups = append(groups, token2Families(byToken)...)
 	}
 
-	var out []BridgeSeedSet
+	var out []enumeratedMotif
 	for _, g := range groups {
 		canon, members := g.key, g.members
 		// GATE 1 — the df band, `2 <= df <= max(12, 2%*N)` (§4). Below the
@@ -227,10 +252,13 @@ func enumerateMotifCandidates(
 			continue
 		}
 
-		out = append(out, BridgeSeedSet{
-			Token:   canon,
-			Kind:    BridgeMotif,
-			Members: kept,
+		out = append(out, enumeratedMotif{
+			BridgeSeedSet: BridgeSeedSet{
+				Token:   canon,
+				Kind:    BridgeMotif,
+				Members: kept,
+			},
+			family: g.family,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Token < out[j].Token })
@@ -633,7 +661,7 @@ func buildMotifBridges(
 	if err != nil {
 		return nil, nil, health, err
 	}
-	var near, far []BridgeSeedSet
+	var near, far []enumeratedMotif
 	for _, r := range rows {
 		if !r.kept {
 			continue
@@ -647,7 +675,10 @@ func buildMotifBridges(
 		}
 	}
 	nearBudget, farBudget := motifSubBudget(eff)
-	return rankAndCap(near, nearBudget), rankAndCap(far, farBudget), health, nil
+	nearOut, nearSup := rankAndCap(near, nearBudget)
+	farOut, farSup := rankAndCap(far, farBudget)
+	health.FamilySuppressedByExact = nearSup + farSup
+	return nearOut, farOut, health, nil
 }
 
 // scoredMotifRow is one enumerated candidate and everything the scorer decided
@@ -658,7 +689,7 @@ func buildMotifBridges(
 // from the engine that serves the bridges rather than from a second
 // implementation that agrees with it until it does not.
 type scoredMotifRow struct {
-	cand  BridgeSeedSet
+	cand  enumeratedMotif
 	lane  BridgeLane
 	comp  BridgeComponents
 	q     float64
@@ -732,11 +763,11 @@ func scoreMotifCandidates(
 		}
 		lane := laneOf(paths, g)
 
-		spec, err := sharedMotifSpecificity(ctx, idx, branch, cand, resolve)
+		spec, err := sharedMotifSpecificity(ctx, idx, branch, cand.BridgeSeedSet, resolve)
 		if err != nil {
 			return nil, health, err
 		}
-		comp, q, kept, err := scoreMotifCandidate(ctx, cand, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
+		comp, q, kept, err := scoreMotifCandidate(ctx, cand.BridgeSeedSet, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
 		if err != nil {
 			return nil, health, err
 		}
@@ -801,11 +832,11 @@ func anyMotifs(seeds []factForLLM) bool {
 
 // rankAndCap orders by Q descending, Token ascending, and truncates to the
 // lane's own budget. A zero budget means the lane is closed at this effort.
-func rankAndCap(in []BridgeSeedSet, budget int) []BridgeSeedSet {
+func rankAndCap(in []enumeratedMotif, budget int) ([]BridgeSeedSet, int) {
 	if budget == 0 {
-		return nil
+		return nil, 0
 	}
-	in = suppressContained(in)
+	in, crossTier := suppressContained(in)
 	sort.SliceStable(in, func(i, j int) bool {
 		if in[i].Q != in[j].Q {
 			return in[i].Q > in[j].Q
@@ -815,7 +846,11 @@ func rankAndCap(in []BridgeSeedSet, budget int) []BridgeSeedSet {
 	if len(in) > budget {
 		in = in[:budget]
 	}
-	return in
+	out := make([]BridgeSeedSet, 0, len(in))
+	for _, c := range in {
+		out = append(out, c.BridgeSeedSet)
+	}
+	return out, crossTier
 }
 
 // ── review-pipeline wiring ────────────────────────────────────────────────
@@ -970,6 +1005,12 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 				"spanning one community — not evidence about the trim",
 			h.FarOtherDropped))
 	}
+	if h.FamilySuppressedByExact > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif tier suppression: %d token-2 family/families dropped in favour of the "+
+				"exact group they contained — the looser grouping did not reach an agent, "+
+				"and neither did its extra members", h.FamilySuppressedByExact))
+	}
 	if len(h.OverCeilingNames) > 0 {
 		lines = append(lines, fmt.Sprintf(
 			"motif df ceiling: %d motif(s) over the band, flagged for review splitting rather than bridged: %s",
@@ -978,21 +1019,37 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 	return lines
 }
 
-// suppressContained drops any group whose members are a strict subset of
-// another group's.
+// suppressContained resolves groups whose members are a strict subset of
+// another group's, and the rule DIFFERS depending on whether the two came from
+// the same tier. It returns the survivors and how many cross-tier families it
+// dropped.
 //
-// The token-2 tier makes these by construction: a family is kept only when it
-// has more members than its key's verbatim group, so the verbatim group is
-// always strictly contained in it, and both carry the SAME Bridge token. On the
-// measured corpus that was 12 of 113 groups, with three tokens each producing
-// two items (Phase-3 review, L1). On an axis judged as an observation-window
-// feeder with eight slots a lane, spending two of them on {A,B} and {A,B,C} is
-// spending two on one question.
+// WITHIN A TIER, the superset survives. The token-2 tier makes these by
+// construction: a family is kept only when it has more members than its key's
+// verbatim group, so that group is always strictly contained in it. On the
+// measured fixture that was 12 of 113 groups (Phase-3 review, L1). Spending two
+// of eight slots on {A,B} and {A,B,C} is spending two on one question, and the
+// superset carries strictly more evidence for the SAME shared mechanism.
 //
-// The SUPERSET survives: it carries strictly more evidence for the same shared
-// mechanism, and the agent can still decline the members it finds unconvincing.
+// ACROSS TIERS, THE EXACT GROUP WINS, and the family is dropped (designer
+// ruling, Phase-4 rulings-3, amending L1). The within-tier rationale does not
+// transfer: a token-2 family is a DIFFERENT, LOOSER grouping, not more evidence
+// for the same one, so "the superset carries strictly more evidence" is false
+// of it. Measured instance that produced the ruling — on the merged corpus at
+// high effort, the family keyed `invents-rather-than-asks` folded the genuine
+// verbatim pair `own-rather-than-rent` (owning vs renting compute) together
+// with a tool-parameter gotcha and a drug-discovery fact, joined by nothing but
+// the English construction "rather than". Under L1 as written the family
+// displaced the real pair and took the slot.
+//
+// WHAT THIS COSTS, said plainly: a dropped family's EXTRA members leave the
+// served set with it, so pairs only that family offered are no longer offered.
+// That is the intended trade — those pairs exist only because a looser tier
+// invented the grouping — but it is a real loss, not a free win, and the
+// acceptance assertion about it is tier-aware for that reason.
+//
 // Runs before ranking and truncation, or it would free no slots.
-func suppressContained(in []BridgeSeedSet) []BridgeSeedSet {
+func suppressContained(in []enumeratedMotif) ([]enumeratedMotif, int) {
 	sets := make([]map[string]struct{}, len(in))
 	for i, g := range in {
 		sets[i] = make(map[string]struct{}, len(g.Members))
@@ -1000,23 +1057,33 @@ func suppressContained(in []BridgeSeedSet) []BridgeSeedSet {
 			sets[i][m.File] = struct{}{}
 		}
 	}
-	out := make([]BridgeSeedSet, 0, len(in))
+	out := make([]enumeratedMotif, 0, len(in))
+	crossTier := 0
 	for i := range in {
-		contained := false
+		drop := false
 		for j := range in {
-			if i == j || len(sets[j]) <= len(sets[i]) {
+			if i == j {
 				continue
 			}
-			if subsetOf(sets[i], sets[j]) {
-				contained = true
+			// Cross-tier: a FAMILY containing an exact group loses to it,
+			// whatever their sizes.
+			if in[i].family && !in[j].family && subsetOf(sets[j], sets[i]) {
+				drop = true
+				crossTier++
+				break
+			}
+			// Same tier: the strict superset survives.
+			if in[i].family == in[j].family &&
+				len(sets[j]) > len(sets[i]) && subsetOf(sets[i], sets[j]) {
+				drop = true
 				break
 			}
 		}
-		if !contained {
+		if !drop {
 			out = append(out, in[i])
 		}
 	}
-	return out
+	return out, crossTier
 }
 
 func subsetOf(small, big map[string]struct{}) bool {

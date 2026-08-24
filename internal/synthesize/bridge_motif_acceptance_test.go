@@ -123,7 +123,7 @@ func motifDFFor(facts []factForLLM) motifDFFn {
 // merges canonical ids, so the same pair of facts can arrive under a different
 // group label at a higher effort. Keying on the token would make monotonicity
 // look violated by a relabelling.
-func pairsOf(groups []BridgeSeedSet) map[string]struct{} {
+func pairsOf(groups []enumeratedMotif) map[string]struct{} {
 	out := map[string]struct{}{}
 	for _, g := range groups {
 		for i := 0; i < len(g.Members); i++ {
@@ -193,15 +193,40 @@ func TestMotifAcceptance_BridgeYieldPairs(t *testing.T) {
 	// another, and therefore never reach a slot. The reviewer measured 12 of
 	// 113 at enumeration; this asserts the suppression actually removes them
 	// before the budget is spent.
-	kept := suppressContained(high)
-	t.Logf("contained-group suppression: %d of %d token-2 groups dropped",
-		len(high)-len(kept), len(high))
+	kept, crossTier := suppressContained(high)
+	t.Logf("contained-group suppression: %d of %d token-2 groups dropped (%d of them cross-tier)",
+		len(high)-len(kept), len(high), crossTier)
 	require.Positive(t, len(high)-len(kept),
 		"token-2 makes contained groups by construction — a run that suppresses none "+
 			"means the suppression is not reaching them")
-	require.Equal(t, pairsOf(high), pairsOf(kept),
-		"suppression must not lose a PAIR — a contained group's members all "+
-			"survive inside the superset that displaced it")
+
+	// TIER-AWARE, amended with the cross-tier ruling (Phase-4 rulings-3).
+	//
+	// The original assertion here was `pairsOf(high) == pairsOf(kept)` — "
+	// suppression must not lose a PAIR". That was true while the superset
+	// always survived: a contained group's members all lived on inside the
+	// group that displaced it. The cross-tier rule inverts that case on
+	// purpose — a token-2 family containing an exact group is DROPPED — so a
+	// family's EXTRA members leave with it, and pairs only that family offered
+	// are no longer offered. Equality is therefore the wrong assertion now, and
+	// weakening it to "subset" alone would assert almost nothing.
+	//
+	// What replaces it is the property the ruling actually protects: whatever
+	// else suppression removes, it never costs a pair the EXACT tier found.
+	require.Subset(t, pairsOf(high), pairsOf(kept),
+		"suppression only ever removes; it cannot invent a pair")
+	require.Subset(t, pairsOf(kept), pairsOf(normal),
+		"no pair the EXACT tier offers may be lost to suppression — that is what "+
+			"the cross-tier rule exists to protect")
+	// SAID PLAINLY, because a reader could take this block for a test OF the
+	// cross-tier rule and it is not one: both assertions above hold under the
+	// OLD rule too, and I verified that by sabotage — reverting to
+	// superset-always-wins leaves this test green. They are invariants that
+	// must survive the change, which is what the ruling asked be re-run. The
+	// rule itself is pinned by TestRankAndCap_CrossTierTheExactGroupWins, which
+	// does fail under that sabotage.
+	t.Logf("pairs: %d enumerated at token-2, %d after suppression, %d at exact",
+		len(pairsOf(high)), len(pairsOf(kept)), len(pairsOf(normal)))
 
 	// The measurement's headline: ten subject-disjoint pairs on knomit-kb. The
 	// shipped gate is FINER than the one that produced it (df-graded rather

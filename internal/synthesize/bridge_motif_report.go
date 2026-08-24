@@ -82,6 +82,7 @@ type MotifReport struct {
 	PointCut           int      `json:"disjointness_cut"`
 	PointUmbrella      int      `json:"disjointness_umbrella"`
 	PointLabels        int      `json:"disjointness_labels"`
+	FamilySuppressed   int      `json:"family_suppressed_by_exact"`
 	PointStrict        bool     `json:"disjointness_strict"`
 	HealthLines        []string `json:"health_lines"`
 
@@ -172,7 +173,7 @@ func MotifComponentReport(
 	labels := subjectLabelsFor(ctx, idx, branch)
 	meanSim := meanSimFor(abstraction, branch)
 
-	rows, health, err := scoreMotifCandidates(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, meanSim)
+	rows, _, err := scoreMotifCandidates(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, meanSim)
 	if err != nil {
 		return rep, err
 	}
@@ -195,7 +196,9 @@ func MotifComponentReport(
 
 	// The served set, from the same engine — so the report shows what a session
 	// would enqueue, not only what enumeration found.
-	near, far, _, err := buildMotifBridges(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, meanSim)
+	// buildMotifBridges' health is the SUPERSET: same enumeration, plus what
+	// suppression did — which only exists once the served set is built.
+	near, far, health, err := buildMotifBridges(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, meanSim)
 	if err != nil {
 		return rep, err
 	}
@@ -213,6 +216,7 @@ func MotifComponentReport(
 	rep.NearOtherDropped = health.NearOtherDropped
 	rep.FarOversizeDropped = health.FarOversizeDropped
 	rep.FarOtherDropped = health.FarOtherDropped
+	rep.FamilySuppressed = health.FamilySuppressedByExact
 	rep.PointCut = health.Point.Cut
 	rep.PointUmbrella = health.Point.Umbrella
 	rep.PointLabels = health.Point.Labels

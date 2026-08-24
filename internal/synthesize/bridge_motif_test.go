@@ -706,46 +706,88 @@ func TestMotifBridgeHealthLines_FailureIsNotSuccessShapedZeros(t *testing.T) {
 	require.Contains(t, found[0], "motif bridges: 2 candidates, 1 near, 1 far")
 }
 
-// ── L1: nested duplicate groups ───────────────────────────────────────────
+// ── L1 + the cross-tier amendment: nested duplicate groups ────────────────
 
-// Every token-2 family strictly CONTAINS its key's verbatim group by
-// construction, so the two compete for the same scarce slots and render the
-// same `Bridge token:` line with nested member sets. The contained one is
-// suppressed: an agent judging {A,B} and then {A,B,C} spends two of eight slots
-// on one question.
-func TestRankAndCap_SuppressesStrictlyContainedGroups(t *testing.T) {
-	small := BridgeSeedSet{Token: "shared-shape", Q: 9, Members: []factForLLM{
-		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}}
-	big := BridgeSeedSet{Token: "shared-shape", Q: 1, Members: []factForLLM{
-		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}, {File: "kb/c/3.md"}}}
+// mc builds an enumerated candidate at a named tier. Explicit at every call
+// site, because the tier is now what decides which of two nested groups wins.
+func mc(token string, q float64, family bool, files ...string) enumeratedMotif {
+	ms := make([]factForLLM, 0, len(files))
+	for _, f := range files {
+		ms = append(ms, factForLLM{File: f})
+	}
+	return enumeratedMotif{
+		BridgeSeedSet: BridgeSeedSet{Token: token, Kind: BridgeMotif, Q: q, Members: ms},
+		family:        family,
+	}
+}
 
-	got := rankAndCap([]BridgeSeedSet{small, big}, 8)
+// CROSS-TIER: the exact group wins, and the family that contains it is dropped
+// (designer ruling, Phase-4 rulings-3, amending L1).
+//
+// The fixture is the measured case that produced the ruling, named after it.
+// On the merged corpus at high effort the token-2 family keyed
+// `invents-rather-than-asks` folded the genuine verbatim pair
+// `own-rather-than-rent` together with a tool-parameter gotcha and a
+// drug-discovery fact — joined by the English construction "rather than" and
+// nothing else. Under L1 as written the family displaced the real pair and
+// took the slot, even though it ranked lower.
+func TestRankAndCap_CrossTierTheExactGroupWins(t *testing.T) {
+	exact := mc("own-rather-than-rent", 1, false,
+		"kb/business/companies/oumi/products/0f4afbc1.md",
+		"kb/technology/ai/economics/enterprise/eaf6e38d.md")
+	family := mc("invents-rather-than-asks", 9, true,
+		"kb/business/companies/oumi/products/0f4afbc1.md",
+		"kb/technology/ai/economics/enterprise/eaf6e38d.md",
+		"kb/gotchas/ai/agents/tools/parameters/missing-arguments/2b9d15c8.md",
+		"kb/science/applied/biomedicine/ai-drug-discovery/robin/ac315cea.md")
 
-	require.Len(t, got, 1, "the contained group goes, whichever ranks higher")
-	require.Len(t, got[0].Members, 3, "the SUPERSET survives — it carries strictly more evidence")
+	// Precondition (lesson 5): the family must OUTRANK the exact group, or the
+	// test could pass on ranking rather than on the tier rule.
+	require.Greater(t, family.Q, exact.Q,
+		"precondition: the family must rank higher, so only the tier rule can drop it")
+
+	got, crossTier := rankAndCap([]enumeratedMotif{exact, family}, 8)
+
+	require.Len(t, got, 1)
+	require.Equal(t, "own-rather-than-rent", got[0].Token,
+		"the exact group is served; the looser fold is not")
+	require.Len(t, got[0].Members, 2)
+	require.Equal(t, 1, crossTier, "and the drop is counted")
+}
+
+// WITHIN A TIER the superset still survives — the original L1 rule, unchanged.
+// An agent judging {A,B} and then {A,B,C} of the SAME grouping spends two of
+// eight slots on one question.
+func TestRankAndCap_SameTierTheSupersetWins(t *testing.T) {
+	for _, family := range []bool{false, true} {
+		small := mc("shared-shape", 9, family, "kb/a/1.md", "kb/b/2.md")
+		big := mc("shared-shape", 1, family, "kb/a/1.md", "kb/b/2.md", "kb/c/3.md")
+
+		got, crossTier := rankAndCap([]enumeratedMotif{small, big}, 8)
+
+		require.Lenf(t, got, 1, "family=%v: the contained group goes, whichever ranks higher", family)
+		require.Lenf(t, got[0].Members, 3, "family=%v: the SUPERSET survives within a tier", family)
+		require.Zerof(t, crossTier, "family=%v: this is not a cross-tier drop", family)
+	}
 }
 
 // Overlapping-but-not-contained groups both survive: they are different
 // questions, and suppressing either would lose a bridge.
 func TestRankAndCap_KeepsOverlappingGroupsThatAreNotContained(t *testing.T) {
-	a := BridgeSeedSet{Token: "alpha-shape", Q: 2, Members: []factForLLM{
-		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}}
-	b := BridgeSeedSet{Token: "bravo-shape", Q: 1, Members: []factForLLM{
-		{File: "kb/b/2.md"}, {File: "kb/c/3.md"}}}
+	a := mc("alpha-shape", 2, false, "kb/a/1.md", "kb/b/2.md")
+	b := mc("bravo-shape", 1, false, "kb/b/2.md", "kb/c/3.md")
 
-	require.Len(t, rankAndCap([]BridgeSeedSet{a, b}, 8), 2)
+	got, _ := rankAndCap([]enumeratedMotif{a, b}, 8)
+	require.Len(t, got, 2)
 }
 
 // Suppression happens BEFORE the budget is spent, or it saves no slots.
 func TestRankAndCap_SuppressionPrecedesTheBudget(t *testing.T) {
-	contained := BridgeSeedSet{Token: "shared-shape", Q: 9, Members: []factForLLM{
-		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}}}
-	superset := BridgeSeedSet{Token: "shared-shape", Q: 8, Members: []factForLLM{
-		{File: "kb/a/1.md"}, {File: "kb/b/2.md"}, {File: "kb/c/3.md"}}}
-	other := BridgeSeedSet{Token: "other-shape", Q: 1, Members: []factForLLM{
-		{File: "kb/d/4.md"}, {File: "kb/e/5.md"}}}
+	contained := mc("shared-shape", 9, true, "kb/a/1.md", "kb/b/2.md")
+	superset := mc("shared-shape", 8, true, "kb/a/1.md", "kb/b/2.md", "kb/c/3.md")
+	other := mc("other-shape", 1, false, "kb/d/4.md", "kb/e/5.md")
 
-	got := rankAndCap([]BridgeSeedSet{contained, superset, other}, 2)
+	got, _ := rankAndCap([]enumeratedMotif{contained, superset, other}, 2)
 
 	require.Len(t, got, 2)
 	require.Equal(t, "shared-shape", got[0].Token)
@@ -977,10 +1019,15 @@ func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.
 	near, far, buildHealth, err := buildMotifBridges(context.Background(), idx, "main", seeds,
 		clusters, EffortHigh, cfg, identityResolver, labels, constMeanSim(0.1))
 	require.NoError(t, err)
-	require.Equal(t, rowHealth, buildHealth, "one enumeration, one health picture")
+	// buildMotifBridges' health carries ONE field the rows' does not:
+	// FamilySuppressedByExact, which only exists once suppression has run. Set
+	// it from the same rebuild below rather than excluding it, so the equality
+	// still covers every other field. (The first version compared the structs
+	// raw and passed only because this fixture has no cross-tier containment —
+	// a coincidence in the fixture, not a property.)
 
 	// Rebuild what production serves, from the rows alone.
-	var wantNear, wantFar []BridgeSeedSet
+	var wantNear, wantFar []enumeratedMotif
 	for _, r := range rows {
 		if !r.kept {
 			continue
@@ -994,6 +1041,11 @@ func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.
 		}
 	}
 	nb, fb := motifSubBudget(EffortHigh)
+	gotNearPre, nearSup := rankAndCap(wantNear, nb)
+	gotFarPre, farSup := rankAndCap(wantFar, fb)
+	rowHealth.FamilySuppressedByExact = nearSup + farSup
+	require.Equal(t, rowHealth, buildHealth, "one enumeration, one health picture")
+	_, _ = gotNearPre, gotFarPre
 
 	require.NotEmpty(t, wantNear, "precondition: the fixture must serve something on each lane")
 	require.NotEmpty(t, wantFar, "precondition: the fixture must serve something on each lane")
@@ -1003,13 +1055,13 @@ func TestScoreMotifCandidates_KeptRowsAreExactlyWhatProductionServes(t *testing.
 	// this test could not — the sabotage passed. Assert the difference rather
 	// than trusting the fixture to keep it (lesson 5).
 	sizes := map[int]bool{}
-	for _, b := range append(append([]BridgeSeedSet{}, wantNear...), wantFar...) {
+	for _, b := range append(append([]enumeratedMotif{}, wantNear...), wantFar...) {
 		sizes[len(b.Members)] = true
 	}
 	require.Greater(t, len(sizes), 1,
 		"precondition: served groups must vary in member count, or this test is blind to a size filter")
-	require.Equal(t, rankAndCap(wantNear, nb), near)
-	require.Equal(t, rankAndCap(wantFar, fb), far)
+	require.Equal(t, gotNearPre, near)
+	require.Equal(t, gotFarPre, far)
 }
 
 // The rows carry the DROPPED candidates too, with the cause — which is the
