@@ -27,6 +27,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -180,16 +181,30 @@ func snapshot(ctx context.Context, corpus, id, scratch string) error {
 // checkpointLiveHome flushes a live corpus's WAL into its .db file so a
 // file-level copy is self-contained.
 //
+// RAW CONNECTION, NEVER store.Open (review finding H-1). This is the one
+// moment the tool touches a real knowledge base, and refuseLivePath's scope
+// note promises that touch is "a read and a checkpoint, no session, no
+// migration". store.Open makes that promise false: it runs migrate.All against
+// whatever it is handed and writes a session sidecar beside it. An operator
+// reading the guard's scope note before pointing this tool at their corpus
+// would have been reading the opposite of what happened.
+//
+// The plain "sqlite3" driver is deliberate over the store's own
+// "sqlite3_knomit": the custom driver is registered lazily by store.Open, and
+// a checkpoint needs none of what it carries. Nothing here can migrate,
+// because nothing here knows what a migration is.
+//
 // Reported rather than ignored on failure: a snapshot that could not checkpoint
 // is a snapshot that may be short of facts, and the whole point of the annex is
 // that its inputs are what they claim to be.
 func checkpointLiveHome(path string) error {
-	svc, err := store.Open(path)
+	db, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		return err
 	}
-	defer svc.Close()
-	return svc.Checkpoint()
+	defer db.Close()
+	_, err = db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
 }
 
 func copyFile(src, dst string) error {
