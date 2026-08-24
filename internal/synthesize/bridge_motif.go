@@ -764,10 +764,45 @@ func buildMotifBridges(
 	labels store.SubjectLabelDF,
 	pairCos pairCosFn,
 ) ([]BridgeSeedSet, []BridgeSeedSet, motifEnumHealth, error) {
+	near, far, _, health, err := buildMotifBridgesWithRows(
+		ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, pairCos)
+	return near, far, health, err
+}
+
+// buildMotifBridgesWithRows is buildMotifBridges plus the per-candidate rows,
+// with every disposition filled in — suppression and budget included.
+//
+// It exists so the measurement surface reads the SAME pass production serves
+// from. The report used to call scoreMotifCandidates and buildMotifBridges
+// separately, which enumerated twice and left the rows knowing nothing about
+// what happened after scoring: suppression drops a candidate inside
+// rankAndCap, so a row said `Kept: true, Cause: ""` for a group no agent ever
+// saw (review finding M-4).
+func buildMotifBridgesWithRows(
+	ctx context.Context,
+	idx SearchQuery,
+	branch string,
+	seeds []factForLLM,
+	clusters ClusterResult,
+	eff Effort,
+	cfg QualityConfig,
+	resolve motifResolver,
+	labels store.SubjectLabelDF,
+	pairCos pairCosFn,
+) ([]BridgeSeedSet, []BridgeSeedSet, []scoredMotifRow, motifEnumHealth, error) {
 	rows, health, err := scoreMotifCandidates(ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, pairCos)
 	if err != nil {
-		return nil, nil, health, err
+		return nil, nil, rows, health, err
 	}
+	// Index rows by member set so a decision taken on a candidate can be
+	// written back to the row it came from. Keyed on members rather than Token
+	// because a token-2 family shares its Token with the verbatim group it
+	// folded — the same ambiguity enumeratedMotif.family exists for.
+	rowOf := map[string]int{}
+	for i, r := range rows {
+		rowOf[memberKey(r.cand)] = i
+	}
+
 	var near, far []enumeratedMotif
 	for _, r := range rows {
 		if !r.kept {
@@ -782,10 +817,51 @@ func buildMotifBridges(
 		}
 	}
 	nearBudget, farBudget := motifSubBudget(eff)
-	nearOut, nearSup := rankAndCap(near, nearBudget)
-	farOut, farSup := rankAndCap(far, farBudget)
+	nearOut, nearSup := rankAndCapRows(near, nearBudget, rows, rowOf)
+	farOut, farSup := rankAndCapRows(far, farBudget, rows, rowOf)
 	health.FamilySuppressedByExact = nearSup + farSup
-	return nearOut, farOut, health, nil
+	return nearOut, farOut, rows, health, nil
+}
+
+// memberKey identifies a candidate by its member set.
+func memberKey(c enumeratedMotif) string {
+	paths := make([]string, 0, len(c.Members))
+	for _, m := range c.Members {
+		paths = append(paths, m.File)
+	}
+	sort.Strings(paths)
+	return strings.Join(paths, "\x00")
+}
+
+// rankAndCapRows is rankAndCap, writing each decision back into the rows.
+func rankAndCapRows(in []enumeratedMotif, budget int, rows []scoredMotifRow, rowOf map[string]int) ([]BridgeSeedSet, int) {
+	if budget == 0 {
+		return nil, 0
+	}
+	kept, crossTier, dropped := suppressContainedTracked(in)
+	for k, cause := range dropped {
+		if i, ok := rowOf[k]; ok {
+			rows[i].kept = false
+			rows[i].cause = cause
+		}
+	}
+	sort.SliceStable(kept, func(i, j int) bool {
+		if kept[i].Q != kept[j].Q {
+			return kept[i].Q > kept[j].Q
+		}
+		return kept[i].Token < kept[j].Token
+	})
+	if len(kept) > budget {
+		kept = kept[:budget]
+	}
+	out := make([]BridgeSeedSet, 0, len(kept))
+	for _, c := range kept {
+		if i, ok := rowOf[memberKey(c)]; ok {
+			rows[i].served = true
+		}
+		out = append(out, c.BridgeSeedSet)
+	}
+	return out, crossTier
 }
 
 // scoredMotifRow is one enumerated candidate and everything the scorer decided
@@ -796,12 +872,21 @@ func buildMotifBridges(
 // from the engine that serves the bridges rather than from a second
 // implementation that agrees with it until it does not.
 type scoredMotifRow struct {
-	cand  enumeratedMotif
-	lane  BridgeLane
-	comp  BridgeComponents
-	q     float64
+	cand enumeratedMotif
+	lane BridgeLane
+	comp BridgeComponents
+	q    float64
+	// kept is the PRE-BUDGET verdict: the candidate passed every gate and
+	// survived suppression, so a session would serve it if a slot existed.
+	// kept is true exactly when cause is empty.
 	kept  bool
 	cause motifDropCause
+	// served reports that it actually reached a work item. A row with
+	// kept && !served is one that lost a slot to the per-lane budget — which
+	// IS register entry 3's vanish-rate population, and the reason budget is
+	// tracked here rather than folded into cause: it is not a defect in the
+	// candidate, it is scarcity.
+	served bool
 }
 
 // motifDropCause names why a candidate was not served. Empty when it was.
@@ -818,6 +903,18 @@ const (
 	motifNearOther   motifDropCause = "near-other"
 	motifFarOversize motifDropCause = "far-oversize"
 	motifFarOther    motifDropCause = "far-other"
+	// Suppression causes (review finding M-4). Suppression runs INSIDE
+	// rankAndCap, after the scorer has already said kept — so before this a row
+	// read `Kept: true, Cause: ""` for a group no agent ever saw, and the
+	// taxonomy whose whole purpose is that "a counter and the row it came from
+	// cannot drift" had a state it did not cover.
+	//
+	// The two are distinct because they mean different things to a reader: a
+	// same-tier drop is one question asked twice; a cross-tier drop is a looser
+	// grouping losing to the exact one it contained. One label for both would
+	// be the M4 counter-finding again.
+	motifSuppressedCrossTier motifDropCause = "suppressed-by-exact-tier"
+	motifSuppressedSameTier  motifDropCause = "suppressed-by-superset"
 )
 
 // scoreMotifCandidates enumerates, lane-splits and scores every motif bridge
@@ -1321,6 +1418,20 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 //
 // Runs before ranking and truncation, or it would free no slots.
 func suppressContained(in []enumeratedMotif) ([]enumeratedMotif, int) {
+	kept, crossTier, _ := suppressContainedTracked(in)
+	return kept, crossTier
+}
+
+// suppressContainedTracked is suppressContained, additionally naming WHICH
+// candidates it dropped and under which cause, keyed by member set.
+//
+// The causes are distinct because the two suppressions mean different things
+// to a reader: a same-tier drop is one question asked twice, and a cross-tier
+// drop is a looser grouping losing to the exact one it contained. Reporting
+// both as "suppressed" would put them under one label again, which is the M4
+// counter-finding's whole lesson.
+func suppressContainedTracked(in []enumeratedMotif) ([]enumeratedMotif, int, map[string]motifDropCause) {
+	dropped := map[string]motifDropCause{}
 	sets := make([]map[string]struct{}, len(in))
 	for i, g := range in {
 		sets[i] = make(map[string]struct{}, len(g.Members))
@@ -1331,7 +1442,7 @@ func suppressContained(in []enumeratedMotif) ([]enumeratedMotif, int) {
 	out := make([]enumeratedMotif, 0, len(in))
 	crossTier := 0
 	for i := range in {
-		drop := false
+		var cause motifDropCause
 		for j := range in {
 			if i == j {
 				continue
@@ -1339,22 +1450,24 @@ func suppressContained(in []enumeratedMotif) ([]enumeratedMotif, int) {
 			// Cross-tier: a FAMILY containing an exact group loses to it,
 			// whatever their sizes.
 			if in[i].family && !in[j].family && subsetOf(sets[j], sets[i]) {
-				drop = true
+				cause = motifSuppressedCrossTier
 				crossTier++
 				break
 			}
 			// Same tier: the strict superset survives.
 			if in[i].family == in[j].family &&
 				len(sets[j]) > len(sets[i]) && subsetOf(sets[i], sets[j]) {
-				drop = true
+				cause = motifSuppressedSameTier
 				break
 			}
 		}
-		if !drop {
+		if cause == motifKept {
 			out = append(out, in[i])
+			continue
 		}
+		dropped[memberKey(in[i])] = cause
 	}
-	return out, crossTier
+	return out, crossTier, dropped
 }
 
 func subsetOf(small, big map[string]struct{}) bool {

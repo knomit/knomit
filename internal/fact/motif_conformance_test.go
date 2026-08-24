@@ -250,7 +250,16 @@ var mechanicsPaths = map[string][]string{
 		// motif tier a candidate came from (enumeratedMotif.family) to decide
 		// which of two nested groups is served. It reads the tier, never a
 		// motif's content, and it is inside the §4/§5 path.
-		"suppressContained",
+		// suppressContainedTracked replaces suppressContained as the function
+		// that reads the tier (M-4 remediation); suppressContained is now a
+		// two-line wrapper that mentions no motif, so it comes OFF the list —
+		// a permission nothing uses is what the bidirectional check exists to
+		// catch.
+		"suppressContainedTracked",
+		// The single-pass builder and the row-writing rank/cap it delegates
+		// to. Same §4/§5 licence buildMotifBridges has always had; theyname the
+		// functions that now do the work.
+		"buildMotifBridgesWithRows",
 		// Phase 4: the activation floor. seedRecurrence counts the corpus's
 		// recurring motifs and motifActive decides whether the axis runs at
 		// all — both read motifs to answer "is there enough repeated

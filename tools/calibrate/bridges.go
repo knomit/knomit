@@ -262,11 +262,18 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 		return nil
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "TOKEN\tLANE\tMEMBERS\tCOH\tSEP\tGAP\tSPEC\tSEEDCOS\tEJACC\tOVERDUP\tQ\tKEPT/CAUSE")
+	fmt.Fprintln(tw, "TOKEN\tLANE\tMEMBERS\tCOH\tSEP\tGAP\tSPEC\tSEEDCOS\tEJACC\tOVERDUP\tQ\tDISPOSITION")
 	for _, b := range rep.Candidates {
-		verdict := "yes"
-		if !b.Kept {
-			verdict = b.Cause
+		// One column, every state named. It read "yes" for candidates absent
+		// from the served line — suppression happens after the scorer's
+		// verdict, so "kept" and "served" are different questions and the
+		// table now answers both (review finding M-4).
+		verdict := "served"
+		switch {
+		case !b.Kept:
+			verdict = "dropped: " + b.Cause
+		case !b.Served:
+			verdict = "kept, no slot (budget)"
 		}
 		seedCos, overDup := "n/a", "n/a"
 		if b.Comp.Novelty.VectorsRead {

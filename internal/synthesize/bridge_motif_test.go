@@ -1468,3 +1468,75 @@ func TestScoreMotifCandidate_UnembeddedFarGroupDoesNotOutrankAnEmbeddedOne(t *te
 		"a group with no vectors must not outrank a genuinely dissimilar one — missing "+
 			"evidence cannot buy the top of the far lane")
 }
+
+// M-4. The acceptance identity the review asked for:
+//
+//	count(Kept) == served + budget_dropped
+//
+// and every row in a state the taxonomy covers. Before the remediation a
+// suppressed candidate read `kept: true, cause: ""` — so a reader computing
+// the vanish rate the obvious way got 1 on merged@high and attributed it to
+// budget contention, when the budget was 8 and nothing contended.
+func TestBuildMotifBridgesWithRows_KeptEqualsServedPlusBudgetDropped(t *testing.T) {
+	// A fixture with a real cross-tier suppression in it: the verbatim pair and
+	// the family that contains it, plus filler to clear the activation floor.
+	seeds := []factForLLM{
+		{File: "kb/a/1.md", Motifs: []string{"own-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/2.md", Motifs: []string{"own-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/3.md", Motifs: []string{"own-shape", "invents-shape"}, Entities: []string{"Gamma"}},
+		{File: "kb/d/4.md", Motifs: []string{"invents-shape"}, Entities: []string{"Delta"}},
+	}
+	seeds = append(seeds, activationFillers()...)
+	clusters, labels := oneCommunityEach(seeds)
+
+	near, far, rows, health, err := buildMotifBridgesWithRows(context.Background(),
+		&pairwiseIndex{}, "main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		identityResolver, labels, constPairCos(0.1))
+	require.NoError(t, err)
+	require.True(t, health.Activation.Active, "precondition: the axis ran")
+
+	kept, served, budget := 0, 0, 0
+	for _, r := range rows {
+		require.Equal(t, r.kept, r.cause == motifKept,
+			"kept is true exactly when there is no cause — %q", r.cause)
+		if r.kept {
+			kept++
+			if r.served {
+				served++
+			} else {
+				budget++
+			}
+		}
+		require.False(t, r.served && !r.kept, "a served row cannot carry a drop cause")
+	}
+	require.Equal(t, len(near)+len(far), served, "served rows are exactly the enqueued ones")
+	require.Equal(t, kept, served+budget, "count(Kept) == served + budget-dropped")
+}
+
+// And the state that had no cause at all: a suppressed candidate must say so.
+func TestBuildMotifBridgesWithRows_SuppressionReportsIntoTheRow(t *testing.T) {
+	// Verbatim {1,2}; a same-tier superset {1,2,3} that swallows it.
+	seeds := []factForLLM{
+		{File: "kb/a/1.md", Motifs: []string{"small-shape", "big-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/2.md", Motifs: []string{"small-shape", "big-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/3.md", Motifs: []string{"big-shape"}, Entities: []string{"Gamma"}},
+	}
+	seeds = append(seeds, activationFillers()...)
+	clusters, labels := oneCommunityEach(seeds)
+
+	_, _, rows, _, err := buildMotifBridgesWithRows(context.Background(),
+		&pairwiseIndex{}, "main", seeds, clusters, EffortHigh, motifQualityConfig(),
+		identityResolver, labels, constPairCos(0.1))
+	require.NoError(t, err)
+
+	var suppressed int
+	for _, r := range rows {
+		if r.cause == motifSuppressedSameTier || r.cause == motifSuppressedCrossTier {
+			suppressed++
+			require.False(t, r.kept, "a suppressed row is not kept")
+			require.False(t, r.served, "and was never served")
+		}
+	}
+	require.Positive(t, suppressed,
+		"precondition: this fixture must actually suppress something, or it proves nothing")
+}

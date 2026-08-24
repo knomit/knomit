@@ -39,10 +39,18 @@ type ScoredMotifBridge struct {
 	Comp BridgeComponents
 	// Q is the lane's weighted quality score (0 when gated out).
 	Q float64
-	// Kept reports whether the scorer would serve this candidate, BEFORE the
-	// per-lane budget. A kept candidate can still miss a slot — which is the
-	// distinction the M3 vanish-rate measurement exists to size.
+	// Kept is the PRE-BUDGET verdict: the candidate passed every gate AND
+	// survived suppression, so a session would serve it if a slot existed.
+	// True exactly when Cause is empty.
 	Kept bool
+	// Served reports that it actually reached a work item.
+	//
+	// Kept && !Served is the vanish-rate population register entry 3 exists to
+	// size — a candidate that lost a slot to the per-lane budget. It is a
+	// separate field rather than a Cause because losing to scarcity is not a
+	// defect in the candidate, and folding it into Cause would put "this group
+	// was wrong" and "there were only eight slots" under one word.
+	Served bool
 	// Cause names why it was dropped, empty when kept. One taxonomy, shared
 	// with the health counters, which are tallied from it.
 	Cause string
@@ -188,7 +196,11 @@ func MotifComponentReport(
 	labels := subjectLabelsFor(ctx, idx, branch)
 	pairCos := pairCosFor(abstraction, branch)
 
-	rows, _, err := scoreMotifCandidates(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, pairCos)
+	// ONE pass. The report used to call scoreMotifCandidates and then
+	// buildMotifBridges separately: it enumerated twice, and the rows knew
+	// nothing about suppression, which happens inside rankAndCap (M-4).
+	near, far, rows, health, err := buildMotifBridgesWithRows(
+		ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, pairCos)
 	if err != nil {
 		return rep, err
 	}
@@ -205,18 +217,13 @@ func MotifComponentReport(
 			Comp:    r.comp,
 			Q:       r.q,
 			Kept:    r.kept,
+			Served:  r.served,
 			Cause:   string(r.cause),
 		})
 	}
 
 	// The served set, from the same engine — so the report shows what a session
 	// would enqueue, not only what enumeration found.
-	// buildMotifBridges' health is the SUPERSET: same enumeration, plus what
-	// suppression did — which only exists once the served set is built.
-	near, far, health, err := buildMotifBridges(ctx, idx, branch, seeds, cr, eff, cfg, resolve, labels, pairCos)
-	if err != nil {
-		return rep, err
-	}
 	for _, b := range near {
 		rep.NearServed = append(rep.NearServed, b.Token)
 	}
