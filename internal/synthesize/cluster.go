@@ -6,6 +6,7 @@ package synthesize
 import (
 	"context"
 	"path"
+	"sort"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -128,6 +129,24 @@ func ScopedCluster(ctx context.Context,
 	for p := range subgraph {
 		paths = append(paths, p)
 	}
+	// SORTED, and it is load-bearing rather than tidy. louvainCommunities
+	// numbers its graph nodes in the order of this slice, and gonum's
+	// Modularize breaks ties by node id — so an unsorted slice feeds Go's
+	// RANDOMISED map iteration straight into the partition. The seeded PCG in
+	// louvain.go cannot rescue that: it fixes the algorithm's own randomness,
+	// not the ordering of what it is handed.
+	//
+	// Everything downstream inherits the wobble — dedup clusters, prune groups,
+	// distill groups, and the Sep>=2 gate on both bridge axes. Measured on the
+	// merged lab corpus before this line existed: a motif bridge candidate
+	// enumerated in four runs of five and vanished in the fifth.
+	//
+	// A sorted-map container was considered and declined (designer, Phase-4
+	// rulings-2): same asymptotics with worse constants for a
+	// build-once-iterate-once map, a new dependency, and signature churn
+	// wherever the subgraph flows. The guarantee lives in
+	// cluster_determinism_test.go, not in the data structure.
+	sort.Strings(paths)
 
 	edges, err := idx.SubgraphEdges(ctx, paths)
 	if err != nil {
