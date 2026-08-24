@@ -284,35 +284,3 @@ func token2PairsOf(seeds []factForLLM, resolve motifResolver) []Token2Pair {
 	}
 	return out
 }
-
-// seedRecurrence counts recurring clusters and the pairs they could bridge,
-// over the SEED POOL — the population the activation floor is set on.
-//
-// A carrier is counted once per canonical id however many spellings of it the
-// fact carries, matching what TokenDF and the vocabulary health both do: a
-// fact using two spellings of one mechanism is one carrier, not two, or a
-// single author's phrasing habit would read as recurrence.
-func seedRecurrence(seeds []factForLLM, resolve motifResolver) (df2Clusters, pairs int) {
-	carriers := map[string]map[string]struct{}{}
-	for _, f := range seeds {
-		for _, m := range f.Motifs {
-			c := resolve(m)
-			if c == "" {
-				continue
-			}
-			if carriers[c] == nil {
-				carriers[c] = map[string]struct{}{}
-			}
-			carriers[c][f.File] = struct{}{}
-		}
-	}
-	for _, set := range carriers {
-		n := len(set)
-		if n < 2 {
-			continue
-		}
-		df2Clusters++
-		pairs += n * (n - 1) / 2
-	}
-	return df2Clusters, pairs
-}

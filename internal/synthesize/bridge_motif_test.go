@@ -808,6 +808,7 @@ func TestBuildMotifBridges_CountsGroupsLostAtTheNearFloor(t *testing.T) {
 		{File: "kb/b/two.md", Motifs: []string{"shared-shape"}, Entities: []string{"Beta"}},
 		{File: "kb/c/three.md", Motifs: []string{"shared-shape"}, Entities: []string{"Gamma"}},
 	}
+	seeds = append(seeds, activationFillers()...)
 	clusters := ClusterResult{Clusters: map[int][]string{
 		0: {"kb/a/one.md"}, 1: {"kb/b/two.md"}, 2: {"kb/c/three.md"}}}
 	labels := labelsWith(200, map[string]int{"alpha": 2, "beta": 2, "gamma": 2})
@@ -851,6 +852,7 @@ func TestBuildMotifBridges_AttributesNearLaneDropsByCause(t *testing.T) {
 		{File: "kb/f/six.md", Motifs: []string{"crowded-shape"}, Entities: []string{"Zeta"}},
 		{File: "kb/g/seven.md", Motifs: []string{"crowded-shape"}, Entities: []string{"Eta"}},
 	}
+	seeds = append(seeds, activationFillers()...)
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
@@ -930,6 +932,7 @@ func TestBuildMotifBridges_CountsOversizedFarGroups(t *testing.T) {
 		{File: "kb/c/three.md", Motifs: []string{"wide-shape"}, Entities: []string{"Gamma"}},
 		{File: "kb/d/four.md", Motifs: []string{"wide-shape"}, Entities: []string{"Delta"}},
 	}
+	seeds = append(seeds, activationFillers()...)
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
@@ -972,6 +975,7 @@ func TestBuildMotifBridges_AttributesFarLaneDropsByCause(t *testing.T) {
 		{File: "kb/e/five.md", Motifs: []string{"thin-shape"}, Entities: []string{"Epsilon"}},
 		{File: "kb/f/six.md", Motifs: []string{"thin-shape"}, Entities: []string{"Zeta"}},
 	}
+	seeds = append(seeds, activationFillers()...)
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
@@ -1126,6 +1130,7 @@ func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, store.Subjec
 		mk("kb/h/8.md", "wide-shape", "Theta"), mk("kb/i/9.md", "wide-shape", "Iota"),
 		mk("kb/j/10.md", "wide-shape", "Kappa"), mk("kb/k/11.md", "wide-shape", "Lambda"),
 	}
+	seeds = append(seeds, activationFillers()...)
 	clusters := ClusterResult{Clusters: map[int][]string{}}
 	labels := labelsWith(200, nil)
 	for i, f := range seeds {
@@ -1142,4 +1147,139 @@ func laneMixtureFixture(t *testing.T) ([]factForLLM, ClusterResult, store.Subjec
 	cfg := motifQualityConfig()
 	cfg.MaxMembers = 3
 	return seeds, clusters, labels, idx, cfg
+}
+
+// ── P2: the activation floor (K=3, phase4-rulings-4) ──────────────────────
+
+// A corpus below the floor enumerates NOTHING, and it costs no index call to
+// find that out — the same property that keeps MN5's vacuous pass vacuous.
+func TestBuildMotifBridges_BelowTheActivationFloorEnumeratesNothing(t *testing.T) {
+	// Two recurring clusters. The floor is three.
+	seeds := []factForLLM{
+		{File: "kb/a/1.md", Motifs: []string{"first-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/2.md", Motifs: []string{"first-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/3.md", Motifs: []string{"second-shape"}, Entities: []string{"Gamma"}},
+		{File: "kb/d/4.md", Motifs: []string{"second-shape"}, Entities: []string{"Delta"}},
+	}
+	clusters, labels := oneCommunityEach(seeds)
+	idx := &countingIndex{pairwiseIndex: pairwiseIndex{edges: nil}}
+
+	near, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, 2, health.Activation.DF2Clusters, "precondition: below the floor of 3")
+	require.False(t, health.Activation.Active)
+	require.Empty(t, near)
+	require.Empty(t, far)
+	require.Zero(t, health.Candidates, "an inactive corpus enumerates nothing")
+	require.Zero(t, idx.calls, "and costs no index call to decide it")
+
+	lines := strings.Join(motifBridgeHealthLines(health, 0, 0), "\n")
+	require.Contains(t, lines, "motif bridging inactive")
+	require.Contains(t, lines, "2 recurring")
+}
+
+// At the floor it enumerates normally. The two tests differ by ONE cluster, so
+// the assertion is about the floor rather than about the fixtures.
+func TestBuildMotifBridges_AtTheActivationFloorEnumeratesNormally(t *testing.T) {
+	seeds := []factForLLM{
+		{File: "kb/a/1.md", Motifs: []string{"first-shape"}, Entities: []string{"Alpha"}},
+		{File: "kb/b/2.md", Motifs: []string{"first-shape"}, Entities: []string{"Beta"}},
+		{File: "kb/c/3.md", Motifs: []string{"second-shape"}, Entities: []string{"Gamma"}},
+		{File: "kb/d/4.md", Motifs: []string{"second-shape"}, Entities: []string{"Delta"}},
+		{File: "kb/e/5.md", Motifs: []string{"third-shape"}, Entities: []string{"Epsilon"}},
+		{File: "kb/f/6.md", Motifs: []string{"third-shape"}, Entities: []string{"Zeta"}},
+	}
+	clusters, labels := oneCommunityEach(seeds)
+	idx := &pairwiseIndex{}
+
+	_, far, health, err := buildMotifBridges(context.Background(), idx, "main", seeds,
+		clusters, EffortHigh, motifQualityConfig(), identityResolver, labels, constMeanSim(0.1))
+
+	require.NoError(t, err)
+	require.Equal(t, motifActivationFloor, health.Activation.DF2Clusters,
+		"precondition: exactly at the floor, one cluster above the previous test")
+	require.True(t, health.Activation.Active)
+	require.Equal(t, 3, health.Candidates)
+	require.Len(t, far, 3, "and the candidates are served")
+}
+
+// The floor counts RECURRING clusters, not motifed facts: a corpus can carry
+// plenty of motifs and still have nothing that repeats.
+func TestMotifActive_CountsRecurrenceNotVolume(t *testing.T) {
+	var hapax []factForLLM
+	for i := range 40 {
+		hapax = append(hapax, factForLLM{
+			File:   fmt.Sprintf("kb/h/%d.md", i),
+			Motifs: []string{fmt.Sprintf("unique-shape-%d", i)},
+		})
+	}
+	got := motifActive(hapax, identityResolver)
+	require.False(t, got.Active, "forty motifs, none of them recurring")
+	require.Zero(t, got.DF2Clusters)
+	require.Zero(t, got.Pairs)
+}
+
+// A fact spelling one mechanism two ways is ONE carrier. Otherwise a single
+// author's phrasing habit would activate the axis by itself.
+func TestSeedRecurrence_TwoSpellingsOnOneFactAreOneCarrier(t *testing.T) {
+	resolve := func(m string) string {
+		if m == "silent-drop" || m == "drops-silently" {
+			return "silent-drop"
+		}
+		return m
+	}
+	seeds := []factForLLM{{File: "kb/a/1.md", Motifs: []string{"silent-drop", "drops-silently"}}}
+
+	clusters, pairs := seedRecurrence(seeds, resolve)
+	require.Zero(t, clusters, "one fact cannot make a motif recur")
+	require.Zero(t, pairs)
+}
+
+// oneCommunityEach puts every seed in its own community and gives every entity
+// a df that clears the disjointness gate.
+func oneCommunityEach(seeds []factForLLM) (ClusterResult, store.SubjectLabelDF) {
+	clusters := ClusterResult{Clusters: map[int][]string{}}
+	labels := labelsWith(200, nil)
+	for i, f := range seeds {
+		clusters.Clusters[i] = []string{f.File}
+		if len(f.Entities) > 0 {
+			labels.DF[strings.ToLower(f.Entities[0])] = 2
+		}
+	}
+	return clusters, labels
+}
+
+// countingIndex records whether the enumeration touched the index at all.
+type countingIndex struct {
+	pairwiseIndex
+	calls int
+}
+
+func (c *countingIndex) TokenDF(ctx context.Context, b, t, k string) (int, error) {
+	c.calls++
+	return c.pairwiseIndex.TokenDF(ctx, b, t, k)
+}
+
+func (c *countingIndex) SimilarityAdjacency(ctx context.Context, paths []string) (store.SimilarityGraph, error) {
+	c.calls++
+	return c.pairwiseIndex.SimilarityAdjacency(ctx, paths)
+}
+
+// activationFillers are four facts carrying two recurring motifs, present only
+// to clear the K=3 activation floor in tests about something else.
+//
+// Each pair SHARES a rare entity, so subject-disjointness rejects it and it
+// never enumerates as a candidate. That is the whole trick: recurrence is
+// counted over the seed pool BEFORE any gate, so these move the activation
+// count and leave every candidate assertion untouched. A filler that enumerated
+// would silently change the numbers the calling test is about.
+func activationFillers() []factForLLM {
+	return []factForLLM{
+		{File: "kb/fill/a1.md", Motifs: []string{"filler-shape-one"}, Entities: []string{"FillerAlpha"}},
+		{File: "kb/fill/a2.md", Motifs: []string{"filler-shape-one"}, Entities: []string{"FillerAlpha"}},
+		{File: "kb/fill/b1.md", Motifs: []string{"filler-shape-two"}, Entities: []string{"FillerBeta"}},
+		{File: "kb/fill/b2.md", Motifs: []string{"filler-shape-two"}, Entities: []string{"FillerBeta"}},
+	}
 }

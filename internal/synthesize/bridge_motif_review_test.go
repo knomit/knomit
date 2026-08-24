@@ -49,6 +49,13 @@ func motifPayloads(in []DiscoverWorkPayload) []DiscoverWorkPayload {
 // motif connects them — which is the whole claim the axis makes.
 func (e *restatementEnv) seedMotifPair(motif string) {
 	e.t.Helper()
+	// The corpus needs enough RECURRING vocabulary to clear the activation
+	// floor before any of it enumerates (phase4-rulings-4). These fillers each
+	// share an entity within their pair, so disjointness rejects them and they
+	// never become candidates — they move the activation count and nothing
+	// else, which is what keeps every "one discover item" assertion below
+	// meaning what it says.
+	e.seedActivationVocabulary()
 	// rewriteWithMotifs, NOT writeFactWithMotifs: the latter stamps
 	// `domain: [alpha]` on every fact it writes, so a "subject-disjoint" pair
 	// built with it shares a domain tag. That went unnoticed while the umbrella
@@ -140,6 +147,7 @@ func TestReviewPlan_HealthReportsTheOperatingPoint(t *testing.T) {
 func TestReviewPlan_DiscoverItemsShareOneRankSpace(t *testing.T) {
 	env := newRestatementEnv(t, 4)
 	env.seedMotifPair("measure-becomes-target")
+	env.seedActivationVocabulary()
 	env.rewriteWithMotifs("kb/gotchas/caching/staleread.md",
 		"A cache read served state the writer had already replaced",
 		"The reader observed a version the writer believed was gone.",

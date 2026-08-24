@@ -251,6 +251,12 @@ var mechanicsPaths = map[string][]string{
 		// which of two nested groups is served. It reads the tier, never a
 		// motif's content, and it is inside the §4/§5 path.
 		"suppressContained",
+		// Phase 4: the activation floor. seedRecurrence counts the corpus's
+		// recurring motifs and motifActive decides whether the axis runs at
+		// all — both read motifs to answer "is there enough repeated
+		// vocabulary here", never to influence a dedup, cluster or ranking
+		// decision. This IS the §4/§5 path's own enablement.
+		"seedRecurrence", "motifActive",
 	},
 	// Phase 4's measurement entry point (Q3's sibling report). It is a
 	// read-only calibrate/dev path: it enumerates and scores through the
@@ -264,7 +270,7 @@ var mechanicsPaths = map[string][]string{
 	// token2PairsOf reports which canonical ids the token-2 tier WOULD fold,
 	// using the tier's own predicate. It decides nothing — the report is
 	// read-only and no branch consults it.
-	"internal/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf", "seedRecurrence"},
+	"internal/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf"},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
 	// names motifs only in describing what it gates. Listed with no permitted

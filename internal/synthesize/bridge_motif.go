@@ -137,6 +137,12 @@ type motifEnumHealth struct {
 	// "bridges lost": the exact group each of these contained was served in its
 	// place.
 	FamilySuppressedByExact int
+	// Activation is the per-corpus enablement decision and the counts it was
+	// made on. Reported whether or not the axis ran, because "inactive" and
+	// "active and found nothing" are different statements about a corpus and a
+	// reader comparing sessions must be able to tell them apart (L6, one layer
+	// out again).
+	Activation motifActivation
 }
 
 // enumeratedMotif is an enumerated group plus the TIER that produced it.
@@ -736,6 +742,17 @@ func scoreMotifCandidates(
 		return nil, motifEnumHealth{}, nil
 	}
 
+	// THE ACTIVATION FLOOR (§8 as amended, phase4-rulings-4). Placed here,
+	// beside the motif-free short circuit and before the first index call, for
+	// the same reason that one is: an inactive corpus must cost nothing. It is
+	// recomputed every session from the pool in hand — level-triggered, no
+	// stored flag, nothing to migrate — so a corpus crosses the floor by
+	// accumulating recurrence and needs no one to switch it on.
+	act := motifActive(seeds, resolve)
+	if !act.Active {
+		return nil, motifEnumHealth{Activation: act}, nil
+	}
+
 	dfOf := func(canon string) int {
 		n, err := idx.TokenDF(ctx, branch, canon, string(BridgeMotif))
 		if err != nil {
@@ -749,6 +766,7 @@ func scoreMotifCandidates(
 	}
 
 	cands, health := enumerateMotifCandidates(seeds, clusters, resolve, dfOf, labels, motifTier(eff))
+	health.Activation = act
 	clusterOf := bridgePathCommunities(seeds, clusters)
 
 	rows := make([]scoredMotifRow, 0, len(cands))
@@ -817,6 +835,118 @@ func tallyMotifDrops(h *motifEnumHealth, rows []scoredMotifRow) {
 		case motifFarOther:
 			h.FarOtherDropped++
 		}
+	}
+}
+
+// seedRecurrence counts recurring clusters and the pairs they could bridge,
+// over the SEED POOL — the population the activation floor is set on.
+//
+// A carrier is counted once per canonical id however many spellings of it the
+// fact carries, matching what TokenDF and the vocabulary health both do: a
+// fact using two spellings of one mechanism is one carrier, not two, or a
+// single author's phrasing habit would read as recurrence.
+func seedRecurrence(seeds []factForLLM, resolve motifResolver) (df2Clusters, pairs int) {
+	carriers := map[string]map[string]struct{}{}
+	for _, f := range seeds {
+		// The SAME §7 exclusion enumeration applies: a discovered fact is never
+		// a seed, or discovery feeds on its own output (cf455b8f). Counting
+		// them here would let a corpus activate on recurrence that enumeration
+		// cannot see, and the axis would switch on and then find nothing --
+		// the activation number would not mean what its label says.
+		if f.Origin == string(fact.Discovered) {
+			continue
+		}
+		for _, m := range f.Motifs {
+			c := resolve(m)
+			if c == "" {
+				continue
+			}
+			if carriers[c] == nil {
+				carriers[c] = map[string]struct{}{}
+			}
+			carriers[c][f.File] = struct{}{}
+		}
+	}
+	for _, set := range carriers {
+		n := len(set)
+		if n < 2 {
+			continue
+		}
+		df2Clusters++
+		pairs += n * (n - 1) / 2
+	}
+	return df2Clusters, pairs
+}
+
+// motifActivationFloor is the minimum number of RECURRING canonical motifs a
+// corpus must carry before motif bridging enumerates anything.
+//
+// CONSTANT CLASSIFICATION (MN13, third class): a STATISTICAL-VALIDITY FLOOR.
+// It is a minimum POPULATION, not a proportion and not a claim about any
+// corpus's distribution: below it there are too few shared-motif pairs in
+// existence for the axis to be doing anything but spending discovery slots on
+// noise. Below the floor the mechanism DOES NOTHING, which is what
+// distinguishes this class from a threshold someone picked.
+//
+// WHY THIS QUANTITY. The blueprint's original condition was ~30% motif
+// coverage plus non-zero recurrence. Measured, coverage is a BACKFILL RATE
+// LIMIT — it tracks sessions elapsed, not corpus character — and the only
+// corpus in the gate annex that cleared 30% is the one the annex names as its
+// negative result (knomit-io-kb: 100% coverage, and zero recurring clusters
+// once the seed filter is applied). The population that can bridge at all is
+// what actually limits the axis. Designer ruling, phase4-rulings-4, replacing
+// the coverage condition; "non-zero recurrence" is the K=1 degenerate case of
+// this same condition and is not a second one.
+//
+// WHY 3, AND WHAT THAT IS WORTH. Measured post-AcceptSeed df>=2 counts:
+// agentic-engineering 4, merged 6, knomit-kb 1, knomit-io-kb 0, core 0. Any K
+// in 2..4 separates the two corpora the annex credits with producing value
+// from the three it does not; K=1 admits the machinery-only corpus and K=5
+// switches off the corpus where the value was measured. 3 sits in the middle
+// rather than on either edge. It is a fit through five points with the target
+// separation known in advance — recorded as such — redeemed by the fact that
+// the QUANTITY has an argument older than the table ("two shots is not a
+// sample", gate annex §4).
+//
+// SETTING IT LOW-INFORMATION IS SAFE BECAUSE ACTIVATION IS LEVEL-TRIGGERED.
+// It is recomputed from current counts every session (Q2: computed, never
+// configured). A corpus below the floor is not switched off, it is NOT YET ON,
+// and it turns itself on by accumulating recurrence — no flag, no migration,
+// no user action. So the asymmetry favours caution: too high costs a delay the
+// corpus resolves by itself, too low spends slots on a vocabulary that cannot
+// support them.
+const motifActivationFloor = 3
+
+// motifActivation is what the activation decision saw.
+type motifActivation struct {
+	// Evaluated reports that the decision was actually MADE. A zero value means
+	// the axis was never asked — a motif-free corpus short-circuits before the
+	// floor is consulted — and that is a different statement from "asked, and
+	// the corpus is below the floor". Without this the two are the same struct,
+	// and the health line would announce an inactive corpus for one that simply
+	// has no motifs (L6's distinction, one layer further down).
+	Evaluated bool
+	// Active reports whether the axis enumerates on this corpus this session.
+	Active bool
+	// DF2Clusters is the recurring-cluster count the decision was made on,
+	// over the SEED POOL (see seedRecurrence).
+	DF2Clusters int
+	// Pairs is the bridgeable-pair ceiling — reported beside the decision
+	// because one heavily-shared motif and three df-2 motifs are different
+	// situations with the same cluster count.
+	Pairs int
+}
+
+// motifActive decides whether this corpus has enough recurring vocabulary for
+// bridging to mean anything. Pure, and it costs no index call: the resolver is
+// already built and the seed pool is already in hand.
+func motifActive(seeds []factForLLM, resolve motifResolver) motifActivation {
+	clusters, pairs := seedRecurrence(seeds, resolve)
+	return motifActivation{
+		Evaluated:   true,
+		Active:      clusters >= motifActivationFloor,
+		DF2Clusters: clusters,
+		Pairs:       pairs,
 	}
 }
 
@@ -968,13 +1098,36 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 			"motif bridges unavailable this session: %s "+
 				"(no candidates — this is NOT a statement about the corpus)", h.Failure)}
 	}
+	if h.Activation.Evaluated && !h.Activation.Active {
+		return []string{fmt.Sprintf(
+			"motif bridging inactive: %d recurring motif(s) (%d bridgeable pair(s)), below the "+
+				"%d-motif validity floor — the corpus has too little repeated vocabulary for a "+
+				"shared-motif pair to mean anything yet. Recomputed every session; it activates "+
+				"itself as recurrence accumulates.",
+			h.Activation.DF2Clusters, h.Activation.Pairs, motifActivationFloor)}
+	}
 	if h.Candidates == 0 && len(h.OverCeilingNames) == 0 {
 		return nil
 	}
 	point := fmt.Sprintf("df <= %d (p%d of %d labels)", h.Point.Cut, disjointnessPercentile, h.Point.Labels)
 	if h.Point.Strict {
-		point = fmt.Sprintf("STRICT fallback — %d labels is below the %d-label validity floor, so any shared label blocks",
-			h.Point.Labels, minLabelsForPercentile)
+		// The two fallbacks are DIFFERENT diagnoses and the line says which.
+		// "Too few labels to estimate from" and "the estimate came back
+		// unsatisfiable" describe different corpora and want different
+		// responses; one wording for both would send a reader looking at the
+		// wrong thing.
+		switch h.Point.Fallback {
+		case degenerateCut:
+			point = fmt.Sprintf(
+				"STRICT fallback (degenerate cut) — %d labels is past the floor, but p%d of their "+
+					"df distribution is %d, and a SHARED label has df >= %d by definition, so that "+
+					"cut can never block. Any shared label blocks instead",
+				h.Point.Labels, disjointnessPercentile, h.Point.Cut, minUsableCut)
+		default:
+			point = fmt.Sprintf(
+				"STRICT fallback (label floor) — %d labels is below the %d-label validity floor, "+
+					"so any shared label blocks", h.Point.Labels, minLabelsForPercentile)
+		}
 	}
 	lines := []string{
 		fmt.Sprintf("motif bridges: %d candidates, %d near, %d far (df band 2..%d)",

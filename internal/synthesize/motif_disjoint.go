@@ -68,9 +68,50 @@ type disjointnessPoint struct {
 	Umbrella int
 	// Labels is how many distinct labels the point was derived from.
 	Labels int
-	// Strict reports the validity-floor fallback.
+	// Strict reports that a conservative fallback is in force: any shared
+	// non-universal label blocks.
 	Strict bool
+	// Fallback names WHICH one, because they are different diagnoses of the
+	// same corpus and a reader debugging one that bridges nothing needs to
+	// tell them apart: "too few labels to estimate from" is not "the estimate
+	// came back meaningless".
+	Fallback disjointnessFallback
 }
+
+// disjointnessFallback names why the gate is running conservatively.
+type disjointnessFallback string
+
+const (
+	noFallback disjointnessFallback = ""
+	// labelFloor: fewer labels than the percentile needs to be an estimate.
+	labelFloor disjointnessFallback = "label-floor"
+	// degenerateCut: enough labels, but the percentile came back below 2.
+	degenerateCut disjointnessFallback = "degenerate-cut"
+)
+
+// minUsableCut is the smallest cut a percentile can yield and still gate
+// anything.
+//
+// CONSTANT CLASSIFICATION (MN13, third class): a STATISTICAL-VALIDITY FLOOR,
+// on the value the estimator YIELDS rather than on the population it is
+// estimated from — the same logic as minLabelsForPercentile, one step later.
+//
+// The gate blocks when a shared label's df <= Cut, and a SHARED label has
+// df >= 2 by construction. A cut of 1 is therefore unsatisfiable: not a strict
+// gate, not a loose gate, NO gate. It is what p90 returns whenever >=90% of a
+// corpus's labels are hapax, which a young repo dominated by path and uuid
+// tokens is — measured at 57 labels / 46 live facts, past the label floor and
+// so getting no protection from it either.
+//
+// Below the label floor the strict fallback covers the corpus; with a mature
+// distribution p90 lands at 3-5 and the percentile covers it; between them
+// there was a band with neither, and the health line said `df <= 1` as though
+// the gate were working. Designer ruling, phase4-rulings-5: fall back to
+// strict, because at the scale real repos actually reach — hundreds of facts,
+// not thousands — that band is near the STEADY STATE, and strict costs the
+// axis nothing under the gems framing (a genuine cross-domain pair shares no
+// labels and passes strict untouched).
+const minUsableCut = 2
 
 // resolveDisjointnessPoint derives the operating point from a corpus's own
 // label distribution.
@@ -81,6 +122,7 @@ func resolveDisjointnessPoint(d store.SubjectLabelDF) disjointnessPoint {
 	}
 	if len(d.DF) < minLabelsForPercentile {
 		p.Strict = true
+		p.Fallback = labelFloor
 		return p
 	}
 	vals := make([]int, 0, len(d.DF))
@@ -94,6 +136,10 @@ func resolveDisjointnessPoint(d store.SubjectLabelDF) disjointnessPoint {
 		idx--
 	}
 	p.Cut = vals[idx]
+	if p.Cut < minUsableCut {
+		p.Strict = true
+		p.Fallback = degenerateCut
+	}
 	return p
 }
 
