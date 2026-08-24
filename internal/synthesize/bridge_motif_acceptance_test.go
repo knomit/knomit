@@ -229,3 +229,140 @@ func TestMotifAcceptance_BridgeYieldPairs(t *testing.T) {
 		"token-2 must admit something exact does not, or the ladder is flat on real data")
 	require.Equal(t, hNormal.Ceiling, hHigh.Ceiling, "the band is a corpus property, not a tier one")
 }
+
+// ── Phase-4 measurement: the token-2 tier's noise shape (register entry 6) ──
+
+// TestMotifMeasurement_Token2FoldStems reports WHAT the token-2 tier folds on.
+//
+// Register entry 6 asks two things: whether a stopword tightening is warranted,
+// and — regardless — that "Phase-4 readers of tier numbers must know what
+// produced them". The Phase-3 review named the suspected culprit as connective
+// merges (`cost-of-delay`/`wolf-of-delay` on `of`+`delay`). This measures the
+// actual distribution rather than assuming that shape.
+//
+// It runs over the FIXTURE corpus because that is the only population with
+// enough recurring vocabulary for the tier to fold anything at scale: the real
+// corpora carry 0-3 folds each. Read-only replay of the harness labels file,
+// per the Phase-2 exception; nothing is imported from .claude/harness.
+//
+//	KNOMIT_MOTIF_ACCEPTANCE=1 go test ./internal/synthesize/ -run TestMotifMeasurement -v
+func TestMotifMeasurement_Token2FoldStems(t *testing.T) {
+	if os.Getenv("KNOMIT_MOTIF_ACCEPTANCE") != "1" {
+		t.Skip("measurement replay over the harness fixture; set KNOMIT_MOTIF_ACCEPTANCE=1")
+	}
+	facts := loadCanonCorpus(t, "knomit-kb")
+	require.NotEmpty(t, facts)
+
+	// The canonical ids this corpus's bridging population actually carries.
+	idSet := map[string]struct{}{}
+	for _, f := range facts {
+		for _, m := range f.Motifs {
+			idSet[m] = struct{}{}
+		}
+	}
+	ids := make([]string, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	stems := make([]map[string]struct{}, len(ids))
+	for i, id := range ids {
+		stems[i] = motifStems(id) // the SHIPPED predicate, not a copy
+	}
+
+	type kv struct {
+		stems string
+		n     int
+	}
+
+	// A fold is a pair of canonical ids the tier would join. Counted by the
+	// stem-set that did it, so the shape of the noise is visible rather than
+	// inferred.
+	byStems := map[string]int{}
+	folds := 0
+	for i := range ids {
+		for j := i + 1; j < len(ids); j++ {
+			sh := sharedMotifStems(stems[i], stems[j])
+			if len(sh) < token2SharedStems {
+				continue
+			}
+			folds++
+			byStems[strings.Join(sh, "+")]++
+		}
+	}
+
+	top := make([]kv, 0, len(byStems))
+	for s, n := range byStems {
+		top = append(top, kv{s, n})
+	}
+	sort.Slice(top, func(a, b int) bool {
+		if top[a].n != top[b].n {
+			return top[a].n > top[b].n
+		}
+		return top[a].stems < top[b].stems
+	})
+
+	// Two competing explanations for the noise, counted rather than assumed.
+	// CONNECTIVES are what the Phase-3 review suspected (`of`+`delay`). Stem
+	// PARTICIPATION tests the other hypothesis: that a few very common
+	// mechanism words carry the folds regardless of part of speech.
+	connectives := map[string]bool{
+		"of": true, "to": true, "by": true, "in": true, "on": true, "for": true,
+		"and": true, "or": true, "the": true, "a": true, "an": true, "at": true,
+		"as": true, "with": true, "from": true, "into": true, "over": true,
+		"under": true, "is": true, "are": true, "be": true, "it": true,
+		"its": true, "that": true, "this": true, "not": true, "no": true,
+		"than": true, "rather": true, "once": true, "when": true, "before": true,
+		"after": true, "per": true, "via": true,
+	}
+	connFolds := 0
+	participation := map[string]int{}
+	for i := range ids {
+		for j := i + 1; j < len(ids); j++ {
+			sh := sharedMotifStems(stems[i], stems[j])
+			if len(sh) < token2SharedStems {
+				continue
+			}
+			hasConn := false
+			for _, st := range sh {
+				participation[st]++
+				if connectives[st] {
+					hasConn = true
+				}
+			}
+			if hasConn {
+				connFolds++
+			}
+		}
+	}
+	partTop := make([]kv, 0, len(participation))
+	for s, n := range participation {
+		partTop = append(partTop, kv{s, n})
+	}
+	sort.Slice(partTop, func(a, b int) bool {
+		if partTop[a].n != partTop[b].n {
+			return partTop[a].n > partTop[b].n
+		}
+		return partTop[a].stems < partTop[b].stems
+	})
+
+	t.Logf("vocabulary: %d canonical ids; %d token-2 folds", len(ids), folds)
+	t.Logf("folds involving a CONNECTIVE stem: %d of %d (%.1f%%)",
+		connFolds, folds, 100*float64(connFolds)/float64(folds))
+	t.Logf("top participating stems (folds each stem appears in):")
+	for i, k := range partTop {
+		if i >= 12 {
+			break
+		}
+		t.Logf("  %4d  %s%s", k.n, k.stems, map[bool]string{true: "   [connective]"}[connectives[k.stems]])
+	}
+	require.Positive(t, folds, "precondition: the fixture must actually fold something")
+	for i, k := range top {
+		if i >= 25 {
+			t.Logf("... and %d more distinct stem-sets", len(top)-i)
+			break
+		}
+		t.Logf("  %4d x  %s", k.n, k.stems)
+	}
+}

@@ -320,10 +320,7 @@ func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
 
 	toks := make([]map[string]struct{}, len(ids))
 	for i, id := range ids {
-		toks[i] = map[string]struct{}{}
-		for _, t := range textnorm.Tokens(textnorm.Canonicalize(id)) {
-			toks[i][t] = struct{}{}
-		}
+		toks[i] = motifStems(id)
 	}
 
 	// families[i] accumulates the members of the family keyed by ids[i].
@@ -337,13 +334,7 @@ func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
 			if folded[j] {
 				continue
 			}
-			shared := 0
-			for t := range toks[i] {
-				if _, ok := toks[j][t]; ok {
-					shared++
-				}
-			}
-			if shared < 2 {
+			if len(sharedMotifStems(toks[i], toks[j])) < token2SharedStems {
 				continue
 			}
 			if families[i] == nil {
@@ -371,6 +362,42 @@ func copyMembers(in map[string]factForLLM) map[string]factForLLM {
 	for k, v := range in {
 		out[k] = v
 	}
+	return out
+}
+
+// token2SharedStems is the tier's name: how many stemmed tokens two canonical
+// ids must share to join one family.
+//
+// CONSTANT CLASSIFICATION (MN13, class 2): a STRUCTURAL K with system
+// precedent — §4 names the tier "token-2" and the number IS the tier. It
+// claims nothing about any corpus's distribution.
+const token2SharedStems = 2
+
+// motifStems is the stemmed token set of a canonical motif id — the unit the
+// token-2 tier matches on.
+//
+// One definition, shared by the tier itself and by the measurement that
+// reports the tier's noise shape (carried-forward register entry 6). A second
+// copy in the instrument would let the measured noise drift from the shipped
+// matching, which is the exact class of error the instrument exists to avoid.
+func motifStems(id string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, t := range textnorm.Tokens(textnorm.Canonicalize(id)) {
+		out[t] = struct{}{}
+	}
+	return out
+}
+
+// sharedMotifStems returns the stems two canonical ids have in common, sorted
+// so callers that report them are deterministic.
+func sharedMotifStems(a, b map[string]struct{}) []string {
+	var out []string
+	for t := range a {
+		if _, ok := b[t]; ok {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 

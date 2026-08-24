@@ -15,6 +15,7 @@ package synthesize
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
@@ -83,6 +84,24 @@ type MotifReport struct {
 	PointLabels        int      `json:"disjointness_labels"`
 	PointStrict        bool     `json:"disjointness_strict"`
 	HealthLines        []string `json:"health_lines"`
+
+	// Token2Pairs is every pair of canonical ids the token-2 tier would join,
+	// with the stems they share — carried-forward register entry 6's "readers
+	// of tier numbers must know what produced them".
+	//
+	// The tier's own predicate computes it (motifStems / sharedMotifStems), so
+	// the reported noise cannot drift from the shipped matching. It is a
+	// VOCABULARY property, not a candidate count: it says which ids COULD be
+	// folded together, before any gate has looked at the facts carrying them.
+	Token2Pairs []Token2Pair `json:"token2_pairs"`
+}
+
+// Token2Pair is one canonical-id pair the token-2 tier would fold into a
+// family, and the stems that did it.
+type Token2Pair struct {
+	A      string   `json:"a"`
+	B      string   `json:"b"`
+	Shared []string `json:"shared_stems"`
 }
 
 // motifReportPopulation is the one-line population statement.
@@ -199,6 +218,7 @@ func MotifComponentReport(
 	rep.PointLabels = health.Point.Labels
 	rep.PointStrict = health.Point.Strict
 	rep.HealthLines = motifBridgeHealthLines(health, len(near), len(far))
+	rep.Token2Pairs = token2PairsOf(seeds, resolve)
 
 	return rep, nil
 }
@@ -209,4 +229,39 @@ func (r MotifReport) Summary() string {
 		"%s @ %s: %d seeds (%d with motifs), %d candidates, %d near / %d far served (budgets %d/%d)",
 		r.Branch, r.Effort, r.Seeds, r.SeedsWithMotifs, len(r.Candidates),
 		len(r.NearServed), len(r.FarServed), r.NearBudget, r.FarBudget)
+}
+
+// token2PairsOf reports every canonical-id pair the token-2 tier would join.
+//
+// Computed over the ids the seed pool actually carries — the population the
+// tier acts on — rather than over the whole alias table, so the number means
+// "folds this corpus's bridging population would see".
+func token2PairsOf(seeds []factForLLM, resolve motifResolver) []Token2Pair {
+	idSet := map[string]struct{}{}
+	for _, f := range seeds {
+		for _, m := range f.Motifs {
+			if c := resolve(m); c != "" {
+				idSet[c] = struct{}{}
+			}
+		}
+	}
+	ids := make([]string, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	stems := make([]map[string]struct{}, len(ids))
+	for i, id := range ids {
+		stems[i] = motifStems(id)
+	}
+	var out []Token2Pair
+	for i := range ids {
+		for j := i + 1; j < len(ids); j++ {
+			if sh := sharedMotifStems(stems[i], stems[j]); len(sh) >= token2SharedStems {
+				out = append(out, Token2Pair{A: ids[i], B: ids[j], Shared: sh})
+			}
+		}
+	}
+	return out
 }
