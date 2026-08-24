@@ -18,6 +18,7 @@
 //	motifannex answer    -corpus <name> -in a.json apply answers, report health
 //	motifannex report    -corpus <name>            vocabulary/coverage/health snapshot
 //	motifannex bridges   -corpus <name> -effort h  motif bridge candidates, served and dropped
+//	motifannex namedef   -corpus <name>            name / name+def cosine ladders, centered and not
 package main
 
 import (
@@ -53,7 +54,7 @@ var corpora = map[string]string{
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal(fmt.Errorf("usage: motifannex <snapshot|session|answer|report|bridges> -corpus <name>"))
+		fatal(fmt.Errorf("usage: motifannex <snapshot|session|answer|report|bridges|namedef> -corpus <name>"))
 	}
 	cmd := os.Args[1]
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
@@ -97,6 +98,8 @@ func main() {
 		fatal(report(ctx, *corpus, *scratch))
 	case "bridges":
 		fatal(bridges(ctx, *corpus, *scratch, *effort))
+	case "namedef":
+		fatal(namedef(ctx, *corpus, *scratch))
 	default:
 		fatal(fmt.Errorf("unknown command %q", cmd))
 	}
