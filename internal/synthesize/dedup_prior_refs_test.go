@@ -128,7 +128,7 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 // objects — and reddens when the helper returns one slice for both. The
 // construction half, which no runtime assertion can see because a copy and a
 // derivation are indistinguishable at every input, is bound structurally by
-// TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList below.
+// TestDedupMergeRefs_CarriedIsBuiltOnlyFromTheOperands below.
 //
 // The gate calls at the end are CONTROLS on the gate, not sabotage targets:
 // no edit to the helper can redden them. They record what the exemption does
@@ -185,34 +185,38 @@ func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	require.Contains(t, err.Error(), ghost)
 }
 
-// TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList binds the property the
+// TestDedupMergeRefs_CarriedIsBuiltOnlyFromTheOperands binds the property the
 // helper exists for, which is a property of its CONSTRUCTION and therefore
-// invisible to any runtime assertion: `carried` is derived from the operands,
-// never from `write`.
+// invisible to any runtime assertion: the carried set is derived from the
+// operands, never from the list being written.
 //
-// Both rejected shapes produce a `carried` that is element-for-element equal
-// to `write` and lives in its own array, so they satisfy every behavioural
-// check — including this file's NotSame — at every possible input:
+// The rejected shape produces a `carried` element-for-element equal to the
+// write list, in its own array, at every possible input:
 //
 //	carried = append([]string(nil), write...)   // a copy of the write list
-//	carried = slices.Clone(write)               // the same thing
 //
-// They are wrong for the reason 0ee925f4 gives: a snapshot of the write list
-// is only as good as its position, so a later change that appends a ref above
-// it is exempted and the same change below it is gated. Deriving from the
-// operands makes divergence hold wherever the append lands. That difference
-// is real and unobservable, which is exactly when a source-level check is the
-// honest instrument — the MN4/MN6 pattern, applied to one function.
-func TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList(t *testing.T) {
+// It is wrong for the reason 0ee925f4 gives: a snapshot of the write list is
+// only as good as its position, so a later change appending a ref above it is
+// exempted from the gate and the same change below it is checked. Deriving
+// from the operands makes divergence hold wherever the append lands. The
+// difference is real and unobservable, which is when a source-level check is
+// the honest instrument — the MN4/MN6 pattern, applied to one function.
+//
+// This is a WHITELIST, and it has to be. An earlier version blacklisted the
+// identifier `write`, which left the property one refactor wide: hoist the
+// write-list construction into a local `w` — to log it, to assert on it, to
+// reuse it — build the carried set from `w`, and the helper is the rejected
+// positional-copy shape under a name the check does not know. That version
+// also reddened a pure rename of the results, with a message naming an
+// identifier that no longer existed. Reading the declaration fixes both: the
+// operands are whatever the parameters are called, and anything else an
+// assignment reaches for is a local the carried set must not be built from.
+func TestDedupMergeRefs_CarriedIsBuiltOnlyFromTheOperands(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "dedup.go", nil, 0)
 	require.NoError(t, err)
 
-	const (
-		fn      = "dedupMergeRefs"
-		carried = "carried"
-		write   = "write"
-	)
+	const fn = "dedupMergeRefs"
 
 	var decl *ast.FuncDecl
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -222,6 +226,45 @@ func TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList(t *testing.T) {
 		return decl == nil
 	})
 	require.NotNil(t, decl, "%s must exist for this check to mean anything", fn)
+
+	// The operands, as the function itself declares them: a rename must follow
+	// automatically rather than redden correct code.
+	allowed := map[string]bool{}
+	for _, f := range decl.Type.Params.List {
+		for _, n := range f.Names {
+			allowed[n.Name] = true
+		}
+	}
+	require.Greater(t, len(allowed), 0, "%s must take the operands as parameters", fn)
+
+	require.NotNil(t, decl.Type.Results, "%s must declare named results", fn)
+	var results []string
+	for _, f := range decl.Type.Results.List {
+		for _, n := range f.Names {
+			results = append(results, n.Name)
+		}
+	}
+	require.Len(t, results, 2, "%s returns the write list and the carried set, in that order", fn)
+	carried := results[1]
+	// The carried set may be built up from itself. The write list is
+	// deliberately NOT whitelisted: it must not appear here at all.
+	allowed[carried] = true
+
+	// Package qualifiers, read from this file's own imports, plus the
+	// predeclared identifiers a construction legitimately uses.
+	for _, imp := range file.Imports {
+		name := strings.Trim(imp.Path.Value, `"`)
+		if i := strings.LastIndex(name, "/"); i >= 0 {
+			name = name[i+1:]
+		}
+		if imp.Name != nil {
+			name = imp.Name.Name
+		}
+		allowed[name] = true
+	}
+	for _, b := range []string{"append", "make", "copy", "len", "cap", "nil", "string", "new"} {
+		allowed[b] = true
+	}
 
 	assignments := 0
 	ast.Inspect(decl.Body, func(n ast.Node) bool {
@@ -239,26 +282,39 @@ func TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList(t *testing.T) {
 			return true
 		}
 		assignments++
-		for _, rhs := range as.Rhs {
-			ast.Inspect(rhs, func(n ast.Node) bool {
-				id, ok := n.(*ast.Ident)
-				if !ok || id.Name != write {
+		var check func(ast.Node) bool
+		check = func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.SelectorExpr:
+				// The member name (fact.UnionStrings) is not an identifier this
+				// check has an opinion about. The qualifier is, so walk only it.
+				ast.Inspect(v.X, check)
+				return false
+			case *ast.Ident:
+				if allowed[v.Name] {
 					return true
 				}
-				t.Fatalf("%s at %s builds %s from %s. A snapshot of the write list is only "+
-					"as good as the line it sits on: a later change appending a ref above "+
-					"it is silently exempted from the gate, one below it is checked "+
-					"(0ee925f4). Derive it from the operands instead.",
-					fn, fset.Position(id.Pos()), carried, write)
+				t.Fatalf("%s builds %s from %q at %s, which is neither an operand nor %s "+
+					"itself. The carried set must be derived from the parameters, where "+
+					"'this was already carried' is provably true — never from the list being "+
+					"written, nor from a local standing in for it. A snapshot of the write "+
+					"list is only as good as the line it sits on: a later change appending a "+
+					"ref above it is silently exempted from the gate, one below it is checked "+
+					"(0ee925f4).",
+					fn, carried, v.Name, fset.Position(v.Pos()), carried)
 				return false
-			})
+			}
+			return true
+		}
+		for _, rhs := range as.Rhs {
+			ast.Inspect(rhs, check)
 		}
 		return true
 	})
 
-	// A body that never assigns `carried` returns the zero value or the write
-	// list under its own name — the aliasing shape — and would otherwise pass
-	// a check that only inspects assignments.
+	// A body that never assigns the carried result returns the zero value or
+	// the write list under its own name — the aliasing shape — and would
+	// otherwise pass a check that only inspects assignments.
 	require.Greater(t, assignments, 0,
 		"%s must build %s explicitly, or there is no snapshot to speak of", fn, carried)
 }
