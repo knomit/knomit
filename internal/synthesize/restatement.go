@@ -814,12 +814,20 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 	health = selectHealth
 
 	served, dropped, err := enqueueRestatementItems(ctx, d, sess, branch, pairs)
+	// Reconcile on BOTH paths, before the early return (PR #130, LOW-1).
+	// Emitted was recorded by selection; only enqueue knows what survived to
+	// the queue. An enqueue that fails PART WAY through has already inserted
+	// some items, and returning without reconciling leaves the deferred
+	// recordRestatementHealth reporting selection's count over a partial
+	// queue — this issue's own bug, re-opened on the error path.
+	//
+	// Unobservable today (StartSession discards the result on error), which is
+	// exactly why it is worth closing now rather than when something starts
+	// reading it.
+	applyEmissionOutcome(&health, served, dropped)
 	if err != nil {
 		return err
 	}
-	// Emitted was recorded by selection; only enqueue knows what survived to
-	// the queue. Reconcile before the deferred recordRestatementHealth fires.
-	applyEmissionOutcome(&health, served, dropped)
 	return nil
 }
 

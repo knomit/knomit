@@ -97,25 +97,44 @@ func TestRestatementHealth_EmittedIsServedAndDropsAreNamed(t *testing.T) {
 // printed equals the number of restate- items in the queue.
 func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	ctx := context.Background()
-	// 200 facts: shortlistBudget is corpus-scaled (5 per 1000), so a small env
-	// gets a budget of ZERO and selects nothing — the test would then pass
-	// vacuously with 0 emitted and 0 queued.
-	env := newRestatementEnv(t, 200)
+
+	// CORPUS SIZE IS LOAD-BEARING, AND SO IS THE PAIR COUNT. Re-derived from
+	// shortlistPerMille (5 per 1000, capped at maxShortlistItems):
+	//
+	//     200 facts → budget 1      400 facts → budget 2
+	//
+	// An earlier version of this test used 200 and injected ONE unservable
+	// pair. That fixed BUDGET vacuity — a smaller env budgets zero and selects
+	// nothing — but left SERVICE vacuity untouched: the single unservable pair
+	// consumed the only slot, so served was structurally 0 and the central
+	// assertion below compared 0 against 0. Proof: hardcoding `h.Emitted = 0`
+	// passed the entire package (PR #130, HIGH-1).
+	//
+	// 400 buys two slots, and two top-ranked pairs fill them: one unservable
+	// (so a drop is exercised) and one servable (so the served count is
+	// NON-ZERO and the equality means something).
+	env := newRestatementEnv(t, 400)
 	env.seedShortlist()
 	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
 	require.NoError(t, err)
 
-	// A standing pair naming a path that does not resolve, ranked at the top of
-	// the distribution so selection cannot help but pick it. This is core's
-	// situation: a computed candidate whose half is gone by the time the queue
-	// is built.
+	// Both ranked above anything the corpus produced on its own, so selection
+	// cannot help but pick them. The unservable one is core's situation: a
+	// computed candidate whose half is gone by the time the queue is built.
 	ids := env.factIDs()
 	require.NoError(t, env.svc.Abstraction().ReplaceRestatementPairs(ctx, env.branch, nil,
-		[]store.RestatementPair{{
-			APath: "kb/f0.md", BPath: "kb/gone.md",
-			AFactID: ids["kb/f0.md"], BFactID: 999999,
-			TitleCos: 0.999,
-		}}, nil))
+		[]store.RestatementPair{
+			{
+				APath: "kb/f0.md", BPath: "kb/gone.md",
+				AFactID: ids["kb/f0.md"], BFactID: 999999,
+				TitleCos: 0.999,
+			},
+			{
+				APath: "kb/f1.md", BPath: "kb/f2.md",
+				AFactID: ids["kb/f1.md"], BFactID: ids["kb/f2.md"],
+				TitleCos: 0.998,
+			},
+		}, nil))
 
 	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
 
@@ -135,6 +154,15 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 			restate++
 		}
 	}
+
+	// NON-VACUITY PRECONDITION, asserted rather than assumed. Without it the
+	// equality below holds trivially whenever nothing is served, which is
+	// exactly how this test passed while `h.Emitted = 0` was hardcoded. A
+	// fixture chosen to make a test discriminate has to be checked, or the
+	// test silently stops discriminating when the fixture drifts.
+	require.Greater(t, restate, 0,
+		"non-vacuity: at least one candidate must actually be SERVED, or the "+
+			"served-equals-queued assertion below compares 0 against 0")
 
 	require.Contains(t, emitted, "emitted: "+itoa(restate),
 		"the emitted number must equal the restate- items actually queued; "+
