@@ -164,10 +164,27 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 		Str("watermark", scan.Watermark).
 		Dur("elapsed", time.Since(t)).Msg("pipeline: seed scan")
 
-	// An empty seed pool completes the session immediately — which still runs
-	// the watermark advance, so an unscoped no-op run records that it saw HEAD.
+	// An empty seed pool USED TO complete the session immediately — which still
+	// runs the watermark advance, so an unscoped no-op run records that it saw
+	// HEAD. Composed with that advance, one full-scan session on a quiet corpus
+	// made every later unscoped session return done:true forever (knomit#115).
+	//
+	// The seed scan is EDGE-triggered: it asks what changed. A strategy may own
+	// a LEVEL-triggered pass that asks what the corpus is missing, and that
+	// question has an answer even when nothing changed. Ask before giving up.
 	if len(seeds) == 0 {
-		return p.completeSession(ctx, sess)
+		if !p.planLevelTriggered(ctx, d, branch, scan) {
+			res, cerr := p.completeSession(ctx, sess)
+			if cerr != nil {
+				return nil, cerr
+			}
+			// #122(c): an empty return that says nothing cannot be told from a
+			// finished corpus, which is how #121's wall read as completion.
+			res.Health = append(res.Health, emptySeedHealth(scan)...)
+			return res, nil
+		}
+		log.Info().Str("tool", tool).Str("session", sess.ID).
+			Msg("pipeline: dirty set empty but level-triggered work is pending; planning anyway")
 	}
 
 	if err := p.strategy.Plan(ctx, d, sess, seeds); err != nil {
@@ -413,6 +430,88 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 }
 
 // ── seed scan ─────────────────────────────────────────────────────────────
+
+// planLevelTriggered asks the strategy whether the corpus's own state gives it
+// work the empty dirty set would otherwise hide (knomit#115).
+//
+// Degrades to false in both failure modes — a strategy that does not implement
+// levelTriggeredStrategy, and one whose check errors — so the behaviour when
+// this cannot answer is exactly the behaviour before it existed. An error here
+// must not fail a session that was about to complete successfully.
+func (p *Pipeline) planLevelTriggered(ctx context.Context, d Deps, branch string, scan seedScan) bool {
+	// A SCOPED session never plans level-triggered work (knomit#128 review,
+	// MEDIUM-2). The level-triggered pools are corpus-wide by construction —
+	// LiveFactsWithoutMotifs does not know what scope the caller named — so
+	// consulting them on a scoped run turns a scope that matched nothing into
+	// a whole-corpus session that rewrites facts the operator never asked
+	// about. Measured before this guard: EffortMedium plus a scope matching no
+	// facts planned backfill over three facts, all outside the scope, and
+	// printed no scoped sentence at all.
+	//
+	// This is the #122 family's own rule — a scope must never silently widen —
+	// applied to the fix that closed a sibling case. A scoped run with an empty
+	// pool is FINISHED for that scope, and says so via emptySeedHealth.
+	//
+	// The level-triggered pass is not lost: it is reached by any unscoped
+	// session, which is the shape that legitimately speaks for the whole
+	// corpus.
+	if scan.Scoped {
+		return false
+	}
+	lt, ok := p.strategy.(levelTriggeredStrategy)
+	if !ok {
+		return false
+	}
+	has, err := lt.HasLevelTriggeredWork(ctx, d, branch)
+	if err != nil {
+		log.Warn().Err(err).Str("tool", p.strategy.Tool()).
+			Msg("pipeline: level-triggered check failed; completing as before")
+		return false
+	}
+	return has
+}
+
+// emptySeedHealth explains an empty seed pool to the agent that asked for one
+// (knomit#122 fix c, closing knomit#115's user-visible half).
+//
+// The empty return was `done: true` with no health block at all —
+// indistinguishable from a finished corpus. That ambiguity is not cosmetic: on
+// knomit-kb it read as completion while ~288 facts sat unreachable behind a
+// watermark, and telling the two apart took a forensic pass over checkpointed
+// database copies.
+//
+// The two cases get DIFFERENT sentences because they have different remedies,
+// and naming the wrong mechanism is worse than naming none. A scoped run is
+// exempt from the watermark on both halves, so a scoped empty pool is never a
+// watermark effect and this must not say it is.
+func emptySeedHealth(scan seedScan) []string {
+	if scan.Scoped {
+		return []string{
+			"review found nothing: this session's scope matched no facts. " +
+				"Widen the scope, or drop it for a whole-corpus pass.",
+		}
+	}
+	if scan.Path == seedScanIncremental {
+		return []string{
+			fmt.Sprintf("review found nothing: nothing has changed since the review "+
+				"watermark (%s). Facts older than the watermark are reachable only "+
+				"through a scoped call or a watermark reset — this is NOT a "+
+				"statement that the corpus is finished.", shortHash(scan.Watermark)),
+		}
+	}
+	return []string{
+		"review found nothing: a whole-corpus scan matched no eligible facts.",
+	}
+}
+
+// shortHash abbreviates a commit hash for a health line, leaving anything that
+// is not a full hash alone.
+func shortHash(h string) string {
+	if len(h) <= 8 {
+		return h
+	}
+	return h[:8]
+}
 
 // seedScan describes HOW a seed pool was produced: which of the two scan paths
 // ran, what the watermark was at the time, and whether a scope was active.
