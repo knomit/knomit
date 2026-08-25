@@ -168,6 +168,25 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge: skipping hypothesis-type output %s — prune-merge cannot create hypotheses", mf.Path)})
 			continue
 		}
+		// Replace the LLM-generated filename with a UUID, as distill does
+		// below and as discovery does in discovery.go (knomit#107a). This was
+		// the only one of validateOutputPath's four callers that did not, and
+		// validateOutputPath checks the ontology root and private paths and
+		// NOTHING ELSE — there is no collision check on this path. So an
+		// LLM-supplied merged.path naming a fact that already existed
+		// overwrote it whole: body, refs, motifs, origin, gone with no warning.
+		//
+		// The corpus's own convention note recorded this as a hazard rather
+		// than a design — "Do not assume a prune-merge output path is
+		// collision-proof by UUID" — which is what a reader had to know in
+		// order not to be bitten by it. Now they do not.
+		//
+		// NORMALIZE rather than reject (designer ruling). Rejecting the merge
+		// on collision would silently undo a consolidation the judge asked
+		// for, which is the argument the DropInvalidMotifs comment makes a few
+		// lines below; the LLM's DIRECTORY choice is still honoured, only the
+		// filename is replaced.
+		mf.Path = normalizeFactPath(mf.Path)
 		// TRANSFER: pooled from the facts being subsumed, not from mf.Sources.
 		// The merged fact REPLACES its sources and they are deleted immediately
 		// below, so trusting the count the model happened to emit discards the
