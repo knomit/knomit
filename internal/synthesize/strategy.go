@@ -106,6 +106,41 @@ type pagedStrategy interface {
 	RenderPayload(item *store.PipelineWorkItem) (string, error)
 }
 
+// levelTriggeredStrategy is the optional half of Strategy for tools that own a
+// pass whose trigger is CORPUS STATE rather than recent change.
+//
+// The engine's seed scan is edge-triggered: it diffs against a watermark and
+// asks "what changed?". Some passes are level-triggered and ask "what is the
+// corpus missing?" — review's motif backfill reads LiveFactsWithoutMotifs,
+// which is corpus-wide and watermark-independent by design. Composing the two
+// starved the second: an empty dirty set completed the session before the
+// strategy ever planned, so on a quiet corpus the level-triggered pass could
+// never run, and a corpus hydrated from a remote (facts present, no new
+// commits) never backfilled at all (knomit#115).
+//
+// Optional rather than part of Strategy for the same reason as pagedStrategy:
+// hypothesize has no level-triggered pass, and widening the required interface
+// would force a meaningless implementation on every tool. The engine
+// type-asserts; a strategy that does not implement this is simply never asked,
+// and keeps the old behaviour exactly.
+type levelTriggeredStrategy interface {
+	// HasLevelTriggeredWork reports whether the corpus's own state gives this
+	// strategy work to do, independent of what changed recently.
+	//
+	// It is consulted ONLY when the dirty seed pool is empty — the one moment
+	// the edge-triggered gate would otherwise hide the answer. An error is
+	// logged and treated as "no", so a strategy that cannot answer degrades to
+	// the previous behaviour rather than failing the session.
+	//
+	// The implementation owns its own gating. Review's, in particular, must
+	// return false below EffortMedium: backfill fires on any authored fact
+	// lacking a motif, which is every fact on a motif-free corpus — precisely
+	// the corpus MN5's test uses — so rescuing it at normal effort would change
+	// what EffortNormal PRODUCES
+	// (invariants/synthesize/motif/effort-amendment).
+	HasLevelTriggeredWork(ctx context.Context, d Deps, branch string) (bool, error)
+}
+
 // WorkItemView is a strategy's rendering of one work item: what the agent is
 // shown and what shape its answer must take. The engine wraps it with the
 // item id and payload (see PipelineItem) — a strategy never has to remember to

@@ -63,6 +63,35 @@ func (reviewStrategy) AcceptSeed(f fact.Fact) bool {
 	return f.Kind == fact.Epistemic
 }
 
+// HasLevelTriggeredWork reports whether the motif vocabulary has work the
+// dirty-set gate would otherwise hide (knomit#115). Review's backfill pool is
+// corpus-wide and watermark-independent, so "nothing changed recently" is not
+// an answer to "does this corpus have un-motifed facts".
+//
+// THE EFFORT GATE IS CHECKED FIRST, AND THAT ORDER IS LOAD-BEARING. Backfill
+// fires on any authored fact lacking a motif — every fact on a motif-free
+// corpus, which is exactly the corpus MN5's review_effort_normal_test.go uses.
+// Answering true at EffortNormal would make a normal-effort session start
+// planning backfill work on that corpus, changing what EffortNormal PRODUCES
+// rather than merely what it costs. That is the guarantee MN5 exists to hold
+// (invariants/synthesize/motif/effort-amendment), and it is the one way this
+// fix could break it.
+//
+// Limit 1: this is an existence check, not a census. Nothing here needs to know
+// HOW MANY facts lack motifs — planMotifBackfillWork re-reads the pool under
+// its own budget — and asking for one keeps the empty-seed path cheap, which is
+// the only thing that path was ever good at.
+func (reviewStrategy) HasLevelTriggeredWork(ctx context.Context, d Deps, branch string) (bool, error) {
+	if !d.Effort.MaintainsVocabulary() {
+		return false, nil
+	}
+	targets, err := d.Motifs.LiveFactsWithoutMotifs(ctx, branch, 1)
+	if err != nil {
+		return false, wrapf(reviewTool, err, "level-triggered check: backfill pool")
+	}
+	return len(targets) > 0, nil
+}
+
 // Plan builds the review work queue over a non-empty seed pool: cluster, dedup,
 // then enqueue prune items per surviving multi-fact cluster, distill items over
 // the (chunked) seed pool, and — at effort >= medium — discover items per
