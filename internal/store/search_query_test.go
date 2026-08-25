@@ -189,3 +189,10 @@ func TestRecentFacts_PopulatesCommitHash(t *testing.T) {
 	require.NotEmpty(t, searchEntries)
 	require.Equal(t, commit, searchEntries[0].CommitHash, "text-search RecentFacts must populate CommitHash")
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *rankedEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

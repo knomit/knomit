@@ -92,3 +92,10 @@ func TestRebuildEmbeddings_ThreadsTitleIntoDocuments(t *testing.T) {
 	require.NotContains(t, pairedBody, "Unique-Title-Marker",
 		"the title must not be concatenated into the body argument")
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *recordingEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

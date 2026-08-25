@@ -85,6 +85,21 @@ func (mr *MockBatchEmbedderMockRecorder) EmbedDocuments(ctx, titles, bodies any)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedDocuments", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedDocuments), ctx, titles, bodies)
 }
 
+// EmbedShortStrings mocks base method.
+func (m *MockBatchEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EmbedShortStrings", ctx, texts)
+	ret0, _ := ret[0].([][]float32)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// EmbedShortStrings indicates an expected call of EmbedShortStrings.
+func (mr *MockBatchEmbedderMockRecorder) EmbedShortStrings(ctx, texts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EmbedShortStrings", reflect.TypeOf((*MockBatchEmbedder)(nil).EmbedShortStrings), ctx, texts)
+}
+
 // EmbedQuery mocks base method.
 func (m *MockBatchEmbedder) EmbedQuery(ctx context.Context, text string) ([]float32, error) {
 	m.ctrl.T.Helper()

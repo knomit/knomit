@@ -392,3 +392,10 @@ func TestVerify_DetectsMissingGraphFactNode(t *testing.T) {
 	}
 	require.True(t, found, "expected graph-coherence Error for kb/x.md, got: %v", report.Issues)
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e *stub768Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

@@ -255,6 +255,9 @@ type ReviewResult struct {
 	Done      bool            `json:"done,omitempty"`
 	Summary   *ReviewStats    `json:"summary,omitempty"`
 	Progress  *ReviewProgress `json:"progress,omitempty"`
+	// Health carries corpus-health descriptors for this session. Read by the
+	// agent, by nothing in the engine.
+	Health []string `json:"health,omitempty"`
 }
 
 // ReviewItem describes a single work item for the hosting model.

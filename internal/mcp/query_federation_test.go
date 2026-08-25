@@ -661,3 +661,10 @@ func TestQueryFederation_RecentWithTextPreservesRelevanceOrder(t *testing.T) {
 		"newer weak match must come last despite its later commit")
 	require.NotContains(t, resp.Facts[0].File, federate.KBScheme, "lens-of-one rows must be bare (never kb://-qualified)")
 }
+
+// EmbedShortStrings satisfies store.BatchEmbedder. Short strings render
+// through the model's short-string template in production; a stub has no
+// template, so it embeds each string as a title-only document.
+func (e rankedFedEmbedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	return e.EmbedDocuments(ctx, texts, make([]string, len(texts)))
+}

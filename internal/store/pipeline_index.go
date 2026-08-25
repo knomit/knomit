@@ -18,13 +18,18 @@ import (
 // Phase is what makes the reviewer stateless across MCP calls — see
 // AdvancePipelineSessionPhase for the CAS guarantee.
 type PipelineSession struct {
-	ID        string
-	Tool      string
-	Branch    string
-	Status    string // "active", "completed", "abandoned"
-	Phase     string // "work", "reflect", "done"
-	Scoped    bool   // true when session was started with a scope filter active
-	Stats     PipelineSessionStats
+	ID     string
+	Tool   string
+	Branch string
+	Status string // "active", "completed", "abandoned"
+	Phase  string // "work", "reflect", "done"
+	Scoped bool   // true when session was started with a scope filter active
+	Stats  PipelineSessionStats
+	// Health carries corpus-health descriptor lines recorded while planning the
+	// session. IN MEMORY ONLY — it is written and read inside the same
+	// StartSession call, so it is deliberately not a column: nothing needs it
+	// after the turn that produced it.
+	Health    []string
 	CreatedAt string
 	UpdatedAt string
 }

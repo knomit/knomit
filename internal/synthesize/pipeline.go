@@ -82,34 +82,37 @@ func errf(tool string, format string, args ...any) error {
 }
 
 // storeIndices returns the store indices under the repo read lock.
-func (p *Pipeline) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex) {
+func (p *Pipeline) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex, store.AbstractionIndex) {
 	var gs store.FactIndex
 	var idx SearchQuery
 	var pipelineIdx store.PipelineIndex
 	var branches store.BranchIndex
+	var abstraction store.AbstractionIndex
 	p.ri.WithRead(func(svc *store.Service) {
 		gs = svc.Facts()
 		idx = svc.Search()
 		pipelineIdx = svc.Pipeline()
 		branches = svc.Branches()
+		abstraction = svc.Abstraction()
 	})
-	return gs, idx, pipelineIdx, branches
+	return gs, idx, pipelineIdx, branches, abstraction
 }
 
 // deps resolves the per-call dependency bundle handed to Strategy methods.
 // Resolved once per engine entry point (and once per dispatch hop) rather than
 // cached on the struct, so a store swap between turns is picked up.
 func (p *Pipeline) deps() Deps {
-	gs, idx, pipelineIdx, branches := p.storeIndices()
+	gs, idx, pipelineIdx, branches, abstraction := p.storeIndices()
 	return Deps{
-		RI:         p.ri,
-		Facts:      gs,
-		Search:     idx,
-		Pipeline:   pipelineIdx,
-		Branches:   branches,
-		Effort:     p.effort,
-		Scope:      p.scope,
-		OnProgress: p.onProgress,
+		RI:          p.ri,
+		Facts:       gs,
+		Search:      idx,
+		Pipeline:    pipelineIdx,
+		Branches:    branches,
+		Abstraction: abstraction,
+		Effort:      p.effort,
+		Scope:       p.scope,
+		OnProgress:  p.onProgress,
 	}
 }
 
@@ -167,7 +170,15 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 		Str("effort", string(p.effort)).Dur("total", time.Since(totalStart)).
 		Msg("pipeline: session started")
 
-	return p.nextItem(ctx, sess)
+	res, err := p.nextItem(ctx, sess)
+	if err != nil {
+		return nil, err
+	}
+	// Health descriptors recorded during Plan ride the FIRST result — the turn
+	// the agent reads before deciding how much of this session to work through.
+	// Plan hung them on the same session object this call is holding.
+	res.Health = sess.Health
+	return res, nil
 }
 
 // ContinueSession processes the model's response for the current work item and
@@ -671,7 +682,7 @@ func (p *Pipeline) handlePhase(ctx context.Context, sess *store.PipelineSession,
 // fetched row, so no caller needs a defensive re-read of its own.
 func (p *Pipeline) refetchAndDispatch(ctx context.Context, sessionID string) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
-	_, _, pipelineIdx, _ := p.storeIndices()
+	_, _, pipelineIdx, _, _ := p.storeIndices()
 	fresh, err := pipelineIdx.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, wrapf(tool, err, "refetch session")

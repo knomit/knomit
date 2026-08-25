@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // defaultVecDim is the dimension facts_vec is created at when no embedder is
@@ -16,6 +17,19 @@ import (
 // dimension.
 const defaultVecDim = 768
 
+// The two code-managed vec0 tables. Both are keyed by facts.id and both are
+// created at the ACTIVE model's dimension, which is why neither can be a static
+// migration: a vec0 table fixes its width at CREATE and cannot be ALTERed.
+//
+//   - factsVecTable holds the blended (title+body) document vector every fact
+//     is indexed with.
+//   - titlesVecTable holds the ABSTRACTION AXIS: the title embedded alone. It
+//     is filled lazily by the review pipeline, never by the write path.
+const (
+	factsVecTable  = "facts_vec"
+	titlesVecTable = "fact_titles_vec"
+)
+
 // ensureFactsVecDefault creates facts_vec at defaultVecDim if it does not
 // already exist, without consulting or writing the embed identity meta. Called
 // from Open so the table is present from the moment the DB is migrated (the
@@ -23,26 +37,32 @@ const defaultVecDim = 768
 // embedder is ever configured. A no-op when the table already exists, so it
 // never clobbers a table that ensureFactsVec created at a real model dim.
 func (si *searchIndex) ensureFactsVecDefault(ctx context.Context) error {
-	exists, err := si.factsVecExists(ctx)
-	if err != nil {
-		return err
+	for _, table := range []string{factsVecTable, titlesVecTable} {
+		exists, err := si.vecTableExists(ctx, table)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if err := si.createVecTable(ctx, table, defaultVecDim); err != nil {
+			return err
+		}
 	}
-	if exists {
-		return nil
-	}
-	return si.createFactsVec(ctx, defaultVecDim)
+	return nil
 }
 
-// createFactsVec creates the facts_vec vec0 table at exactly `dim`. It is the
-// single source of the table's DDL, shared by ensureFactsVecDefault and
+// createVecTable creates one code-managed vec0 table at exactly `dim`. It is
+// the single source of their DDL, shared by ensureFactsVecDefault and
 // ensureFactsVec so the column spec (width, distance metric) can never drift
-// between the create-on-Open and recreate-on-rebuild paths. `dim` comes from the
-// trusted model registry (or defaultVecDim), so formatting it into DDL is safe.
-func (si *searchIndex) createFactsVec(ctx context.Context, dim int) error {
+// between the create-on-Open and recreate-on-rebuild paths. `table` is one of
+// the constants above and `dim` comes from the trusted model registry (or
+// defaultVecDim), so formatting both into DDL is safe.
+func (si *searchIndex) createVecTable(ctx context.Context, table string, dim int) error {
 	if _, err := conn(ctx, si.rh.db).ExecContext(ctx,
-		fmt.Sprintf(`CREATE VIRTUAL TABLE facts_vec USING vec0(embedding FLOAT[%d] distance_metric=cosine)`, dim),
+		fmt.Sprintf(`CREATE VIRTUAL TABLE %s USING vec0(embedding FLOAT[%d] distance_metric=cosine)`, table, dim),
 	); err != nil {
-		return fmt.Errorf("create facts_vec[%d]: %w", dim, err)
+		return fmt.Errorf("create %s[%d]: %w", table, dim, err)
 	}
 	return nil
 }
@@ -62,30 +82,104 @@ func (si *searchIndex) ensureFactsVec(ctx context.Context, modelID string, dim i
 	if err != nil {
 		return err
 	}
-	exists, err := si.factsVecExists(ctx)
+	// Width is validated on EVERY path, before the identity short-circuit.
+	// fact_titles_vec is created at defaultVecDim by Open (the table must exist
+	// for the delete trigger), so under a model of any other dimension it would
+	// otherwise keep that wrong width forever: inserts would fail, the axis
+	// would stay empty, and the shortlist would silently find nothing. The
+	// identity check below governs RE-EMBEDDING; it cannot govern shape.
+	titlesOK, err := si.vecTableHasDim(ctx, titlesVecTable, dim)
 	if err != nil {
 		return err
 	}
-	if exists && curID == modelID && curDim == dim {
-		return nil
-	}
-	if exists {
-		if err := si.dropFactsVec(ctx); err != nil {
+	if !titlesOK {
+		if err := si.recreateVecTable(ctx, titlesVecTable, dim); err != nil {
+			return err
+		}
+		if err := si.clearRestatementState(ctx); err != nil {
 			return err
 		}
 	}
-	return si.createFactsVec(ctx, dim)
+
+	factsOK, err := si.vecTableHasDim(ctx, factsVecTable, dim)
+	if err != nil {
+		return err
+	}
+	if factsOK && curID == modelID && curDim == dim {
+		return nil
+	}
+	// The abstraction axis is embedded by the same model at the same dimension,
+	// so it drifts with facts_vec and is recreated by the same mechanism. The
+	// restatement state is derived from the axis — title cosines computed under
+	// another model are not comparable — so it goes with it.
+	if err := si.recreateVecTable(ctx, factsVecTable, dim); err != nil {
+		return err
+	}
+	if err := si.recreateVecTable(ctx, titlesVecTable, dim); err != nil {
+		return err
+	}
+	return si.clearRestatementState(ctx)
 }
 
-func (si *searchIndex) factsVecExists(ctx context.Context) (bool, error) {
+// clearRestatementState drops everything derived from the abstraction axis.
+//
+// The VERDICTS go too, which is easy to miss: a trailing resolution-rate that
+// mixed judgements made under two different embedding models would be reading
+// evidence about pairs the new model may never propose. The schema says an
+// empty verdict window is safe — it reads as "optimistic", the cold-start
+// posture — so the honest move on a model change is to start over.
+func (si *searchIndex) clearRestatementState(ctx context.Context) error {
+	for _, table := range []string{
+		"restatement_pairs",
+		"restatement_cache_state",
+		"restatement_verdicts",
+		"restatement_throttle_state",
+	} {
+		if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `DELETE FROM `+table); err != nil {
+			return fmt.Errorf("clear %s on embed-identity change: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// vecTableHasDim reports whether table exists AND was created at exactly dim,
+// read back from its stored DDL.
+func (si *searchIndex) vecTableHasDim(ctx context.Context, table string, dim int) (bool, error) {
+	var ddl sql.NullString
+	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&ddl)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read %s ddl: %w", table, err)
+	}
+	return strings.Contains(ddl.String, fmt.Sprintf("FLOAT[%d]", dim)), nil
+}
+
+// recreateVecTable drops table if present and creates it empty at dim.
+func (si *searchIndex) recreateVecTable(ctx context.Context, table string, dim int) error {
+	exists, err := si.vecTableExists(ctx, table)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if err := si.dropVecTable(ctx, table); err != nil {
+			return err
+		}
+	}
+	return si.createVecTable(ctx, table, dim)
+}
+
+func (si *searchIndex) vecTableExists(ctx context.Context, table string) (bool, error) {
 	var n int
 	err := conn(ctx, si.rh.db).QueryRowContext(ctx,
-		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='facts_vec'`).Scan(&n)
+		`SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?`, table).Scan(&n)
 	return n > 0, err
 }
 
-func (si *searchIndex) dropFactsVec(ctx context.Context) error {
-	_, err := conn(ctx, si.rh.db).ExecContext(ctx, `DROP TABLE IF EXISTS facts_vec`)
+func (si *searchIndex) dropVecTable(ctx context.Context, table string) error {
+	_, err := conn(ctx, si.rh.db).ExecContext(ctx, `DROP TABLE IF EXISTS `+table)
 	return err
 }
 
