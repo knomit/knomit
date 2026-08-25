@@ -414,9 +414,6 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 
 // ── seed scan ─────────────────────────────────────────────────────────────
 
-// dirtyFacts returns the session's seed facts: everything changed since this
-// tool's watermark, or the whole (strategy-filtered) corpus on a full scan.
-//
 // seedScan describes HOW a seed pool was produced: which of the two scan paths
 // ran, what the watermark was at the time, and whether a scope was active.
 //
@@ -444,6 +441,9 @@ const (
 	seedScanIncremental = "incremental"
 )
 
+// dirtyFacts returns the session's seed facts: everything changed since this
+// tool's watermark, or the whole (strategy-filtered) corpus on a full scan.
+//
 // First run (no watermark): uses the search index to retrieve facts without
 // reading every file from git.
 // Incremental (has watermark): uses DiffFiles to read only changed paths.

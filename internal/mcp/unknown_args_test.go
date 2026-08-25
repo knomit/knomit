@@ -126,6 +126,87 @@ func TestReviewHandler_UnknownArgumentKeyDoesNotAdvanceWatermark(t *testing.T) {
 			"assertion above is capable of failing")
 }
 
+// The hypothesize analogue of the watermark test above, and it exists because
+// its absence was caught in review (PR #126, HIGH-2).
+//
+// TestHypothesizeHandler_RejectsUnknownArgumentKey below asserts only IsError,
+// which cannot see WHERE the guard runs: with the guard moved after the engine
+// it still returns an error, and the whole internal/mcp package stays green.
+// Verified by running exactly that sabotage.
+//
+// The harm is not hypothetical and not smaller than review's. NewHypothesizer
+// drives the SAME Pipeline.StartSession; an empty seed pool reaches
+// completeSession, and an unscoped completion advances the HYPOTHESIZE
+// watermark for that branch. Same walling mechanism, same corpus, different
+// watermark key.
+func TestHypothesizeHandler_UnknownArgumentKeyDoesNotAdvanceWatermark(t *testing.T) {
+	ri, svc := newReviewTestRepoWithStore(t)
+	onAgent := repos.WithBranch(repos.WithRepoInstance(context.Background(), ri), "agent/test")
+	ctx := context.Background()
+
+	before, err := svc.Pipeline().GetPipelineWatermark(ctx, "hypothesize", "agent/test")
+	require.NoError(t, err)
+
+	var bad mcpgo.CallToolRequest
+	bad.Params.Arguments = map[string]any{"effort": "medium", badScopeKey: badScopeValue}
+	result, err := HypothesizeHandler()(onAgent, bad)
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+
+	after, err := svc.Pipeline().GetPipelineWatermark(ctx, "hypothesize", "agent/test")
+	require.NoError(t, err)
+	require.Equal(t, before, after,
+		"a rejected call must not have run a session — the hypothesize watermark "+
+			"moved, which walls this tool exactly as #121 walled review")
+
+	// Control: a VALID unscoped call DOES advance it, so the assertion above is
+	// capable of failing.
+	var good mcpgo.CallToolRequest
+	good.Params.Arguments = map[string]any{"effort": "medium"}
+	result, err = HypothesizeHandler()(onAgent, good)
+	require.NoError(t, err)
+	require.False(t, result.IsError, "control call must run: %s", resultText(t, result))
+
+	moved, err := svc.Pipeline().GetPipelineWatermark(ctx, "hypothesize", "agent/test")
+	require.NoError(t, err)
+	require.NotEqual(t, before, moved,
+		"control: an accepted unscoped call DOES advance the hypothesize watermark")
+}
+
+// The handler must pass its OWN tool's schema to the guard. Handing it the
+// sibling tool's schema compiles, passes every test that existed at review
+// time, and makes knomit_review reject `page`, `item_id` and
+// `completion_token` — the entire paging protocol (PR #126, MEDIUM-1).
+//
+// AcceptsEveryDeclaredKey cannot see this: it hands the helper a tool and then
+// checks that tool's own keys, so the pairing is correct by construction. That
+// is the test-calls-the-helper disguise again — this test drives the HANDLER.
+func TestReviewHandler_AcceptsPagingArgumentKeys(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	onAgent := repos.WithBranch(repos.WithRepoInstance(context.Background(), ri), "agent/test")
+
+	// The paging protocol's three keys, which exist on knomit_review and NOT on
+	// knomit_hypothesize. session_id is present so the call is a continue —
+	// what matters is that the guard does not reject these keys.
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"session_id":       "no-such-session",
+		"page":             float64(2),
+		"item_id":          float64(7),
+		"completion_token": "tok",
+	}
+	result, err := ReviewHandler()(onAgent, req)
+	require.NoError(t, err)
+
+	// The call fails on the session, not on the arguments. Asserting the
+	// MESSAGE is the point: "IsError" is true either way, and this test exists
+	// precisely because a coarser assertion could not tell the two apart.
+	text := resultText(t, result)
+	require.NotContains(t, text, "unknown argument",
+		"the paging keys belong to knomit_review and must pass its guard — "+
+			"handing the guard the wrong tool's schema breaks paging silently")
+}
+
 // Same for knomit_hypothesize: it shares parseEffortAndScope and the same
 // silent-drop exposure.
 func TestHypothesizeHandler_RejectsUnknownArgumentKey(t *testing.T) {
@@ -206,10 +287,60 @@ func TestRejectUnknownArguments_AcceptsEveryDeclaredKey(t *testing.T) {
 	}
 }
 
-// A call carrying no arguments at all is the documented way to start a
-// session, and must not be caught by the guard.
-func TestRejectUnknownArguments_AcceptsEmptyArguments(t *testing.T) {
+// Two shapes mean "no arguments", and BOTH must pass: an empty object, and
+// Arguments left nil entirely. The nil path is the one the guard's own
+// early-return handles, and it was previously untested — an omission caught in
+// review (PR #126, LOW-2). Calling with no arguments is the documented way to
+// start a session, so a guard that rejected either shape would break the
+// tool's primary entry point.
+func TestRejectUnknownArguments_AcceptsBothNoArgumentShapes(t *testing.T) {
+	t.Run("empty object", func(t *testing.T) {
+		var req mcpgo.CallToolRequest
+		req.Params.Arguments = map[string]any{}
+		require.NoError(t, rejectUnknownArguments(req, reviewTool()))
+	})
+
+	t.Run("nil arguments", func(t *testing.T) {
+		var req mcpgo.CallToolRequest // Params.Arguments left nil
+		require.NoError(t, rejectUnknownArguments(req, reviewTool()),
+			"a call with no arguments at all starts a session and must pass")
+	})
+}
+
+// PR #126, MEDIUM-2. `arguments` that is present but NOT a JSON object
+// bypassed the guard completely: GetArguments type-asserts to map[string]any
+// and yields nil for anything else, the guard early-returned nil, and the call
+// RAN — unscoped, advancing the watermark. That is #121's exact consequence
+// reached by a second route, and the route is wire-reachable: mcp-go
+// unmarshals `arguments` into a bare `any` and performs no schema validation
+// on the server path.
+//
+// The guard's comment claimed "the ordinary per-argument accessors handle it".
+// They do not: they silently default, which is the whole failure mode.
+//
+// Ruled consistent with the hard-error decision on unknown keys — same class,
+// same silent-unscoped consequence.
+func TestReviewHandler_RejectsNonObjectArguments(t *testing.T) {
+	ri, svc := newReviewTestRepoWithStore(t)
+	onAgent := repos.WithBranch(repos.WithRepoInstance(context.Background(), ri), "agent/test")
+	ctx := context.Background()
+
+	before, err := svc.Pipeline().GetPipelineWatermark(ctx, "review", "agent/test")
+	require.NoError(t, err)
+
+	// The #121 payload, delivered as a JSON STRING rather than an object.
 	var req mcpgo.CallToolRequest
-	req.Params.Arguments = map[string]any{}
-	require.NoError(t, rejectUnknownArguments(req, reviewTool()))
+	req.Params.Arguments = `{"effort": "medium", "scope": "{\"entities\": [\"x\"]}"}`
+
+	result, err := ReviewHandler()(onAgent, req)
+	require.NoError(t, err)
+	require.True(t, result.IsError,
+		"arguments that are not a JSON object must be rejected, not silently "+
+			"treated as no arguments at all")
+
+	after, err := svc.Pipeline().GetPipelineWatermark(ctx, "review", "agent/test")
+	require.NoError(t, err)
+	require.Equal(t, before, after,
+		"the rejected call must not have run — this is #121's consequence "+
+			"reached by a second route")
 }
