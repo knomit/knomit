@@ -60,6 +60,19 @@ const (
 	BridgeBoth   BridgeKind = "both"
 )
 
+// BridgeMotif is the Phase-3 aspect axis: the shared token is a CANONICAL
+// MOTIF ID rather than an entity or a domain tag.
+//
+// Deliberately absent from BridgeKindFromString below. Entity/domain selection
+// is a per-repo config knob (discovery.bridge); motif bridging is bound to the
+// effort dial instead (§5), so a config value of "motif" must not be able to
+// switch the entity and domain axes off.
+//
+// Enumeration for this kind lives entirely in bridge_motif.go, which is why no
+// function in THIS file mentions motifs — this file's mechanicsPaths entry
+// stays nil, and the MN6 declaration it makes stays true.
+const BridgeMotif BridgeKind = "motif"
+
 // DefaultBridgeKind is the historical default — bridge on either axis.
 const DefaultBridgeKind = BridgeBoth
 

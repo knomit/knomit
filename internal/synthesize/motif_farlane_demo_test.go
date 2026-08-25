@@ -15,17 +15,18 @@ import (
 // rather than hand-copied into a document, because a hand-copied prompt is a
 // claim about the code rather than an output of it.
 //
-// The far lane is not built yet (Phase 3). Two things are therefore stated
-// rather than implemented:
+// When this demo first ran, the far lane did not exist: BridgeKind had no
+// `motif` member and the SHIP line was SPLICED into the rendered prompt by the
+// test itself, at a named position — immediately after the "Bridge token:"
+// line, before the member list.
 //
-//   - BridgeKind has no `motif` member yet, so the kind is a string literal.
-//   - The SHIP line is SPLICED in at a named position — immediately after the
-//     "Bridge token:" line, which is where the preamble establishes what kind
-//     of group this is, and before the member list. The far lane needs it
-//     there because its members have cohesion 0 BY CONSTRUCTION: the standard
-//     backward preamble says they "share the structural token", and without
-//     the SHIP line a model would reasonably infer they are also similar,
-//     which is the exact inference the far lane must prevent.
+// Phase 3 built both, at exactly that position and for exactly the stated
+// reason: the far lane's members have cohesion 0 BY CONSTRUCTION, the standard
+// backward preamble says they "share the structural token", and without the
+// SHIP line a model would reasonably infer they are also similar — the exact
+// inference the far lane must prevent. The splice is gone; what prints below
+// now comes from renderDiscoverPrompt itself, which is what the demo claimed to
+// be showing all along.
 //
 // Member data was read from the merged scratch corpus through knomit's fact
 // API (Facts().ReadFact + fact.ParseFact), not from the index.
@@ -39,9 +40,10 @@ func TestFarLaneDemo_RenderTheShipPrompt(t *testing.T) {
 
 	payload := DiscoverWorkPayload{
 		Direction: DiscoverBackward, // far lane routes backward → hypothesize
+		Lane:      LaneFar,
 		Bridge: BridgeSeedSet{
 			Token: motif,
-			Kind:  BridgeKind("motif"), // Phase-3 constant does not exist yet
+			Kind:  BridgeMotif,
 			Members: []factForLLM{
 				{
 					File:  "kb/gotchas/ai/agents/coding-agents/ui-testing/77b3e628.md",
@@ -85,15 +87,14 @@ func TestFarLaneDemo_RenderTheShipPrompt(t *testing.T) {
 
 	prompt := renderDiscoverPrompt(payload, "kb")
 
-	// The SHIP line, verbatim from blueprint §4, %q = the motif.
+	// The SHIP line now comes from the renderer. Asserted rather than spliced:
+	// a demo that printed a line the code does not produce would be a claim
+	// about the code instead of an output of it.
 	ship := fmt.Sprintf("These facts are NOT semantically similar. Each claims motif %q. "+
 		"Propose a keystone only if one mechanism genuinely underlies all members — default to NO.", motif)
-
-	anchor := fmt.Sprintf("Bridge token: %q (kind=%s)\n", payload.Bridge.Token, payload.Bridge.Kind)
-	if !strings.Contains(prompt, anchor) {
-		t.Fatalf("splice anchor not found — renderDiscoverPrompt changed shape")
+	if !strings.Contains(prompt, ship) {
+		t.Fatalf("renderDiscoverPrompt no longer emits the §4 far-lane SHIP line")
 	}
-	prompt = strings.Replace(prompt, anchor, anchor+"\n"+ship+"\n", 1)
 
 	facts, err := json.MarshalIndent(payload.Bridge.Members, "", "  ")
 	if err != nil {

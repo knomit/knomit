@@ -374,6 +374,21 @@ func (mr *MockSearchIndexMockRecorder) SubgraphEdges(ctx, paths any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubgraphEdges", reflect.TypeOf((*MockSearchIndex)(nil).SubgraphEdges), ctx, paths)
 }
 
+// SubjectLabelDF mocks base method.
+func (m *MockSearchIndex) SubjectLabelDF(ctx context.Context, branch string) (store.SubjectLabelDF, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SubjectLabelDF", ctx, branch)
+	ret0, _ := ret[0].(store.SubjectLabelDF)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SubjectLabelDF indicates an expected call of SubjectLabelDF.
+func (mr *MockSearchIndexMockRecorder) SubjectLabelDF(ctx, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SubjectLabelDF", reflect.TypeOf((*MockSearchIndex)(nil).SubjectLabelDF), ctx, branch)
+}
+
 // TokenDF mocks base method.
 func (m *MockSearchIndex) TokenDF(ctx context.Context, branch, token, kind string) (int, error) {
 	m.ctrl.T.Helper()

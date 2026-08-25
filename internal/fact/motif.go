@@ -219,6 +219,11 @@ func StripSubjectMotifs(f Fact) []string {
 
 // subjectTokens is the stemmed token set of everything the fact already says
 // about its own subject: authored entities, domain tags, and path segments.
+func subjectTokens(f Fact) map[string]struct{} {
+	return SubjectTokens(f.Entities, f.Domain, f.path)
+}
+
+// SubjectTokens is that same set, computed from the three inputs directly.
 //
 // The path is included because a fact's location IS a subject claim — the
 // ontology category is chosen to describe what the fact is about — and
@@ -226,24 +231,30 @@ func StripSubjectMotifs(f Fact) []string {
 // re-typed. The ontology root and the uuid segment ride along harmlessly:
 // they are stemmed tokens like any other, and no motif of 2+ words is a
 // subset of {kb} or of a hex id.
-func subjectTokens(f Fact) map[string]struct{} {
+//
+// Exported because the Phase-3 subject-disjointness gate asks of a PAIR of
+// facts the question this asks of one, and the two must not be able to
+// disagree about what a subject token is. It takes the three fields rather
+// than a Fact so a caller holding only a payload projection (synthesize's
+// factForLLM) can ask without rebuilding one.
+func SubjectTokens(entities, domain []string, path string) map[string]struct{} {
 	set := make(map[string]struct{})
 	add := func(s string) {
 		for _, tok := range textnorm.Tokens(textnorm.Canonicalize(s)) {
 			set[tok] = struct{}{}
 		}
 	}
-	for _, e := range f.Entities {
+	for _, e := range entities {
 		add(e)
 	}
-	for _, d := range f.Domain {
+	for _, d := range domain {
 		add(d)
 	}
 	// Trim the extension first so "e5d04257.md" does not contribute a
 	// spurious "md" token — that describes the file format, not the fact.
 	// Canonicalize de-hyphenizes and Tokens splits on '/', so path segments
 	// and their words arrive already separated.
-	add(strings.TrimSuffix(f.path, ".md"))
+	add(strings.TrimSuffix(path, ".md"))
 	return set
 }
 

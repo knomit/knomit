@@ -190,8 +190,14 @@ func TestConformance_BridgeFilesUntouched(t *testing.T) {
 		if name == "" {
 			continue
 		}
-		require.NotRegexp(t, `^internal/synthesize/bridge.*\.go$`, name,
-			"phase 0 is independent of the bridge engine")
+		// The phase-0 clause that also lived here — "no internal/synthesize/
+		// bridge*.go may differ from the merge base" — was removed by Phase 3
+		// (designer ruling 2026-08-23,
+		// .claude/plans/motif/2026-08-23-phase3-rulings-1.md Q1). Its premise
+		// was that phase 0 is independent of the bridge engine; Phase 3 IS the
+		// bridge-engine phase, so the premise expired rather than the
+		// constraint being waived. MN5 below is the load-bearing half and is
+		// unaffected.
 		require.NotEqual(t, "internal/synthesize/review_effort_normal_test.go", name,
 			"MN5: the EffortNormal contract test stays byte-identical")
 	}

@@ -270,28 +270,71 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		return wrapf(reviewTool, err, "build bridges")
 	}
 	sl := scopeLabel(d.Scope)
-	for i, b := range bridges {
+	rank := 0
+	for _, b := range bridges {
 		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl}
-		payloadJSON, err := json.Marshal(payload)
-		if err != nil {
-			return wrapf(reviewTool, err, "marshal discover payload %d", i)
+		if err := enqueueDiscover(ctx, d, sess, payload,
+			fmt.Sprintf("discover-fwd-%d", rank), forwardDiscoverPriority(rank)); err != nil {
+			return err
 		}
-		if err := d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
-			SessionID:  sess.ID,
-			StepType:   "discover",
-			ClusterKey: fmt.Sprintf("discover-fwd-%d", i),
-			FactsJSON:  string(payloadJSON),
-			Priority:   forwardDiscoverPriority(i),
-		}); err != nil {
-			return wrapf(reviewTool, err, "insert discover item %d", i)
-		}
+		rank++
 	}
+
+	// Motif bridging (§4/§5): the aspect axis, a peer grouping key of
+	// entity/domain with its own per-lane budgets so neither axis can starve
+	// the other (MN8).
+	//
+	// Enumerated HERE — in review, over the ordinary seed pool — because that
+	// is where the facts carrying motifs are. The LANE decides the direction:
+	// near routes forward like any bridge, far routes BACKWARD, which is what
+	// makes it a hypothesis under the blast-radius gate (2bc84184). The
+	// hypothesize tool's synthesis-only seed pool is untouched by this
+	// (designer ruling 2026-08-23, phase3-rulings-1 Q2).
+	nearMotif, farMotif, motifHealth, mErr := buildMotifBridges(ctx, d.Search, branch,
+		llmSeeds, cr, d.Effort, cfg, motifResolverFor(ctx, d, branch),
+		subjectLabelsFor(ctx, d, branch), meanSimFor(d, branch))
+	if mErr != nil {
+		// Degrade rather than fail the session: the grounded work above is
+		// already queued, and an unavailable axis is not a reason to lose it.
+		// The failure is RECORDED in health, not just logged — a reader
+		// comparing two sessions must be able to tell an axis that found
+		// nothing from one that could not look (L6).
+		log.Warn().Err(mErr).Str("session", sess.ID).
+			Msg("review: motif bridging skipped this session")
+		motifHealth.Failure = mErr.Error()
+		nearMotif, farMotif = nil, nil
+	}
+	// Both motif lanes ride the FORWARD-discover priority band, backward items
+	// included. That is deliberate: the band is a property of the REVIEW
+	// session's queue (these items must run after its grounded work and before
+	// reflect), not a claim about a discover item's direction. The headroom is
+	// asserted on the total in TestEffortBudget_StaysBelowPriorityBand — do not
+	// "fix" this by inventing a second band.
+	for _, b := range nearMotif {
+		payload := DiscoverWorkPayload{Direction: DiscoverForward, Bridge: b, ScopeLabel: sl, Lane: LaneNear}
+		if err := enqueueDiscover(ctx, d, sess, payload,
+			fmt.Sprintf("discover-motif-near-%d", rank), forwardDiscoverPriority(rank)); err != nil {
+			return err
+		}
+		rank++
+	}
+	for _, b := range farMotif {
+		payload := DiscoverWorkPayload{Direction: DiscoverBackward, Bridge: b, ScopeLabel: sl, Lane: LaneFar}
+		if err := enqueueDiscover(ctx, d, sess, payload,
+			fmt.Sprintf("discover-motif-far-%d", rank), forwardDiscoverPriority(rank)); err != nil {
+			return err
+		}
+		rank++
+	}
+	sess.Health = append(sess.Health, motifBridgeHealthLines(motifHealth, len(nearMotif), len(farMotif))...)
 
 	log.Info().
 		Str("session", sess.ID).
 		Int("prune_clusters", len(pruneClusters)).
 		Int("seeds", len(llmSeeds)).
 		Int("bridges", len(bridges)).
+		Int("motif_near", len(nearMotif)).
+		Int("motif_far", len(farMotif)).
 		Str("effort", string(d.Effort)).
 		Msg("review: work planned")
 	d.OnProgress(ProgressEvent{Phase: "review-start", Message: fmt.Sprintf("session %s: %d clusters, %d seeds, %d bridges", sess.ID, len(pruneClusters), len(llmSeeds), len(bridges))})

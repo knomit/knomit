@@ -198,8 +198,49 @@ var mechanicsPaths = map[string][]string{
 	// field into a payload, not consulting it in a decision — if a motif term
 	// ever reaches the clustering arithmetic that is an MN6 violation this does
 	// not cover.
-	"internal/synthesize/cluster.go": {"ScopedCluster"},
-	"internal/synthesize/louvain.go": nil,
+	// The §4/§5 path itself — the axis MN6 names as DESIGNED for motifs
+	// ("anything that spawns work outside the §4/§5/§7 synthesis paths designed
+	// for them"). Listed rather than left unpoliced, so this map stays the one
+	// register of which functions read motifs and a future helper here has to
+	// be declared rather than appearing quietly.
+	//
+	// What no entry here licenses: a motif term reaching dedup, clustering or
+	// search ranking. Those files stay nil below and this list does not touch
+	// them.
+	// laneOf, scoreMotifCandidate, rankAndCap, disjointMembers and
+	// copyMembers are deliberately NOT listed: their bodies name no motif
+	// identifier (they work on canonical ids, paths and scores), and this list
+	// rejects a permission nothing uses.
+	//
+	// The names in this paragraph are prose, and the bidirectional machinery
+	// checks the allow-LIST rather than the reasoning beside it — so a rename
+	// leaves a ghost here that nothing catches. One did: the Phase-3 review
+	// (L3) found this sentence still citing mergeToken2Groups, deleted two
+	// commits earlier and replaced by token2Families.
+	//
+	// Of the two listed, enumerateMotifCandidates reads members' motifs to
+	// GROUP them and sharedMotifSpecificity reads them to SCORE the group it
+	// was already given — both inside the §4/§5 cascade, neither reachable from
+	// dedup, clustering or search ranking.
+	// buildMotifBridges is the §4/§5 entry point: it reads the seed pool's
+	// motifs to decide whether the axis does anything at all, then drives
+	// enumeration, the lane split and the per-lane budgets.
+	// The wiring half of the same file: motifResolverFor closes over the alias
+	// table, and motifBridgeHealthLines RENDERS what the axis did into the
+	// session's health output. Reporting is not deciding — the no-branch
+	// property is what MN6 is about, and it holds: nothing in this package
+	// reads a health line.
+	"internal/synthesize/bridge_motif.go": {
+		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
+		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
+	},
+	// The gate that decides which motif groups the agent ever sees. It reads
+	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
+	// names motifs only in describing what it gates. Listed with no permitted
+	// function so that a motif-reading function added here must be declared.
+	"internal/synthesize/motif_disjoint.go": {},
+	"internal/synthesize/cluster.go":        {"ScopedCluster"},
+	"internal/synthesize/louvain.go":        nil,
 
 	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
 	// these names a SELECT column list and hands the row to a scanner; carrying
@@ -327,7 +368,13 @@ func funcsMentioningMotifs(t *testing.T, rel string) []string {
 // needing one written under deadline.
 func TestMN2_NoLLMInMotifCode(t *testing.T) {
 	sources := goSources(t)
-	for _, rel := range []string{"internal/fact/motif.go", "internal/textnorm/textnorm.go"} {
+	for _, rel := range []string{
+		"internal/fact/motif.go", "internal/textnorm/textnorm.go",
+		// Phase 3's enumeration and its gate. The detector stays mechanical:
+		// the connected agent is the only reasoner in the read path, and it
+		// already exists (cf455b8f).
+		"internal/synthesize/bridge_motif.go", "internal/synthesize/motif_disjoint.go",
+	} {
 		src, ok := sources[rel]
 		require.Truef(t, ok, "MN2 target %s is missing", rel)
 		lower := strings.ToLower(src)
@@ -442,4 +489,120 @@ func parseGo(t *testing.T, rel string) *ast.File {
 	file, err := parser.ParseFile(fset, filepath.Join(repoRoot(t), rel), nil, parser.ParseComments)
 	require.NoErrorf(t, err, "parsing %s", rel)
 	return file
+}
+
+// TestMN13_MotifBridgeConstantsAreClassified — the Phase-3 half of the same
+// rule. Every numeric constant on the bridging path states its class where it
+// is defined, and no float literal appears in either file's CODE: a float here
+// would be the corpus-property constant MN13 forbids, wearing a threshold's
+// clothes.
+func TestMN13_MotifBridgeConstantsAreClassified(t *testing.T) {
+	for rel, want := range map[string]map[string]string{
+		"internal/synthesize/motif_disjoint.go": {
+			"disjointnessPercentile": "SELECTION POINT",
+			"minLabelsForPercentile": "STATISTICAL-VALIDITY FLOOR",
+			"umbrellaPerCent":        "RATIO",
+		},
+		"internal/synthesize/bridge_motif.go": {
+			"motifDFCeilingFloor": "STATISTICAL-VALIDITY FLOOR",
+		},
+	} {
+		requireConstantsClassified(t, rel, want)
+
+		requireNoUnnamedRatios(t, rel)
+	}
+}
+
+// requireConstantsClassified checks that each named constant in rel carries a
+// doc comment declaring its class. Shared by both MN13 tests so the rule has
+// one implementation and cannot drift between the phases that use it.
+func requireConstantsClassified(t *testing.T, rel string, want map[string]string) {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, decl := range parseGo(t, rel).Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		blockDoc := gen.Doc.Text()
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			doc := blockDoc + vs.Doc.Text()
+			for _, name := range vs.Names {
+				phrase, tracked := want[name.Name]
+				if !tracked {
+					continue
+				}
+				seen[name.Name] = true
+				require.Containsf(t, doc, phrase,
+					"MN13: const %s in %s must state its class where it is defined "+
+						"(expected its doc comment to contain %q)", name.Name, rel, phrase)
+			}
+		}
+	}
+	for name := range want {
+		require.Truef(t, seen[name], "const %s no longer exists in %s — "+
+			"update this test rather than letting the classification rule lapse", name, rel)
+	}
+}
+
+// requireNoUnnamedRatios is MN13's literal check, in BOTH forms a ratio can
+// take.
+//
+// A float literal was the only form the first version looked for, and the
+// Phase-3 review (L2) found the gap by walking through it: the df band's
+// ceiling was written `LiveFacts * 2 / 100` — a ratio of the corpus's own size,
+// in bare integers, invisible to a float scan. That is lesson 3 turned on the
+// check itself: ask in what form the violation would appear, and does the check
+// read that form.
+//
+// So it bans float literals outright, and bans the integer-ratio SHAPE
+// (`<expr> * N / M`) when the MULTIPLIER N is a bare number. N is the ratio
+// someone chose and must therefore be named and classified; the divisor is the
+// unit's own denominator — `x * umbrellaPerCent / 100` is what a correctly
+// classified per-cent ratio looks like, and a `const hundred = 100` would be
+// ceremony, not clarity.
+func requireNoUnnamedRatios(t *testing.T, rel string) {
+	t.Helper()
+	file := parseGo(t, rel)
+
+	var offenders []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
+			offenders = append(offenders, "float literal "+lit.Value)
+			return true
+		}
+		// `x * N / M` parses as (x * N) / M — a division whose left operand is
+		// a multiplication. Either bare number makes it an unnamed ratio.
+		div, ok := n.(*ast.BinaryExpr)
+		if !ok || div.Op != token.QUO {
+			return true
+		}
+		mul, ok := div.X.(*ast.BinaryExpr)
+		if !ok || mul.Op != token.MUL {
+			return true
+		}
+		if lit, ok := mul.Y.(*ast.BasicLit); ok && lit.Kind == token.INT {
+			offenders = append(offenders,
+				"unnamed integer ratio "+lit.Value+"/"+exprText(div.Y))
+		}
+		return true
+	})
+	require.Emptyf(t, offenders,
+		"MN13: %s must not carry an unclassified ratio — name it as a constant and "+
+			"state its class where it is defined: %v", rel, offenders)
+}
+
+// exprText renders a small expression for an error message.
+func exprText(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		return v.Value
+	case *ast.Ident:
+		return v.Name
+	}
+	return "?"
 }

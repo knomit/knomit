@@ -83,6 +83,11 @@ type GraphStore interface {
 	// TokenDF returns the count of facts live on branch that carry the given
 	// domain/entity tag (kind: "domain"|"entity").
 	TokenDF(ctx context.Context, branch, token, kind string) (int, error)
+	// SubjectLabelDF returns the document frequency of every subject label
+	// live on branch, plus the live fact count. The Phase-3 subject-
+	// disjointness gate derives its operating point from this distribution
+	// rather than from any fixed cut (MN13).
+	SubjectLabelDF(ctx context.Context, branch string) (SubjectLabelDF, error)
 	// SimilarityAdjacency returns the member-restricted SIMILAR_TO graph for
 	// the given fact paths. Only edges where both endpoints are in paths are
 	// kept. Liveness is enforced via NOT n.deleted = true. An empty or

@@ -467,10 +467,15 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 // reach reflect. If someone raises effortBudget(EffortHigh) past the band, this
 // fails loudly instead of silently letting discovery reorder after reflect.
 func TestEffortBudget_StaysBelowPriorityBand(t *testing.T) {
-	require.Less(t, effortBudget(EffortHigh), maxBridgeSeeds,
-		"effortBudget(EffortHigh) must stay below the forward-discover priority band width")
-	require.Less(t, effortBudget(EffortMedium), maxBridgeSeeds,
-		"effortBudget(EffortMedium) must stay below the forward-discover priority band width")
+	// Phase 3 puts motif items — both lanes — into the SAME forward-discover
+	// band, so the headroom question is about the TOTAL a session can enqueue,
+	// not about any one budget. Asserting effortBudget alone would have gone on
+	// passing while the band overflowed.
+	for _, e := range []Effort{EffortMedium, EffortHigh} {
+		near, far := motifSubBudget(e)
+		require.Less(t, effortBudget(e)+near+far, maxBridgeSeeds,
+			"every discover item a %s session can enqueue must fit the band above reflect", e)
+	}
 }
 
 // ─── buildScoredBridges tests ──────────────────────────────────────────────────
