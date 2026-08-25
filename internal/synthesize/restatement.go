@@ -412,6 +412,7 @@ type restatementHealth struct {
 	TailP999       float64
 	OperatingPoint float64 // title-cos of the last selected pair, in THIS repo
 	Emitted        int
+	Dropped        int
 	ResolutionRate float64
 	ThrottleState  string
 	// MotifWidened counts pairs admitted ONLY because their facts share a
@@ -677,16 +678,27 @@ func pairTouchesScope(ctx context.Context, d Deps, branch string, p store.Restat
 // and needs no prompt, schema, or apply-path change. The judge that already
 // knows how to merge under a fidelity contract gets to apply it to pairs it
 // previously never saw.
-func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, pairs []store.RestatementPair) error {
+//
+// Returns what actually reached the judge, and what did not (knomit#117a). The
+// count and the insert were separated by a `continue`, so a candidate whose
+// pair could not be loaded evaporated between them: no item, no health line, no
+// warning. Measured on core as `restatement candidates emitted: 8` beside ZERO
+// restate- items in a fully-drained 48-item queue. The number was not wrong
+// about what it counted — it counted SELECTION and was read as SERVICE, and
+// nothing in the output could tell the two apart.
+func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, pairs []store.RestatementPair) (served, dropped int, err error) {
 	for i, p := range pairs {
 		facts := make([]factForLLM, 0, 2)
 		for _, path := range []string{p.APath, p.BPath} {
 			f, err := d.Search.GetByPath(ctx, branch, path)
 			if err != nil {
-				return wrapf(reviewTool, err, "shortlist: read %s", path)
+				return served, dropped, wrapf(reviewTool, err, "shortlist: read %s", path)
 			}
 			if f == nil {
-				break // raced a retraction; drop the pair rather than half-ship it
+				// Raced a retraction, or the pair names a path that no longer
+				// resolves — drop rather than half-ship. Dropping is still
+				// right; doing it silently was not.
+				break
 			}
 			facts = append(facts, factForLLM{
 				File:       f.Path,
@@ -701,11 +713,20 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 			})
 		}
 		if len(facts) != 2 {
+			dropped++
+			// WARN, not Debug: this is a computed candidate the corpus paid a
+			// KNN query for, and it is being discarded. The pair is NOT
+			// retired — no verdict is recorded — so it stays standing and can
+			// be re-selected once its half resolves again. That makes a
+			// persistent drop a LOOP rather than a loss, which is worth
+			// seeing in a log.
+			log.Warn().Str("session", sess.ID).Str("a", p.APath).Str("b", p.BPath).
+				Msg("review: restatement candidate dropped — a half did not resolve")
 			continue
 		}
 		factsJSON, err := json.Marshal(facts)
 		if err != nil {
-			return wrapf(reviewTool, err, "shortlist: marshal pair %d", i)
+			return served, dropped, wrapf(reviewTool, err, "shortlist: marshal pair %d", i)
 		}
 		if err := d.Pipeline.InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
 			SessionID:  sess.ID,
@@ -714,10 +735,25 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 			FactsJSON:  string(factsJSON),
 			Priority:   restatementPriority,
 		}); err != nil {
-			return wrapf(reviewTool, err, "shortlist: insert item %d", i)
+			return served, dropped, wrapf(reviewTool, err, "shortlist: insert item %d", i)
 		}
+		served++
 	}
-	return nil
+	return served, dropped, nil
+}
+
+// applyEmissionOutcome corrects the health block from what SELECTION chose to
+// what enqueue actually served (knomit#117a).
+//
+// It exists as its own function because the two numbers are produced in
+// different places — selectRestatementCandidates sets Emitted, and the drop
+// happens later, at enqueue — so without an explicit hand-off the health line
+// keeps reporting selection while the queue reflects service. That gap is the
+// whole bug, and a fix that only changed enqueue's return value would leave the
+// number an operator READS exactly as wrong as before.
+func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
+	h.Emitted = served
+	h.Dropped = dropped
 }
 
 // planRestatementShortlist runs the whole phase-0 sequence for one session:
@@ -777,9 +813,13 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 	selectHealth.Coverage = health.Coverage
 	health = selectHealth
 
-	if err := enqueueRestatementItems(ctx, d, sess, branch, pairs); err != nil {
+	served, dropped, err := enqueueRestatementItems(ctx, d, sess, branch, pairs)
+	if err != nil {
 		return err
 	}
+	// Emitted was recorded by selection; only enqueue knows what survived to
+	// the queue. Reconcile before the deferred recordRestatementHealth fires.
+	applyEmissionOutcome(&health, served, dropped)
 	return nil
 }
 
@@ -806,7 +846,7 @@ func healthLines(h restatementHealth) []string {
 		fmt.Sprintf("standing restatement pairs: %d (title-cos p99 %.3f, p99.9 %.3f)",
 			h.StandingPairs, h.TailP99, h.TailP999),
 		fmt.Sprintf("operating point: title-cos %.3f (this corpus, this session)", h.OperatingPoint),
-		fmt.Sprintf("restatement candidates emitted: %d", h.Emitted),
+		emittedLine(h),
 		fmt.Sprintf("shortlist throttle: %s%s (trailing resolution-rate %.0f%% over last %d judged)",
 			h.ThrottleState, probeSuffix(h), h.ResolutionRate*100, throttleWindow),
 		// The motif signal's actual contribution, not its existence (designer
@@ -814,6 +854,21 @@ func healthLines(h restatementHealth) []string {
 		// a line that only ever said "enabled" could not support that claim.
 		motifSignalLine(h),
 	}
+}
+
+// emittedLine reports what actually reached the judge, and names any candidate
+// that did not (knomit#117a).
+//
+// The drop clause appears ONLY when something dropped. A block that mentions
+// drops every session trains a reader to skip the line, which is how the
+// original silence would come back wearing a number.
+func emittedLine(h restatementHealth) string {
+	if h.Dropped == 0 {
+		return fmt.Sprintf("restatement candidates emitted: %d", h.Emitted)
+	}
+	return fmt.Sprintf("restatement candidates emitted: %d (%d selected but dropped "+
+		"unserved — a half no longer resolves; the pair stays standing and will "+
+		"be re-offered)", h.Emitted, h.Dropped)
 }
 
 // motifSignalLine reports what the §7 motif widener contributed this session.
