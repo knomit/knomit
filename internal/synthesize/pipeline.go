@@ -173,7 +173,7 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	// a LEVEL-triggered pass that asks what the corpus is missing, and that
 	// question has an answer even when nothing changed. Ask before giving up.
 	if len(seeds) == 0 {
-		if !p.planLevelTriggered(ctx, d, branch) {
+		if !p.planLevelTriggered(ctx, d, branch, scan) {
 			res, cerr := p.completeSession(ctx, sess)
 			if cerr != nil {
 				return nil, cerr
@@ -438,7 +438,26 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // levelTriggeredStrategy, and one whose check errors — so the behaviour when
 // this cannot answer is exactly the behaviour before it existed. An error here
 // must not fail a session that was about to complete successfully.
-func (p *Pipeline) planLevelTriggered(ctx context.Context, d Deps, branch string) bool {
+func (p *Pipeline) planLevelTriggered(ctx context.Context, d Deps, branch string, scan seedScan) bool {
+	// A SCOPED session never plans level-triggered work (knomit#128 review,
+	// MEDIUM-2). The level-triggered pools are corpus-wide by construction —
+	// LiveFactsWithoutMotifs does not know what scope the caller named — so
+	// consulting them on a scoped run turns a scope that matched nothing into
+	// a whole-corpus session that rewrites facts the operator never asked
+	// about. Measured before this guard: EffortMedium plus a scope matching no
+	// facts planned backfill over three facts, all outside the scope, and
+	// printed no scoped sentence at all.
+	//
+	// This is the #122 family's own rule — a scope must never silently widen —
+	// applied to the fix that closed a sibling case. A scoped run with an empty
+	// pool is FINISHED for that scope, and says so via emptySeedHealth.
+	//
+	// The level-triggered pass is not lost: it is reached by any unscoped
+	// session, which is the shape that legitimately speaks for the whole
+	// corpus.
+	if scan.Scoped {
+		return false
+	}
 	lt, ok := p.strategy.(levelTriggeredStrategy)
 	if !ok {
 		return false

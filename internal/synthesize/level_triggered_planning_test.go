@@ -114,8 +114,21 @@ func TestStartSession_EmptyDirtySetAtNormalEffortStillCompletes(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, targets, "precondition: same corpus, backfill pool non-empty")
 
-	// 1. The predicate itself, directly. This is the assertion that fails the
-	// moment the effort gate leaves HasLevelTriggeredWork, wherever it goes.
+	// 1. The predicate itself, directly.
+	//
+	// KEPT DELIBERATELY, and not redundant with assertion 2. Review flagged it
+	// as the test-calls-the-helper disguise and over-specified — a
+	// behaviour-equivalent refactor moving the gate into planLevelTriggered
+	// would fail it. That refactor is not behaviour-equivalent as far as this
+	// package is concerned: levelTriggeredStrategy's doc comment states that
+	// THE IMPLEMENTATION OWNS ITS OWN GATING and that review's must return
+	// false below EffortMedium. This assertion pins that interface contract,
+	// which exists so a future strategy author knows where gating belongs;
+	// assertion 2 pins the wiring. They fail for different reasons.
+	//
+	// If it ever does fail spuriously, the fix is to move the contract, not to
+	// delete the assertion — assertion 2 would still pass with the gate in the
+	// wrong place for the next strategy that copies this one.
 	d := r.p.deps()
 	has, err := reviewStrategy{}.HasLevelTriggeredWork(ctx, d, branch)
 	require.NoError(t, err)
@@ -124,16 +137,53 @@ func TestStartSession_EmptyDirtySetAtNormalEffortStillCompletes(t *testing.T) {
 			"corpus: backfill fires on every fact there, which is the corpus MN5's "+
 			"test uses (invariants/synthesize/motif/effort-amendment)")
 
-	// 2. The path actually taken. The early-exit path is the one that appends
-	// the empty-seed health line; the plan path never does. So the presence of
-	// that line is proof the session completed WITHOUT planning — which
-	// `res.Done` alone cannot tell you, since both paths end done.
+	// 2. The path actually taken — asserted by CONTENT, not by non-emptiness.
+	//
+	// An earlier version asserted only `require.NotEmpty(res.Health)`, which
+	// is INERT: under the effort-gate sabotage the Plan path populates Health
+	// with the restatement/abstraction block, so Health is non-empty on both
+	// paths and the assertion could never fail (PR #128, MEDIUM-1). Only the
+	// early-exit path emits this sentence.
 	res, err := r.StartSession(ctx)
 	require.NoError(t, err)
 	require.True(t, res.Done)
-	require.NotEmpty(t, res.Health,
+	require.Contains(t, strings.Join(res.Health, "\n"), "review found nothing",
 		"the session must complete via the early-exit path, not by planning "+
 			"an empty queue and completing at the end of it")
+}
+
+// emptySeedHealth's THIRD branch — a first-run full scan (no watermark, no
+// scope) that matched no eligible facts — was untested (PR #128, LOW-2).
+//
+// Driven directly rather than through StartSession because the situation is
+// awkward to stage end-to-end and the branch is pure: it maps a seedScan onto
+// a sentence. What matters is that all three cases are distinguishable and
+// that this one blames neither the watermark nor a scope, because on a first
+// run neither is the reason.
+func TestEmptySeedHealth_DistinguishesAllThreeCases(t *testing.T) {
+	scoped := strings.Join(emptySeedHealth(seedScan{Scoped: true, Path: seedScanFull}), "\n")
+	require.Contains(t, scoped, "scope")
+	require.NotContains(t, scoped, "watermark")
+
+	incremental := strings.Join(emptySeedHealth(
+		seedScan{Path: seedScanIncremental, Watermark: "abcdef1234567890"}), "\n")
+	require.Contains(t, incremental, "watermark")
+	require.Contains(t, incremental, "abcdef12", "the hash is carried, abbreviated")
+
+	// First run: no watermark to blame, no scope to widen.
+	firstRun := strings.Join(emptySeedHealth(seedScan{Path: seedScanFull}), "\n")
+	require.NotEmpty(t, firstRun, "the third case must say something too")
+	require.NotContains(t, firstRun, "watermark",
+		"there is no watermark on a first run — naming one sends the reader to "+
+			"a mechanism that was not involved")
+	require.NotContains(t, firstRun, "scope",
+		"an unscoped run must not blame a scope")
+
+	// All three sentences differ: an operator must be able to tell which case
+	// they are in from the line alone, which is the whole point of #122(c).
+	require.NotEqual(t, scoped, incremental)
+	require.NotEqual(t, scoped, firstRun)
+	require.NotEqual(t, incremental, firstRun)
 }
 
 // knomit#122 fix (c), merged here because it is #115's user-visible half. An
@@ -170,20 +220,36 @@ func TestStartSession_EmptyReturnSaysWhyItIsEmpty(t *testing.T) {
 	// Case 2: a scope that matches nothing. Same done:true shape, different
 	// cause, and the operator needs to tell them apart — this is the pair the
 	// #115 comment measured as ambiguous exactly when it mattered.
-	t.Run("scope matched no facts", func(t *testing.T) {
-		r, _, _ := newQuietCorpusReviewer(t, EffortNormal)
-		r.p.scope = ScopeFilter{Entities: []string{"nothing-has-this-entity"}}
+	//
+	// PARAMETERIZED OVER BOTH EFFORTS, and that is the point of this subtest's
+	// current shape (PR #128, MEDIUM-2). At EffortNormal the effort gate
+	// suppresses the level-triggered path, so the scoped sentence appeared to
+	// be covered while being unreachable at the efforts that actually run
+	// vocabulary work. Measured before the fix: EffortMedium with a scope
+	// matching nothing returned done=false and planned backfill over facts
+	// ALL OUTSIDE the named scope, with no scoped sentence anywhere.
+	//
+	// A scoped session must never silently widen into a corpus-wide one. That
+	// is the #122 family's own rule, and this fix had broken it in the course
+	// of fixing a sibling case.
+	for _, effort := range []Effort{EffortNormal, EffortMedium} {
+		t.Run("scope matched no facts at effort "+string(effort), func(t *testing.T) {
+			r, _, _ := newQuietCorpusReviewer(t, effort)
+			r.p.scope = ScopeFilter{Entities: []string{"nothing-has-this-entity"}}
 
-		res, err := r.StartSession(ctx)
-		require.NoError(t, err)
-		require.True(t, res.Done)
+			res, err := r.StartSession(ctx)
+			require.NoError(t, err)
+			require.True(t, res.Done,
+				"a scope matching no facts must COMPLETE, never become a "+
+					"corpus-wide session over facts outside the scope")
 
-		health := strings.Join(res.Health, "\n")
-		require.NotEmpty(t, res.Health)
-		require.Contains(t, health, "scope",
-			"a scoped empty return must say the SCOPE matched nothing, not blame the watermark")
-		require.NotContains(t, health, "watermark",
-			"a scoped run is exempt from the watermark on both halves — "+
-				"naming it here would send the reader to the wrong mechanism")
-	})
+			health := strings.Join(res.Health, "\n")
+			require.NotEmpty(t, res.Health)
+			require.Contains(t, health, "scope",
+				"a scoped empty return must say the SCOPE matched nothing, not blame the watermark")
+			require.NotContains(t, health, "watermark",
+				"a scoped run is exempt from the watermark on both halves — "+
+					"naming it here would send the reader to the wrong mechanism")
+		})
+	}
 }
