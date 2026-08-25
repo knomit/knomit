@@ -752,10 +752,15 @@ func (p *Pipeline) payloadResult(ctx context.Context, d Deps, sess *store.Pipeli
 	return &PipelineResult{
 		SessionID: sess.ID,
 		Item: &PipelineItem{
-			ID:        item.ID,
-			Type:      item.StepType,
-			FactsJSON: item.FactsJSON,
-			Facts:     facts,
+			ID:   item.ID,
+			Type: item.StepType,
+			// Carried on EVERY page, not only the first (knomit#120). The agent
+			// reads the later pages last, and that is when it decides how to
+			// answer — a key present on page 1 and absent afterwards would be
+			// worse than uniformly absent.
+			ClusterKey: item.ClusterKey,
+			FactsJSON:  item.FactsJSON,
+			Facts:      facts,
 		},
 		Progress: &ReviewProgress{
 			Completed: completed,
@@ -867,6 +872,7 @@ func (p *Pipeline) renderWorkItem(ctx context.Context, d Deps, sess *store.Pipel
 		Item: &PipelineItem{
 			ID:             item.ID,
 			Type:           view.Type,
+			ClusterKey:     item.ClusterKey,
 			Prompt:         view.Prompt,
 			ResponseSchema: view.ResponseSchema,
 			FactsJSON:      item.FactsJSON,
