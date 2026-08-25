@@ -191,3 +191,47 @@ func readFactFromStore(t *testing.T, e *restatementEnv, path string) fact.Fact {
 	require.NoError(t, err)
 	return f
 }
+
+// TestMotifDynamics_ReviewMergeTrimsToTheCapWinnerFirst binds the other half
+// of the merge's motif semantics through dedupCluster: the union is capped at
+// fact.MaxMotifs, and it is the WINNER's axis that survives the trim. The
+// sibling test above pins the ordering with two motifs, where nothing is
+// dropped; here the operands overflow the cap, which is the case where
+// ordering stops being cosmetic and decides what is deleted with the loser.
+func TestMotifDynamics_ReviewMergeTrimsToTheCapWinnerFirst(t *testing.T) {
+	env := newRestatementEnv(t, 0)
+	ctx := context.Background()
+
+	winnerMotifs := []string{"stale-read-window", "silent-fallback"}
+	loserMotifs := []string{"unmonitored-expiry", "retry-storm", "cold-start-stall"}
+
+	// Preconditions: the sets must be disjoint and must overflow the cap, or
+	// "trimmed winner-first" is asserted about a union that never trimmed.
+	require.Greater(t, len(winnerMotifs)+len(loserMotifs), fact.MaxMotifs)
+	for _, w := range winnerMotifs {
+		require.NotContains(t, loserMotifs, w)
+	}
+
+	env.writeFactWithMotifsConf("kb/alpha/winner.md", "Cache invalidation on write",
+		"one account of it", winnerMotifs, 0.9)
+	env.writeFactWithMotifsConf("kb/alpha/loser.md", "Cache invalidation on write",
+		"one account of it", loserMotifs, 0.5)
+
+	cluster := []factForLLM{
+		{File: "kb/alpha/winner.md", Title: "Cache invalidation on write", Body: "one account of it",
+			Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
+		{File: "kb/alpha/loser.md", Title: "Cache invalidation on write", Body: "one account of it",
+			Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
+	}
+
+	out, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(), 0,
+		"test", func(ProgressEvent) {}, env.branch, bareRefFixture)
+	require.NoError(t, err)
+	require.Len(t, out, 1, "the fixture must actually have merged, or this proves nothing")
+
+	survivor := readFactFromStore(t, env, out[0].File)
+	require.Equal(t, []string{"stale-read-window", "silent-fallback", "unmonitored-expiry"},
+		survivor.Motifs,
+		"the cap keeps the winner's whole axis and as much of the loser's as fits — "+
+			"merging loser-first would drop the winner's own motifs instead")
+}
