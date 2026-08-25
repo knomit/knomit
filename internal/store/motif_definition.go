@@ -211,6 +211,23 @@ type MotifVocabularyHealth struct {
 	// links; one where every cluster has exactly two carriers has high
 	// recurrence and modest links. Both numbers are needed to tell those apart.
 	Links int
+	// EpistemicRecurring is how many clusters have df >= 2 counting EPISTEMIC
+	// carriers only — the population the activation floor actually reads
+	// (knomit#116).
+	//
+	// Reported beside Recurring because the two diverge, badly, and nothing
+	// said so. Recurring's "authored facts only" qualifier filters ORIGIN, not
+	// KIND, so a reader takes it as naming the population when it names a
+	// different axis entirely. Measured divergence up to 5.0x — one motif read
+	// raw df 5 / epistemic df 1, all five carriers in one folder — and one
+	// corpus printed "3 recur" four lines above "0 recurring motif(s) … below
+	// the floor", in the same health block.
+	//
+	// Mint quality and activation contribution are INDEPENDENT axes: a name can
+	// be among the healthiest in a vocabulary by span and contribute nothing to
+	// activation, because all its carriers are pragmatic. The floor is right not
+	// to count them; the line was wrong to imply it had.
+	EpistemicRecurring int
 }
 
 // RecurrenceRate is the fraction of clusters carried by more than one fact.
@@ -256,9 +273,20 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 	// report one cluster where the point readers see several singletons. The two
 	// queries agree because they compute the same thing, not because they were
 	// written on the same day.
+	// Both df counts come from ONE row per cluster, so the raw and epistemic
+	// figures can never describe different cluster sets (knomit#116). A second
+	// query with its own GROUP BY would be free to disagree with this one about
+	// which clusters exist, and the whole point of reporting them side by side
+	// is that they are the same clusters counted over different carriers.
+	//
+	// The epistemic predicate is `f.kind = 'epistemic'` — the same one
+	// AcceptSeed and epistemicLiveJoin apply, which is what makes this number
+	// the one the activation floor reads rather than merely a similar one.
 	key := motifClusterKeyExpr("m.motif")
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
-		SELECT `+key+`, COUNT(DISTINCT bf.path)
+		SELECT `+key+`,
+		       COUNT(DISTINCT bf.path),
+		       COUNT(DISTINCT CASE WHEN f.kind = 'epistemic' THEN bf.path END)
 		  FROM branch_facts bf
 		  JOIN facts f ON f.id = bf.fact_id
 		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
@@ -271,14 +299,17 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 	defer rows.Close()
 	for rows.Next() {
 		var key string
-		var df int
-		if err := rows.Scan(&key, &df); err != nil {
+		var df, epistemicDF int
+		if err := rows.Scan(&key, &df, &epistemicDF); err != nil {
 			return h, fmt.Errorf("VocabularyHealth: scan: %w", err)
 		}
 		h.Clusters++
 		h.Mints++ // one mint per cluster, by whichever fact first used it
 		if df >= 2 {
 			h.Recurring++
+		}
+		if epistemicDF >= 2 {
+			h.EpistemicRecurring++
 		}
 		h.Links += df - 1 // every use after the first
 	}

@@ -186,10 +186,36 @@ func motifVocabularyHealthLines(h store.MotifVocabularyHealth) []string {
 	if h.Clusters == 0 {
 		return nil
 	}
-	return []string{fmt.Sprintf(
-		"motif vocabulary: %d clusters, recurrence %.0f%% (%d recur), mint-to-link %.2f (%d mints / %d links), authored facts only",
-		h.Clusters, 100*h.RecurrenceRate(), h.Recurring,
-		h.MintToLinkRatio(), h.Mints, h.Links)}
+	// BOTH POPULATIONS, BOTH LABELLED (knomit#116). The raw figure counts every
+	// authored carrier; the activation floor reads only EPISTEMIC ones, and the
+	// two diverge by up to 5x on measured corpora. The old line's "authored
+	// facts only" qualifier filters ORIGIN, not KIND — a reader takes it as
+	// naming the population, and it names a different axis.
+	//
+	// Labelling, not redefinition: raw recurrence keeps its meaning, because it
+	// is the honest answer to "is this vocabulary being reused at all". The
+	// epistemic count answers a different question — "how close is bridging to
+	// activating" — and only that one was ever unavailable.
+	return []string{
+		fmt.Sprintf(
+			"motif vocabulary: %d clusters, recurrence %.0f%% (%d recur over authored "+
+				"carriers; %d recur over EPISTEMIC carriers — the population the "+
+				"activation floor reads), mint-to-link %.2f (%d mints / %d links)",
+			h.Clusters, 100*h.RecurrenceRate(), h.Recurring, h.EpistemicRecurring,
+			h.MintToLinkRatio(), h.Mints, h.Links),
+
+		// ONE SENTENCE, ITS OWN LINE, REMOVED BY #127's FIX. df counts
+		// CARRIERS, and duplicate records of one event inflate it — measured
+		// live at df 4 resting on one event. Labelling the population correctly
+		// does not make the count correct, so this says so rather than shipping
+		// a more precise wrong number.
+		//
+		// Deliberately self-contained and last: #127's PR deletes this line, and
+		// nothing above depends on its presence or its position.
+		"motif vocabulary caveat: df counts CARRIERS, not distinct claims — " +
+			"duplicate records of one event inflate every figure above (#127); " +
+			"treat them as upper bounds until that lands.",
+	}
 }
 
 // motifDefineHealth reports what the pass did. Nothing branches on it.
