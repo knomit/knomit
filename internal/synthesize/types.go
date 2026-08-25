@@ -262,11 +262,32 @@ func chunkFacts(facts []factForLLM, maxBytes int) [][]factForLLM {
 
 // ReviewResult is returned from StartSession and ContinueSession.
 type ReviewResult struct {
-	SessionID string          `json:"session_id"`
-	Item      *ReviewItem     `json:"item,omitempty"`
-	Done      bool            `json:"done,omitempty"`
-	Summary   *ReviewStats    `json:"summary,omitempty"`
-	Progress  *ReviewProgress `json:"progress,omitempty"`
+	SessionID string `json:"session_id"`
+	// Repo, RepoID and WriteBranch say WHERE this session operates
+	// (knomit#113). knomit_review takes no repo argument — the binding decides
+	// — so without these a session through a multi-mount lens cannot confirm
+	// which corpus it seeded from or where its answers will write. The fleet
+	// had to derive it from path-prefix formatting: a correct instrument
+	// nobody should have had to invent. knomit_learn already returns where it
+	// wrote; this makes review match.
+	//
+	// Start turn only. The identity does not change mid-session, and repeating
+	// it on every continue is noise that trains a reader to skip the envelope.
+	Repo        string `json:"repo,omitempty"`
+	RepoID      string `json:"repo_id,omitempty"`
+	WriteBranch string `json:"write_branch,omitempty"`
+	// AbandonedSession names the in-flight session this one DISPLACED, if any.
+	//
+	// Starting a session abandons any active session for the same tool+branch.
+	// Deliberate, but silent on both sides: the winner did not know it took the
+	// slot, and the loser found out only when its next answer was rejected as
+	// "not active" — after composing one. Nothing can notify the loser; this
+	// lets the winner's result say what it displaced.
+	AbandonedSession string          `json:"abandoned_session,omitempty"`
+	Item             *ReviewItem     `json:"item,omitempty"`
+	Done             bool            `json:"done,omitempty"`
+	Summary          *ReviewStats    `json:"summary,omitempty"`
+	Progress         *ReviewProgress `json:"progress,omitempty"`
 	// Health carries corpus-health descriptors for this session. Read by the
 	// agent, by nothing in the engine.
 	Health []string `json:"health,omitempty"`
