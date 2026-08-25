@@ -124,7 +124,11 @@ func TestApplyPruneDecisions_AcceptsSynthesisMerge(t *testing.T) {
 	require.Equal(t, 1, stats.Merged, "synthesis-type merge must commit")
 	require.Empty(t, warns, "no warns expected for valid synthesis merge; got: %v", warns)
 
-	got, err := svc.Search().GetByPath(context.Background(), "agent/test", "kb/synth/merged.md")
+	// The filename is UUID-normalized since #107a, so the merged fact is found
+	// by title rather than by the path the fixture supplied.
+	mergedPath := mergedFactPath(t, svc, "agent/test", "Merged synthesis")
+	require.NotEmpty(t, mergedPath, "valid merge must have written a fact")
+	got, err := svc.Search().GetByPath(context.Background(), "agent/test", mergedPath)
 	require.NoError(t, err)
 	require.NotNil(t, got, "valid merge must have written a fact")
 	require.Equal(t, "Merged synthesis", got.Title)

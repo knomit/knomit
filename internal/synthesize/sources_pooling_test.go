@@ -258,7 +258,7 @@ func TestApplyPruneDecisions_MergePoolsSubsumedSources(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, stats.Merged)
 
-	require.Equal(t, 8, readSources(t, svc, branch, "kb/technology/merged.md"),
+	require.Equal(t, 8, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"a merge deletes its inputs, so their corroborations must transfer to the survivor")
 
 	// And they really are gone, which is what makes the transfer mandatory.
@@ -286,7 +286,7 @@ func TestApplyPruneDecisions_MergeExcludesHypothesisSources(t *testing.T) {
 		"test", func(ProgressEvent) {}, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
-	require.Equal(t, 2, readSources(t, svc, branch, "kb/technology/merged.md"),
+	require.Equal(t, 2, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"a hypothesis is a conjecture; its count must not pool into the merged fact")
 }
 
@@ -308,7 +308,7 @@ func TestApplyPruneDecisions_MergeWarnsWhenSourcesUnreadable(t *testing.T) {
 	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
-	require.Equal(t, 1, readSources(t, svc, branch, "kb/technology/merged.md"),
+	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"the floor still applies — 0 would make the fact invisible to every downstream weight")
 	require.NotEmpty(t, *warns, "a merge that could read none of its sources must say so")
 	require.Contains(t, (*warns)[0], "could be read",
@@ -426,7 +426,7 @@ func TestApplyPruneDecisions_MergeOverHypothesesDoesNotWarnUnreadable(t *testing
 	_, err := ApplyPruneDecisions(ctx, svc.Facts(), svc.Search(), nil, merges, "test", onProgress, branch, bareRefFixture, "kb")
 	require.NoError(t, err)
 
-	require.Equal(t, 1, readSources(t, svc, branch, "kb/technology/merged.md"),
+	require.Equal(t, 1, readSources(t, svc, branch, mergedFactPath(t, svc, branch, "M")),
 		"conjecture pools nothing, so the merged fact rests on the floor")
 	for _, w := range *warns {
 		require.NotContains(t, w, "could be read",
