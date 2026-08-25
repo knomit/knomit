@@ -2,6 +2,11 @@ package synthesize
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"reflect"
+	"strings"
 	"testing"
 
 	"knomit/internal/fact"
@@ -119,10 +124,17 @@ func TestDedupCluster_KeepsUnresolvableCarriedRefs(t *testing.T) {
 //
 // So the property under test is not "prior equals the write list" (it does),
 // it is "prior was built from the operands and can diverge from the write
-// list". The two assertions below are the two halves of that, and each is
-// meant to go red under its own sabotage: return `carried = write` from the
-// helper, and the aliasing check fails; build `carried` from `write` after a
-// later append, and the divergence check fails.
+// list". This test binds the RUNTIME half — the two lists are distinct
+// objects — and reddens when the helper returns one slice for both. The
+// construction half, which no runtime assertion can see because a copy and a
+// derivation are indistinguishable at every input, is bound structurally by
+// TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList below.
+//
+// The gate calls at the end are CONTROLS on the gate, not sabotage targets:
+// no edit to the helper can redden them. They record what the exemption does
+// and does not cover — a carried ref that no longer resolves passes, a ref
+// that was never carried is still rejected — which is the behaviour the two
+// arguments are meant to produce.
 func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	ctx := context.Background()
 	svc, branch := newSourcesTestRepo(t)
@@ -163,12 +175,131 @@ func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	_, _, err := gate.Apply(ctx, winnerPath, write, carried)
 	require.NoError(t, err, "a ref both operands carried must not be re-judged")
 
-	// The divergence the snapshot exists for: a ref the merge did not carry,
-	// of the kind a later change might append here (a lineage pointer to a
-	// synthesized parent), is still gated.
+	// The other half of the control: the exemption is not blanket. A ref the
+	// merge did not carry, of the kind a later change might append here (a
+	// lineage pointer to a synthesized parent), is still gated.
 	const ghost = "kb/technology/never-existed.md"
 	extended := append(append([]string(nil), write...), ghost)
 	_, _, err = gate.Apply(ctx, winnerPath, extended, carried)
 	require.Error(t, err, "a ref that was never carried must still be rejected")
 	require.Contains(t, err.Error(), ghost)
+}
+
+// TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList binds the property the
+// helper exists for, which is a property of its CONSTRUCTION and therefore
+// invisible to any runtime assertion: `carried` is derived from the operands,
+// never from `write`.
+//
+// Both rejected shapes produce a `carried` that is element-for-element equal
+// to `write` and lives in its own array, so they satisfy every behavioural
+// check — including this file's NotSame — at every possible input:
+//
+//	carried = append([]string(nil), write...)   // a copy of the write list
+//	carried = slices.Clone(write)               // the same thing
+//
+// They are wrong for the reason 0ee925f4 gives: a snapshot of the write list
+// is only as good as its position, so a later change that appends a ref above
+// it is exempted and the same change below it is gated. Deriving from the
+// operands makes divergence hold wherever the append lands. That difference
+// is real and unobservable, which is exactly when a source-level check is the
+// honest instrument — the MN4/MN6 pattern, applied to one function.
+func TestDedupMergeRefs_CarriedIsNotBuiltFromTheWriteList(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "dedup.go", nil, 0)
+	require.NoError(t, err)
+
+	const (
+		fn      = "dedupMergeRefs"
+		carried = "carried"
+		write   = "write"
+	)
+
+	var decl *ast.FuncDecl
+	ast.Inspect(file, func(n ast.Node) bool {
+		if f, ok := n.(*ast.FuncDecl); ok && f.Name.Name == fn {
+			decl = f
+		}
+		return decl == nil
+	})
+	require.NotNil(t, decl, "%s must exist for this check to mean anything", fn)
+
+	assignments := 0
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		assigns := false
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && id.Name == carried {
+				assigns = true
+			}
+		}
+		if !assigns {
+			return true
+		}
+		assignments++
+		for _, rhs := range as.Rhs {
+			ast.Inspect(rhs, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
+				if !ok || id.Name != write {
+					return true
+				}
+				t.Fatalf("%s at %s builds %s from %s. A snapshot of the write list is only "+
+					"as good as the line it sits on: a later change appending a ref above "+
+					"it is silently exempted from the gate, one below it is checked "+
+					"(0ee925f4). Derive it from the operands instead.",
+					fn, fset.Position(id.Pos()), carried, write)
+				return false
+			})
+		}
+		return true
+	})
+
+	// A body that never assigns `carried` returns the zero value or the write
+	// list under its own name — the aliasing shape — and would otherwise pass
+	// a check that only inspects assignments.
+	require.Greater(t, assignments, 0,
+		"%s must build %s explicitly, or there is no snapshot to speak of", fn, carried)
+}
+
+// TestFactForLLM_CarriesNoRefs pins the premise the annex §6.2 correction
+// rests on. #103 named decision.go's merge and distill gate calls as the
+// dedup sites that omit `prior`; they are not — they write NEW facts whose
+// refs are wholly LLM-authored, so there is nothing carried to exempt and
+// `prior: nil` is correct. That verdict holds only because the model never
+// sees the cluster members' citations: factForLLM is the whole of what those
+// paths show it, and it has no Refs field.
+//
+// Add one and both sites become wrong the moment the model starts copying a
+// member's refs into its output — the #103 failure, in the two places #103
+// wrongly accused, with nothing to announce the change. Reading the three
+// sites and agreeing is still a reading; this is the tripwire, and it names
+// where to look when it fires.
+func TestFactForLLM_CarriesNoRefs(t *testing.T) {
+	typ := reflect.TypeOf(factForLLM{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		name := strings.ToLower(f.Name)
+		tag := strings.ToLower(f.Tag.Get("json"))
+		require.NotEqualf(t, "refs", name,
+			"factForLLM.%s exposes carried refs to the LLM. decision.go's merge (:214) and "+
+				"distill (:324) gate calls pass prior: nil BECAUSE the model cannot copy a "+
+				"member's citations into its output — see the gate annex §6.2 correction and "+
+				"knomit#103. If this field is intended, those two call sites must be revisited "+
+				"in the same change.", f.Name)
+		require.NotEqualf(t, "refs", strings.Split(tag, ",")[0],
+			"factForLLM.%s is serialized to the model as %q — same consequence as a Refs "+
+				"field, see above.", f.Name, tag)
+	}
+	// Preconditions: the walk must actually be inspecting a populated struct,
+	// or an empty loop passes as a guarantee.
+	require.Greater(t, typ.NumField(), 5)
+	require.NotEqual(t, -1, func() int {
+		f, ok := typ.FieldByName("File")
+		if !ok {
+			return -1
+		}
+		return f.Index[0]
+	}(), "factForLLM must still be the struct this guards")
 }
