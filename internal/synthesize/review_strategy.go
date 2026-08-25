@@ -92,6 +92,46 @@ func (reviewStrategy) HasLevelTriggeredWork(ctx context.Context, d Deps, branch 
 	return len(targets) > 0, nil
 }
 
+// recordVocabularySkipHealth states that the vocabulary passes did not run,
+// and why (knomit#112).
+//
+// The gate below has no else, planning happens once at session start, and the
+// only tell that a session planned zero motif work was the ABSENCE of the
+// backfill health line — something a reader has to already know to miss. A
+// population session looped on this doing nothing motif-related while looking
+// busy.
+//
+// Absence of work must be STATED, never inferred. That is the same rule the
+// campaign applied to the failed-pass line, to Evaluated ("never asked" vs
+// "asked, below floor"), and to #115's empty return; this is the fourth place
+// it was missing.
+//
+// SILENT WHEN THE GATE IS OPEN. At effort >= medium the passes run and report
+// for themselves, and a skip line beside their own output would contradict it
+// — a false statement in the same block, which is the defect this line exists
+// to end rather than to relocate.
+//
+// MN5: this adds a descriptor at normal effort and that is not a violation.
+// The effort-normal invariant's scope is the DISCOVERY DIMENSION and only that
+// — no normal-vs-medium divergence in what discovery COSTS OR PRODUCES — and
+// it explicitly names the general-freeze reading as a misreading that once
+// blocked a legitimate uniform fix. A health line costs no discovery and
+// produces no facts.
+func recordVocabularySkipHealth(sess *store.PipelineSession, effort Effort) {
+	if sess == nil || effort.MaintainsVocabulary() {
+		return
+	}
+	// Appends, like every health recorder — see
+	// TestHealthRecorders_NeverDestroyExistingLines for why that is a rule
+	// rather than a convention.
+	sess.Health = append(sess.Health, fmt.Sprintf(
+		"motif vocabulary passes skipped: effort %q does not maintain the "+
+			"vocabulary, so alias resolution, definitions and backfill did not "+
+			"run this session. This is a DIAL, not a corpus finding — re-run at "+
+			"effort medium or high to plan them.",
+		effort))
+}
+
 // Plan builds the review work queue over a non-empty seed pool: cluster, dedup,
 // then enqueue prune items per surviving multi-fact cluster, distill items over
 // the (chunked) seed pool, and — at effort >= medium — discover items per
@@ -198,6 +238,11 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// Both health recorders APPEND, so their ordering is a readability choice
 	// and not load-bearing — an earlier version depended on it, which is why
 	// recordRestatementHealth stopped assigning.
+	// Says so when the gate below closes (knomit#112). Called unconditionally
+	// and silent when the gate is open, so the statement cannot drift out of
+	// step with the branch it describes — an `else` here would be a second
+	// place the condition is written.
+	recordVocabularySkipHealth(sess, d.Effort)
 	if d.Effort.MaintainsVocabulary() {
 		// REBUILD FIRST, and unconditionally. The mechanical alias layer is
 		// model-less and cheap — grouping strings the corpus already holds —
