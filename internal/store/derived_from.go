@@ -248,16 +248,21 @@ func (si *searchIndex) graphAddDerivedFromAtCommitTx(
 			return fmt.Errorf("graphAddDerivedFromAtCommitTx: resolve %s: %w", refPath, err)
 		}
 		if !ok {
-			// With the knomit_learn/knomit_update ref gate in place this is
-			// unreachable for anything written through MCP: a local ref that
-			// will not resolve is rejected before the write. Reaching here
-			// means the fact arrived another way — a direct git push to the
-			// KB branch, a remote reconcile, or a history rewrite — which is
-			// worth seeing. Skipping the edge is still correct; failing the
-			// index is not.
-			log.Warn().Str("branch", branch).Str("source", sourcePath).
+			// The ref gate stops a NEWLY ADDED local ref from being written
+			// unresolvable, but it deliberately exempts refs a fact already
+			// carried — internal/refs does not re-judge the past. So this is
+			// reachable through ordinary MCP writes too: a dedup merge grafts
+			// the loser's carried refs onto the winner, and on a corpus that
+			// predates the gate, or whose targets fell past the walk-back
+			// horizon, those refs land here on every index sync. That is
+			// expected, not a bypass — hence Debug, not Warn. A fact that
+			// arrived another way (a direct git push to the KB branch, a
+			// remote reconcile, a history rewrite) also lands here and is
+			// indistinguishable at this point. Skipping the edge is still
+			// correct; failing the index is not.
+			log.Debug().Str("branch", branch).Str("source", sourcePath).
 				Str("ref", refPath).Str("source_commit", sourceCommit).
-				Msg("derived_from: local ref did not resolve; edge skipped (bypassed the ref gate?)")
+				Msg("derived_from: local ref did not resolve; edge skipped")
 			continue
 		}
 
