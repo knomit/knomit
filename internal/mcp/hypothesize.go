@@ -88,6 +88,12 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		if req.Params.Task != nil {
 			ctx = context.WithoutCancel(ctx)
 		}
+		// See the identical guard in ReviewHandler (knomit#122). This tool
+		// shares parseEffortAndScope and therefore the same silent-drop
+		// exposure: an unrecognised scope key runs the pass whole-corpus.
+		if err := rejectUnknownArguments(req, hypothesizeTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		b := repos.BindingFromContext(ctx)
 		if !b.WriteOK() {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
