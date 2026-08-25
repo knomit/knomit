@@ -233,7 +233,60 @@ var mechanicsPaths = map[string][]string{
 	"internal/synthesize/bridge_motif.go": {
 		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
 		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
+		// Phase 4: buildMotifBridges' own loop, extracted so the measurement
+		// instrument and production drive the SAME enumeration and scoring
+		// rather than two implementations that agree until they do not. It IS
+		// the §4/§5 path MN6 designs motifs into — the same licence
+		// buildMotifBridges has always had, now naming the function that does
+		// the work instead of the wrapper that calls it.
+		"scoreMotifCandidates",
+		// The drop-cause taxonomy and its tally. They read the SCORER's
+		// components (cohesion, member count) and the lane, never a motif's
+		// content; they name motifs only in describing what was dropped.
+		// Declared rather than exempted, because the register's value is that
+		// a motif-touching function cannot appear here undeclared.
+		"motifDropCauseOf", "tallyMotifDrops",
+		// Phase-4 rulings-3: suppression became TIER-AWARE, so it now reads the
+		// motif tier a candidate came from (enumeratedMotif.family) to decide
+		// which of two nested groups is served. It reads the tier, never a
+		// motif's content, and it is inside the §4/§5 path.
+		// suppressContainedTracked replaces suppressContained as the function
+		// that reads the tier (M-4 remediation); suppressContained is now a
+		// two-line wrapper that mentions no motif, so it comes OFF the list —
+		// a permission nothing uses is what the bidirectional check exists to
+		// catch.
+		"suppressContainedTracked",
+		// The single-pass builder and the row-writing rank/cap it delegates
+		// to. Same §4/§5 licence buildMotifBridges has always had; theyname the
+		// functions that now do the work.
+		"buildMotifBridgesWithRows",
+		// dedupThresholdFor now names motifs in its own doc (M-5: the
+		// MotifDedupThreshold override). It resolves a model's cosine
+		// threshold and reads no motif content.
+		"dedupThresholdFor",
+		// Phase 4: the activation floor. seedRecurrence counts the corpus's
+		// recurring motifs and motifActive decides whether the axis runs at
+		// all — both read motifs to answer "is there enough repeated
+		// vocabulary here", never to influence a dedup, cluster or ranking
+		// decision. This IS the §4/§5 path's own enablement.
+		"seedRecurrence", "motifActive",
 	},
+	// Phase 4's measurement entry point (Q3's sibling report). It is a
+	// read-only calibrate/dev path: it enumerates and scores through the
+	// shipped §4/§5 functions and returns rows. It decides nothing, writes
+	// nothing, and no production branch reads it — the same standing as
+	// BridgeComponentReport on the entity/domain axis. Listed so a function
+	// added to this file has to be declared rather than inheriting the file's
+	// silence.
+	// Summary renders the report as one human line and names the
+	// seeds-with-motifs count in it.
+	// token2PairsOf reports which canonical ids the token-2 tier WOULD fold,
+	// using the tier's own predicate. It decides nothing — the report is
+	// read-only and no branch consults it.
+	"internal/synthesize/bridge_motif_report.go": {"MotifComponentReport", "Summary", "token2PairsOf",
+		// The row-to-report projection (M-8). It moves a candidate's own
+		// disposition into the reported shape and decides nothing.
+		"scoredMotifBridgeOf"},
 	// The gate that decides which motif groups the agent ever sees. It reads
 	// the SUBJECT axis — entities, domain tags, path tokens — to do it, and
 	// names motifs only in describing what it gates. Listed with no permitted
@@ -504,12 +557,65 @@ func TestMN13_MotifBridgeConstantsAreClassified(t *testing.T) {
 			"umbrellaPerCent":        "RATIO",
 		},
 		"internal/synthesize/bridge_motif.go": {
-			"motifDFCeilingFloor": "STATISTICAL-VALIDITY FLOOR",
+			"motifDFCeilingFloor":   "STATISTICAL-VALIDITY FLOOR",
+			"motifDFCeilingPerCent": "RATIO",
+			"motifActivationFloor":  "STATISTICAL-VALIDITY FLOOR",
+			"token2SharedStems":     "STRUCTURAL K",
 		},
 	} {
 		requireConstantsClassified(t, rel, want)
-
+		requireEveryNumericConstantClassified(t, rel)
 		requireNoUnnamedRatios(t, rel)
+	}
+}
+
+// requireEveryNumericConstantClassified closes the opt-in hole (review finding
+// M-6).
+//
+// requireConstantsClassified skips any constant absent from its map, so the
+// phase added three numeric constants and the test that is named after the
+// rule stayed green while none of them was checked — and the acceptance
+// package claimed otherwise. Adding three map entries would satisfy the ruling
+// once; making UNTRACKED constants fail stops the class recurring, which is
+// what a conformance check is for.
+//
+// Scope is numeric LITERALS, which is MN13's own subject ("every numeric
+// constant"). String enums and iota discriminants are excluded structurally
+// rather than by an exemption list: they carry no tuned value, so there is no
+// class to state, and a list would be one more thing to forget.
+func requireEveryNumericConstantClassified(t *testing.T, rel string) {
+	t.Helper()
+	for _, decl := range parseGo(t, rel).Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		blockDoc := gen.Doc.Text()
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			numeric := false
+			for _, v := range vs.Values {
+				if lit, ok := v.(*ast.BasicLit); ok &&
+					(lit.Kind == token.INT || lit.Kind == token.FLOAT) {
+					numeric = true
+				}
+			}
+			if !numeric {
+				continue
+			}
+			doc := blockDoc + vs.Doc.Text()
+			for _, name := range vs.Names {
+				require.Containsf(t, doc, "CONSTANT CLASSIFICATION",
+					"MN13: numeric const %s in %s states no class. Every numeric constant is a "+
+						"corpus-property constant (forbidden), a resource budget, or a "+
+						"statistical-validity floor, and the class must be stated where it is "+
+						"defined — a value whose paragraph is deleted is indistinguishable from "+
+						"the forbidden kind", name.Name, rel)
+			}
+		}
 	}
 }
 

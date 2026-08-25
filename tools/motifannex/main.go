@@ -17,10 +17,18 @@
 //	motifannex session   -corpus <name>            run one session, dump its items
 //	motifannex answer    -corpus <name> -in a.json apply answers, report health
 //	motifannex report    -corpus <name>            vocabulary/coverage/health snapshot
+//	motifannex bridges   -corpus <name> -effort h  motif bridge candidates, served and dropped
+//	motifannex namedef   -corpus <name>            name / name+def cosine ladders, centered and not
+//	motifannex roundtrip -corpus <name>            READ-ONLY parse/serialize fidelity audit
+//	motifannex judgepack -scratch <dir>            combine primary+supplementary into one blind pack
+//	motifannex harnesspack                         the Phase-4 blind judging pack (primary arms)
+//	motifannex survival  -corpus <name>            discovered-fact survival per bridge axis
+//	motifannex calibpack                           T8 stratified labelling pack + key (all lab corpora)
 package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -31,6 +39,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
 	"knomit/internal/repos"
@@ -51,12 +60,13 @@ var corpora = map[string]string{
 
 func main() {
 	if len(os.Args) < 2 {
-		fatal(fmt.Errorf("usage: motifannex <snapshot|session|answer|report> -corpus <name>"))
+		fatal(fmt.Errorf("usage: motifannex <snapshot|session|answer|report|bridges|namedef> -corpus <name>"))
 	}
 	cmd := os.Args[1]
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	corpus := fs.String("corpus", "", "corpus name")
 	in := fs.String("in", "", "answers JSON (answer)")
+	effort := fs.String("effort", "high", "discovery effort for `bridges` (normal|medium|high)")
 	scratch := fs.String("scratch", defaultScratch(), "working directory for copies")
 	_ = fs.Parse(os.Args[2:])
 
@@ -92,6 +102,22 @@ func main() {
 		fatal(prunebase(ctx, *scratch))
 	case "report":
 		fatal(report(ctx, *corpus, *scratch))
+	case "bridges":
+		fatal(bridges(ctx, *corpus, *scratch, *effort))
+	case "namedef":
+		fatal(namedef(ctx, *corpus, *scratch))
+	case "roundtrip":
+		fatal(roundtrip(ctx, *corpus, *scratch))
+	case "judgepack":
+		fatal(judgepack(*scratch))
+	case "harnesspack":
+		fatal(harnesspack(ctx, *scratch, []string{"merged", "agentic-engineering", "knomit-kb"}))
+	case "survival":
+		fatal(survival(ctx, *corpus, *scratch))
+	case "calibpack":
+		fatal(calibpack(ctx, *scratch, []string{
+			"merged", "agentic-engineering", "knomit-kb", "knomit-io-kb",
+		}))
 	default:
 		fatal(fmt.Errorf("unknown command %q", cmd))
 	}
@@ -158,16 +184,30 @@ func snapshot(ctx context.Context, corpus, id, scratch string) error {
 // checkpointLiveHome flushes a live corpus's WAL into its .db file so a
 // file-level copy is self-contained.
 //
+// RAW CONNECTION, NEVER store.Open (review finding H-1). This is the one
+// moment the tool touches a real knowledge base, and refuseLivePath's scope
+// note promises that touch is "a read and a checkpoint, no session, no
+// migration". store.Open makes that promise false: it runs migrate.All against
+// whatever it is handed and writes a session sidecar beside it. An operator
+// reading the guard's scope note before pointing this tool at their corpus
+// would have been reading the opposite of what happened.
+//
+// The plain "sqlite3" driver is deliberate over the store's own
+// "sqlite3_knomit": the custom driver is registered lazily by store.Open, and
+// a checkpoint needs none of what it carries. Nothing here can migrate,
+// because nothing here knows what a migration is.
+//
 // Reported rather than ignored on failure: a snapshot that could not checkpoint
 // is a snapshot that may be short of facts, and the whole point of the annex is
 // that its inputs are what they claim to be.
 func checkpointLiveHome(path string) error {
-	svc, err := store.Open(path)
+	db, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		return err
 	}
-	defer svc.Close()
-	return svc.Checkpoint()
+	defer db.Close()
+	_, err = db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
 }
 
 func copyFile(src, dst string) error {
@@ -186,8 +226,15 @@ func copyFile(src, dst string) error {
 }
 
 // open builds a store + repo instance over the COPY, with the real embedder.
+//
+// The lab guard runs FIRST — before the stat, and before store.Open, because
+// store.Open migrates the schema of whatever it is handed. See refuseLivePath.
 func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.RepoInstance, string, func(), error) {
+	home, _ := os.UserHomeDir()
 	path := copyPath(scratch, corpus)
+	if err := refuseLivePath(path, home); err != nil {
+		return nil, nil, "", nil, err
+	}
 	if _, err := os.Stat(path); err != nil {
 		return nil, nil, "", nil, fmt.Errorf("no snapshot for %s — run `snapshot` first: %w", corpus, err)
 	}
@@ -195,7 +242,6 @@ func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.R
 	if err != nil {
 		return nil, nil, "", nil, err
 	}
-	home, _ := os.UserHomeDir()
 	// The corpora were embedded with this model (meta.embed_model_id); the
 	// annex must use the SAME one or every stored vector is unreadable and
 	// every similarity is nonsense.
@@ -224,8 +270,36 @@ func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.R
 	}
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: corpus, AgentBranch: branch, Svc: svc, OntologyRoot: "kb", Embedder: emb,
+		Quality: productionQuality(),
 	})
 	return svc, ri, branch, func() { emb.Close(); svc.Close() }, nil
+}
+
+// productionQuality gives the instance the SHIPPED bridge-quality knobs.
+//
+// WITHOUT IT THE TOOL MEASURES AN ENGINE THAT CANNOT EMIT. A bare test
+// instance leaves MaxMembers at zero, and a zero member cap gates out every
+// bridge candidate there is — so a `bridges` run reports "0 near, 0 far" on
+// every corpus and it reads as a finding about the corpora. It is not; it is a
+// finding about the harness. Phase-3's rulings-3 already caught this once in
+// the test harness (deviation #3) and TestInstanceConfig.Quality's own doc
+// comment warns about it in as many words; this tool walked into it anyway,
+// which is why the values are now READ rather than re-typed.
+//
+// Read from config.Defaults() rather than restated: the Phase-3 review noted
+// that the test harness's re-typed copies could drift from the real defaults
+// and only a sibling test pinned them. A measurement tool that drifts from
+// production configuration is measuring a different engine, quietly.
+func productionQuality() *repos.TestQualityConfig {
+	d := config.Defaults().Discovery
+	return &repos.TestQualityConfig{
+		CohFloor:     d.CohFloor,
+		QualityFloor: d.QualityFloor,
+		WCoh:         d.WCoh,
+		WGap:         d.WGap,
+		WSpec:        d.WSpec,
+		MaxMembers:   d.MaxMembers,
+	}
 }
 
 // branchOf finds the branch carrying the most facts — the corpus's own agent
@@ -606,17 +680,31 @@ func skipBodyFor(af answerFile) string {
 // ── report ────────────────────────────────────────────────────────────────
 
 type corpusReport struct {
-	Corpus       string   `json:"corpus"`
-	Branch       string   `json:"branch"`
-	AuthoredLive int      `json:"authored_live"`
-	WithMotifs   int      `json:"with_motifs"`
-	Coverage     float64  `json:"coverage"`
-	Clusters     int      `json:"clusters"`
-	Recurring    int      `json:"recurring_df2plus"`
-	Recurrence   float64  `json:"recurrence_rate"`
-	MintToLink   float64  `json:"mint_to_link"`
-	NeedDefine   int      `json:"clusters_needing_definition"`
-	TopMotifs    []string `json:"top_motifs"`
+	// Population states what every count below is over. It is ITS OWN
+	// sentence, deliberately not shared with MotifReport.Population: the two
+	// reports count different things under near-identical labels — this one's
+	// bridgeable_pairs is over live AUTHORED facts (8 / 16 / 2 / 2 / 0 on the
+	// lab corpora) while MotifReport's seed_bridgeable_pairs is over the
+	// post-AcceptSeed pool (6 / 13 / 1 / 0 / 0). Up to 3x apart, and honesty
+	// item 7 records that exactly this confusion nearly set K on the wrong
+	// population (review finding L-3).
+	Population   string  `json:"population"`
+	Corpus       string  `json:"corpus"`
+	Branch       string  `json:"branch"`
+	AuthoredLive int     `json:"authored_live"`
+	WithMotifs   int     `json:"with_motifs"`
+	Coverage     float64 `json:"coverage"`
+	Clusters     int     `json:"clusters"`
+	Recurring    int     `json:"recurring_df2plus"`
+	Recurrence   float64 `json:"recurrence_rate"`
+	MintToLink   float64 `json:"mint_to_link"`
+	NeedDefine   int     `json:"clusters_needing_definition"`
+	// BridgeablePairs is the CEILING on motif bridging — see bridgeablePairs.
+	// Reported next to Recurring because the two answer different questions:
+	// Recurring counts CLUSTERS that could bridge, this counts the PAIRS they
+	// could bridge, and one heavily-shared motif separates them sharply.
+	BridgeablePairs int      `json:"bridgeable_pairs"`
+	TopMotifs       []string `json:"top_motifs"`
 }
 
 func report(ctx context.Context, corpus, scratch string) error {
@@ -626,7 +714,13 @@ func report(ctx context.Context, corpus, scratch string) error {
 	}
 	defer closeAll()
 
-	r := corpusReport{Corpus: corpus, Branch: branch}
+	r := corpusReport{
+		Corpus: corpus, Branch: branch,
+		Population: "live AUTHORED facts on the branch — NOT the post-AcceptSeed bridging pool. " +
+			"bridgeable_pairs here counts pairs over authored facts; the axis enumerates over " +
+			"epistemic seeds only, so MotifReport.seed_bridgeable_pairs is the smaller number " +
+			"and the one an activation decision is made on.",
+	}
 	if with, total, err := svc.Motifs().MotifCoverage(ctx, branch); err == nil {
 		r.WithMotifs, r.AuthoredLive = with, total
 		if total > 0 {
@@ -641,6 +735,11 @@ func report(ctx context.Context, corpus, scratch string) error {
 		r.NeedDefine = len(need)
 	}
 	if cs, err := svc.Motifs().Clusters(ctx, branch); err == nil {
+		dfs := make([]int, 0, len(cs))
+		for _, c := range cs {
+			dfs = append(dfs, c.DF)
+		}
+		r.BridgeablePairs = bridgeablePairs(dfs)
 		for i, c := range cs {
 			if i >= 20 {
 				break

@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -217,4 +218,90 @@ func TestSubjectDisjoint_UnknownLabelIsTreatedAsSpecific(t *testing.T) {
 	b := factForLLM{File: "kb/beta/2.md", Entities: []string{"Unmapped Thing"}}
 	require.Zero(t, labels.DF["unmapped"], "precondition: the shared token is unknown here")
 	require.False(t, subjectDisjoint(a, b, labels, p))
+}
+
+// ── the degenerate cut (Phase-4 deviation #4, phase4-rulings-5) ───────────
+
+// A derived cut of 1 is NOT a conservative gate — it is no gate at all. The
+// gate blocks when a shared label's df <= cut, and a SHARED label has df >= 2
+// by definition, so at cut=1 nothing can ever block.
+//
+// It happens in a real band: a corpus past the 50-label floor whose labels are
+// >=90% hapax, which a young repo dominated by path and uuid tokens is.
+// Measured on the dynamics fixture at 57 labels / 46 live facts. Below the
+// floor the strict fallback protects; with a mature distribution p90 is 3-5 and
+// the percentile protects; between them there was nothing.
+func TestResolveDisjointnessPoint_DegenerateCutFallsBackToStrict(t *testing.T) {
+	// 60 labels, past the floor, 57 of them hapax => p90 is 1.
+	d := store.SubjectLabelDF{LiveFacts: 46, DF: map[string]int{}}
+	for i := range 57 {
+		d.DF[fmt.Sprintf("hapax%d", i)] = 1
+	}
+	d.DF["shared-a"] = 2
+	d.DF["shared-b"] = 2
+	d.DF["shared-c"] = 3
+
+	p := resolveDisjointnessPoint(d)
+
+	require.GreaterOrEqual(t, len(d.DF), minLabelsForPercentile,
+		"precondition: past the label floor, so the label-floor fallback is NOT what fires")
+	require.True(t, p.Strict, "a cut below 2 is unsatisfiable by any shared label")
+	require.Equal(t, degenerateCut, p.Fallback, "and the health line must say WHICH fallback fired")
+}
+
+// The two fallbacks are distinct, and the health line has to tell them apart:
+// one says "too few labels to estimate", the other says "the estimate came
+// back meaningless". A reader debugging a corpus that bridges nothing needs to
+// know which.
+func TestResolveDisjointnessPoint_NamesWhichFallbackFired(t *testing.T) {
+	small := store.SubjectLabelDF{LiveFacts: 6, DF: map[string]int{"a": 2, "b": 2}}
+	p := resolveDisjointnessPoint(small)
+	require.True(t, p.Strict)
+	require.Equal(t, labelFloor, p.Fallback)
+
+	lines := motifBridgeHealthLines(motifEnumHealth{
+		Candidates: 1, Ceiling: 12, Point: p,
+		Activation: motifActivation{Evaluated: true, Active: true, DF2Clusters: 3},
+	}, 1, 0)
+	joined := strings.Join(lines, "\n")
+	require.Contains(t, joined, "below the")
+	require.Contains(t, joined, "label validity floor")
+	require.NotContains(t, joined, "degenerate")
+}
+
+// A healthy distribution still gets a real percentile — the fallback must not
+// swallow the ordinary case.
+func TestResolveDisjointnessPoint_HealthyDistributionKeepsItsPercentile(t *testing.T) {
+	d := store.SubjectLabelDF{LiveFacts: 400, DF: map[string]int{}}
+	for i := range 60 {
+		d.DF[fmt.Sprintf("hapax%d", i)] = 1
+	}
+	for i := range 40 {
+		d.DF[fmt.Sprintf("common%d", i)] = 2 + i%6
+	}
+
+	p := resolveDisjointnessPoint(d)
+
+	require.False(t, p.Strict, "a usable distribution is not a fallback case")
+	require.GreaterOrEqual(t, p.Cut, 2, "precondition: the cut must be satisfiable, or this proves nothing")
+	require.Equal(t, noFallback, p.Fallback)
+}
+
+// The property the whole ruling protects, asserted at the gate rather than at
+// the point: in the degenerate band a pair sharing a rare entity must be
+// REJECTED. Before the fix it passed.
+func TestSubjectDisjoint_DegenerateBandStillBlocksASharedRareEntity(t *testing.T) {
+	d := store.SubjectLabelDF{LiveFacts: 46, DF: map[string]int{}}
+	for i := range 57 {
+		d.DF[fmt.Sprintf("hapax%d", i)] = 1
+	}
+	d.DF["cognition"] = 2
+
+	p := resolveDisjointnessPoint(d)
+	require.True(t, p.Strict, "precondition: this fixture is in the degenerate band")
+
+	a := factForLLM{File: "kb/gotchas/uitesting/x.md", Entities: []string{"Cognition"}}
+	b := factForLLM{File: "kb/technology/benchmarks/y.md", Entities: []string{"Cognition"}}
+	require.False(t, subjectDisjoint(a, b, d, p),
+		"a shared rare entity is one subject, whatever the percentile came back as")
 }

@@ -69,6 +69,7 @@ func TestMotifBridging_AcrossSessions(t *testing.T) {
 
 	// S2 — the motifs arrive on two subject-disjoint facts. The bridge forms,
 	// on a corpus whose alias table this session had to build for itself.
+	env.seedActivationVocabulary()
 	env.rewriteWithMotifs(uiPath,
 		"An agent testing a UI will execute JavaScript instead of clicking",
 		"Driving app state directly bypasses the path the verifier believes it is checking.",
@@ -79,17 +80,17 @@ func TestMotifBridging_AcrossSessions(t *testing.T) {
 		[]string{"measure-becomes-target"}, []string{"Terminal Bench"})
 
 	s2, h2 := env.motifBridgeSession(EffortHigh)
-	motifs2 := motifPayloads(s2)
+	motifs2 := motifPayloadsFor(s2, "measure-becomes-target")
 	require.Len(t, motifs2, 1, "the pair bridges once its motifs exist")
 	require.Equal(t, LaneFar, motifs2[0].Lane)
-	require.Contains(t, strings.Join(h2, "\n"), "motif bridges: 1 candidates")
+	require.Contains(t, strings.Join(h2, "\n"), "motif bridges:")
 
 	// S3 — nothing changed. The bridge is still THERE: enumeration is a
 	// function of the live corpus, not of what this session happens to have
 	// touched, so a standing bridge does not blink out because a session was
 	// quiet.
 	s3, _ := env.motifBridgeSession(EffortHigh)
-	require.Len(t, motifPayloads(s3), 1,
+	require.Len(t, motifPayloadsFor(s3, "measure-becomes-target"), 1,
 		"a bridge is a property of the corpus, not of the session's dirty set")
 
 	// S4 — one member is rewritten so the two now share a RARE entity. They are
@@ -101,7 +102,7 @@ func TestMotifBridging_AcrossSessions(t *testing.T) {
 		[]string{"measure-becomes-target"}, []string{"Cognition"})
 
 	s4, _ := env.motifBridgeSession(EffortHigh)
-	require.Empty(t, motifPayloads(s4),
+	require.Empty(t, motifPayloadsFor(s4, "measure-becomes-target"),
 		"the pair now shares a rare entity — level-triggered, so the gate re-decides")
 
 	// S5 — and back. The same edit reversed restores the bridge, which is what
@@ -112,7 +113,7 @@ func TestMotifBridging_AcrossSessions(t *testing.T) {
 		[]string{"measure-becomes-target"}, []string{"Terminal Bench"})
 
 	s5, _ := env.motifBridgeSession(EffortHigh)
-	require.Len(t, motifPayloads(s5), 1)
+	require.Len(t, motifPayloadsFor(s5, "measure-becomes-target"), 1)
 }
 
 // TestMotifBridging_EffortIsRecomputedPerSession — the same corpus, two
@@ -120,6 +121,7 @@ func TestMotifBridging_AcrossSessions(t *testing.T) {
 // effort must close the far lane on the very next session.
 func TestMotifBridging_EffortIsRecomputedPerSession(t *testing.T) {
 	env := motifDynamicsEnv(t)
+	env.seedActivationVocabulary()
 	env.rewriteWithMotifs("kb/gotchas/uitesting/agentclicks.md",
 		"An agent testing a UI will execute JavaScript instead of clicking",
 		"Driving app state directly bypasses the verifier's path.",
@@ -130,10 +132,10 @@ func TestMotifBridging_EffortIsRecomputedPerSession(t *testing.T) {
 		[]string{"measure-becomes-target"}, []string{"Terminal Bench"})
 
 	high, _ := env.motifBridgeSession(EffortHigh)
-	require.Len(t, motifPayloads(high), 1, "the far lane is open at high")
+	require.Len(t, motifPayloadsFor(high, "measure-becomes-target"), 1, "the far lane is open at high")
 
 	medium, _ := env.motifBridgeSession(EffortMedium)
-	require.Empty(t, motifPayloads(medium),
+	require.Empty(t, motifPayloadsFor(medium, "measure-becomes-target"),
 		"medium is near lane only, and this group is far — no state carries the item over")
 }
 
@@ -153,6 +155,7 @@ func TestMotifBridging_FromNothing(t *testing.T) {
 	// which needs an agent to answer its work item, and this test is about the
 	// mechanical derived state a session must build unaided — the alias table,
 	// the canonical id, the df — not about the judged half.
+	env.seedActivationVocabulary()
 	env.rewriteWithMotifs("kb/gotchas/caching/staleread.md",
 		"A cache served state the writer had already replaced",
 		"The reader observed a version the writer believed was gone.",
@@ -165,7 +168,7 @@ func TestMotifBridging_FromNothing(t *testing.T) {
 	var found bool
 	for i := 0; i < 4 && !found; i++ {
 		payloads, _ := env.motifBridgeSession(EffortHigh)
-		found = len(motifPayloads(payloads)) > 0
+		found = len(motifPayloadsFor(payloads, "stale-read-after-write")) > 0
 	}
 	require.True(t, found,
 		"a session must maintain the derived state its own bridging depends on")
@@ -192,4 +195,57 @@ func TestMotifBridging_ReinforcementSurvivesLaterSessions(t *testing.T) {
 	// And a second reinforcement attempt after that session is still a no-op.
 	require.Empty(t, env.apply(goodReinforcement()))
 	require.Equal(t, afterWrite.Sources, env.read(reinforcePath).Sources)
+}
+
+// seedActivationVocabulary gives the corpus enough RECURRING vocabulary to
+// clear the K=3 activation floor, on facts unrelated to whatever the calling
+// test is about.
+//
+// Every motif-bridging fixture in this package seeded exactly one recurring
+// motif, because one is all a bridge needs. The activation floor
+// (phase4-rulings-4) means one is no longer enough for the axis to run at all,
+// so a test about lane routing or payload contents has to bring a vocabulary
+// with it. The two extra regularities here are deliberately about nothing the
+// callers assert on: they exist to make the corpus eligible, not to be found.
+//
+// It writes its own paths (kb/act/*) so it cannot collide with a caller's
+// subject facts, and — the part that matters — each pair SHARES a rare entity,
+// so subject-disjointness rejects it and it never becomes a candidate. The
+// fillers therefore move the activation count and nothing else: a caller
+// asserting "one discover item" still gets one. Recurrence is counted over the
+// seed pool BEFORE any gate, which is what makes that possible.
+func (e *restatementEnv) seedActivationVocabulary() {
+	e.rewriteWithMotifs("kb/act/retrytopology.md",
+		"A retry storm formed when every client backed off by the same amount",
+		"Identical backoff turned independent retries into a synchronised wave.",
+		[]string{"synchronised-retry-wave"}, []string{"FillerAlpha"})
+	e.rewriteWithMotifs("kb/act/schedulerqueue.md",
+		"Batch jobs released on the hour arrived as one spike",
+		"A shared release time collapsed independent schedules onto one instant.",
+		[]string{"synchronised-retry-wave"}, []string{"FillerAlpha"})
+	e.rewriteWithMotifs("kb/act/configdrift.md",
+		"Two replicas diverged because only one reloaded its configuration",
+		"A reload that reached one process and not its peer left them disagreeing.",
+		[]string{"partial-reload-diverges"}, []string{"FillerBeta"})
+	e.rewriteWithMotifs("kb/act/certrotation.md",
+		"Half the fleet kept the old certificate after rotation",
+		"A rotation applied per-node left the fleet holding two truths at once.",
+		[]string{"partial-reload-diverges"}, []string{"FillerBeta"})
+}
+
+// motifPayloadsFor narrows to the bridge a test is actually about.
+//
+// Since the activation floor (phase4-rulings-4) a corpus must carry three
+// recurring motifs before any of them enumerates, so every fixture here now
+// brings filler vocabulary — and the fillers enumerate too. Asserting on the
+// total would be asserting on the fillers. Filtering by token asserts on the
+// subject, which is what these tests always meant.
+func motifPayloadsFor(payloads []DiscoverWorkPayload, token string) []DiscoverWorkPayload {
+	var out []DiscoverWorkPayload
+	for _, p := range motifPayloads(payloads) {
+		if p.Bridge.Token == token {
+			out = append(out, p)
+		}
+	}
+	return out
 }

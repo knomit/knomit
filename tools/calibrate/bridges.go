@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 	"knomit/internal/config"
+	"knomit/internal/embeddings"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
@@ -58,6 +60,15 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 			if err := eff.Validate(); err != nil {
 				return fmt.Errorf("--effort: %w", err)
 			}
+			// MOTIF is a SIBLING report, not a kind of this one (Phase-4 Q3).
+			// The two enumerate different populations over different pools with
+			// different engines, and 8ad54ee8 is precisely an aggregate whose
+			// population was not the production population, surviving because
+			// nothing forced the population into the output. Folding a second
+			// population behind a flag on one function is how that recurs.
+			if kindStr == "motif" {
+				return runMotifReport(cmd, dbPath, branch, effortStr, resolution, minCommunity, cfg)
+			}
 			kind := synthesize.BridgeKindFromString(kindStr)
 
 			// Open the index without an embedder — the scoring path is embedder-free.
@@ -76,6 +87,14 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 			}
 
 			out := cmd.OutOrStdout()
+			// POPULATION FIRST, before any number. A figure that travels
+			// without the population it was computed over is how 8ad54ee8
+			// happened: a suggested floor derived from unreshaped candidates,
+			// read as if it described the production ones.
+			fmt.Fprintf(out, "POPULATION: %s bridge candidates over live SYNTHESIS facts on %q, "+
+				"scored UNRESHAPED (production applies cohFloor AFTER reshapeCohesiveSubset, "+
+				"so the suggested floor below is a lower bound, not the production floor)\n\n",
+				kindStr, branch)
 			if len(report) == 0 {
 				fmt.Fprintln(out, "no bridge candidates found")
 				return nil
@@ -133,7 +152,7 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 	f.String("db", "", "path to knomit index DB (required)")
 	f.String("branch", "main", "branch name to query")
 	f.String("effort", "medium", "discovery effort level (normal/medium/high)")
-	f.String("kind", "both", "bridge kind to enumerate (domain/entity/both)")
+	f.String("kind", "both", "bridge kind to enumerate (domain/entity/both/motif)")
 	f.Float64("resolution", 2.0, "Louvain resolution for clustering")
 	f.Int("min-community", 2, "minimum community size for clustering")
 	// Q-knob overrides: register with config.Defaults().Discovery values as the
@@ -204,4 +223,132 @@ func sortedCopy(vs []float64) []float64 {
 	copy(cp, vs)
 	sort.Float64s(cp)
 	return cp
+}
+
+// runMotifReport prints the motif axis's component report.
+//
+// Separate from the entity/domain path deliberately (Phase-4 Q3): different
+// population, different pool, different engine. It states all three in its own
+// header rather than inheriting a sentence written about another axis.
+func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
+	resolution float64, minCommunity int, cfg synthesize.QualityConfig) error {
+	eff := synthesize.NormalizeEffort(synthesize.Effort(effortStr))
+	if err := eff.Validate(); err != nil {
+		return fmt.Errorf("--effort: %w", err)
+	}
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open index %q: %w", dbPath, err)
+	}
+	defer svc.Close()
+
+	// M-5: resolve the CORPUS's own model thresholds. This command opens the
+	// store without an embedder — correct, the scoring path needs none — but
+	// OverDedup is measured against a cosine, and the default is nomic's while
+	// every corpus in this campaign is embeddinggemma (0.82 vs 0.92). An
+	// unknown model yields "not computed", never a default.
+	idx := motifThresholdIndex{SearchQuery: svc.Search()}
+	idx.dedup, idx.known = corpusDedupThreshold(dbPath)
+
+	rep, err := synthesize.MotifComponentReport(cmd.Context(), idx, svc.Motifs(),
+		svc.Abstraction(), branch, eff, resolution, minCommunity, cfg)
+	if err != nil {
+		return fmt.Errorf("motif component report: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(out, "POPULATION: %s\n\n", rep.Population)
+	fmt.Fprintf(out, "%s\n", rep.Summary())
+	if !rep.ActivationActive {
+		fmt.Fprintf(out, "\nAXIS INACTIVE: %d recurring motif(s) — below the activation floor. "+
+			"Nothing below is a statement about this corpus's bridges; the axis did not run.\n",
+			rep.SeedDF2Clusters)
+	}
+	fmt.Fprintf(out, "activation population: %d recurring motif(s), %d bridgeable pair(s)\n",
+		rep.SeedDF2Clusters, rep.SeedBridgeablePairs)
+	if idx.known {
+		fmt.Fprintf(out, "dedup threshold: %.3f (this corpus's own embedding model)\n\n", idx.dedup)
+	} else {
+		fmt.Fprintf(out, "dedup threshold: UNKNOWN — OverDedup not computed. "+
+			"The corpus does not record a recognised embedding model, and the shipped "+
+			"default belongs to a different one.\n\n")
+	}
+
+	if len(rep.Candidates) == 0 {
+		fmt.Fprintln(out, "no motif bridge candidates found")
+		return nil
+	}
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "TOKEN\tLANE\tMEMBERS\tCOH\tSEP\tGAP\tSPEC\tSEEDCOS\tEJACC\tOVERDUP\tQ\tDISPOSITION")
+	for _, b := range rep.Candidates {
+		// One column, every state named. It read "yes" for candidates absent
+		// from the served line — suppression happens after the scorer's
+		// verdict, so "kept" and "served" are different questions and the
+		// table now answers both (review finding M-4).
+		verdict := "served"
+		switch {
+		case !b.Kept:
+			verdict = "dropped: " + b.Cause
+		case !b.Served:
+			verdict = "kept, no slot (budget)"
+		}
+		seedCos, overDup := "n/a", "n/a"
+		if b.Comp.Novelty.VectorsRead {
+			seedCos = fmt.Sprintf("%.3f", b.Comp.Novelty.SeedCos)
+			if b.Comp.Novelty.DedupKnown {
+				overDup = fmt.Sprintf("%.3f", b.Comp.Novelty.OverDedup)
+			}
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%.3f\t%d\t%.3f\t%.3f\t%s\t%.3f\t%s\t%.3f\t%s\n",
+			b.Token, b.Lane, len(b.Members), b.Comp.Coh, b.Comp.Sep, b.Comp.Gap, b.Comp.Spec,
+			seedCos, b.Comp.Novelty.EntityJaccard, overDup, b.Q, verdict)
+	}
+	tw.Flush()
+
+	fmt.Fprintf(out, "\nserved: %d near, %d far (budgets %d/%d)\n",
+		len(rep.NearServed), len(rep.FarServed), rep.NearBudget, rep.FarBudget)
+	fmt.Fprintln(out, "\nNOTE: OVERDUP counts member pairs at or above the dedup cosine, which "+
+		"catches VERBATIM duplicates only (90d69628). A zero does NOT mean the members say "+
+		"different things.")
+	for _, l := range rep.HealthLines {
+		fmt.Fprintf(out, "  health: %s\n", l)
+	}
+	return nil
+}
+
+// motifThresholdIndex carries the corpus's own dedup threshold to the scorer,
+// which otherwise has no embedder to ask.
+//
+// Structural rather than a new parameter: synthesize looks for the method, so
+// nothing had to thread a threshold through four call layers, and "the caller
+// knows it" cannot be confused with "there is an embedder".
+type motifThresholdIndex struct {
+	synthesize.SearchQuery
+	dedup float64
+	known bool
+}
+
+func (m motifThresholdIndex) MotifDedupThreshold() (float64, bool) { return m.dedup, m.known }
+
+// corpusDedupThreshold reads meta.embed_model_id from the corpus and resolves
+// that model's Dedup.
+//
+// Raw read, and read-only: this command is documented as needing no embedding
+// model, which stays true — a model IDENTITY is not a model. UNKNOWN is a real
+// answer here and is reported as one.
+func corpusDedupThreshold(dbPath string) (float64, bool) {
+	db, err := sql.Open("sqlite3", "file:"+dbPath+"?mode=ro")
+	if err != nil {
+		return 0, false
+	}
+	defer db.Close()
+	var id string
+	if err := db.QueryRow(`SELECT value FROM meta WHERE key = 'embed_model_id'`).Scan(&id); err != nil {
+		return 0, false
+	}
+	m, err := embeddings.Lookup(id)
+	if err != nil {
+		return 0, false
+	}
+	return m.Thresholds.Dedup, true
 }

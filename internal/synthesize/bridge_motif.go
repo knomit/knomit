@@ -103,6 +103,60 @@ type motifEnumHealth struct {
 	// over the member cap, or under the quality floor. Separate because it is
 	// not evidence about the lane split.
 	NearOtherDropped int
+	// FarOversizeDropped counts groups assigned to the FAR lane and then
+	// dropped BECAUSE OF THE MEMBER CAP — the population §4's unimplemented
+	// trim would act on (carried-forward register entry 5).
+	//
+	// §4 specifies that an oversized far group is TRIMMED ("maximum community
+	// spread, then minimum mean similarity") rather than discarded. The trim
+	// was ruled deliberate-to-defer, and the group is dropped by MaxMembers
+	// instead — but nothing counted the drops, so the redesign that is supposed
+	// to happen on measured data had no denominator at all.
+	//
+	// IT IS AN UPPER BOUND, twice over, and both matter to whoever reads it as
+	// "bridges the trim would recover". A group counted here may also have been
+	// failing another gate (the cap is checked first, exactly as the near lane
+	// checks its floor first), and a group the trim shrank to fit could still
+	// fall under the quality floor afterwards. What the number means is "far
+	// groups the member cap rejected" — nothing more.
+	FarOversizeDropped int
+	// FarOtherDropped counts far-lane groups rejected for any other reason —
+	// under the quality floor, or spanning fewer than two communities. Kept
+	// apart for the same reason the near lane keeps its two apart: a counter
+	// purpose-built for one Phase-4 decision must not quietly carry a second
+	// cause under the first one's label (review M4's counter-finding).
+	FarOtherDropped int
+	// FamilySuppressedByExact counts token-2 families dropped because they
+	// strictly contained a verbatim group (Phase-4 rulings-3, amending L1).
+	//
+	// WHAT READS IT AND WHAT IT MEANS: it is the visible cost of the cross-tier
+	// rule. Each one is a looser grouping that did NOT reach an agent, and with
+	// it went whatever extra members it had — so a rising count means the token-2
+	// tier is mostly re-wrapping groups the exact tier already found, which is
+	// evidence about the TIER's value, not about the corpus. It does NOT mean
+	// "bridges lost": the exact group each of these contained was served in its
+	// place.
+	FamilySuppressedByExact int
+	// Activation is the per-corpus enablement decision and the counts it was
+	// made on. Reported whether or not the axis ran, because "inactive" and
+	// "active and found nothing" are different statements about a corpus and a
+	// reader comparing sessions must be able to tell them apart (L6, one layer
+	// out again).
+	Activation motifActivation
+}
+
+// enumeratedMotif is an enumerated group plus the TIER that produced it.
+//
+// The tier is carried rather than re-derived because it cannot be re-derived:
+// a token-2 family is keyed by one of the canonical ids it folded, so its
+// Token is indistinguishable from a verbatim group's. Suppression has to know
+// which is which (see suppressContained), and a wrong guess there drops the
+// better group.
+type enumeratedMotif struct {
+	BridgeSeedSet
+	// family reports that this group came from the token-2 tier — a fold of
+	// several canonical ids — rather than from one id's own carriers.
+	family bool
 }
 
 // enumerateMotifCandidates is the §4 enumeration loop, with the gates applied
@@ -118,7 +172,7 @@ func enumerateMotifCandidates(
 	df motifDFFn,
 	labels store.SubjectLabelDF,
 	tier motifMatchTier,
-) ([]BridgeSeedSet, motifEnumHealth) {
+) ([]enumeratedMotif, motifEnumHealth) {
 	point := resolveDisjointnessPoint(labels)
 	ceiling := labels.LiveFacts * motifDFCeilingPerCent / 100
 	if ceiling < motifDFCeilingFloor {
@@ -163,7 +217,7 @@ func enumerateMotifCandidates(
 		groups = append(groups, token2Families(byToken)...)
 	}
 
-	var out []BridgeSeedSet
+	var out []enumeratedMotif
 	for _, g := range groups {
 		canon, members := g.key, g.members
 		// GATE 1 — the df band, `2 <= df <= max(12, 2%*N)` (§4). Below the
@@ -204,10 +258,13 @@ func enumerateMotifCandidates(
 			continue
 		}
 
-		out = append(out, BridgeSeedSet{
-			Token:   canon,
-			Kind:    BridgeMotif,
-			Members: kept,
+		out = append(out, enumeratedMotif{
+			BridgeSeedSet: BridgeSeedSet{
+				Token:   canon,
+				Kind:    BridgeMotif,
+				Members: kept,
+			},
+			family: g.family,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Token < out[j].Token })
@@ -297,10 +354,7 @@ func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
 
 	toks := make([]map[string]struct{}, len(ids))
 	for i, id := range ids {
-		toks[i] = map[string]struct{}{}
-		for _, t := range textnorm.Tokens(textnorm.Canonicalize(id)) {
-			toks[i][t] = struct{}{}
-		}
+		toks[i] = motifStems(id)
 	}
 
 	// families[i] accumulates the members of the family keyed by ids[i].
@@ -314,13 +368,7 @@ func token2Families(byToken map[string]map[string]factForLLM) []motifGroup {
 			if folded[j] {
 				continue
 			}
-			shared := 0
-			for t := range toks[i] {
-				if _, ok := toks[j][t]; ok {
-					shared++
-				}
-			}
-			if shared < 2 {
+			if len(sharedMotifStems(toks[i], toks[j])) < token2SharedStems {
 				continue
 			}
 			if families[i] == nil {
@@ -348,6 +396,42 @@ func copyMembers(in map[string]factForLLM) map[string]factForLLM {
 	for k, v := range in {
 		out[k] = v
 	}
+	return out
+}
+
+// token2SharedStems is the tier's name: how many stemmed tokens two canonical
+// ids must share to join one family.
+//
+// CONSTANT CLASSIFICATION (MN13, class 2): a STRUCTURAL K with system
+// precedent — §4 names the tier "token-2" and the number IS the tier. It
+// claims nothing about any corpus's distribution.
+const token2SharedStems = 2
+
+// motifStems is the stemmed token set of a canonical motif id — the unit the
+// token-2 tier matches on.
+//
+// One definition, shared by the tier itself and by the measurement that
+// reports the tier's noise shape (carried-forward register entry 6). A second
+// copy in the instrument would let the measured noise drift from the shipped
+// matching, which is the exact class of error the instrument exists to avoid.
+func motifStems(id string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, t := range textnorm.Tokens(textnorm.Canonicalize(id)) {
+		out[t] = struct{}{}
+	}
+	return out
+}
+
+// sharedMotifStems returns the stems two canonical ids have in common, sorted
+// so callers that report them are deterministic.
+func sharedMotifStems(a, b map[string]struct{}) []string {
+	var out []string
+	for t := range a {
+		if _, ok := b[t]; ok {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -382,7 +466,120 @@ func laneOf(paths []string, g store.SimilarityGraph) BridgeLane {
 // graph cannot supply them: that graph is a top-K edge set, and in the far lane
 // it is empty by definition, so a "similarity" read off it would be the same
 // constant for every far candidate — a term that ranks nothing.
-type meanSimFn func(ctx context.Context, paths []string) (float64, error)
+// pairCosFn returns EVERY member-pair body cosine, not just their mean.
+//
+// The far lane only ever wanted the mean, but §8's novelty signals need the
+// distribution: "any pair over dedup" is a question about individual pairs that
+// a mean cannot answer — a group with one near-duplicate pair and three distant
+// ones has an unremarkable mean and is exactly the case the signal exists to
+// surface.
+type pairCosFn func(ctx context.Context, paths []string) ([]float64, error)
+
+// dedupThresholdFor reads the dedup cosine OverDedup is measured against.
+//
+// It is the model-dependent threshold discovery's own duplicate check uses
+// (store.EmbedderThresholds), never a number of this file's own — a novelty
+// signal calibrated against a different threshold from the gate it describes
+// would be measuring nothing anybody acts on.
+func dedupThresholdFor(idx SearchQuery) (float64, bool) {
+	// A caller with no embedder but with the corpus's model identity — the
+	// calibrate surface — supplies the threshold itself. Structural, so no
+	// signature has to thread it through four layers, and it cannot be
+	// confused with "there is an embedder".
+	if s, ok := idx.(interface {
+		MotifDedupThreshold() (float64, bool)
+	}); ok {
+		return s.MotifDedupThreshold()
+	}
+	if e, ok := idx.(interface{ Embedder() store.Embedder }); ok {
+		if emb := e.Embedder(); emb != nil {
+			return emb.Thresholds().Dedup, true
+		}
+	}
+	// UNKNOWN, not defaulted (review finding M-5). params.Defaults() is nomic's
+	// geometry; every corpus in this campaign is embeddinggemma, whose Dedup is
+	// 0.82 against the default 0.92. Returning the default here made
+	// `calibrate --kind motif` — which opens a store with no embedder — report
+	// OverDedup 0.000 for a pair genuinely above its corpus's own gate, breaking
+	// the one direction OverDedup's doc promises is safe.
+	return 0, false
+}
+
+// noveltyOf computes §8's seed-set novelty signals for one candidate.
+//
+// EntityJaccard needs no vectors and is always computed. The other two need a
+// vector source, so VectorsRead reports whether they mean anything — a zero
+// SeedCos from "no vectors" and a zero from "genuinely dissimilar" are opposite
+// findings and must not share a representation.
+func noveltyOf(ctx context.Context, members []factForLLM, paths []string, pairCos pairCosFn,
+	dedup float64, dedupKnown bool) (NoveltySignals, error) {
+	n := NoveltySignals{EntityJaccard: meanEntityJaccard(members), DedupKnown: dedupKnown}
+	if pairCos == nil {
+		return n, nil
+	}
+	cs, err := pairCos(ctx, paths)
+	if err != nil {
+		return n, err
+	}
+	if len(cs) == 0 {
+		return n, nil
+	}
+	n.VectorsRead = true
+	var sum float64
+	over := 0
+	for _, c := range cs {
+		sum += c
+		if c >= dedup {
+			over++
+		}
+	}
+	n.SeedCos = sum / float64(len(cs))
+	if dedupKnown {
+		n.OverDedup = float64(over) / float64(len(cs))
+	}
+	return n, nil
+}
+
+// meanEntityJaccard is the mean Jaccard overlap of member ENTITY sets over all
+// member pairs — the subject-axis counterpart to SeedCos.
+//
+// A pair with no entities on either side contributes 0, not 1: "two facts that
+// name nothing" is an absence of evidence about their subjects, and scoring it
+// as perfect disjointness would reward the corpus for being unlabelled.
+func meanEntityJaccard(members []factForLLM) float64 {
+	if len(members) < 2 {
+		return 0
+	}
+	sets := make([]map[string]struct{}, len(members))
+	for i, m := range members {
+		sets[i] = map[string]struct{}{}
+		for _, e := range m.Entities {
+			sets[i][strings.ToLower(e)] = struct{}{}
+		}
+	}
+	var sum float64
+	pairs := 0
+	for i := range sets {
+		for j := i + 1; j < len(sets); j++ {
+			inter, union := 0, len(sets[j])
+			for t := range sets[i] {
+				if _, ok := sets[j][t]; ok {
+					inter++
+				} else {
+					union++
+				}
+			}
+			pairs++
+			if union > 0 {
+				sum += float64(inter) / float64(union)
+			}
+		}
+	}
+	if pairs == 0 {
+		return 0
+	}
+	return sum / float64(pairs)
+}
 
 // scoreMotifCandidate scores one candidate on its lane.
 //
@@ -410,7 +607,7 @@ func scoreMotifCandidate(
 	clusterOf map[string]int,
 	cfg QualityConfig,
 	sharedSpec float64,
-	meanSim meanSimFn,
+	pairCos pairCosFn,
 ) (BridgeComponents, float64, bool, error) {
 	paths := make([]string, 0, len(cand.Members))
 	for _, m := range cand.Members {
@@ -427,6 +624,15 @@ func scoreMotifCandidate(
 		Spec:    sharedSpec,
 		Members: len(paths),
 	}
+	// §8's novelty signals. Computed for EVERY candidate, on both lanes and
+	// whether or not it is kept, because `calibrate bridges` is about the
+	// distribution the scorer sees rather than the slice it serves.
+	dedup, dedupKnown := dedupThresholdFor(idx)
+	nov, err := noveltyOf(ctx, cand.Members, paths, pairCos, dedup, dedupKnown)
+	if err != nil {
+		return comp, 0, false, err
+	}
+	comp.Novelty = nov
 	if lane == LaneNear {
 		q, kept := bridgeQ(comp, cfg)
 		return comp, q, kept, nil
@@ -434,7 +640,7 @@ func scoreMotifCandidate(
 	if comp.Sep < 2 || comp.Members > cfg.MaxMembers {
 		return comp, 0, false, nil
 	}
-	ms, err := meanSim(ctx, paths)
+	ms, err := meanPairCos(ctx, paths, pairCos)
 	if err != nil {
 		// Propagated, never defaulted. A similarity that could not be read is
 		// not "maximally dissimilar", and treating it as 0 would hand every
@@ -577,13 +783,193 @@ func buildMotifBridges(
 	cfg QualityConfig,
 	resolve motifResolver,
 	labels store.SubjectLabelDF,
-	meanSim meanSimFn,
+	pairCos pairCosFn,
 ) ([]BridgeSeedSet, []BridgeSeedSet, motifEnumHealth, error) {
+	near, far, _, health, err := buildMotifBridgesWithRows(
+		ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, pairCos)
+	return near, far, health, err
+}
+
+// buildMotifBridgesWithRows is buildMotifBridges plus the per-candidate rows,
+// with every disposition filled in — suppression and budget included.
+//
+// It exists so the measurement surface reads the SAME pass production serves
+// from. The report used to call scoreMotifCandidates and buildMotifBridges
+// separately, which enumerated twice and left the rows knowing nothing about
+// what happened after scoring: suppression drops a candidate inside
+// rankAndCap, so a row said `Kept: true, Cause: ""` for a group no agent ever
+// saw (review finding M-4).
+func buildMotifBridgesWithRows(
+	ctx context.Context,
+	idx SearchQuery,
+	branch string,
+	seeds []factForLLM,
+	clusters ClusterResult,
+	eff Effort,
+	cfg QualityConfig,
+	resolve motifResolver,
+	labels store.SubjectLabelDF,
+	pairCos pairCosFn,
+) ([]BridgeSeedSet, []BridgeSeedSet, []scoredMotifRow, motifEnumHealth, error) {
+	rows, health, err := scoreMotifCandidates(ctx, idx, branch, seeds, clusters, eff, cfg, resolve, labels, pairCos)
+	if err != nil {
+		return nil, nil, rows, health, err
+	}
+	// Index rows by member set so a decision taken on a candidate can be
+	// written back to the row it came from. Keyed on members rather than Token
+	// because a token-2 family shares its Token with the verbatim group it
+	// folded — the same ambiguity enumeratedMotif.family exists for.
+	rowOf := map[string]int{}
+	for i, r := range rows {
+		rowOf[memberKey(r.cand)] = i
+	}
+
+	var near, far []enumeratedMotif
+	for _, r := range rows {
+		if !r.kept {
+			continue
+		}
+		cand := r.cand
+		cand.Q = r.q
+		if r.lane == LaneNear {
+			near = append(near, cand)
+		} else {
+			far = append(far, cand)
+		}
+	}
+	nearBudget, farBudget := motifSubBudget(eff)
+	nearOut, nearSup := rankAndCapRows(near, nearBudget, rows, rowOf)
+	farOut, farSup := rankAndCapRows(far, farBudget, rows, rowOf)
+	health.FamilySuppressedByExact = nearSup + farSup
+	return nearOut, farOut, rows, health, nil
+}
+
+// memberKey identifies a candidate by its member set.
+func memberKey(c enumeratedMotif) string {
+	paths := make([]string, 0, len(c.Members))
+	for _, m := range c.Members {
+		paths = append(paths, m.File)
+	}
+	sort.Strings(paths)
+	return strings.Join(paths, "\x00")
+}
+
+// rankAndCapRows is rankAndCap, writing each decision back into the rows.
+func rankAndCapRows(in []enumeratedMotif, budget int, rows []scoredMotifRow, rowOf map[string]int) ([]BridgeSeedSet, int) {
+	if budget == 0 {
+		return nil, 0
+	}
+	kept, crossTier, dropped := suppressContainedTracked(in)
+	for k, cause := range dropped {
+		if i, ok := rowOf[k]; ok {
+			rows[i].kept = false
+			rows[i].cause = cause
+		}
+	}
+	sort.SliceStable(kept, func(i, j int) bool {
+		if kept[i].Q != kept[j].Q {
+			return kept[i].Q > kept[j].Q
+		}
+		return kept[i].Token < kept[j].Token
+	})
+	if len(kept) > budget {
+		kept = kept[:budget]
+	}
+	out := make([]BridgeSeedSet, 0, len(kept))
+	for _, c := range kept {
+		if i, ok := rowOf[memberKey(c)]; ok {
+			rows[i].served = true
+		}
+		out = append(out, c.BridgeSeedSet)
+	}
+	return out, crossTier
+}
+
+// scoredMotifRow is one enumerated candidate and everything the scorer decided
+// about it — INCLUDING the ones that were dropped, with the cause.
+//
+// Production throws the dropped rows away; measurement is mostly about them.
+// Both read this one function, so the numbers Phase 4 sets constants on come
+// from the engine that serves the bridges rather than from a second
+// implementation that agrees with it until it does not.
+type scoredMotifRow struct {
+	cand enumeratedMotif
+	lane BridgeLane
+	comp BridgeComponents
+	q    float64
+	// kept is the PRE-BUDGET verdict: the candidate passed every gate and
+	// survived suppression, so a session would serve it if a slot existed.
+	// kept is true exactly when cause is empty.
+	kept  bool
+	cause motifDropCause
+	// served reports that it actually reached a work item. A row with
+	// kept && !served is one that lost a slot to the per-lane budget — which
+	// IS register entry 3's vanish-rate population, and the reason budget is
+	// tracked here rather than folded into cause: it is not a defect in the
+	// candidate, it is scarcity.
+	served bool
+}
+
+// motifDropCause names why a candidate was not served. Empty when it was.
+//
+// One taxonomy, and the health counters are TALLIED FROM IT rather than
+// incremented alongside it — so a counter and the row it came from cannot
+// drift into disagreeing about the same group, which is the shape of the
+// review's M4 counter-finding.
+type motifDropCause string
+
+const (
+	motifKept        motifDropCause = ""
+	motifNearFloor   motifDropCause = "near-cohesion-floor"
+	motifNearOther   motifDropCause = "near-other"
+	motifFarOversize motifDropCause = "far-oversize"
+	motifFarOther    motifDropCause = "far-other"
+	// Suppression causes (review finding M-4). Suppression runs INSIDE
+	// rankAndCap, after the scorer has already said kept — so before this a row
+	// read `Kept: true, Cause: ""` for a group no agent ever saw, and the
+	// taxonomy whose whole purpose is that "a counter and the row it came from
+	// cannot drift" had a state it did not cover.
+	//
+	// The two are distinct because they mean different things to a reader: a
+	// same-tier drop is one question asked twice; a cross-tier drop is a looser
+	// grouping losing to the exact one it contained. One label for both would
+	// be the M4 counter-finding again.
+	motifSuppressedCrossTier motifDropCause = "suppressed-by-exact-tier"
+	motifSuppressedSameTier  motifDropCause = "suppressed-by-superset"
+)
+
+// scoreMotifCandidates enumerates, lane-splits and scores every motif bridge
+// candidate, returning one row per candidate. It applies no budget and no
+// ranking: those belong to the caller that serves items, not to the caller
+// that measures them.
+func scoreMotifCandidates(
+	ctx context.Context,
+	idx SearchQuery,
+	branch string,
+	seeds []factForLLM,
+	clusters ClusterResult,
+	eff Effort,
+	cfg QualityConfig,
+	resolve motifResolver,
+	labels store.SubjectLabelDF,
+	pairCos pairCosFn,
+) ([]scoredMotifRow, motifEnumHealth, error) {
 	// A corpus with no motifs costs nothing at all — not one index call. This
 	// is the mechanism behind MN5's vacuous pass, so it is stated here rather
 	// than left to emerge from the gates downstream.
 	if !anyMotifs(seeds) {
-		return nil, nil, motifEnumHealth{}, nil
+		return nil, motifEnumHealth{}, nil
+	}
+
+	// THE ACTIVATION FLOOR (§8 as amended, phase4-rulings-4). Placed here,
+	// beside the motif-free short circuit and before the first index call, for
+	// the same reason that one is: an inactive corpus must cost nothing. It is
+	// recomputed every session from the pool in hand — level-triggered, no
+	// stored flag, nothing to migrate — so a corpus crosses the floor by
+	// accumulating recurrence and needs no one to switch it on.
+	act := motifActive(seeds, resolve)
+	if !act.Active {
+		return nil, motifEnumHealth{Activation: act}, nil
 	}
 
 	dfOf := func(canon string) int {
@@ -599,9 +985,10 @@ func buildMotifBridges(
 	}
 
 	cands, health := enumerateMotifCandidates(seeds, clusters, resolve, dfOf, labels, motifTier(eff))
+	health.Activation = act
 	clusterOf := bridgePathCommunities(seeds, clusters)
 
-	var near, far []BridgeSeedSet
+	rows := make([]scoredMotifRow, 0, len(cands))
 	for _, cand := range cands {
 		paths := make([]string, 0, len(cand.Members))
 		for _, m := range cand.Members {
@@ -609,40 +996,177 @@ func buildMotifBridges(
 		}
 		g, err := idx.SimilarityAdjacency(ctx, paths)
 		if err != nil {
-			return nil, nil, health, err
+			return nil, health, err
 		}
 		lane := laneOf(paths, g)
 
-		spec, err := sharedMotifSpecificity(ctx, idx, branch, cand, resolve)
+		spec, err := sharedMotifSpecificity(ctx, idx, branch, cand.BridgeSeedSet, resolve)
 		if err != nil {
-			return nil, nil, health, err
+			return nil, health, err
 		}
-		comp, q, kept, err := scoreMotifCandidate(ctx, cand, lane, g, idx, branch, clusterOf, cfg, spec, meanSim)
+		comp, q, kept, err := scoreMotifCandidate(ctx, cand.BridgeSeedSet, lane, g, idx, branch, clusterOf, cfg, spec, pairCos)
 		if err != nil {
-			return nil, nil, health, err
+			return nil, health, err
 		}
-		if !kept {
-			// Attributed by CAUSE, from the components the scorer computed,
-			// rather than by "it was near and it went".
-			if lane == LaneNear {
-				if comp.Coh < cfg.CohFloor {
-					health.NearFloorDropped++
-				} else {
-					health.NearOtherDropped++
-				}
-			}
-			continue
-		}
-		cand.Q = q
-		if lane == LaneNear {
-			near = append(near, cand)
-		} else {
-			far = append(far, cand)
+		rows = append(rows, scoredMotifRow{
+			cand: cand, lane: lane, comp: comp, q: q, kept: kept,
+			cause: motifDropCauseOf(lane, comp, cfg, kept),
+		})
+	}
+	tallyMotifDrops(&health, rows)
+	return rows, health, nil
+}
+
+// motifDropCauseOf names why the scorer rejected a candidate.
+//
+// Attributed by CAUSE, from the components the scorer computed, rather than by
+// "it was near and it went". Each lane names the cause its own Phase-4
+// decision turns on FIRST — the near lane's cohesion floor (the crack between
+// the lanes), the far lane's member cap (§4's unimplemented trim) — so each is
+// an upper bound when a group trips both conditions, as the counters they feed
+// say at their definitions.
+func motifDropCauseOf(lane BridgeLane, comp BridgeComponents, cfg QualityConfig, kept bool) motifDropCause {
+	switch {
+	case kept:
+		return motifKept
+	case lane == LaneNear && comp.Coh < cfg.CohFloor:
+		return motifNearFloor
+	case lane == LaneNear:
+		return motifNearOther
+	case comp.Members > cfg.MaxMembers:
+		return motifFarOversize
+	default:
+		return motifFarOther
+	}
+}
+
+// tallyMotifDrops derives the health counters from the rows, so a counter and
+// the row it came from cannot disagree about the same group.
+func tallyMotifDrops(h *motifEnumHealth, rows []scoredMotifRow) {
+	for _, r := range rows {
+		switch r.cause {
+		case motifNearFloor:
+			h.NearFloorDropped++
+		case motifNearOther:
+			h.NearOtherDropped++
+		case motifFarOversize:
+			h.FarOversizeDropped++
+		case motifFarOther:
+			h.FarOtherDropped++
 		}
 	}
+}
 
-	nearBudget, farBudget := motifSubBudget(eff)
-	return rankAndCap(near, nearBudget), rankAndCap(far, farBudget), health, nil
+// seedRecurrence counts recurring clusters and the pairs they could bridge,
+// over the SEED POOL — the population the activation floor is set on.
+//
+// A carrier is counted once per canonical id however many spellings of it the
+// fact carries, matching what TokenDF and the vocabulary health both do: a
+// fact using two spellings of one mechanism is one carrier, not two, or a
+// single author's phrasing habit would read as recurrence.
+func seedRecurrence(seeds []factForLLM, resolve motifResolver) (df2Clusters, pairs int) {
+	carriers := map[string]map[string]struct{}{}
+	for _, f := range seeds {
+		// The SAME §7 exclusion enumeration applies: a discovered fact is never
+		// a seed, or discovery feeds on its own output (cf455b8f). Counting
+		// them here would let a corpus activate on recurrence that enumeration
+		// cannot see, and the axis would switch on and then find nothing --
+		// the activation number would not mean what its label says.
+		if f.Origin == string(fact.Discovered) {
+			continue
+		}
+		for _, m := range f.Motifs {
+			c := resolve(m)
+			if c == "" {
+				continue
+			}
+			if carriers[c] == nil {
+				carriers[c] = map[string]struct{}{}
+			}
+			carriers[c][f.File] = struct{}{}
+		}
+	}
+	for _, set := range carriers {
+		n := len(set)
+		if n < 2 {
+			continue
+		}
+		df2Clusters++
+		pairs += n * (n - 1) / 2
+	}
+	return df2Clusters, pairs
+}
+
+// motifActivationFloor is the minimum number of RECURRING canonical motifs a
+// corpus must carry before motif bridging enumerates anything.
+//
+// CONSTANT CLASSIFICATION (MN13, third class): a STATISTICAL-VALIDITY FLOOR.
+// It is a minimum POPULATION, not a proportion and not a claim about any
+// corpus's distribution: below it there are too few shared-motif pairs in
+// existence for the axis to be doing anything but spending discovery slots on
+// noise. Below the floor the mechanism DOES NOTHING, which is what
+// distinguishes this class from a threshold someone picked.
+//
+// WHY THIS QUANTITY. The blueprint's original condition was ~30% motif
+// coverage plus non-zero recurrence. Measured, coverage is a BACKFILL RATE
+// LIMIT — it tracks sessions elapsed, not corpus character — and the only
+// corpus in the gate annex that cleared 30% is the one the annex names as its
+// negative result (knomit-io-kb: 100% coverage, and zero recurring clusters
+// once the seed filter is applied). The population that can bridge at all is
+// what actually limits the axis. Designer ruling, phase4-rulings-4, replacing
+// the coverage condition; "non-zero recurrence" is the K=1 degenerate case of
+// this same condition and is not a second one.
+//
+// WHY 3, AND WHAT THAT IS WORTH. Measured post-AcceptSeed df>=2 counts:
+// agentic-engineering 4, merged 6, knomit-kb 1, knomit-io-kb 0, core 0. Any K
+// in 2..4 separates the two corpora the annex credits with producing value
+// from the three it does not; K=1 admits the machinery-only corpus and K=5
+// switches off the corpus where the value was measured. 3 sits in the middle
+// rather than on either edge. It is a fit through five points with the target
+// separation known in advance — recorded as such — redeemed by the fact that
+// the QUANTITY has an argument older than the table ("two shots is not a
+// sample", gate annex §4).
+//
+// SETTING IT LOW-INFORMATION IS SAFE BECAUSE ACTIVATION IS LEVEL-TRIGGERED.
+// It is recomputed from current counts every session (Q2: computed, never
+// configured). A corpus below the floor is not switched off, it is NOT YET ON,
+// and it turns itself on by accumulating recurrence — no flag, no migration,
+// no user action. So the asymmetry favours caution: too high costs a delay the
+// corpus resolves by itself, too low spends slots on a vocabulary that cannot
+// support them.
+const motifActivationFloor = 3
+
+// motifActivation is what the activation decision saw.
+type motifActivation struct {
+	// Evaluated reports that the decision was actually MADE. A zero value means
+	// the axis was never asked — a motif-free corpus short-circuits before the
+	// floor is consulted — and that is a different statement from "asked, and
+	// the corpus is below the floor". Without this the two are the same struct,
+	// and the health line would announce an inactive corpus for one that simply
+	// has no motifs (L6's distinction, one layer further down).
+	Evaluated bool
+	// Active reports whether the axis enumerates on this corpus this session.
+	Active bool
+	// DF2Clusters is the recurring-cluster count the decision was made on,
+	// over the SEED POOL (see seedRecurrence).
+	DF2Clusters int
+	// Pairs is the bridgeable-pair ceiling — reported beside the decision
+	// because one heavily-shared motif and three df-2 motifs are different
+	// situations with the same cluster count.
+	Pairs int
+}
+
+// motifActive decides whether this corpus has enough recurring vocabulary for
+// bridging to mean anything. Pure, and it costs no index call: the resolver is
+// already built and the seed pool is already in hand.
+func motifActive(seeds []factForLLM, resolve motifResolver) motifActivation {
+	clusters, pairs := seedRecurrence(seeds, resolve)
+	return motifActivation{
+		Evaluated:   true,
+		Active:      clusters >= motifActivationFloor,
+		DF2Clusters: clusters,
+		Pairs:       pairs,
+	}
 }
 
 // anyMotifs reports whether the seed pool carries a motif at all.
@@ -657,11 +1181,11 @@ func anyMotifs(seeds []factForLLM) bool {
 
 // rankAndCap orders by Q descending, Token ascending, and truncates to the
 // lane's own budget. A zero budget means the lane is closed at this effort.
-func rankAndCap(in []BridgeSeedSet, budget int) []BridgeSeedSet {
+func rankAndCap(in []enumeratedMotif, budget int) ([]BridgeSeedSet, int) {
 	if budget == 0 {
-		return nil
+		return nil, 0
 	}
-	in = suppressContained(in)
+	in, crossTier := suppressContained(in)
 	sort.SliceStable(in, func(i, j int) bool {
 		if in[i].Q != in[j].Q {
 			return in[i].Q > in[j].Q
@@ -671,7 +1195,11 @@ func rankAndCap(in []BridgeSeedSet, budget int) []BridgeSeedSet {
 	if len(in) > budget {
 		in = in[:budget]
 	}
-	return in
+	out := make([]BridgeSeedSet, 0, len(in))
+	for _, c := range in {
+		out = append(out, c.BridgeSeedSet)
+	}
+	return out, crossTier
 }
 
 // ── review-pipeline wiring ────────────────────────────────────────────────
@@ -701,8 +1229,8 @@ func enqueueDiscover(ctx context.Context, d Deps, sess *store.PipelineSession, p
 // Read ONCE: the resolver is called per motif per fact, and a per-call query
 // would turn enumeration into a round-trip storm over a table that does not
 // change mid-session.
-func motifResolverFor(ctx context.Context, d Deps, branch string) motifResolver {
-	table, err := d.Motifs.AliasTable(ctx, branch)
+func motifResolverFor(ctx context.Context, motifs store.MotifIndex, branch string) motifResolver {
+	table, err := motifs.AliasTable(ctx, branch)
 	if err != nil {
 		// Degrade, but never silently: without the table every spelling is its
 		// own cluster, so synonyms stop bridging and the session's motif output
@@ -727,8 +1255,8 @@ func motifResolverFor(ctx context.Context, d Deps, branch string) motifResolver 
 // disjointness gate. On failure it returns the zero value, whose operating
 // point is STRICT — the conservative direction, and the one that keeps a
 // near-duplicate out rather than letting it through.
-func subjectLabelsFor(ctx context.Context, d Deps, branch string) store.SubjectLabelDF {
-	labels, err := d.Search.SubjectLabelDF(ctx, branch)
+func subjectLabelsFor(ctx context.Context, search SearchQuery, branch string) store.SubjectLabelDF {
+	labels, err := search.SubjectLabelDF(ctx, branch)
 	if err != nil {
 		log.Warn().Err(err).Str("branch", branch).
 			Msg("review: subject-label distribution unreadable; disjointness gate falls back to strict")
@@ -742,40 +1270,57 @@ func subjectLabelsFor(ctx context.Context, d Deps, branch string) store.SubjectL
 // The far lane cannot get them from the SIMILAR_TO graph — that graph is empty
 // there by definition — so this reaches for the vectors the graph was built
 // from.
-func meanSimFor(d Deps, branch string) meanSimFn {
-	return func(ctx context.Context, paths []string) (float64, error) {
-		ids, err := d.Abstraction.FactIDsByPath(ctx, branch, paths)
+func pairCosFor(abstraction store.AbstractionIndex, branch string) pairCosFn {
+	return func(ctx context.Context, paths []string) ([]float64, error) {
+		ids, err := abstraction.FactIDsByPath(ctx, branch, paths)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		idList := make([]int64, 0, len(ids))
 		for _, id := range ids {
 			idList = append(idList, id)
 		}
-		vecs, err := d.Abstraction.BodyVectorsByFactID(ctx, idList)
+		vecs, err := abstraction.BodyVectorsByFactID(ctx, idList)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
-		var sum float64
-		var n int
+		var out []float64
 		for i := 0; i < len(idList); i++ {
 			for j := i + 1; j < len(idList); j++ {
 				a, b := vecs[idList[i]], vecs[idList[j]]
 				if len(a) == 0 || len(b) == 0 {
 					continue
 				}
-				sum += dot(a, b)
-				n++
+				out = append(out, dot(a, b))
 			}
 		}
-		if n == 0 {
-			// No vectors is NOT "maximally dissimilar". Returning 0 would hand
-			// every un-embedded group the highest far-lane score there is,
-			// which is the opposite of what missing evidence should buy.
-			return 1, nil
-		}
-		return sum / float64(n), nil
+		return out, nil
 	}
+}
+
+// meanPairCos is the far lane's view of the pair distribution.
+//
+// AN EMPTY DISTRIBUTION SCORES 1, NOT 0. No vectors is not "maximally
+// dissimilar": returning 0 would hand every un-embedded group the highest
+// far-lane score there is, which is the opposite of what missing evidence
+// should buy. That rule lived inside the old mean-only provider and is kept
+// here rather than lost in the refactor.
+func meanPairCos(ctx context.Context, paths []string, pairCos pairCosFn) (float64, error) {
+	if pairCos == nil {
+		return 1, nil
+	}
+	cs, err := pairCos(ctx, paths)
+	if err != nil {
+		return 0, err
+	}
+	if len(cs) == 0 {
+		return 1, nil
+	}
+	var sum float64
+	for _, c := range cs {
+		sum += c
+	}
+	return sum / float64(len(cs)), nil
 }
 
 // motifBridgeHealthLines are DESCRIPTORS: no branch in this package reads any
@@ -789,13 +1334,36 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 			"motif bridges unavailable this session: %s "+
 				"(no candidates — this is NOT a statement about the corpus)", h.Failure)}
 	}
+	if h.Activation.Evaluated && !h.Activation.Active {
+		return []string{fmt.Sprintf(
+			"motif bridging inactive: %d recurring motif(s) (%d bridgeable pair(s)), below the "+
+				"%d-motif validity floor — the corpus has too little repeated vocabulary for a "+
+				"shared-motif pair to mean anything yet. Recomputed every session; it activates "+
+				"itself as recurrence accumulates.",
+			h.Activation.DF2Clusters, h.Activation.Pairs, motifActivationFloor)}
+	}
 	if h.Candidates == 0 && len(h.OverCeilingNames) == 0 {
 		return nil
 	}
 	point := fmt.Sprintf("df <= %d (p%d of %d labels)", h.Point.Cut, disjointnessPercentile, h.Point.Labels)
 	if h.Point.Strict {
-		point = fmt.Sprintf("STRICT fallback — %d labels is below the %d-label validity floor, so any shared label blocks",
-			h.Point.Labels, minLabelsForPercentile)
+		// The two fallbacks are DIFFERENT diagnoses and the line says which.
+		// "Too few labels to estimate from" and "the estimate came back
+		// unsatisfiable" describe different corpora and want different
+		// responses; one wording for both would send a reader looking at the
+		// wrong thing.
+		switch h.Point.Fallback {
+		case degenerateCut:
+			point = fmt.Sprintf(
+				"STRICT fallback (degenerate cut) — %d labels is past the floor, but p%d of their "+
+					"df distribution is %d, and a SHARED label has df >= %d by definition, so that "+
+					"cut can never block. Any shared label blocks instead",
+				h.Point.Labels, disjointnessPercentile, h.Point.Cut, minUsableCut)
+		default:
+			point = fmt.Sprintf(
+				"STRICT fallback (label floor) — %d labels is below the %d-label validity floor, "+
+					"so any shared label blocks", h.Point.Labels, minLabelsForPercentile)
+		}
 	}
 	lines := []string{
 		fmt.Sprintf("motif bridges: %d candidates, %d near, %d far (df band 2..%d)",
@@ -813,6 +1381,25 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 			"motif near-lane other: %d group(s) dropped over the member cap or under "+
 				"the quality floor — not evidence about the lane split", h.NearOtherDropped))
 	}
+	if h.FarOversizeDropped > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif far-lane oversize: %d group(s) assigned far and dropped over the "+
+				"member cap — the population §4's unimplemented trim would act on "+
+				"(upper bound: a trimmed group could still fail another gate)",
+			h.FarOversizeDropped))
+	}
+	if h.FarOtherDropped > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif far-lane other: %d group(s) dropped under the quality floor or "+
+				"spanning one community — not evidence about the trim",
+			h.FarOtherDropped))
+	}
+	if h.FamilySuppressedByExact > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"motif tier suppression: %d token-2 family/families dropped in favour of the "+
+				"exact group they contained — the looser grouping did not reach an agent, "+
+				"and neither did its extra members", h.FamilySuppressedByExact))
+	}
 	if len(h.OverCeilingNames) > 0 {
 		lines = append(lines, fmt.Sprintf(
 			"motif df ceiling: %d motif(s) over the band, flagged for review splitting rather than bridged: %s",
@@ -821,21 +1408,51 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 	return lines
 }
 
-// suppressContained drops any group whose members are a strict subset of
-// another group's.
+// suppressContained resolves groups whose members are a strict subset of
+// another group's, and the rule DIFFERS depending on whether the two came from
+// the same tier. It returns the survivors and how many cross-tier families it
+// dropped.
 //
-// The token-2 tier makes these by construction: a family is kept only when it
-// has more members than its key's verbatim group, so the verbatim group is
-// always strictly contained in it, and both carry the SAME Bridge token. On the
-// measured corpus that was 12 of 113 groups, with three tokens each producing
-// two items (Phase-3 review, L1). On an axis judged as an observation-window
-// feeder with eight slots a lane, spending two of them on {A,B} and {A,B,C} is
-// spending two on one question.
+// WITHIN A TIER, the superset survives. The token-2 tier makes these by
+// construction: a family is kept only when it has more members than its key's
+// verbatim group, so that group is always strictly contained in it. On the
+// measured fixture that was 12 of 113 groups (Phase-3 review, L1). Spending two
+// of eight slots on {A,B} and {A,B,C} is spending two on one question, and the
+// superset carries strictly more evidence for the SAME shared mechanism.
 //
-// The SUPERSET survives: it carries strictly more evidence for the same shared
-// mechanism, and the agent can still decline the members it finds unconvincing.
+// ACROSS TIERS, THE EXACT GROUP WINS, and the family is dropped (designer
+// ruling, Phase-4 rulings-3, amending L1). The within-tier rationale does not
+// transfer: a token-2 family is a DIFFERENT, LOOSER grouping, not more evidence
+// for the same one, so "the superset carries strictly more evidence" is false
+// of it. Measured instance that produced the ruling — on the merged corpus at
+// high effort, the family keyed `invents-rather-than-asks` folded the genuine
+// verbatim pair `own-rather-than-rent` (owning vs renting compute) together
+// with a tool-parameter gotcha and a drug-discovery fact, joined by nothing but
+// the English construction "rather than". Under L1 as written the family
+// displaced the real pair and took the slot.
+//
+// WHAT THIS COSTS, said plainly: a dropped family's EXTRA members leave the
+// served set with it, so pairs only that family offered are no longer offered.
+// That is the intended trade — those pairs exist only because a looser tier
+// invented the grouping — but it is a real loss, not a free win, and the
+// acceptance assertion about it is tier-aware for that reason.
+//
 // Runs before ranking and truncation, or it would free no slots.
-func suppressContained(in []BridgeSeedSet) []BridgeSeedSet {
+func suppressContained(in []enumeratedMotif) ([]enumeratedMotif, int) {
+	kept, crossTier, _ := suppressContainedTracked(in)
+	return kept, crossTier
+}
+
+// suppressContainedTracked is suppressContained, additionally naming WHICH
+// candidates it dropped and under which cause, keyed by member set.
+//
+// The causes are distinct because the two suppressions mean different things
+// to a reader: a same-tier drop is one question asked twice, and a cross-tier
+// drop is a looser grouping losing to the exact one it contained. Reporting
+// both as "suppressed" would put them under one label again, which is the M4
+// counter-finding's whole lesson.
+func suppressContainedTracked(in []enumeratedMotif) ([]enumeratedMotif, int, map[string]motifDropCause) {
+	dropped := map[string]motifDropCause{}
 	sets := make([]map[string]struct{}, len(in))
 	for i, g := range in {
 		sets[i] = make(map[string]struct{}, len(g.Members))
@@ -843,23 +1460,35 @@ func suppressContained(in []BridgeSeedSet) []BridgeSeedSet {
 			sets[i][m.File] = struct{}{}
 		}
 	}
-	out := make([]BridgeSeedSet, 0, len(in))
+	out := make([]enumeratedMotif, 0, len(in))
+	crossTier := 0
 	for i := range in {
-		contained := false
+		var cause motifDropCause
 		for j := range in {
-			if i == j || len(sets[j]) <= len(sets[i]) {
+			if i == j {
 				continue
 			}
-			if subsetOf(sets[i], sets[j]) {
-				contained = true
+			// Cross-tier: a FAMILY containing an exact group loses to it,
+			// whatever their sizes.
+			if in[i].family && !in[j].family && subsetOf(sets[j], sets[i]) {
+				cause = motifSuppressedCrossTier
+				crossTier++
+				break
+			}
+			// Same tier: the strict superset survives.
+			if in[i].family == in[j].family &&
+				len(sets[j]) > len(sets[i]) && subsetOf(sets[i], sets[j]) {
+				cause = motifSuppressedSameTier
 				break
 			}
 		}
-		if !contained {
+		if cause == motifKept {
 			out = append(out, in[i])
+			continue
 		}
+		dropped[memberKey(in[i])] = cause
 	}
-	return out
+	return out, crossTier, dropped
 }
 
 func subsetOf(small, big map[string]struct{}) bool {
