@@ -79,6 +79,13 @@ var motifGateNames = regexp.MustCompile(`\b(ValidateMotifs|StripSubjectMotifs|Dr
 // caller has to be justified, because needing one usually means the path is not
 // reaching SerializeFact, which is the actual defect.
 var motifGateCallSites = map[string]string{
+	"internal/synthesize/decision.go": "prune-merge and distill consume LLM-PROPOSED motifs on facts whose " +
+		"other content is good; DropInvalidMotifs drops what SerializeFact would " +
+		"reject so one malformed name cannot discard an entire consolidation. It " +
+		"uses the gate's own definition rather than re-implementing one, which is " +
+		"what MN4 forbids",
+	"internal/synthesize/discovery.go": "same, for discovered facts — which cost a bridge enumeration and an " +
+		"LLM call each, so discarding one over a malformed motif spends both for nothing",
 	"internal/web/handlers_fact_write.go": "the REST PUT path commits the client's bytes verbatim, so it must " +
 		"apply the gate itself and reserialize when the gate changes anything; it is the one write " +
 		"path that does not reach SerializeFact on its own",
@@ -155,10 +162,76 @@ var mechanicsPaths = map[string][]string{
 	"internal/synthesize/bridge_score.go":    nil,
 	"internal/synthesize/bridge_filtered.go": nil,
 	"internal/synthesize/bridge_reshape.go":  nil,
-	"internal/synthesize/restatement.go":     nil,
-	"internal/synthesize/cluster.go":         nil,
-	"internal/synthesize/louvain.go":         nil,
-	"internal/store/search_query.go":         nil,
+	// The §7 shortlist is a path MN6 names EXPLICITLY as designed for motifs
+	// ("anything that spawns work outside the §4/§5/§7 synthesis paths designed
+	// for them"), so this is the rule's exemption rather than an exception to
+	// it. Blueprint §6 puts a shared exact motif into §7 as an added
+	// restatement signal.
+	//
+	// Scoped to the two functions that implement the widener. Everything else
+	// in this file — the pair cache, the percentile ranking, the judge-outcome
+	// throttle, the probe — stays blind to motifs, and the widener changes
+	// ELIGIBILITY only: the judge-slot budget is untouched, so a motif-rich
+	// corpus gets better candidates for the same spend, never more of them.
+	//
+	// What this does NOT license is a motif term entering the SCORING. A shared
+	// motif buys a look further down this repo's own ranking; it does not
+	// change where a pair sits in that ranking, which would be a corpus-property
+	// claim in disguise (MN13, Q2 ruling).
+	"internal/synthesize/restatement.go": {
+		"selectRestatementCandidates", "pairSharesCanonicalMotif",
+		// REPORTING, not deciding. These render the signal's contribution into
+		// the session's health lines so the GATE package can state how often it
+		// fired rather than that it exists. No branch reads them — which is the
+		// MN6 property, and is itself asserted by the no-branch grep.
+		"healthLines", "motifSignalLine",
+	},
+	// ScopedCluster is a CARRIER, and only the projection inside it (Phase 2).
+	// It builds the factForLLM payload from search results, and §2.1 requires
+	// that payload to show members' motifs — without it prune and distill
+	// cannot carry a motif over to the fact that replaces them, and the merged
+	// claim silently loses the regularity its members named.
+	//
+	// It does not CLUSTER on motifs. The community detection, the similarity
+	// scoring, and the resolution parameter are all untouched and stay banned,
+	// as does every other function in this file. The entry licenses copying the
+	// field into a payload, not consulting it in a decision — if a motif term
+	// ever reaches the clustering arithmetic that is an MN6 violation this does
+	// not cover.
+	"internal/synthesize/cluster.go": {"ScopedCluster"},
+	"internal/synthesize/louvain.go": nil,
+
+	// The read CARRIERS only (Phase 2, designer ruling 2026-08-21). Each of
+	// these names a SELECT column list and hands the row to a scanner; carrying
+	// an authored field to a reader is the visibility side of the MN6 line,
+	// which the clarified rule does not restrict. Phase 1 left the field
+	// write-only precisely because no such entry existed, and every read
+	// surface would have shipped empty with a green suite.
+	//
+	// What stays banned in this file is the deciding: newFactFilter's
+	// WHERE-clause construction, filterByEpisodeOps, and the KNN/rerank scoring
+	// inside Search must not consult motifs. Search appears here because its
+	// text-less branch owns a column list, NOT because its ranking may read
+	// them — if a motif term ever reaches the scoring arithmetic, that is an
+	// MN6 violation this entry does not license.
+	//
+	// newFactFilter and addMotifClause are the §6 motif_match filter, added in
+	// Phase 2 with the designer's Q1 scoping sentence: EXPLICIT user-supplied
+	// motif_match ONLY; never consulted unless the caller passed the parameter.
+	// A user-requested filter is expressed intent — the visibility side of the
+	// MN6 line — and §6 governs read surfaces by design.
+	//
+	// expandMotifQuery resolves the caller's terms to concrete spellings per
+	// tier. Same licence: it answers the question asked, it does not decide
+	// what ranks.
+	//
+	// None of these entries licenses motifs reaching the SCORING or KNN paths.
+	// Those decide ranking rather than answering a caller's question, and a
+	// motif term arriving there is an MN6 violation this list does not cover.
+	"internal/store/search_query.go": {
+		"RecentFacts", "recentFactsSearch", "Search",
+		"newFactFilter", "addMotifClause", "expandMotifQuery",
+	},
 }
 
 // TestMN6_MotifsDoNotDriveMechanics — MN6 as clarified by the designer on
@@ -220,6 +293,23 @@ func funcsMentioningMotifs(t *testing.T, rel string) []string {
 				}
 			case *ast.SelectorExpr:
 				if strings.Contains(strings.ToLower(id.Sel.Name), "motif") {
+					mentions = true
+				}
+			case *ast.BasicLit:
+				// String literals count (Phase 2). In internal/store every
+				// mechanical decision this rule polices is expressed as SQL
+				// TEXT, not as Go identifiers: a WHERE clause selecting on
+				// motifs is a string, and an Ident-only walk cannot see it.
+				// Without this case the check was fail-OPEN in exactly the
+				// package where MN6 has the most to catch — a motif filter
+				// added to newFactFilter's clause builder would have passed
+				// silently while the allow-list said that file touched nothing.
+				//
+				// It costs some precision: a function whose SQL merely SELECTs
+				// the column now needs an allow-list entry too. That is the
+				// right trade — the entry states, in writing, that the function
+				// carries motifs and does not decide with them.
+				if id.Kind == token.STRING && strings.Contains(strings.ToLower(id.Value), "motif") {
 					mentions = true
 				}
 			}

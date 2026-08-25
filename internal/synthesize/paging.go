@@ -103,7 +103,25 @@ func packFactPages(facts []factForLLM, maxBytes int) [][]factForLLM {
 // unchanged: reflect and discover interpolate their payloads into the prompt
 // rather than shipping them beside it, so they are single-page by construction
 // and must not be reshaped here.
-func factPages(factsJSON string) ([]json.RawMessage, error) {
+func factPages(stepType, factsJSON string) ([]json.RawMessage, error) {
+	// Only page the step types that actually page. Everything else ships
+	// verbatim, as one page.
+	//
+	// This gate is load-bearing, not an optimisation. Unmarshalling into
+	// []factForLLM SUCCEEDS for any JSON array of objects — Go ignores unknown
+	// fields — so a payload of a different shape decodes to a slice of EMPTY
+	// factForLLM structs, and re-marshalling them REPLACES the real payload
+	// with blanks. The motif alias and define payloads are arrays, and both
+	// were being destroyed on the way to the model; backfill survived only
+	// because its payload happens to be an object, where the unmarshal fails
+	// and the verbatim fall-through catches it.
+	//
+	// The failure is silent at every layer: Render returns the right payload,
+	// the item stores the right payload, and only what the ENGINE serves is
+	// wrong.
+	if !pagedStepTypes[stepType] {
+		return []json.RawMessage{json.RawMessage(factsJSON)}, nil
+	}
 	var facts []factForLLM
 	if err := json.Unmarshal([]byte(factsJSON), &facts); err != nil {
 		return []json.RawMessage{json.RawMessage(factsJSON)}, nil
@@ -125,8 +143,8 @@ func factPages(factsJSON string) ([]json.RawMessage, error) {
 }
 
 // pageCountFor reports how many pages an item will be served in.
-func pageCountFor(factsJSON string) int {
-	pages, err := factPages(factsJSON)
+func pageCountFor(stepType, factsJSON string) int {
+	pages, err := factPages(stepType, factsJSON)
 	if err != nil || len(pages) == 0 {
 		return 1
 	}
@@ -158,8 +176,8 @@ func completionTokenFor(itemID int64, factsJSON string) string {
 //
 // The error names the token, the page count, and how to obtain it, because the
 // agent that hits this has already produced a synthesis it is about to lose.
-func requireCompletionToken(itemID int64, factsJSON, supplied string) error {
-	pages := pageCountFor(factsJSON)
+func requireCompletionToken(stepType string, itemID int64, factsJSON, supplied string) error {
+	pages := pageCountFor(stepType, factsJSON)
 	if pages <= 1 {
 		return nil
 	}

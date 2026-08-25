@@ -184,6 +184,7 @@ func (e *restatementEnv) deps() Deps {
 		Pipeline:    e.svc.Pipeline(),
 		Branches:    e.svc.Branches(),
 		Abstraction: e.svc.Abstraction(),
+		Motifs:      e.svc.Motifs(),
 		Effort:      EffortNormal,
 		OnProgress:  func(ProgressEvent) {},
 	}

@@ -139,31 +139,14 @@ func TestMN1_InstructionsCarryNoCorpusVocabulary(t *testing.T) {
 	}
 }
 
-// TestMN1_NoVocabularyInAnyPrompt — nothing in the served surface may
-// enumerate this corpus's motifs. Phase 2 introduces exactly one exception
-// (the backfill work item); until then the count is zero.
-func TestMN1_NoVocabularyInAnyPrompt(t *testing.T) {
-	const marker = "zzz-unique-marker"
-	rich := newInstructionsTestRepo(t, []motifSeed{
-		{path: "kb/alpha/one.md", motifs: []string{marker}},
-	})
-	require.NotContains(t,
-		ProfileInstructions("code", rich.OntologyRoot(), rich.Ontology()), marker)
-
-	for name, schema := range map[string]map[string]any{
-		"knomit_learn":  learnToolSchemaProperties(),
-		"knomit_update": updateToolSchemaProperties(),
-	} {
-		for prop, spec := range schema {
-			m, ok := spec.(map[string]any)
-			if !ok {
-				continue
-			}
-			desc, _ := m["description"].(string)
-			require.NotContainsf(t, desc, marker, "%s.%s leaks corpus vocabulary", name, prop)
-		}
-	}
-}
+// TestMN1_NoVocabularyInAnyPrompt lives in internal/synthesize now, because
+// the only way to check it is to RENDER work items, and rendering needs the
+// pipeline. See TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary there.
+//
+// What was here scanned prompt TEMPLATES and asserted it covered "any prompt".
+// Phase-2 vocabulary travels in PAYLOADS, which a template scan structurally
+// cannot see — so the widened test reproduced, one level out, the exact defect
+// it had been widened to fix: naming an exception it never enumerated against.
 
 // TestMN1_FrontmatterListNamesMotifs — the pointer bullet must be present.
 // Its absence is not cosmetic: the frontmatter list is an enumeration, and an

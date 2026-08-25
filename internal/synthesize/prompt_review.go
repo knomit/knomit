@@ -44,6 +44,7 @@ const pruneResponseSchema = `{
               "confidence": {"type": "number"},
               "sources": {"type": "integer"},
               "entities": {"type": "array", "items": {"type": "string"}},
+              "motifs": {"type": "array", "items": {"type": "string"}, "description": "Motifs name the general regularity the claim instantiates, independent of its subject. Carry over member motifs still true of the new claim; author a new one only if the merged claim exemplifies a regularity no member named; at most 3; zero is correct."},
               "refs": {"type": "array", "items": {"type": "string"}}
             },
             "required": ["path", "title", "body"]
@@ -70,6 +71,7 @@ const distillResponseSchema = `{
           "domain": {"type": "array", "items": {"type": "string"}},
           "confidence": {"type": "number"},
           "entities": {"type": "array", "items": {"type": "string"}},
+          "motifs": {"type": "array", "items": {"type": "string"}, "description": "Motifs name the general regularity the claim instantiates, independent of its subject. Carry over member motifs still true of the new claim; author a new one only if the synthesized claim exemplifies a regularity no member named; at most 3; zero is correct."},
           "refs": {"type": "array", "items": {"type": "string"}}
         },
         "required": ["path", "title", "body"]
@@ -156,11 +158,12 @@ const reflectResponseSchema = `{
 // RenderReflectWorkItem renders a reflect prompt for hypothesis transition
 // review. existingMethodology is the pre-formatted methodology section to
 // inject; pass an empty string when none is relevant.
-func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology string) (*WorkItemContent, error) {
+func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodology, motifVocabulary string) (*WorkItemContent, error) {
 	prompt, err := RenderTemplate("reflect", "user", PromptData{
 		Facts:               string(transitionsJSON),
 		OntologyRoot:        ontologyRoot,
 		ExistingMethodology: existingMethodology,
+		MotifVocabulary:     motifVocabulary,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render reflect work item: %w", err)
@@ -182,6 +185,7 @@ func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 // on the wire. Compact, not indented: it ships as structural JSON now, and the
 // delivering envelope does its own formatting.
 func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string) (*WorkItemContent, error) {
+	shared := sharedClusterMotifs(facts)
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
 		return nil, fmt.Errorf("marshal facts for distill work item: %w", err)
@@ -190,6 +194,7 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 	prompt, err := RenderTemplate("distill", "user", PromptData{
 		OntologyRoot:          ontologyRoot,
 		ApplicableMethodology: applicableMethodology,
+		SharedMotifs:          shared,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)
@@ -199,5 +204,44 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 		Prompt:         prompt,
 		ResponseSchema: distillResponseSchema,
 		Facts:          string(factsJSON),
+	}, nil
+}
+
+// RenderMotifAliasWorkItem renders the vocabulary judge's prompt.
+//
+// Takes no arguments: the pairs ride in the work item's `facts` field like
+// every other step's payload, and the prompt says so rather than interpolating
+// them. That is also what keeps this the ONE prompt in the system that can
+// legitimately contain corpus vocabulary — the vocabulary is in the payload,
+// not in the template, so the MN1 enumeration over prompt TEMPLATES stays a
+// clean check.
+func RenderMotifAliasWorkItem(factsJSON string) (*WorkItemContent, error) {
+	prompt, err := RenderTemplate("motif_alias", "user", PromptData{})
+	if err != nil {
+		return nil, fmt.Errorf("render motif alias work item: %w", err)
+	}
+	return &WorkItemContent{
+		Prompt:         prompt,
+		ResponseSchema: motifAliasResponseSchema,
+		// The pairs themselves. The prompt says they ride here; omitting them
+		// asked the judge to decide about content it never received.
+		Facts: factsJSON,
+	}, nil
+}
+
+// RenderMotifDefineWorkItem renders the blind definition prompt.
+//
+// Takes no arguments for the same reason RenderMotifAliasWorkItem does: the
+// names ride in the work item's `facts` field, so the TEMPLATE carries no
+// corpus vocabulary and the MN1 enumeration over templates stays a clean check.
+func RenderMotifDefineWorkItem(factsJSON string) (*WorkItemContent, error) {
+	prompt, err := RenderTemplate("motif_define", "user", PromptData{})
+	if err != nil {
+		return nil, fmt.Errorf("render motif define work item: %w", err)
+	}
+	return &WorkItemContent{
+		Prompt:         prompt,
+		ResponseSchema: motifDefineResponseSchema,
+		Facts:          factsJSON,
 	}, nil
 }

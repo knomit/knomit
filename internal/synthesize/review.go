@@ -185,7 +185,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 		return out, nil
 	}
 
-	pages, err := factPages(res.Item.Facts)
+	pages, err := factPages(res.Item.Type, res.Item.Facts)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +254,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 
 // storeIndices returns the store indices under the repo read lock.
 func (r *Reviewer) storeIndices() (store.FactIndex, SearchQuery, store.PipelineIndex, store.BranchIndex) {
-	gs, idx, pipelineIdx, branches, _ := r.p.storeIndices()
+	gs, idx, pipelineIdx, branches, _, _ := r.p.storeIndices()
 	return gs, idx, pipelineIdx, branches
 }
 

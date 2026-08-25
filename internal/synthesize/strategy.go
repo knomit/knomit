@@ -63,9 +63,13 @@ type Deps struct {
 	// Abstraction is the title-embedding axis and the restatement shortlist
 	// built on it (the consolidation-scope fix). Review-pipeline only.
 	Abstraction store.AbstractionIndex
-	Effort      Effort
-	Scope       ScopeFilter
-	OnProgress  func(ProgressEvent)
+	// Motifs is alias resolution over the motif vocabulary. Review-pipeline
+	// only, like Abstraction: it is derived state rebuilt under review's own
+	// budget, and no runtime path may pay for it.
+	Motifs     store.MotifIndex
+	Effort     Effort
+	Scope      ScopeFilter
+	OnProgress func(ProgressEvent)
 }
 
 // pagedStrategy is the optional half of Strategy: implemented only by

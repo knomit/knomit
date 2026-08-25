@@ -502,7 +502,7 @@ func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactW
 		return nil, fmt.Errorf("getByPath: %w", err)
 	}
 	row := conn(ctx, fq.rh.db).QueryRowContext(ctx,
-		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities,
+		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
 		        f.confidence, f.sources, f.refs, f.evidence_weight,
 		        bf.commit_hash, o.data, cl.committed_at
 		 FROM branch_facts bf
@@ -540,15 +540,16 @@ func (si *searchIndex) getEmbeddingByFact(ctx context.Context, path, blobHash st
 
 // scanFactWithBody scans a FactWithBody from a *sql.Row (branch_facts JOIN facts JOIN objects LEFT JOIN commit_log).
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// confidence, sources, refs, evidence_weight, commit_hash, data, committed_at.
+// motifs, confidence, sources, refs, evidence_weight, commit_hash, data,
+// committed_at.
 func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	var f FactWithBody
-	var domainJSON, entitiesJSON, refsJSON string
+	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
 	var rawData []byte
 	var committedAt sql.NullInt64
 	err := row.Scan(
 		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
-		&domainJSON, &entitiesJSON,
+		&domainJSON, &entitiesJSON, &motifsJSON,
 		&f.Confidence, &f.Sources,
 		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &committedAt,
 	)
@@ -559,6 +560,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 		return nil, fmt.Errorf("scanFactWithBody: %w", err)
 	}
 	logFactJSONUnmarshal("scanFactWithBody", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
+	unmarshalMotifs("scanFactWithBody", f.Path, motifsJSON, &f.Motifs)
 	f.Body = extractBody(rawData)
 	if committedAt.Valid {
 		f.CommittedAt = committedAt.Int64
@@ -569,13 +571,14 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 // scanFactRecordFromRowsWithCommittedAt scans a *FactWithBody from *sql.Rows,
 // including commit_hash and committed_at (fields absent from FactRecord).
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// confidence, sources, refs, evidence_weight, commit_hash, committed_at.
+// motifs, confidence, sources, refs, evidence_weight, commit_hash,
+// committed_at.
 func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
-	var domainJSON, entitiesJSON, refsJSON string
+	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
 	err := rows.Scan(
 		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
-		&domainJSON, &entitiesJSON,
+		&domainJSON, &entitiesJSON, &motifsJSON,
 		&f.Confidence, &f.Sources,
 		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &f.CommittedAt,
 	)
@@ -583,20 +586,22 @@ func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error
 		return nil, fmt.Errorf("scanFactRecordFromRowsWithCommittedAt: %w", err)
 	}
 	logFactJSONUnmarshal("scanFactRecordFromRowsWithCommittedAt", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
+	unmarshalMotifs("scanFactRecordFromRowsWithCommittedAt", f.Path, motifsJSON, &f.Motifs)
 	return &f, nil
 }
 
 // scanFactWithBodyFromRowsWithCommittedAt scans a *FactWithBody from *sql.Rows,
 // including the body (raw object data) and committed_at timestamp.
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// confidence, sources, refs, evidence_weight, commit_hash, data, committed_at.
+// motifs, confidence, sources, refs, evidence_weight, commit_hash, data,
+// committed_at.
 func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
-	var domainJSON, entitiesJSON, refsJSON string
+	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
 	var rawData []byte
 	err := rows.Scan(
 		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
-		&domainJSON, &entitiesJSON,
+		&domainJSON, &entitiesJSON, &motifsJSON,
 		&f.Confidence, &f.Sources,
 		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &f.CommittedAt,
 	)
@@ -604,6 +609,7 @@ func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, err
 		return nil, fmt.Errorf("scanFactWithBodyFromRowsWithCommittedAt: %w", err)
 	}
 	logFactJSONUnmarshal("scanFactWithBodyFromRowsWithCommittedAt", f.Path, domainJSON, entitiesJSON, refsJSON, &f.Domain, &f.Entities, &f.Refs)
+	unmarshalMotifs("scanFactWithBodyFromRowsWithCommittedAt", f.Path, motifsJSON, &f.Motifs)
 	f.Body = extractBody(rawData)
 	return &f, nil
 }
@@ -619,6 +625,27 @@ func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, err
 // `INSERT OR IGNORE` dedup at fact_entities/fact_domains, a corrupt entities
 // column would otherwise make `?entity=…` queries return nothing for a fact
 // that should match.
+// unmarshalMotifs decodes the facts.motifs JSON column into out, warning
+// rather than failing on a malformed value — the same posture as the other
+// fact JSON columns, and the one §2.10's read/write asymmetry requires: a
+// reader must never fail on a motif list, only ignore what it cannot use.
+//
+// Separate from logFactJSONUnmarshal rather than a fourth parameter on it,
+// because two of the five call sites (the RecentFacts pair) have no refs
+// column to pass and already hand it a literal "null".
+//
+// The empty string is treated as "no motifs" silently: the column is
+// NOT NULL DEFAULT '[]', so an empty value can only come from a row a
+// SELECT did not name, which is not a data defect worth a warning.
+func unmarshalMotifs(scanner, path, motifsJSON string, out *[]string) {
+	if motifsJSON == "" {
+		return
+	}
+	if err := json.Unmarshal([]byte(motifsJSON), out); err != nil {
+		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "motifs").Msg("fact JSON column unmarshal failed; field empty")
+	}
+}
+
 func logFactJSONUnmarshal(scanner, path, domainJSON, entitiesJSON, refsJSON string, domain *[]string, entities *[]string, refs *[]string) {
 	if err := json.Unmarshal([]byte(domainJSON), domain); err != nil {
 		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "domain").Msg("fact JSON column unmarshal failed; field empty")

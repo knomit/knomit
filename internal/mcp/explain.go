@@ -62,12 +62,36 @@ type explainFactEntry struct {
 	Summary    bool `json:"summary,omitempty"`
 
 	// Root-only fields (omitted on summary nodes).
-	Domain         []string        `json:"domain,omitempty"`
-	Entities       []string        `json:"entities,omitempty"`
+	Domain   []string `json:"domain,omitempty"`
+	Entities []string `json:"entities,omitempty"`
+	// Motifs is the §6 explain surface: each of the root fact's motifs with its
+	// document frequency and the other facts carrying it. This is where a
+	// reader asks "what else instantiates this mechanism?" and gets an answer
+	// without composing a second query.
+	Motifs         []explainMotif  `json:"motifs,omitempty"`
 	EvidenceWeight float64         `json:"evidence_weight,omitempty"`
 	Body           string          `json:"body,omitempty"`
 	Refs           *classifiedRefs `json:"refs,omitempty"`
 	History        *explainHistory `json:"history,omitempty"`
+}
+
+// explainMotif is one motif on the root fact, resolved.
+type explainMotif struct {
+	// Motif is the spelling THIS fact carries — what its author wrote (MN3).
+	Motif string `json:"motif"`
+	// Canonical is the cluster's representative spelling, present only when it
+	// differs from Motif. Its absence therefore means "this fact spells it the
+	// way the corpus mostly does", which is the common and uninteresting case.
+	Canonical string `json:"canonical,omitempty"`
+	// Definition is the cluster's glossary sentence, when one has been
+	// authored. Absent rather than empty on an undefined cluster.
+	Definition string `json:"definition,omitempty"`
+	// DF counts live facts carrying ANY spelling in the cluster, this one
+	// included. 1 means nothing else instantiates it yet.
+	DF int `json:"df"`
+	// Siblings are other facts carrying the cluster, most relevant first and
+	// bounded. Empty at df 1.
+	Siblings []string `json:"siblings,omitempty"`
 }
 
 type classifiedRefs struct {
@@ -390,6 +414,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		Domain:         parsed.Domain,
 		Sources:        parsed.Sources,
 		Entities:       parsed.Entities,
+		Motifs:         explainMotifs(ctx, rt, s, parsed, rel),
 		EvidenceWeight: parsed.EvidenceWeight,
 		Body:           parsed.Body,
 		Refs:           refs,
@@ -631,4 +656,64 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 		return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
 	}
 	return mcpgo.NewToolResultText(string(out)), nil
+}
+
+// explainMotifsShown bounds the sibling list per motif. A PROMPT/RESPONSE-SIZE
+// BUDGET: explain answers about one fact, and an unbounded sibling list on a
+// popular motif would bury it.
+const explainMotifsShown = 5
+
+// explainMotifs resolves a fact's motifs for the §6 explain surface.
+//
+// Degrades to nothing rather than failing the call: explain's job is the fact
+// and its provenance, and a corpus whose vocabulary cannot be read should still
+// answer that. Every field is read-only derived state (MN6 permits unrestricted
+// reading; this consults no mechanical decision and spawns no work).
+func explainMotifs(ctx context.Context, rt repos.ReadTarget, s mcpStore, parsed fact.Fact, self string) []explainMotif {
+	if len(parsed.Motifs) == 0 || s.motifs == nil {
+		return nil
+	}
+	branch := rt.Branch
+	out := make([]explainMotif, 0, len(parsed.Motifs))
+	for _, m := range parsed.Motifs {
+		entry := explainMotif{Motif: m}
+
+		if canonical, err := s.motifs.CanonicalID(ctx, branch, m); err == nil && canonical != m {
+			// Shown only when it DIFFERS: on the common path the fact spells
+			// the motif the way the corpus mostly does, and repeating it would
+			// be noise in every row.
+			entry.Canonical = canonical
+		}
+		key, err := s.motifs.ClusterKey(ctx, branch, m)
+		if err != nil {
+			out = append(out, entry)
+			continue
+		}
+		if def, ok, dErr := s.motifs.Definition(ctx, branch, key); dErr == nil && ok {
+			entry.Definition = def
+		}
+		// df over the CLUSTER, matching TokenDF and the health metrics — a
+		// corpus that spells one mechanism three ways must not read as three
+		// lonely motifs here either.
+		canonical := entry.Canonical
+		if canonical == "" {
+			canonical = m
+		}
+		if df, dfErr := s.graph.TokenDF(ctx, branch, canonical, "motif"); dfErr == nil {
+			entry.DF = df
+		}
+		if titles, tErr := s.motifs.CarrierTitles(ctx, branch, key, explainMotifsShown+1); tErr == nil {
+			for _, t := range titles {
+				if t == parsed.Title {
+					continue // the fact being explained is not its own sibling
+				}
+				if len(entry.Siblings) == explainMotifsShown {
+					break
+				}
+				entry.Siblings = append(entry.Siblings, t)
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
 }

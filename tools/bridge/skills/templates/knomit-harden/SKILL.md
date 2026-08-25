@@ -68,7 +68,25 @@ For each candidate, in order:
      anchors to the enforcing code added and stale anchors dropped.
    - The fact's own claim is false at HEAD → `/knomit-retract`, then
      `/knomit-remember` a replacement if warranted.
-6. **TENSION check** — query for facts sharing this fact's entities or slogan
+6. **MOTIF check (opportunistic)** — while you have the fact open and its
+   mechanism freshly in mind, ask whether it instantiates a general REGULARITY
+   worth naming: a mechanism, a failure shape, a pattern that a fact about some
+   entirely different subject could also exemplify. If so and the fact carries
+   no `motifs`, add one via `/knomit-update` (2–4 kebab-case words, at most 3).
+   Zero is the right answer often — many facts are about a particular thing and
+   instantiate nothing general, and a wrong motif is worse than none.
+
+   Name the MECHANISM, never the subject: a motif that restates the fact's own
+   entity, area, or path words says nothing the fact has not already said about
+   itself, and is discarded on write. And name the problem's shape rather than
+   its fix (`unmonitored-expiry`, not `automatic-renewal`).
+
+   This is opportunistic by design. Do not go looking for facts to motif — the
+   backfill pass does that systematically, with the corpus's existing
+   vocabulary in front of it. You have something it does not: you have just
+   read this fact adversarially and know what it is really about.
+
+7. **TENSION check** — query for facts sharing this fact's entities or slogan
    terms. Fragments of two individually-true facts can compose into a false
    inference (one fact: "writes skip re-indexing on cache hits"; another:
    "the index is keyed by row id" — composed carelessly: "renames never

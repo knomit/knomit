@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store/migrate"
 )
 
 // TestMigration017_UpgradesPreMigrationDatabase runs migration 000017 against a
@@ -70,7 +72,12 @@ func TestMigration017_UpgradesPreMigrationDatabase(t *testing.T) {
 	var dirty bool
 	require.NoError(t, svc2.rh.db.QueryRow(
 		`SELECT version, dirty FROM schema_migrations`).Scan(&v, &dirty))
-	require.Equal(t, 19, v, "the store must have migrated forward")
+	// Derived, not pinned: this test's subject is migration 017, and a literal
+	// here makes every LATER migration fail it for reasons that have nothing to
+	// do with 017. Ask the embedded migrations what "all the way forward" means.
+	latest, err := migrate.LatestRepoVersion()
+	require.NoError(t, err)
+	require.Equal(t, latest, v, "the store must have migrated forward")
 	require.False(t, dirty)
 
 	// The connection columns are gone...
