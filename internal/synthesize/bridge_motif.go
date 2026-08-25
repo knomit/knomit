@@ -1154,6 +1154,11 @@ type motifActivation struct {
 	// because one heavily-shared motif and three df-2 motifs are different
 	// situations with the same cluster count.
 	Pairs int
+	// Seeds is how many seed facts the decision was made over. Reported
+	// because this whole struct describes ONE SESSION'S POOL, and without the
+	// count the health line cannot say so — which is precisely how its earlier
+	// wording came to make a claim about the corpus (knomit#119).
+	Seeds int
 }
 
 // motifActive decides whether this corpus has enough recurring vocabulary for
@@ -1166,6 +1171,7 @@ func motifActive(seeds []factForLLM, resolve motifResolver) motifActivation {
 		Active:      clusters >= motifActivationFloor,
 		DF2Clusters: clusters,
 		Pairs:       pairs,
+		Seeds:       len(seeds),
 	}
 }
 
@@ -1335,12 +1341,32 @@ func motifBridgeHealthLines(h motifEnumHealth, near, far int) []string {
 				"(no candidates — this is NOT a statement about the corpus)", h.Failure)}
 	}
 	if h.Activation.Evaluated && !h.Activation.Active {
+		// SCOPE-LOCAL BY CONSTRUCTION (knomit#119). Every number here is
+		// computed over THIS SESSION'S SEED POOL (see motifActive), so the
+		// sentence may not generalise past it.
+		//
+		// It used to. The retired wording claimed "the corpus has too little
+		// repeated vocabulary ... it activates itself as recurrence
+		// accumulates" — both halves false on a scoped session. It was
+		// measured printing on a corpus roughly 4x past the floor, in the same
+		// health block as a corpus-wide line reporting 16 recurring motifs;
+		// and the second half additionally invited an operator to WAIT for an
+		// activation a narrow scope never reaches. One operator lost ~50
+		// sessions to it, re-deriving the confusion from scratch.
+		//
+		// The mechanics were never wrong; only the sentence was. Hence wording
+		// plus the pool size rather than a corpus-wide recount: computing this
+		// corpus-wide would add a per-session query to buy a claim a
+		// corpus-shaped session never needs, because at that shape the gate
+		// passes and this line does not print at all.
 		return []string{fmt.Sprintf(
-			"motif bridging inactive: %d recurring motif(s) (%d bridgeable pair(s)), below the "+
-				"%d-motif validity floor — the corpus has too little repeated vocabulary for a "+
-				"shared-motif pair to mean anything yet. Recomputed every session; it activates "+
-				"itself as recurrence accumulates.",
-			h.Activation.DF2Clusters, h.Activation.Pairs, motifActivationFloor)}
+			"motif bridging inactive for THIS SESSION's pool: %d recurring motif(s) "+
+				"(%d bridgeable pair(s)) among the %d seed fact(s) evaluated, below the "+
+				"%d-motif floor. Scope-local: a narrow scope reports inactive on a "+
+				"knowledge base that is far past the floor, so this is NOT a statement "+
+				"about the whole base. Recomputed per session from the pool in hand.",
+			h.Activation.DF2Clusters, h.Activation.Pairs, h.Activation.Seeds,
+			motifActivationFloor)}
 	}
 	if h.Candidates == 0 && len(h.OverCeilingNames) == 0 {
 		return nil
