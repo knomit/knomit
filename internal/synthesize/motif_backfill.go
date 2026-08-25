@@ -202,6 +202,25 @@ func buildBackfillHints(ctx context.Context, d Deps, branch string, targets []st
 	return hints
 }
 
+// noteBackfillRefusal carries a per-motif refusal reason back to the answering
+// agent (knomit#118).
+//
+// It rides sess.Health, which on a CONTINUE call starts empty — the field is
+// in-memory only and is written and read inside one turn. So these notices are
+// exactly this answer's, not a replay of the session's planning block.
+//
+// Why the agent and not just the log: the server log is not a channel the
+// answering agent reads. Before this, a refused motif produced a Warn nobody in
+// the loop saw, and the fact simply reappeared — which is indistinguishable
+// from never having been asked. That is invisible attrition: the same error
+// repeats, a backfill slot burns each cycle, and nothing anywhere says why.
+func noteBackfillRefusal(sess *store.PipelineSession, notice string) {
+	if sess == nil {
+		return
+	}
+	sess.Health = append(sess.Health, notice)
+}
+
 // backfillHealth reports the pass's coverage picture. Nothing branches on it.
 type backfillHealth struct {
 	WithMotifs int
@@ -400,7 +419,7 @@ func validateMotifBackfill(res motifBackfillResult, offered backfillPayload) err
 // content-addressing the drain record was always supposed to rest on. The
 // "gained motifs" check above is NOT this guard and does not subsume it: an
 // edit need not add a motif.
-func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBackfillResult, offered backfillPayload) error {
+func applyMotifBackfill(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, res motifBackfillResult, offered backfillPayload) error {
 	offeredID := make(map[string]int64, len(offered.Facts))
 	for _, f := range offered.Facts {
 		offeredID[f.Path] = f.FactID
@@ -467,7 +486,23 @@ func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBac
 			// The single gate refused it — an over-cap or malformed list. The
 			// fact keeps no motifs and is offered again next session, which is
 			// the same outcome as the agent having returned none.
+			//
+			// TELL THE AGENT (knomit#118). Re-offer is not a signal, it is the
+			// absence of one: nothing records a wholly-refused batch, so the
+			// fact returns looking never-asked and an agent repeating the same
+			// naming error loops on it forever, burning a slot each cycle.
+			// Measured as three offers — two silent refusals of one 5-segment
+			// name, then resolution with a 4-segment one.
+			//
+			// The gate's own error text is echoed rather than paraphrased: it
+			// names the rule and the count ("5 kebab-case words, want 2–4"),
+			// and a paraphrase here would be a second statement of a rule that
+			// lives in exactly one place (MN4).
 			log.Warn().Err(err).Str("path", a.Path).Msg("motif backfill: rejected by the write gate")
+			noteBackfillRefusal(sess, fmt.Sprintf(
+				"motif backfill REFUSED for %s: %v — the fact keeps no motifs and "+
+					"will be offered again; a differently-formed name can fix it.",
+				a.Path, err))
 			continue
 		}
 		// Did the SILENT half of the gate take the whole answer?
@@ -488,6 +523,19 @@ func applyMotifBackfill(ctx context.Context, d Deps, branch string, res motifBac
 		if perr == nil && len(stored.Motifs) == 0 {
 			log.Debug().Str("path", a.Path).Strs("proposed", a.Motifs).
 				Msg("motif backfill: the subject strip absorbed the whole answer; judged empty")
+			// A DIFFERENT SENTENCE from the refusal above, deliberately
+			// (knomit#118). A refused NAME can be fixed by naming it better
+			// next time; a subject restatement has nothing to fix — the same
+			// content with the same hints draws the same answer forever. An
+			// agent told only "rejected" would spend its next turn rewording
+			// something that was never the problem, and this fact is judged
+			// empty so it will not come back to correct the impression.
+			noteBackfillRefusal(sess, fmt.Sprintf(
+				"motif backfill STRIPPED for %s: %s named the fact's own SUBJECT "+
+					"rather than a mechanism, so nothing was stored and the fact is "+
+					"judged as carrying no motif. Rewording will not help; a motif "+
+					"names what the fact is an INSTANCE OF, not what it is about.",
+				a.Path, strings.Join(a.Motifs, ", ")))
 			judgedEmpty = append(judgedEmpty, want)
 			// Nothing to write — the fact is unchanged. Writing anyway would
 			// mint a new version, and the judgement below would then name a

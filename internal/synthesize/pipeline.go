@@ -377,7 +377,24 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 		return nil, err
 	}
 
-	return p.nextItem(ctx, sess)
+	res, err := p.nextItem(ctx, sess)
+	if err != nil {
+		return nil, err
+	}
+	// NOTICES FROM THIS APPLY ride the turn that produced them (knomit#118).
+	//
+	// Apply may have refused part of the agent's answer — a malformed motif
+	// name, a subject restatement — and before this those reasons reached only
+	// the server log, which is not a channel the answering agent reads. The
+	// fact simply reappeared later, indistinguishable from never having been
+	// asked, so the same error repeated and a slot burned each cycle.
+	//
+	// Safe to attach wholesale because sess.Health is IN-MEMORY ONLY and this
+	// sess was re-read from the row at the top of the call: it starts empty on
+	// a continue, so whatever is here was appended by THIS Apply. It is not a
+	// replay of the planning block, which rides StartSession's result instead.
+	res.Health = append(res.Health, sess.Health...)
+	return res, nil
 }
 
 // RunAll drives the session to completion using an LLM adapter: start, then
