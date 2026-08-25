@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 
 	"github.com/go-chi/chi/v5"
 
@@ -234,12 +235,29 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 			return
 		}
 
-		// The client's bytes are stored verbatim unless canonicalization
-		// actually moved a ref — a PUT that needs no rewriting must not be
-		// silently reformatted by a round trip through SerializeFact.
+		// The motif gate. This path is the ONE write path that does not reach
+		// SerializeFact on its own — it commits the client's bytes — so without
+		// this, a subject-restating motif typed into the raw editor lands on
+		// disk, in fact_motifs and in TokenDF, having passed no gate at all.
+		//
+		// Two things can make the gate non-trivial, and both must be caught:
+		// the subject strip removing a motif, and ParseFact having already
+		// dropped a malformed or over-cap one — the parsed fact is clean in
+		// that second case while body.Content still carries the offender,
+		// which is exactly what MotifWarnings exists to report.
+		gatedMotifs := knomitfact.StripSubjectMotifs(f)
+		motifsChanged := len(f.MotifWarnings) > 0 || !slices.Equal(gatedMotifs, f.Motifs)
+
+		// The client's bytes are stored verbatim unless a gate actually changed
+		// something — a PUT that needs no rewriting must not be silently
+		// reformatted by a round trip through SerializeFact.
 		content := body.Content
-		if changed {
+		if changed || motifsChanged {
 			f.Refs = canonRefs
+			// SerializeFact strips again on its way out; assigning here keeps
+			// the fact handed to BuildFactView below telling the same story as
+			// the bytes committed.
+			f.Motifs = gatedMotifs
 			serialized, serr := knomitfact.SerializeFact(f)
 			if serr != nil {
 				hal.WriteProblem(w, http.StatusUnprocessableEntity,

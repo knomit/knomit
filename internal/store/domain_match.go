@@ -4,11 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode"
 
-	"github.com/gertd/go-pluralize"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
+	"knomit/internal/textnorm"
 )
 
 // Domain-tag matching: a domain tag is canonicalised deterministically at the
@@ -18,88 +15,20 @@ import (
 // variants and makes matching word-order-independent, with no FTS5/embeddings.
 // Authored tags stay in git; this canonical/token form is derived index state.
 
-// domainCaser performs Unicode case folding (language-neutral). Allocated once.
-var domainCaser = cases.Fold()
-
-// domainPluralizer singularizes plural tokens to a match key. go-pluralize is a
-// port of the widely-used JS `pluralize`, with a real irregular/exception table
-// (not naive suffix rules), so it is symmetric and idempotent on the irregulars
-// a hand-rolled or Porter/Snowball stemmer breaks: analyses≡analysis,
-// indices≡index, matrices≡matrix, theses≡thesis. Allocated once; configured for
-// the technical vocabulary in stemDomainToken's guards. Pure-Go, zero deps.
-var domainPluralizer = pluralize.NewClient()
-
-// canonicalizeDomain normalises a domain tag for matching and junction storage:
-// NFC → case-fold → replace hyphens and Unicode whitespace with a single space →
-// trim. Underscores are PRESERVED so identifier-like tags (commit_log) stay one
-// token. Pure and idempotent.
-func canonicalizeDomain(s string) string {
-	s = norm.NFC.String(s)
-	s = domainCaser.String(s)
-	var b strings.Builder
-	b.Grow(len(s))
-	prevSpace := true // leading-trim: suppress leading spaces
-	for _, r := range s {
-		if r == '-' || unicode.IsSpace(r) {
-			if !prevSpace {
-				b.WriteByte(' ')
-				prevSpace = true
-			}
-			continue
-		}
-		b.WriteRune(r)
-		prevSpace = false
-	}
-	return strings.TrimRight(b.String(), " ")
-}
-
-// stemDomainToken normalises a token to its singular form as a MATCH-ONLY key —
-// the result is never displayed or stored as the canonical tag, only used so a
-// query token and a stored token collapse to the same key ("vulnerabilities" ≡
-// "vulnerability"). It delegates to go-pluralize, which is symmetric and
-// idempotent on the irregulars a hand-rolled or Porter/Snowball stemmer breaks
-// (analyses≡analysis, indices≡index, matrices≡matrix, theses≡thesis), verified
-// against the real domain corpus.
+// The three normalizers below moved to internal/textnorm so internal/fact can
+// use the SAME definition of "the same token" for the motif subject-word strip
+// without inverting the store -> fact dependency (internal/fact imports no
+// internal package, by design). Two stemmers are two things that drift, and a
+// drifted stemmer lets a motif that renames its own fact's subject past the
+// strip.
 //
-// Two guards prevent over-singularizing non-plurals that merely end in 's'
-// (any pluralizer treats a trailing 's' as plural, which is what we DON'T want
-// for these — confirmed against real knomit domains):
-//   - len <= 3: acronyms/identifiers (ai, aws, llm, tls) are never plurals.
-//   - "...ics": -ics field/mass nouns (economics, robotics, metrics, ethics)
-//     are singular; stripping to -ic would be wrong and asymmetric.
-//
-// Both guards are symmetric (applied identically at index and query time), so
-// they never break matching; they only avoid mangling internal keys.
-func stemDomainToken(t string) string {
-	if len(t) <= 3 || strings.HasSuffix(t, "ics") {
-		return t
-	}
-	return domainPluralizer.Singular(t)
-}
-
-// domainTokens returns the stemmed, de-duplicated token set of a canonical
-// domain, split on whitespace AND slash. Splitting on '/' too means a
-// hierarchical tag's individual segments are each searchable as a word
-// ("multi-tenant/auth" → ["multi","tenant","auth"]) — without it, a segment
-// glued to a slash ("tenant/auth") is unreachable by its own middle word and
-// the slash-hierarchy branch only matches whole prefixes. Order follows first
-// appearance; callers treat it as a set. Pass the output of canonicalizeDomain.
-func domainTokens(canonical string) []string {
-	fields := strings.FieldsFunc(canonical, func(r rune) bool {
-		return r == '/' || unicode.IsSpace(r)
-	})
-	seen := make(map[string]struct{}, len(fields))
-	out := make([]string, 0, len(fields))
-	for _, f := range fields {
-		st := stemDomainToken(f)
-		if _, ok := seen[st]; ok {
-			continue
-		}
-		seen[st] = struct{}{}
-		out = append(out, st)
-	}
-	return out
-}
+// They stay as unexported names here because every call site in this package
+// reads better with the domain-specific name, and because renaming ~30 call
+// sites would bury a mechanical extraction inside an unrelated diff. The
+// existing domain-match suite is the zero-diff gate: no test was edited.
+func canonicalizeDomain(s string) string     { return textnorm.Canonicalize(s) }
+func stemDomainToken(t string) string        { return textnorm.Stem(t) }
+func domainTokens(canonical string) []string { return textnorm.Tokens(canonical) }
 
 // DomainTagMatches reports whether queryTag matches factTag under the SAME default
 // semantics SearchOptions.Domain uses (search_query.go:339-373): canonical
@@ -135,7 +64,7 @@ func DomainTagMatches(factTag, queryTag string) bool {
 // EntityTagMatches reports case-folded equality, mirroring the COLLATE NOCASE
 // fact_entities junction. Entities are not tokenized (no entity token table).
 func EntityTagMatches(factEntity, queryEntity string) bool {
-	return domainCaser.String(factEntity) == domainCaser.String(queryEntity)
+	return textnorm.Fold(factEntity) == textnorm.Fold(queryEntity)
 }
 
 // CanonicalizeTag exposes canonicalizeDomain for consumers that must group tags
