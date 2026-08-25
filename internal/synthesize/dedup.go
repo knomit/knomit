@@ -72,6 +72,32 @@ func loserCorroborations(loser factForLLM) int {
 	return loser.Sources
 }
 
+// dedupMergeRefs returns the winner's post-merge ref list and, as a separate
+// list, the refs the two operands already carried — the `prior` the ref gate
+// exempts from re-judging.
+//
+// The two are computed from the SAME three inputs and are therefore equal
+// today: a mechanical merge introduces no citation, so every element of the
+// write list was carried by the winner, carried by the loser, or is the
+// loser's own path. They are nonetheless built separately, and that is the
+// whole point of this function. Handing the write list to Gate.Apply in both
+// argument positions would read identically and behave identically now, and
+// would exempt whatever a later change appends to the write list at the call
+// site — a lineage pointer to a synthesized parent, an annex ref — leaving a
+// gate call that can never reject anything (0ee925f4). `prior` has to be able
+// to diverge from `refs` for the check to mean what it says, so the carried
+// set is derived from the operands, where "this was already carried" is
+// provably true, and never from the list being written.
+func dedupMergeRefs(winnerRefs, loserRefs []string, loserPath string) (write, carried []string) {
+	write = fact.UnionStrings(winnerRefs, loserRefs)
+	write = fact.AppendUnique(write, loserPath)
+
+	carried = fact.UnionStrings(winnerRefs, loserRefs)
+	carried = fact.AppendUnique(carried, loserPath)
+
+	return write, carried
+}
+
 // applyGreedyMerges sorts pairs by similarity descending and selects pairs
 // such that each fact index participates in at most one merge.
 func applyGreedyMerges(pairs []mergePair) []mergePair {
@@ -204,24 +230,37 @@ func dedupCluster(
 
 		onProgress(ProgressEvent{Phase: "dedup-merge", Message: fmt.Sprintf("%s <- %s (%.2f)", winnerFact.File, loserFact.File, p.similarity)})
 
+		// Every failure from here to the end of the iteration is scoped to
+		// THIS pair: warn, skip it, keep going — the same shape the merge and
+		// discovery loops use. A single member that cannot be read or parsed
+		// (frontmatter from an older serializer, a hand-edit on the KB branch)
+		// otherwise aborts the whole review session before it plans anything,
+		// which is the #103 failure again from a different cause and just as
+		// permanent across retries. Skipping leaves both facts live, so the
+		// next pass is free to try the pair again.
+
 		// Read the winner's full fact from git to get its Refs.
 		winnerResult, err := gs.ReadFact(ctx, agentBranch, winnerFact.File, nil)
 		if err != nil {
-			return nil, fmt.Errorf("dedupCluster: read winner %q: %w", winnerFact.File, err)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read winner %s: %v", winnerFact.File, err)})
+			continue
 		}
 		fullWinner, err := fact.ParseFact(winnerFact.File, winnerResult.Content)
 		if err != nil {
-			return nil, fmt.Errorf("dedupCluster: parse winner %q: %w", winnerFact.File, err)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse winner %s: %v", winnerFact.File, err)})
+			continue
 		}
 
 		// Read the loser's full fact to get its Refs.
 		loserResult, err := gs.ReadFact(ctx, agentBranch, loserFact.File, nil)
 		if err != nil {
-			return nil, fmt.Errorf("dedupCluster: read loser %q: %w", loserFact.File, err)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup read loser %s: %v", loserFact.File, err)})
+			continue
 		}
 		fullLoser, err := fact.ParseFact(loserFact.File, loserResult.Content)
 		if err != nil {
-			return nil, fmt.Errorf("dedupCluster: parse loser %q: %w", loserFact.File, err)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup parse loser %s: %v", loserFact.File, err)})
+			continue
 		}
 
 		// Apply merged fields to the full winner fact.
@@ -235,40 +274,71 @@ func dedupCluster(
 		// location, and without it the loser's motifs are simply deleted along
 		// with the loser, losing authored data that no derived state can rebuild.
 		fullWinner.Motifs = fact.MergeMotifs(fullWinner.Motifs, fullLoser.Motifs)
-		// Refs = union of both refs + loser's path.
-		mergedRefs := fact.UnionStrings(fullWinner.Refs, fullLoser.Refs)
-		mergedRefs = fact.AppendUnique(mergedRefs, loserFact.File)
+		// Refs = union of both refs + loser's path, and — separately — the
+		// snapshot of what the two operands already carried.
+		mergedRefs, carriedRefs := dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, loserFact.File)
 
-		// Same gate as every other write path. The loser is passed as retracted
-		// because it is deleted immediately below and the winner cites it as
-		// lineage — that citation is the record of the merge, not a dead ref.
-		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, []string{loserFact.File})
+		// Same gate as every other write path — but this merge ADDS no
+		// citation, so the whole carried set goes in as prior.
+		//
+		// Both operands are facts already in the corpus: each carried its refs
+		// from its own commit, where they were checked once, and grafting the
+		// loser's lineage onto the winner is a transfer, not the author making
+		// a fresh claim about today's index. internal/refs is explicit that
+		// such refs are never re-judged — "a retraction anywhere in history
+		// makes every fact that ever cited it uneditable" is exactly the
+		// failure re-judging produces. Here it was worse than uneditable: one
+		// cluster member citing a fact that no longer resolves aborted the
+		// whole review session — every pass in the run lost, and lost again on
+		// every retry (#103). Dropping the offending refs instead would trade
+		// the abort for silent provenance loss, and those targets are usually
+		// still reachable through the commit their referrer pinned.
+		//
+		// The loser's own path is prior for the reason it always was: it is
+		// deleted immediately below and the winner cites it as lineage — that
+		// citation is the record of the merge, not a dead ref.
+		//
+		// The check is therefore structurally satisfied today. It stays for
+		// Canonicalize, and because carriedRefs is built from the operands
+		// rather than from mergedRefs, anything a later change appends to the
+		// write list here is still gated (0ee925f4).
+		canonRefs, _, gerr := gate.Apply(ctx, winnerFact.File, mergedRefs, carriedRefs)
 		if gerr != nil {
-			return nil, fmt.Errorf("dedupCluster: refs for winner %q: %w", winnerFact.File, gerr)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup merge %s rejected: %v", winnerFact.File, gerr)})
+			continue
 		}
 		fullWinner.Refs = canonRefs
 
 		// Serialize and write the winner back to git.
 		newContent, err := fact.SerializeFact(fullWinner)
 		if err != nil {
-			return nil, fmt.Errorf("dedupCluster: serialize winner %q: %w", winnerFact.File, err)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup serialize winner %s: %v", winnerFact.File, err)})
+			continue
 		}
 		if _, err := gs.WriteFact(ctx, agentBranch, winnerFact.File, newContent, fmt.Sprintf("dedup: merge %s into %s [%s]", loserFact.File, winnerFact.File, recipeName), "subsume"); err != nil {
-			return nil, fmt.Errorf("dedupCluster: write winner %q: %w", winnerFact.File, err)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup write winner %s: %v", winnerFact.File, err)})
+			continue
 		}
 
-		// Delete the loser from git.
-		if _, err := gs.DeleteFact(ctx, agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName)); err != nil {
-			return nil, fmt.Errorf("dedupCluster: delete loser %q: %w", loserFact.File, err)
-		}
-
-		removedPaths[loserFact.File] = true
-
-		// Update the in-memory fact for the winner in case subsequent searches see it.
+		// Update the in-memory fact for the winner in case subsequent searches
+		// see it. This happens BEFORE the delete below, so the in-memory copy
+		// matches what is on the branch even if the delete is what fails.
 		updatedWinner := winnerFact
 		updatedWinner.Confidence = fullWinner.Confidence
 		updatedWinner.Sources = fullWinner.Sources
 		clusterByPath[winnerFact.File] = updatedWinner
+
+		// Delete the loser from git. A failure here leaves the winner merged
+		// and the loser still live: the pair stays a near-duplicate for this
+		// pass, and the winner's citation of it resolves either way. The loser
+		// stays in the surviving cluster, so nothing downstream is handed a
+		// path that is still there.
+		if _, err := gs.DeleteFact(ctx, agentBranch, loserFact.File, fmt.Sprintf("dedup: remove duplicate %s (merged into %s) [%s]", loserFact.File, winnerFact.File, recipeName)); err != nil {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("dedup delete loser %s: %v", loserFact.File, err)})
+			continue
+		}
+
+		removedPaths[loserFact.File] = true
 	}
 
 	// Build surviving cluster (exclude losers).
