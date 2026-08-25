@@ -262,7 +262,7 @@ func (r *Reviewer) storeIndices() (store.FactIndex, SearchQuery, store.PipelineI
 // whole epistemic corpus on a full scan), projected onto the prompt-facing
 // shape the review path works in.
 func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]factForLLM, error) {
-	seeds, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
+	seeds, _, err := r.p.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
 	if err != nil {
 		return nil, err
 	}

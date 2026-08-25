@@ -53,6 +53,15 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if req.Params.Task != nil {
 			ctx = context.WithoutCancel(ctx)
 		}
+		// FIRST, before the binding gate and before any argument is read
+		// (knomit#122). A malformed call is malformed wherever it is pointed,
+		// and the harm this prevents is a call that RUNS: an unrecognised
+		// scope key made every session whole-corpus, and an unscoped
+		// completion advances the watermark. Rejecting after StartSession
+		// would be too late by exactly the write that matters.
+		if err := rejectUnknownArguments(req, reviewTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		b := repos.BindingFromContext(ctx)
 		if !b.WriteOK() {
 			return mcpgo.NewToolResultError(fmt.Sprintf(

@@ -3,6 +3,9 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -31,4 +34,94 @@ func unmarshalArg[T any](req mcpgo.CallToolRequest, key string, target *T) error
 		return fmt.Errorf("invalid %s format: %v", key, err)
 	}
 	return nil
+}
+
+// rejectUnknownArguments fails a call carrying an argument key the tool does
+// not declare (knomit#122).
+//
+// WHY THIS IS AN ERROR AND NOT A WARNING. An MCP tool call is a JSON object
+// with no arity check: a caller can invent a parameter, the server never reads
+// it, and the call runs a DIFFERENT, VALID, SILENT operation. On knomit-kb that
+// was `{"effort": "medium", "scope": "{\"entities\": [...]}"}` — a `scope` key,
+// which knomit_review does not have, holding stringified JSON. Every such call
+// ran as a whole-corpus incremental pass, and an unscoped completion advances
+// the review watermark, so one malformed call turned a populated corpus into
+// permanent sub-millisecond done:true walls (#121). A warning returned in a
+// field the caller is not reading would be the same silence one level up.
+//
+// ORDER MATTERS. This runs BEFORE any per-argument type validation. The
+// original proposal was to type-check the known keys, and it would not have
+// caught this bug at all: the failing key is never read, so no amount of
+// validating `domain` and `entities` sees it.
+//
+// The valid set is DERIVED FROM THE TOOL'S OWN SCHEMA rather than listed here.
+// A hand-maintained list beside the schema is a second declaration of the same
+// thing; the two drift the first time a parameter is added, and the failure
+// mode is the guard rejecting the tool's own new parameter.
+func rejectUnknownArguments(req mcpgo.CallToolRequest, tool mcpgo.Tool) error {
+	args := req.GetArguments()
+	if args == nil {
+		// GetArguments type-asserts to map[string]any and yields nil for
+		// ANYTHING else — including `arguments` that is present but is a
+		// string, number or array. Those two cases need opposite answers.
+		//
+		// Absent arguments is legitimate: calling with none is the documented
+		// way to start a session, and there is nothing to enumerate.
+		//
+		// Present-but-not-an-object is NOT. An earlier version of this comment
+		// claimed "the ordinary per-argument accessors handle it" — they do
+		// not, they silently default, which is exactly the failure mode this
+		// function exists to close. Left unrejected, a caller sending the #121
+		// payload as a JSON string reached an unscoped whole-corpus pass and
+		// advanced the watermark: the same consequence as an unknown key, by a
+		// second route. It is wire-reachable, because mcp-go unmarshals
+		// `arguments` into a bare `any` and does no schema validation on the
+		// server path.
+		if req.GetRawArguments() != nil {
+			return fmt.Errorf("invalid arguments for %s: expected a JSON object, got %T",
+				tool.Name, req.GetRawArguments())
+		}
+		return nil
+	}
+
+	var unknown []string
+	for key := range args {
+		// Transport metadata is not a caller mistake. MCP reserves `_meta`,
+		// and clients attach underscore-prefixed keys of their own accord;
+		// rejecting those would break working clients to catch a bug they do
+		// not have.
+		if strings.HasPrefix(key, "_") {
+			continue
+		}
+		if _, declared := tool.InputSchema.Properties[key]; !declared {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+
+	// Sorted so the message is deterministic — a caller diffing two error
+	// strings should see a difference only when the calls differ.
+	sort.Strings(unknown)
+	valid := make([]string, 0, len(tool.InputSchema.Properties))
+	for key := range tool.InputSchema.Properties {
+		valid = append(valid, key)
+	}
+	sort.Strings(valid)
+
+	// The message names the offending keys AND the valid set: a caller that
+	// invented a parameter cannot correct itself from "invalid arguments", and
+	// the one that produced #121 would simply have re-sent the same call.
+	return fmt.Errorf("unknown argument %s for %s; valid arguments are: %s",
+		quotedList(unknown), tool.Name, strings.Join(valid, ", "))
+}
+
+// quotedList renders names as `"a", "b"` for an error message.
+func quotedList(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = strconv.Quote(n)
+	}
+	return strings.Join(quoted, ", ")
 }

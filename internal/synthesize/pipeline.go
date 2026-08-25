@@ -152,11 +152,16 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	}
 
 	t := time.Now()
-	seeds, err := p.dirtyFacts(ctx, branch, d.Facts, d.Search, d.Pipeline)
+	seeds, scan, err := p.dirtyFacts(ctx, branch, d.Facts, d.Search, d.Pipeline)
 	if err != nil {
 		return nil, wrapf(tool, err, "dirty facts")
 	}
+	// scoped/path/watermark ride this line because seeds+elapsed alone cannot
+	// tell a finished corpus from a call whose scope was silently dropped
+	// (knomit#122). With them, #121's week of forensics is one grep.
 	log.Info().Str("tool", tool).Str("session", sess.ID).Int("seeds", len(seeds)).
+		Bool("scoped", scan.Scoped).Str("scan_path", scan.Path).
+		Str("watermark", scan.Watermark).
 		Dur("elapsed", time.Since(t)).Msg("pipeline: seed scan")
 
 	// An empty seed pool completes the session immediately — which still runs
@@ -409,6 +414,33 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 
 // ── seed scan ─────────────────────────────────────────────────────────────
 
+// seedScan describes HOW a seed pool was produced: which of the two scan paths
+// ran, what the watermark was at the time, and whether a scope was active.
+//
+// It exists because the seed-scan log line carried only `seeds` and `elapsed`,
+// and those two numbers cannot distinguish "this corpus is finished" from "this
+// call lost its scope and diffed HEAD against HEAD" (knomit#122). Recovering
+// the difference after the fact took: reading a DB column for the scoped flag,
+// inferring the path from wall-clock timing, and solving for the watermark by
+// counting commit-log entries against candidate cutoffs until one matched the
+// seed count. All three values are known here, at the moment the decision is
+// made, and none of them was being written down.
+//
+// Reported for both paths, including the watermark on a scoped run where it did
+// NOT gate the scan: its value is the diagnostic — a watermark sitting at HEAD
+// is what makes every later unscoped call a no-op — not whether this particular
+// call consulted it.
+type seedScan struct {
+	Path      string // seedScanFull or seedScanIncremental
+	Watermark string // empty on a first run; the hash diffed against otherwise
+	Scoped    bool
+}
+
+const (
+	seedScanFull        = "full"
+	seedScanIncremental = "incremental"
+)
+
 // dirtyFacts returns the session's seed facts: everything changed since this
 // tool's watermark, or the whole (strategy-filtered) corpus on a full scan.
 //
@@ -422,13 +454,16 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 // load-bearing: discovery seeding excludes origin=discovered facts, and
 // dropping Origin here previously let a discovered fact seed its own
 // discovery.
-func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]fact.Fact, error) {
+func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactIndex, idx SearchQuery, pipelineIdx store.PipelineIndex) ([]fact.Fact, seedScan, error) {
 	tool := p.strategy.Tool()
 
 	watermark, err := pipelineIdx.GetPipelineWatermark(ctx, tool, branch)
 	if err != nil {
-		return nil, fmt.Errorf("get watermark: %w", err)
+		return nil, seedScan{}, fmt.Errorf("get watermark: %w", err)
 	}
+	// Recorded before the branch below, so the two agree by construction: the
+	// same expression that CHOOSES the path is the one that names it.
+	scan := seedScan{Watermark: watermark, Scoped: !p.scope.IsEmpty()}
 
 	// Full-scan path, taken when EITHER:
 	//   - no watermark → first run, all facts are dirty; or
@@ -442,6 +477,7 @@ func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 	//     scoped is exempt from both
 	//     (decisions/architecture/synthesize/scope-filter).
 	if watermark == "" || !p.scope.IsEmpty() {
+		scan.Path = seedScanFull
 		// Scope is applied in Go via p.scope.Matches, NOT pushed into
 		// SearchOptions: store.Search ANDs its domain+entity clauses
 		// (intersection) and canonicalises domains, whereas the filter is
@@ -450,7 +486,7 @@ func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		// the same scope yields the same seed pool regardless of watermark.
 		results, err := idx.Search(ctx, branch, p.strategy.SeedQuery())
 		if err != nil {
-			return nil, fmt.Errorf("search all: %w", err)
+			return nil, scan, fmt.Errorf("search all: %w", err)
 		}
 		seeds := make([]fact.Fact, 0, len(results))
 		for _, sr := range results {
@@ -463,13 +499,14 @@ func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 			}
 			seeds = append(seeds, f)
 		}
-		return seeds, nil
+		return seeds, scan, nil
 	}
 
 	// Incremental: only changed facts since watermark.
+	scan.Path = seedScanIncremental
 	added, modified, _, err := gs.DiffFiles(ctx, branch, watermark)
 	if err != nil {
-		return nil, fmt.Errorf("diff files: %w", err)
+		return nil, scan, fmt.Errorf("diff files: %w", err)
 	}
 
 	var seeds []fact.Fact
@@ -493,7 +530,7 @@ func (p *Pipeline) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 		}
 		seeds = append(seeds, f)
 	}
-	return seeds, nil
+	return seeds, scan, nil
 }
 
 // factFromSearchResult projects a search hit into a fact.Fact so the full-scan
