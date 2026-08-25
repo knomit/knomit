@@ -361,23 +361,39 @@ func (mi *motifIndex) LiveFactsWithoutMotifs(ctx context.Context, branch string,
 
 // MotifCoverage reports how many live AUTHORED facts carry at least one motif.
 // Reported in health; nothing branches on it.
-func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, total int, err error) {
+func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, backlog, total int, err error) {
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
-		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+		return 0, 0, 0, fmt.Errorf("MotifCoverage: %w", err)
 	}
+	// All three counts come from ONE query over ONE denominator, and the
+	// backlog term repeats LiveFactsWithoutMotifs' predicate exactly
+	// (knomit#124). The repetition is deliberate and it is the point: the
+	// backlog reported to an operator must be the same population the offer
+	// pool walks, or drain progress describes a queue nobody is draining.
+	// Computing it in a second method with its own WHERE clause is how those
+	// two drift apart.
+	//
+	// The three are a PARTITION — covered + declined + backlog = total — which
+	// is what lets the caller derive `declined` without a fourth count that
+	// could disagree with the other three.
 	err = conn(ctx, mi.rh.db).QueryRowContext(ctx, `
 		SELECT
 		  COUNT(DISTINCT CASE WHEN EXISTS (
 		      SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id) THEN bf.path END),
+		  COUNT(DISTINCT CASE WHEN NOT EXISTS (
+		      SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id)
+		    AND NOT EXISTS (
+		      SELECT 1 FROM motif_backfill_judged j
+		       WHERE j.branch_id = bf.branch_id AND j.fact_id = f.id) THEN bf.path END),
 		  COUNT(DISTINCT bf.path)
 		  FROM branch_facts bf
 		  JOIN facts f ON f.id = bf.fact_id
-		 WHERE bf.branch_id = ? AND f.origin = 'authored'`, branchID).Scan(&with, &total)
+		 WHERE bf.branch_id = ? AND f.origin = 'authored'`, branchID).Scan(&with, &backlog, &total)
 	if err != nil {
-		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+		return 0, 0, 0, fmt.Errorf("MotifCoverage: %w", err)
 	}
-	return with, total, nil
+	return with, backlog, total, nil
 }
 
 // RecordBackfillJudgedEmpty records that the backfill pass asked about these

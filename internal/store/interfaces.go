@@ -334,7 +334,12 @@ type MotifIndex interface {
 	// staleness guard would read "vanished" for a fact that is right there.
 	LiveFactIDs(ctx context.Context, branch string, paths []string) (map[string]int64, error)
 	// MotifCoverage reports how many live authored facts carry a motif.
-	MotifCoverage(ctx context.Context, branch string) (with, total int, err error)
+	// It returns three counts that PARTITION the authored population:
+	// `with` carry a motif, `backlog` are neither covered nor judged (the
+	// offer pool), and `total` is all of them. The caller derives declines as
+	// total-with-backlog rather than counting them separately, so the four
+	// numbers cannot disagree (knomit#124).
+	MotifCoverage(ctx context.Context, branch string) (with, backlog, total int, err error)
 	// AliasRows returns the alias table with its audit columns (method and the
 	// merge rationale).
 	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)

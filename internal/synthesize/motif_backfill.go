@@ -206,6 +206,20 @@ func buildBackfillHints(ctx context.Context, d Deps, branch string, targets []st
 type backfillHealth struct {
 	WithMotifs int
 	TotalFacts int
+	// Backlog is how many authored facts are still UNRESOLVED — neither
+	// carrying a motif nor recorded as judged-none-apply (knomit#124).
+	//
+	// It exists because the backlog leaves by TWO doors and coverage only sees
+	// one. A fact that gained a motif leaves via fact_motifs; a fact an agent
+	// honestly declined leaves via motif_backfill_judged. So the three
+	// populations partition the corpus —
+	//
+	//	total = covered + declined + backlog
+	//
+	// — and this is the term that lets the other two be told apart. Without it
+	// `declined` is unknowable, and with it every derived number below comes
+	// from one identity rather than from a second count that could disagree.
+	Backlog    int
 	Offered    int
 	Vocabulary int
 }
@@ -215,18 +229,57 @@ func recordBackfillHealth(sess *store.PipelineSession, h backfillHealth) {
 		return
 	}
 	pct := 100 * float64(h.WithMotifs) / float64(h.TotalFacts)
-	sess.Health = append(sess.Health, fmt.Sprintf(
-		"motif backfill: coverage %.0f%% (%d/%d authored facts), %d offered this session, %d vocabulary shown",
-		pct, h.WithMotifs, h.TotalFacts, h.Offered, h.Vocabulary))
+
+	// DRAIN PROGRESS, beside coverage and not instead of it — they measure
+	// different things and a reader needs both (knomit#124).
+	//
+	// coverage = covered/total measures the corpus's COMPOSITION: how much of
+	// it turned out to carry a mechanism. resolved = total-backlog measures the
+	// WORK: how much of it has been asked about. Only the second can reach
+	// 100%, because an honest decline resolves a fact without covering it.
+	//
+	// Reporting only coverage made a finished job look like a failed one — a
+	// corpus that drains perfectly still shows single-digit coverage forever if
+	// most of its facts are honestly motif-less. Worse, it priced a behaviour:
+	// a completion criterion written against coverage reads as a permanent
+	// stall, and the way to keep the number moving is to stop declining.
+	resolved := h.TotalFacts - h.Backlog
+	line := fmt.Sprintf(
+		"motif backfill: coverage %.0f%% (%d/%d authored facts), judged %d/%d, "+
+			"%d offered this session, %d vocabulary shown",
+		pct, h.WithMotifs, h.TotalFacts, resolved, h.TotalFacts,
+		h.Offered, h.Vocabulary)
+
+	// The ceiling, stated only when there IS one. An unexplained ceiling
+	// invites someone to "fix" it by declining less, so the clause names the
+	// declines that cause it; and a line that mentions a ceiling every session
+	// trains a reader to skip it (the #130 drop-clause reasoning).
+	//
+	// Guarded on the identity holding: the three populations partition the
+	// corpus, so a caller supplying figures that violate it gets the plain form
+	// rather than a negative count or a ceiling above 100%. Arithmetic nobody
+	// can act on is worse than a number that is merely incomplete.
+	if declined := h.TotalFacts - h.WithMotifs - h.Backlog; declined > 0 && resolved >= 0 {
+		ceiling := 100 * float64(h.TotalFacts-declined) / float64(h.TotalFacts)
+		line += fmt.Sprintf(
+			" — coverage cannot exceed %.0f%%: %d fact(s) were honestly declined "+
+				"(judged, no motif applies), which resolves them without covering them",
+			ceiling, declined)
+	}
+	sess.Health = append(sess.Health, line)
 }
 
 // planMotifBackfillWork enqueues at most one backfill item per session.
 func planMotifBackfillWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) error {
-	with, total, err := d.Motifs.MotifCoverage(ctx, branch)
+	with, backlog, total, err := d.Motifs.MotifCoverage(ctx, branch)
 	if err != nil {
 		return nil // an addition to review; degrade rather than fail
 	}
-	health := backfillHealth{WithMotifs: with, TotalFacts: total}
+	// All three counts come from the one query, so the health line's derived
+	// `declined` cannot disagree with them (knomit#124). They are a
+	// SESSION-START snapshot — this runs during Plan, before any of this
+	// session's answers land — which is what the health block is throughout.
+	health := backfillHealth{WithMotifs: with, Backlog: backlog, TotalFacts: total}
 	defer func() { recordBackfillHealth(sess, health) }()
 
 	targets, err := d.Motifs.LiveFactsWithoutMotifs(ctx, branch, maxBackfillFacts)
