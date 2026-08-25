@@ -84,6 +84,11 @@ func TestApplyPruneDecisions_MergeDoesNotOverwriteAnExistingFact(t *testing.T) {
 // keeps those tests asserting what they were written to assert (sources
 // pooling, hypothesis exclusion, unreadable-source warnings) rather than
 // accidentally re-asserting a filename.
+// It FAILS on a miss rather than returning "" (PR #131, LOW-5). Call sites in
+// sources_pooling_test.go feed the result straight into readSources, so an
+// empty path surfaced as a confusing ReadFact error about a path that is
+// obviously wrong, instead of the true diagnosis: the merge wrote nothing.
+// A helper that cannot find what it was asked for should say which.
 func mergedFactPath(t *testing.T, svc *store.Service, branch, title string) string {
 	t.Helper()
 	facts, err := svc.Search().Search(context.Background(), branch, store.SearchOptions{Limit: 1000})
@@ -93,6 +98,9 @@ func mergedFactPath(t *testing.T, svc *store.Service, branch, title string) stri
 			return f.Path
 		}
 	}
+	require.FailNow(t, "no merged fact found",
+		"no live fact titled %q on %s — the merge wrote nothing, which is a "+
+			"different failure from the path being wrong", title, branch)
 	return ""
 }
 
