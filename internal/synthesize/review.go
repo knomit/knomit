@@ -164,10 +164,17 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 	}
 	out := &ReviewResult{
 		SessionID: res.SessionID,
-		Done:      res.Done,
-		Summary:   res.Summary,
-		Progress:  res.Progress,
-		Health:    res.Health,
+		// Identity and displacement cross the engine→wire boundary here. The
+		// engine struct is the source of a copy; this projection is what a
+		// client actually receives (knomit#113).
+		Repo:             res.Repo,
+		RepoID:           res.RepoID,
+		WriteBranch:      res.WriteBranch,
+		AbandonedSession: res.AbandonedSession,
+		Done:             res.Done,
+		Summary:          res.Summary,
+		Progress:         res.Progress,
+		Health:           res.Health,
 	}
 	if res.Item == nil {
 		return out, nil

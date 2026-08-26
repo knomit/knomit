@@ -197,8 +197,20 @@ type PipelineItem struct {
 // PipelineResult is the engine's tool-neutral turn result.
 type PipelineResult struct {
 	SessionID string
-	Item      *PipelineItem
-	Done      bool
+	// Repo, RepoID and WriteBranch say WHERE this session is operating
+	// (knomit#113). The tool takes no repo argument — the binding decides — so
+	// without these a session through a multi-mount lens could not confirm
+	// which corpus it seeded from or where its answers land. knomit_learn
+	// already returns where it wrote; this makes review match.
+	Repo        string
+	RepoID      string
+	WriteBranch string
+	// AbandonedSession is the in-flight session this one displaced at start, if
+	// any (the #121 residue). Starting a session abandons any active session
+	// for the same tool+branch, and that was invisible on both sides.
+	AbandonedSession string
+	Item             *PipelineItem
+	Done             bool
 	// Summary is populated only on the completing turn. It reuses ReviewStats
 	// because that is the type already on the wire and in the session row;
 	// the name is review-flavoured but the counters are not.

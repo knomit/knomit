@@ -181,6 +181,10 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 			// #122(c): an empty return that says nothing cannot be told from a
 			// finished corpus, which is how #121's wall read as completion.
 			res.Health = append(res.Health, emptySeedHealth(scan)...)
+			// Identity on THIS path too: an empty return is exactly when an
+			// operator most needs to know which corpus reported nothing, since
+			// "nothing to do" and "wrong repo" look identical otherwise.
+			p.stampIdentity(res, sess)
 			return res, nil
 		}
 		log.Info().Str("tool", tool).Str("session", sess.ID).
@@ -203,7 +207,24 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	// the agent reads before deciding how much of this session to work through.
 	// Plan hung them on the same session object this call is holding.
 	res.Health = sess.Health
+	p.stampIdentity(res, sess)
 	return res, nil
+}
+
+// stampIdentity puts WHERE this session runs, and WHAT it displaced, onto a
+// start result (knomit#113 and #121's residue).
+//
+// On the START turn only. The identity does not change mid-session, and the
+// abandonment is a fact about one moment — repeating either on every continue
+// would be noise that trains a reader to skip the envelope.
+func (p *Pipeline) stampIdentity(res *PipelineResult, sess *store.PipelineSession) {
+	if res == nil {
+		return
+	}
+	res.Repo = p.ri.Name()
+	res.RepoID = p.ri.ID()
+	res.WriteBranch = sess.Branch
+	res.AbandonedSession = sess.Abandoned
 }
 
 // ContinueSession processes the model's response for the current work item and

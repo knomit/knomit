@@ -29,7 +29,18 @@ type PipelineSession struct {
 	// session. IN MEMORY ONLY — it is written and read inside the same
 	// StartSession call, so it is deliberately not a column: nothing needs it
 	// after the turn that produced it.
-	Health    []string
+	Health []string
+	// Abandoned is the id of the active session this one DISPLACED at creation,
+	// if there was one. IN MEMORY ONLY, like Health, and set by
+	// CreatePipelineSession alone — it describes one moment, not a stored
+	// property of the row.
+	//
+	// Starting a session abandons any active session for the same tool+branch.
+	// That is deliberate (one session per tool per branch) but it was silent on
+	// both sides: the winner did not know it took the slot, and the loser found
+	// out only when its next answer was rejected as "not active" — after it had
+	// composed one (knomit#113 / #121 residue).
+	Abandoned string
 	CreatedAt string
 	UpdatedAt string
 }
@@ -123,6 +134,21 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 	defer tx.Rollback()
 
 	// Abandon any active session for this tool+branch.
+	//
+	// WHICH ONE, captured before the update (knomit#113 / #121 residue).
+	// Starting a session silently DISPLACES an in-flight one, and the
+	// invisibility is two-sided: the new caller is not told it took the slot,
+	// and the displaced caller is not told either — it finds out when its next
+	// continue call is rejected, after spending a turn composing an answer to
+	// an item that no longer exists. Nothing here can notify the loser, so the
+	// least this can do is let the winner's result say what it displaced.
+	var abandoned string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`,
+		tool, branch,
+	).Scan(&abandoned); err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("CreatePipelineSession find active: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE tool = ? AND branch = ? AND status = 'active'`,
 		now, tool, branch,
@@ -136,6 +162,7 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 		Branch:    branch,
 		Status:    "active",
 		Phase:     "work",
+		Abandoned: abandoned,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
