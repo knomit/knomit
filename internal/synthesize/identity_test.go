@@ -214,11 +214,20 @@ func TestStructural_ReachesTheJudge(t *testing.T) {
 		"a structurally matched pair must be offered to the judge, not merely detected")
 }
 
-// TestStructural_ReservationSurvivesAFullOrdinaryBand — the reservation is only
-// meaningful when the ordinary band could have taken every slot. A widener that
+// TestStructural_AllowanceSurvivesAFullOrdinaryBand — the allowance is only
+// meaningful when the ordinary band could have taken every slot. A route that
 // fires only on underfill is decorative (the designer's Q10 ruling on the motif
-// signal, which this reservation copies).
-func TestStructural_ReservationSurvivesAFullOrdinaryBand(t *testing.T) {
+// signal).
+//
+// CHANGED BY knomit#155, and the change is the point. This used to end
+// `require.Len(pairs, budget)` — "the reservation reallocates a slot, it does
+// not add one" — because the structural route was a reservation INSIDE the
+// budget. It is now a separate allowance spent outside the budget, so the
+// correct assertion is the opposite one: the ordinary band keeps its full
+// budget AND the structural pairs are added on top. The old assertion is not
+// merely obsolete; keeping it would re-impose the coupling the fix removed,
+// since the only way to satisfy it is to take a slot from the ordinary band.
+func TestStructural_AllowanceSurvivesAFullOrdinaryBand(t *testing.T) {
 	ctx := context.Background()
 	a := "kb/technology/security/vulnerabilities/cisco/1e8287a2.md"
 	b := "kb/technology/security/vulnerabilities/networking/cisco/bfbb31b8.md"
@@ -238,10 +247,14 @@ func TestStructural_ReservationSurvivesAFullOrdinaryBand(t *testing.T) {
 
 	pairs, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, structuralFiller+2)
 	require.NoError(t, err)
-	require.Equal(t, 1, h.StructuralOffered,
-		"the reserved slot must be spent even when the ordinary band could have filled the budget")
+	require.Positive(t, h.StructuralOffered,
+		"the allowance must be spent even when the ordinary band could have filled the budget")
+	require.LessOrEqual(t, h.StructuralOffered, structuralAllowance,
+		"the allowance bounds the route; an unbounded sweep would drown the session")
 	require.True(t, containsPair(pairs, a, b))
-	require.Len(t, pairs, budget, "the reservation reallocates a slot, it does not add one")
+	require.Len(t, pairs, budget+h.StructuralOffered,
+		"the allowance ADDS to the budget, it does not spend from it — the ordinary "+
+			"band must still get every slot the throttle funded")
 }
 
 // TestStructural_NoTitleVectorIsDroppedNotScored — the ranking column means

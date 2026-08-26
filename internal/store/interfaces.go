@@ -374,6 +374,29 @@ type AbstractionIndex interface {
 	// titles score, so they cannot be reached through the cosine ranking that
 	// serves the title-KNN population.
 	RestatementPairsByMatchKind(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error)
+	// RestatementPairsByMatchKindOldest returns the `limit` OLDEST standing
+	// pairs of the named match kinds, by mint order rather than by cosine.
+	//
+	// The structural routes need a SWEEP, not a ranking. Inflow far exceeds
+	// outflow, so re-selecting the top of a cosine ranking every session
+	// starves the tail forever — and the ranking buys nothing here anyway,
+	// since a structurally matched pair is a near-certain duplicate whatever
+	// its cosine happens to be (see MatchKind).
+	//
+	// There is NO stored cursor, and deliberately so: consumption IS the
+	// cursor. A judged pair is deleted when its verdict lands, so "the oldest
+	// N standing" re-evaluated each session advances on its own.
+	//
+	// MINT ORDER IS `rowid`, and that is exact only while the axis is
+	// COMPLETE. ReplaceRestatementPairs writes with INSERT OR REPLACE, which
+	// in SQLite deletes the conflicting row and inserts a new one — assigning a
+	// FRESH rowid. So rowid means "least recently minted OR RE-minted": a
+	// re-minted pair goes to the BACK of the sweep (revisited, never skipped),
+	// and while the title axis is still filling every pair is rescanned each
+	// session, which churns every rowid and makes this ordering deterministic
+	// but not age-stable. Callers must SAY WHICH REGIME THEY ARE IN rather than
+	// claim an oldest-first guarantee they do not have.
+	RestatementPairsByMatchKindOldest(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error)
 	// TitleVectorsByFactID returns STORED title-axis vectors, keyed by fact id.
 	// Symmetric with BodyVectorsByFactID; nothing is re-embedded.
 	TitleVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error)
