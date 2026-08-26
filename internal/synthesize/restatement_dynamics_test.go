@@ -170,24 +170,35 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 	require.GreaterOrEqual(t, len(declined), throttleMinVerdicts)
 
 	// Quiet sessions, then exactly one probe.
+	//
+	// Driven through planRestatementShortlist, NOT selectRestatementCandidates
+	// (knomit#117b). The probe slot is consumed by the CALLER now, after
+	// enqueue, so a loop that stops at selection never exercises consumption at
+	// all: probeAllowed HOLDS its counter at the interval, so every subsequent
+	// session stays eligible and this loop counts three probes instead of one.
+	// Asserting at selection would assert that the helper works, not that
+	// anything spends the slot -- the campaign's path-vs-state rule, the same
+	// shape that rewrote the #117a wiring test.
 	probed := 0
-	var probePair store.RestatementPair
+	var probeA, probeB string
 	for range throttleProbeInterval + 1 {
-		pairs, health, err = selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
-		require.NoError(t, err)
-		if health.Probing {
+		sess, serr := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+		require.NoError(t, serr)
+		require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
+		items := env.workItems(sess.ID)
+		if healthLineSaysProbing(sess) {
 			probed++
-			require.Len(t, pairs, 1, "a probe is one slot, not a batch")
-			probePair = pairs[0]
+			require.Len(t, items, 1, "a probe is one slot, not a batch")
+			probeA, probeB = itemPairPaths(t, items[0].FactsJSON)
 		} else {
-			require.Empty(t, pairs, "a defunded corpus is silent between probes")
+			require.Empty(t, items, "a defunded corpus is silent between probes")
 		}
 	}
 	require.Equal(t, 1, probed, "exactly one probe per interval")
 
 	// Resolve the probe: the corpus funds itself again from evidence only the
 	// probe could have produced.
-	env.recordVerdict(probePair.APath, probePair.BPath, true)
+	env.recordVerdict(probeA, probeB, true)
 	pairs, health, err = selectRestatementCandidates(ctx, env.deps(), env.branch, nil, 600)
 	require.NoError(t, err)
 	require.Equal(t, throttleFunded, health.ThrottleState)
