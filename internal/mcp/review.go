@@ -85,6 +85,10 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
+		// Attribute whatever session this call opens. Harmless on a continue
+		// call, which creates none — the handle is read only by StartSession
+		// (knomit#123).
+		ctx = withActor(ctx, req)
 		reviewer := synthesize.NewReviewerWithOptions(ri, logProgress, effort, scope)
 
 		sessionID := req.GetString("session_id", "")

@@ -51,6 +51,24 @@ CREATE TABLE pipeline_sessions (
     status       TEXT NOT NULL DEFAULT 'active',
     phase        TEXT NOT NULL DEFAULT 'work',
     scoped       INTEGER NOT NULL DEFAULT 0, -- 1 when session was started with a scope filter
+    -- WHO opened this session, as a CORRELATION HANDLE — emphatically NOT an
+    -- identity and NOT authentication (knomit#123). Over MCP the value derives
+    -- from the caller's own `Mcp-Session-Id` header, which this server does
+    -- not verify: a fabricated id is accepted and runs. The MCP specification
+    -- is explicit that a session id "is not evidence of who the caller is" and
+    -- MUST NOT be treated as authentication. Read this column as "the opening
+    -- call said it was this", never as "this caller was".
+    --
+    -- Scheme-prefixed so the KIND of claim is visible in the value itself:
+    -- `mcp-session:<id>`, plus ` client:<name>/<version>` when the caller ran
+    -- `initialize` against this process. Empty for in-process callers (tests,
+    -- local tools) — honest absence, not "unknown".
+    --
+    -- Its worth is joinability: the same id is logged as `mcp_session` by the
+    -- HTTP slow-request line, so within the idle-reap window
+    -- (pipeline_idle_ttl, 1h) an unexpected session is one query rather than a
+    -- forensic pass over checkpointed DB copies.
+    created_by   TEXT NOT NULL DEFAULT '',
     -- Running work-item stat totals. They live on the row, not in memory, because
     -- the engine is per-call stateless: the MCP handler builds a fresh Reviewer
     -- for every continue call, so nothing accumulated on that struct survives.

@@ -239,7 +239,7 @@ func TestHypothesizer_DiscoverParseFailure_NonFatal(t *testing.T) {
 	svc, ri := newHypothesizeTestRepo(t)
 	ctx := context.Background()
 
-	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test")
+	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test", "")
 	require.NoError(t, err)
 	insertManualDiscoverItem(t, svc, sess.ID)
 
@@ -279,7 +279,7 @@ func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 	svc, ri := newHypothesizeTestRepo(t)
 	ctx := context.Background()
 
-	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test")
+	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test", "")
 	require.NoError(t, err)
 	insertManualDiscoverItem(t, svc, sess.ID)
 

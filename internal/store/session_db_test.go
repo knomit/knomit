@@ -165,7 +165,7 @@ func TestMarkPipelineSessionScoped_SetsFlag(t *testing.T) {
 	svc := openSessionTestStore(t)
 	ctx := context.Background()
 
-	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test")
+	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test", "")
 	require.NoError(t, err)
 	require.False(t, sess.Scoped, "newly created session must not be scoped")
 

@@ -26,7 +26,7 @@ func TestEnqueueRestatementItems_DropsAreCountedAndReported(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 3)
 	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
 	ids := env.factIDs()
@@ -115,7 +115,7 @@ func TestPlanRestatementShortlist_HealthEmittedMatchesTheQueue(t *testing.T) {
 	// NON-ZERO and the equality means something).
 	env := newRestatementEnv(t, 400)
 	env.seedShortlist()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
 	// Both ranked above anything the corpus produced on its own, so selection

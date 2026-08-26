@@ -200,7 +200,7 @@ func TestApplyReflectDecisions_ProposeSourcesIsOne(t *testing.T) {
 	seedFactWithSources(t, svc, branch, "kb/technology/a.md", 2)
 	seedFactWithSources(t, svc, branch, "kb/technology/b.md", 3)
 
-	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "review", branch)
+	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "review", branch, "")
 	require.NoError(t, err)
 
 	result := ReflectResult{Propose: []ProposeEntry{{

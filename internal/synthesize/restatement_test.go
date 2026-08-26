@@ -562,7 +562,7 @@ func TestApply_AttributesOnlyShortlistVerdicts(t *testing.T) {
 	}
 
 	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	env.seedShortlist()
 
@@ -634,7 +634,7 @@ func TestApply_SkipsVerdictWhenAnEndpointIsAlreadyGone(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 4)
 	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
 	item := &store.PipelineWorkItem{

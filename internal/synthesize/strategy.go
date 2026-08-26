@@ -209,8 +209,12 @@ type PipelineResult struct {
 	// any (the #121 residue). Starting a session abandons any active session
 	// for the same tool+branch, and that was invisible on both sides.
 	AbandonedSession string
-	Item             *PipelineItem
-	Done             bool
+	// AbandonedSessionCreatedBy is the displaced session's correlation handle
+	// — WHOSE slot this one took, not merely that it took one (knomit#123).
+	// Empty when nothing was displaced or when the loser carried no handle.
+	AbandonedSessionCreatedBy string
+	Item                      *PipelineItem
+	Done                      bool
 	// Summary is populated only on the completing turn. It reuses ReviewStats
 	// because that is the type already on the wire and in the session row;
 	// the name is review-flavoured but the counters are not.
