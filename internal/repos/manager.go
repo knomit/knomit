@@ -108,6 +108,23 @@ type Manager struct {
 	// job outlives the name reservation inflightMu guards.
 	createJobsMu sync.Mutex
 	createJobs   map[string]*CreateJob
+
+	// createsCtx/createsCancel/createWg own the DETACHED CREATE lifecycle, the
+	// third piece of background work Close must drain before it touches the
+	// handles that work uses — after the index heal (indexWg) and the reconcile
+	// loop (syncWg), and for the same reason: a create still running when
+	// control.db closes issues SQL on a closed *sql.DB and keeps writing into a
+	// directory the caller is now free to delete.
+	//
+	// SEPARATE from m.ctx, which Close cannot cancel because it belongs to
+	// whoever called New. Close cancels createsCancel and then waits createWg,
+	// so shutdown does not have to sit out a create's full CreateTimeout — and
+	// the cancelled create unwinds through its own step-boundary checks and
+	// cleanup() while control.db is STILL OPEN, which is what lets the rollback
+	// actually complete instead of logging "registry row not removed".
+	createsCtx    context.Context
+	createsCancel context.CancelFunc
+	createWg      sync.WaitGroup
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote
@@ -132,7 +149,10 @@ func (m *Manager) ResolveAuth(cfg config.RemoteAuthConfig, url string) (transpor
 
 // New returns an uninitialised Manager. Call Boot to open repos.
 func New(ctx context.Context, deps Deps) *Manager {
+	createsCtx, createsCancel := context.WithCancel(ctx)
 	return &Manager{
+		createsCtx:      createsCtx,
+		createsCancel:   createsCancel,
 		repos:           make(map[string]*RepoInstance),
 		byUID:           make(map[string]*RepoInstance),
 		unavailable:     make(map[string]Unavailable),
@@ -490,6 +510,23 @@ func (m *Manager) Close() error {
 	if m.sessionReaperStop != nil {
 		m.sessionReaperStop()
 		m.sessionReaperStop = nil
+	}
+
+	// Drain detached creates FIRST — before the control.db handles below are
+	// nilled and closed. This is the same invariant the indexWg/syncWg waits in
+	// pass 2 enforce for the index heal and the reconcile loop (see
+	// TestManagerClose_WaitsForBackgroundIndex, PR #82 review finding #1): no
+	// in-flight background SQL may race the handle closing. A detached create
+	// (#67) is the third such worker and was not registered with the drain,
+	// which is how it kept issuing SQL on a closed control.db and writing into
+	// a directory the caller was already deleting.
+	//
+	// It runs BEFORE the handles are released rather than beside pass 2 for a
+	// second reason: a cancelled create rolls itself back, and that rollback
+	// deletes a registry row. It needs the registry still open to do it.
+	if !m.drainCreates() {
+		log.Error().Dur("timeout", createDrainTimeout).
+			Msg("close: in-flight repo create did not finish after cancellation; closing anyway")
 	}
 
 	m.mu.Lock()
