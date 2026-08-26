@@ -349,8 +349,39 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// prune's positive cluster-size priorities and above the negative
 	// discover/reflect band (see forwardDiscoverPriority). Equal-priority items
 	// are served in insertion order by NextPipelineWorkItem's `id ASC` tiebreak.
+	//
+	// PROGRESSION, NOT MIRROR (knomit#135). Only the REMAINDER group is
+	// enqueued here. A clustered group is held back and enqueued only if its
+	// prune verdict comes back all-KEEP — see promoteClusterToDistill.
+	//
+	// The defect: distill was planned ALONGSIDE prune at session start, so
+	// every cluster was reasoned over twice in one session — once to decide
+	// whether its facts overlap, then again to synthesize upward from them as
+	// though they did not. Worse, a cluster whose prune verdict MERGED two
+	// facts was still distilled from the pre-merge grouping, which is how
+	// synthesis ended up fabricating corroboration out of what was one claim
+	// recorded twice.
+	//
+	// The prune verdict is a free classifier and this is the whole idea:
+	// acted-on (merge / retract / update) means the facts overlapped, so the
+	// cluster STOPS this session and re-seeds through the watermark once the
+	// changed facts settle; all-KEEP means the judge certified them distinct,
+	// which is synthesis's legitimate input.
+	//
+	// THE REMAINDER IS NOT GATED, and that is deliberate rather than an
+	// oversight. distillGroups' remainder is the seeds that landed in no
+	// multi-seed cluster; those never become a prune item at all, so they have
+	// no verdict to be classified by. Gating them on promotion would gate them
+	// on nothing and silently drop them — the population is substantial on real
+	// corpora. They were never part of the double-reasoning #135 removes: that
+	// was distill firing on prune's OWN clusters.
 	if len(llmSeeds) > 1 {
 		for _, group := range distillGroups(llmSeeds, clusters) {
+			if !group.Remainder {
+				// Held for promotion. Enqueued from the prune Apply arm if and
+				// only if the judge certifies the cluster distinct.
+				continue
+			}
 			for ci, chunk := range chunkFacts(group.Facts, maxItemBytes) {
 				factsJSON, err := json.Marshal(chunk)
 				if err != nil {
@@ -544,6 +575,13 @@ func (reviewStrategy) RenderPayload(item *store.PipelineWorkItem) (string, error
 type distillGroup struct {
 	Key   string
 	Facts []factForLLM
+	// Remainder marks the group of seeds that landed in NO multi-seed cluster.
+	//
+	// It is the one group with no corresponding prune item, so it is the one
+	// group that cannot be promotion-gated: there is no verdict to classify it
+	// by (knomit#135). Everything else here is a cluster, and a cluster is held
+	// until its prune verdict says it is worth synthesizing over.
+	Remainder bool
 }
 
 // distillGroups partitions the seed pool into the groups depth-0 distill
@@ -608,7 +646,7 @@ func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
 		}
 	}
 	if len(remainder) > 0 {
-		groups = append(groups, distillGroup{Key: "distill-rest", Facts: remainder})
+		groups = append(groups, distillGroup{Key: "distill-rest", Facts: remainder, Remainder: true})
 	}
 	return groups
 }
@@ -917,6 +955,28 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		// shortlist is earning its slots, and counting them would keep a
 		// useless shortlist funded forever on any healthy corpus.
 		recordShortlistVerdict(ctx, d, sess, judged, dec.prune)
+
+		// The prune→distill progression (knomit#135). The verdict just applied
+		// is a free classifier: all-KEEP means the judge certified this cluster
+		// distinct, which is synthesis's legitimate input, so its distill item
+		// is enqueued NOW — same session, because an all-KEEP dirties nothing
+		// and a "next session" promise would never fire.
+		//
+		// AFTER the apply, deliberately. The promotion is a statement about a
+		// verdict that has LANDED; enqueueing before the mutations committed
+		// would promote on an answer that could still fail to apply.
+		if promotesToDistill(item) {
+			inputPaths, perr := itemInputPaths(item)
+			switch {
+			case perr != nil:
+				log.Warn().Err(perr).Str("session", sess.ID).Str("cluster", item.ClusterKey).
+					Msg("review: prune item paths unreadable; cluster not considered for promotion")
+			case pruneVerdictCertifiesDistinct(*dec.prune, inputPaths):
+				promoteClusterToDistill(ctx, d, sess, item)
+			default:
+				recordProgressionStop(sess, item, stats)
+			}
+		}
 
 	case "distill":
 		stats, writtenFacts, err := ApplyDistillDecisions(ctx, d.Facts, d.Search, dec.distill.Synthesize, dec.distill.Retract, reviewTool, d.OnProgress, branch, fact.ID12(d.RI.ID()), d.RI.OntologyRoot())
