@@ -211,6 +211,20 @@ type PipelineIndex interface {
 	// engine's running totals have to live.
 	AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
+	// PendingPipelineWorkItems returns this session's UNANSWERED items, in
+	// queue order. It exists for the mid-session refresh: an item's payload is
+	// materialised when the session is planned, so a merge applied later in the
+	// same session leaves every still-queued item describing a corpus that no
+	// longer exists.
+	PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error)
+	// UpdatePipelineWorkItemFacts rewrites an unanswered item's payload. The
+	// response IS NULL guard is the same CAS the claim protocol uses: an item
+	// answered between the read and the rewrite must not be edited underneath
+	// the answer that is already being applied.
+	UpdatePipelineWorkItemFacts(ctx context.Context, id int64, factsJSON string) (updated bool, err error)
+	// DeletePipelineWorkItem removes an unanswered item, for the case where a
+	// refresh leaves it with too little left to judge. Same CAS guard.
+	DeletePipelineWorkItem(ctx context.Context, id int64) (deleted bool, err error)
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }

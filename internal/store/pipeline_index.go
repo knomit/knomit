@@ -375,3 +375,68 @@ func (pi *pipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID st
 	}
 	return completed, remaining, nil
 }
+
+// PendingPipelineWorkItems returns this session's unanswered items in queue
+// order — the same ordering NextPipelineWorkItem serves, so a caller iterating
+// them sees the queue as the agent will.
+func (pi *pipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error) {
+	rows, err := pi.sessionDB.QueryContext(ctx,
+		`SELECT id, session_id, step_type, cluster_key, facts_json, response, priority, depth, created_at
+		 FROM pipeline_work_items
+		 WHERE session_id = ? AND response IS NULL
+		 ORDER BY priority DESC, id ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("PendingPipelineWorkItems: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []PipelineWorkItem
+	for rows.Next() {
+		var item PipelineWorkItem
+		if err := rows.Scan(&item.ID, &item.SessionID, &item.StepType, &item.ClusterKey,
+			&item.FactsJSON, &item.Response, &item.Priority, &item.Depth, &item.CreatedAt); err != nil {
+			return nil, fmt.Errorf("PendingPipelineWorkItems scan: %w", err)
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("PendingPipelineWorkItems rows: %w", err)
+	}
+	return out, nil
+}
+
+// UpdatePipelineWorkItemFacts rewrites an unanswered item's payload.
+//
+// The `response IS NULL` guard is the claim protocol's CAS, used here in the
+// other direction: the claim stops two callers applying one answer, and this
+// stops a payload edit landing on an item whose answer is already being
+// applied. updated=false means the item was claimed first — a benign no-op,
+// exactly as a lost claim is.
+func (pi *pipelineIndex) UpdatePipelineWorkItemFacts(ctx context.Context, id int64, factsJSON string) (bool, error) {
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_work_items SET facts_json = ? WHERE id = ? AND response IS NULL`,
+		factsJSON, id)
+	if err != nil {
+		return false, fmt.Errorf("UpdatePipelineWorkItemFacts: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("UpdatePipelineWorkItemFacts rows: %w", err)
+	}
+	return n > 0, nil
+}
+
+// DeletePipelineWorkItem removes an unanswered item. Same CAS guard as the
+// payload rewrite above, for the same reason.
+func (pi *pipelineIndex) DeletePipelineWorkItem(ctx context.Context, id int64) (bool, error) {
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`DELETE FROM pipeline_work_items WHERE id = ? AND response IS NULL`, id)
+	if err != nil {
+		return false, fmt.Errorf("DeletePipelineWorkItem: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("DeletePipelineWorkItem rows: %w", err)
+	}
+	return n > 0, nil
+}

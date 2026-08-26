@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"knomit/internal/fact"
@@ -73,6 +74,17 @@ type ReviewStats struct {
 	Merged      int
 	Updated     int
 	Synthesized int
+	// Retired is every path this apply actually removed from the corpus —
+	// retracted facts and merge sources alike, and only those whose delete
+	// SUCCEEDED. It is the input to the mid-session refresh of already-queued
+	// work items (see inflight.go), which is why it reports what happened
+	// rather than what was asked for: an item stripped of a fact that is still
+	// live would be a second bug wearing the first one's fix.
+	//
+	// Not serialised. ReviewStats is embedded in ReviewResult as `summary`,
+	// and a path list there would be a wire-shape change for an internal
+	// hand-off.
+	Retired []string `json:"-"`
 }
 
 // ApplyPruneDecisions applies prune decisions (retract/update) and merges to the git store.
@@ -111,11 +123,17 @@ func ApplyPruneDecisions(ctx context.Context,
 			// no-op
 		case "retract":
 			msg := fmt.Sprintf("synthesize-%s: retract %s", recipeName, d.Path)
-			deletedPaths[d.Path] = true
 			if _, err := gs.DeleteFact(ctx, agentBranch, d.Path, msg); err != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("retract %s: %v", d.Path, err)})
 				continue
 			}
+			// Recorded AFTER the delete succeeded. The merge loop below already
+			// does this; the retract branch used to mark the path deleted first,
+			// which made a FAILED retract look identical to a completed one —
+			// harmless while deletedPaths only suppressed double-deletion, and
+			// not harmless now that the same set says which facts left the
+			// corpus.
+			deletedPaths[d.Path] = true
 			onProgress(ProgressEvent{Phase: "detail-retract", Message: "retract " + d.Path})
 			stats.Pruned++
 
@@ -263,6 +281,14 @@ func ApplyPruneDecisions(ctx context.Context,
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
 		stats.Merged++
 	}
+
+	// Sorted so the retired set is a deterministic function of what happened,
+	// not of Go's map iteration order.
+	stats.Retired = make([]string, 0, len(deletedPaths))
+	for p := range deletedPaths {
+		stats.Retired = append(stats.Retired, p)
+	}
+	sort.Strings(stats.Retired)
 
 	return stats, nil
 }

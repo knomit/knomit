@@ -839,6 +839,21 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 			return wrapf(reviewTool, err, "apply prune")
 		}
 		recordStats(ctx, reviewTool, d, sess, stats)
+		// Bring the REST of this session's queue back into agreement with the
+		// corpus the merge just changed. Every still-queued item was
+		// materialised during Plan, so without this the session goes on to
+		// offer facts this very item retired — a judge slot, or one of the
+		// eight backfill slots, spent on a corpus state that is already gone.
+		//
+		// Non-fatal by construction: the mutations above have already landed
+		// and been recorded, so failing the item here would report an error for
+		// work that succeeded. A refresh that cannot run leaves the queue as
+		// stale as it was before this existed, which is a degradation, not a
+		// corruption.
+		if rerr := refreshInFlightItems(ctx, d, sess, branch, stats.Retired); rerr != nil {
+			log.Warn().Err(rerr).Str("session", sess.ID).
+				Msg("review: in-flight work items could not be refreshed after this merge")
+		}
 		// Attribution for the judge-outcome throttle. ONLY shortlist-originated
 		// items count: a cluster prune's merges say nothing about whether the
 		// shortlist is earning its slots, and counting them would keep a
