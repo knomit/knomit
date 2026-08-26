@@ -56,6 +56,18 @@ type repoBuilder struct {
 	syncCtx context.Context
 	syncWg  *sync.WaitGroup
 
+	// syncLoopMu serializes the two routes that touch syncWg for a clone-create:
+	// startSync (ActivateSync) does syncWg.Wait()+Add(1) to restart the reconcile
+	// loop, while the openOne heal's activate()->startSyncLoops does its own
+	// syncWg.Add(1). Both fire from ONE Create, concurrently, so without this the
+	// Wait races the Add — an illegal WaitGroup use the race detector flags on the
+	// syncWg state word. Teardown handles the same hazard by ordering indexWg.Wait
+	// before syncWg.Wait (instance.go); this covers the ActivateSync direction,
+	// where ordering is not available (ActivateSync must not block on the heal).
+	// runReconcileLoop takes no repo lock, so holding this across syncWg.Wait()
+	// cannot deadlock against a loop's Done().
+	syncLoopMu sync.Mutex
+
 	// index-heal handles: the background heal owns its OWN context + waitgroup,
 	// SEPARATE from syncCtx/syncWg. The heal is cancelled only by a real teardown
 	// (shutdown/Close/SwapStore), never by startSync's loop-restart cancel — so a
@@ -650,8 +662,14 @@ func (b *repoBuilder) build() *RepoInstance {
 			}
 		}
 
+		// Serialize the loop-restart drain against the heal's startSyncLoops Add
+		// (see repoBuilder.syncLoopMu). syncCancel() first so any loop this Wait
+		// blocks on is already told to exit; the loop's Done() takes no repo lock,
+		// so waiting under syncLoopMu cannot deadlock.
+		b.syncLoopMu.Lock()
 		syncCancel()
 		syncWg.Wait()
+		b.syncLoopMu.Unlock()
 
 		var newCtx context.Context
 		newCtx, syncCancel = context.WithCancel(ctx)
@@ -705,7 +723,9 @@ func (b *repoBuilder) build() *RepoInstance {
 		if noBackgroundSync {
 			return nil
 		}
+		b.syncLoopMu.Lock()
 		syncWg.Add(1)
+		b.syncLoopMu.Unlock()
 		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly)
 		return nil
 	}
@@ -816,7 +836,12 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	}
 
 	authFn := makeRemoteAuthFn(b.cfg.Remote, b.keyPath)
+	// Serialize this Add against startSync's syncWg.Wait() (see syncLoopMu): a
+	// clone-create runs both from one Create concurrently, and an Add racing a
+	// Wait is an illegal WaitGroup use the race detector flags.
+	b.syncLoopMu.Lock()
 	wg.Add(1)
+	b.syncLoopMu.Unlock()
 	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly)
 }
 
