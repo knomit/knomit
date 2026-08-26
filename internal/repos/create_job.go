@@ -26,6 +26,21 @@ import (
 // legitimately slow but progressing create.
 const DefaultCreateTimeout = 30 * time.Minute
 
+// createDrainTimeout bounds how long Close waits for in-flight creates AFTER
+// cancelling them.
+//
+// CLASSIFICATION (MN13): an OPERATIONAL BOUND, not a corpus property. It is a
+// backstop on shutdown latency, not a measure of anything. The cancel above is
+// what makes the wait short in the normal case — a create notices at its next
+// step boundary — so this only fires when a create is wedged inside work that
+// does not observe cancellation, and there the right answer is to stop waiting
+// and let the process exit rather than hang shutdown forever.
+//
+// The cost of it firing is the hazard it exists to prevent, so it is generous
+// rather than tight: a create that outlives it may still touch a closing
+// handle, which is exactly the use-after-close being fixed.
+const createDrainTimeout = 30 * time.Second
+
 // CreateJobTTL is how long a FINISHED job stays readable before it is reaped.
 //
 // CLASSIFICATION (MN13): an OPERATIONAL BOUND on retention, not a corpus
@@ -275,10 +290,18 @@ func (m *Manager) StartCreate(spec CreateSpec) *CreateJob {
 
 	timeout := m.createTimeout()
 
+	// Registered with the drain BEFORE the goroutine starts. Adding inside the
+	// goroutine would race Close: a create could be started and not yet counted
+	// when Close reads the waitgroup, which is the very gap this closes.
+	m.createWg.Add(1)
+
 	go func() {
-		// Parented to the manager, never to a request; cancelled on the way
-		// out so the timer is released rather than left to fire.
-		ctx, cancel := context.WithTimeout(m.ctx, timeout)
+		defer m.createWg.Done()
+		// Parented to createsCtx, not m.ctx: same lifetime, plus a cancel that
+		// Close owns, so shutdown can wind an in-flight create down instead of
+		// waiting out its full deadline. Cancelled on the way out either way so
+		// the timer is released rather than left to fire.
+		ctx, cancel := context.WithTimeout(m.createsCtx, timeout)
 		defer cancel()
 
 		ri, err := m.Create(ctx, spec, j.record)
@@ -301,4 +324,29 @@ func (m *Manager) StartCreate(spec CreateSpec) *CreateJob {
 	}()
 
 	return j
+}
+
+// drainCreates cancels every in-flight detached create and waits for them,
+// bounded by createDrainTimeout. Called by Close BEFORE the control.db handles
+// are released, so a create still unwinding can complete its own rollback
+// against an open database.
+//
+// Reports whether the drain completed. A false return means at least one create
+// is still running and shutdown proceeded anyway — the caller logs it, because
+// the alternative is hanging forever on work that is not observing its context.
+func (m *Manager) drainCreates() bool {
+	if m.createsCancel != nil {
+		m.createsCancel()
+	}
+	done := make(chan struct{})
+	go func() {
+		m.createWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(createDrainTimeout):
+		return false
+	}
 }

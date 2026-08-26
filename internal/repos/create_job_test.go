@@ -172,3 +172,101 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	}, 30*time.Second, 50*time.Millisecond,
 		"the detached create's cancelled context must not stop the background index heal")
 }
+
+// TestManagerClose_DrainsInFlightCreate is the third instance of an invariant
+// Close already enforces twice: drain in-flight background work BEFORE touching
+// the handles it uses.
+//
+// TestManagerClose_WaitsForBackgroundIndex pinned it for the index heal (PR #82
+// review finding #1 — "Manager.Close ran svc.Close() while the heal was still
+// issuing SQL on the same *sql.DB — a use-after-close"), and
+// TestClose_WaitsForInFlightAcquire pins it for an outstanding Acquire. #67
+// introduced a THIRD background worker — the detached create — and never
+// registered it with the drain. The create runs on m.ctx, which Close neither
+// cancels nor waits for, so it keeps issuing SQL against a control.db that
+// Close has already closed (observed: "registry: sql: database is closed") and
+// keeps writing files into a directory the caller is about to remove. That is
+// the CI flake this fixes, and the Manager.Close edge deferred from #67.
+//
+// Close CANCELS before waiting rather than waiting the create out: a create is
+// bounded by CreateTimeout, and blocking shutdown for half an hour is the wrong
+// shutdown semantics. Cancelling makes the wait short AND makes the rollback
+// complete, because the create unwinds through its own boundary checks and
+// cleanup() while control.db is still open.
+// CLONE MODE IS THE FIXTURE so the create is slow enough to still be running
+// when Close arrives; the anti-vacuity assertion below checks that directly.
+//
+// WHAT MADE THIS TEST DETERMINISTIC WAS THE ASSERTION, NOT THE FIXTURE, and the
+// history is worth keeping because the obvious version does not work. The first
+// form asked a TIMING question — "was the job done when Close returned?" — and
+// measured, with the drain removed, 27/30 red on preset and 28/30 on a
+// one-fact clone. Scaling the remote to 200 facts did NOT help (20/30): the
+// margin was never the problem.
+//
+// The reason is that Close BREAKING the create is what makes the create finish
+// quickly, so the symptom partially masks itself — the timing check missed
+// precisely the runs where teardown won hardest. Asking about the create's
+// OUTCOME instead is 30/30 red without the drain and 0/20 with it, on the
+// CHEAPEST fixture. The 200-fact remote was built, measured, and thrown away.
+func TestManagerClose_DrainsInFlightCreate(t *testing.T) {
+	root := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: t.TempDir(), LocalOriginRoot: root},
+		AgentBranch: "machine/test",
+		Embedder:    testEmbedder{},
+	})
+	require.NoError(t, m.Start())
+	url := seedBareRemoteWithFact(t, filepath.Join(root, "remote.git"))
+
+	job := m.StartCreate(CreateSpec{Name: "cloned", Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main"}})
+
+	// ANTI-VACUITY. The test says something only if the create is STILL RUNNING
+	// when Close is called — if it had already finished, Close would have
+	// nothing to drain and would pass with no drain implemented at all.
+	require.Equal(t, CreateRunning, job.Status().State,
+		"the create must still be in flight when Close is called, or this test "+
+			"cannot detect whether Close drains it")
+
+	require.NoError(t, m.Close())
+
+	// THE PRIMARY PROPERTY, and it is about the create's OUTCOME rather than
+	// about timing: Close must not DESTROY an in-flight create. Measured, with
+	// the drain removed, the create is killed 12 times out of 12 — in two
+	// flavours, roughly evenly split:
+	//
+	//   "repo manager is not running"      (Close nilled the handles first)
+	//   "registry: sql: database is closed" (Close closed control.db under it)
+	//
+	// With the drain, 10 out of 10 report `context canceled` — a create that
+	// was asked to stop and stopped, which is the whole difference between an
+	// orderly shutdown and a use-after-close.
+	//
+	// This assertion replaced a timing one ("was the job done when Close
+	// returned?"), which looked reasonable and was only ~65% reliable. The
+	// reason is worth keeping: Close BREAKING the create is what makes the
+	// create finish quickly, so the symptom partially masks itself and the
+	// timing check missed exactly the runs where teardown won the race hardest.
+	_, cerr := job.Result()
+	if cerr != nil {
+		require.NotErrorIs(t, cerr, ErrManagerStopped,
+			"Close nilled the control handles while a create was still running")
+		require.NotContains(t, cerr.Error(), "database is closed",
+			"Close closed control.db while a create was still issuing SQL on it — "+
+				"the use-after-close this drain exists to prevent")
+	}
+
+	// SECONDARY, and strictly true whenever the drain is present: Close did not
+	// return until the create was terminal. Checked without blocking, because a
+	// receive that had to wait would be this test doing the draining Close is
+	// supposed to have done. Weaker than the outcome check above (it catches
+	// only about half the unfixed runs), kept because it can never fail while
+	// the drain is working.
+	select {
+	case <-job.Done():
+	default:
+		t.Fatal("Close returned while a detached create was still in flight")
+	}
+	require.NotEqual(t, CreateRunning, job.Status().State,
+		"a drained create must be terminal, not merely unobserved")
+}
