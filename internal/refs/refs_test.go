@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"knomit/internal/fact"
 )
 
 const gateRepoID = "3ec012f5b4d2"
@@ -85,13 +87,19 @@ func TestGate_ReportsAllProblems(t *testing.T) {
 }
 
 // Canonical form must behave exactly like the bare form.
-func TestGate_AcceptsQualifiedSelfReference(t *testing.T) {
+//
+// RENAMED from TestGate_AcceptsQualifiedSelfReference. "Self" there meant own
+// REPO — this is kb/y/new.md citing a DIFFERENT fact, written canonically. Once
+// #132 gave "self-reference" a precise and opposite meaning (a ref to the
+// fact's OWN PATH, now rejected), the old name read as the direct contradiction
+// of TestApply_SelfReferenceIsRejectedInCanonicalForm sitting a few lines away.
+func TestGate_AcceptsQualifiedRefToAnotherFactInThisRepo(t *testing.T) {
 	g := newGate("kb/decisions/x/abc.md")
 	batch := map[string][]string{
 		"kb/y/new.md": {"kb://3ec012f5b4d2/kb/decisions/x/abc.md"},
 	}
 	if err := g.CheckBatch(context.Background(), batch, nil); err != nil {
-		t.Fatalf("qualified self-reference must be accepted, got %v", err)
+		t.Fatalf("a canonical ref to another fact in this repo must be accepted, got %v", err)
 	}
 }
 
@@ -320,13 +328,83 @@ func TestApply_ChecksThenCanonicalizes(t *testing.T) {
 	}
 }
 
-// A fact may cite ITSELF (dedup-merge appends its own path as lineage) — the
-// single-fact batch satisfies that without a resolution lookup.
-func TestApply_SelfReferenceIsSatisfiedByTheBatch(t *testing.T) {
+// A fact may NOT cite itself (#132). This inverts the previous assertion, which
+// said the single-fact batch SATISFIED a self-citation — true of the resolution
+// question, and beside the point: a self-ref is not an unresolvable pointer, it
+// is a malformed one. The merge that used to produce these no longer does.
+//
+// The resolver must not be consulted: rejection is decided on the ref's shape
+// alone, so no corpus lookup can be part of the answer.
+func TestApply_SelfReferenceIsRejected(t *testing.T) {
 	g := New(gateRepoID, func(context.Context, string) (bool, error) {
 		return false, errors.New("resolver must not be consulted")
 	})
-	if _, _, err := g.Apply(context.Background(), "kb/self.md", []string{"kb/self.md"}, nil); err != nil {
-		t.Fatalf("a self-citation must be satisfied by its own batch entry, got %v", err)
+	_, _, err := g.Apply(context.Background(), "kb/self.md", []string{"kb/self.md"}, nil)
+	if err == nil {
+		t.Fatal("a fact citing its own path must be rejected")
+	}
+	if !strings.Contains(err.Error(), "may not reference itself") {
+		t.Fatalf("error must name the self-reference, got %v", err)
+	}
+}
+
+// The self-ref check compares CLASSIFIED paths, so it catches the canonical
+// form too. This is the form the corpus actually stores (bare paths are
+// qualified on write), so a check that only caught the bare spelling would miss
+// most real instances — both forms exist in stored corpora today.
+func TestApply_SelfReferenceIsRejectedInCanonicalForm(t *testing.T) {
+	g := New(gateRepoID, func(context.Context, string) (bool, error) {
+		return true, nil
+	})
+	canon := fact.QualifyKBPath(gateRepoID, "kb/self.md")
+	if _, _, err := g.Apply(context.Background(), "kb/self.md", []string{canon}, nil); err == nil {
+		t.Fatalf("a self-citation in canonical form (%s) must be rejected", canon)
+	}
+}
+
+// A self-ref the fact ALREADY CARRIED is GRANDFATHERED, and that asymmetry is
+// deliberate rather than an oversight. Facts written before #132 carry one on
+// disk, and some live in repos a deployment mounts READ-ONLY — rejecting a
+// carried self-ref would make those uneditable by anyone who can reach them,
+// bricking records nobody can repair in order to forbid a state that no longer
+// has a producer. They are inert on read (localEvidenceRefs drops the
+// self-path; the recursive walks absorb it as a back-edge), so letting an edit
+// through costs nothing.
+//
+// The NEW-ref rejection above is what actually closes the hole; this is the
+// bound on its blast radius.
+func TestApply_CarriedSelfReferenceIsGrandfathered(t *testing.T) {
+	g := New(gateRepoID, func(context.Context, string) (bool, error) {
+		return true, nil
+	})
+	prior := []string{"kb/self.md"}
+	if _, _, err := g.Apply(context.Background(), "kb/self.md", []string{"kb/self.md"}, prior); err != nil {
+		t.Fatalf("a carried self-citation must be let through so legacy facts stay editable, got %v", err)
+	}
+}
+
+// The grandfathering is matched on the CLASSIFIED path, so a fact whose stored
+// self-ref is canonical stays editable when the caller resends it bare (or the
+// other way round) — the two spellings are one edge, and both occur on disk.
+func TestApply_CarriedSelfReferenceGrandfatheredAcrossForms(t *testing.T) {
+	g := New(gateRepoID, func(context.Context, string) (bool, error) {
+		return true, nil
+	})
+	canon := fact.QualifyKBPath(gateRepoID, "kb/self.md")
+	if _, _, err := g.Apply(context.Background(), "kb/self.md", []string{"kb/self.md"}, []string{canon}); err != nil {
+		t.Fatalf("a carried canonical self-ref resent bare must be let through, got %v", err)
+	}
+}
+
+// Refs to OTHER facts are untouched by the self-check — including a retired
+// predecessor at a DIFFERENT path, which is genuine lineage. This is the
+// boundary #132 draws: reject a ref equal to the fact's OWN path, keep
+// everything else.
+func TestApply_RefToAnotherFactIsNotSelfReference(t *testing.T) {
+	g := New(gateRepoID, func(_ context.Context, p string) (bool, error) {
+		return p == "kb/other.md", nil
+	})
+	if _, _, err := g.Apply(context.Background(), "kb/self.md", []string{"kb/other.md"}, nil); err != nil {
+		t.Fatalf("citing a different fact must be allowed, got %v", err)
 	}
 }

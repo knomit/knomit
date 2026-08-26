@@ -213,12 +213,17 @@ func TestLearnHandler_AllowsDiscoveredHypothesis(t *testing.T) {
 	require.Equal(t, fact.Discovered, got.Origin)
 }
 
-// TestLearnHandler_DedupMergeWeightExcludesSelfCitation is a regression test:
-// when a discovered fact dedup-merges against an existing fact, the merge
-// appends the fact's own resulting path to refs as lineage. The evidence_weight
-// computation must NOT count that self-path as a source — otherwise a merged
-// derived fact inflates its own weight by citing its predecessor as evidence.
-func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
+// TestLearnHandler_DedupMergeEmitsNoSelfCitation inverts what this test used to
+// assert. It pinned that the merge APPENDS the fact's own resulting path as
+// lineage, and that evidence_weight excludes it. #132 removed the append: a
+// fact citing itself is not lineage, because the retarget preserves the file
+// and git history already records the subsumption.
+//
+// The WEIGHT assertion is kept unchanged and is the more important half — it
+// held before via the read-side exclusion in localEvidenceRefs and must still
+// hold now that the ref is not written at all. Two independent reasons for one
+// number, which is why the merge change cannot quietly alter it.
+func TestLearnHandler_DedupMergeEmitsNoSelfCitation(t *testing.T) {
 	svc, ctx, emb := newOriginTestRepo(t)
 
 	// Seed the only legitimate source. weight must derive from THIS alone.
@@ -270,8 +275,15 @@ func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
 	require.NoError(t, berr)
 	root, rerr := svc.RootCommit(context.Background(), br)
 	require.NoError(t, rerr)
-	require.Contains(t, merged.Refs, fact.QualifyKBPath(fact.ID12(root), firstPath),
-		"merge appends the fact's own path to refs (lineage) — the condition under test")
+	require.NotContains(t, merged.Refs, fact.QualifyKBPath(fact.ID12(root), firstPath),
+		"the merge must not write the fact's own path as a ref (#132)")
+	require.NotContains(t, merged.Refs, firstPath,
+		"nor the bare spelling of it — both forms occur in stored corpora")
+	// The genuine source SURVIVES: this is the boundary. #132 removes the
+	// self-reference, not lineage — a merged fact keeps every ref naming some
+	// OTHER fact.
+	require.Contains(t, merged.Refs, fact.QualifyKBPath(fact.ID12(root), sourcePath),
+		"the real source citation must survive the merge")
 	require.Equal(t, fact.Discovered, merged.Origin, "merged fact must stay discovered")
 	require.InDelta(t, baseline, merged.EvidenceWeight, 1e-9,
 		"weight must derive from the genuine source only, not inflate by counting the fact's own predecessor path as evidence")
@@ -283,7 +295,8 @@ func TestLearnHandler_DedupMergeWeightExcludesSelfCitation(t *testing.T) {
 // A cross-repo kb:// ref is excluded even though it ends in ".md", and a
 // SOURCE citation is excluded even when the file it cites is markdown — which
 // the previous ".md suffix" rule got wrong, counting src://…/plans/x.md as
-// local evidence. The fact's own path is excluded as dedup-merge lineage.
+// local evidence. The fact's own path is excluded — the merge no longer
+// writes one (#132), but facts written before that change still carry one.
 //
 // A schemeless ref like "docs/x.txt" IS a repo-relative fact path — that is
 // what schemeless means — so it is kept here. It cannot reach this function in
@@ -299,7 +312,7 @@ func TestLocalEvidenceRefs(t *testing.T) {
 	f.Refs = []string{
 		localRef,       // genuinely local: kept
 		kbRef,          // cross-repo kb:// (ends in .md): dropped
-		f.Path(),       // the fact's own path (dedup-merge lineage): dropped
+		f.Path(),       // the fact's own path (legacy, pre-#132): dropped
 		srcMarkdownRef, // markdown SOURCE citation (ends in .md): dropped
 		"https://example.com/paper",
 	}
@@ -324,7 +337,7 @@ func TestLocalEvidenceRefs_CanonicalStoredForm(t *testing.T) {
 	f := fact.NewFact("kb/observations/ai/derived.md")
 	f.Refs = []string{
 		fact.QualifyKBPath(localID, "kb/observations/ai/source.md"), // evidence
-		fact.QualifyKBPath(localID, f.Path()),                       // own path: lineage, not evidence
+		fact.QualifyKBPath(localID, f.Path()),                       // own path (legacy): never evidence
 		fact.QualifyKBPath("7b4887ce51d9", "kb/elsewhere.md"),       // foreign: excluded
 	}
 

@@ -150,10 +150,43 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 	}
 	sort.Strings(sources)
 
+	var selfRefs []problem
 	for _, from := range sources {
 		carried := g.pathSet(prior[from])
+		self := fact.ClassifyRef(from, g.localRepoID).Path
 		for _, raw := range batch[from] {
 			r := fact.ClassifyRef(raw, g.localRepoID)
+
+			// SELF-REFERENCE (#132) — checked FIRST, and the order is
+			// load-bearing. A self-ref is by definition in inBatch (the fact
+			// is the thing being written), so any check placed after the skip
+			// below is unreachable and would ship as a green no-op.
+			//
+			// Compared on the CLASSIFIED path, never the raw string: a
+			// self-ref reaches here bare ("kb/x/y.md") or canonical
+			// ("kb://<own-id>/kb/x/y.md") and both forms exist in stored
+			// corpora today, so a string test would match roughly none of them.
+			//
+			// NEWLY-ADDED refs only — a self-ref the fact already CARRIED is
+			// let through, deliberately. Facts written before #132 carry one
+			// on disk, and some of them live in repos a given deployment
+			// mounts READ-ONLY, so they cannot be repaired from everywhere
+			// they can be read. Rejecting a carried self-ref would make those
+			// facts uneditable — bricking a record nobody in reach can fix, to
+			// prevent a state that no longer has a producer.
+			//
+			// Safe because the producer is gone: mergeFacts no longer emits a
+			// self-ref by either route (append, or a union entry the retarget
+			// turns self-referential), so nothing legitimate introduces a NEW
+			// one and this check is defence in depth. And the legacy rows are
+			// inert on read — localEvidenceRefs drops the self-path before it
+			// can reach a weight, and the recursive walks absorb it as a
+			// back-edge.
+			if r.Kind == fact.RefLocalFact && r.Path == self && !carried[r.Path] {
+				selfRefs = append(selfRefs, problem{from, raw})
+				continue
+			}
+
 			if r.Kind != fact.RefLocalFact || inBatch[r.Path] || carried[r.Path] {
 				continue
 			}
@@ -172,6 +205,24 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 				problems = append(problems, problem{from, raw})
 			}
 		}
+	}
+
+	// Reported separately from unresolvable refs, and FIRST, because the two
+	// need opposite fixes: an unresolvable ref means "write the target"; a
+	// self-ref means "delete this ref, there is nothing to write". Folding
+	// them into one list would tell an agent to create a fact that already
+	// exists — it is the one being written.
+	if len(selfRefs) > 0 {
+		var b strings.Builder
+		b.WriteString("a fact may not reference itself — nothing was written:\n")
+		for _, p := range selfRefs {
+			fmt.Fprintf(&b, "  %s cites its own path as %s\n", p.from, p.ref)
+		}
+		b.WriteString("\nRemove the ref. A fact is not evidence for itself, and its own " +
+			"history is already recorded by the commit that writes it.\nRefs to OTHER " +
+			"facts are unaffected, including facts this one supersedes or that have " +
+			"since been retracted — citing those is lineage and stays valid.")
+		return fmt.Errorf("%s", b.String())
 	}
 
 	if len(problems) == 0 {

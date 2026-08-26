@@ -8,6 +8,12 @@ import (
 	"knomit/internal/fact"
 )
 
+// testLocalID is a stand-in repo id for mergeFacts unit tests. It must be
+// non-empty: ClassifyRef reads every kb://<id>/… ref as FOREIGN when the local
+// id is empty, so an empty value here would silently disable the self-ref
+// filter the merge now applies.
+const testLocalID = "3ec012f5b4d2"
+
 // knomit_learn's input schema advertises `"sources": {"default": 1}` and
 // `"confidence": {"default": 0.7}`, but a JSON Schema `default` is
 // documentation for the client, not server-side coercion. learnFactInput held
@@ -89,7 +95,7 @@ func TestMergeFacts_TransfersLoserSources(t *testing.T) {
 	incoming.Title, incoming.Body, incoming.Type = "N", "nb", fact.Observation
 	incoming.Confidence, incoming.Sources = 0.5, 3
 
-	merged := mergeFacts(incoming, existing, "kb/tech/foo.md")
+	merged := mergeFacts(incoming, existing, testLocalID)
 	require.Equal(t, 5, merged.Sources,
 		"a dedup merge leaves one file, so both facts' corroborations must pool into it")
 }

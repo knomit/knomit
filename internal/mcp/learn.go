@@ -19,8 +19,7 @@ import (
 
 // localEvidenceRefs returns the subset of a fact's refs that are genuinely-local
 // fact edges eligible to contribute evidence weight. It drops:
-//   - the fact's own resulting path (a dedup-merge appends it as lineage; a fact
-//     is never its own evidence source), and
+//   - the fact's own path (a fact is never its own evidence source), and
 //   - everything ClassifyRef does not call a local fact: a FOREIGN kb:// ref
 //     points into another repo, and a source citation is not a fact edge even
 //     when the file it cites is markdown (src://…/plans/x.md ends in ".md").
@@ -31,9 +30,12 @@ import (
 // them as foreign and silently compute the weight from nothing.
 func localEvidenceRefs(f fact.Fact, localRepoID string) []string {
 	var localRefs []string
-	// The self-path may be stored either bare (as the merge appended it) or
-	// canonical (as it was written), so compare on the classified path rather
-	// than the raw string.
+	// KEPT after #132 stopped the merge writing a self-ref, because facts
+	// written BEFORE that change still carry one on disk, in BOTH forms —
+	// measured: kb://<id>/…/69694fd7.md canonical, …/f1d14b64.md bare. A
+	// read-side drop is what keeps those legacy rows from inflating a weight,
+	// and it costs one comparison. Compare on the CLASSIFIED path, never the
+	// raw string, precisely because the two stored forms differ.
 	self := fact.ClassifyRef(f.Path(), localRepoID).Path
 	for _, r := range f.Refs {
 		c := fact.ClassifyRef(r, localRepoID)
@@ -354,16 +356,39 @@ func newFactWins(newFact, existing fact.Fact) bool {
 // one field that unions WINNER-first, because they are capped and so their
 // order decides what survives — see the call site. Pure.
 //
-// existingPath is the existing fact's RAW on-disk path and is deliberately
-// distinct from existing.Path(). The two differ in case: existing came from
-// ParseFact(existingPath, …), whose final step is NewFact(existingPath) =
-// strings.ToLower(existingPath). The merged fact's IDENTITY uses the
-// normalized form (that is what identity means here, and lowercasing is
-// idempotent, so this matches the pre-refactor behaviour exactly), but the
-// lineage REF must use the raw path — a ref is a pointer to a file, and for a
-// mixed-case fact file like "kb/Tech/Foo.md" the normalized "kb/tech/foo.md"
-// names nothing on disk, so every provenance walk through that edge dangles.
-func mergeFacts(newFact, existing fact.Fact, existingPath string) fact.Fact {
+// THE MERGE EMITS NO SELF-REFERENCE, and that is the point of #132. Two
+// separate ways one used to arise, and BOTH have to be closed — removing only
+// the first leaves the second producing them:
+//
+//  1. The merge APPENDED the existing fact's path as lineage. Because the merge
+//     RETARGETS onto that path, the appended path is the merged fact's OWN
+//     path, by construction. That append is gone: the retarget preserves the
+//     file, so git history for it already records that this version subsumed a
+//     duplicate, and the ref added nothing a reader could not get from
+//     `git log`.
+//
+//  2. The union can CONVERT a legitimate ref into a self-reference. An incoming
+//     fact may cite the very fact it then dedup-merges into — a perfectly
+//     ordinary "B cites A" that becomes "A cites A" the moment B is retargeted
+//     onto A. Nothing was appended; the ref was already there and only its
+//     meaning changed. So the union is FILTERED against the merged path rather
+//     than merely not added to. (Found by the suite, not by reading: it is
+//     exactly what TestLearnHandler_OriginDefaultsAuthored does.)
+//
+// Nothing downstream loses information. localEvidenceRefs already dropped the
+// self-path so it could not inflate evidence weight, and the recursive ref
+// walks in internal/synthesize/weight.go absorb it as a back-edge — the ref was
+// discarded by every consumer that read it.
+//
+// localRepoID is needed to CLASSIFY, not to decorate: refs arrive bare from the
+// caller and canonical from storage, and ClassifyRef with an empty id reads
+// every kb://<id>/… ref as FOREIGN — so a filter without it would silently miss
+// every canonical self-ref, which is the majority form on disk.
+//
+// Note what is NOT affected: refs to OTHER facts, including retired ones, are
+// unioned as before. Citing a retired predecessor at a DIFFERENT path is
+// genuine lineage and stays.
+func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	merged := fact.NewFact(existing.Path())
 	winner, loser := existing, newFact
 	if newFactWins(newFact, existing) {
@@ -417,8 +442,18 @@ func mergeFacts(newFact, existing fact.Fact, existingPath string) fact.Fact {
 	// is a hybrid, since a naive recompute mishandles a DERIVED existing fact
 	// whose lineage-composed weight max preserves better.
 	merged.EvidenceWeight = max(newFact.EvidenceWeight, existing.EvidenceWeight)
-	// Raw path, not existing.Path(): see the doc comment above.
-	merged.Refs = fact.AppendUnique(fact.UnionStrings(newFact.Refs, existing.Refs), existingPath)
+	// Union, then drop any ref that names the merged fact itself — in either
+	// stored form. See the doc comment above (#132).
+	self := fact.ClassifyRef(merged.Path(), localRepoID).Path
+	union := fact.UnionStrings(newFact.Refs, existing.Refs)
+	kept := make([]string, 0, len(union))
+	for _, r := range union {
+		if c := fact.ClassifyRef(r, localRepoID); c.Kind == fact.RefLocalFact && c.Path == self {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	merged.Refs = kept
 	return merged
 }
 
@@ -481,6 +516,7 @@ func applyDedupMerge(
 	topicCategories []string,
 	paths []string,
 	files map[string]string,
+	localRepoID string,
 ) (map[string][]float32, []string, map[string][]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
 	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
@@ -584,7 +620,7 @@ func applyDedupMerge(
 			continue
 		}
 
-		merged := mergeFacts(f, existingFact, match.Path)
+		merged := mergeFacts(f, existingFact, localRepoID)
 		if newFactWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
 			// as the new fact); just retarget to the existing path it now lives at.
@@ -765,7 +801,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// matches in its own category directory, if any. Mutates facts and
 		// files in place; hands back the embedding donations and the subsumed
 		// hypotheses to retract alongside the write.
-		embByPath, retract, priorRefs, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, facts, topicCategories, paths, files)
+		embByPath, retract, priorRefs, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, facts, topicCategories, paths, files, gate.LocalRepoID())
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
