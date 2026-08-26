@@ -244,9 +244,15 @@ func TestThrottleState_StartsOptimisticDefundsOnAllKeepRestoresOnResolution(t *t
 	require.Equal(t, throttleOptimistic, state, "no history means try it")
 	require.Zero(t, rate)
 
-	// Not enough evidence yet: a couple of keeps must not defund a corpus.
+	// Not enough evidence yet: a couple of keeps must not defund a corpus --
+	// but they must not read as FUNDED either. This assertion said
+	// throttleFunded because the code fell THROUGH to it, while the comment
+	// above named the property actually under test. Judged-with-nothing-resolved
+	// is its own state now (knomit#117b); both halves are asserted so the
+	// not-defunded property cannot silently ride on the state name again.
 	_, state = throttleState(keepVerdicts(throttleMinVerdicts - 1))
-	require.Equal(t, throttleFunded, state)
+	require.Equal(t, throttleUnproven, state)
+	require.NotEqual(t, throttleDefunded, state, "a couple of keeps must not defund a corpus")
 
 	_, state = throttleState(keepVerdicts(throttleMinVerdicts))
 	require.Equal(t, throttleDefunded, state, "enough judged, none resolved")

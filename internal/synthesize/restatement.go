@@ -372,10 +372,18 @@ const shortlistOverfetch = 4
 const shortlistMotifWiden = 3
 
 // Throttle states, reported in health output.
+//
+// RESOLVED, not merged: a verdict counts when the judge merged the pair OR
+// retracted its redundant half (the verdicts-are-resolved-not-merged ruling).
+// These comments used to say "merged". They predate that ruling and named a
+// NARROWER event than the code has ever counted, which is half of why the
+// printed state looked impossible on live corpora (knomit#117b) — the other
+// half is the fall-through that throttleState now closes.
 const (
-	throttleOptimistic = "optimistic" // no history yet — the cap bounds the downside
-	throttleFunded     = "funded"     // the judge has merged something recently
-	throttleDefunded   = "defunded"   // enough judged, none merged: stop spending
+	throttleOptimistic = "optimistic" // no verdicts yet — the cap bounds the downside
+	throttleFunded     = "funded"     // the judge resolved a pair recently
+	throttleUnproven   = "unproven"   // judged, none resolved, too little evidence to defund
+	throttleDefunded   = "defunded"   // enough judged, none resolved: stop spending
 )
 
 // restatementClusterKeyPrefix marks a prune work item as shortlist-originated.
@@ -403,6 +411,12 @@ type restatementHealth struct {
 	Dropped        int
 	ResolutionRate float64
 	ThrottleState  string
+	// Judged is how many verdicts the rate above was actually computed over.
+	// The health line used to print the throttleWindow CONSTANT instead, so a
+	// corpus with no verdicts at all still read "over last 10 judged"
+	// (knomit#117b). The denominator has to be the real one or the rate above
+	// it cannot be interpreted.
+	Judged int
 	// MotifWidened counts pairs admitted ONLY because their facts share a
 	// canonical motif — candidates the title axis alone would not have reached.
 	// Reported so the signal's contribution is visible rather than inferred.
@@ -442,8 +456,22 @@ func shortlistBudget(n int) int {
 }
 
 // throttleState reads the corpus's own verdict history: optimistic with no
-// history, defunded once enough shortlist pairs have been judged and none
-// merged, funded again the moment one merges.
+// verdicts, unproven once pairs have been judged with nothing resolved but too
+// few to conclude, defunded once enough have been judged with none resolved,
+// funded the moment one resolves.
+//
+// unproven is not a cosmetic split of funded (knomit#117b). Every
+// 0 < len(verdicts) < throttleMinVerdicts with nothing resolved used to fall
+// THROUGH to funded, so the line claimed "the judge resolved a pair recently"
+// on the exact evidence that says it did not — observed live on knomit-kb at
+// one judged KEEP. That interval is also the trajectory INTO defunding, which
+// is the thing an operator needs to see coming rather than discover after the
+// corpus has gone quiet.
+//
+// Behaviourally inert BY CONSTRUCTION, and that is load-bearing: only
+// throttleDefunded is read by any branch, so an unproven corpus budgets and
+// probes exactly as a funded or optimistic one does. This changes what is
+// PRINTED, never what is spent.
 func throttleState(verdicts []store.RestatementVerdict) (float64, string) {
 	if len(verdicts) == 0 {
 		return 0, throttleOptimistic
@@ -455,8 +483,11 @@ func throttleState(verdicts []store.RestatementVerdict) (float64, string) {
 		}
 	}
 	rate := float64(resolved) / float64(len(verdicts))
-	if resolved == 0 && len(verdicts) >= throttleMinVerdicts {
-		return rate, throttleDefunded
+	if resolved == 0 {
+		if len(verdicts) >= throttleMinVerdicts {
+			return rate, throttleDefunded
+		}
+		return rate, throttleUnproven
 	}
 	return rate, throttleFunded
 }
@@ -490,6 +521,7 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		return nil, h, wrapf(reviewTool, err, "shortlist: verdicts")
 	}
 	h.ResolutionRate, h.ThrottleState = throttleState(verdicts)
+	h.Judged = len(verdicts)
 
 	budget := shortlistBudget(n)
 	probing := false
@@ -674,16 +706,17 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// something (designer rider).
 	h.MotifSlotUsed = h.MotifWidened > 0 && len(ordinary) >= budget
 
-	if probing && len(out) > 0 {
-		// The probe is spent only if it actually put something in front of the
-		// judge. A session that found nothing to offer produced no evidence,
-		// and charging it a probe would buy another full interval of silence
-		// for nothing.
-		h.Probing = true
-		if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
-			return nil, h, wrapf(reviewTool, err, "shortlist: consume probe")
-		}
-	}
+	// Selection can only PROPOSE a probe; whether the slot is spent depends on
+	// what reached the judge, and only enqueue knows that. So the consumption
+	// moved to planRestatementShortlist (knomit#117b).
+	//
+	// probeAllowed has always documented the contract as "consumed by the
+	// caller, and only when a pair was actually emitted" — this is the first
+	// code that meets it. The gap mattered because selected != served since
+	// knomit#117a: a probe whose one pair fails to load at item creation put
+	// NOTHING in front of the judge, yet bought a full interval of silence.
+	// That is the self-defunding latch re-introduced at a slower rate.
+	h.Probing = probing && len(out) > 0
 	if len(out) > 0 {
 		// The operating point is not a threshold anyone chose: it is whatever
 		// absolute cosine the last funded pair happens to sit at in THIS repo.
@@ -823,6 +856,12 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 func applyEmissionOutcome(h *restatementHealth, served, dropped int) {
 	h.Emitted = served
 	h.Dropped = dropped
+	// The same correction applied to the probe (knomit#117b). Selection
+	// proposed one; a slot is only SPENT if something actually reached the
+	// judge. Downgrading here also stops the health line rendering "(probing)"
+	// for a session that probed nothing — the identical selected-vs-served
+	// lie this function exists to end, wearing the throttle's clothes.
+	h.Probing = h.Probing && served > 0
 }
 
 // planRestatementShortlist runs the whole phase-0 sequence for one session:
@@ -893,6 +932,21 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 	// exactly why it is worth closing now rather than when something starts
 	// reading it.
 	applyEmissionOutcome(&health, served, dropped)
+	if health.Probing {
+		// Consume the probe HERE, and only here: health.Probing is true at this
+		// point only if a pair actually reached the judge, which is the
+		// contract probeAllowed documents.
+		//
+		// A failure is not fatal and is self-healing: probeAllowed HOLDS the
+		// counter at the interval rather than bumping past it, so a corpus that
+		// could not record the consumption stays eligible and probes again next
+		// session. Failing a review over that bookkeeping write would cost more
+		// than the one extra probe it prevents.
+		if perr := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); perr != nil {
+			log.Warn().Err(perr).Str("session", sess.ID).
+				Msg("review: probe slot not consumed; corpus stays eligible next session")
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -924,7 +978,7 @@ func healthLines(h restatementHealth) []string {
 		fmt.Sprintf("operating point: title-cos %.3f (this corpus, this session)", h.OperatingPoint),
 		emittedLine(h),
 		fmt.Sprintf("shortlist throttle: %s%s (trailing resolution-rate %.0f%% over last %d judged)",
-			h.ThrottleState, probeSuffix(h), h.ResolutionRate*100, throttleWindow),
+			h.ThrottleState, probeSuffix(h), h.ResolutionRate*100, h.Judged),
 		// The motif signal's actual contribution, not its existence (designer
 		// rider Q10). The GATE package needs to state how often it FIRED, and
 		// a line that only ever said "enabled" could not support that claim.
