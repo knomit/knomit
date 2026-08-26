@@ -82,8 +82,14 @@ func applyReinforcements(
 			reject("%s is one of the seeds — a fact is not an independent derivation of itself", r.Path)
 			continue
 		}
-		if !refsCoverSeeds(r.Refs, seedPaths) {
-			reject("%s refs does not cite every seed", r.Path)
+		// The derivation-path floor (#151), replacing "cite every seed". See
+		// refsCiteSeedSubset. The split below is the same partition this check
+		// runs, recomputed after the fact is read so a rejection here costs no
+		// read — deliberate duplication of two cheap calls, not a seam.
+		if !refsCiteSeedSubset(r.Refs, seedPaths, localRepoID) {
+			_, _, distinct := splitSeedRefs(r.Refs, seedPaths, localRepoID)
+			reject("%s cites %d of the bridge's seeds as its derivation path, needs at least %d",
+				r.Path, distinct, minCitedSeeds)
 			continue
 		}
 
@@ -140,20 +146,21 @@ func applyReinforcements(
 		// write list is built from it and the two can diverge.
 		prior := append([]string(nil), f.Refs...)
 
-		// SEEDS ONLY (review H2). refsCoverSeeds is a superset check, so r.Refs
-		// may name anything the model happened to read while deciding — and
-		// rider 2 now instructs it to read. Every extra would become a permanent
+		// SEEDS ONLY (review H2). The subset check above bounds how FEW seeds
+		// may be cited; this bounds what else may ride along. r.Refs may name
+		// anything the model happened to read while deciding — and rider 2 now
+		// instructs it to read. Every extra would become a permanent
 		// DERIVED_FROM edge on a fact someone else authored, and would move its
 		// evidence weight. Surplus citation does not kill an otherwise valid
 		// reinforcement; the extras are dropped with a warning.
-		var extras, seeds []string
-		for _, ref := range r.Refs {
-			if _, isSeed := seedPaths[ref]; isSeed {
-				seeds = append(seeds, ref)
-			} else {
-				extras = append(extras, ref)
-			}
-		}
+		//
+		// The partition is by CANONICAL PATH (#151), not by raw string. It used
+		// to disagree with the dedup membership test twelve lines below, which
+		// has always canonicalised: a seed cited as kb://<own-id>/<path> — the
+		// spelling the corpus stores — was classified an EXTRA here and dropped,
+		// while the test below would have recognised it. One half of this
+		// function knew how refs are spelled and the other did not.
+		seeds, extras, _ := splitSeedRefs(r.Refs, seedPaths, localRepoID)
 		if len(extras) > 0 {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
 				"reinforce %s: discarded %d ref(s) naming facts outside the bridge: %s",

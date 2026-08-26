@@ -257,9 +257,35 @@ func TestHypothesizer_DiscoverParseFailure_NonFatal(t *testing.T) {
 }
 
 // discoverResponseOneProposal is a valid forward-discover response proposing
-// exactly one fact. With empty bridge members, refs=[] satisfies the
-// refs-cover-seeds check and confidence 0.9 clears the 0.5 gate.
-const discoverResponseOneProposal = `{"proposals":[{"path":"kb/x/p.md","title":"P","body":"B","type":"synthesis","domain":["auth"],"confidence":0.9,"entities":[],"refs":[]}]}`
+// exactly one fact, citing the two seeds insertSeededDiscoverItem offers.
+// Confidence 0.9 clears the 0.5 gate.
+//
+// It used to carry refs=[] against a bridge with NO members, where the
+// then-current "refs must cover every seed" check was vacuously satisfied by
+// the empty seed set. #151 replaced that with a floor of two cited seeds, and
+// the fixture stopped writing anything — correctly. A zero-member bridge cannot
+// occur (enumeration requires at least two members spanning two communities),
+// so the old fixture was asserting THROUGH an impossible state; the seeds below
+// make it a shape the engine can actually produce.
+const discoverResponseOneProposal = `{"proposals":[{"path":"kb/x/p.md","title":"P","body":"B","type":"synthesis","domain":["auth"],"confidence":0.9,"entities":[],"refs":["kb/seedone.md","kb/seedtwo.md"]}]}`
+
+// insertSeededDiscoverItem is insertManualDiscoverItem plus the two seed facts
+// its bridge offers, for tests that let apply RUN and need the proposal to
+// survive the citation gate. Tests asserting that nothing is written keep using
+// the bare helper, whose empty corpus is what makes "no facts" measurable.
+func insertSeededDiscoverItem(t *testing.T, svc *store.Service, sessionID string) {
+	t.Helper()
+	writeTestFact(t, svc, "kb/seedone.md", "Seed one", fact.Observation, "auth")
+	writeTestFact(t, svc, "kb/seedtwo.md", "Seed two", fact.Observation, "auth")
+	require.NoError(t, svc.Pipeline().InsertPipelineWorkItem(context.Background(), store.PipelineWorkItem{
+		SessionID:  sessionID,
+		StepType:   "discover",
+		ClusterKey: "discover-bwd-0",
+		FactsJSON: `{"direction":"forward","bridge":{"token":"auth","kind":"entity","members":` +
+			`[{"path":"kb/seedone.md"},{"path":"kb/seedtwo.md"}]}}`,
+		Priority: backwardDiscoverPriority(0),
+	}))
+}
 
 // TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce is the hypothesize
 // half of the P0.4 claim anchor (review_claim_test.go covers the review half):
@@ -281,7 +307,7 @@ func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 
 	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test", "")
 	require.NoError(t, err)
-	insertManualDiscoverItem(t, svc, sess.ID)
+	insertSeededDiscoverItem(t, svc, sess.ID)
 
 	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{})
 	var start, done sync.WaitGroup
@@ -300,9 +326,20 @@ func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 	start.Done()
 	done.Wait()
 
+	// Count only the PROPOSED fact. The two seeds are also on disk now, so a
+	// bare corpus count would no longer measure what this test is about.
+	// normalizeFactPath rewrites the basename to a uuid, so match on title.
 	results, err := svc.Search().Search(ctx, "agent/test", store.SearchOptions{Limit: 10})
 	require.NoError(t, err)
-	require.Len(t, results, 1, "a duplicated discover submission must not duplicate its proposals")
+	proposed := 0
+	for _, r := range results {
+		if r.Title == "P" {
+			proposed++
+		}
+	}
+	require.Equal(t, 1, proposed,
+		"a duplicated discover submission must not duplicate its proposals (corpus: %d facts)",
+		len(results))
 }
 
 // TestBackwardDiscoverPriority_StrictlyNegativeRanked is the regression guard

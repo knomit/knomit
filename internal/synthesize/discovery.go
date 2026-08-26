@@ -253,7 +253,7 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 		b.WriteString("  (b) The consequence is LOAD-BEARING — its falsity invalidates ≥2 of the cited facts.\n")
 	}
 	b.WriteString("  (c) Not already in the corpus — you QUERIED for it above and no existing fact states it. If one does, REINFORCE it instead of proposing (below).\n")
-	b.WriteString("  (d) You can cite every seed fact above in refs. An empty refs array indicates you did not engage with the inputs.\n\n")
+	b.WriteString("  (d) You can cite AT LEAST TWO of the seed facts above in refs, as the derivation path this claim actually rests on. Cite the seeds that genuinely support it and NO OTHERS — a seed that does not fit is simply not claimed as evidence, not forced in, and not a reason to abandon an otherwise valid derivation. Refs naming anything that is not a seed above are discarded. An empty refs array indicates you did not engage with the inputs.\n\n")
 	b.WriteString("If any condition fails, return an empty proposals array. Skipping is the expected outcome.\n\n")
 	// GATE rider 3 (designer, 2026-08-23): discovery's third outcome. On a
 	// recall hit the answer is neither propose nor decline — the seeds are an
@@ -267,10 +267,10 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 	b.WriteString("Reinforce ONLY IF ALL of these hold:\n")
 	b.WriteString("  (a) The existing fact states the SAME claim, not a neighbouring one. Say why in one sentence; if you cannot write that sentence, they are not the same claim.\n")
 	b.WriteString("  (b) You would otherwise have proposed it here. Reinforcement replaces a proposal; it is never a note about something you happened to read.\n")
-	b.WriteString("  (c) You can cite every seed fact above in refs.\n")
+	b.WriteString("  (c) You can cite AT LEAST TWO of the seed facts above in refs, as the derivation path — the seeds that genuinely support the existing claim, and no others.\n")
 	b.WriteString("DEFAULT TO NO on sameness. When you are torn between \"the same claim\" and \"a claim near it\", PROPOSE AND LINK instead of reinforcing: a false link is recoverable, a false merge is not.\n\n")
 	b.WriteString("PERSISTENCE — origin reflects how this group was formed.\n")
-	b.WriteString("These facts were grouped by a cross-cluster BRIDGE, so any fact you persist from them is discovery-engine output (origin: discovered). Submit your proposals back via knomit_hypothesize/knomit_review to record them automatically. If you instead save one directly with knomit_learn after previewing, you MUST set origin: discovered and cite every seed fact above in refs.\n\n")
+	b.WriteString("These facts were grouped by a cross-cluster BRIDGE, so any fact you persist from them is discovery-engine output (origin: discovered). Submit your proposals back via knomit_hypothesize/knomit_review to record them automatically. If you instead save one directly with knomit_learn after previewing, you MUST set origin: discovered and cite at least two of the seed facts above in refs — the ones on the derivation path, and no facts other than the seeds.\n\n")
 	b.WriteString("RESPONSE SCHEMA: {\"proposals\":[{\"path\":\"" + ontologyRoot + "/.../slug.md\",\"title\":\"...\",\"body\":\"...\",\"type\":\"")
 	if payload.Direction == DiscoverBackward {
 		b.WriteString("hypothesis")
@@ -342,9 +342,38 @@ func applyDiscoveredProposals(
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", p.Path, err)})
 			continue
 		}
-		if !refsCoverSeeds(p.Refs, seedPaths) {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery rejected: %s refs does not cite every seed", p.Path)})
+		// ONE expression of the floor, both call sites. The proposal and
+		// reinforce paths ask the same question and must not drift into two
+		// spellings of it — the same reason the motif rank order has a single
+		// comparator. splitSeedRefs is called again here only for the message
+		// and the discard list; the DECISION is refsCiteSeedSubset's alone.
+		if !refsCiteSeedSubset(p.Refs, seedPaths, localRepoID) {
+			_, _, distinctSeeds := splitSeedRefs(p.Refs, seedPaths, localRepoID)
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"discovery rejected: %s cites %d of the bridge's seeds as its derivation path, needs at least %d",
+				p.Path, distinctSeeds, minCitedSeeds)})
 			continue
+		}
+		citedSeeds, extraRefs, _ := splitSeedRefs(p.Refs, seedPaths, localRepoID)
+		// SEEDS ONLY, discarded not rejected — the same treatment the reinforce
+		// path has always given surplus refs, so the two paths now agree.
+		//
+		// A derived fact's refs ARE its derivation path: every one becomes a
+		// permanent DERIVED_FROM edge and moves the fact's evidence weight, so a
+		// ref naming something the bridge never offered is a derivation nobody
+		// checked. Before #151 this path wrote them through unfiltered.
+		//
+		// Discarding rather than rejecting keeps the campaign's rule that a
+		// proposal costing a bridge enumeration and an LLM call is not thrown
+		// away over surplus (cf. DropInvalidMotifs) — and the warning is what
+		// stops the drop being silent. NOTE the consequence: this drops
+		// external refs too (an https:// source the model attached), because
+		// the discover prompt asks for a derivation path over the seeds, not a
+		// bibliography.
+		if len(extraRefs) > 0 {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"discovery %s: discarded %d ref(s) naming facts outside the bridge: %s",
+				p.Path, len(extraRefs), strings.Join(extraRefs, ", "))})
 		}
 		if p.Confidence < gates.ConfidenceThreshold {
 			log.Debug().Str("path", p.Path).Float64("confidence", p.Confidence).Float64("threshold", gates.ConfidenceThreshold).Msg("discovery gate: confidence below threshold")
@@ -379,7 +408,7 @@ func applyDiscoveredProposals(
 		// bridge proposal is a NEW claim over facts that stay alive — so there
 		// is no retraction list. A rejection warns and skips this one proposal,
 		// matching every other gate in this loop.
-		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), p.Refs, nil)
+		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), citedSeeds, nil)
 		if gerr != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", f.Path(), gerr)})
 			continue
@@ -442,18 +471,82 @@ func applyDiscoveredProposals(
 	return written, nil
 }
 
-// refsCoverSeeds reports whether refs is a superset of the seed paths set.
-func refsCoverSeeds(refs []string, seedPaths map[string]struct{}) bool {
-	have := make(map[string]struct{}, len(refs))
-	for _, r := range refs {
-		have[r] = struct{}{}
-	}
+// minCitedSeeds is the floor on how many of a bridge's offered seeds a derived
+// fact must claim as its derivation path.
+//
+// TWO, because one is not a derivation. A bridge asserts that a claim follows
+// from the CONJUNCTION of facts that clustering kept apart; a fact citing a
+// single seed is not a weaker bridge, it is a different thing entirely — an
+// observation about one fact, which the bridge machinery is not the way to
+// record. This is a floor on ARGUMENT SHAPE, not a corpus property: it is two
+// because a conjunction needs two terms, and no measurement of any corpus
+// could move it (MN13).
+//
+// CONSEQUENCE WORTH STATING, because it is the first thing a reader will get
+// wrong: on a TWO-seed bridge this rule is identical to the all-seeds rule it
+// replaces. #151 relaxes nothing there, by design. The relaxation bites only
+// at three or more seeds — which is where it was measured to bite (s207's
+// discarded derivation was a five-seed item).
+const minCitedSeeds = 2
+
+// splitSeedRefs partitions a derived fact's refs into the OFFERED SEEDS it
+// claims and the EXTRAS it does not, comparing on canonical fact paths rather
+// than raw strings.
+//
+// THE NORMALISATION IS LOAD-BEARING, and the raw-string version it replaces was
+// a latent defect. Refs are STORED CANONICAL as kb://<own-id12>/<path>, so a
+// seed cited in the form the corpus itself writes matched NOTHING under a
+// literal string compare. Under the all-seeds rule that failed loudly (a valid
+// answer was rejected); under the subset rule it fails twice over — the
+// correctly-spelled seed does not COUNT toward minCitedSeeds and is then
+// discarded as an extra, so relaxing the gate without this would have thrown
+// away the very answers #151 exists to keep. Third live site of the same
+// stored-canonical trap (#125's lineage refs, #132's self-refs, this).
+//
+// Returns the cited seeds in their ORIGINAL spelling (callers canonicalise
+// deliberately, and the reinforce path must not rewrite authored strings), the
+// extras likewise, and the count of DISTINCT seeds cited — distinct, so a fact
+// naming one seed twice, in two spellings, does not buy itself a second term.
+func splitSeedRefs(refs []string, seedPaths map[string]struct{}, localRepoID string) (cited, extras []string, distinct int) {
+	canonSeed := make(map[string]struct{}, len(seedPaths))
 	for s := range seedPaths {
-		if _, ok := have[s]; !ok {
-			return false
-		}
+		canonSeed[fact.ClassifyRef(s, localRepoID).Path] = struct{}{}
 	}
-	return true
+	seen := make(map[string]struct{}, len(refs))
+	for _, r := range refs {
+		c := fact.ClassifyRef(r, localRepoID)
+		if _, isSeed := canonSeed[c.Path]; isSeed && c.Kind == fact.RefLocalFact {
+			cited = append(cited, r)
+			if _, dup := seen[c.Path]; !dup {
+				seen[c.Path] = struct{}{}
+				distinct++
+			}
+			continue
+		}
+		extras = append(extras, r)
+	}
+	return cited, extras, distinct
+}
+
+// refsCiteSeedSubset reports whether a derived fact's refs form an acceptable
+// derivation path over the bridge's offered seeds: a SUBSET of them, at least
+// minCitedSeeds distinct.
+//
+// This replaces the "cite EVERY offered seed" rule (designer ruling
+// 2026-08-26, #151). That rule PUNISHED JUDGE HONESTY: when four of five seeds
+// genuinely derived the target and the fifth did not, there was no subset
+// mechanism, so a valid independent derivation was discarded whole rather than
+// recorded at its true strength. It also FORCED the exact over-citation that
+// #125 (lineage) and #132 (self-reference) forbid, so the three rules were
+// fighting each other; this aligns them.
+//
+// WHAT IT DOES NOT LICENSE: inventing a citation. Only offered seeds count
+// toward the floor, and refs naming anything else are the caller's to discard —
+// a derived fact's refs are its derivation path, and a path through a fact the
+// bridge never offered is a claim nobody checked.
+func refsCiteSeedSubset(refs []string, seedPaths map[string]struct{}, localRepoID string) bool {
+	_, _, distinct := splitSeedRefs(refs, seedPaths, localRepoID)
+	return distinct >= minCitedSeeds
 }
 
 // isDuplicate computes the document embedding for the proposal and reports

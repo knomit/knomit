@@ -201,8 +201,13 @@ func TestApplyReinforcements_RejectsAnUnreasonedEquivalence(t *testing.T) {
 	require.Equal(t, before.Sources, env.read(reinforcePath).Sources)
 }
 
-// The same engagement proof the proposal path demands: cite every seed.
-func TestApplyReinforcements_RejectsWhenRefsDoNotCoverEverySeed(t *testing.T) {
+// The same derivation-path floor the proposal path demands: at least two seeds.
+//
+// Retargeted by #151 (was ..._RejectsWhenRefsDoNotCoverEverySeed). This env's
+// bridge has two members, so citing one is both "not every seed" and "below the
+// floor" — the two rules coincide here and this test cannot tell them apart.
+// The three-seed cases that CAN are in discovery_citation_test.go.
+func TestApplyReinforcements_RejectsFewerThanTwoCitedSeeds(t *testing.T) {
 	env := newReinforceEnv(t)
 	before := env.read(reinforcePath)
 
