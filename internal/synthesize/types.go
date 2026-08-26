@@ -283,11 +283,17 @@ type ReviewResult struct {
 	// slot, and the loser found out only when its next answer was rejected as
 	// "not active" — after composing one. Nothing can notify the loser; this
 	// lets the winner's result say what it displaced.
-	AbandonedSession string          `json:"abandoned_session,omitempty"`
-	Item             *ReviewItem     `json:"item,omitempty"`
-	Done             bool            `json:"done,omitempty"`
-	Summary          *ReviewStats    `json:"summary,omitempty"`
-	Progress         *ReviewProgress `json:"progress,omitempty"`
+	AbandonedSession string `json:"abandoned_session,omitempty"`
+	// AbandonedSessionCreatedBy names WHO opened the session this one
+	// displaced. `abandoned_session` alone is an id with nothing behind it —
+	// the loser's row is reapable and a resuming caller cannot look it up
+	// later. Read it as a correlation handle, not an identity: see the
+	// created_by column comment (knomit#123).
+	AbandonedSessionCreatedBy string          `json:"abandoned_session_created_by,omitempty"`
+	Item                      *ReviewItem     `json:"item,omitempty"`
+	Done                      bool            `json:"done,omitempty"`
+	Summary                   *ReviewStats    `json:"summary,omitempty"`
+	Progress                  *ReviewProgress `json:"progress,omitempty"`
 	// Health carries corpus-health descriptors for this session. Read by the
 	// agent, by nothing in the engine.
 	Health []string `json:"health,omitempty"`

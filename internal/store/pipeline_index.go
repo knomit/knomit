@@ -31,8 +31,9 @@ type PipelineSession struct {
 	// after the turn that produced it.
 	Health []string
 	// Abandoned is the id of the active session this one DISPLACED at creation,
-	// if there was one. IN MEMORY ONLY, like Health, and set by
-	// CreatePipelineSession alone — it describes one moment, not a stored
+	// if there was one, and AbandonedCreatedBy is that session's own
+	// correlation handle. IN MEMORY ONLY, like Health, and set by
+	// CreatePipelineSession alone — they describe one moment, not a stored
 	// property of the row.
 	//
 	// Starting a session abandons any active session for the same tool+branch.
@@ -41,6 +42,13 @@ type PipelineSession struct {
 	// out only when its next answer was rejected as "not active" — after it had
 	// composed one (knomit#113 / #121 residue).
 	Abandoned string
+	// AbandonedCreatedBy carries the displaced session's created_by, read in
+	// the same statement that finds it. The id alone tells the winner THAT it
+	// took someone's slot; the handle tells it WHOSE, which is the answer a
+	// resuming caller actually needs and the only one available from state
+	// (knomit#123). Empty when nothing was displaced, and equally when the
+	// displaced session was opened in-process and carried no handle.
+	AbandonedCreatedBy string
 	// CreatedBy is the correlation handle for whoever opened this session —
 	// NOT an identity, NOT authentication. See the column comment in
 	// session_schema.sql: over MCP the value derives from a client-supplied,
@@ -158,11 +166,11 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 	// continue call is rejected, after spending a turn composing an answer to
 	// an item that no longer exists. Nothing here can notify the loser, so the
 	// least this can do is let the winner's result say what it displaced.
-	var abandoned string
+	var abandoned, abandonedBy string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT id FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`,
+		`SELECT id, created_by FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`,
 		tool, branch,
-	).Scan(&abandoned); err != nil && err != sql.ErrNoRows {
+	).Scan(&abandoned, &abandonedBy); err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("CreatePipelineSession find active: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -173,15 +181,16 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 	}
 
 	s := &PipelineSession{
-		ID:        uuid.New().String(),
-		Tool:      tool,
-		Branch:    branch,
-		Status:    "active",
-		Phase:     "work",
-		Abandoned: abandoned,
-		CreatedBy: createdBy,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:                 uuid.New().String(),
+		Tool:               tool,
+		Branch:             branch,
+		Status:             "active",
+		Phase:              "work",
+		Abandoned:          abandoned,
+		AbandonedCreatedBy: abandonedBy,
+		CreatedBy:          createdBy,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 
 	if _, err := tx.ExecContext(ctx,

@@ -232,6 +232,7 @@ func (p *Pipeline) stampIdentity(res *PipelineResult, sess *store.PipelineSessio
 	res.RepoID = p.ri.ID()
 	res.WriteBranch = sess.Branch
 	res.AbandonedSession = sess.Abandoned
+	res.AbandonedSessionCreatedBy = sess.AbandonedCreatedBy
 }
 
 // ContinueSession processes the model's response for the current work item and

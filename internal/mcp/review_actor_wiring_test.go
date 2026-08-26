@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -44,11 +45,29 @@ func actorE2E(t *testing.T) (*httptest.Server, *store.Service) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
+	// Seed enough facts to cluster. Without them a start call finds no seeds,
+	// completes the session on the spot, and leaves nothing ACTIVE — which
+	// makes the displacement half of this file untestable and, worse, would
+	// pass vacuously: "no session was displaced" is what an unseeded corpus
+	// produces AND what a broken implementation produces.
+	for _, slug := range []string{"alpha", "beta", "gamma"} {
+		f := fact.NewFact("kb/test/" + slug + ".md")
+		f.Title = slug
+		f.Body = "body of " + slug
+		f.Type = fact.Observation
+		f.Domain = []string{"test"}
+		f.Confidence = 0.5
+		f.Sources = 1
+		body, err := fact.SerializeFact(f)
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(context.Background(), "agent/test", f.Path(), body, "seed", "")
+		require.NoError(t, err)
+	}
+
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name:         "alpha",
 		AgentBranch:  "agent/test",
 		Svc:          svc,
-		Ontology:     fact.CodeOntology(),
 		OntologyRoot: "kb",
 	})
 
@@ -164,4 +183,79 @@ func TestReviewHandler_DistinctCallersGetDistinctHandles(t *testing.T) {
 	require.Contains(t, rowB.CreatedBy, "client:client-beta/2.0.0")
 	require.Contains(t, rowA.CreatedBy, mcpA)
 	require.Contains(t, rowB.CreatedBy, mcpB)
+}
+
+// startReviewEnvelope is startReview's sibling: it returns the whole decoded
+// start envelope rather than just the session id, for assertions about what the
+// winner is TOLD rather than what the row records.
+func startReviewEnvelope(t *testing.T, ts *httptest.Server, clientName, clientVersion string) (mcpSessionID string, env map[string]any) {
+	t.Helper()
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18",` +
+		`"capabilities":{},"clientInfo":{"name":"` + clientName + `","version":"` + clientVersion + `"}}}`
+	_, hdr := rpc(t, ts, initBody, nil)
+	mcpSessionID = hdr.Get("Mcp-Session-Id")
+	require.NotEmpty(t, mcpSessionID)
+
+	callBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"knomit_review","arguments":{}}}`
+	raw, _ := rpc(t, ts, callBody, map[string]string{"Mcp-Session-Id": mcpSessionID})
+
+	var rpcEnv struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	require.NoErrorf(t, json.Unmarshal([]byte(raw), &rpcEnv), "tools/call did not return JSON-RPC: %s", raw)
+	require.NotEmpty(t, rpcEnv.Result.Content, "tools/call produced no content: %s", raw)
+	require.False(t, rpcEnv.Result.IsError, "review returned an error: %s", rpcEnv.Result.Content[0].Text)
+
+	require.NoError(t, json.Unmarshal([]byte(rpcEnv.Result.Content[0].Text), &env))
+	require.NotEmpty(t, env["session_id"], "review must report the session it opened")
+	return mcpSessionID, env
+}
+
+// Within one repo+tool+branch there is exactly ONE session, and starting a new
+// one silently displaces whatever was in flight. #113 made the winner's envelope
+// say WHAT it displaced; on its own that is an id with nothing behind it, since
+// the loser's row is reapable and a resuming caller cannot look it up later.
+// This pins the other half: the envelope says WHOSE session it took.
+//
+// Both starts go through the SAME server, because sharing the repo+tool+branch
+// is precisely what makes the second displace the first.
+func TestReviewHandler_EnvelopeNamesWhoWasDisplaced(t *testing.T) {
+	ts, _ := actorE2E(t)
+
+	firstMCP, firstEnv := startReviewEnvelope(t, ts, "the-loser", "1.0.0")
+	// The fixture must actually reach the displacement branch: only an ACTIVE
+	// session gets abandoned, so a first session that completed on the spot
+	// would make every assertion below compare absence against absence.
+	require.NotContains(t, firstEnv, "done",
+		"the first session must still be in flight, or there is nothing to displace")
+	require.Contains(t, firstEnv, "item", "the first session must hold a work item")
+
+	// The first start displaced nothing, so it must say nothing — an
+	// unconditional field would make "displaced someone" indistinguishable
+	// from "went first".
+	require.NotContains(t, firstEnv, "abandoned_session")
+	require.NotContains(t, firstEnv, "abandoned_session_created_by")
+
+	_, secondEnv := startReviewEnvelope(t, ts, "the-winner", "2.0.0")
+
+	require.Equal(t, firstEnv["session_id"], secondEnv["abandoned_session"],
+		"the winner must name the session it displaced")
+	require.Equal(t,
+		"mcp-session:"+firstMCP+" client:the-loser/1.0.0",
+		secondEnv["abandoned_session_created_by"],
+		"and must name WHO opened it — the loser's handle, not the winner's")
+
+	// Explicitly the LOSER's handle and not the winner's. An implementation
+	// that populated the field from the new session rather than the displaced
+	// one produces a well-formed and entirely wrong answer, and the two clients
+	// are named differently here precisely so that answer is distinguishable.
+	displaced, _ := secondEnv["abandoned_session_created_by"].(string)
+	require.Contains(t, displaced, "client:the-loser/1.0.0")
+	require.NotContains(t, displaced, "the-winner",
+		"the displaced handle must not be the displacing caller's own")
 }
