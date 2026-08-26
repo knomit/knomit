@@ -864,7 +864,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		}
 
 	case motifBackfillStepType:
-		if err := applyMotifBackfill(ctx, d, branch, *dec.motifBackfill, dec.motifBackfillOffered); err != nil {
+		if err := applyMotifBackfill(ctx, d, sess, branch, *dec.motifBackfill, dec.motifBackfillOffered); err != nil {
 			return wrapf(reviewTool, err, "apply motif backfill")
 		}
 

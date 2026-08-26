@@ -43,7 +43,7 @@ func TestMotifDrain_EmptyJudgmentIsNotReOffered(t *testing.T) {
 
 	// The agent judges kb/a.md and finds no regularity. kb/b.md it does not
 	// reach — a distinction the next test pins down.
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: nil}},
 	}, offeredBackfillForTest(t, ctx, env)))
 
@@ -93,7 +93,7 @@ func TestMotifDrain_QuietCorpusDrainsThenGoesSilent(t *testing.T) {
 			// leave no trace at all.
 			res.Assignments = append(res.Assignments, motifAssignment{Path: tgt.Path})
 		}
-		require.NoError(t, applyMotifBackfill(ctx, d, env.branch, res, offeredBackfillForTest(t, ctx, env)))
+		require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, res, offeredBackfillForTest(t, ctx, env)))
 	}
 	require.Len(t, judged, total, "every fact must have been reached")
 	require.Equal(t, 3, sessions, "a %d-fact backlog at %d per session is three sessions",
@@ -124,7 +124,7 @@ func TestMotifDrain_EditedFactReturnsToBacklog(t *testing.T) {
 	env.writeFact("kb/a.md", "Alpha", "body alpha")
 	d := env.deps()
 
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md"}},
 	}, offeredBackfillForTest(t, ctx, env)))
 	after, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
@@ -156,7 +156,7 @@ func TestMotifDrain_RefusedAssignmentIsReOffered(t *testing.T) {
 
 	// Five words: over the 2-4 word ceiling, refused by SerializeFact.
 	const tooLong = "instrument-fault-reads-as-signal"
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: []string{tooLong}}},
 	}, offeredBackfillForTest(t, ctx, env)))
 
@@ -180,7 +180,7 @@ func TestMotifDrain_UnansweredFactIsReOffered(t *testing.T) {
 	env.writeFact("kb/b.md", "Bravo", "body bravo")
 	d := env.deps()
 
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md"}},
 	}, offeredBackfillForTest(t, ctx, env)))
 
@@ -199,7 +199,7 @@ func TestMotifDrain_AssignedFactLeavesTheBacklogByItsMotif(t *testing.T) {
 	env.writeFact("kb/a.md", "Alpha", "body alpha")
 	d := env.deps()
 
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: []string{"silent-fallback"}}},
 	}, offeredBackfillForTest(t, ctx, env)))
 	rec, err := env.svc.Search().GetByPath(ctx, env.branch, "kb/a.md")
@@ -244,7 +244,7 @@ func TestMotifDrain_EmptyJudgementBindsToTheVersionThatWasJudged(t *testing.T) {
 	env.writeFact("kb/a.md", "Alpha", "a materially different claim the agent never saw")
 
 	// The agent's answer about the OLD content arrives.
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md"}},
 	}, offered))
 
@@ -268,7 +268,7 @@ func TestMotifDrain_AssignmentBindsToTheVersionThatWasJudged(t *testing.T) {
 	offered := offeredBackfillForTest(t, ctx, env)
 	env.writeFact("kb/a.md", "Alpha", "a materially different claim the agent never saw")
 
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/a.md", Motifs: []string{"silent-fallback"}}},
 	}, offered))
 
@@ -302,7 +302,7 @@ func TestMotifDrain_FullyStrippedAssignmentIsAJudgement(t *testing.T) {
 	d := env.deps()
 
 	offered := offeredBackfillForTest(t, ctx, env)
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/silent/fallback.md", Motifs: []string{"silent-fallback"}}},
 	}, offered))
 
@@ -327,7 +327,7 @@ func TestMotifDrain_PartiallyStrippedAssignmentKeepsWhatSurvived(t *testing.T) {
 	d := env.deps()
 
 	offered := offeredBackfillForTest(t, ctx, env)
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{
 			Path:   "kb/silent/fallback.md",
 			Motifs: []string{"silent-fallback", "unbounded-retry"},

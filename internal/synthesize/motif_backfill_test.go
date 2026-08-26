@@ -158,7 +158,7 @@ func TestBackfillApply_SubjectMotifIsStrippedByTheOneGate(t *testing.T) {
 	res := motifBackfillResult{Assignments: []motifAssignment{
 		{Path: "kb/alpha/one.md", Motifs: []string{"widget-alpha", "silent-fallback"}},
 	}}
-	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, res, offeredBackfillForTest(t, ctx, env)))
+	require.NoError(t, applyMotifBackfill(ctx, env.deps(), sessionForBackfillTest(t, ctx, env), env.branch, res, offeredBackfillForTest(t, ctx, env)))
 
 	rec, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestBackfillApply_SkipsAFactThatGainedMotifsMeanwhile(t *testing.T) {
 	res := motifBackfillResult{Assignments: []motifAssignment{
 		{Path: "kb/alpha/one.md", Motifs: []string{"silent-fallback"}},
 	}}
-	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, res, offeredBackfillForTest(t, ctx, env)))
+	require.NoError(t, applyMotifBackfill(ctx, env.deps(), sessionForBackfillTest(t, ctx, env), env.branch, res, offeredBackfillForTest(t, ctx, env)))
 
 	rec, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/alpha/one.md")
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestBackfillApply_EmptyAssignmentWritesNothing(t *testing.T) {
 	before, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/alpha/one.md")
 	require.NoError(t, err)
 
-	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, env.deps(), sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{{Path: "kb/alpha/one.md", Motifs: []string{}}},
 	}, offeredBackfillForTest(t, ctx, env)))
 
@@ -304,7 +304,7 @@ func TestBackfillApply_PreservesEveryOtherField(t *testing.T) {
 	require.NotEmpty(t, before.Domain, "fixture must carry the fields whose loss we are guarding")
 	require.NotEmpty(t, before.Entities)
 
-	require.NoError(t, applyMotifBackfill(ctx, env.deps(), env.branch, motifBackfillResult{
+	require.NoError(t, applyMotifBackfill(ctx, env.deps(), sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 		Assignments: []motifAssignment{
 			{Path: "kb/alpha/one.md", Motifs: []string{"silent-fallback"}},
 		},

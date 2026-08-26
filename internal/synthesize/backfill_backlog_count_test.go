@@ -58,7 +58,7 @@ func TestMotifCoverage_BacklogMatchesTheOfferPool(t *testing.T) {
 	res := motifBackfillResult{Assignments: []motifAssignment{
 		{Path: "kb/a.md", Motifs: []string{"silent-fallback"}},
 	}}
-	require.NoError(t, applyMotifBackfill(ctx, d, env.branch, res,
+	require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, res,
 		offeredBackfillForTest(t, ctx, env)))
 
 	with, backlog, _ = agree("one assigned")

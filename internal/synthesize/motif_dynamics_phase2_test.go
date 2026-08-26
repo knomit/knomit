@@ -221,7 +221,7 @@ func TestPhase2Dynamics_BackfillCoverageClosesOverSessions(t *testing.T) {
 			})
 		}
 		_ = offered
-		require.NoError(t, applyMotifBackfill(ctx, d, env.branch, res, offeredBackfillForTest(t, ctx, env)))
+		require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, res, offeredBackfillForTest(t, ctx, env)))
 		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 	}
 
@@ -254,7 +254,7 @@ func TestPhase2Dynamics_AuthoredMotifSurvivesLaterSessions(t *testing.T) {
 				"session %d offered backfill for a fact that already has a motif", session)
 		}
 		// A backfill pass that tried to overwrite it anyway must be refused.
-		require.NoError(t, applyMotifBackfill(ctx, d, env.branch, motifBackfillResult{
+		require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
 			Assignments: []motifAssignment{
 				{Path: "kb/authored.md", Motifs: []string{"config-drift"}},
 			},
