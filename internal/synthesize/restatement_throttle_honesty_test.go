@@ -115,7 +115,7 @@ func TestHealthLine_ThrottleDenominatorIsWhatWasActuallyJudged(t *testing.T) {
 	env := newRestatementEnv(t, 600)
 	env.seedShortlist()
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
 
@@ -138,7 +138,7 @@ func TestHealthLine_ThrottleDenominatorIsWhatWasActuallyJudged(t *testing.T) {
 		env.recordVerdict(pairs[i].APath, pairs[i].BPath, false)
 	}
 
-	sess2, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+	sess2, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess2, env.branch, nil))
 	require.Contains(t, throttleHealthLine(sess2), fmt.Sprintf("over last %d judged", judged))
@@ -181,7 +181,7 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 	// unservable pair; it must NOT be recorded as having probed.
 	dropped := 0
 	for range throttleProbeInterval {
-		sess, serr := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+		sess, serr := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 		require.NoError(t, serr)
 		require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
 		require.Empty(t, env.workItems(sess.ID), "nothing servable can reach the queue")
@@ -208,7 +208,7 @@ func TestProbe_IsNotConsumedWhenTheSelectedPairIsNeverServed(t *testing.T) {
 			TitleCos: 0.9999,
 		}}, nil))
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
 	require.True(t, healthLineSaysProbing(sess),
