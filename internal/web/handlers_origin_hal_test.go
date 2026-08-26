@@ -921,9 +921,11 @@ func TestHandleHALSetOrigin_RefusesARemoteWithADifferentOntology(t *testing.T) {
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`)))
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	// POST /repos is 202: the repo is not there until the job finishes.
+	awaitCreate(t, r, rec)
 
 	// A remote that is a knowledge base on a DIFFERENT one (the default).
 	url := seedKnomitRemoteForTest(t, filepath.Join(root, "remote.git"), "seed")
@@ -954,9 +956,11 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`)))
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	// POST /repos is 202: the repo is not there until the job finishes.
+	awaitCreate(t, r, rec)
 
 	url := seedPlainRemoteForTest(t, filepath.Join(root, "remote.git"))
 

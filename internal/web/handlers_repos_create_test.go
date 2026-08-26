@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
@@ -47,7 +47,15 @@ func newRealManagerWithLocalOriginRoot(t *testing.T, root string) *repos.Manager
 	return m
 }
 
-func TestPostRepos_StreamsNDJSONAndCreates(t *testing.T) {
+// TestPostRepos_AcceptsAndCreates pins the 202 contract: POST answers
+// immediately with the job's identity and a Location pointing at the poll
+// resource, and the create it started really does produce the repo.
+//
+// It replaces the old NDJSON-stream test. The stream is gone on purpose — a
+// response that streamed until the create finished was the mechanism by which
+// the request OWNED the work (issue #67); 202 removes the ownership rather
+// than patching around it.
+func TestPostRepos_AcceptsAndCreates(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
 
@@ -56,30 +64,51 @@ func TestPostRepos_StreamsNDJSONAndCreates(t *testing.T) {
 		strings.NewReader(`{"name":"work","mode":"preset","ontology_preset":"default"}`))
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body=%s", rec.Code, rec.Body.String())
 	}
-	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/x-ndjson") {
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
 		t.Fatalf("content-type = %q", ct)
 	}
-	var lastType string
-	sc := bufio.NewScanner(strings.NewReader(rec.Body.String()))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(line), &m); err != nil {
-			t.Fatalf("bad ndjson line %q: %v", line, err)
-		}
-		lastType, _ = m["type"].(string)
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("bad 202 body %q: %v", rec.Body.String(), err)
 	}
-	if lastType != "done" {
-		t.Fatalf("last type = %q, want done", lastType)
+	id, _ := body["create_id"].(string)
+	if id == "" {
+		t.Fatalf("202 body carries no create_id: %v", body)
+	}
+	if got := rec.Header().Get("Location"); !strings.HasSuffix(got, "/repo-creates/"+id) {
+		t.Fatalf("Location = %q, want a /repo-creates/%s URL", got, id)
+	}
+	// The 202 is answered BEFORE the work is done, which is the whole point:
+	// state is "running", not a result.
+	if body["state"] != "running" {
+		t.Fatalf("state = %v, want running", body["state"])
+	}
+
+	final := awaitCreate(t, r, rec)
+	if final["state"] != "done" {
+		t.Fatalf("final state = %v", final["state"])
+	}
+	repo, _ := final["repo"].(map[string]any)
+	if repo == nil || repo["name"] != "work" {
+		t.Fatalf("terminal poll carries no repo: %v", final)
 	}
 	if s.Manager.Get("work") == nil {
 		t.Fatal("repo not registered")
+	}
+}
+
+// TestGetRepoCreate_UnknownIDIs404 pins the poll resource's refusal. Unknown
+// and expired are deliberately one answer — see handleHALRepoCreateStatus.
+func TestGetRepoCreate_UnknownIDIs404(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repo-creates/nosuchjob", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -182,8 +211,8 @@ func TestPostRepos_BodyUnderTheCapIsNotRejectedAsOversize(t *testing.T) {
 	if rec.Code == http.StatusRequestEntityTooLarge {
 		t.Fatalf("a body well under the cap was rejected as oversize: %s", rec.Body.String())
 	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -220,8 +249,8 @@ func TestPostRepos_YAMLUnderTheCapWhoseJSONEncodingExceedsItIsAccepted(t *testin
 		t.Fatalf("an ontology of %d raw bytes (under the %d cap) was rejected as oversize: %s",
 			len(raw), MaxOntologyBytes, rec.Body.String())
 	}
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -330,5 +359,147 @@ func TestPostRepos_CloneOfARefLessRemoteIs409NotAStreamedError(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "one commit is enough") {
 		t.Fatalf("body does not tell the user how to fix it: %s", rec.Body.String())
+	}
+}
+
+// TestPostRepos_ClientDisconnectDoesNotAbortTheCreate is the web-layer half of
+// issue #67: the repo's creation must not be the property of the request that
+// asked for it.
+//
+// Before the fix the handler passed r.Context() straight into Manager.Create,
+// so a client that went away cancelled the create at its next step boundary —
+// discarding, in clone mode, a network fetch that may already have completed,
+// and making the outcome of a slow create depend on whether a browser tab
+// stayed open.
+//
+// Under 202 the request cannot own the work by construction, so what this test
+// guards is that nothing SNEAKS the request's context back in — the preflight
+// still legitimately receives it, and a future change that also handed it to
+// the create would be invisible to every other test here.
+//
+// The request context is cancelled BEFORE the handler runs, which makes the
+// test deterministic rather than a race against a fast create: there is no
+// window in which the create could have finished first.
+func TestPostRepos_ClientDisconnectDoesNotAbortTheCreate(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the client is already gone
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"work","mode":"preset","ontology_preset":"default"}`)).WithContext(ctx)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// The repo is created regardless. It is NOT registered by the instant the
+	// handler returns — 202 answers before the work is done — so this waits on
+	// the effect rather than assuming otherwise.
+	deadline := time.Now().Add(60 * time.Second)
+	for s.Manager.Get("work") == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("repo was never created: the create is still tied to the request context")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestGetRepoCreate_TimeoutIsReadableAsATerminalFailure is the HTTP-visible
+// half of requirement (2): when a detached create exceeds its own deadline,
+// the client that comes back to ask does not find "still running" or a
+// half-created repo — it finds a terminal failure that says it timed out, and
+// the repo genuinely is not there.
+//
+// This is what the 202 shape buys that a stream could not: the outcome of a
+// create outlives the connection that started it.
+func TestGetRepoCreate_TimeoutIsReadableAsATerminalFailure(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg:         config.Config{Home: t.TempDir()},
+		AgentBranch: "machine/test",
+		// Already expired when the create's goroutine runs.
+		CreateTimeout: time.Nanosecond,
+	})
+	if err := m.Start(); err != nil {
+		t.Fatalf("start manager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+
+	s := &Server{Manager: m}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"work","mode":"preset","ontology_preset":"default"}`)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body=%s", rec.Code, rec.Body.String())
+	}
+	var accepted map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("bad 202 body: %v", err)
+	}
+	id, _ := accepted["create_id"].(string)
+
+	deadline := time.Now().Add(60 * time.Second)
+	var st map[string]any
+	for {
+		poll := httptest.NewRecorder()
+		r.ServeHTTP(poll, httptest.NewRequest(http.MethodGet, "/repo-creates/"+id, nil))
+		if poll.Code != http.StatusOK {
+			t.Fatalf("poll status = %d, body=%s", poll.Code, poll.Body.String())
+		}
+		if err := json.Unmarshal(poll.Body.Bytes(), &st); err != nil {
+			t.Fatalf("bad poll body: %v", err)
+		}
+		if st["state"] != "running" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("create never became terminal: %v", st)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if st["state"] != "failed" {
+		t.Fatalf("state = %v, want failed", st["state"])
+	}
+	if st["timed_out"] != true {
+		t.Fatalf("timed_out = %v, want true — a deadline must be distinguishable from a create error", st["timed_out"])
+	}
+	if msg, _ := st["error"].(string); msg == "" {
+		t.Fatalf("failed poll carries no error text: %v", st)
+	}
+	if _, ok := st["repo"]; ok {
+		t.Fatalf("a failed create must not offer a repo link: %v", st)
+	}
+	if m.Get("work") != nil {
+		t.Fatal("the timed-out repo must not be registered")
+	}
+}
+
+// TestReposNamedCreatesStaysReachable pins the reason the create-status route
+// is /repo-creates/{id} and not /repos/creates/{id}.
+//
+// Repo names use the alphabet [a-z0-9_-], so "creates" is a legal repo name.
+// chi prefers a static path segment over a {param} edge and does NOT backtrack
+// when the static branch fails to match the rest of the path — so a
+// /repos/creates/... route would not merely shadow one URL, it would make a
+// repo actually called "creates" unreachable at EVERY route under
+// /repos/{repo}. A sibling collection has no such shadow, and this test fails
+// the moment someone nests it back.
+func TestReposNamedCreatesStaysReachable(t *testing.T) {
+	s := &Server{Manager: newRealManager(t)}
+	r := s.NewAPIRouter()
+	createViaAPI(t, r, "creates")
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/creates/branches", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /repos/creates/branches = %d, want 200 — a repo named "+
+			"\"creates\" is shadowed by the create-status route; body=%s",
+			rec.Code, rec.Body.String())
 	}
 }

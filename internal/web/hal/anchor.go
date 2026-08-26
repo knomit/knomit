@@ -46,6 +46,15 @@ func (b URLBuilder) Repos() string { return b.Base + "/repos" }
 // Repo returns a single repo resource URL.
 func (b URLBuilder) Repo(repo string) string { return b.Base + "/repos/" + repo }
 
+// RepoCreate returns the poll URL for one detached repo-create job — the
+// resource POST /repos answers 202 with.
+//
+// A SIBLING of /repos, not a child, and deliberately so: repo names use the
+// alphabet [a-z0-9_-], so "creates" is a legal repo name, and a
+// /repos/creates/{id} route would shadow every route under /repos/{repo} for a
+// repo actually called that.
+func (b URLBuilder) RepoCreate(id string) string { return b.Base + "/repo-creates/" + id }
+
 // Branches returns the branch collection URL for a repo.
 func (b URLBuilder) Branches(repo string) string {
 	return b.Repo(repo) + "/branches"

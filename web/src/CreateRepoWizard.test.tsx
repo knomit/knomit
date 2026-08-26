@@ -7,10 +7,7 @@ vi.mock('./api', () => ({
   api: {
     probeOrigin: vi.fn(),
     probeInitialized: vi.fn(),
-    createRepo: vi.fn(async (_b: unknown, onEvent: (e: unknown) => void) => {
-      onEvent({ type: 'progress', step: 'init-git', pct: 50, message: 'x' });
-      onEvent({ type: 'done', repo: { name: 'kb' } });
-    }),
+    createRepo: vi.fn(),
     ontologyPresets: vi.fn(async () => [
       { name: 'default', id: 'general', title: 'General', description: 'd', topics: ['people'] },
       { name: 'code', id: 'source-code', title: 'Code', description: 'd', topics: ['invariants'] },
@@ -55,13 +52,33 @@ const passBranchStep = async () => {
   await waitFor(() => expect(screen.queryByTestId('step-branch')).not.toBeInTheDocument());
 };
 
-// The default createRepo: two events, ending in a repo named "kb". Restored
-// before every test rather than only cleared, because mockImplementation
-// installs an IMPLEMENTATION and clearAllMocks leaves it in place — so one
-// test's deliberate failure became the next test's createRepo.
-const okCreate = async (_b: unknown, onEvent: (e: unknown) => void) => {
-  onEvent({ type: 'progress', step: 'init-git', pct: 50, message: 'x' });
-  onEvent({ type: 'done', repo: { name: 'kb' } });
+// createRepo is a 202-then-poll OBSERVER now: it reports each status it sees
+// and RESOLVES with the terminal one. A failed create resolves with
+// state 'failed' rather than throwing — a failure is an outcome the wizard
+// renders, not an exception — so these mocks must RETURN their terminal
+// status, not merely announce it.
+const status = (over: Record<string, unknown> = {}) => ({
+  create_id: 'job1', name: 'kb', mode: 'initialize', state: 'running', ...over,
+});
+
+// A create that reaches `step` and then fails there.
+const failingCreate = (step: string, error: string) =>
+  async (_b: unknown, onStatus: (s: unknown) => void) => {
+    onStatus(status({ step, pct: 70, message: 'pushing agent/host' }));
+    const final = status({ step, state: 'failed', error });
+    onStatus(final);
+    return final;
+  };
+
+// The default createRepo: one progress report, then a repo named "kb".
+// Restored before every test rather than only cleared, because
+// mockImplementation installs an IMPLEMENTATION and clearAllMocks leaves it in
+// place — so one test's deliberate failure became the next test's createRepo.
+const okCreate = async (_b: unknown, onStatus: (s: unknown) => void) => {
+  onStatus(status({ mode: 'preset', step: 'init-git', pct: 50, message: 'x' }));
+  const final = status({ mode: 'preset', state: 'done', step: 'done', pct: 100, repo: { name: 'kb' } });
+  onStatus(final);
+  return final;
 };
 
 describe('CreateRepoWizard', () => {
@@ -268,10 +285,7 @@ describe('CreateRepoWizard', () => {
     (api.probeOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(probed());
     initializedAs('no');
     (api.createRepo as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_b: unknown, onEvent: (e: unknown) => void) => {
-        onEvent({ type: 'progress', step: 'push', pct: 70, message: 'pushing agent/host' });
-        onEvent({ type: 'error', detail: 'initialize: push agent/host: authorization failed: You are not allowed to push code to this project.' });
-      });
+      failingCreate('push', 'initialize: push agent/host: authorization failed: You are not allowed to push code to this project.'));
     render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
 
     fireEvent.change(screen.getByTestId('create-url'), { target: { value: 'https://h/new.git' } });
@@ -302,10 +316,7 @@ describe('CreateRepoWizard', () => {
     (api.probeOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(probed());
     initializedAs('no');
     (api.createRepo as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_b: unknown, onEvent: (e: unknown) => void) => {
-        onEvent({ type: 'progress', step: 'push', pct: 70, message: 'pushing agent/host' });
-        onEvent({ type: 'error', detail: 'initialize: push agent/host: pre-receive hook declined' });
-      });
+      failingCreate('push', 'initialize: push agent/host: pre-receive hook declined'));
     render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
 
     fireEvent.change(screen.getByTestId('create-url'), { target: { value: 'https://h/new.git' } });
@@ -339,9 +350,7 @@ describe('CreateRepoWizard', () => {
     (api.probeOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(probed());
     initializedAs('no');
     (api.createRepo as ReturnType<typeof vi.fn>).mockImplementation(
-      async (_b: unknown, onEvent: (e: unknown) => void) => {
-        onEvent({ type: 'error', detail: 'initialize: push agent/host: pre-receive hook declined' });
-      });
+      failingCreate('push', 'initialize: push agent/host: pre-receive hook declined'));
     render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
 
     fireEvent.change(screen.getByTestId('create-url'), { target: { value: 'https://h/new.git' } });

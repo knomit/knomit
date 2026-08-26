@@ -639,24 +639,28 @@ async function getAgentBranch(repo: string): Promise<string> {
   return (agent || main || branches[0])?.name || 'main';
 }
 
-export interface CreateEvent {
-  type: 'progress' | 'done' | 'error';
+// RepoCreateStatus is the state of one detached repo-create job — the body of
+// the 202 that POST /repos answers with, and of every poll of
+// /repo-creates/{id}. One shape for both, so the 202 IS the first poll result.
+//
+// step/message/pct are a LATEST-VALUE snapshot, not a stream: a poll landing
+// between two steps reports the earlier one, and no intermediate step is
+// guaranteed to be seen by anyone. Anything that needs every step must derive
+// it from the known pipeline, not from what it happened to observe.
+export interface RepoCreateStatus {
+  create_id: string;
+  name: string;
+  mode: string;
+  state: 'running' | 'done' | 'failed';
   step?: string;
   message?: string;
   pct?: number;
+  /** Present only when state is 'done'. */
   repo?: { name: string };
-  title?: string;
-  detail?: string;
-}
-
-export function parseNDJSONLine(line: string): CreateEvent | null {
-  const t = line.trim();
-  if (!t) return null;
-  try {
-    return JSON.parse(t) as CreateEvent;
-  } catch {
-    return null;
-  }
+  /** Present only when state is 'failed'. */
+  error?: string;
+  /** Present only when state is 'failed': the create's own deadline expired. */
+  timed_out?: boolean;
 }
 
 export interface CreateRepoBody {
@@ -784,9 +788,31 @@ export interface ArchivedRepo {
   sizeBytes?: number;
 }
 
-// createRepo POSTs and streams NDJSON progress, invoking onEvent per line.
-// Resolves when the stream ends. Throws on a pre-stream non-OK (problem+json).
-async function createRepo(body: CreateRepoBody, onEvent: (e: CreateEvent) => void): Promise<void> {
+// createRepoPollMs is how often createRepo asks how a create is going.
+//
+// It is a RESPONSIVENESS choice, not a correctness one: the create finishes
+// when it finishes regardless of whether anyone is asking. Short enough that a
+// clone's progress reads as live, long enough not to hammer the server for the
+// minutes a large clone can take.
+const createRepoPollMs = 400;
+
+// createRepo starts a repo create and follows it to its terminal state,
+// invoking onStatus each time the reported status changes.
+//
+// The POST answers 202 immediately and does NOT hold the work (issue #67):
+// the server runs the create on its own bounded context, so nothing here —
+// abandoning the poll, reloading the page, losing the network — can cancel a
+// create that is already under way. This function is an OBSERVER, and if it
+// stops observing the create still lands.
+//
+// Resolves with the terminal status (state 'done' or 'failed'); a failed
+// create resolves rather than throwing, because "the create failed" is an
+// outcome the caller renders, not an exception. It throws only when the
+// request itself was refused (problem+json) or the job became unreadable.
+async function createRepo(
+  body: CreateRepoBody,
+  onStatus: (s: RepoCreateStatus) => void,
+): Promise<RepoCreateStatus> {
   const r = await fetch(apiUrl('/api/v1/repos'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -800,22 +826,20 @@ async function createRepo(body: CreateRepoBody, onEvent: (e: CreateEvent) => voi
     } catch { /* ignore */ }
     throw new Error(`create → ${r.status} ${detail}`);
   }
-  const reader = r.body!.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const e = parseNDJSONLine(buf.slice(0, nl));
-      buf = buf.slice(nl + 1);
-      if (e) onEvent(e);
-    }
+  let status = await r.json() as RepoCreateStatus;
+  onStatus(status);
+  while (status.state === 'running') {
+    await new Promise(res => setTimeout(res, createRepoPollMs));
+    // A poll that fails is NOT a create that failed — the create is on the
+    // server and unaffected. Surfacing it as a create failure would report a
+    // repo as broken that is very likely fine, so a lost poll just retries.
+    try {
+      status = await fetchJSON<RepoCreateStatus>(
+        apiUrl(`/api/v1/repo-creates/${status.create_id}`));
+      onStatus(status);
+    } catch { /* transient; poll again */ }
   }
-  const tail = parseNDJSONLine(buf);
-  if (tail) onEvent(tail);
+  return status;
 }
 
 async function archiveRepo(repo: string): Promise<ArchivedRepo> {

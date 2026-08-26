@@ -96,9 +96,24 @@ paths:
       tags: [repos]
       summary: Create a repository
       description: |
-        Initiates repo creation and streams progress as newline-delimited JSON
-        (NDJSON). Each line is a `CreateRepoEvent` object. The stream ends with
-        a `done` or `error` event.
+        Starts repo creation and returns `202 Accepted` immediately with the
+        job's `create_id` and a `Location` header pointing at
+        `/repo-creates/{id}`. Poll that resource for progress and for the
+        terminal outcome.
+
+        THE RESPONSE DOES NOT HOLD THE WORK. The create runs on the server's
+        own bounded context with its own deadline, so it is unaffected by what
+        the client does next: disconnecting, never polling, or polling from a
+        different session all leave the create running to the same terminal
+        state. This is deliberate — the previous shape streamed progress until
+        the create finished and scoped the work to the request, which meant a
+        closed browser tab could cancel a clone that had already completed.
+
+        Because the outcome outlives the connection, a create that fails or
+        exceeds its deadline is still readable afterwards, for a limited
+        retention window, at `/repo-creates/{id}`. A failed create leaves NO
+        repo behind: the partial database and the registry row are rolled back
+        before the job becomes terminal.
 
         409 covers several distinct conflicts: the name is already taken, the
         origin URL is already in use by another active repo, a create for the
@@ -114,18 +129,18 @@ paths:
           (mode=clone) — use mode=initialize.
         - the branch already has one (mode=initialize) — use mode=clone.
 
-        All three checks run BEFORE the stream opens, from the server's own
+        All three checks run BEFORE the 202 is committed, from the server's own
         probes of the origin rather than anything trusted from an earlier
         client-side probe — which is what makes these 409s reachable at all.
-        A condition that can only be produced once the 200 is committed is not
-        a 409 to any client.
+        A condition that can only be produced once the job has started is not
+        a 409 to any client; it surfaces as a `failed` poll result instead.
 
         They are deliberately narrow. Only a remote the server could actually
         see is refused: one that is unreachable, or that needs credentials the
         request did not carry, establishes nothing either way, so it proceeds
-        and fails as an `error` event inside the 200 stream instead. Create
-        re-asserts all three conditions itself regardless — the pre-stream
-        probes are advisory, and a remote can change in between.
+        and fails as a `failed` poll result instead. Create re-asserts all
+        three conditions itself regardless — the pre-flight probes are
+        advisory, and a remote can change in between.
 
         The ontology question is asked of the branch the create will actually
         READ, which is not always the branch named: when the remote already
@@ -142,15 +157,56 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/CreateRepoRequest" }
       responses:
-        "200":
-          description: NDJSON stream of creation progress events
+        "202":
+          description: |
+            Creation accepted and started. The body is the job's first status
+            snapshot — the same shape `/repo-creates/{id}` returns — so a
+            client needs to parse only one thing.
+          headers:
+            Location:
+              description: URL of the create job to poll.
+              schema: { type: string }
           content:
-            application/x-ndjson:
+            application/json:
               schema:
-                $ref: "#/components/schemas/CreateRepoEvent"
+                $ref: "#/components/schemas/RepoCreateStatus"
         "400": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
+
+  /repo-creates/{id}:
+    get:
+      tags: [repos]
+      summary: Read the status of a repo-create job
+      description: |
+        Reports a detached create's progress while it runs and its terminal
+        outcome after it ends. This is the poll target `POST /repos` hands back.
+
+        A SIBLING of `/repos` rather than a path beneath it, on purpose: repo
+        names use the alphabet `[a-z0-9_-]`, so `creates` is a legal repo name,
+        and a `/repos/creates/{id}` route would shadow every route belonging to
+        a repo actually called that.
+
+        Finished jobs are retained for a limited window (one hour) so a client
+        that lost its connection can still learn how the create ended. After
+        that the job is reaped and this returns 404 — the same answer as an id
+        that never existed, because a client cannot act differently on the two,
+        and `GET /repos/{repo}` is the authoritative answer to whether the repo
+        exists.
+      operationId: getRepoCreate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Current status of the create job.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepoCreateStatus"
+        "404": { $ref: "#/components/responses/Problem" }
 
   /repos:probe-origin:
     post:
@@ -2467,37 +2523,59 @@ components:
         origin:
           $ref: "#/components/schemas/CreateRepoOrigin"
 
-    CreateRepoEvent:
+    RepoCreateStatus:
       type: object
       description: |
-        One line of the NDJSON creation stream. Each object carries a `type`
-        discriminator and optional progress fields. The stream always ends with
-        a `done` or `error` event.
-      required: [type]
+        The state of one detached repo-create job. Returned both by the 202
+        that starts it and by every poll of `/repo-creates/{id}`, so a client
+        parses one shape and the 202 body is literally the first poll result.
+
+        `step`/`message`/`pct` are a LATEST-VALUE snapshot, not a stream: a
+        poll that arrives between two steps reports the earlier one, and a
+        poll that arrives after three reports only the third. No intermediate
+        step is guaranteed to be observed by anyone.
+      required: [create_id, name, mode, state]
       properties:
-        type:
+        create_id:
           type: string
-          enum: [progress, done, error]
-          description: Event kind.
+          description: Job identity. Stable for the job's whole life.
+        name:
+          type: string
+          description: Requested repo name.
+        mode:
+          type: string
+          description: Requested create mode.
+        state:
+          type: string
+          enum: [running, done, failed]
+          description: |
+            `running` is the only non-terminal value. `failed` means the repo
+            does NOT exist — the partial database and registry row were rolled
+            back before the job became terminal.
         step:
           type: string
-          description: Machine-readable step identifier (e.g. "init", "clone", "index").
+          description: Machine-readable step identifier (e.g. "clone", "register").
         message:
           type: string
           description: Human-readable progress message.
         pct:
-          type: number
-          format: double
-          description: Completion percentage (0–100), present on progress events.
+          type: integer
+          description: Completion percentage (0–100) of the last recorded step.
         repo:
+          type: object
+          description: |
+            Present only when state is `done`. Absent while running (the repo
+            does not exist yet) and after a failure (it was rolled back), so
+            the link is never offered pointing at nothing.
+        error:
           type: string
-          description: Repo name, present on the final done event.
-        title:
-          type: string
-          description: Short summary, present on done/error events.
-        detail:
-          type: string
-          description: Extended detail or error description.
+          description: Failure description. Present only when state is `failed`.
+        timed_out:
+          type: boolean
+          description: |
+            Present only when state is `failed`. True when the failure was the
+            create's own deadline expiring rather than a create error — named
+            separately because the two call for different client behaviour.
 
     # Origin probe (pre-create)
     ProbeOriginRequest:
