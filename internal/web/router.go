@@ -105,6 +105,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/repos", handleHALRepos(b, s.Manager))
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
+	// The poll target for the 202 that POST /repos answers with. A SIBLING
+	// collection rather than "/repos/creates/{id}": "creates" is a legal repo
+	// name ([a-z0-9_-]), and chi prefers a static segment over the {repo}
+	// param without backtracking, so nesting it here would make a repo
+	// actually named "creates" unreachable at every route below.
+	r.Get("/repo-creates/{id}", handleHALRepoCreateStatus(b, s.Manager))
+
 	// Probes an origin before create, so the wizard can classify it (has refs
 	// / empty / unreachable) instead of asking the user to declare that up
 	// front. Collection-level for the same reason as the ontology block below:

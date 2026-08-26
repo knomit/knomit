@@ -9,20 +9,75 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"knomit/internal/config"
 	"knomit/internal/repos"
 )
 
-// createViaAPI POSTs a preset-create and drains the NDJSON stream.
+// createViaAPI POSTs a preset-create and polls the returned create job to
+// completion, so callers can treat it as "the repo now exists".
+//
+// The polling is not ceremony: POST /repos answers 202 and returns before the
+// repo is registered (issue #67 — the response no longer holds the work), so a
+// test that went straight from create to DELETE would race the create it just
+// asked for. Every consumer of an async create has to wait somewhere; for
+// tests, here is that somewhere.
 func createViaAPI(t *testing.T, r http.Handler, name string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"`+name+`","mode":"preset","ontology_preset":"default"}`))
 	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create %s: status %d body %s", name, rec.Code, rec.Body.String())
+	}
+	awaitCreate(t, r, rec)
+}
+
+// awaitCreate polls the create job named by a 202 response until it reaches a
+// terminal state, failing the test on a failed create or on a job that never
+// finishes.
+func awaitCreate(t *testing.T, r http.Handler, accepted *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(accepted.Body.Bytes(), &body); err != nil {
+		t.Fatalf("202 body is not JSON: %v (%s)", err, accepted.Body.String())
+	}
+	// FOLLOW THE LINK the server gave us rather than rebuilding the path.
+	// Hardcoding it here would make every test that creates a repo fail
+	// whenever the route moves, which drowns the ONE test that is actually
+	// about where the route lives (TestReposNamedCreatesStaysReachable) in
+	// noise from tests that do not care.
+	self := accepted.Header().Get("Location")
+	if self == "" {
+		t.Fatalf("202 carries no Location header: %s", accepted.Body.String())
+	}
+	self = strings.TrimPrefix(self, APIBase)
+	if id, _ := body["create_id"].(string); id == "" {
+		t.Fatalf("202 body carries no create_id: %s", accepted.Body.String())
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, self, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("poll %s: status %d body %s", self, rec.Code, rec.Body.String())
+		}
+		var st map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("poll body is not JSON: %v (%s)", err, rec.Body.String())
+		}
+		switch st["state"] {
+		case "done":
+			return st
+		case "failed":
+			t.Fatalf("create failed: %v", st["error"])
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("create never reached a terminal state: %v", st)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

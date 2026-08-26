@@ -1,5 +1,5 @@
 import { useReducer, useRef, useState } from 'react';
-import { api, type CreateEvent, type ProbeResult } from './api';
+import { api, type RepoCreateStatus, type ProbeResult } from './api';
 import { wizardReducer, initialWizardState, currentStep, stepsFor, branchCheckBlocked, probeIsCurrent, createBodyFor, authFor, isValidRepoName, type WizardAction } from './wizardState';
 import { WizardStepRail } from './WizardStepRail';
 import { StepSource } from './StepSource';
@@ -58,7 +58,11 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   const [checkedOk, setCheckedOk] = useState(0);
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState('');
-  const [events, setEvents] = useState<CreateEvent[]>([]);
+  // The latest reported create status, or null before a create starts.
+  // Polling reports a LATEST VALUE rather than a stream, so the progress
+  // component renders the mode's known step list with this as the cursor —
+  // see CreateProgress.
+  const [createStatus, setCreateStatus] = useState<RepoCreateStatus | null>(null);
   // Gates Next on the ontology step. Passed to StepOntology as setOntologyValid
   // directly (not a wrapping lambda) so its identity is stable across
   // renders — StepOntology's validity effects depend on it and a fresh
@@ -93,7 +97,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     // probeError/probeFailure are deliberately NOT cleared: they belong to the
     // access step's own check, which is still true when you navigate back to it.
     setCreateErr('');
-    setEvents([]);
+    setCreateStatus(null);
     dispatch(a);
   };
 
@@ -238,17 +242,18 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   };
 
   const handleCreate = async () => {
-    setCreateErr(''); setEvents([]); setCreating(true);
+    setCreateErr(''); setCreateStatus(null); setCreating(true);
     const body = createBodyFor(state);
-    let failed = false;
-    let doneName = state.name;
     try {
-      await api.createRepo(body, (e) => {
-        setEvents(prev => [...prev, e]);
-        if (e.type === 'done' && e.repo) doneName = e.repo.name;
-        if (e.type === 'error') { failed = true; setCreateErr(e.detail || e.title || 'create failed'); }
-      });
-      if (!failed) onDone(doneName);
+      // createRepo POSTs, gets a 202, and polls to a terminal state. A failed
+      // create RESOLVES with state 'failed' — it is an outcome to render, not
+      // an exception — so the catch below is for a REFUSED request only.
+      const final = await api.createRepo(body, setCreateStatus);
+      if (final.state === 'failed') {
+        setCreateErr(final.error || 'create failed');
+      } else {
+        onDone(final.repo?.name || state.name);
+      }
     } catch (e) {
       setCreateErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -337,7 +342,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
           <div style={errNote}>No repository was added. You can change something and try again.</div>
         </div>
       )}
-      {step === 'review' && <CreateProgress events={events} />}
+      {step === 'review' && <CreateProgress status={createStatus} />}
 
       <div style={footer}>
         {step !== 'source' && (

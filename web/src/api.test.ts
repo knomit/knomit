@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parseSearchQuery, parseFilterQuery, parseNDJSONLine, api } from './api';
+import { parseSearchQuery, parseFilterQuery, api } from './api';
 
 describe('parseSearchQuery', () => {
   it('parses plain text', () => {
@@ -690,20 +690,64 @@ describe('api lens read surface', () => {
   });
 });
 
-describe('parseNDJSONLine', () => {
-  it('parses a progress line', () => {
-    const e = parseNDJSONLine('{"type":"progress","step":"clone","message":"x","pct":40}');
-    expect(e?.type).toBe('progress');
-    expect(e?.pct).toBe(40);
+describe('api.createRepo (202 + poll)', () => {
+  // POST /repos answers 202 and does NOT hold the work: the create runs on the
+  // server's own bounded context. createRepo is therefore an OBSERVER that
+  // polls to a terminal state — these pin that it actually polls, that it
+  // stops on each terminal state, and that a failed create RESOLVES rather
+  // than throwing (a failure is an outcome to render, not an exception).
+  const accepted = (over: Record<string, unknown> = {}) =>
+    ({ create_id: 'job1', name: 'work', mode: 'preset', state: 'running', step: 'validate', pct: 5, ...over });
+
+  it('polls the create job until it is done and reports each step', async () => {
+    const bodies = [
+      accepted(),
+      accepted({ state: 'running', step: 'register', pct: 85 }),
+      accepted({ state: 'done', step: 'done', pct: 100, repo: { name: 'work' } }),
+    ];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: call === 0 ? 202 : 200, statusText: '',
+      json: async () => bodies[call++],
+    })));
+
+    const seen: string[] = [];
+    const final = await api.createRepo(
+      { name: 'work', mode: 'preset', ontology_preset: 'default' },
+      s => { seen.push(s.step ?? ''); });
+
+    expect(final.state).toBe('done');
+    expect(final.repo?.name).toBe('work');
+    // Three fetches: the POST plus two polls. A createRepo that returned on
+    // the 202 would have made exactly one and seen exactly one step.
+    expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3);
+    expect(seen).toEqual(['validate', 'register', 'done']);
   });
-  it('parses a done line with repo', () => {
-    const e = parseNDJSONLine('{"type":"done","repo":{"name":"work"}}');
-    expect(e?.type).toBe('done');
-    expect(e?.repo?.name).toBe('work');
+
+  it('resolves (does not throw) when the create fails, carrying the reason', async () => {
+    const bodies = [
+      accepted(),
+      accepted({ state: 'failed', error: 'context deadline exceeded', timed_out: true }),
+    ];
+    let call = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: call === 0 ? 202 : 200, statusText: '',
+      json: async () => bodies[call++],
+    })));
+
+    const final = await api.createRepo({ name: 'work', mode: 'preset' }, () => {});
+    expect(final.state).toBe('failed');
+    expect(final.error).toBe('context deadline exceeded');
+    expect(final.timed_out).toBe(true);
   });
-  it('returns null for blank/garbage lines', () => {
-    expect(parseNDJSONLine('   ')).toBeNull();
-    expect(parseNDJSONLine('not json')).toBeNull();
+
+  it('throws when the POST itself is refused', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: false, status: 409, statusText: 'Conflict',
+      json: async () => ({ detail: 'repo already exists' }),
+    })));
+    await expect(api.createRepo({ name: 'work', mode: 'preset' }, () => {}))
+      .rejects.toThrow('repo already exists');
   });
 });
 

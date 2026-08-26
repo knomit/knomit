@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
@@ -31,6 +32,11 @@ type Deps struct {
 	// doSync/doPush immediately on startup which can race with test
 	// assertions about remote state. Production leaves this unset.
 	DisableBackgroundSync bool
+	// CreateTimeout bounds a DETACHED create (Manager.StartCreate). Unset
+	// means DefaultCreateTimeout. Unlike DisableBackgroundSync this is not a
+	// test-only flag — it is a real operational knob that tests also set, to
+	// reach the timeout path in milliseconds rather than in half-hours.
+	CreateTimeout time.Duration
 }
 
 // Manager owns the full lifecycle of all registered repositories:
@@ -91,6 +97,17 @@ type Manager struct {
 	inflightMu      sync.Mutex
 	creating        map[string]struct{}
 	creatingOrigins map[string]struct{}
+
+	// createJobs holds the detached create jobs (StartCreate), keyed by job
+	// id, so a client that started a create and then lost its connection can
+	// come back and ask how it ended. Finished entries are reaped past
+	// CreateJobTTL on the registration path — see reapCreateJobsLocked.
+	//
+	// It has its OWN mutex rather than sharing m.mu or inflightMu: a status
+	// poll must never queue behind a lifecycle operation holding m.mu, and a
+	// job outlives the name reservation inflightMu guards.
+	createJobsMu sync.Mutex
+	createJobs   map[string]*CreateJob
 }
 
 // ResolveAuth resolves a transport.AuthMethod for the given config and remote

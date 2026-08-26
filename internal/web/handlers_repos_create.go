@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -37,9 +39,21 @@ type createRepoRequest struct {
 const maxCreateBodyBytes = 6*MaxOntologyBytes + 4*1024
 
 // handleHALReposCreate serves POST /api/v1/repos. It pre-validates (returning
-// problem+json on rejection), then streams newline-delimited JSON progress
-// (application/x-ndjson) ending in a terminal {"type":"done"} or
-// {"type":"error"} line.
+// problem+json on rejection), then starts the create DETACHED and answers
+// 202 Accepted with the job's identity and a link to poll.
+//
+// THE RESPONSE NO LONGER HOLDS THE WORK (issue #67). It used to stream NDJSON
+// progress until the create finished, with r.Context() passed straight into
+// Manager.Create — which made a repo's creation the property of the request
+// that asked for it: a client that closed its tab cancelled the create at its
+// next step boundary, discarding a clone that may already have completed.
+//
+// 202 makes that structurally impossible rather than merely fixed. There is no
+// window in which the client owns the work, because the client never holds it
+// at all: it starts a job, gets an id, and asks about it afterwards. A client
+// that never comes back changes nothing — the job is bounded by its own
+// deadline and lands in a terminal state either way, which StartCreate also
+// logs for exactly the reader who is no longer here.
 func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// ontology_yaml rides in this body for modes "custom" and "initialize", so the
@@ -84,46 +98,82 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			}
 		}
 
+		// Preflight still runs on the REQUEST's context, and correctly so: it
+		// is the only part of a create the caller genuinely owns. Its refusals
+		// are the documented 4xx statuses, and they must stay refusals of the
+		// request rather than becoming the terminal state of a job nobody
+		// asked to start.
 		if err := m.CreatePreflight(r.Context(), spec); err != nil {
 			status, title := createErrStatus(err)
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
 			return
 		}
 
-		flusher, _ := w.(http.Flusher)
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.WriteHeader(http.StatusOK)
-		enc := json.NewEncoder(w)
-		emit := func(e repos.Event) {
-			_ = enc.Encode(map[string]any{
-				"type": "progress", "step": e.Step, "message": e.Message, "pct": e.Pct,
-			})
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
+		job := m.StartCreate(spec)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Location", b.RepoCreate(job.ID()))
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(createStatusBody(b, job.Status()))
+	}
+}
 
-		ri, err := m.Create(r.Context(), spec, emit)
-		if err != nil {
-			_ = enc.Encode(map[string]any{
-				"type": "error", "title": "Create failed", "detail": err.Error(),
-			})
-			if flusher != nil {
-				flusher.Flush()
-			}
+// handleHALRepoCreateStatus serves GET /api/v1/repo-creates/{id} — the poll
+// target the 202 points at. It reports progress while running and the terminal
+// outcome afterwards, for CreateJobTTL past the finish.
+//
+// NOTE ON THE PATH: this is deliberately NOT /repos/creates/{id}. Repo names
+// use the alphabet [a-z0-9_-], so "creates" is a legal repo name, and chi
+// resolves a static segment in preference to a {repo} param without
+// backtracking — a repo actually named "creates" would become unreachable at
+// every route under /repos/{repo}. A sibling collection has no such shadow.
+func handleHALRepoCreateStatus(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		job, ok := m.CreateJobByID(id)
+		if !ok {
+			// Unknown and expired are one answer on purpose: a client cannot
+			// act differently on them, and the registry is the authoritative
+			// answer to whether the repo exists.
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+				"no create job with that id (it may have expired)", r.URL.Path)
 			return
 		}
-		_ = enc.Encode(map[string]any{
-			"type": "done",
-			"repo": map[string]any{
-				"name":   ri.Name(),
-				"_links": hal.LinkMap{"self": {Href: b.Repo(ri.Name())}},
-			},
-		})
-		if flusher != nil {
-			flusher.Flush()
-		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(createStatusBody(b, job.Status()))
 	}
+}
+
+// createStatusBody renders one create job for the wire. Both the 202 and the
+// poll use it, so a client parses ONE shape and the initial response is
+// literally the first poll result.
+func createStatusBody(b hal.URLBuilder, st repos.CreateStatus) map[string]any {
+	body := map[string]any{
+		"create_id": st.ID,
+		"name":      st.Name,
+		"mode":      st.Mode,
+		"state":     string(st.State),
+		"step":      st.Step,
+		"message":   st.Message,
+		"pct":       st.Pct,
+		"_links":    hal.LinkMap{"self": {Href: b.RepoCreate(st.ID)}},
+	}
+	switch st.State {
+	case repos.CreateDone:
+		// The repo link appears only once the repo actually exists — a link
+		// offered while the create is still running would 404, and one offered
+		// after a failure would point at something that was rolled back.
+		body["repo"] = map[string]any{
+			"name":   st.Name,
+			"_links": hal.LinkMap{"self": {Href: b.Repo(st.Name)}},
+		}
+	case repos.CreateFailed:
+		body["error"] = st.Err.Error()
+		// Named separately from the message because a deadline and a genuine
+		// create failure call for different client behaviour: one is worth
+		// retrying as-is, the other is not.
+		body["timed_out"] = st.TimedOut
+	}
+	return body
 }
 
 func createErrStatus(err error) (int, string) {
