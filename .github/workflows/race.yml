@@ -1,0 +1,95 @@
+name: Race
+
+# Post-merge data-race detection (#156), closing the gap that #133 exposed: a
+# real data race sat on dev and was found by a human running `-race` by hand,
+# because CI never ran it.
+#
+# DEV AND MASTER PUSHES ONLY — never on pull_request, and that is the ruling
+# rather than an economy. `-race` roughly doubles wall-clock and is timing
+# sensitive, so on PR branches it would be slow, flaky and blocking-looking;
+# what it is FOR is catching a race that reached an integration branch, which
+# is a post-merge question. ci.yml keeps its own `pull_request` trigger; this
+# file deliberately has none.
+#
+# NON-BLOCKING BY CONSTRUCTION, NOT BY SUPPRESSION. This is a separate workflow
+# and is not in the repo's required-checks list, so a red here cannot gate a
+# merge. It deliberately does NOT set `continue-on-error: true` — that would
+# make the job REPORT success while failing, which is the one outcome worse
+# than no job at all: a signal nobody can see. Non-blocking must mean "does not
+# gate", never "always green".
+on:
+  push:
+    branches: [dev, master]
+
+# One race run per branch. A burst of merges should leave the newest commit
+# checked, not queue a 20-minute run per commit — the answer to "does dev have a
+# race" is about dev's tip, not about each step it took to get there.
+concurrency:
+  group: race-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  race:
+    name: go test -race ./...
+    runs-on: ubuntu-latest
+    # DELIBERATELY LOOSER THAN THE `-timeout` BELOW. Whichever limit fires
+    # first decides what you get to read: the go test timeout prints a full
+    # goroutine dump naming the stuck test, while a job timeout kills the runner
+    # and leaves you a truncated log and no stack. So the job ceiling is set
+    # well above the per-package one — it exists only to stop a wedged runner
+    # burning the 6-hour default, never to be the thing that reports a hang.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # Same native-lib bootstrap as tests.yml: the pluggable embedder links
+      # libtokenizers.a statically (CGo) and loads ONNX Runtime at runtime, and
+      # the packages below link it transitively.
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
+        run: make setup
+
+      # ./... — DELIBERATELY WIDER THAN tests.yml, which names its packages and
+      # so covers 17 of the repo's 49 test-bearing ones. A race job that
+      # inherited that list would be blind to internal/synthesize, internal/mcp,
+      # internal/repos and internal/refs, which is most of where concurrency
+      # actually lives here.
+      #
+      # READ A RED HERE CAREFULLY: because this is the only job running those
+      # 32 packages, a failure is NOT necessarily a race. It may be an ordinary
+      # test failure in a package nothing else in CI runs. Check the output for
+      # a `DATA RACE` block before calling it a race — the two have different
+      # owners and different fixes. (The coverage gap itself is filed
+      # separately; this job is not the place to fix it.)
+      #
+      # -count=1 because a cached PASS proves nothing about a race: the race
+      # detector has to actually execute the code.
+      #
+      # -timeout 30m is MEASURED, not guessed. go test defaults to 10 minutes
+      # PER PACKAGE, and internal/synthesize under -race takes 744s (12.4 min)
+      # on an Apple-Silicon dev machine — so the default makes that package
+      # panic with `test timed out after 10m0s` and the job goes red for a
+      # reason that is not a race. That is the wallpaper failure this job exists
+      # to avoid, and it is how the first draft of this workflow behaved.
+      # 30m is ~2.4x the measured figure, headroom for a CI runner slower than
+      # the machine it was measured on. If a package ever legitimately needs
+      # longer, RE-MEASURE and raise this — do not round it up on a hunch.
+      #
+      # -skip TestConformance_BridgeFilesUntouched: that test asserts a
+      # NON-EMPTY diff against dev, so that a branch-scoped conformance check
+      # cannot pass vacuously. On a PUSH TO DEV the checkout IS dev, the diff is
+      # empty by construction, and it fails for a reason that has nothing to do
+      # with this job. It is skipped here and still enforced where it means
+      # something — on a branch, before merge.
+      - name: go test -race ./...
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test -race -count=1 -timeout 30m \
+            -skip 'TestConformance_BridgeFilesUntouched' \
+            ./...
