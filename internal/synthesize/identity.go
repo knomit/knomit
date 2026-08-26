@@ -158,6 +158,16 @@ func buildIdentityIndex(titles map[int64]store.LiveFactTitle) *identityIndex {
 // Returns 0 for a corpus with no shared tokens, which makes every rarity test
 // false: with no distribution to read, nothing is known to be rare, and
 // inventing a fallback number is exactly the forbidden constant.
+//
+// KNOWN BLIND SPOT (review LOW-1, accepted): on a corpus where more than half
+// of all matchable token-occurrences sit on df==2 tokens, this returns 2, and
+// the caller's `df < cut && df >= 2` band is then empty — both structural
+// routes find nothing. That is graceful (no worse than having no structural
+// detection at all) and needs an atypical distribution: real corpora repeat
+// their freeform path prefixes, and those are high-df tokens that pull the
+// median up. Recorded rather than fixed, because every fix for it is a floor
+// or a fallback — i.e. a corpus-property constant (MN13) — and the failure is
+// silence rather than a wrong merge.
 func factWeightedMedianDF(perFact map[int64][]string, df map[string]int) int {
 	var occurrences []int
 	for _, toks := range perFact {
