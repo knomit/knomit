@@ -186,7 +186,36 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	// A pass whose trigger is corpus state cannot be planned from an
 	// edge-triggered seed scan, and this early return is where it would be
 	// silently starved again.
+	//
+	// ONE WAS ADDED BACK, and this is it (knomit#155). The structural
+	// duplicate sweep drains STANDING pairs — corpus state — so left inside
+	// the edge-triggered Plan it would advance only while the corpus kept
+	// changing, and never on the caught-up corpus whose backlog it exists to
+	// drain. The hook below is that pass's, and NOT a general resurrection of
+	// the removed level-triggered trio: it plans the standing sweep and
+	// nothing else, so a quiet corpus does the sweep and goes home rather than
+	// running the whole edge-triggered plan over an empty seed set.
 	if len(seeds) == 0 {
+		planned, standingHealth, serr := p.planStandingWork(ctx, d, sess, branch, scan)
+		if serr != nil {
+			return nil, serr
+		}
+		if planned {
+			log.Info().Str("tool", tool).Str("session", sess.ID).
+				Msg("pipeline: dirty set empty but the corpus's own state has standing work; planning it")
+			res, err := p.nextItem(ctx, sess)
+			if err != nil {
+				return nil, err
+			}
+			// The same health contract the planned path below keeps: the
+			// descriptors ride the FIRST result. emptySeedHealth still goes on,
+			// because "nothing has CHANGED" remains true and is the sentence
+			// that explains why this session is only doing standing work.
+			res.Health = append(res.Health, emptySeedHealth(scan)...)
+			res.Health = append(res.Health, sess.Health...)
+			p.stampIdentity(res, sess)
+			return res, nil
+		}
 		res, cerr := p.completeSession(ctx, sess)
 		if cerr != nil {
 			return nil, cerr
@@ -194,6 +223,11 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 		// #122(c): an empty return that says nothing cannot be told from a
 		// finished corpus, which is how #121's wall read as completion.
 		res.Health = append(res.Health, emptySeedHealth(scan)...)
+		// And say what the STANDING channel found, on the same principle. An
+		// empty seed pool with a silent standing pass is the #121 wall's shape
+		// exactly: "nothing to do" indistinguishable from "the pass that would
+		// have found something never ran".
+		res.Health = append(res.Health, standingHealth...)
 		// Identity on THIS path too: an empty return is exactly when an
 		// operator most needs to know which corpus reported nothing, since
 		// "nothing to do" and "wrong repo" look identical otherwise.
@@ -479,6 +513,51 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 }
 
 // ── seed scan ─────────────────────────────────────────────────────────────
+
+// planStandingWork asks the strategy whether the corpus's own state gives it
+// work the empty dirty set would otherwise hide (knomit#115, knomit#155).
+//
+// Degrades to "nothing planned" in both failure modes — a strategy that does
+// not implement standingWorkStrategy, and one whose planning errors — so the
+// behaviour when this cannot answer is exactly the behaviour before it existed.
+// A standing pass must never fail a session that was about to complete
+// successfully; it is an ADDITION to the session, not a precondition for one.
+// The error is not swallowed silently, though: it becomes a health line, on the
+// same rule as every other failure in this area.
+func (p *Pipeline) planStandingWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, scan seedScan) (bool, []string, error) {
+	// A SCOPED session never plans standing work (knomit#128 review, MEDIUM-2,
+	// reinstated here verbatim in intent).
+	//
+	// The standing pools are corpus-wide BY CONSTRUCTION — the restatement
+	// shortlist does not know what scope the caller named, and the structural
+	// route deliberately ignores the scope filter even when it does — so
+	// consulting them on a scoped run turns a scope that matched nothing into a
+	// whole-corpus session the operator never asked for. That is the #122
+	// family's own rule: a scope must never silently widen.
+	//
+	// The pass is not lost. It is reached by any UNSCOPED session, which is the
+	// shape that legitimately speaks for the whole corpus.
+	if scan.Scoped {
+		return false, []string{
+			"standing work not planned: this session is SCOPED, and the standing " +
+				"pools are corpus-wide. Re-run without a scope to drain them.",
+		}, nil
+	}
+	sw, ok := p.strategy.(standingWorkStrategy)
+	if !ok {
+		return false, nil, nil
+	}
+	planned, health, err := sw.PlanStandingWork(ctx, d, sess, branch)
+	if err != nil {
+		log.Warn().Err(err).Str("tool", p.strategy.Tool()).Str("session", sess.ID).
+			Msg("pipeline: standing-work planning failed; completing as before")
+		return false, []string{
+			"standing work could not be planned this session: " + err.Error() +
+				". This is NOT a statement that the corpus has no standing work.",
+		}, nil
+	}
+	return planned, health, nil
+}
 
 // emptySeedHealth explains an empty seed pool to the agent that asked for one
 // (knomit#122 fix c, closing knomit#115's user-visible half).

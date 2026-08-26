@@ -103,6 +103,53 @@ func recordVocabularySkipHealth(sess *store.PipelineSession, effort Effort) {
 		effort))
 }
 
+// PlanStandingWork plans the review's CORPUS-STATE channel on a session whose
+// dirty set is empty (knomit#155).
+//
+// ONLY the restatement shortlist runs here, and that is the whole design. The
+// rest of Plan is edge-triggered — clustering, dedup, prune items, distill
+// chunks, bridge seeding — and on an empty seed pool every one of them is
+// correctly empty. Running them anyway would widen the blast radius of a quiet
+// session for nothing. A caught-up corpus does its standing sweep and goes
+// home.
+//
+// Note what is NOT re-created here: the removed level-triggered trio asked
+// "does the corpus have work?" and then, separately, planned it — two
+// statements that could drift apart. This plans, then reports what it planned,
+// so the health line and the queue cannot disagree.
+func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) (bool, []string, error) {
+	before := len(sess.Health)
+	// nil clusters: an empty dirty set clusters to nothing, so there is no
+	// co-membership to exclude against. That is not a degradation — the
+	// exclusion means "prune already sees this pair THIS SESSION", and this
+	// session's prune sees nothing at all.
+	if err := planRestatementShortlist(ctx, d, sess, branch, nil); err != nil {
+		return false, nil, err
+	}
+	// Whether anything reached the queue is read from the QUEUE, not inferred
+	// from the selection's own count. selected != served has been the source of
+	// two separate defects in this area (knomit#117a, #130): a pair that fails
+	// to load at item creation is selected and never served, and a session that
+	// reported the selection count over an empty queue is exactly the
+	// dishonesty this whole campaign is about.
+	items, err := d.Pipeline.PendingPipelineWorkItems(ctx, sess.ID)
+	if err != nil {
+		return false, nil, wrapf(reviewTool, err, "standing work: read pending items")
+	}
+	pending := len(items)
+	// The shortlist's own health lines were hung on the session by
+	// planRestatementShortlist; hand back only what it added, so the caller can
+	// place them without duplicating what it already holds.
+	health := append([]string(nil), sess.Health[before:]...)
+	if pending == 0 {
+		health = append(health,
+			"standing work: the corpus-state channel ran and enqueued nothing this "+
+				"session. This IS a finding — it means no standing pair was eligible, "+
+				"not that the channel was skipped.")
+	}
+	return pending > 0, health, nil
+}
+
 // Plan builds the review work queue over a non-empty seed pool: cluster, dedup,
 // then enqueue prune items per surviving multi-fact cluster, distill items over
 // the (chunked) seed pool, and — at effort >= medium — discover items per
@@ -143,6 +190,28 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 			pruneClusters = append(pruneClusters, c)
 		}
 	}
+
+	// Cousin-meeting (knomit#149). ScopedCluster's neighbour expansion is
+	// fenced to each seed's own category directory, so two facts in DIFFERENT
+	// directories under a shared ancestor never co-cluster at any cosine. This
+	// widens the PRUNE cluster set — and nothing else — so the judge sees them.
+	//
+	// TWO PROPERTIES OF THIS CALL SITE ARE LOAD-BEARING, and both are about
+	// where it sits rather than what it does:
+	//
+	//  1. AFTER dedupCluster. Before it, a newly-met cousin above the floor
+	//     would be merged mechanically with no judge — a strictly larger change
+	//     than the one ruled, and one that spends the judge's authority without
+	//     asking it.
+	//  2. On `pruneClusters`, NOT on `clusters`. The latter is read by
+	//     distillGroups and clusterResultFromGroups (both bridge axes and
+	//     discover) further down this function; the ruling scopes the fix to
+	//     prune, so those four consumers must see exactly what they saw before.
+	pruneClusters, cousins := joinCousinsForPrune(ctx, d, branch, pruneClusters, dedupThreshold)
+	sess.Health = append(sess.Health, cousinSignalLine(cousins))
+	log.Info().Str("session", sess.ID).Int("attached", cousins.Attached).
+		Int("joined", cousins.Joined).Int("searched", cousins.Searched).
+		Msg("review: cousin sweep done")
 
 	// Store prune work items — priority = cluster size (bigger = more urgent).
 	//
@@ -191,7 +260,18 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// Every step degrades to "no candidates" rather than failing the session:
 	// this is an addition to consolidation, and a corpus that cannot embed its
 	// titles or read its own cache should still get its ordinary review.
-	if err := planRestatementShortlist(ctx, d, sess, branch, clusters); err != nil {
+	//
+	// The co-membership input is `clusters` PLUS the cousin-joined prune
+	// clusters, and the union is the point. The exclusion means "prune already
+	// sees this pair", so it has to be read off the clusters prune is ACTUALLY
+	// given — otherwise the shortlist would spend a judge slot on a pair the
+	// cousin sweep had just put in front of the same judge, which is the
+	// double-spend the exclusion exists to prevent. `clusters` stays in the
+	// list because it also carries the single-fact clusters, which contribute
+	// no pairs but cost nothing to pass; clusterCoMembership unions pairs, so
+	// the overlap between the two slices is harmless.
+	if err := planRestatementShortlist(ctx, d, sess, branch,
+		append(append([][]factForLLM{}, clusters...), pruneClusters...)); err != nil {
 		return err
 	}
 

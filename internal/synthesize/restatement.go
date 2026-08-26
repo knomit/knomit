@@ -371,6 +371,27 @@ const shortlistOverfetch = 4
 // A SELECTION-POLICY constant, the same class as judgePairPermille (MN13).
 const shortlistMotifWiden = 3
 
+// structuralAllowance is how many judge slots ONE SESSION may spend on the
+// structural detection route, and it is spent WHATEVER THE THROTTLE SAYS.
+//
+// MN13 classification: a RESOURCE BUDGET, the same class as shortlistOverfetch
+// and pairNeighbourK — how much one session is willing to spend on this route.
+// It is NOT a claim about how many structural duplicates a corpus contains, and
+// nothing here is gated on a "≥N standing" floor, which would be exactly that
+// claim.
+//
+// WHY IT IS NOT THE THROTTLE'S TO WITHHOLD (knomit#155). The structural route
+// used to sit behind the ordinary band's `budget >= 2`, which made it
+// unreachable in the one state it was built for: a defunded corpus probes with
+// budget 1, one below the gate, so a corpus whose judge had resolved nothing
+// could never be shown the evidence that might change its mind. That is a
+// self-defunding latch — the penalty blocking its own recovery — and the fix is
+// to stop expressing this route's cost in the ordinary band's currency at all.
+// The throttle governs how much a corpus spends on TITLE-RANKED candidates,
+// which is what its verdict history is evidence about; it has never judged a
+// structural pair, so it has no evidence to withhold one on.
+const structuralAllowance = 5
+
 // Throttle states, reported in health output.
 //
 // RESOLVED, not merged: a verdict counts when the judge merged the pair OR
@@ -437,6 +458,18 @@ type restatementHealth struct {
 	// StandingStructural is how many structurally matched pairs the cache
 	// holds at all, whatever this session's scope and clusters made eligible.
 	StandingStructural int
+	// StructuralOutOfScope counts structural pairs offered to a SCOPED session
+	// whose halves both sit outside that scope. The structural route ignores
+	// the scope filter by design, which is a widening — and a widening the
+	// operator is not told about is the defect the #122 family exists to end.
+	StructuralOutOfScope int
+	// SweepOrderStable reports whether the sweep's oldest-first order currently
+	// means what it says. It is true only once the title axis is COMPLETE:
+	// while the axis is filling, every pair is rescanned and re-minted each
+	// session, which reassigns every rowid (see
+	// RestatementPairsByMatchKindOldest). Reported rather than assumed —
+	// a degenerated sweep order looks exactly like a working one from outside.
+	SweepOrderStable bool
 	// Probing is true when a defunded corpus spent its periodic probe slot —
 	// the one path by which its own evidence can change.
 	Probing bool
@@ -523,8 +556,37 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	h.ResolutionRate, h.ThrottleState = throttleState(verdicts)
 	h.Judged = len(verdicts)
 
+	// The structural sweep is decided BEFORE the throttle and independently of
+	// it (knomit#155). Ordering matters: every early return below is a
+	// throttle decision about the ordinary band, and the whole point of the
+	// dedicated allowance is that those decisions do not reach this route.
+	coGrouped := clusterCoMembership(clusters)
+	structural, err := selectStructuralSweep(ctx, d, branch, coGrouped)
+	if err != nil {
+		return nil, h, err
+	}
+	h.StructuralAvailable = len(structural)
+	// Whether "oldest-first" currently means what it says — see
+	// RestatementPairsByMatchKindOldest. Reported rather than assumed, because
+	// a sweep whose order has silently degenerated looks exactly like one that
+	// has not.
+	h.SweepOrderStable = h.Coverage >= 1
+	if !d.Scope.IsEmpty() {
+		// The structural route deliberately ignores the scope filter: a
+		// cross-category structural pair is corpus-wide evidence by
+		// construction. That is a SCOPE WIDENING, and a widening nobody is
+		// told about is the #122 family's own defect. Count them so the health
+		// line can say so.
+		for _, p := range structural {
+			if !pairTouchesScope(ctx, d, branch, p) {
+				h.StructuralOutOfScope++
+			}
+		}
+	}
+
 	budget := shortlistBudget(n)
 	probing := false
+	throttleClosed := false
 	if h.ThrottleState == throttleDefunded {
 		// Defunded corpora still probe, or they could never recover.
 		allowed, err := probeAllowed(ctx, d, branch)
@@ -532,17 +594,24 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 			return nil, h, err
 		}
 		if !allowed {
-			return nil, h, nil
+			throttleClosed = true
+		} else {
+			probing = true
+			budget = 1
 		}
-		probing = true
-		budget = 1
 	} else if err := d.Abstraction.SetProbeSessionsWaited(ctx, branch, 0); err != nil {
 		// A funded corpus owes no probe; reset so a later defunding starts its
 		// wait from now rather than inheriting an ancient count.
 		return nil, h, wrapf(reviewTool, err, "shortlist: reset probe wait")
 	}
 	if budget == 0 {
-		return nil, h, nil
+		throttleClosed = true
+	}
+	if throttleClosed {
+		// The ordinary band is shut. The structural allowance is not — this is
+		// the latch break, and it is the only path by which a defunded corpus
+		// is shown evidence its own verdict history says nothing about.
+		return emitStructuralOnly(structural, &h), h, nil
 	}
 
 	// Over-fetch: the exclusions below are decided per candidate, and cutting to
@@ -569,7 +638,6 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// band underfilled. That made the signal contribute nothing in exactly the
 	// case it exists for: pairs the title axis UNDER-RANKS (designer ruling
 	// Q10).
-	coGrouped := clusterCoMembership(clusters)
 	eligible := func(p store.RestatementPair) bool {
 		if _, ok := coGrouped[pathPairKey(p.APath, p.BPath)]; ok {
 			return false
@@ -599,33 +667,6 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		}
 	}
 
-	// RESERVE one slot for a STRUCTURAL pair when one exists (#127).
-	//
-	// Same shape as the motif widener below, and for the same reason: a pair
-	// found by path identity or a shared rare identifier is evidence the title
-	// ranking cannot see, so it sits below the title-ranked band by definition.
-	// Without a reserved slot the detection would be real and inert — a
-	// duplicate correctly identified and never offered, which is this issue's
-	// own failure mode arriving one layer later.
-	//
-	// A BUDGET ALLOCATION, not a threshold (MN13): it changes what may be
-	// considered, never how much is spent, and the corpus's own throttle still
-	// decides whether anything is spent at all.
-	var structural []store.RestatementPair
-	if budget >= 2 {
-		sp, serr := d.Abstraction.RestatementPairsByMatchKind(ctx, branch,
-			[]string{store.MatchPathIdentity, store.MatchRareToken}, budget*shortlistOverfetch)
-		if serr != nil {
-			return nil, h, wrapf(reviewTool, serr, "shortlist: structural rank")
-		}
-		for _, p := range sp {
-			if eligible(p) {
-				structural = append(structural, p)
-			}
-		}
-	}
-	h.StructuralAvailable = len(structural)
-
 	// RESERVE one slot for a widened pair when one exists. A shared canonical
 	// motif is evidence ORTHOGONAL to title similarity — evidence the title
 	// axis cannot see — so the pairs it identifies are below the title-ranked
@@ -639,24 +680,14 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// a corpus that can afford one judgment should spend it on its
 	// best-evidenced candidate rather than on orthogonal evidence about a
 	// lower-ranked one.
-	// Two reservations, one slot each, and neither may take the last slot: a
-	// corpus that can afford two judgements should still spend one on its
-	// best-evidenced ordinary candidate.
-	structuralReserved, motifReserved := 0, 0
-	if budget >= 2 {
-		if len(structural) > 0 {
-			structuralReserved = 1
-		}
-		if len(motifPairs) > 0 {
-			motifReserved = 1
-		}
-		for structuralReserved+motifReserved >= budget {
-			if motifReserved > 0 {
-				motifReserved--
-				continue
-			}
-			structuralReserved--
-		}
+	//
+	// The structural route USED TO SHARE this arithmetic, as a second
+	// one-slot reservation. It no longer does: it has its own allowance, spent
+	// outside the budget entirely (knomit#155). So the only thing left to
+	// arbitrate here is the motif slot against the ordinary band.
+	motifReserved := 0
+	if budget >= 2 && len(motifPairs) > 0 {
+		motifReserved = 1
 	}
 
 	var out []store.RestatementPair
@@ -671,33 +702,35 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		return true
 	}
 
-	// Structural first, within its own reservation. It is the only route by
-	// which a pair the title ranking places nowhere can be judged at all, and a
-	// route that fires only on underfill is decorative (the Q10 ruling on the
-	// motif widener, which this reservation copies).
-	used := 0
+	// Structural first, on its OWN allowance — it is not competing for the
+	// budget any more, so nothing it takes is taken from the ordinary band.
+	// It goes first only so the ordinary band's cosine stays the LAST thing
+	// added, which is what the operating point below reads.
 	for _, p := range structural {
-		if used >= structuralReserved {
-			break
-		}
 		if add(p) {
-			used++
 			h.StructuralOffered++
 		}
 	}
-	// The ordinary band takes everything the motif reservation does not hold —
-	// including any structural slot that went unused.
+	// The budget-funded bands. `budgeted` counts only what the BUDGET paid
+	// for: `len(out)` would now include the structural allowance and would
+	// shrink the ordinary band by however many structural pairs happened to
+	// stand — the allowance silently becoming a tax on the very band it was
+	// separated from.
+	budgeted := 0
 	for _, p := range ordinary {
-		if len(out) >= budget-motifReserved {
-			break
-		}
-		add(p)
-	}
-	for _, p := range motifPairs {
-		if len(out) >= budget {
+		if budgeted >= budget-motifReserved {
 			break
 		}
 		if add(p) {
+			budgeted++
+		}
+	}
+	for _, p := range motifPairs {
+		if budgeted >= budget {
+			break
+		}
+		if add(p) {
+			budgeted++
 			h.MotifWidened++
 		}
 	}
@@ -716,16 +749,77 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// knomit#117a: a probe whose one pair fails to load at item creation put
 	// NOTHING in front of the judge, yet bought a full interval of silence.
 	// That is the self-defunding latch re-introduced at a slower rate.
-	h.Probing = probing && len(out) > 0
-	if len(out) > 0 {
+	h.Probing = probing && budgeted > 0
+	if budgeted > 0 {
 		// The operating point is not a threshold anyone chose: it is whatever
 		// absolute cosine the last funded pair happens to sit at in THIS repo.
 		// Reported because it is a corpus fingerprint — the same code on
 		// another corpus prints a different number.
+		//
+		// FUNDED is the operative word, and it is why this reads `budgeted`
+		// rather than `len(out)`. The structural allowance is not funded by the
+		// budget, so its cosine is not this corpus's operating point — and on a
+		// defunded corpus, where the allowance is the ONLY thing emitted, using
+		// the last element would print a structural cosine as though the
+		// throttle had chosen it.
 		h.OperatingPoint = out[len(out)-1].TitleCos
 	}
 	h.Emitted = len(out)
 	return out, h, nil
+}
+
+// selectStructuralSweep is the structural route's whole selection: the oldest
+// standing path-identity pairs this session's clusters do not already hold.
+//
+// PATH-IDENTITY ONLY, for now. The rare-token route is the wider, weaker net
+// (store.MatchRareToken), and its merge rate is unmeasured because the route it
+// shares was inert — so it stays closed until the path-identity sample says
+// what a structural offer is actually worth. Opening both at once would spend
+// the sample on a population that cannot be told apart afterwards.
+//
+// The SCOPE filter is deliberately absent. `eligible` applies it to the
+// title-ranked band, where it belongs — a session asked to work on one area
+// should not spend its funded slots elsewhere. A structural pair is not that:
+// its evidence is the corpus's own filing, which is corpus-wide by
+// construction, and there is no scoped view that would ever co-present the two
+// halves. The widening is real, so it is COUNTED and reported rather than done
+// quietly (h.StructuralOutOfScope).
+func selectStructuralSweep(ctx context.Context, d Deps, branch string, coGrouped map[string]struct{}) ([]store.RestatementPair, error) {
+	// Over-fetch for the same reason the ordinary band does: the exclusion
+	// below is decided per candidate, so cutting to the allowance first would
+	// let one co-clustered pair silently shrink the sweep.
+	sp, err := d.Abstraction.RestatementPairsByMatchKindOldest(ctx, branch,
+		[]string{store.MatchPathIdentity}, structuralAllowance*shortlistOverfetch)
+	if err != nil {
+		return nil, wrapf(reviewTool, err, "shortlist: structural sweep")
+	}
+	var out []store.RestatementPair
+	for _, p := range sp {
+		if len(out) >= structuralAllowance {
+			break
+		}
+		// The one exclusion that survives on this route: prune already sees
+		// this pair in one cluster, so a shortlist slot would buy a second
+		// judgement of the same question.
+		if _, ok := coGrouped[pathPairKey(p.APath, p.BPath)]; ok {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// emitStructuralOnly is the return the throttle-closed paths take.
+//
+// A defunded corpus that is not probing, and a corpus whose budget rounds to
+// zero, both used to return NOTHING here. That is what made the structural
+// detection inert exactly where it mattered: the corpus with the least evidence
+// that consolidation is worth anything is the corpus most in need of being
+// shown a near-certain duplicate. The allowance is spent; the budget is not.
+func emitStructuralOnly(structural []store.RestatementPair, h *restatementHealth) []store.RestatementPair {
+	h.StructuralOffered = len(structural)
+	h.Emitted = len(structural)
+	return structural
 }
 
 // clusterCoMembership is the set of pairs this session's own dedupCluster
@@ -1016,9 +1110,29 @@ func structuralSignalLine(h restatementHealth) string {
 	if h.StandingStructural == 0 {
 		return "structural duplicate detection: no path-identity or rare-token pairs stand in this corpus"
 	}
-	return fmt.Sprintf(
-		"structural duplicate detection: %d standing, %d eligible this session, %d offered",
-		h.StandingStructural, h.StructuralAvailable, h.StructuralOffered)
+	line := fmt.Sprintf(
+		"structural duplicate detection: %d standing, %d eligible this session, %d offered "+
+			"(allowance %d/session, path-identity only — rare-token stays closed until the "+
+			"path-identity merge rate justifies it)",
+		h.StandingStructural, h.StructuralAvailable, h.StructuralOffered, structuralAllowance)
+	// Say which order the sweep is actually in. "Oldest-first" is exact only on
+	// a complete axis; while the axis fills, every pair is re-minted each
+	// session and the order is deterministic but not age-stable. A sweep that
+	// has silently degenerated reads identically to one that has not, so the
+	// regime is stated rather than implied (see
+	// RestatementPairsByMatchKindOldest).
+	if h.SweepOrderStable {
+		line += ". Sweep order: oldest-first (axis complete)"
+	} else {
+		line += ". Sweep order: NOT yet age-stable — the title axis is still filling, so " +
+			"pairs are re-minted each session and mint order churns"
+	}
+	if h.StructuralOutOfScope > 0 {
+		line += fmt.Sprintf(". %d structural pair(s) offered from OUTSIDE this session's scope "+
+			"— structural evidence is corpus-wide by construction, so this route ignores the "+
+			"scope filter on purpose", h.StructuralOutOfScope)
+	}
+	return line
 }
 
 // motifSignalLine reports what the §7 motif widener contributed this session.

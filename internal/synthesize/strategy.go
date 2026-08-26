@@ -256,6 +256,36 @@ type Strategy interface {
 	Render(ctx context.Context, d Deps, sess *store.PipelineSession, item *store.PipelineWorkItem) (*WorkItemView, error)
 }
 
+// standingWorkStrategy is implemented by a strategy that owns work triggered by
+// CORPUS STATE rather than by the seed scan.
+//
+// The seed scan is EDGE-triggered: it asks what has CHANGED since the
+// watermark. A standing-state pass asks what the corpus IS, and that question
+// still has an answer when nothing has changed — so composing the two starves
+// the standing pass on exactly the corpora it exists for, the quiet ones that
+// have caught up. That composition is knomit#115, and the empty-seed early
+// return in StartSession is where it is reintroduced every time.
+//
+// The backfill pass was the last holder of this shape, and it was removed as a
+// one-off migration wrongly built as permanent machinery. This interface is
+// deliberately NARROWER than the `levelTriggeredStrategy` trio it replaces —
+// one hook, plan-or-don't, no separate "has work?" probe to fall out of step
+// with the planning it gates.
+//
+// Optional: a strategy that does not implement it behaves exactly as it did
+// before this existed.
+type standingWorkStrategy interface {
+	// PlanStandingWork enqueues work the corpus's own state calls for, on a
+	// session whose dirty set is EMPTY. It returns whether anything was
+	// enqueued, plus health lines to attach — which must be non-empty even
+	// when nothing was planned, because "no standing work" and "the standing
+	// pass never ran" are the two states an operator most needs to tell apart
+	// (knomit#122c).
+	//
+	// It is called ONLY on unscoped sessions; see planStandingWork.
+	PlanStandingWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) (planned bool, health []string, err error)
+}
+
 // ── shared "discover" step ────────────────────────────────────────────────
 //
 // The discover step is the one step type both the review (forward) and

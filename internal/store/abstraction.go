@@ -615,6 +615,48 @@ func (ax *abstractionIndex) RestatementPairsByMatchKind(ctx context.Context, bra
 	return scanRestatementPairs(rows)
 }
 
+// RestatementPairsByMatchKindOldest sweeps a match-kind population in MINT
+// ORDER instead of ranking it.
+//
+// Same population as RestatementPairsByMatchKind, different question. That one
+// asks "which of these is most title-similar"; this asks "which have waited
+// longest". The sweep is the right shape for the structural routes because
+// their inflow far exceeds what any session can judge, so a cosine ranking
+// re-offers the same head forever and the tail is never reached.
+//
+// `rowid` is the mint order, with the caveat spelled out on the interface: the
+// cache is written with INSERT OR REPLACE, so a re-minted pair gets a fresh
+// rowid and moves to the BACK. That is the wanted behaviour (a re-minted pair
+// is revisited, not skipped) but it means the ordering is only age-EXACT once
+// the title axis is complete.
+//
+// Ties are broken on the paths, so two runs over one corpus agree even if the
+// rowids ever collide.
+func (ax *abstractionIndex) RestatementPairsByMatchKindOldest(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error) {
+	if limit <= 0 || len(kinds) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+	args := make([]any, 0, len(kinds)+2)
+	args = append(args, branch)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	args = append(args, limit)
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos, p.match_kind
+		   FROM restatement_pairs p
+		   JOIN branches b ON b.id = p.branch_id
+		  WHERE b.name = ? AND p.match_kind IN (`+placeholders+`)
+		  ORDER BY p.rowid ASC, p.a_path ASC, p.b_path ASC
+		  LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: sweep pairs by match kind: %w", err)
+	}
+	defer rows.Close()
+	return scanRestatementPairs(rows)
+}
+
 func scanRestatementPairs(rows *sql.Rows) ([]RestatementPair, error) {
 	var out []RestatementPair
 	for rows.Next() {
