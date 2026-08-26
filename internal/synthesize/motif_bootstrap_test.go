@@ -129,7 +129,7 @@ func TestBootstrap_EveryMotifWorkItemShipsItsPayload(t *testing.T) {
 	seen := map[string]bool{}
 	for _, item := range out.restatementItems {
 		switch item.StepType {
-		case motifAliasStepType, motifDefineStepType, motifBackfillStepType:
+		case motifAliasStepType, motifDefineStepType:
 			seen[item.StepType] = true
 			sess := pipelineSessionFor(env, out.sessionID)
 			view, err := (reviewStrategy{}).Render(ctx, env.deps(), &sess, &item)
@@ -205,8 +205,6 @@ func TestBootstrap_EngineServesTheRealPayloadNotABlankedOne(t *testing.T) {
 			case motifDefineStepType:
 				require.Contains(t, string(res.Item.Facts), `"cluster_key"`,
 					"the definer's answer must be routable back to a cluster")
-			case motifBackfillStepType:
-				require.Contains(t, string(res.Item.Facts), `"vocabulary"`)
 			}
 		}
 		res, err = rv.ContinueSessionForItem(ctx, res.SessionID, emptyResponseForTest(res.Item.Type), res.Item.ID)
@@ -221,7 +219,7 @@ func TestBootstrap_EngineServesTheRealPayloadNotABlankedOne(t *testing.T) {
 
 func motifStepForTest(t string) bool {
 	switch t {
-	case motifAliasStepType, motifDefineStepType, motifBackfillStepType:
+	case motifAliasStepType, motifDefineStepType:
 		return true
 	}
 	return false
@@ -233,8 +231,6 @@ func emptyResponseForTest(stepType string) string {
 		return `{"verdicts":[]}`
 	case motifDefineStepType:
 		return `{"definitions":[]}`
-	case motifBackfillStepType:
-		return `{"assignments":[]}`
 	case "prune":
 		return `{"decisions":[],"merges":[]}`
 	case "distill":

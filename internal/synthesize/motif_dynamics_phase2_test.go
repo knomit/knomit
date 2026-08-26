@@ -190,51 +190,16 @@ func TestPhase2Dynamics_DefinitionsAreAuthoredOnceAndRefreshedOnChange(t *testin
 
 // Backfill coverage must CLOSE over sessions. A bounded pass that re-offered
 // the same head every session would never reach the tail.
-func TestPhase2Dynamics_BackfillCoverageClosesOverSessions(t *testing.T) {
-	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	const total = 20
-	for i := range total {
-		env.writeFact(fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
-			fmt.Sprintf("body %d", i))
-	}
-	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
-
-	d := env.deps()
-	seen := map[string]bool{}
-	for session := range 4 {
-		targets, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
-		require.NoError(t, err)
-		if len(targets) == 0 {
-			break
-		}
-		// Answer this session's batch, as the agent would.
-		var offered []motifDefineItem
-		res := motifBackfillResult{}
-		for _, tgt := range targets {
-			require.Falsef(t, seen[tgt.Path],
-				"session %d re-offered %s — a bounded pass that repeats its head never "+
-					"reaches the tail", session, tgt.Path)
-			seen[tgt.Path] = true
-			res.Assignments = append(res.Assignments, motifAssignment{
-				Path: tgt.Path, Motifs: []string{"silent-fallback"},
-			})
-		}
-		_ = offered
-		require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, res, offeredBackfillForTest(t, ctx, env)))
-		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
-	}
-
-	with, _, all, err := env.svc.Motifs().MotifCoverage(ctx, env.branch)
-	require.NoError(t, err)
-	require.Equal(t, all, with,
-		"coverage must CLOSE: every authored fact was offered across the sessions")
-	require.Equal(t, total, with)
-}
-
 // A motif written in session N must survive the machinery of session N+1 —
-// the alias rebuild, the definition pass, and a backfill sweep that must not
-// touch a fact that already has one.
+// the alias rebuild and the definition pass.
+//
+// This test used to drive that machinery through the backfill pass, including
+// an assertion that backfill refused to overwrite an existing motif. Backfill
+// is gone; the property it was demonstrating is not. What remains is the part
+// that never depended on backfill: run the vocabulary sessions that DO still
+// exist and assert an authored motif is neither changed nor rewritten. The
+// blob-hash assertion is the load-bearing half — a pass that rewrote the fact
+// to an identical value would still be touching authored data.
 func TestPhase2Dynamics_AuthoredMotifSurvivesLaterSessions(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 0)
@@ -245,20 +210,8 @@ func TestPhase2Dynamics_AuthoredMotifSurvivesLaterSessions(t *testing.T) {
 	before, err := env.svc.FactQuery().GetByPath(ctx, env.branch, "kb/authored.md")
 	require.NoError(t, err)
 
-	d := env.deps()
-	for session := range 3 {
-		targets, err := env.svc.Motifs().LiveFactsWithoutMotifs(ctx, env.branch, maxBackfillFacts)
-		require.NoError(t, err)
-		for _, tgt := range targets {
-			require.NotEqualf(t, "kb/authored.md", tgt.Path,
-				"session %d offered backfill for a fact that already has a motif", session)
-		}
-		// A backfill pass that tried to overwrite it anyway must be refused.
-		require.NoError(t, applyMotifBackfill(ctx, d, sessionForBackfillTest(t, ctx, env), env.branch, motifBackfillResult{
-			Assignments: []motifAssignment{
-				{Path: "kb/authored.md", Motifs: []string{"config-drift"}},
-			},
-		}, offeredBackfillForTest(t, ctx, env)))
+	for range 3 {
+		env.vocabSession()
 		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 	}
 
@@ -289,7 +242,6 @@ func TestPhase2Dynamics_HealthReportsEverySubsystemEverySession(t *testing.T) {
 			"standing restatement pairs", // phase 0
 			"motif signal",               // phase 2, §7
 			"motif vocabulary",           // phase 2, §3.3
-			"motif backfill",             // phase 2, §6
 		} {
 			require.Containsf(t, joined, want,
 				"session %d lost the %q health line — a subsystem that reports nothing "+

@@ -63,35 +63,6 @@ func (reviewStrategy) AcceptSeed(f fact.Fact) bool {
 	return f.Kind == fact.Epistemic
 }
 
-// HasLevelTriggeredWork reports whether the motif vocabulary has work the
-// dirty-set gate would otherwise hide (knomit#115). Review's backfill pool is
-// corpus-wide and watermark-independent, so "nothing changed recently" is not
-// an answer to "does this corpus have un-motifed facts".
-//
-// THE EFFORT GATE IS CHECKED FIRST, AND THAT ORDER IS LOAD-BEARING. Backfill
-// fires on any authored fact lacking a motif — every fact on a motif-free
-// corpus, which is exactly the corpus MN5's review_effort_normal_test.go uses.
-// Answering true at EffortNormal would make a normal-effort session start
-// planning backfill work on that corpus, changing what EffortNormal PRODUCES
-// rather than merely what it costs. That is the guarantee MN5 exists to hold
-// (invariants/synthesize/motif/effort-amendment), and it is the one way this
-// fix could break it.
-//
-// Limit 1: this is an existence check, not a census. Nothing here needs to know
-// HOW MANY facts lack motifs — planMotifBackfillWork re-reads the pool under
-// its own budget — and asking for one keeps the empty-seed path cheap, which is
-// the only thing that path was ever good at.
-func (reviewStrategy) HasLevelTriggeredWork(ctx context.Context, d Deps, branch string) (bool, error) {
-	if !d.Effort.MaintainsVocabulary() {
-		return false, nil
-	}
-	targets, err := d.Motifs.LiveFactsWithoutMotifs(ctx, branch, 1)
-	if err != nil {
-		return false, wrapf(reviewTool, err, "level-triggered check: backfill pool")
-	}
-	return len(targets) > 0, nil
-}
-
 // recordVocabularySkipHealth states that the vocabulary passes did not run,
 // and why (knomit#112).
 //
@@ -126,8 +97,8 @@ func recordVocabularySkipHealth(sess *store.PipelineSession, effort Effort) {
 	// rather than a convention.
 	sess.Health = append(sess.Health, fmt.Sprintf(
 		"motif vocabulary passes skipped: effort %q does not maintain the "+
-			"vocabulary, so alias resolution, definitions and backfill did not "+
-			"run this session. This is a DIAL, not a corpus finding — re-run at "+
+			"vocabulary, so alias resolution and definitions did not run this "+
+			"session. This is a DIAL, not a corpus finding — re-run at "+
 			"effort medium or high to plan them.",
 		effort))
 }
@@ -270,9 +241,6 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 			return err
 		}
 		if err := planMotifDefineWork(ctx, d, sess, branch); err != nil {
-			return err
-		}
-		if err := planMotifBackfillWork(ctx, d, sess, branch); err != nil {
 			return err
 		}
 	}
@@ -660,10 +628,6 @@ type itemDecision struct {
 	// the items they answer so each can be routed back to its cluster.
 	motifDefine        *motifDefineResult
 	motifDefineOffered []motifDefineItem
-	// motifBackfill carries the backfill pass's assignments, with the payload
-	// they answer so an invented path can be refused.
-	motifBackfill        *motifBackfillResult
-	motifBackfillOffered backfillPayload
 }
 
 // Decode parses and validates a response against its work item. It is
@@ -749,20 +713,6 @@ func (reviewStrategy) Decode(item *store.PipelineWorkItem, response string) (any
 			return nil, "", wrapf(reviewTool, err, "validate motif define")
 		}
 		return &itemDecision{motifDefine: &result, motifDefineOffered: offered}, response, nil
-
-	case motifBackfillStepType:
-		var offered backfillPayload
-		if err := json.Unmarshal([]byte(item.FactsJSON), &offered); err != nil {
-			return nil, "", wrapf(reviewTool, err, "unmarshal motif backfill payload")
-		}
-		result, err := parseMotifBackfillResponse(response)
-		if err != nil {
-			return nil, "", wrapf(reviewTool, err, "parse motif backfill response")
-		}
-		if err := validateMotifBackfill(result, offered); err != nil {
-			return nil, "", wrapf(reviewTool, err, "validate motif backfill")
-		}
-		return &itemDecision{motifBackfill: &result, motifBackfillOffered: offered}, response, nil
 
 	case "discover":
 		// An empty response is "no bridges panned out", not a malformed one.
@@ -886,11 +836,6 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 			return wrapf(reviewTool, err, "apply motif define")
 		}
 
-	case motifBackfillStepType:
-		if err := applyMotifBackfill(ctx, d, sess, branch, *dec.motifBackfill, dec.motifBackfillOffered); err != nil {
-			return wrapf(reviewTool, err, "apply motif backfill")
-		}
-
 	case "discover":
 		return applyDiscoverStep(ctx, reviewTool, d, sess, dec.discover)
 
@@ -998,8 +943,6 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 		content, err = RenderMotifAliasWorkItem(item.FactsJSON)
 	case motifDefineStepType:
 		content, err = RenderMotifDefineWorkItem(item.FactsJSON)
-	case motifBackfillStepType:
-		content, err = RenderMotifBackfillWorkItem(item.FactsJSON)
 	case "discover":
 		var payload DiscoverWorkPayload
 		if uerr := json.Unmarshal([]byte(item.FactsJSON), &payload); uerr != nil {

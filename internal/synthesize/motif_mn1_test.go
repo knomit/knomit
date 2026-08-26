@@ -28,16 +28,22 @@ import (
 // vocabularyBearingItems are the rendered work items permitted to carry this
 // corpus's motif vocabulary, and where in each.
 //
-// THE RULE (Q8): no prompt on a FACT-WRITING path may carry the corpus's
-// vocabulary; backfill is the single exception. The entries below are that
-// rule plus the two the roadmap authorizes elsewhere, each with the reason its
-// exposure is not the one MN1 forbids.
+// THE RULE (Q8): no prompt on a DIRECT fact-writing path may carry vocabulary
+// drawn from the WIDER CORPUS.
+//
+// MN1 IS NOW EXCEPTION-FREE. It had exactly one: motif backfill, which wrote
+// motifs straight onto existing facts and was excepted on the grounds that the
+// fact's claim was already fixed, so corpus vocabulary could only bias which
+// existing name got REUSED. That pass was removed as a one-off migration
+// wrongly built as permanent machinery, and the exception left with it — every
+// surviving step type writes facts only through review-apply.
+//
+// So the entries below are NOT exceptions to the rule. Each is a path the rule
+// does not reach, and each states why its exposure is a different class from
+// the one MN1 forbids. An entry that cannot state such a reason IS an
+// exception, and there is no longer a precedent for admitting one:
+// TestMN1_VocabularyAllowListIsExceptionFree fails if this map grows.
 var vocabularyBearingItems = map[string]string{
-	motifBackfillStepType: "THE exception (Q8). Backfill is genuinely a fact-writing path — it puts " +
-		"motifs onto facts — and genuinely excepted: the fact already exists and its " +
-		"claim is fixed, so vocabulary can only bias which existing name is REUSED, " +
-		"which is the entire purpose. Reuse-before-minting is correct exactly here.",
-
 	motifAliasStepType: "not a fact-writing path at all. §3.1 clusters the vocabulary, so the " +
 		"vocabulary IS the subject; the pass writes derived state and no facts.",
 
@@ -113,9 +119,12 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 			if strings.Contains(text, marker) {
 				require.Truef(t, allowed,
 					"work item %q leaks corpus vocabulary in its %s. No prompt on a "+
-						"fact-writing path may carry the corpus's vocabulary; if this item "+
-						"legitimately must, declare it in vocabularyBearingItems with the "+
-						"reason its exposure is not the one MN1 forbids.", item.StepType, what)
+						"direct fact-writing path may carry the wider corpus's vocabulary, "+
+						"and MN1 no longer has an exception to point at. If this item's "+
+						"exposure is genuinely a different class, declare it in "+
+						"vocabularyBearingItems with that reason AND update "+
+						"TestMN1_VocabularyAllowListIsExceptionFree, which exists so the "+
+						"list cannot grow quietly.", item.StepType, what)
 			}
 		}
 	}
@@ -160,43 +169,6 @@ func TestMN1_RenderedWorkItemsCarryNoUnauthorizedVocabulary(t *testing.T) {
 			"%s is a declared vocabulary-bearing item but this session produced none — "+
 				"either the fixture no longer exercises it or the entry is stale", step)
 	}
-}
-
-// The backfill payload must ACTUALLY carry vocabulary. The exception exists to
-// permit something; if it permits nothing, the pass is asking a model to prefer
-// existing names while showing it none — which is what shipped before C2.
-func TestMN1_BackfillActuallyReceivesTheVocabularyItIsAllowed(t *testing.T) {
-	ctx := context.Background()
-	env := newRestatementEnv(t, 0)
-	env.writeFactWithMotifs("kb/a.md", "Alpha", "a distinct body", []string{"silent-fallback"})
-	env.writeFactWithMotifs("kb/b.md", "Bravo", "another distinct body", []string{"silent-fallback"})
-	for i := range 16 {
-		env.writeFactWithMotifs(
-			fmt.Sprintf("kb/f%02d.md", i), fmt.Sprintf("Fact %d", i),
-			fmt.Sprintf("A distinct body about subject number %d.", i),
-			[]string{fmt.Sprintf("mechanism-%s", numberWord(i))})
-	}
-	env.writeFact("kb/bare.md", "Bare fact", "a body with no motif")
-
-	out := env.vocabSession()
-	sess := store.PipelineSession{ID: out.sessionID, Branch: env.branch}
-
-	var found bool
-	for _, item := range out.restatementItems {
-		if item.StepType != motifBackfillStepType {
-			continue
-		}
-		found = true
-		view, err := (reviewStrategy{}).Render(ctx, env.deps(), &sess, &item)
-		require.NoError(t, err)
-		require.Contains(t, view.Facts, "vocabulary",
-			"the backfill payload must carry the vocabulary field its prompt refers to")
-		require.Contains(t, view.Facts, "silent-fallback",
-			"...populated with the corpus's actual recurring motifs. An empty exception "+
-				"is worse than no exception: the prompt tells the model to prefer an "+
-				"existing name and then shows it none.")
-	}
-	require.True(t, found, "the fixture must produce a backfill item")
 }
 
 // The two authorized TEMPLATE carriers, asserted where they live. Both are
@@ -315,4 +287,32 @@ func TestMN1_DiscoverRendererCarriesOnlyTheGroupsOwnMotif(t *testing.T) {
 	}, "kb")
 	require.NotContains(t, bare.Prompt, marker)
 	require.NotContains(t, bare.Prompt, foreign)
+}
+
+// TestMN1_VocabularyAllowListIsExceptionFree pins the SHAPE of the allow-list,
+// which the scan above cannot.
+//
+// The scan is behavioural: it proves no item LEAKED the marker this session.
+// That is necessary and not sufficient — an exception added to the map is
+// invisible to it, because the map is what the scan consults to decide whether
+// a leak was permitted. Widening the allow-list makes the scan agree with the
+// widening. So the list needs a test of its own, and this is it.
+//
+// Backfill's removal is what makes an exact assertion possible: with the sole
+// direct-fact-writing exception gone, the permitted set is closed, and any
+// growth is a deliberate act that has to be argued for here rather than merely
+// added above.
+func TestMN1_VocabularyAllowListIsExceptionFree(t *testing.T) {
+	permitted := make([]string, 0, len(vocabularyBearingItems))
+	for k := range vocabularyBearingItems {
+		permitted = append(permitted, k)
+	}
+	require.ElementsMatch(t, []string{
+		motifAliasStepType, motifDefineStepType, "distill", "discover", "reflect",
+	}, permitted,
+		"the MN1 vocabulary allow-list changed. Every entry must be a path the "+
+			"Q8 rule does not reach — one that writes facts through review-apply, "+
+			"not directly — with its reason stated in the map. Backfill was the only "+
+			"direct-write exception and it no longer exists; do not re-open the "+
+			"category without a designer ruling.")
 }

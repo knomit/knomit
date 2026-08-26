@@ -721,7 +721,7 @@ func report(ctx context.Context, corpus, scratch string) error {
 			"epistemic seeds only, so MotifReport.seed_bridgeable_pairs is the smaller number " +
 			"and the one an activation decision is made on.",
 	}
-	if with, _, total, err := svc.Motifs().MotifCoverage(ctx, branch); err == nil {
+	if with, total, err := svc.Motifs().MotifCoverage(ctx, branch); err == nil {
 		r.WithMotifs, r.AuthoredLive = with, total
 		if total > 0 {
 			r.Coverage = float64(with) / float64(total)

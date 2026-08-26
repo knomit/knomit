@@ -325,35 +325,12 @@ type MotifIndex interface {
 	// VocabularyHealth computes the §3.3 metrics over AUTHORED facts only.
 	// Diagnostic; nothing branches on it.
 	VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error)
-	// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
-	// oldest first, for the backfill pass.
-	LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error)
-	// RecordBackfillJudgedEmpty records that backfill asked about these FACT
-	// VERSIONS and the answer was "no regularity here" — the negative
-	// judgement, which is what makes the pass a one-time drain rather than a
-	// standing job. A motif the write gate REFUSED is not this, and neither is
-	// silence about an offered fact; both must come back.
-	//
-	// Takes fact IDS, not paths. A judgement is about CONTENT, and the caller
-	// is the only layer that knows which version its agent was shown — see
-	// LiveFactIDs.
-	RecordBackfillJudgedEmpty(ctx context.Context, branch string, factIDs []int64) error
-	// LiveFactIDs resolves paths to the fact ids the branch currently points
-	// at, so a pass can tell whether the version it is about to act on is
-	// still the version it was handed.
-	//
-	// Deliberately NOT AbstractionIndex.FactIDsByPath, which filters
-	// f.kind = 'epistemic': backfill's targets are every AUTHORED live fact,
-	// so reusing that query would silently skip every pragmatic one and the
-	// staleness guard would read "vanished" for a fact that is right there.
-	LiveFactIDs(ctx context.Context, branch string, paths []string) (map[string]int64, error)
-	// MotifCoverage reports how many live authored facts carry a motif.
-	// It returns three counts that PARTITION the authored population:
-	// `with` carry a motif, `backlog` are neither covered nor judged (the
-	// offer pool), and `total` is all of them. The caller derives declines as
-	// total-with-backlog rather than counting them separately, so the four
-	// numbers cannot disagree (knomit#124).
-	MotifCoverage(ctx context.Context, branch string) (with, backlog, total int, err error)
+	// MotifCoverage reports how many live authored facts carry a motif, out of
+	// how many there are. Both counts come from one query over one denominator
+	// so they cannot disagree (knomit#124). The backlog term left with the
+	// backfill pass — it counted facts still owed an offer, which meant
+	// something only while something was offering.
+	MotifCoverage(ctx context.Context, branch string) (with, total int, err error)
 	// AliasRows returns the alias table with its audit columns (method and the
 	// merge rationale).
 	AliasRows(ctx context.Context, branch string) (map[string]AliasRow, error)

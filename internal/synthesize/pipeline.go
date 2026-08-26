@@ -171,31 +171,34 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 		Str("watermark", scan.Watermark).
 		Dur("elapsed", time.Since(t)).Msg("pipeline: seed scan")
 
-	// An empty seed pool USED TO complete the session immediately — which still
-	// runs the watermark advance, so an unscoped no-op run records that it saw
-	// HEAD. Composed with that advance, one full-scan session on a quiet corpus
-	// made every later unscoped session return done:true forever (knomit#115).
+	// An empty seed pool completes the session.
 	//
-	// The seed scan is EDGE-triggered: it asks what changed. A strategy may own
-	// a LEVEL-triggered pass that asks what the corpus is missing, and that
-	// question has an answer even when nothing changed. Ask before giving up.
+	// knomit#115 RESCUED this path: the seed scan is EDGE-triggered (it asks
+	// what changed), motif backfill was LEVEL-triggered (it asked what the
+	// corpus was missing), and composing the two starved backfill on a quiet
+	// corpus. That rescue is GONE HERE because its subject is — the backfill
+	// pass was removed as a one-off migration wrongly built as permanent
+	// machinery, and it was the only level-triggered pass there has ever been.
+	// #115 is reverted by the removal of what it fixed, not by a decision that
+	// it was wrong.
+	//
+	// SO: if a level-triggered pass is ever added back, #115 returns WITH it.
+	// A pass whose trigger is corpus state cannot be planned from an
+	// edge-triggered seed scan, and this early return is where it would be
+	// silently starved again.
 	if len(seeds) == 0 {
-		if !p.planLevelTriggered(ctx, d, branch, scan) {
-			res, cerr := p.completeSession(ctx, sess)
-			if cerr != nil {
-				return nil, cerr
-			}
-			// #122(c): an empty return that says nothing cannot be told from a
-			// finished corpus, which is how #121's wall read as completion.
-			res.Health = append(res.Health, emptySeedHealth(scan)...)
-			// Identity on THIS path too: an empty return is exactly when an
-			// operator most needs to know which corpus reported nothing, since
-			// "nothing to do" and "wrong repo" look identical otherwise.
-			p.stampIdentity(res, sess)
-			return res, nil
+		res, cerr := p.completeSession(ctx, sess)
+		if cerr != nil {
+			return nil, cerr
 		}
-		log.Info().Str("tool", tool).Str("session", sess.ID).
-			Msg("pipeline: dirty set empty but level-triggered work is pending; planning anyway")
+		// #122(c): an empty return that says nothing cannot be told from a
+		// finished corpus, which is how #121's wall read as completion.
+		res.Health = append(res.Health, emptySeedHealth(scan)...)
+		// Identity on THIS path too: an empty return is exactly when an
+		// operator most needs to know which corpus reported nothing, since
+		// "nothing to do" and "wrong repo" look identical otherwise.
+		p.stampIdentity(res, sess)
+		return res, nil
 	}
 
 	if err := p.strategy.Plan(ctx, d, sess, seeds); err != nil {
@@ -476,46 +479,6 @@ func (p *Pipeline) RunAll(ctx context.Context, adapter llm.LLMAdapter) error {
 }
 
 // ── seed scan ─────────────────────────────────────────────────────────────
-
-// planLevelTriggered asks the strategy whether the corpus's own state gives it
-// work the empty dirty set would otherwise hide (knomit#115).
-//
-// Degrades to false in both failure modes — a strategy that does not implement
-// levelTriggeredStrategy, and one whose check errors — so the behaviour when
-// this cannot answer is exactly the behaviour before it existed. An error here
-// must not fail a session that was about to complete successfully.
-func (p *Pipeline) planLevelTriggered(ctx context.Context, d Deps, branch string, scan seedScan) bool {
-	// A SCOPED session never plans level-triggered work (knomit#128 review,
-	// MEDIUM-2). The level-triggered pools are corpus-wide by construction —
-	// LiveFactsWithoutMotifs does not know what scope the caller named — so
-	// consulting them on a scoped run turns a scope that matched nothing into
-	// a whole-corpus session that rewrites facts the operator never asked
-	// about. Measured before this guard: EffortMedium plus a scope matching no
-	// facts planned backfill over three facts, all outside the scope, and
-	// printed no scoped sentence at all.
-	//
-	// This is the #122 family's own rule — a scope must never silently widen —
-	// applied to the fix that closed a sibling case. A scoped run with an empty
-	// pool is FINISHED for that scope, and says so via emptySeedHealth.
-	//
-	// The level-triggered pass is not lost: it is reached by any unscoped
-	// session, which is the shape that legitimately speaks for the whole
-	// corpus.
-	if scan.Scoped {
-		return false
-	}
-	lt, ok := p.strategy.(levelTriggeredStrategy)
-	if !ok {
-		return false
-	}
-	has, err := lt.HasLevelTriggeredWork(ctx, d, branch)
-	if err != nil {
-		log.Warn().Err(err).Str("tool", p.strategy.Tool()).
-			Msg("pipeline: level-triggered check failed; completing as before")
-		return false
-	}
-	return has
-}
 
 // emptySeedHealth explains an empty seed pool to the agent that asked for one
 // (knomit#122 fix c, closing knomit#115's user-visible half).

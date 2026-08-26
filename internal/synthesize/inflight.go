@@ -194,29 +194,6 @@ func refreshedPayload(ctx context.Context, d Deps, branch string, item store.Pip
 			return refreshUnchanged, "", fmt.Errorf("re-marshal discover payload: %w", err)
 		}
 		return refreshRewrite, string(blob), nil
-
-	case motifBackfillStepType:
-		// Backfill is RE-MATERIALISED rather than filtered. Its payload is a
-		// budget — the oldest maxBackfillFacts facts still lacking a motif —
-		// so merely dropping a retired entry would leave the session offering
-		// seven where it had eight. Re-deriving hands the freed slot to a fact
-		// that still exists, which is the whole point of the sequence: a
-		// confirmed duplicate must not cost backfill budget.
-		if !backfillPayloadNames(item.FactsJSON, m) {
-			return refreshUnchanged, "", nil
-		}
-		payload, err := backfillPayloadFor(ctx, d, branch)
-		if err != nil {
-			return refreshUnchanged, "", err
-		}
-		if len(payload.Facts) == 0 {
-			return refreshDelete, "", nil
-		}
-		blob, err := json.Marshal(payload)
-		if err != nil {
-			return refreshUnchanged, "", fmt.Errorf("re-marshal backfill payload: %w", err)
-		}
-		return refreshRewrite, string(blob), nil
 	}
 	return refreshUnchanged, "", nil
 }
@@ -293,25 +270,4 @@ func liveMember(ctx context.Context, d Deps, branch string, stale factForLLM) (f
 		Sources:    rec.Sources,
 		Origin:     rec.Origin,
 	}, true
-}
-
-// backfillPayloadNames reports whether a backfill payload offers any mutated
-// path. Checked before re-deriving, so an untouched backfill item is left
-// exactly as planned rather than silently re-rolled on every mutation.
-//
-// A CHANGED path counts, not only a retired one: the payload binds each offer
-// to the fact id it was planned against, and applyMotifBackfill refuses to
-// write against any other version — so an updated fact would otherwise sit in
-// the payload as a slot that is guaranteed to be skipped.
-func backfillPayloadNames(factsJSON string, m mutation) bool {
-	var payload backfillPayload
-	if err := json.Unmarshal([]byte(factsJSON), &payload); err != nil {
-		return false
-	}
-	for _, f := range payload.Facts {
-		if m.touches(f.Path) {
-			return true
-		}
-	}
-	return false
 }
