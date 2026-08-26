@@ -3,6 +3,8 @@ package synthesize
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // WorkItemContent is what gets returned to the hosting model in the MCP response.
@@ -244,4 +246,49 @@ func RenderMotifDefineWorkItem(factsJSON string) (*WorkItemContent, error) {
 		ResponseSchema: motifDefineResponseSchema,
 		Facts:          factsJSON,
 	}, nil
+}
+
+// sharedClusterMotifs lived in motif_backfill.go until the backfill pass was
+// removed. It is NOT backfill code and never was: its only caller is
+// RenderDistillWorkItem, just above. It sat in that file for authorship
+// reasons, which is exactly how a distill dependency ends up hidden inside a
+// pass scheduled for deletion — the file-level rip-out scope had it slated for
+// removal until a symbol-level sweep found this caller.
+//
+// sharedClusterMotifs renders the motifs carried by TWO OR MORE facts in a
+// cluster, for the §6 distill enrichment line.
+//
+// Shared, not merely present: a motif on one member says something about that
+// member, while a motif on several says something about the group — which is
+// what the synthesized claim is about. A list of every member's motifs would
+// be longer and say less.
+//
+// Deliberately mechanical and alias-blind. It compares the strings as written,
+// because it runs while rendering a prompt and has no branch handy to resolve
+// through; the cost of missing two spellings of one mechanism is a slightly
+// thinner hint, and the alternative is threading a store read into a pure
+// render function for a line that is free context either way.
+func sharedClusterMotifs(facts []factForLLM) string {
+	count := map[string]int{}
+	for _, f := range facts {
+		seen := map[string]struct{}{}
+		for _, m := range f.Motifs {
+			if _, dup := seen[m]; dup {
+				continue // one fact is one carrier, however it repeats itself
+			}
+			seen[m] = struct{}{}
+			count[m]++
+		}
+	}
+	var shared []string
+	for m, n := range count {
+		if n >= 2 {
+			shared = append(shared, m)
+		}
+	}
+	if len(shared) == 0 {
+		return ""
+	}
+	sort.Strings(shared)
+	return strings.Join(shared, ", ")
 }
