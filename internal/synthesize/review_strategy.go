@@ -191,6 +191,28 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 		}
 	}
 
+	// Cousin-meeting (knomit#149). ScopedCluster's neighbour expansion is
+	// fenced to each seed's own category directory, so two facts in DIFFERENT
+	// directories under a shared ancestor never co-cluster at any cosine. This
+	// widens the PRUNE cluster set — and nothing else — so the judge sees them.
+	//
+	// TWO PROPERTIES OF THIS CALL SITE ARE LOAD-BEARING, and both are about
+	// where it sits rather than what it does:
+	//
+	//  1. AFTER dedupCluster. Before it, a newly-met cousin above the floor
+	//     would be merged mechanically with no judge — a strictly larger change
+	//     than the one ruled, and one that spends the judge's authority without
+	//     asking it.
+	//  2. On `pruneClusters`, NOT on `clusters`. The latter is read by
+	//     distillGroups and clusterResultFromGroups (both bridge axes and
+	//     discover) further down this function; the ruling scopes the fix to
+	//     prune, so those four consumers must see exactly what they saw before.
+	pruneClusters, cousins := joinCousinsForPrune(ctx, d, branch, pruneClusters, dedupThreshold)
+	sess.Health = append(sess.Health, cousinSignalLine(cousins))
+	log.Info().Str("session", sess.ID).Int("attached", cousins.Attached).
+		Int("joined", cousins.Joined).Int("searched", cousins.Searched).
+		Msg("review: cousin sweep done")
+
 	// Store prune work items — priority = cluster size (bigger = more urgent).
 	//
 	// Prune clusters are deliberately NOT chunked, unlike the distill items
@@ -238,7 +260,18 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// Every step degrades to "no candidates" rather than failing the session:
 	// this is an addition to consolidation, and a corpus that cannot embed its
 	// titles or read its own cache should still get its ordinary review.
-	if err := planRestatementShortlist(ctx, d, sess, branch, clusters); err != nil {
+	//
+	// The co-membership input is `clusters` PLUS the cousin-joined prune
+	// clusters, and the union is the point. The exclusion means "prune already
+	// sees this pair", so it has to be read off the clusters prune is ACTUALLY
+	// given — otherwise the shortlist would spend a judge slot on a pair the
+	// cousin sweep had just put in front of the same judge, which is the
+	// double-spend the exclusion exists to prevent. `clusters` stays in the
+	// list because it also carries the single-fact clusters, which contribute
+	// no pairs but cost nothing to pass; clusterCoMembership unions pairs, so
+	// the overlap between the two slices is harmless.
+	if err := planRestatementShortlist(ctx, d, sess, branch,
+		append(append([][]factForLLM{}, clusters...), pruneClusters...)); err != nil {
 		return err
 	}
 
