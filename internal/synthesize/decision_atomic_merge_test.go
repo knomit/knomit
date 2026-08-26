@@ -72,12 +72,22 @@ func TestApplyPruneMerge_WriteAndSourceDeletesShareOneCommit(t *testing.T) {
 		len(stats.Retired))
 }
 
-// TestApplyPruneMerge_AlreadyMissingSourceDoesNotAbortTheMerge — batchWrite
-// REFUSES a delete of a missing path, so an absent source would take down a
-// merge that is otherwise complete. That is a new failure mode created by
-// batching, and it is the reason the delete list is filtered rather than
-// passed through.
-func TestApplyPruneMerge_AlreadyMissingSourceDoesNotAbortTheMerge(t *testing.T) {
+// TestApplyPruneMerge_RetiredNamesOnlyTheSourcesThisCallRemoved.
+//
+// Renamed from "…AlreadyMissingSourceDoesNotAbortTheMerge", which claimed more
+// than it pinned. The cold review showed the merge does NOT abort on a missing
+// source even with the filter removed — only the Retired list changes — and
+// measuring it settled why: batchWrite refuses a delete only when the path's
+// parent SUBTREE is absent entirely; a missing leaf inside an existing
+// directory is a silent no-op, and go-git keeps a subtree whose last file was
+// removed. A merge source always lived at a real path, so the erroring case is
+// unreachable from here and there is nothing to test about it.
+//
+// What the filter actually buys is the thing this test now names: Retired must
+// list only what this call removed, because #127's in-flight refresh uses it to
+// strip paths out of still-queued items. A path reported as retired when
+// nothing removed it deletes a LIVE fact from the judge's view.
+func TestApplyPruneMerge_RetiredNamesOnlyTheSourcesThisCallRemoved(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 0)
 	env.writeFact("kb/alpha/one.md", "One", "first recording")
@@ -94,6 +104,10 @@ func TestApplyPruneMerge_AlreadyMissingSourceDoesNotAbortTheMerge(t *testing.T) 
 
 	require.Equal(t, 1, stats.Merged,
 		"an already-absent source is not an error — the merge must still land")
+	require.True(t, stats.Merged == 1 && len(stats.Retired) == 1,
+		"fixture: exactly one source was removable, so the two outcomes are "+
+			"distinguishable — Merged says the merge landed, Retired says which "+
+			"source it took")
 	merged, err := env.svc.Facts().FactExists(ctx, env.branch, out)
 	require.NoError(t, err)
 	require.True(t, merged, "the merged fact must have been written")

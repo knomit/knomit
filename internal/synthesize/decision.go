@@ -302,9 +302,23 @@ func ApplyPruneDecisions(ctx context.Context,
 			// Same call the Phase-3 review made on applyReinforcements (L7) —
 			// a handled failure mode that does not exist reads as a risk that
 			// was considered, which is worse than no branch at all.
-			// A source that is already gone is not an error and must not fail
-			// the batch: batchWrite REFUSES a delete of a missing path, so one
-			// absent source would abort a merge that is otherwise complete.
+			// A source that is already gone is skipped so that deletedPaths —
+			// and therefore ReviewStats.Retired — names only what this call
+			// ACTUALLY removed. That list drives the in-flight refresh, which
+			// strips those paths out of still-queued work items, so a path
+			// reported as retired when nothing removed it would delete a LIVE
+			// fact from the judge's view. Same contract, and the same failure,
+			// as the retract branch's delete-then-record ordering above.
+			//
+			// It is NOT an abort guard, though an earlier version of this
+			// comment said so. Measured: batchWrite refuses a delete only when
+			// the path's parent SUBTREE is absent from the tree entirely
+			// ("subtree not found"); a missing leaf inside an existing
+			// directory is a silent no-op, and go-git keeps a subtree that has
+			// had its last file removed. A merge source is by construction a
+			// fact that existed at a real path, so it can never reach the
+			// erroring case — guarding against it would be a handled failure
+			// mode that does not exist (the L7 call again).
 			exists, eerr := gs.FactExists(ctx, agentBranch, src)
 			if eerr != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge source %s: %v", src, eerr)})

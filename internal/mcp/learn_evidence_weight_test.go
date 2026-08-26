@@ -108,4 +108,13 @@ func TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight(t *testing.T) {
 	require.Contains(t, merged.Content, "evidence_weight:",
 		"a dedup-merge must not erase the existing fact's stored evidence_weight — "+
 			"the merged fact rests on strictly more evidence, not less")
+
+	// The VALUE, not just the presence. mergeFacts carries MAX of the two
+	// operands, and the incoming fact carries none, so the existing 0.8 must
+	// survive intact. Asserting only that the key is present would pass for any
+	// number the merge happened to invent — the same "it changed" vs "it changed
+	// to the right thing" gap the mechanical-merge test was corrected for.
+	require.Contains(t, merged.Content, "evidence_weight: 0.8",
+		"MAX of the two operands: the incoming fact carries no weight, so the "+
+			"existing 0.8 is the answer")
 }
