@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -316,204 +315,29 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 	return h, rows.Err()
 }
 
-// BackfillTarget is one fact the backfill pass may offer motifs for.
-//
-// Domain and Entities ride along because the §11 subtraction residue is
-// computed against them — title tokens MINUS subject tokens. Reading them from
-// the indexed columns rather than re-parsing the blob keeps the residue
-// computed over the same values every other subject-aware path uses.
-type BackfillTarget struct {
-	FactID   int64
-	Path     string
-	Title    string
-	Domain   []string
-	Entities []string
-}
-
-// LiveFactsWithoutMotifs returns AUTHORED live facts carrying no motifs,
-// oldest fact id first, for the backfill pass.
-//
-// Authored-only, for the same reason the health metrics are: a distilled or
-// discovered fact without motifs is the pipeline having decided it needed none,
-// and re-asking would be the engine second-guessing itself rather than filling
-// a gap a human left.
-//
-// Oldest-first is deterministic and gives a corpus a stable sweep order across
-// sessions — a bounded pass that started somewhere different each time would
-// re-offer the same facts and never reach the tail.
-//
-// This is the BACKLOG, and the backlog is what makes a session non-empty:
-// facts that have never been judged. Two ways out of it, and they are
-// different answers rather than one answer twice — a fact that GAINED a motif
-// leaves via fact_motifs, and a fact an agent judged to carry none leaves via
-// motif_backfill_judged. Without the second, "answered, none apply" was
-// indistinguishable from "not yet asked", and such a fact was re-offered every
-// session forever; on a corpus with enough of them they hold every slot and the
-// sweep never reaches the tail.
-//
-// The judged record is keyed on fact_id, which is content-addressed: an edited
-// fact is a new immutable row that has never been judged and correctly returns
-// here. Level-triggered throughout — "backlog" is this comparison, not state
-// anyone maintains.
-func (mi *motifIndex) LiveFactsWithoutMotifs(ctx context.Context, branch string, limit int) ([]BackfillTarget, error) {
-	branchID, err := mi.rh.branchID(ctx, branch)
-	if err != nil {
-		return nil, fmt.Errorf("LiveFactsWithoutMotifs: %w", err)
-	}
-	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
-		SELECT f.id, bf.path, f.title, f.domain, f.entities
-		  FROM branch_facts bf
-		  JOIN facts f ON f.id = bf.fact_id
-		 WHERE bf.branch_id = ?
-		   AND f.origin = 'authored'
-		   AND NOT EXISTS (SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id)
-		   AND NOT EXISTS (SELECT 1 FROM motif_backfill_judged j
-		                    WHERE j.branch_id = bf.branch_id AND j.fact_id = f.id)
-		 ORDER BY f.id ASC
-		 LIMIT ?`, branchID, limit)
-	if err != nil {
-		return nil, fmt.Errorf("LiveFactsWithoutMotifs: %w", err)
-	}
-	defer rows.Close()
-	var out []BackfillTarget
-	for rows.Next() {
-		var t BackfillTarget
-		var domainJSON, entitiesJSON string
-		if err := rows.Scan(&t.FactID, &t.Path, &t.Title, &domainJSON, &entitiesJSON); err != nil {
-			return nil, fmt.Errorf("LiveFactsWithoutMotifs: scan: %w", err)
-		}
-		var refs []string
-		logFactJSONUnmarshal("LiveFactsWithoutMotifs", t.Path, domainJSON, entitiesJSON, "null",
-			&t.Domain, &t.Entities, &refs)
-		out = append(out, t)
-	}
-	return out, rows.Err()
-}
-
 // MotifCoverage reports how many live AUTHORED facts carry at least one motif.
 // Reported in health; nothing branches on it.
-func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, backlog, total int, err error) {
+// The backlog term is GONE with the backfill pass (knomit backfill rip-out).
+// It counted facts still owed an offer, which only meant anything while
+// something was offering; both surviving callers already discarded it. A
+// return value nothing reads is one a later reader trusts by accident.
+func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, total int, err error) {
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
 	}
-	// All three counts come from ONE query over ONE denominator, and the
-	// backlog term repeats LiveFactsWithoutMotifs' predicate exactly
-	// (knomit#124). The repetition is deliberate and it is the point: the
-	// backlog reported to an operator must be the same population the offer
-	// pool walks, or drain progress describes a queue nobody is draining.
-	// Computing it in a second method with its own WHERE clause is how those
-	// two drift apart.
-	//
-	// The three are a PARTITION — covered + declined + backlog = total — which
-	// is what lets the caller derive `declined` without a fourth count that
-	// could disagree with the other three.
+	// Both counts come from ONE query over ONE denominator, so coverage can
+	// never be reported against a total some other clause computed.
 	err = conn(ctx, mi.rh.db).QueryRowContext(ctx, `
 		SELECT
 		  COUNT(DISTINCT CASE WHEN EXISTS (
 		      SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id) THEN bf.path END),
-		  COUNT(DISTINCT CASE WHEN NOT EXISTS (
-		      SELECT 1 FROM fact_motifs m WHERE m.fact_id = f.id)
-		    AND NOT EXISTS (
-		      SELECT 1 FROM motif_backfill_judged j
-		       WHERE j.branch_id = bf.branch_id AND j.fact_id = f.id) THEN bf.path END),
 		  COUNT(DISTINCT bf.path)
 		  FROM branch_facts bf
 		  JOIN facts f ON f.id = bf.fact_id
-		 WHERE bf.branch_id = ? AND f.origin = 'authored'`, branchID).Scan(&with, &backlog, &total)
+		 WHERE bf.branch_id = ? AND f.origin = 'authored'`, branchID).Scan(&with, &total)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("MotifCoverage: %w", err)
+		return 0, 0, fmt.Errorf("MotifCoverage: %w", err)
 	}
-	return with, backlog, total, nil
-}
-
-// RecordBackfillJudgedEmpty records that the backfill pass asked about these
-// facts and the answer was "no regularity here".
-//
-// ONLY that answer. A motif the write gate REFUSED is not this: the agent found
-// a regularity and named it, and the name failed a shape rule. Recording that
-// as judged would bury the fact with no motif and no trace of why, which is the
-// opposite of what should happen — it must come back so the naming can be
-// fixed. Silence about an offered fact is likewise not an answer about it.
-//
-// Idempotent: re-judging the same version is the same answer.
-//
-// Takes FACT IDS — the versions the agent was actually shown — and never
-// resolves a path here. Resolving the branch's live pointer at write time was
-// exactly wrong: the pass offers a fact, the agent answers minutes later, and
-// an ordinary learn/update in between makes the live pointer a DIFFERENT
-// version. Stamping that one records a verdict against content nobody read,
-// and because the stamp is what removes a fact from the backlog, the new claim
-// then goes permanently unjudged. The caller owns the binding (see
-// LiveFactIDs) because the caller is the only layer that knows what it offered.
-func (mi *motifIndex) RecordBackfillJudgedEmpty(ctx context.Context, branch string, factIDs []int64) error {
-	if len(factIDs) == 0 {
-		return nil
-	}
-	branchID, err := mi.rh.branchID(ctx, branch)
-	if err != nil {
-		return fmt.Errorf("RecordBackfillJudgedEmpty: %w", err)
-	}
-	now := time.Now().Unix()
-	for _, id := range factIDs {
-		if _, err := conn(ctx, mi.rh.db).ExecContext(ctx, `
-			INSERT INTO motif_backfill_judged (branch_id, fact_id, judged_at)
-			VALUES (?, ?, ?)
-			ON CONFLICT(branch_id, fact_id) DO NOTHING`, branchID, id, now); err != nil {
-			return fmt.Errorf("RecordBackfillJudgedEmpty: %w", err)
-		}
-	}
-	return nil
-}
-
-// LiveFactIDs resolves paths to the fact ids this branch currently points at.
-//
-// A path missing from the result is a path the branch no longer carries; the
-// caller must treat that as "not the version I was handed" rather than as an
-// error, since a fact can legitimately be retracted mid-session.
-//
-// Not AbstractionIndex.FactIDsByPath: that query carries an
-// `f.kind = 'epistemic'` filter it needs for the title-vector work and backfill
-// does not want. Reusing it would make every pragmatic fact look absent, and a
-// staleness guard reading "absent" would skip facts that are present and
-// current — the quiet half of a wrong answer.
-func (mi *motifIndex) LiveFactIDs(ctx context.Context, branch string, paths []string) (map[string]int64, error) {
-	out := make(map[string]int64, len(paths))
-	if len(paths) == 0 {
-		return out, nil
-	}
-	branchID, err := mi.rh.branchID(ctx, branch)
-	if err != nil {
-		return nil, fmt.Errorf("LiveFactIDs: %w", err)
-	}
-	for start := 0; start < len(paths); start += sqlIDChunk {
-		chunk := paths[start:min(start+sqlIDChunk, len(paths))]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
-		args := make([]any, 0, len(chunk)+1)
-		args = append(args, branchID)
-		for _, p := range chunk {
-			args = append(args, p)
-		}
-		rows, err := conn(ctx, mi.rh.db).QueryContext(ctx,
-			`SELECT path, fact_id FROM branch_facts
-			  WHERE branch_id = ? AND path IN (`+placeholders+`)`, args...)
-		if err != nil {
-			return nil, fmt.Errorf("LiveFactIDs: %w", err)
-		}
-		for rows.Next() {
-			var path string
-			var id int64
-			if err := rows.Scan(&path, &id); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("LiveFactIDs: scan: %w", err)
-			}
-			out[path] = id
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("LiveFactIDs: %w", err)
-		}
-		rows.Close()
-	}
-	return out, nil
+	return with, total, nil
 }

@@ -1,0 +1,18 @@
+-- Drop the motif-backfill judgement record along with the pass that wrote it.
+--
+-- motif_backfill_judged (000022) existed to make backfill a ONE-TIME DRAIN
+-- rather than a standing job: it recorded the negative judgement ("no
+-- regularity here") so a correctly-declined fact was not re-offered forever.
+-- With the backfill pass removed there is nothing left to re-offer, so the
+-- table records an answer to a question no longer asked.
+--
+-- Nothing is lost that matters. Motif ASSIGNMENTS live in the facts themselves
+-- — git-backed frontmatter, indexed in fact_motifs — and are untouched by this.
+-- What goes is only the record of which facts were asked and said no.
+--
+-- The one real consequence, stated so it is not discovered later: if a
+-- backfill-shaped pass is ever reintroduced, this history is gone and it will
+-- re-offer facts a human already declined. That is a reason to do any future
+-- re-audit the escape-hatch way (an agent walking facts over MCP, keeping its
+-- own record) rather than to keep an unused table against the possibility.
+DROP TABLE IF EXISTS motif_backfill_judged;

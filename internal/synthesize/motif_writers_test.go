@@ -207,9 +207,16 @@ func TestDerivedWriters_OneBadMotifDoesNotDiscardTheFact(t *testing.T) {
 		"...and the fact's actual content is untouched")
 }
 
-// The three derived writers must all take that path. A writer that assigns
-// LLM-proposed motifs raw is one malformed name away from discarding its fact.
-func TestDerivedWriters_AllThreeDropRatherThanDiscard(t *testing.T) {
+// Both derived writers must take that path. A writer that assigns LLM-proposed
+// motifs raw is one malformed name away from discarding its fact.
+//
+// There were THREE. The third was motif backfill, which was named here for the
+// opposite reason — it did NOT drop, it skipped the fact and requeued it, and
+// that was correct because its fact already existed so nothing was lost by
+// trying again. Backfill is gone, and with it the only writer whose contract
+// differed. The remaining two both drop, which is why this no longer needs to
+// distinguish between them.
+func TestDerivedWriters_DropRatherThanDiscard(t *testing.T) {
 	for _, rel := range []string{"decision.go", "discovery.go"} {
 		src := readSourceFile(t, rel)
 		require.Containsf(t, src, "fact.DropInvalidMotifs",
@@ -217,11 +224,4 @@ func TestDerivedWriters_AllThreeDropRatherThanDiscard(t *testing.T) {
 				"malformed name would fail SerializeFact and the caller's warn+continue "+
 				"would discard the whole fact", rel)
 	}
-	// Backfill already had the right semantics: it skips the fact and requeues
-	// it, so a later session offers it again. Named here so the difference is
-	// deliberate rather than accidental.
-	src := readSourceFile(t, "motif_backfill.go")
-	require.Contains(t, src, "rejected by the write gate",
-		"backfill keeps drop-and-requeue: unlike a merge, its fact already exists "+
-			"and nothing is lost by trying again")
 }
