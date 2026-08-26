@@ -627,3 +627,84 @@ func TestRelevantMethodologyForFact_VectorCoverage_WithNoiseInIndex(t *testing.T
 			"methodology candidate %s has VectorScore=0 — KNN window did not cover it", m.Path)
 	}
 }
+
+// TestRelevantMethodologyForFact_ExcludesTheSourceFactItself pins #132(b)(2):
+// a candidate scored against a set must not BE a member of that set.
+//
+// Live exhibit (core drain s213): the methodology retriever returned
+// kb/meta/reasoning/substrate-layer-dominance.md at 0.90 for a distill item
+// where that fact was itself one of the cluster's input facts — a self-match
+// pushing it past the 0.50 mandatory-read threshold. The score is genuine (a
+// fact matches itself perfectly) and meaningless: the prompt then tells the
+// judge to read, as guidance for synthesizing a fact, that very fact.
+//
+// A source fact can be a methodology fact — that is exactly the live case —
+// so the candidate query has to exclude the source path rather than relying on
+// the type filter to separate them.
+//
+// ANTI-VACUITY: assertion 1 is the control and it is what makes assertion 2
+// mean anything. If self were absent merely because it never entered the
+// candidate pool — wrong type, wrong branch, below threshold — assertion 2
+// would pass under any implementation, including one with no exclusion at all.
+// Assertion 1 proves self IS retrievable, with a high score, from a DIFFERENT
+// source on the same branch. Only then does its absence in assertion 2 pin the
+// exclusion.
+func TestRelevantMethodologyForFact_ExcludesTheSourceFactItself(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/a"))
+	svc.SetEmbedder(&stub768Embedder{})
+
+	ctx := context.Background()
+	branch := "agent/a"
+
+	// Two methodology facts sharing tags, so each is a strong candidate for
+	// the other and neither is filtered out by tag overlap.
+	const selfPath = "kb/meta/reasoning/self.md"
+	const otherPath = "kb/meta/reasoning/other.md"
+	doms := []string{"meta", "reasoning", "methodology"}
+	ents := []string{"Anthropic"}
+
+	_, err = svc.Facts().WriteFact(ctx, branch, selfPath,
+		methFactBody("Self", "a lesson about layers", doms, ents), "add self", "")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, branch, otherPath,
+		methFactBody("Other", "a lesson about layers", doms, ents), "add other", "")
+	require.NoError(t, err)
+
+	// 1. CONTROL — self is a genuine, high-scoring candidate when the source
+	//    is someone else. Without this the test below proves nothing.
+	fromOther, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		otherPath, doms, ents, 10, 0.0)
+	require.NoError(t, err)
+	var selfScore float64
+	var selfSeen bool
+	for _, m := range fromOther {
+		if m.Path == selfPath {
+			selfSeen, selfScore = true, m.Score
+		}
+		require.NotEqual(t, otherPath, m.Path,
+			"the source fact must be excluded from its own candidate set")
+	}
+	require.True(t, selfSeen,
+		"fixture is inert: %s must be retrievable as a candidate for another fact, "+
+			"or its absence below says nothing about self-exclusion", selfPath)
+	require.Greater(t, selfScore, 0.50,
+		"fixture is inert: %s must score above the 0.50 mandatory-read threshold "+
+			"as a candidate, or excluding it changes nothing that mattered", selfPath)
+
+	// 2. THE PROPERTY — asking on behalf of self must not return self, even
+	//    though self is the highest-scoring candidate in the pool.
+	fromSelf, err := svc.Search().RelevantMethodologyForFact(ctx, branch,
+		selfPath, doms, ents, 10, 0.0)
+	require.NoError(t, err)
+	for _, m := range fromSelf {
+		require.NotEqual(t, selfPath, m.Path,
+			"a fact must never be offered as methodology for synthesizing itself "+
+				"(scored %.2f as a member of its own candidate set)", m.Score)
+	}
+	// And the retrieval still works — excluding self must not empty the result.
+	require.NotEmpty(t, fromSelf, "excluding self must not suppress the other candidates")
+}
