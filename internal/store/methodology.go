@@ -74,12 +74,29 @@ func (mm *methodologyMatcher) RelevantMethodologyForFact(
 	}
 
 	// Load methodology candidate set visible on this branch.
+	//
+	// The source fact is EXCLUDED from its own candidate set (#132). A source
+	// fact may itself be a methodology fact — that is not a corner case but the
+	// observed one: a distill cluster whose input facts include a methodology
+	// fact retrieved kb/meta/reasoning/substrate-layer-dominance.md at 0.90 as
+	// guidance for synthesizing that very fact. The score is genuine, because a
+	// fact matches itself perfectly, and that is exactly what makes it
+	// worthless: a perfect methodology score is a self-membership red flag, not
+	// a strong recommendation, and here it cleared the 0.50 mandatory-read
+	// threshold on nothing but its own identity.
+	//
+	// Excluded HERE, in the candidate set, rather than filtered from the
+	// results: this query is the single authoritative definition of what is
+	// being scored, so a later filter would leave the self-match to consume a
+	// top-k slot before being dropped. The KNN query below is deliberately left
+	// alone — it only populates similarity scores keyed by fact id, and an
+	// entry for a fact absent from cands is never read.
 	rows, err := conn(ctx, mm.rh.db).QueryContext(ctx, `
 		SELECT f.path, f.title, f.id, f.blob_hash, f.domain, f.entities
 		FROM facts f
 		JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-		WHERE f.type = 'methodology'
-	`, branchID)
+		WHERE f.type = 'methodology' AND f.path <> ?
+	`, branchID, factPath)
 	if err != nil {
 		return nil, fmt.Errorf("RelevantMethodologyForFact: query candidates: %w", err)
 	}

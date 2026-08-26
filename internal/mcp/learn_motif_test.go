@@ -46,7 +46,7 @@ func motifMergeFixture(t *testing.T, newMotifs, existingMotifs []string, newWins
 		nf.Confidence, ex.Confidence = 0.5, 0.9
 	}
 	require.Equal(t, newWins, newFactWins(nf, ex), "fixture must produce the intended winner")
-	return mergeFacts(nf, ex, "kb/alpha/existing.md")
+	return mergeFacts(nf, ex, testLocalID)
 }
 
 // TestMergeFacts_MotifsWinnerFirstTrimAtCap is the roadmap's conformance case,
@@ -90,7 +90,7 @@ func TestMergeFacts_DomainAndEntitiesStayIncomingFirst(t *testing.T) {
 	ex.Entities = []string{"OldEntity"}
 
 	require.False(t, newFactWins(nf, ex))
-	merged := mergeFacts(nf, ex, "kb/alpha/existing.md")
+	merged := mergeFacts(nf, ex, testLocalID)
 
 	require.Equal(t, []string{"new-domain", "old-domain"}, merged.Domain,
 		"domain stays incoming-first even when the incoming fact loses")

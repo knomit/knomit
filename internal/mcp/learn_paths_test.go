@@ -50,16 +50,18 @@ func TestValidateAndBuildFacts_UppercaseOntologyRoot(t *testing.T) {
 	require.Equal(t, strings.ToLower(paths[0]), facts[0].Path())
 }
 
-// TestMergeFacts_LineageRefUsesRawPath pins that the lineage ref a dedup-merge
-// appends points at a file that exists on disk.
+// TestMergeFacts_AppendsNoSelfLineageRef replaces TestMergeFacts_LineageRefUsesRawPath,
+// which pinned that the appended lineage ref used the RAW on-disk path so a
+// provenance walk through it would not dangle. That whole concern is gone with
+// the ref: #132 stopped the merge appending its own path at all, because the
+// merge RETARGETS onto that path, so the "lineage" ref pointed at the merged
+// fact itself.
 //
-// The merged fact's IDENTITY is the normalized (lowercased) path — that is
-// what identity means, and ToLower is idempotent. But the REF is a pointer to
-// a file. `existing` is produced by ParseFact(rawPath, …), whose last step
-// lowercases the whole path, so existing.Path() for "kb/Tech/Foo.md" is
-// "kb/tech/foo.md" — a path with no file behind it. Using it as the lineage
-// ref makes every provenance walk through that edge dangle.
-func TestMergeFacts_LineageRefUsesRawPath(t *testing.T) {
+// The mixed-case fixture is KEPT deliberately. Raw vs normalized was the reason
+// the old ref existed, so it is the case most likely to be reintroduced by
+// someone restoring the append "correctly" — a merge that emits EITHER spelling
+// of its own path fails here.
+func TestMergeFacts_AppendsNoSelfLineageRef(t *testing.T) {
 	const rawPath = "kb/Tech/Foo.md"
 
 	existing := fact.NewFact(rawPath) // mirrors ParseFact: lowercases
@@ -72,14 +74,60 @@ func TestMergeFacts_LineageRefUsesRawPath(t *testing.T) {
 	incoming.Confidence, incoming.Sources = 0.5, 1
 	incoming.Domain, incoming.Entities, incoming.Refs = []string{"d"}, []string{}, []string{}
 
-	merged := mergeFacts(incoming, existing, rawPath)
+	merged := mergeFacts(incoming, existing, testLocalID)
 
-	require.Contains(t, merged.Refs, rawPath,
-		"lineage ref must be the raw on-disk path so provenance walks resolve")
+	require.NotContains(t, merged.Refs, rawPath,
+		"the merge must not append its own path as lineage (#132)")
 	require.NotContains(t, merged.Refs, strings.ToLower(rawPath),
-		"lowercased path names no file on disk; a ref to it dangles")
-	// Identity stays normalized — unchanged from the pre-refactor behaviour.
+		"nor the normalized spelling of it")
+	require.Empty(t, merged.Refs,
+		"neither operand carried a ref, so the merge must produce none")
+	// Identity stays normalized — unchanged.
 	require.Equal(t, strings.ToLower(rawPath), merged.Path())
+}
+
+// TestMergeFacts_DropsARefThatBecomesSelfReferential is the SECOND way a merge
+// used to emit a self-ref, and the one removing the append does not close: the
+// incoming fact legitimately cites the fact it then merges INTO. Nothing is
+// appended — the ref was already there, and the retarget is what changes its
+// meaning from "B cites A" to "A cites A".
+//
+// Both stored spellings are exercised, because refs arrive bare from a caller
+// and canonical from storage, and a filter that classified with an empty repo
+// id would read the canonical one as foreign and keep it.
+func TestMergeFacts_DropsARefThatBecomesSelfReferential(t *testing.T) {
+	const existingPath = "kb/tech/foo.md"
+	const otherPath = "kb/tech/other.md"
+
+	for _, tc := range []struct {
+		name    string
+		selfRef string
+	}{
+		{"bare", existingPath},
+		{"canonical", fact.QualifyKBPath(testLocalID, existingPath)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			existing := fact.NewFact(existingPath)
+			existing.Title, existing.Body, existing.Type = "E", "eb", fact.Observation
+			existing.Confidence, existing.Sources = 0.9, 2
+			existing.Domain, existing.Entities = []string{"d"}, []string{}
+			existing.Refs = []string{}
+
+			incoming := fact.NewFact("kb/tech/new.md")
+			incoming.Title, incoming.Body, incoming.Type = "N", "nb", fact.Observation
+			incoming.Confidence, incoming.Sources = 0.5, 1
+			incoming.Domain, incoming.Entities = []string{"d"}, []string{}
+			// Cites the fact it is about to be merged into, plus an unrelated one.
+			incoming.Refs = []string{tc.selfRef, otherPath}
+
+			merged := mergeFacts(incoming, existing, testLocalID)
+
+			require.NotContains(t, merged.Refs, tc.selfRef,
+				"a ref the retarget turned into a self-reference must be dropped")
+			require.Contains(t, merged.Refs, otherPath,
+				"refs to OTHER facts must survive — dropping those would destroy lineage")
+		})
+	}
 }
 
 // knomit_learn must refuse exactly what the REST create path refuses: the two
