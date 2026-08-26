@@ -117,7 +117,22 @@ func (hypothesizeStrategy) Plan(ctx context.Context, d Deps, sess *store.Pipelin
 	// bridged facts. A single seed cannot bridge to anything, hence the >= 2
 	// guard. Skipped entirely at EffortNormal — that is the zero-discovery-spend
 	// contract of invariants/synthesize/effort-normal-byte-identical.
+	//
+	// SINCE #125 THIS ARM IS UNREACHABLE IN PRACTICE. Backward bridging here is
+	// entity/domain-only — the motif axis is enumerated in REVIEW, over the
+	// ordinary seed pool where the motif-carrying facts are, and its far lane
+	// already routes backward from there (designer ruling 2026-08-23,
+	// phase3-rulings-1 Q2). With entity/domain now rank-only, no candidate this
+	// builder can produce qualifies, so it returns empty on every corpus at
+	// every effort rather than only on motif-poor ones. Backward DISCOVERY is
+	// not lost — review's far lane carries it — but this surface is dark, and
+	// the first arm below is what tells a reader that, instead of leaving them
+	// to read zero items as a stall. The enqueue path is left in place:
+	// removing it is a rip-out decision for its own ticket, not part of this
+	// fix, and BuildBackwardBridges is still what the calibrate tools measure.
 	switch {
+	case d.Effort.Discovers() && !BridgeKindFromString(d.RI.DiscoveryBridge()).Qualifies():
+		sess.Health = append(sess.Health, entityAxisRankOnlyLine())
 	case d.Effort.Discovers() && len(seeds) >= 2:
 		if err := enqueueBackwardBridgeItems(ctx, d, sess.ID, seeds, branch); err != nil {
 			// Non-fatal: discovery is enrichment, not a blocker on the standard

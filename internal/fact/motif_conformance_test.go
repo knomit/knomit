@@ -207,10 +207,20 @@ var mechanicsPaths = map[string][]string{
 	// What no entry here licenses: a motif term reaching dedup, clustering or
 	// search ranking. Those files stay nil below and this list does not touch
 	// them.
-	// laneOf, scoreMotifCandidate, rankAndCap, disjointMembers and
-	// copyMembers are deliberately NOT listed: their bodies name no motif
-	// identifier (they work on canonical ids, paths and scores), and this list
-	// rejects a permission nothing uses.
+	// laneOf, scoreMotifCandidate, disjointMembers and copyMembers are
+	// deliberately NOT listed: their bodies name no motif identifier (they work
+	// on canonical ids, paths and scores), and this list rejects a permission
+	// nothing uses.
+	//
+	// rankAndCap WAS in that sentence until #125 and no longer is. Nothing
+	// about what it does changed — it ranked motif bridge candidates before and
+	// ranks them now — but its inline sort literal became a call to the shared
+	// motifRankLess comparator, which names a motif identifier where the
+	// literal named none. That is the check working as designed rather than a
+	// false positive: MN6's register is of which functions READ motifs, and
+	// this one always did through the values it sorts. The alternative — naming
+	// the comparator so the word does not appear — is the fail-OPEN this test's
+	// own BasicLit case was added to close, so it was not taken.
 	//
 	// The names in this paragraph are prose, and the bidirectional machinery
 	// checks the allow-LIST rather than the reasoning beside it — so a rename
@@ -230,9 +240,29 @@ var mechanicsPaths = map[string][]string{
 	// session's health output. Reporting is not deciding — the no-branch
 	// property is what MN6 is about, and it holds: nothing in this package
 	// reads a health line.
+	// #125: the rank order gained an entity-overlap TIEBREAKER, and both rank
+	// paths now share one comparator (motifRankLess) so the served order and the
+	// measured order cannot drift. The two CALLERS name a motif identifier and
+	// are listed; motifRankLess itself is not, and deliberately so — its body
+	// reads only Q, the overlap and the token, so it mentions nothing, and the
+	// bidirectional half of this check refuses a permission nothing uses.
+	//
+	// What this licenses is ORDERING WITHIN THE AXIS, which is the §4/§5 path
+	// MN6 designs motifs into. What it does not license is the inverse — an
+	// entity term deciding whether a candidate EXISTS. The tiebreaker sits
+	// strictly below Q for exactly that reason, and is a sort term rather than
+	// a weight so no constant has to be invented to mean "small" (MN13).
 	"internal/synthesize/bridge_motif.go": {
 		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
 		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
+		"rankAndCap", "rankAndCapRows",
+		// #125's qualify predicate. It is DECLARED here rather than beside
+		// BridgeKindFromString in bridge.go precisely so that file's nil entry
+		// above stays nil: a method whose body names BridgeMotif would have
+		// forced the entity/domain engine's "blind to motifs" declaration into
+		// a one-entry allow-list, to hold a predicate whose whole subject is
+		// the other axis. Moving the method preserved the stronger statement.
+		"Qualifies",
 		// Phase 4: buildMotifBridges' own loop, extracted so the measurement
 		// instrument and production drive the SAME enumeration and scoring
 		// rather than two implementations that agree until they do not. It IS

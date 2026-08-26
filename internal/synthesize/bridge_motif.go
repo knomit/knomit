@@ -157,7 +157,45 @@ type enumeratedMotif struct {
 	// family reports that this group came from the token-2 tier — a fold of
 	// several canonical ids — rather than from one id's own carriers.
 	family bool
+	// entOverlap is the group's mean pairwise entity-set overlap
+	// (NoveltySignals.EntityJaccard), carried here for ONE purpose: to break
+	// ties in the rank order (#125). Entity overlap never qualifies a bridge
+	// and never enters Q — a pair earns its place on the MECHANISM it shares,
+	// and shared names only decide which of two otherwise-equal groups an agent
+	// sees first. Zero when unset, which simply means no tiebreak.
+	entOverlap float64
 }
+
+// Qualifies reports whether a shared token of this kind can QUALIFY a pair as a
+// bridge — that is, whether it is enough on its own to put a candidate in front
+// of an agent.
+//
+// ONLY A SHARED MECHANISM QUALIFIES (designer ruling 2026-08-26, #125). Entity
+// and domain overlap never do; they enter only at RANK, deciding which of two
+// groups that already share a mechanism an agent sees first (motifRankLess).
+//
+// This is a measured verdict, not a preference. Across the whole drain the
+// shared-signal tally reached six firings — three manufactured by lineage, one
+// redundant with entity overlap, one redundant with a cross-reference the author
+// had already written in prose, one entity-overlap-by-mention — and ZERO that
+// cleared the axis's four success clauses (no shared entity after
+// normalisation, no common synthesis, different subject areas, not
+// near-duplicates). Session 206 measured the mechanism directly: every
+// entity/domain bridge that session produced nothing, because a token like
+// domain="ai" is degenerate in an AI corpus and preferentially selects DIGEST
+// facts, whose broad tags make the corpus's lowest-quality records its most
+// attractive seeds.
+//
+// The accepted consequence is SILENCE, not a fallback: a corpus or scope whose
+// motif axis is inactive gets no discover bridges at all rather than
+// entity-only ones. No entity-only bridge has ever been shown to be worth an
+// agent's time, so the silence costs nothing that was demonstrated.
+//
+// Note the asymmetry with the degenerate-token problem: the surviving axis
+// already fences it, with a df ceiling DERIVED from the corpus
+// (max(12, 2%*LiveFacts), bridge_motif.go). The entity axis never had one and
+// now needs none.
+func (k BridgeKind) Qualifies() bool { return k == BridgeMotif }
 
 // enumerateMotifCandidates is the §4 enumeration loop, with the gates applied
 // in §4 order: df band, then Louvain separation, then subject-disjointness.
@@ -846,6 +884,7 @@ func buildMotifBridgesWithRows(
 		}
 		cand := r.cand
 		cand.Q = r.q
+		cand.entOverlap = r.comp.Novelty.EntityJaccard
 		if r.lane == LaneNear {
 			near = append(near, cand)
 		} else {
@@ -881,12 +920,7 @@ func rankAndCapRows(in []enumeratedMotif, budget int, rows []scoredMotifRow, row
 			rows[i].cause = cause
 		}
 	}
-	sort.SliceStable(kept, func(i, j int) bool {
-		if kept[i].Q != kept[j].Q {
-			return kept[i].Q > kept[j].Q
-		}
-		return kept[i].Token < kept[j].Token
-	})
+	sort.SliceStable(kept, motifRankLess(kept))
 	if len(kept) > budget {
 		kept = kept[:budget]
 	}
@@ -1200,19 +1234,46 @@ func anyMotifs(seeds []factForLLM) bool {
 	return false
 }
 
-// rankAndCap orders by Q descending, Token ascending, and truncates to the
-// lane's own budget. A zero budget means the lane is closed at this effort.
+// motifRankLess is the ONE rank order for motif bridges: Q descending, then
+// entity overlap descending, then Token ascending.
+//
+// The middle term is #125's "entities are TIEBREAKER-ONLY" half, and its
+// POSITION is the whole of its semantics. Sitting BELOW Q, it can only choose
+// between groups the mechanism signal already scored equally; it can never lift
+// a group with a weaker mechanism above a stronger one, which is what a weight
+// inside Q would do.
+//
+// It is a tiebreaker rather than a weight for a second reason: a weight needs a
+// DEFAULT, and there is no measured distribution to derive one from. Its three
+// siblings (WCoh, WGap, WSpec) all default to 1.0, which here would make entity
+// overlap a co-equal term — "entities partly qualify", the thing the ruling
+// forbids — and any smaller value would be a number invented to mean "small".
+// That is the shape anti-patterns/corpus-property-constants exists to refuse.
+// A continuous entity nudge, if one is ever wanted, is a calibration item with
+// a measured default, not this fix.
+//
+// Shared by both rank paths so the served order and the measured order cannot
+// drift apart.
+func motifRankLess(in []enumeratedMotif) func(i, j int) bool {
+	return func(i, j int) bool {
+		if in[i].Q != in[j].Q {
+			return in[i].Q > in[j].Q
+		}
+		if in[i].entOverlap != in[j].entOverlap {
+			return in[i].entOverlap > in[j].entOverlap
+		}
+		return in[i].Token < in[j].Token
+	}
+}
+
+// rankAndCap orders by motifRankLess and truncates to the lane's own budget.
+// A zero budget means the lane is closed at this effort.
 func rankAndCap(in []enumeratedMotif, budget int) ([]BridgeSeedSet, int) {
 	if budget == 0 {
 		return nil, 0
 	}
 	in, crossTier := suppressContained(in)
-	sort.SliceStable(in, func(i, j int) bool {
-		if in[i].Q != in[j].Q {
-			return in[i].Q > in[j].Q
-		}
-		return in[i].Token < in[j].Token
-	})
+	sort.SliceStable(in, motifRankLess(in))
 	if len(in) > budget {
 		in = in[:budget]
 	}

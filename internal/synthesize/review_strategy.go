@@ -302,11 +302,32 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 	// Dispatch: scoped sessions use the token-optional filtered generator;
 	// unscoped sessions use the token-anchored scored generator. The scope is
 	// empty in the unscoped case, so passing it to buildScoredBridges is a no-op.
+	//
+	// THE QUALIFY GATE (#125). Only a shared MECHANISM qualifies a bridge; a
+	// shared entity or domain name does not, and enters only at rank. Both
+	// generators below are token-anchored on entity/domain — the scoped one
+	// labels its subsets with whatever entity/domain token they happen to
+	// share — so neither can produce a qualifying candidate, and the gate skips
+	// the BUILD rather than filtering its output: the axis costs no index call
+	// to discover it has nothing to offer.
+	//
+	// The builders themselves are deliberately untouched. They remain the
+	// population BridgeComponentReport measures, and removing them is a
+	// rip-out decision for its own ticket, not part of this fix.
+	bridgeKind := BridgeKindFromString(d.RI.DiscoveryBridge())
 	var bridges []BridgeSeedSet
-	if !d.Scope.IsEmpty() {
+	switch {
+	case !bridgeKind.Qualifies():
+		// Say WHY there are none. "0 bridges" and "this axis cannot qualify"
+		// are the same number, and only the health line separates a designed
+		// silence from a stall (the #147 lesson, one surface over).
+		if d.Effort.Discovers() {
+			sess.Health = append(sess.Health, entityAxisRankOnlyLine())
+		}
+	case !d.Scope.IsEmpty():
 		bridges, err = buildFilteredBridges(ctx, d.Search, branch, llmSeeds, cr, d.Scope, d.Effort, cfg)
-	} else {
-		bridges, err = buildScoredBridges(ctx, d.Search, branch, llmSeeds, cr, BridgeKindFromString(d.RI.DiscoveryBridge()), d.Effort, cfg, d.Scope)
+	default:
+		bridges, err = buildScoredBridges(ctx, d.Search, branch, llmSeeds, cr, bridgeKind, d.Effort, cfg, d.Scope)
 	}
 	if err != nil {
 		return wrapf(reviewTool, err, "build bridges")
