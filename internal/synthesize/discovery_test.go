@@ -95,10 +95,17 @@ func TestApplyDiscoveredProposals_ConfidenceGate(t *testing.T) {
 	require.True(t, strings.HasPrefix(written[0], "kb/"), "wrote %q", written[0])
 }
 
-// TestApplyDiscoveredProposals_RefsMustCoverSeeds: a proposal that omits
-// one of the bridge members from refs is rejected (proves the agent
-// engaged with every input).
-func TestApplyDiscoveredProposals_RefsMustCoverSeeds(t *testing.T) {
+// TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds: a proposal citing
+// ONE seed is rejected — a single citation is not a derivation path.
+//
+// Retargeted by #151. It used to read "a proposal that omits one of the bridge
+// members is rejected", which is no longer the rule: on a THREE-seed bridge,
+// omitting one is now correct. What survives is the floor, and this fixture's
+// bridge has exactly two members, where the floor and the old all-seeds rule
+// happen to coincide. TestSeedSubset_TwoSeedBridgeStillNeedsBoth states that
+// coincidence deliberately; this test is not evidence of the relaxation either
+// way — discovery_citation_test.go carries that.
+func TestApplyDiscoveredProposals_RefsMustCiteAtLeastTwoSeeds(t *testing.T) {
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -116,14 +123,14 @@ func TestApplyDiscoveredProposals_RefsMustCoverSeeds(t *testing.T) {
 			Members: []factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
 		},
 	}
-	// Refs missing kb/b.md → reject.
+	// Refs cite one seed of the two offered → below the floor, reject.
 	props := []DiscoveredFact{{
 		Path: "kb/skipped.md", Title: "x", Body: "x", Type: "synthesis",
 		Domain: []string{"x"}, Confidence: 0.9, Refs: []string{"kb/a.md"},
 	}}
 	written, err := applyDiscoveredProposals(context.Background(), svc.Facts(), svc.Search(), nil, payload, props, DiscoveryGates{}, branch, bareRefFixture, "kb", nil)
 	require.NoError(t, err)
-	require.Empty(t, written, "incomplete-refs proposal must be rejected")
+	require.Empty(t, written, "a proposal citing one seed of two must be rejected")
 }
 
 // TestApplyDiscoveredProposals_OriginDiscovered: the written fact carries
@@ -208,7 +215,7 @@ func TestRenderDiscoverPrompt_TokenPresent_ContainsBridgeTokenLine(t *testing.T)
 	out := renderDiscoverPrompt(payload, "kb")
 	require.Contains(t, out, `Bridge token:`, "token-present prompt must emit Bridge token: line")
 	require.Contains(t, out, `Members (1):`)
-	require.Contains(t, out, "(d) You can cite every seed fact above in refs")
+	require.Contains(t, out, "(d) You can cite AT LEAST TWO of the seed facts above in refs")
 
 	// extract RESPONSE SCHEMA line for comparison with token-optional variant
 	schemaLine := extractResponseSchemaLine(out)
@@ -240,7 +247,7 @@ func TestRenderDiscoverPrompt_TokenEmpty_Forward(t *testing.T) {
 	require.NotContains(t, out, "Bridge token:", "token-optional prompt must NOT emit Bridge token: line")
 	require.Contains(t, out, "auth", "scope label must appear in prompt")
 	require.Contains(t, out, "Members (2):")
-	require.Contains(t, out, "(d) You can cite every seed fact above in refs")
+	require.Contains(t, out, "(d) You can cite AT LEAST TWO of the seed facts above in refs")
 	require.Contains(t, out, "RESPONSE SCHEMA")
 	require.Contains(t, out, "strictly ENTAILED", "forward token-optional must keep entailment language")
 
@@ -278,7 +285,7 @@ func TestRenderDiscoverPrompt_MandatesDiscoveredOrigin(t *testing.T) {
 			out := renderDiscoverPrompt(v.payload, "kb")
 			require.Contains(t, out, "origin: discovered",
 				"discover prompt must name the discovered origin at proposal time")
-			require.Contains(t, out, "MUST set origin: discovered and cite every seed fact above in refs",
+			require.Contains(t, out, "MUST set origin: discovered and cite at least two of the seed facts above in refs",
 				"discover prompt must mandate origin + refs for the knomit_learn save path")
 			require.Contains(t, out, "BRIDGE",
 				"the instruction must tie origin to the bridge grouping method")
@@ -320,7 +327,7 @@ func TestRenderDiscoverPrompt_TokenEmpty_Backward(t *testing.T) {
 	require.NotContains(t, out, "Bridge token:", "backward token-optional prompt must NOT emit Bridge token: line")
 	require.Contains(t, out, "auth", "scope label must appear in backward token-optional prompt")
 	require.Contains(t, out, "Members (1):")
-	require.Contains(t, out, "(d) You can cite every seed fact above in refs")
+	require.Contains(t, out, "(d) You can cite AT LEAST TWO of the seed facts above in refs")
 	require.Contains(t, out, "strictly REQUIRED", "backward token-optional must keep required-by language")
 
 	// RESPONSE SCHEMA must match backward token-present.
