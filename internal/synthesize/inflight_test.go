@@ -445,3 +445,59 @@ func TestApplyPrune_RewrittenExcludesPathsTheSameApplyRetired(t *testing.T) {
 		"a path this apply retired must not also be reported as rewritten — "+
 			"there is nothing left to re-read")
 }
+
+// TestInFlightRefresh_ReinforcementRefreshesQueuedSnapshots — the third
+// vehicle. Measured live this session: a merged pair came back in a DISTILL
+// item and in a DISCOVER item, so all three work-item types re-serve stale
+// facts.
+//
+// Discover has no retire path of its own — it WRITES new facts and REINFORCES
+// existing ones, and nothing in applyDiscoverStep deletes anything. Its
+// contribution to in-session staleness is therefore the mutated-but-live half:
+// a reinforced fact gains a source and a ref, and every queued item is still
+// carrying the count from before.
+func TestInFlightRefresh_ReinforcementRefreshesQueuedSnapshots(t *testing.T) {
+	env := newInflightEnv(t)
+	env.writeFact("kb/other-x.md", "X", "x")
+	// The reinforced fact is re-rendered through SerializeFact by the
+	// reinforce path, which refuses any fact whose stored bytes would not
+	// round-trip. Write it the way a real writer does, or the gate rejects it
+	// and the test measures a rejection rather than a refresh.
+	env.writeFactWithMotifsConf(dupAPath, "SmartConsole bypass", "one recording", nil, 0.7)
+
+	queuedID := env.queue("prune", "cluster-1", members(dupAPath, "kb/other-x.md"), 3)
+	before := sourcesOf(env.factsOf(queuedID), dupAPath)
+	require.GreaterOrEqual(t, before, 0, "the queued item must carry the fact under test")
+
+	discoverID := env.queue("discover", "discover-fwd-0", DiscoverWorkPayload{
+		Direction: DiscoverForward,
+		Bridge: BridgeSeedSet{
+			Token:   "SmartConsole",
+			Members: members(dupBPath, "kb/other-x.md"),
+		},
+	}, -1)
+	// Refs must cite EVERY seed, and the reinforced fact must not be one of
+	// them — a fact is not an independent derivation of itself.
+	env.applyResponse(discoverID, fmt.Sprintf(
+		`{"proposals":[],"reinforcements":[{"path":%q,"reason":"the seeds independently re-derive this",
+		  "refs":[%q,%q]}]}`, dupAPath, dupBPath, "kb/other-x.md"))
+
+	live, err := env.svc.Search().GetByPath(context.Background(), env.branch, dupAPath)
+	require.NoError(t, err)
+	require.NotNil(t, live)
+	require.Greater(t, live.Sources, before,
+		"fixture: the reinforcement must actually have landed, or this proves nothing")
+
+	after := sourcesOf(env.factsOf(queuedID), dupAPath)
+	require.Equal(t, live.Sources, after,
+		"a reinforced fact's queued snapshot must show the sources the corpus now holds")
+}
+
+func sourcesOf(facts []factForLLM, path string) int {
+	for _, f := range facts {
+		if f.File == path {
+			return f.Sources
+		}
+	}
+	return -1
+}
