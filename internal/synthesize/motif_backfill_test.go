@@ -238,7 +238,7 @@ func TestBackfillHealth_ReportsCoverage(t *testing.T) {
 	env.writeFact("kb/b.md", "Bravo", "body")
 	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	sess.Health = []string{"another producer's line"}
 	require.NoError(t, planMotifBackfillWork(ctx, env.deps(), sess, env.branch))
@@ -258,7 +258,7 @@ func TestBackfillWorkItem_PayloadCarriesVocabularyAndResidue(t *testing.T) {
 	env.writeFact("kb/target.md", "Target exhausts under retry storms", "body")
 	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planMotifBackfillWork(ctx, env.deps(), sess, env.branch))
 

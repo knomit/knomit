@@ -33,7 +33,7 @@ func TestApplyMotifBackfill_RefusedNameReachesTheAgent(t *testing.T) {
 	d := env.deps()
 	env.writeFact("kb/a.md", "A", "body a")
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
 	// Five hyphen segments — the validator counts segments, not concepts, and
@@ -65,7 +65,7 @@ func TestApplyMotifBackfill_ValidAssignmentProducesNoNotice(t *testing.T) {
 	d := env.deps()
 	env.writeFact("kb/a.md", "A", "body a")
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
 	res := motifBackfillResult{Assignments: []motifAssignment{
@@ -99,7 +99,7 @@ func TestApplyMotifBackfill_SubjectStripIsReportedAsItsOwnCase(t *testing.T) {
 	// is an instance of.
 	env.writeFact("kb/widget/cache.md", "Cache", "body a")
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
 	res := motifBackfillResult{Assignments: []motifAssignment{
@@ -130,7 +130,7 @@ func TestContinueSession_BackfillRefusalReachesTheCaller(t *testing.T) {
 	env := newRestatementEnv(t, 0)
 	env.writeFact("kb/a.md", "A", "body a")
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 
 	offered := offeredBackfillForTest(t, ctx, env)
@@ -169,7 +169,7 @@ func TestContinueSession_BackfillRefusalReachesTheCaller(t *testing.T) {
 // applyMotifBackfill directly and do not read its notices.
 func sessionForBackfillTest(t *testing.T, ctx context.Context, env *restatementEnv) *store.PipelineSession {
 	t.Helper()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	return sess
 }

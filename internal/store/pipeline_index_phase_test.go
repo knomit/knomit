@@ -17,7 +17,7 @@ func TestPipelineSession_PhaseDefault(t *testing.T) {
 	svc := newPhaseTestService(t)
 	pi := svc.Pipeline()
 
-	created, err := pi.CreatePipelineSession(context.Background(), "review", "agent/test")
+	created, err := pi.CreatePipelineSession(context.Background(), "review", "agent/test", "")
 	require.NoError(t, err)
 	require.Equal(t, "work", created.Phase, "new session must start in phase=work")
 
@@ -34,7 +34,7 @@ func TestPipelineSession_AdvancePhase_MatchingFrom(t *testing.T) {
 	pi := svc.Pipeline()
 	ctx := context.Background()
 
-	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test")
+	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
 
 	advanced, err := pi.AdvancePipelineSessionPhase(ctx, sess.ID, "work", "reflect")
@@ -61,7 +61,7 @@ func TestPipelineSession_AdvancePhase_NonMatchingFrom(t *testing.T) {
 	pi := svc.Pipeline()
 	ctx := context.Background()
 
-	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test")
+	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
 
 	// First caller wins the work -> reflect transition.
@@ -88,7 +88,7 @@ func TestPipelineSession_AdvancePhase_UpdatesTimestamp(t *testing.T) {
 	pi := svc.Pipeline()
 	ctx := context.Background()
 
-	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test")
+	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
 	createdTS := sess.UpdatedAt
 

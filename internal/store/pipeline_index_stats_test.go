@@ -21,7 +21,7 @@ func TestAddPipelineSessionStats_Accumulates(t *testing.T) {
 	pi := svc.Pipeline()
 	ctx := context.Background()
 
-	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test")
+	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
 
 	got, err := pi.GetPipelineSession(ctx, sess.ID)
@@ -47,7 +47,7 @@ func TestAddPipelineSessionStats_ConcurrentAddsAllLand(t *testing.T) {
 	pi := svc.Pipeline()
 	ctx := context.Background()
 
-	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test")
+	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
 
 	const callers = 8

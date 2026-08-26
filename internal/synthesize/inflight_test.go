@@ -37,7 +37,7 @@ func newInflightEnv(t *testing.T) *inflightEnv {
 	env := newRestatementEnv(t, maxBackfillFacts+4)
 	env.writeFact(dupAPath, "SmartConsole bypass", "one recording of the event")
 	env.writeFact(dupBPath, "SmartConsole bypass, again", "the same event, second category")
-	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), reviewTool, env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), reviewTool, env.branch, "")
 	require.NoError(t, err)
 	return &inflightEnv{restatementEnv: env, sess: sess}
 }

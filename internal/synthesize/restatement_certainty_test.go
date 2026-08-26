@@ -104,7 +104,7 @@ func TestShortlist_CertainDuplicatesAreEnqueuedForTheJudge(t *testing.T) {
 	certainPairIsAboveTheFloor(t, env)
 
 	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.branch, nil))
 
@@ -126,7 +126,7 @@ func TestShortlist_CoClusteredCertainDuplicatesAreNotEnqueued(t *testing.T) {
 	certainPairIsAboveTheFloor(t, env)
 
 	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
 	coClustered := [][]factForLLM{{
 		{File: certainAPath}, {File: certainBPath},

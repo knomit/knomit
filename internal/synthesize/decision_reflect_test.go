@@ -277,7 +277,7 @@ func newReflectTestEnv(t *testing.T) (*store.Service, *store.PipelineSession) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
-	sess, err := svc.Pipeline().CreatePipelineSession(context.Background(), "review", "agent/test")
+	sess, err := svc.Pipeline().CreatePipelineSession(context.Background(), "review", "agent/test", "")
 	require.NoError(t, err)
 	return svc, sess
 }

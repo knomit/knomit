@@ -125,14 +125,21 @@ func (p *Pipeline) deps() Deps {
 // This is the ONLY place the engine reads ri.AgentBranch(). The value becomes
 // sess.Branch and travels with the session for the rest of its lifetime; every
 // method below reads it back off the row
-// (invariants/synthesize/session-branch-binding).
+// (invariants/synthesize/session-branch-binding). The caller's correlation
+// handle is bound at the same moment and for the same reason — see actor.go.
 func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	totalStart := time.Now()
 	d := p.deps()
 	branch := p.ri.AgentBranch()
+	// Read ONCE, here, for the same reason the branch is: the value describes
+	// the call that opened the session, and the MCP handler builds a fresh
+	// engine per continue call, so a later read would see a different request
+	// (or none). It goes onto the row and is never read from the context again
+	// (knomit#123). Empty is normal for in-process callers.
+	actor := actorFromContext(ctx)
 
-	sess, err := d.Pipeline.CreatePipelineSession(ctx, tool, branch)
+	sess, err := d.Pipeline.CreatePipelineSession(ctx, tool, branch, actor)
 	if err != nil {
 		return nil, wrapf(tool, err, "create session")
 	}

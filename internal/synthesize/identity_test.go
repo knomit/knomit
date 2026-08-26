@@ -201,7 +201,7 @@ func TestStructural_ReachesTheJudge(t *testing.T) {
 	})
 
 	d := env.deps()
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planRestatementShortlist(ctx, d, sess, env.branch, nil))
 

@@ -124,7 +124,10 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			if perr != nil {
 				return mcpgo.NewToolResultError(perr.Error()), nil
 			}
-			result, err = synthesize.NewHypothesizer(ri, logProgress, effort, scope).StartSession(ctx)
+			// Attribute the session this call is about to open (knomit#123).
+			// Only the start path needs it: StartSession is the sole reader.
+			result, err = synthesize.NewHypothesizer(ri, logProgress, effort, scope).
+				StartSession(withActor(ctx, req))
 		} else {
 			// Effort and scope are deliberately NOT parsed on the continue path:
 			// an invalid effort must not be able to wedge a live session, and the

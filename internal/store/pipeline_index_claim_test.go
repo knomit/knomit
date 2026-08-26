@@ -24,7 +24,7 @@ func TestAnswerPipelineWorkItem_ClaimsExactlyOnce(t *testing.T) {
 	pi := svc.Pipeline()
 	ctx := context.Background()
 
-	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test")
+	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
 	require.NoError(t, pi.InsertPipelineWorkItem(ctx, PipelineWorkItem{
 		SessionID: sess.ID, StepType: "prune", ClusterKey: "c0", FactsJSON: "[]",
@@ -76,7 +76,7 @@ func TestNextPipelineWorkItem_TiebreakByIDAscending(t *testing.T) {
 	pi := svc.Pipeline()
 	ctx := context.Background()
 
-	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test")
+	sess, err := pi.CreatePipelineSession(ctx, "review", "agent/test", "")
 	require.NoError(t, err)
 
 	// Three items at the same priority, plus one strictly higher that must

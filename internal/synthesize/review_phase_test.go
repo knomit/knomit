@@ -349,7 +349,7 @@ func newPhaseTestReviewer(t *testing.T) (*Reviewer, *store.Service) {
 // that just want to exercise the dispatcher).
 func manualSession(t *testing.T, svc *store.Service, branch string) *store.PipelineSession {
 	t.Helper()
-	sess, err := svc.Pipeline().CreatePipelineSession(context.Background(), "review", branch)
+	sess, err := svc.Pipeline().CreatePipelineSession(context.Background(), "review", branch, "")
 	require.NoError(t, err)
 	return sess
 }

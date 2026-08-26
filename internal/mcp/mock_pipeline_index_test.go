@@ -100,18 +100,18 @@ func (mr *MockPipelineIndexMockRecorder) CompletePipelineSession(ctx, id any) *g
 }
 
 // CreatePipelineSession mocks base method.
-func (m *MockPipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch string) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*store.PipelineSession, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreatePipelineSession", ctx, tool, branch)
+	ret := m.ctrl.Call(m, "CreatePipelineSession", ctx, tool, branch, createdBy)
 	ret0, _ := ret[0].(*store.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreatePipelineSession indicates an expected call of CreatePipelineSession.
-func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch, createdBy any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSession), ctx, tool, branch)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSession), ctx, tool, branch, createdBy)
 }
 
 // GetPipelineSession mocks base method.

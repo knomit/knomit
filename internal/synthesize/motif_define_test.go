@@ -19,7 +19,7 @@ import (
 func TestMotifDefine_PayloadCarriesNoCarrierContent(t *testing.T) {
 	ctx := context.Background()
 	env := motifVocabEnv(t, 4)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planMotifDefineWork(ctx, env.deps(), sess, env.branch))
 
@@ -212,7 +212,7 @@ func TestMotifDefine_RegisterRejectsCarrierEntityNames(t *testing.T) {
 
 	// The blindness guard is what makes this achievable: the payload never
 	// carried "Postgres", so a compliant writer could not have used it.
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planMotifDefineWork(ctx, env.deps(), sess, env.branch))
 	item, err := env.svc.Pipeline().NextPipelineWorkItem(ctx, sess.ID)
@@ -285,7 +285,7 @@ func TestMotifVocabulary_ReachesTheHealthLines(t *testing.T) {
 	env.writeFactWithMotifs("kb/b.md", "B", "body", []string{"silent-fallback"})
 	require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	sess.Health = []string{"a line from another producer"}
 	require.NoError(t, planMotifDefineWork(ctx, env.deps(), sess, env.branch))

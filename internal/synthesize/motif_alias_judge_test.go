@@ -176,7 +176,7 @@ func TestMotifAliasDecode_WrongEnvelopeKeyIsLoud(t *testing.T) {
 // regressing.
 func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary+4)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.branch, "")
 	require.NoError(t, err)
 
 	recordRestatementHealth(sess, restatementHealth{StandingPairs: 7})
@@ -196,7 +196,7 @@ func TestMotifAliasHealth_CoexistsWithRestatementLines(t *testing.T) {
 // to stay distinguishable, which is the whole reason these descriptors exist.
 func TestMotifAliasHealth_BelowFloorIsReported(t *testing.T) {
 	env := motifVocabEnv(t, minJudgeVocabulary-1)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(context.Background(), "review", env.branch, "")
 	require.NoError(t, err)
 
 	require.NoError(t, planMotifAliasWork(context.Background(), env.deps(), sess, env.branch))
@@ -211,7 +211,7 @@ func TestMotifAliasHealth_BelowFloorIsReported(t *testing.T) {
 func TestMotifAliasWorkItem_PayloadCarriesTitlesForBothSides(t *testing.T) {
 	ctx := context.Background()
 	env := motifVocabEnv(t, minJudgeVocabulary+4)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planMotifAliasWork(ctx, env.deps(), sess, env.branch))
 
@@ -235,7 +235,7 @@ func TestMotifAliasWorkItem_PayloadCarriesTitlesForBothSides(t *testing.T) {
 func TestMotifAliasWorkItem_OneItemPerSession(t *testing.T) {
 	ctx := context.Background()
 	env := motifVocabEnv(t, minJudgeVocabulary+6)
-	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch)
+	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, "review", env.branch, "")
 	require.NoError(t, err)
 	require.NoError(t, planMotifAliasWork(ctx, env.deps(), sess, env.branch))
 
