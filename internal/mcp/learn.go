@@ -385,6 +385,38 @@ func mergeFacts(newFact, existing fact.Fact, existingPath string) fact.Fact {
 	merged.Motifs = fact.MergeMotifs(winner.Motifs, loser.Motifs)
 	merged.Confidence = max(newFact.Confidence, existing.Confidence)
 	merged.Sources = newFact.Sources + existing.Sources
+	// CARRY THE WEIGHT ACROSS (#94). Without this the merged fact starts at 0
+	// and stays there whenever computeEvidenceWeights declines to restamp it —
+	// which is the common case, because that gate reads the RAW Origin field
+	// and an agent writing through knomit_learn normally omits origin. The
+	// existing fact's stored weight then vanishes from the file, the index, and
+	// every weight-ordered query (knomit f62378e5, reproduced by
+	// TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight).
+	//
+	// MAX, not the winner's: the merged fact pools BOTH facts' sources, and
+	// evidence weight is monotone in pooled evidence, so the larger of the two
+	// is a LOWER BOUND on what a full recompute would produce. Taking the
+	// winner's would still erase a weight whenever the unweighted fact won.
+	// This never overstates the evidence, and computeEvidenceWeights still
+	// overrides with a true recompute wherever its origin gate applies.
+	//
+	// TODAY THE FIRST OPERAND IS ALWAYS ZERO, and that is worth stating rather
+	// than leaving for a reader to discover: `evidence_weight` is not a field
+	// of the learn schema, and computeEvidenceWeights runs AFTER this merge —
+	// so an incoming fact never arrives carrying one, and max() currently
+	// reduces to "keep the existing fact's weight". It is written as max
+	// because that is the RULE (never lose the larger evidence claim), and it
+	// stays correct if either of those two facts changes. Unlike a guard for an
+	// impossible failure, this costs no branch and asserts nothing false — but
+	// no test can exercise the other operand, so none pretends to.
+	//
+	// KNOWN BOUND (cold review, tracked follow-up): max is a lower bound on a
+	// true recompute, not the recompute itself — an existing weight of ~0.47
+	// merged with an incoming fact carrying sources: 20 justifies ~0.94. Left
+	// deliberately: it never overstates and never erases, and the correct fix
+	// is a hybrid, since a naive recompute mishandles a DERIVED existing fact
+	// whose lineage-composed weight max preserves better.
+	merged.EvidenceWeight = max(newFact.EvidenceWeight, existing.EvidenceWeight)
 	// Raw path, not existing.Path(): see the doc comment above.
 	merged.Refs = fact.AppendUnique(fact.UnionStrings(newFact.Refs, existing.Refs), existingPath)
 	return merged

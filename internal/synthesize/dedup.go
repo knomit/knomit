@@ -274,6 +274,28 @@ func dedupCluster(
 		// location, and without it the loser's motifs are simply deleted along
 		// with the loser, losing authored data that no derived state can rebuild.
 		fullWinner.Motifs = fact.MergeMotifs(fullWinner.Motifs, fullLoser.Motifs)
+		// RECOMPUTE the evidence weight from the pooled lineage (#94).
+		//
+		// The merge pools the loser's sources onto the winner two lines above,
+		// and evidence weight is DEFINED as a function of the pooled evidence —
+		// so a weight carried over unchanged describes evidence the surviving
+		// fact no longer has. Not an erasure like the learn path: a stale
+		// number, which is harder to notice and just as wrong.
+		//
+		// computeTransfer is the SAME call ApplyPruneDecisions uses, deliberately.
+		// Two merge paths deriving one field two ways is the "same operation,
+		// two callers, one silently wrong" drift this package keeps hitting;
+		// one mechanism cannot drift from itself. It runs before the loser is
+		// deleted, because it reads both facts.
+		//
+		// Only the WEIGHT is taken. Sources stays with mergeFacts, which owns
+		// the merge rule and whose hypothesis handling
+		// (loserCorroborations) is already pinned by tests; the two agree on
+		// every ordinary pair and disagree only when the WINNER is a
+		// hypothesis, where mergeFacts' answer is the tested one.
+		mergedWeight, _, _ := computeTransfer(ctx, gs, agentBranch, localRepoID,
+			[]string{winnerFact.File, loserFact.File})
+		fullWinner.EvidenceWeight = mergedWeight
 		// Refs = union of both refs + loser's path, and — separately — the
 		// snapshot of what the two operands already carried.
 		mergedRefs, carriedRefs := dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, loserFact.File)

@@ -272,22 +272,71 @@ func ApplyPruneDecisions(ctx context.Context,
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge serialize %s: %v", merged.Path(), err)})
 			continue
 		}
+		// ONE COMMIT for the whole merge (#101): the merged fact and every
+		// source it subsumes.
+		//
+		// A merge used to be a write followed by N separate deletes, so an
+		// interruption between them left the corpus holding BOTH the merged
+		// fact and the originals it replaced — a duplicate set manufactured by
+		// the mechanism that exists to remove duplicates, and one no later
+		// session can recognise as half-done. Batched, the merge either
+		// happened or it did not.
+		//
+		// This is the "loss impossible by construction" direction rather than
+		// "detect and refuse": there is no lossy state to detect, because the
+		// state cannot exist.
 		msg := fmt.Sprintf("synthesize-%s: merge %s", recipeName, strings.Join(m.Paths, ", "))
-		if _, err := gs.WriteFact(ctx, agentBranch, merged.Path(), content, msg, "subsume"); err != nil {
-			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge write %s: %v", merged.Path(), err)})
-			continue
-		}
+		files := map[string]string{merged.Path(): content}
 
-		// Delete source facts (losers get retract tag).
+		var deletes []string
 		for _, src := range m.Paths {
 			if deletedPaths[src] {
+				continue // a retract earlier in this same call already took it
+			}
+			// NOTE: there is deliberately NO "src != merged.Path()" guard here.
+			// normalizeFactPath mints the merged fact a fresh uuid filename
+			// (#107a), so the merged path cannot be one of the sources — the
+			// merge deleting itself is impossible by construction, not by
+			// check. A guard for it was written and then removed: no sabotage
+			// could make any test fail without it, because no input reaches it.
+			// Same call the Phase-3 review made on applyReinforcements (L7) —
+			// a handled failure mode that does not exist reads as a risk that
+			// was considered, which is worse than no branch at all.
+			// A source that is already gone is skipped so that deletedPaths —
+			// and therefore ReviewStats.Retired — names only what this call
+			// ACTUALLY removed. That list drives the in-flight refresh, which
+			// strips those paths out of still-queued work items, so a path
+			// reported as retired when nothing removed it would delete a LIVE
+			// fact from the judge's view. Same contract, and the same failure,
+			// as the retract branch's delete-then-record ordering above.
+			//
+			// It is NOT an abort guard, though an earlier version of this
+			// comment said so. Measured: batchWrite refuses a delete only when
+			// the path's parent SUBTREE is absent from the tree entirely
+			// ("subtree not found"); a missing leaf inside an existing
+			// directory is a silent no-op, and go-git keeps a subtree that has
+			// had its last file removed. A merge source is by construction a
+			// fact that existed at a real path, so it can never reach the
+			// erroring case — guarding against it would be a handled failure
+			// mode that does not exist (the L7 call again).
+			exists, eerr := gs.FactExists(ctx, agentBranch, src)
+			if eerr != nil {
+				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge source %s: %v", src, eerr)})
 				continue
 			}
-			srcMsg := fmt.Sprintf("synthesize-%s: subsumed by %s", recipeName, merged.Path())
-			if _, err := gs.DeleteFact(ctx, agentBranch, src, srcMsg); err != nil {
-				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge delete source %s: %v", src, err)})
+			if !exists {
 				continue
 			}
+			deletes = append(deletes, src)
+		}
+
+		if _, _, err := gs.BatchWriteFacts(ctx, agentBranch, files, deletes, msg, "subsume"); err != nil {
+			// Atomic in both directions: nothing landed, so nothing is
+			// recorded. The sources stay live and the pair is offered again.
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s: %v", merged.Path(), err)})
+			continue
+		}
+		for _, src := range deletes {
 			deletedPaths[src] = true
 		}
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
