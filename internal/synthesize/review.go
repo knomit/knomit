@@ -174,8 +174,9 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 	}
 
 	out.Item = &ReviewItem{
-		ID:   res.Item.ID,
-		Type: res.Item.Type,
+		ID:         res.Item.ID,
+		Type:       res.Item.Type,
+		ClusterKey: res.Item.ClusterKey,
 	}
 	if res.Item.Facts == "" {
 		// Nothing shipped beside the prompt: a single-page step type.

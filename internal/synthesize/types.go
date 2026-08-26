@@ -290,6 +290,17 @@ type ReviewItem struct {
 	// wire, which is pure cost on the exact items that are already too large.
 	// Mirrors HypothesizeItem.Fact, which has always shipped this way.
 	Facts json.RawMessage `json:"facts,omitempty"`
+	// ClusterKey identifies what this item was grouped FROM, so an answering
+	// agent can tell what it is holding (knomit#120).
+	//
+	// Read it before deciding to no-op. Item types differ in what a non-answer
+	// costs: an ordinary prune cluster (`cluster-N`) is safe to skip, while a
+	// restatement pair (`restate-N`) is not — a no-op there records a declined
+	// verdict AND permanently retires the standing pair, recoverable only by an
+	// edit that re-mints it. Before this field the two were identical on the
+	// wire and the only safe rule was to judge every 2-fact prune as though it
+	// were destructive.
+	ClusterKey string `json:"cluster_key,omitempty"`
 
 	// Paging. An item whose facts exceed one tool result is served across
 	// several; the agent accumulates every page and answers once at the end.

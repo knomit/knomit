@@ -225,7 +225,7 @@ func TestPhase2Dynamics_BackfillCoverageClosesOverSessions(t *testing.T) {
 		require.NoError(t, env.svc.Motifs().RebuildAliases(ctx, env.branch))
 	}
 
-	with, all, err := env.svc.Motifs().MotifCoverage(ctx, env.branch)
+	with, _, all, err := env.svc.Motifs().MotifCoverage(ctx, env.branch)
 	require.NoError(t, err)
 	require.Equal(t, all, with,
 		"coverage must CLOSE: every authored fact was offered across the sessions")

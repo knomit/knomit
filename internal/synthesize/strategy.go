@@ -171,6 +171,21 @@ type PipelineItem struct {
 	// hypothesize echoes it back to the agent as the `fact` field. Carrying it
 	// here spares the facades a second read of the work item.
 	FactsJSON string
+	// ClusterKey is the stored item's grouping key, carried to the wire so an
+	// answering agent can tell WHAT it is holding (knomit#120).
+	//
+	// It matters because item types differ in what a NON-ANSWER costs. An
+	// ordinary prune cluster is safe to no-op; a restatement pair (key prefixed
+	// `restate-`) is not — a no-op records a DECLINED verdict against the
+	// throttle and permanently retires the standing pair. Two 2-fact prune
+	// items were identical on every other field, so the only safe fleet rule
+	// was to treat every one as possibly destructive.
+	//
+	// The RAW key rather than a derived is_restatement flag: the key already
+	// exists and is already computed, so it cannot drift from its source the
+	// way a second declaration would. The cost is that consumers key off the
+	// prefix, which is why the prefix is pinned as a wire contract by test.
+	ClusterKey string
 	// Facts is the RENDERED payload the strategy chose to ship beside the
 	// prompt — distinct from FactsJSON, which is what the row stores. They
 	// coincide for distill today; keeping them separate is what lets a
