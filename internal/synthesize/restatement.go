@@ -120,7 +120,7 @@ type refreshStats struct {
 //
 // NO clustering runs in this path. The neighbour lookup is the same KNN the
 // similarity graph uses.
-func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, dedupThreshold float64) (refreshStats, error) {
+func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (refreshStats, error) {
 	var stats refreshStats
 
 	// Diff against facts that are actually ON THE AXIS. A fact with no title
@@ -209,11 +209,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, ded
 		}
 	}
 
-	kept, unscorable, err := filterByBlendedCosine(ctx, d, candidates, dedupThreshold)
-	if err != nil {
-		return stats, err
-	}
-	stats.PairsAdded = len(kept)
+	stats.PairsAdded = len(candidates)
 
 	// Nothing is recorded as covered until the axis is COMPLETE.
 	//
@@ -227,16 +223,13 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, ded
 	// The cost is bounded to the fill period and vanishes the session coverage
 	// closes.
 	//
-	// A fact whose blended vector could not be read was not really scanned
-	// either, for the same reason and with the same consequence.
+	// Coverage is a statement about the TITLE axis and nothing else, because
+	// the title KNN above is the entire scan. An earlier version also withheld
+	// coverage from facts whose blended vector could not be read — necessary
+	// while a blended-cosine filter ran here, meaningless now that none does.
 	var covered []int64
 	if complete {
-		covered = make([]int64, 0, len(requeue))
-		for _, id := range requeue {
-			if _, bad := unscorable[id]; !bad {
-				covered = append(covered, id)
-			}
-		}
+		covered = append([]int64(nil), requeue...)
 	}
 	// Pairs are deleted for departed facts and for facts being scanned for the
 	// first time — never for requeued partners, whose existing pairs are
@@ -249,7 +242,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, ded
 	// whole corpus — and its pairs should describe the finished axis, not the
 	// union of every half-filled state it passed through on the way.
 	return stats, d.Abstraction.ReplaceRestatementPairs(ctx, branch,
-		append(dropped, added...), kept, covered)
+		append(dropped, added...), candidates, covered)
 }
 
 // newRestatementPair canonicalises a pair so A-B and B-A are one row.
@@ -266,58 +259,36 @@ func newRestatementPair(id int64, path string, n store.TitleNeighbour) store.Res
 	return p
 }
 
-// filterByBlendedCosine drops pairs whose BLENDED (title+body) vectors already
-// sit at or above the model's calibrated dedup threshold.
+// NOTE ON THE FILTER THAT USED TO LIVE HERE (#127).
 //
-// Those pairs are not restatements the judge needs to see: mergeFacts already
-// merges them mechanically, so spending a judge slot on one is pure waste. The
-// threshold is the active model's own calibrated value
-// (internal/embeddings/params), not a constant invented here — the shortlist
-// contributes no absolute cosine of its own.
+// This function once dropped every candidate pair whose stored blended vectors
+// sat at or above the model's calibrated dedup threshold, on the rationale that
+// "mergeFacts already merges them mechanically, so spending a judge slot on one
+// is pure waste."
 //
-// Vectors come from the stored facts_vec rows. Nothing is re-embedded.
-func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.RestatementPair, dedupThreshold float64) ([]store.RestatementPair, map[int64]struct{}, error) {
-	unscorable := map[int64]struct{}{}
-	if len(pairs) == 0 {
-		return nil, unscorable, nil
-	}
-	idSet := map[int64]struct{}{}
-	for _, p := range pairs {
-		idSet[p.AFactID] = struct{}{}
-		idSet[p.BFactID] = struct{}{}
-	}
-	ids := make([]int64, 0, len(idSet))
-	for id := range idSet {
-		ids = append(ids, id)
-	}
-	vecs, err := d.Abstraction.BodyVectorsByFactID(ctx, ids)
-	if err != nil {
-		return nil, unscorable, wrapf(reviewTool, err, "shortlist: body vectors")
-	}
-
-	out := make([]store.RestatementPair, 0, len(pairs))
-	for _, p := range pairs {
-		a, aok := vecs[p.AFactID]
-		b, bok := vecs[p.BFactID]
-		if !aok || !bok {
-			// A fact with no stored vector cannot be scored — keeping the pair
-			// would mean guessing whether dedup already caught it. Report the
-			// missing side so the caller does not record it as covered.
-			if !aok {
-				unscorable[p.AFactID] = struct{}{}
-			}
-			if !bok {
-				unscorable[p.BFactID] = struct{}{}
-			}
-			continue
-		}
-		if store.CosineSim(a, b) >= dedupThreshold {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out, unscorable, nil
-}
+// That rationale is false for precisely the population this shortlist exists to
+// serve. dedupCluster's mechanical merge only ever pairs facts that are in the
+// SAME cluster — every search hit is gated on cluster membership before it can
+// become a mergePair — and the shortlist exists because restatements whose
+// halves cluster APART are judged by nothing (gotchas/synthesize/prune-scope).
+// So a cross-cluster pair above the floor was deleted here as already-handled
+// and then handled by nothing: being a CERTAIN duplicate was the disqualifier.
+//
+// Measured on the live core corpus before the removal: all six confirmed
+// duplicate pairs sat at blended cosine 0.83–0.97 against a floor of 0.82 and
+// were absent from a 14,768-row standing cache whose surviving pairs topped out
+// at 0.77. The judge was being shown everything except the duplicates.
+//
+// The exclusion it was trying to express — "prune already sees this pair" — is
+// real, and is implemented once and correctly at SELECTION time as a cluster
+// co-membership check (clusterCoMembership). That check is exact and
+// session-aware; the cosine version was a proxy for it, and the proxy was
+// inverted.
+//
+// Nothing replaces it: an above-floor pair is the shortlist's best candidate,
+// not its waste. It is also the pair a mechanical merge would handle WORST —
+// mergeFacts picks a winner and discards the loser's body, while the judge is
+// required to preserve both.
 
 // ── selection ─────────────────────────────────────────────────────────────
 //
@@ -784,8 +755,7 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 	}
 	health.Coverage = float64(have) / float64(total)
 
-	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
-	refresh, err := refreshRestatementShortlist(ctx, d, branch, dedupThreshold)
+	refresh, err := refreshRestatementShortlist(ctx, d, branch)
 	if err != nil {
 		health.Failure = "shortlist refresh failed"
 		log.Warn().Err(err).Str("session", sess.ID).

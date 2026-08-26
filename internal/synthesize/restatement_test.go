@@ -113,7 +113,7 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
 
-	refresh, err := refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	refresh, err := refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 	require.Equal(t, 40, refresh.NeighbourQueries, "first refresh seeds every fact")
 
@@ -121,7 +121,7 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, stats.Count, "the cache is populated")
 
-	refresh, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	refresh, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 	require.Zero(t, refresh.NeighbourQueries, "unchanged corpus does no work")
 
@@ -129,7 +129,7 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	_, _, err = ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
 
-	refresh, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	refresh, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 	require.LessOrEqual(t, refresh.NeighbourQueries, 1+pairNeighbourK,
 		"one edited fact costs its own lookup plus at most its partners'")
@@ -144,12 +144,12 @@ func TestRefreshShortlist_DropsPairsOfDepartedFacts(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	_, err = env.svc.Facts().DeleteFact(ctx, env.branch, "kb/f3.md", "retract f3")
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 1000)
@@ -160,10 +160,19 @@ func TestRefreshShortlist_DropsPairsOfDepartedFacts(t *testing.T) {
 	}
 }
 
-// TestRefreshShortlist_ExcludesPairsAtOrAboveDedup — the one absolute cosine in
-// play is the model's OWN calibrated dedup threshold, and pairs at or above it
-// are mergeFacts's business, not the judge's.
-func TestRefreshShortlist_ExcludesPairsAtOrAboveDedup(t *testing.T) {
+// TestRefreshShortlist_KeepsPairsAtOrAboveDedup — the inverse of what this
+// test asserted before #127.
+//
+// It used to pin "a pair the mechanical dedup gate already catches must never
+// reach the judge". The premise was false: the mechanical gate only catches
+// pairs inside ONE cluster, and this shortlist exists precisely for pairs whose
+// halves cluster apart, so above-floor cross-cluster pairs were dropped here
+// and caught nowhere. See the note where filterByBlendedCosine used to live.
+//
+// The real "prune already sees it" exclusion is asserted at its actual site, in
+// restatement_certainty_test.go — a co-clustered pair still reaches the cache
+// but is never enqueued.
+func TestRefreshShortlist_KeepsPairsAtOrAboveDedup(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 0)
 	// Two facts with identical text: identical blended vectors, cosine 1.
@@ -176,17 +185,17 @@ func TestRefreshShortlist_ExcludesPairsAtOrAboveDedup(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)
 	require.NoError(t, err)
-	for _, p := range pairs {
-		require.False(t, p.APath == "kb/twin-a.md" && p.BPath == "kb/twin-b.md",
-			"a pair the mechanical dedup gate already catches must never reach the judge")
-	}
-	// ...while the sub-dedup pair still stands, so the assertion above is about
-	// the filter rather than about the shortlist finding nothing.
+	require.True(t, containsPair(pairs, "kb/twin-a.md", "kb/twin-b.md"),
+		"a certain duplicate is the shortlist's best candidate, not its waste — "+
+			"no cluster-scoped merge reaches it when its halves cluster apart")
+	// ...and the sub-floor pair still stands, so the assertion above is about
+	// the removed filter rather than about the shortlist keeping everything
+	// indiscriminately.
 	require.True(t, containsPair(pairs, "kb/near-a.md", "kb/near-b.md"),
 		"a pair below the dedup floor is exactly what the judge should see")
 }
@@ -206,7 +215,7 @@ func TestRefreshShortlist_KeepsSimilarToNeighbours(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	pairs, err := env.svc.Abstraction().RestatementPairsByRank(ctx, env.branch, 100)

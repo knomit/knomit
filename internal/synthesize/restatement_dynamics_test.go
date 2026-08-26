@@ -69,7 +69,7 @@ func TestDynamics_PartialBackfillClosesOverSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.Less(t, have, total, "the first session covers only part of the corpus")
 
-	_, err = refreshRestatementShortlist(ctx, env.deps(), env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, env.deps(), env.branch)
 	require.NoError(t, err)
 	firstPairs := env.standingPairCount()
 
@@ -78,7 +78,7 @@ func TestDynamics_PartialBackfillClosesOverSessions(t *testing.T) {
 	for range 40 {
 		have, total, err = ensureTitleVectors(ctx, env.deps(), env.branch, tinyBudget)
 		require.NoError(t, err)
-		_, err = refreshRestatementShortlist(ctx, env.deps(), env.branch, env.dedupThreshold())
+		_, err = refreshRestatementShortlist(ctx, env.deps(), env.branch)
 		require.NoError(t, err)
 		if have == total {
 			break
