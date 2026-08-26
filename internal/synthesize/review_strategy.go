@@ -103,6 +103,53 @@ func recordVocabularySkipHealth(sess *store.PipelineSession, effort Effort) {
 		effort))
 }
 
+// PlanStandingWork plans the review's CORPUS-STATE channel on a session whose
+// dirty set is empty (knomit#155).
+//
+// ONLY the restatement shortlist runs here, and that is the whole design. The
+// rest of Plan is edge-triggered — clustering, dedup, prune items, distill
+// chunks, bridge seeding — and on an empty seed pool every one of them is
+// correctly empty. Running them anyway would widen the blast radius of a quiet
+// session for nothing. A caught-up corpus does its standing sweep and goes
+// home.
+//
+// Note what is NOT re-created here: the removed level-triggered trio asked
+// "does the corpus have work?" and then, separately, planned it — two
+// statements that could drift apart. This plans, then reports what it planned,
+// so the health line and the queue cannot disagree.
+func (reviewStrategy) PlanStandingWork(ctx context.Context, d Deps, sess *store.PipelineSession, branch string) (bool, []string, error) {
+	before := len(sess.Health)
+	// nil clusters: an empty dirty set clusters to nothing, so there is no
+	// co-membership to exclude against. That is not a degradation — the
+	// exclusion means "prune already sees this pair THIS SESSION", and this
+	// session's prune sees nothing at all.
+	if err := planRestatementShortlist(ctx, d, sess, branch, nil); err != nil {
+		return false, nil, err
+	}
+	// Whether anything reached the queue is read from the QUEUE, not inferred
+	// from the selection's own count. selected != served has been the source of
+	// two separate defects in this area (knomit#117a, #130): a pair that fails
+	// to load at item creation is selected and never served, and a session that
+	// reported the selection count over an empty queue is exactly the
+	// dishonesty this whole campaign is about.
+	items, err := d.Pipeline.PendingPipelineWorkItems(ctx, sess.ID)
+	if err != nil {
+		return false, nil, wrapf(reviewTool, err, "standing work: read pending items")
+	}
+	pending := len(items)
+	// The shortlist's own health lines were hung on the session by
+	// planRestatementShortlist; hand back only what it added, so the caller can
+	// place them without duplicating what it already holds.
+	health := append([]string(nil), sess.Health[before:]...)
+	if pending == 0 {
+		health = append(health,
+			"standing work: the corpus-state channel ran and enqueued nothing this "+
+				"session. This IS a finding — it means no standing pair was eligible, "+
+				"not that the channel was skipped.")
+	}
+	return pending > 0, health, nil
+}
+
 // Plan builds the review work queue over a non-empty seed pool: cluster, dedup,
 // then enqueue prune items per surviving multi-fact cluster, distill items over
 // the (chunked) seed pool, and — at effort >= medium — discover items per

@@ -358,9 +358,24 @@ func TestStructural_AllowanceCapsTheSweep(t *testing.T) {
 			"a whole session's judge budget to one route")
 }
 
-// manyTwinsEnv builds a corpus with n path-identity twin pairs, each on its own
-// discriminating subject token so no pair can match across pairs.
+// manyTwinsEnv builds a corpus with n path-identity twin pairs on the standard
+// filler, for tests about SELECTION (which is corpus-scaled).
 func manyTwinsEnv(t *testing.T, n int) *restatementEnv {
+	t.Helper()
+	return manyTwinsEnvWithFiller(t, n, structuralFiller)
+}
+
+// manyTwinsEnvWithFiller is manyTwinsEnv with the filler size chosen by the
+// caller.
+//
+// The filler exists for ONE reason — both rarity cuts are read off the corpus's
+// own token distribution, so a corpus with no distribution has nothing rare in
+// it — and the standard 404 is sized for `shortlistBudget`, which is a
+// SELECTION concern. Tests about the standing channel do not need it: the
+// allowance fires whatever the budget is, and 404 facts make the distill item
+// span six pages, which turns an unrelated paging contract into a fixture
+// problem. So they pass a smaller number and assert the detection still fires.
+func manyTwinsEnvWithFiller(t *testing.T, n, filler int) *restatementEnv {
 	t.Helper()
 	// Subject tokens chosen to be rare in this corpus and unrelated to each
 	// other; the prefix-EXTENSION shape (subject vs vendor/subject) is the one
@@ -372,7 +387,7 @@ func manyTwinsEnv(t *testing.T, n int) *restatementEnv {
 	require.LessOrEqual(t, n, len(subjects), "manyTwinsEnv has only %d subjects", len(subjects))
 
 	env := newRestatementEnv(t, 0)
-	for i := range structuralFiller {
+	for i := range filler {
 		env.writeFact(
 			fmt.Sprintf("kb/technology/filler/topic%d/%08x.md", i, i+1),
 			fmt.Sprintf("Filler note 2026 about widget %d", 1000+i),
