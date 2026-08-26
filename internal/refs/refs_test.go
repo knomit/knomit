@@ -408,3 +408,32 @@ func TestApply_RefToAnotherFactIsNotSelfReference(t *testing.T) {
 		t.Fatalf("citing a different fact must be allowed, got %v", err)
 	}
 }
+
+// The shape #151's reinforce path actually writes: a fact that ALREADY carries
+// a legacy self-ref gains a NEW ref to a different fact. Both halves must hold
+// at once — the carried self-ref is grandfathered, and the newly-added seed is
+// checked normally.
+//
+// This is a cross-package interaction, pinned here because it is where the rule
+// lives. discovery_reinforce.go builds newRefs from the fact's existing refs
+// plus the cited seeds and passes a prior SNAPSHOT to CheckBatch; if a carried
+// self-ref were rejected, reinforce would fail outright on any of the legacy
+// facts that carry one — and those cannot currently be repaired, because they
+// live in a read-only mount. That is the concrete reason the carried case is
+// grandfathered rather than rejected.
+func TestGate_CarriedSelfRefPlusNewRef_ReinforceShape(t *testing.T) {
+	g := New(gateRepoID, existsIn("kb/seed.md"))
+	self := "kb/legacy.md"
+	batch := map[string][]string{self: {self, "kb/seed.md"}}
+	prior := map[string][]string{self: {self}}
+	if err := g.CheckBatch(context.Background(), batch, prior); err != nil {
+		t.Fatalf("a legacy self-ref carrier gaining a real seed ref must be accepted, got %v", err)
+	}
+
+	// And the new-ref check is NOT weakened by the carried self-ref sitting
+	// beside it: an unresolvable addition is still rejected.
+	batch[self] = []string{self, "kb/typo.md"}
+	if err := g.CheckBatch(context.Background(), batch, prior); err == nil {
+		t.Fatal("an unresolvable NEW ref must still be rejected alongside a carried self-ref")
+	}
+}
