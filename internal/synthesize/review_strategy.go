@@ -850,7 +850,7 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 		// work that succeeded. A refresh that cannot run leaves the queue as
 		// stale as it was before this existed, which is a degradation, not a
 		// corruption.
-		if rerr := refreshInFlightItems(ctx, d, sess, branch, stats.Retired); rerr != nil {
+		if rerr := refreshInFlightItems(ctx, d, sess, branch, stats); rerr != nil {
 			log.Warn().Err(rerr).Str("session", sess.ID).
 				Msg("review: in-flight work items could not be refreshed after this merge")
 		}
@@ -866,6 +866,14 @@ func (reviewStrategy) Apply(ctx context.Context, d Deps, sess *store.PipelineSes
 			return wrapf(reviewTool, err, "apply distill")
 		}
 		recordStats(ctx, reviewTool, d, sess, stats)
+		// Distill retires facts too, and the queue it leaves stale is not its
+		// own: measured live, a distill's subsumed facts sat in prune and
+		// discover items queued in the same session. Staleness is a property of
+		// the corpus changing, not of which vehicle changed it.
+		if rerr := refreshInFlightItems(ctx, d, sess, branch, stats); rerr != nil {
+			log.Warn().Err(rerr).Str("session", sess.ID).
+				Msg("review: in-flight work items could not be refreshed after this distill")
+		}
 		enqueueRaptorFollowups(ctx, d, sess, item, writtenFacts)
 
 	case motifAliasStepType:

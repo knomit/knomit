@@ -14,8 +14,15 @@
 // fact that no longer exists — spending a judge slot, or one of the eight
 // backfill slots, on a corpus state that is already gone.
 //
-// This file closes that gap. It takes the set of paths an apply RETIRED and
-// brings the still-queued items back into agreement with the corpus.
+// This file closes that gap. It takes the paths an apply MUTATED — retired, or
+// changed in place — and brings the still-queued items back into agreement with
+// the corpus.
+//
+// It runs over EVERY unanswered item in the session, not just items of the
+// vehicle that did the mutating. Staleness is cross-vehicle by nature: a prune
+// merge retires facts that a distill item queued in the same session is still
+// carrying, and measured live, that happens as often as the within-vehicle
+// case.
 package synthesize
 
 import (
@@ -53,13 +60,22 @@ const minBridgeMembers = 2
 // Per-item failures warn and skip that item (conventions/synthesize/write-paths/
 // failure-isolation): a payload that cannot be decoded is one stale item, and
 // losing the whole refresh over it would strand every other item too.
-func refreshInFlightItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, retired []string) error {
-	if len(retired) == 0 || sess == nil {
+func refreshInFlightItems(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, stats *ReviewStats) error {
+	if sess == nil || stats == nil {
 		return nil
 	}
-	gone := make(map[string]struct{}, len(retired))
-	for _, p := range retired {
-		gone[p] = struct{}{}
+	if len(stats.Retired) == 0 && len(stats.Rewritten) == 0 {
+		return nil
+	}
+	m := mutation{
+		gone:    make(map[string]struct{}, len(stats.Retired)),
+		changed: make(map[string]struct{}, len(stats.Rewritten)),
+	}
+	for _, p := range stats.Retired {
+		m.gone[p] = struct{}{}
+	}
+	for _, p := range stats.Rewritten {
+		m.changed[p] = struct{}{}
 	}
 
 	items, err := d.Pipeline.PendingPipelineWorkItems(ctx, sess.ID)
@@ -69,7 +85,7 @@ func refreshInFlightItems(ctx context.Context, d Deps, sess *store.PipelineSessi
 
 	var updated, dropped int
 	for _, item := range items {
-		action, payload, aerr := refreshedPayload(ctx, d, branch, item, gone)
+		action, payload, aerr := refreshedPayload(ctx, d, branch, item, m)
 		if aerr != nil {
 			log.Warn().Err(aerr).Int64("item", item.ID).Str("step", item.StepType).
 				Msg("review: in-flight refresh could not read an item's payload; leaving it as planned")
@@ -100,16 +116,35 @@ func refreshInFlightItems(ctx context.Context, d Deps, sess *store.PipelineSessi
 	}
 
 	if updated > 0 || dropped > 0 {
-		log.Info().Str("session", sess.ID).Int("retired", len(retired)).
+		log.Info().Str("session", sess.ID).
+			Int("retired", len(stats.Retired)).Int("rewritten", len(stats.Rewritten)).
 			Int("items_rewritten", updated).Int("items_dropped", dropped).
 			Msg("review: in-flight work items refreshed after a mid-session retirement")
 		// Reported, not merely logged: an item that silently vanishes from the
 		// queue is indistinguishable from one that was never planned.
 		d.OnProgress(ProgressEvent{Phase: "detail-refresh", Message: fmt.Sprintf(
-			"in-flight refresh: %d fact(s) retired mid-session — %d queued item(s) rewritten, %d dropped",
-			len(retired), updated, dropped)})
+			"in-flight refresh: %d fact(s) retired and %d changed mid-session — "+
+				"%d queued item(s) rewritten, %d dropped",
+			len(stats.Retired), len(stats.Rewritten), updated, dropped)})
 	}
 	return nil
+}
+
+// mutation is what one apply did to the corpus, in the two shapes a queued
+// item cares about: members that must be DROPPED, and members that must be
+// RE-READ because their stored fields moved underneath the snapshot.
+type mutation struct {
+	gone    map[string]struct{}
+	changed map[string]struct{}
+}
+
+// touches reports whether a path was mutated at all.
+func (m mutation) touches(path string) bool {
+	if _, ok := m.gone[path]; ok {
+		return true
+	}
+	_, ok := m.changed[path]
+	return ok
 }
 
 // refreshAction is what a refresh decided about one item.
@@ -128,26 +163,26 @@ const (
 // passes, which name motifs rather than facts — fall through unchanged. That
 // is not an oversight to be tidied later: a pass whose payload cannot name a
 // retired fact has nothing to reconcile.
-func refreshedPayload(ctx context.Context, d Deps, branch string, item store.PipelineWorkItem, gone map[string]struct{}) (refreshAction, string, error) {
+func refreshedPayload(ctx context.Context, d Deps, branch string, item store.PipelineWorkItem, m mutation) (refreshAction, string, error) {
 	switch item.StepType {
 	case "prune":
 		// Cluster prunes and shortlist pairs share this shape, and share the
 		// floor: both ask whether these facts consolidate.
-		return refreshFactList(item.FactsJSON, gone, minJudgeableMembers)
+		return refreshFactList(ctx, d, branch, item.FactsJSON, m, minJudgeableMembers)
 
 	case "distill":
 		// Distill synthesizes UPWARD from what it is shown rather than
 		// reconciling members against each other, so one surviving fact is
 		// still a question worth asking. Only an empty payload is vacuous.
-		return refreshFactList(item.FactsJSON, gone, 1)
+		return refreshFactList(ctx, d, branch, item.FactsJSON, m, 1)
 
 	case "discover":
 		var payload DiscoverWorkPayload
 		if err := json.Unmarshal([]byte(item.FactsJSON), &payload); err != nil {
 			return refreshUnchanged, "", fmt.Errorf("decode discover payload: %w", err)
 		}
-		kept, removed := withoutRetired(payload.Bridge.Members, gone)
-		if removed == 0 {
+		kept, dropped, rewritten := reconcileMembers(ctx, d, branch, payload.Bridge.Members, m)
+		if dropped == 0 && rewritten == 0 {
 			return refreshUnchanged, "", nil
 		}
 		if len(kept) < minBridgeMembers {
@@ -167,7 +202,7 @@ func refreshedPayload(ctx context.Context, d Deps, branch string, item store.Pip
 		// seven where it had eight. Re-deriving hands the freed slot to a fact
 		// that still exists, which is the whole point of the sequence: a
 		// confirmed duplicate must not cost backfill budget.
-		if !backfillPayloadNames(item.FactsJSON, gone) {
+		if !backfillPayloadNames(item.FactsJSON, m) {
 			return refreshUnchanged, "", nil
 		}
 		payload, err := backfillPayloadFor(ctx, d, branch)
@@ -186,15 +221,15 @@ func refreshedPayload(ctx context.Context, d Deps, branch string, item store.Pip
 	return refreshUnchanged, "", nil
 }
 
-// refreshFactList reconciles a plain []factForLLM payload against the retired
-// set, deleting the item when too little is left to judge.
-func refreshFactList(factsJSON string, gone map[string]struct{}, floor int) (refreshAction, string, error) {
+// refreshFactList reconciles a plain []factForLLM payload against one apply's
+// mutations, deleting the item when too little is left to judge.
+func refreshFactList(ctx context.Context, d Deps, branch, factsJSON string, m mutation, floor int) (refreshAction, string, error) {
 	var facts []factForLLM
 	if err := json.Unmarshal([]byte(factsJSON), &facts); err != nil {
 		return refreshUnchanged, "", fmt.Errorf("decode fact list payload: %w", err)
 	}
-	kept, removed := withoutRetired(facts, gone)
-	if removed == 0 {
+	kept, dropped, rewritten := reconcileMembers(ctx, d, branch, facts, m)
+	if dropped == 0 && rewritten == 0 {
 		return refreshUnchanged, "", nil
 	}
 	if len(kept) < floor {
@@ -207,28 +242,74 @@ func refreshFactList(factsJSON string, gone map[string]struct{}, floor int) (ref
 	return refreshRewrite, string(blob), nil
 }
 
-// withoutRetired returns the members that survive, and how many were removed.
-func withoutRetired(facts []factForLLM, gone map[string]struct{}) ([]factForLLM, int) {
-	kept := make([]factForLLM, 0, len(facts))
+// reconcileMembers drops retired members and RE-READS changed ones, returning
+// the survivors plus how many were dropped and how many were re-read.
+//
+// Re-read rather than patched: the queued member is a snapshot of the fields a
+// prompt shows, and an apply that rewrote the fact may have moved more than the
+// one field it was asked about. Reading the live record is the only version of
+// this that cannot drift from what a freshly planned item would have carried.
+//
+// A changed member that can no longer be read is left exactly as it was. That
+// is the conservative direction: showing a stale snapshot costs one imprecise
+// judgement, while dropping a member the corpus may still hold silently
+// shrinks the question.
+func reconcileMembers(ctx context.Context, d Deps, branch string, facts []factForLLM, m mutation) (kept []factForLLM, dropped, rewritten int) {
+	kept = make([]factForLLM, 0, len(facts))
 	for _, f := range facts {
-		if _, dead := gone[f.File]; dead {
+		if _, dead := m.gone[f.File]; dead {
+			dropped++
 			continue
+		}
+		if _, moved := m.changed[f.File]; moved {
+			if fresh, ok := liveMember(ctx, d, branch, f); ok {
+				kept = append(kept, fresh)
+				rewritten++
+				continue
+			}
 		}
 		kept = append(kept, f)
 	}
-	return kept, len(facts) - len(kept)
+	return kept, dropped, rewritten
 }
 
-// backfillPayloadNames reports whether a backfill payload offers any of the
-// retired paths. Checked before re-deriving, so an untouched backfill item is
-// left exactly as planned rather than silently re-rolled on every merge.
-func backfillPayloadNames(factsJSON string, gone map[string]struct{}) bool {
+// liveMember re-reads one member from the index, in the same field mapping the
+// planner uses (enqueueRestatementItems). Motifs are carried too: a member's
+// motifs steer the distill enrichment line and the bridge specificity score.
+func liveMember(ctx context.Context, d Deps, branch string, stale factForLLM) (factForLLM, bool) {
+	rec, err := d.Search.GetByPath(ctx, branch, stale.File)
+	if err != nil || rec == nil {
+		return stale, false
+	}
+	return factForLLM{
+		File:       rec.Path,
+		Title:      rec.Title,
+		Body:       rec.Body,
+		Type:       rec.Type,
+		Domain:     rec.Domain,
+		Entities:   rec.Entities,
+		Motifs:     rec.Motifs,
+		Confidence: rec.Confidence,
+		Sources:    rec.Sources,
+		Origin:     rec.Origin,
+	}, true
+}
+
+// backfillPayloadNames reports whether a backfill payload offers any mutated
+// path. Checked before re-deriving, so an untouched backfill item is left
+// exactly as planned rather than silently re-rolled on every mutation.
+//
+// A CHANGED path counts, not only a retired one: the payload binds each offer
+// to the fact id it was planned against, and applyMotifBackfill refuses to
+// write against any other version — so an updated fact would otherwise sit in
+// the payload as a slot that is guaranteed to be skipped.
+func backfillPayloadNames(factsJSON string, m mutation) bool {
 	var payload backfillPayload
 	if err := json.Unmarshal([]byte(factsJSON), &payload); err != nil {
 		return false
 	}
 	for _, f := range payload.Facts {
-		if _, dead := gone[f.Path]; dead {
+		if m.touches(f.Path) {
 			return true
 		}
 	}

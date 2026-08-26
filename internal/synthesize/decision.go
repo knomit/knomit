@@ -85,6 +85,13 @@ type ReviewStats struct {
 	// and a path list there would be a wire-shape change for an internal
 	// hand-off.
 	Retired []string `json:"-"`
+	// Rewritten is every path this apply CHANGED IN PLACE — a confidence
+	// update, today. Same contract as Retired: only writes that succeeded, and
+	// for the same consumer. A queued item carries a SNAPSHOT of each fact's
+	// fields, so an in-place rewrite leaves later items showing the old
+	// confidence; measured live, facts set to 0.5/0.7/0.8 still read
+	// 0.9/0.9/0.95 at items queued before the update.
+	Rewritten []string `json:"-"`
 }
 
 // ApplyPruneDecisions applies prune decisions (retract/update) and merges to the git store.
@@ -111,6 +118,10 @@ func ApplyPruneDecisions(ctx context.Context,
 	// Track deleted paths to avoid double-deletion when a path appears in
 	// both "retract" decisions and merge source lists.
 	deletedPaths := make(map[string]bool)
+	// Paths changed in place rather than removed. Separate from deletedPaths
+	// because the two mean opposite things to a queued work item: one member
+	// must be dropped, the other re-read.
+	rewrittenPaths := make(map[string]bool)
 	// mergeGate is the one gate the merge outputs below go through, built once
 	// for the whole call.
 	mergeGate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
@@ -161,6 +172,7 @@ func ApplyPruneDecisions(ctx context.Context,
 			}
 			onProgress(ProgressEvent{Phase: "detail-update", Message: fmt.Sprintf("update %.2f %s", d.Confidence, d.Path)})
 			stats.Updated++
+			rewrittenPaths[d.Path] = true
 		}
 	}
 
@@ -290,6 +302,18 @@ func ApplyPruneDecisions(ctx context.Context,
 	}
 	sort.Strings(stats.Retired)
 
+	// A path that was updated and then subsumed by a merge in the same apply is
+	// RETIRED, not rewritten: it is gone, and asking a later item to re-read it
+	// would find nothing.
+	stats.Rewritten = make([]string, 0, len(rewrittenPaths))
+	for p := range rewrittenPaths {
+		if deletedPaths[p] {
+			continue
+		}
+		stats.Rewritten = append(stats.Rewritten, p)
+	}
+	sort.Strings(stats.Rewritten)
+
 	return stats, nil
 }
 
@@ -397,7 +421,9 @@ func ApplyDistillDecisions(ctx context.Context,
 		}
 		onProgress(ProgressEvent{Phase: "detail-distill-retract", Message: "retract " + path})
 		stats.Pruned++
+		stats.Retired = append(stats.Retired, path)
 	}
+	sort.Strings(stats.Retired)
 
 	return stats, written, nil
 }
