@@ -101,6 +101,21 @@ type factForLLM struct {
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
 	Origin     string   `json:"origin,omitempty"`
+	// LineageRefs holds this fact's refs REDUCED TO THE LOCAL FACT PATHS THEY
+	// NAME, canonicalized — not the raw ref strings. It exists for the one-hop
+	// lineage exclusion in bridge candidate scoring (#125), which needs to ask
+	// "does this member cite that member?" without an index or a graph walk.
+	//
+	// Normalization happens at the projection sites, not here, because it needs
+	// this repo's own 12-hex id: refs are STORED CANONICAL as
+	// kb://<own-id12>/<path>, so a raw ref string never equals a member's path
+	// and a lineage test over unnormalized refs excludes NOTHING while looking
+	// like it works. Populate it only via localFactRefPaths(f.Refs, localRepoID).
+	//
+	// json:"-" deliberately: this is scoring data, never prompt data. The LLM
+	// payload's bytes are unchanged by its presence, so no prompt, golden, or
+	// paging expectation moves.
+	LineageRefs []string `json:"-"`
 }
 
 // extractJSON strips optional markdown code fences from LLM output.

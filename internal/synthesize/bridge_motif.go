@@ -240,6 +240,21 @@ func enumerateMotifCandidates(
 			continue
 		}
 
+		// GATE 2.5 — one-hop lineage exclusion (#125), pairwise (see
+		// lineageDisjointMembers). Ordered BEFORE subject-disjointness because
+		// it is the cheap one — set membership over refs already in hand, no
+		// index and no walk — and before separation because dropping a member
+		// can change the community span.
+		//
+		// This gate is why the shared-motif signal can be trusted at all: the
+		// signal's first-ever live firing (s175) offered a parent and its own
+		// source as a reason to synthesize, because the parent had INHERITED
+		// the child's motif. A motif shared by citation is not a recurrence.
+		members = lineageDisjointMembersMap(members)
+		if len(members) < 2 {
+			continue
+		}
+
 		// GATE 3 — subject-disjointness, applied pairwise (see disjointMembers).
 		// Ordered after the df band because it is the expensive one, and before
 		// separation because dropping a member can change the community span.

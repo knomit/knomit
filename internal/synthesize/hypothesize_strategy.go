@@ -183,7 +183,7 @@ func backwardDiscoverPriority(rank int) float64 {
 // forward (review) path uses, so both discovery directions honour the same axis
 // selection AND the same community partition, with nothing hardcoded.
 func enqueueBackwardBridgeItems(ctx context.Context, d Deps, sessionID string, seeds []fact.Fact, branch string) error {
-	bridges, err := BuildBackwardBridges(ctx, d.Search, seeds, branch, d.Effort,
+	bridges, err := BuildBackwardBridges(ctx, d.Search, seeds, branch, fact.ID12(d.RI.ID()), d.Effort,
 		BridgeKindFromString(d.RI.DiscoveryBridge()), d.RI.ClusterResolution(),
 		d.RI.ClusterMinCommunitySize(), QualityConfigFromRepo(d.RI), d.Scope)
 	if err != nil {

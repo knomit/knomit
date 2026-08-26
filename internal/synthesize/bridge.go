@@ -275,6 +275,11 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 		for _, f := range pathMap {
 			members = append(members, f)
 		}
+		// One-hop lineage exclusion (#125). Applied BEFORE the community-span
+		// check because dropping a member can collapse the span: a group whose
+		// two communities were "a synthesis" and "the fact it was distilled
+		// from" is not a bridge once the parent leaves. See bridge_lineage.go.
+		members, _ = lineageDisjointMembers(members)
 		if len(members) < 2 {
 			continue
 		}
@@ -424,6 +429,7 @@ func BuildBackwardBridges(
 	idx SearchQuery,
 	synthFacts []fact.Fact,
 	branch string,
+	localRepoID string,
 	effort Effort,
 	kind BridgeKind,
 	resolution float64,
@@ -439,15 +445,16 @@ func BuildBackwardBridges(
 	seeds := make([]factForLLM, 0, len(synthFacts))
 	for _, f := range synthFacts {
 		seeds = append(seeds, factForLLM{
-			File:       f.Path(),
-			Title:      f.Title,
-			Body:       f.Body,
-			Type:       string(f.Type),
-			Domain:     f.Domain,
-			Entities:   f.Entities,
-			Confidence: f.Confidence,
-			Sources:    f.Sources,
-			Origin:     string(f.Origin),
+			File:        f.Path(),
+			Title:       f.Title,
+			Body:        f.Body,
+			Type:        string(f.Type),
+			Domain:      f.Domain,
+			Entities:    f.Entities,
+			Confidence:  f.Confidence,
+			Sources:     f.Sources,
+			Origin:      string(f.Origin),
+			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
 		})
 	}
 	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, func(ProgressEvent) {}, branch)

@@ -38,10 +38,18 @@ type ScoredBridge struct {
 //
 // Errors from Search, ScopedCluster, SimilarityAdjacency, derivationGap,
 // or specificity are propagated immediately.
+//
+// localRepoID is this repo's 12-hex id, threaded for the same reason the
+// production path threads it: it is what reduces stored refs to the local fact
+// paths the one-hop lineage exclusion compares. A report run with "" would
+// enumerate candidates production excludes, and a measurement surface that
+// scores a different population than the engine serves is the failure this
+// file's POPULATION-first convention exists to prevent.
 func BridgeComponentReport(
 	ctx context.Context,
 	idx SearchQuery,
 	branch string,
+	localRepoID string,
 	kind BridgeKind,
 	eff Effort,
 	resolution float64,
@@ -59,15 +67,16 @@ func BridgeComponentReport(
 	seeds := make([]factForLLM, 0, len(results))
 	for _, r := range results {
 		seeds = append(seeds, factForLLM{
-			File:       r.Path,
-			Title:      r.Title,
-			Body:       r.Body,
-			Type:       r.Type,
-			Domain:     r.Domain,
-			Entities:   r.Entities,
-			Confidence: r.Confidence,
-			Sources:    r.Sources,
-			Origin:     r.Origin,
+			File:        r.Path,
+			Title:       r.Title,
+			Body:        r.Body,
+			Type:        r.Type,
+			Domain:      r.Domain,
+			Entities:    r.Entities,
+			Confidence:  r.Confidence,
+			Sources:     r.Sources,
+			Origin:      r.Origin,
+			LineageRefs: localFactRefPaths(r.Refs, localRepoID),
 		})
 	}
 

@@ -112,7 +112,7 @@ func recordVocabularySkipHealth(sess *store.PipelineSession, effort Effort) {
 // already bound to the branch it was created against.
 func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSession, seeds []fact.Fact) error {
 	branch := sess.Branch
-	llmSeeds := factsForLLM(seeds)
+	llmSeeds := factsForLLM(seeds, fact.ID12(d.RI.ID()))
 
 	// Build scoped clusters.
 	t := time.Now()
@@ -519,20 +519,27 @@ func distillGroups(seeds []factForLLM, clusters [][]factForLLM) []distillGroup {
 // fact.Fact's. Origin in particular is carried through — bridge seeding
 // excludes origin=discovered facts, and dropping it here would let a
 // discovered fact seed its own discovery.
-func factsForLLM(seeds []fact.Fact) []factForLLM {
+//
+// localRepoID is this repo's 12-hex id and is threaded rather than defaulted:
+// it is what reduces the stored refs to LineageRefs, and refs are stored
+// canonical (kb://<own-id>/<path>), so classifying them with an empty id reads
+// every local citation as foreign and hands the lineage exclusion an empty set
+// to work from.
+func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
 	out := make([]factForLLM, 0, len(seeds))
 	for _, f := range seeds {
 		out = append(out, factForLLM{
-			File:       f.Path(),
-			Title:      f.Title,
-			Body:       f.Body,
-			Type:       string(f.Type),
-			Domain:     f.Domain,
-			Entities:   f.Entities,
-			Motifs:     f.Motifs,
-			Confidence: f.Confidence,
-			Sources:    f.Sources,
-			Origin:     string(f.Origin),
+			File:        f.Path(),
+			Title:       f.Title,
+			Body:        f.Body,
+			Type:        string(f.Type),
+			Domain:      f.Domain,
+			Entities:    f.Entities,
+			Motifs:      f.Motifs,
+			Confidence:  f.Confidence,
+			Sources:     f.Sources,
+			Origin:      string(f.Origin),
+			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
 		})
 	}
 	return out

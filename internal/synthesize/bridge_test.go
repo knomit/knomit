@@ -317,7 +317,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 		Return(1, nil).AnyTimes()
 
 	// Entity kind: only the shared ENTITY token bridges.
-	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeEntity, 2.0, 2, testCfg, ScopeFilter{})
+	ent, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeEntity, 2.0, 2, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	if _, ok := containsToken(ent, "shared"); !ok {
 		t.Errorf("BridgeEntity must surface entity token 'shared': %v", ent)
@@ -327,7 +327,7 @@ func TestBuildBackwardBridges_HonorsBridgeKind(t *testing.T) {
 	}
 
 	// Domain kind: only the shared DOMAIN token bridges.
-	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeDomain, 2.0, 2, testCfg, ScopeFilter{})
+	dom, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeDomain, 2.0, 2, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 	if _, ok := containsToken(dom, "auth"); !ok {
 		t.Errorf("BridgeDomain must surface domain token 'auth': %v", dom)
@@ -457,7 +457,7 @@ func TestBuildBackwardBridges_UsesConfiguredResolution(t *testing.T) {
 	m.EXPECT().TokenDF(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(1, nil).AnyTimes()
 
-	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testCfg, ScopeFilter{})
+	_, err := BuildBackwardBridges(ctx, m, synthFacts, "agent/test", testLocalRepoID, EffortHigh, BridgeBoth, wantResolution, wantMinCommunity, testCfg, ScopeFilter{})
 	require.NoError(t, err)
 }
 
