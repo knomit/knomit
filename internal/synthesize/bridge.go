@@ -71,6 +71,14 @@ const (
 // Enumeration for this kind lives entirely in bridge_motif.go, which is why no
 // function in THIS file mentions motifs — this file's mechanicsPaths entry
 // stays nil, and the MN6 declaration it makes stays true.
+//
+// #125 added a second member to that arrangement: BridgeKind.Qualifies, the
+// predicate that says only a shared MECHANISM qualifies a bridge, is declared
+// in bridge_motif.go rather than beside BridgeKindFromString here. Its body
+// names BridgeMotif, and putting it in this file would have turned the nil
+// entry above into a one-entry allow-list — eroding a documented property of
+// the entity/domain engine to hold a method whose entire subject is the OTHER
+// axis. Same rationale as the enumeration split, applied to a method.
 const BridgeMotif BridgeKind = "motif"
 
 // DefaultBridgeKind is the historical default — bridge on either axis.
@@ -86,6 +94,20 @@ func BridgeKindFromString(s string) BridgeKind {
 		return BridgeKind(s)
 	}
 	return DefaultBridgeKind
+}
+
+// entityAxisRankOnlyLine is the health line every surface that USED to serve
+// entity/domain bridges emits in their place.
+//
+// It exists because "0 bridges" and "this axis no longer qualifies" are the same
+// number, and a later auditor reading a session with no discover items has no
+// way to tell an axis that found nothing from one that cannot qualify — the
+// saturated-vs-broken confusion #147 was re-ruled over, one surface across.
+// The sentence names the state, not a count: there is no count to give.
+func entityAxisRankOnlyLine() string {
+	return "bridge axis: entity/domain is RANK-ONLY — a shared name no longer qualifies a " +
+		"bridge, only a shared mechanism does (#125). Zero entity bridges here is the " +
+		"designed state, not a stall."
 }
 
 // effortBudget is the maximum number of bridge seed sets a pool is truncated
@@ -275,6 +297,11 @@ func enumerateBridgeCandidates(seeds []factForLLM, clusters ClusterResult, kind 
 		for _, f := range pathMap {
 			members = append(members, f)
 		}
+		// One-hop lineage exclusion (#125). Applied BEFORE the community-span
+		// check because dropping a member can collapse the span: a group whose
+		// two communities were "a synthesis" and "the fact it was distilled
+		// from" is not a bridge once the parent leaves. See bridge_lineage.go.
+		members, _ = lineageDisjointMembers(members)
 		if len(members) < 2 {
 			continue
 		}
@@ -424,6 +451,7 @@ func BuildBackwardBridges(
 	idx SearchQuery,
 	synthFacts []fact.Fact,
 	branch string,
+	localRepoID string,
 	effort Effort,
 	kind BridgeKind,
 	resolution float64,
@@ -439,15 +467,16 @@ func BuildBackwardBridges(
 	seeds := make([]factForLLM, 0, len(synthFacts))
 	for _, f := range synthFacts {
 		seeds = append(seeds, factForLLM{
-			File:       f.Path(),
-			Title:      f.Title,
-			Body:       f.Body,
-			Type:       string(f.Type),
-			Domain:     f.Domain,
-			Entities:   f.Entities,
-			Confidence: f.Confidence,
-			Sources:    f.Sources,
-			Origin:     string(f.Origin),
+			File:        f.Path(),
+			Title:       f.Title,
+			Body:        f.Body,
+			Type:        string(f.Type),
+			Domain:      f.Domain,
+			Entities:    f.Entities,
+			Confidence:  f.Confidence,
+			Sources:     f.Sources,
+			Origin:      string(f.Origin),
+			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
 		})
 	}
 	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, func(ProgressEvent) {}, branch)

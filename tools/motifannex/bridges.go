@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"knomit/internal/fact"
 	"knomit/internal/synthesize"
 )
 
@@ -32,7 +33,7 @@ func bridges(ctx context.Context, corpus, scratch, effortStr string) error {
 	defer closeAll()
 
 	rep, err := synthesize.MotifComponentReport(ctx, svc.Search(), svc.Motifs(), svc.Abstraction(),
-		branch, eff, ri.ClusterResolution(), ri.ClusterMinCommunitySize(),
+		branch, fact.ID12(ri.ID()), eff, ri.ClusterResolution(), ri.ClusterMinCommunitySize(),
 		synthesize.QualityConfigFromRepo(ri))
 	if err != nil {
 		return fmt.Errorf("motif component report: %w", err)

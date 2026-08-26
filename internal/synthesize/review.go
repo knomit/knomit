@@ -19,6 +19,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/fact"
+
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -278,7 +280,7 @@ func (r *Reviewer) dirtyFacts(ctx context.Context, branch string, gs store.FactI
 	if seeds == nil {
 		return nil, nil
 	}
-	return factsForLLM(seeds), nil
+	return factsForLLM(seeds, fact.ID12(r.ri.ID())), nil
 }
 
 // nextItem dispatches on the session's persistent phase and returns the

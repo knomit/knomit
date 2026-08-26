@@ -196,6 +196,7 @@ func MotifComponentReport(
 	motifs store.MotifIndex,
 	abstraction store.AbstractionIndex,
 	branch string,
+	localRepoID string,
 	eff Effort,
 	resolution float64,
 	minCommunitySize int,
@@ -218,7 +219,7 @@ func MotifComponentReport(
 		if !strat.AcceptSeed(f) {
 			continue
 		}
-		seeds = append(seeds, factsForLLM([]fact.Fact{f})...)
+		seeds = append(seeds, factsForLLM([]fact.Fact{f}, localRepoID)...)
 	}
 	rep.Seeds = len(seeds)
 	for _, s := range seeds {

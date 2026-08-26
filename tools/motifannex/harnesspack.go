@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
@@ -97,7 +98,7 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 		}
 		cfg := synthesize.QualityConfigFromRepo(ri)
 		rep, err := synthesize.MotifComponentReport(ctx, svc.Search(), svc.Motifs(),
-			svc.Abstraction(), branch, synthesize.EffortHigh,
+			svc.Abstraction(), branch, fact.ID12(ri.ID()), synthesize.EffortHigh,
 			ri.ClusterResolution(), ri.ClusterMinCommunitySize(), cfg)
 		if err != nil {
 			closeAll()
@@ -146,7 +147,7 @@ func harnesspack(ctx context.Context, scratch string, corpora []string) error {
 
 		// TOKEN — the shipped entity/domain report, kept bridges only.
 		tk, err := synthesize.BridgeComponentReport(ctx, svc.Search(), branch,
-			synthesize.BridgeKindFromString("both"), synthesize.EffortHigh,
+			fact.ID12(ri.ID()), synthesize.BridgeKindFromString("both"), synthesize.EffortHigh,
 			ri.ClusterResolution(), ri.ClusterMinCommunitySize(), cfg)
 		if err != nil {
 			closeAll()

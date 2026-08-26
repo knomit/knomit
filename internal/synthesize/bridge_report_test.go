@@ -92,7 +92,7 @@ func TestBridgeComponentReport_CrossCommunity_Kept(t *testing.T) {
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortHigh, 1.0, 1, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, cfg)
 	require.NoError(t, err)
 
 	// At least one result: bridgeTok bridge should be kept
@@ -148,7 +148,7 @@ func TestBridgeComponentReport_SameCommunityToken_ProducesNoCandidates(t *testin
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortHigh, 1.0, 1, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, cfg)
 	require.NoError(t, err)
 	require.Empty(t, results, "same-community token yields no bridge candidates")
 }
@@ -196,7 +196,7 @@ func TestBridgeComponentReport_CrossCommunityLowCohesion_GatedNotKept(t *testing
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortHigh, 1.0, 1, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, cfg)
 	require.NoError(t, err)
 
 	// The candidate IS produced (cross-community) but gated by CohFloor.
@@ -261,7 +261,7 @@ func TestBridgeComponentReport_QDescOrdering(t *testing.T) {
 		MaxMembers:   10,
 	}
 
-	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortHigh, 1.0, 1, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, cfg)
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
 
@@ -302,7 +302,7 @@ func TestBridgeComponentReport_ErrorPropagation_SimilarityAdjacency(t *testing.T
 
 	cfg := QualityConfig{CohFloor: 0.0, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
 
-	_, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortHigh, 1.0, 1, cfg)
+	_, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortHigh, 1.0, 1, cfg)
 	require.Error(t, err)
 	require.ErrorIs(t, err, boom)
 }
@@ -329,7 +329,7 @@ func TestBridgeComponentReport_NormalEffort_Empty(t *testing.T) {
 	})
 
 	cfg := QualityConfig{CohFloor: 0.5, MaxMembers: 10, QualityFloor: 0.0, WCoh: 1, WGap: 1, WSpec: 1}
-	results, err := BridgeComponentReport(ctx, idx, branch, BridgeEntity, EffortNormal, 1.0, 1, cfg)
+	results, err := BridgeComponentReport(ctx, idx, branch, testLocalRepoID, BridgeEntity, EffortNormal, 1.0, 1, cfg)
 	require.NoError(t, err)
 	require.Empty(t, results, "EffortNormal must return empty results (effort gate returns early)")
 }

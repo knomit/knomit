@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
+	"knomit/internal/fact"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
@@ -81,7 +82,12 @@ paths, and token frequencies — no embedding model is loaded or needed.`,
 			idx := svc.Search()
 			ctx := context.Background()
 
-			report, err := synthesize.BridgeComponentReport(ctx, idx, branch, kind, eff, resolution, minCommunity, cfg)
+			localRepoID, err := localRepoIDFor(ctx, svc, branch)
+			if err != nil {
+				return err
+			}
+
+			report, err := synthesize.BridgeComponentReport(ctx, idx, branch, localRepoID, kind, eff, resolution, minCommunity, cfg)
 			if err != nil {
 				return fmt.Errorf("bridge component report: %w", err)
 			}
@@ -250,8 +256,13 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	idx := motifThresholdIndex{SearchQuery: svc.Search()}
 	idx.dedup, idx.known = corpusDedupThreshold(dbPath)
 
+	localRepoID, err := localRepoIDFor(cmd.Context(), svc, branch)
+	if err != nil {
+		return err
+	}
+
 	rep, err := synthesize.MotifComponentReport(cmd.Context(), idx, svc.Motifs(),
-		svc.Abstraction(), branch, eff, resolution, minCommunity, cfg)
+		svc.Abstraction(), branch, localRepoID, eff, resolution, minCommunity, cfg)
 	if err != nil {
 		return fmt.Errorf("motif component report: %w", err)
 	}
@@ -351,4 +362,21 @@ func corpusDedupThreshold(dbPath string) (float64, bool) {
 		return 0, false
 	}
 	return m.Thresholds.Dedup, true
+}
+
+// localRepoIDFor resolves the corpus's own 12-hex repo identity, which the
+// bridge reports need to reduce stored refs (kb://<own-id>/<path>) to the local
+// fact paths the one-hop lineage exclusion compares.
+//
+// It is an ERROR, not a fallback to "": with an empty id every stored ref reads
+// as foreign, the lineage exclusion has nothing to exclude on, and the report
+// would silently score a LARGER candidate population than production serves.
+// A calibration number computed over the wrong population is exactly the class
+// of mistake the POPULATION-first headers in this file exist to prevent.
+func localRepoIDFor(ctx context.Context, svc *store.Service, branch string) (string, error) {
+	root, err := svc.RootCommit(ctx, branch)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo identity on %q: %w", branch, err)
+	}
+	return fact.ID12(root), nil
 }

@@ -307,6 +307,37 @@ func buildFilteredBridges(
 			}
 		}
 
+		// One-hop lineage exclusion (#125). The subset arrives cross-community
+		// by construction (reshapeCohesiveSubset), but a subset whose seam WAS
+		// a synthesis and its own source stops being a bridge once the parent
+		// leaves — so scoring runs over the survivors, and the Sep >= 2 gate in
+		// bridgeQ is what turns a collapsed span into a drop.
+		//
+		// `sub` itself is deliberately NOT narrowed: it is also the bookkeeping
+		// slice removed from `remaining` below, and shrinking it would leave the
+		// dropped parent in the pool to be re-extracted next iteration.
+		members, _ = lineageDisjointMembers(members)
+		if len(members) < 2 {
+			// Nothing scoreable left; fall through to the removal bookkeeping
+			// so the loop still makes progress on `remaining`.
+			subSet := make(map[string]bool, len(sub))
+			for _, p := range sub {
+				subSet[p] = true
+			}
+			next := remaining[:0:0]
+			for _, p := range remaining {
+				if !subSet[p] {
+					next = append(next, p)
+				}
+			}
+			remaining = next
+			continue
+		}
+		scored := make([]string, 0, len(members))
+		for _, m := range members {
+			scored = append(scored, m.File)
+		}
+
 		tok, tkind, spec := sharedSubToken(members, DefaultBridgeKind, seeds)
 		if tok != "" {
 			// Check whether tok canonically matches the scope along its own axis
@@ -333,16 +364,16 @@ func buildFilteredBridges(
 			}
 		}
 
-		gap, err := derivationGap(ctx, sub, idx)
+		gap, err := derivationGap(ctx, scored, idx)
 		if err != nil {
 			return nil, err
 		}
 		comp := BridgeComponents{
-			Coh:     cohesion(sub, g),
-			Sep:     separation(sub, clusterOf),
+			Coh:     cohesion(scored, g),
+			Sep:     separation(scored, clusterOf),
 			Gap:     gap,
 			Spec:    spec,
-			Members: len(sub),
+			Members: len(scored),
 		}
 		q, kept := bridgeQ(comp, cfg)
 		if kept {
