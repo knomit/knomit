@@ -2,6 +2,7 @@ package synthesize
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"knomit/internal/fact"
@@ -14,15 +15,36 @@ import (
 // the first context passed to Search and returns ctx.Err() if the
 // context is canceled. All other interface methods would panic if
 // invoked (they aren't, by dedupCluster's call shape).
+//
+// mu is load-bearing, not decoration: dedupCluster fans Search out across
+// one goroutine per cluster member (errgroup, limit
+// maxConcurrentDedupSearches), so both fields below are written
+// concurrently. Unguarded they raced each other, failing the ENTIRE
+// package under -race for anyone running the detector — knomit#133. The
+// production side guards its own shared state with exactly this shape;
+// a double that does not is violating the contract every real
+// store.SearchIndex meets, not exposing a defect in dedupCluster.
+//
+// Readers do NOT need the lock: dedupCluster calls g.Wait() before every
+// return, which orders all of the writes above before anything the test
+// goroutine does afterwards.
 type ctxCapturingSearchIndex struct {
 	store.SearchIndex
+	mu     sync.Mutex
 	called int
 	gotCtx context.Context
 }
 
 func (s *ctxCapturingSearchIndex) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
+	s.mu.Lock()
 	s.called++
-	s.gotCtx = ctx
+	// First write wins. The doc comment above has always promised "the
+	// first context passed to Search"; last-write-wins never actually
+	// delivered it, and with a fan-out there is no defined last.
+	if s.gotCtx == nil {
+		s.gotCtx = ctx
+	}
+	s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
