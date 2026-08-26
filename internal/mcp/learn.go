@@ -385,6 +385,21 @@ func mergeFacts(newFact, existing fact.Fact, existingPath string) fact.Fact {
 	merged.Motifs = fact.MergeMotifs(winner.Motifs, loser.Motifs)
 	merged.Confidence = max(newFact.Confidence, existing.Confidence)
 	merged.Sources = newFact.Sources + existing.Sources
+	// CARRY THE WEIGHT ACROSS (#94). Without this the merged fact starts at 0
+	// and stays there whenever computeEvidenceWeights declines to restamp it —
+	// which is the common case, because that gate reads the RAW Origin field
+	// and an agent writing through knomit_learn normally omits origin. The
+	// existing fact's stored weight then vanishes from the file, the index, and
+	// every weight-ordered query (knomit f62378e5, reproduced by
+	// TestLearnHandler_DedupMergeKeepsStoredEvidenceWeight).
+	//
+	// MAX, not the winner's: the merged fact pools BOTH facts' sources, and
+	// evidence weight is monotone in pooled evidence, so the larger of the two
+	// is a LOWER BOUND on what a full recompute would produce. Taking the
+	// winner's would still erase a weight whenever the unweighted fact won.
+	// This never overstates the evidence, and computeEvidenceWeights still
+	// overrides with a true recompute wherever its origin gate applies.
+	merged.EvidenceWeight = max(newFact.EvidenceWeight, existing.EvidenceWeight)
 	// Raw path, not existing.Path(): see the doc comment above.
 	merged.Refs = fact.AppendUnique(fact.UnionStrings(newFact.Refs, existing.Refs), existingPath)
 	return merged
