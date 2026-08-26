@@ -182,7 +182,7 @@ func TestDynamics_DefundAndProbeRecoveryOverSessions(t *testing.T) {
 	probed := 0
 	var probeA, probeB string
 	for range throttleProbeInterval + 1 {
-		sess, serr := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch)
+		sess, serr := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 		require.NoError(t, serr)
 		require.NoError(t, planRestatementShortlist(ctx, env.deps(), sess, env.branch, nil))
 		items := env.workItems(sess.ID)
