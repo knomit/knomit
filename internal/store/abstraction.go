@@ -262,6 +262,47 @@ func (ax *abstractionIndex) TopTitleNeighbours(ctx context.Context, branch strin
 // dedupCluster does (conventions/synthesize/scoped-cluster-queryby-path): every
 // one of these facts is already indexed, and ONNX inference to recompute a
 // vector we already hold is pure waste.
+// TitleVectorsByFactID returns STORED title-axis vectors, keyed by fact id.
+//
+// Symmetric with BodyVectorsByFactID, and for the same reason: the structural
+// detection pass finds pairs that no KNN returned, so it has no similarity
+// score in hand and must read the two vectors it already has rather than
+// re-embed anything.
+func (ax *abstractionIndex) TitleVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error) {
+	out := make(map[int64][]float32, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	for _, chunk := range chunkIDs(ids) {
+		placeholders, args := idPlaceholders(chunk)
+		rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+			`SELECT rowid, embedding FROM fact_titles_vec WHERE rowid IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("abstraction: title vectors: %w", err)
+		}
+		for rows.Next() {
+			var id int64
+			var blob []byte
+			if err := rows.Scan(&id, &blob); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("abstraction: scan title vector: %w", err)
+			}
+			vec, err := bytesToFloat32Slice(blob)
+			if err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("abstraction: decode title vector %d: %w", id, err)
+			}
+			out[id] = vec
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("abstraction: title vectors: %w", err)
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 func (ax *abstractionIndex) BodyVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error) {
 	out := make(map[int64][]float32, len(ids))
 	if len(ids) == 0 {
@@ -496,11 +537,15 @@ func (ax *abstractionIndex) ReplaceRestatementPairs(ctx context.Context, branch 
 		}
 	}
 	for _, p := range add {
+		kind := p.MatchKind
+		if kind == "" {
+			kind = MatchTitleKNN
+		}
 		if _, err := db.ExecContext(ctx,
 			`INSERT OR REPLACE INTO restatement_pairs
-			     (branch_id, a_path, b_path, a_fact_id, b_fact_id, title_cos)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			branchID, p.APath, p.BPath, p.AFactID, p.BFactID, p.TitleCos); err != nil {
+			     (branch_id, a_path, b_path, a_fact_id, b_fact_id, title_cos, match_kind)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			branchID, p.APath, p.BPath, p.AFactID, p.BFactID, p.TitleCos, kind); err != nil {
 			return fmt.Errorf("abstraction: insert pair %s|%s: %w", p.APath, p.BPath, err)
 		}
 	}
@@ -527,7 +572,7 @@ func (ax *abstractionIndex) RestatementPairsByRank(ctx context.Context, branch s
 		return nil, nil
 	}
 	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
-		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos
+		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos, p.match_kind
 		   FROM restatement_pairs p
 		   JOIN branches b ON b.id = p.branch_id
 		  WHERE b.name = ?
@@ -537,14 +582,69 @@ func (ax *abstractionIndex) RestatementPairsByRank(ctx context.Context, branch s
 		return nil, fmt.Errorf("abstraction: rank pairs: %w", err)
 	}
 	defer rows.Close()
+	return scanRestatementPairs(rows)
+}
 
+// RestatementPairsByMatchKind ranks WITHIN one detection route.
+//
+// The cosine ordering is kept inside the population rather than dropped: it
+// still orders structural matches sensibly against each other, it just no
+// longer decides whether they are reachable at all.
+func (ax *abstractionIndex) RestatementPairsByMatchKind(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error) {
+	if limit <= 0 || len(kinds) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",")
+	args := make([]any, 0, len(kinds)+2)
+	args = append(args, branch)
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	args = append(args, limit)
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT p.a_path, p.b_path, p.a_fact_id, p.b_fact_id, p.title_cos, p.match_kind
+		   FROM restatement_pairs p
+		   JOIN branches b ON b.id = p.branch_id
+		  WHERE b.name = ? AND p.match_kind IN (`+placeholders+`)
+		  ORDER BY p.title_cos DESC, p.a_path ASC, p.b_path ASC
+		  LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: rank pairs by match kind: %w", err)
+	}
+	defer rows.Close()
+	return scanRestatementPairs(rows)
+}
+
+func scanRestatementPairs(rows *sql.Rows) ([]RestatementPair, error) {
 	var out []RestatementPair
 	for rows.Next() {
 		var p RestatementPair
-		if err := rows.Scan(&p.APath, &p.BPath, &p.AFactID, &p.BFactID, &p.TitleCos); err != nil {
+		if err := rows.Scan(&p.APath, &p.BPath, &p.AFactID, &p.BFactID, &p.TitleCos, &p.MatchKind); err != nil {
 			return nil, fmt.Errorf("abstraction: scan pair: %w", err)
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// LiveEpistemicFactTitles is the structural detection pass's input: what each
+// live fact SAYS IT IS, rather than where it sits in the vector space.
+func (ax *abstractionIndex) LiveEpistemicFactTitles(ctx context.Context, branch string) (map[int64]LiveFactTitle, error) {
+	rows, err := conn(ctx, ax.rh.db).QueryContext(ctx,
+		`SELECT f.id, f.path, f.title`+epistemicLiveJoin, branch)
+	if err != nil {
+		return nil, fmt.Errorf("abstraction: live fact titles: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[int64]LiveFactTitle{}
+	for rows.Next() {
+		var id int64
+		var t LiveFactTitle
+		if err := rows.Scan(&id, &t.Path, &t.Title); err != nil {
+			return nil, fmt.Errorf("abstraction: scan live fact title: %w", err)
+		}
+		out[id] = t
 	}
 	return out, rows.Err()
 }
@@ -564,6 +664,13 @@ func (ax *abstractionIndex) RestatementPairStats(ctx context.Context, branch str
 	}
 	if st.Count == 0 {
 		return st, nil
+	}
+	if err := conn(ctx, ax.rh.db).QueryRowContext(ctx,
+		`SELECT COUNT(*)
+		   FROM restatement_pairs p
+		   JOIN branches b ON b.id = p.branch_id
+		  WHERE b.name = ? AND p.match_kind <> ?`, branch, MatchTitleKNN).Scan(&st.Structural); err != nil {
+		return st, fmt.Errorf("abstraction: structural pair count: %w", err)
 	}
 	var err error
 	if st.P99, err = ax.pairQuantile(ctx, branch, st.Count, 0.99); err != nil {
