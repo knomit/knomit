@@ -107,6 +107,7 @@ type refreshStats struct {
 	PairsAdded       int
 	FactsRequeued    int  // partners re-scanned so an asymmetric discovery is not lost
 	AxisComplete     bool // false while the backfill is still filling the axis
+	StructuralAdded  int  // pairs found by path identity or a rare identifier
 }
 
 // refreshRestatementShortlist brings the standing candidate cache up to date.
@@ -120,7 +121,7 @@ type refreshStats struct {
 //
 // NO clustering runs in this path. The neighbour lookup is the same KNN the
 // similarity graph uses.
-func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, dedupThreshold float64) (refreshStats, error) {
+func refreshRestatementShortlist(ctx context.Context, d Deps, branch string) (refreshStats, error) {
 	var stats refreshStats
 
 	// Diff against facts that are actually ON THE AXIS. A fact with no title
@@ -209,11 +210,22 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, ded
 		}
 	}
 
-	kept, unscorable, err := filterByBlendedCosine(ctx, d, candidates, dedupThreshold)
-	if err != nil {
-		return stats, err
+	// The structural pass (#127). The KNN above finds what is CLOSE; this finds
+	// what the corpus's own filing and vocabulary say is the SAME — pairs no
+	// vector neighbourhood contains, which is precisely the population that
+	// survives longest.
+	//
+	// Degrades to "no structural candidates" rather than failing the refresh:
+	// it is an addition to a mechanism that worked without it.
+	structural, serr := structuralPairs(ctx, d, branch, requeue, declined)
+	if serr != nil {
+		log.Warn().Err(serr).Msg("review: structural duplicate detection skipped this session")
+	} else {
+		candidates = append(candidates, structural...)
+		stats.StructuralAdded = len(structural)
 	}
-	stats.PairsAdded = len(kept)
+
+	stats.PairsAdded = len(candidates)
 
 	// Nothing is recorded as covered until the axis is COMPLETE.
 	//
@@ -227,16 +239,13 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, ded
 	// The cost is bounded to the fill period and vanishes the session coverage
 	// closes.
 	//
-	// A fact whose blended vector could not be read was not really scanned
-	// either, for the same reason and with the same consequence.
+	// Coverage is a statement about the TITLE axis and nothing else, because
+	// the title KNN above is the entire scan. An earlier version also withheld
+	// coverage from facts whose blended vector could not be read — necessary
+	// while a blended-cosine filter ran here, meaningless now that none does.
 	var covered []int64
 	if complete {
-		covered = make([]int64, 0, len(requeue))
-		for _, id := range requeue {
-			if _, bad := unscorable[id]; !bad {
-				covered = append(covered, id)
-			}
-		}
+		covered = append([]int64(nil), requeue...)
 	}
 	// Pairs are deleted for departed facts and for facts being scanned for the
 	// first time — never for requeued partners, whose existing pairs are
@@ -249,7 +258,7 @@ func refreshRestatementShortlist(ctx context.Context, d Deps, branch string, ded
 	// whole corpus — and its pairs should describe the finished axis, not the
 	// union of every half-filled state it passed through on the way.
 	return stats, d.Abstraction.ReplaceRestatementPairs(ctx, branch,
-		append(dropped, added...), kept, covered)
+		append(dropped, added...), candidates, covered)
 }
 
 // newRestatementPair canonicalises a pair so A-B and B-A are one row.
@@ -257,7 +266,8 @@ func newRestatementPair(id int64, path string, n store.TitleNeighbour) store.Res
 	p := store.RestatementPair{
 		APath: path, BPath: n.Path,
 		AFactID: id, BFactID: n.FactID,
-		TitleCos: n.Similarity,
+		TitleCos:  n.Similarity,
+		MatchKind: store.MatchTitleKNN,
 	}
 	if p.BPath < p.APath {
 		p.APath, p.BPath = p.BPath, p.APath
@@ -266,58 +276,36 @@ func newRestatementPair(id int64, path string, n store.TitleNeighbour) store.Res
 	return p
 }
 
-// filterByBlendedCosine drops pairs whose BLENDED (title+body) vectors already
-// sit at or above the model's calibrated dedup threshold.
+// NOTE ON THE FILTER THAT USED TO LIVE HERE (#127).
 //
-// Those pairs are not restatements the judge needs to see: mergeFacts already
-// merges them mechanically, so spending a judge slot on one is pure waste. The
-// threshold is the active model's own calibrated value
-// (internal/embeddings/params), not a constant invented here — the shortlist
-// contributes no absolute cosine of its own.
+// This function once dropped every candidate pair whose stored blended vectors
+// sat at or above the model's calibrated dedup threshold, on the rationale that
+// "mergeFacts already merges them mechanically, so spending a judge slot on one
+// is pure waste."
 //
-// Vectors come from the stored facts_vec rows. Nothing is re-embedded.
-func filterByBlendedCosine(ctx context.Context, d Deps, pairs []store.RestatementPair, dedupThreshold float64) ([]store.RestatementPair, map[int64]struct{}, error) {
-	unscorable := map[int64]struct{}{}
-	if len(pairs) == 0 {
-		return nil, unscorable, nil
-	}
-	idSet := map[int64]struct{}{}
-	for _, p := range pairs {
-		idSet[p.AFactID] = struct{}{}
-		idSet[p.BFactID] = struct{}{}
-	}
-	ids := make([]int64, 0, len(idSet))
-	for id := range idSet {
-		ids = append(ids, id)
-	}
-	vecs, err := d.Abstraction.BodyVectorsByFactID(ctx, ids)
-	if err != nil {
-		return nil, unscorable, wrapf(reviewTool, err, "shortlist: body vectors")
-	}
-
-	out := make([]store.RestatementPair, 0, len(pairs))
-	for _, p := range pairs {
-		a, aok := vecs[p.AFactID]
-		b, bok := vecs[p.BFactID]
-		if !aok || !bok {
-			// A fact with no stored vector cannot be scored — keeping the pair
-			// would mean guessing whether dedup already caught it. Report the
-			// missing side so the caller does not record it as covered.
-			if !aok {
-				unscorable[p.AFactID] = struct{}{}
-			}
-			if !bok {
-				unscorable[p.BFactID] = struct{}{}
-			}
-			continue
-		}
-		if store.CosineSim(a, b) >= dedupThreshold {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out, unscorable, nil
-}
+// That rationale is false for precisely the population this shortlist exists to
+// serve. dedupCluster's mechanical merge only ever pairs facts that are in the
+// SAME cluster — every search hit is gated on cluster membership before it can
+// become a mergePair — and the shortlist exists because restatements whose
+// halves cluster APART are judged by nothing (gotchas/synthesize/prune-scope).
+// So a cross-cluster pair above the floor was deleted here as already-handled
+// and then handled by nothing: being a CERTAIN duplicate was the disqualifier.
+//
+// Measured on the live core corpus before the removal: all six confirmed
+// duplicate pairs sat at blended cosine 0.83–0.97 against a floor of 0.82 and
+// were absent from a 14,768-row standing cache whose surviving pairs topped out
+// at 0.77. The judge was being shown everything except the duplicates.
+//
+// The exclusion it was trying to express — "prune already sees this pair" — is
+// real, and is implemented once and correctly at SELECTION time as a cluster
+// co-membership check (clusterCoMembership). That check is exact and
+// session-aware; the cosine version was a proxy for it, and the proxy was
+// inverted.
+//
+// Nothing replaces it: an above-floor pair is the shortlist's best candidate,
+// not its waste. It is also the pair a mechanical merge would handle WORST —
+// mergeFacts picks a winner and discards the loser's body, while the judge is
+// required to preserve both.
 
 // ── selection ─────────────────────────────────────────────────────────────
 //
@@ -425,6 +413,16 @@ type restatementHealth struct {
 	// something, and the one worth reporting: a widened pair admitted into a
 	// slot nothing else wanted is free.
 	MotifSlotUsed bool
+	// StructuralAvailable / StructuralOffered describe the #127 detection
+	// route: how many structurally matched pairs were eligible this session,
+	// and how many actually reached the judge. Observability only — a
+	// detection that is never offered has to be visible as such, which is the
+	// failure this route exists to end.
+	StructuralAvailable int
+	StructuralOffered   int
+	// StandingStructural is how many structurally matched pairs the cache
+	// holds at all, whatever this session's scope and clusters made eligible.
+	StandingStructural int
 	// Probing is true when a defunded corpus spent its periodic probe slot —
 	// the one path by which its own evidence can change.
 	Probing bool
@@ -485,6 +483,7 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		return nil, h, wrapf(reviewTool, err, "shortlist: stats")
 	}
 	h.StandingPairs, h.TailP99, h.TailP999 = stats.Count, stats.P99, stats.P999
+	h.StandingStructural = stats.Structural
 
 	verdicts, err := d.Abstraction.RecentRestatementVerdicts(ctx, branch, throttleWindow)
 	if err != nil {
@@ -568,6 +567,33 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 		}
 	}
 
+	// RESERVE one slot for a STRUCTURAL pair when one exists (#127).
+	//
+	// Same shape as the motif widener below, and for the same reason: a pair
+	// found by path identity or a shared rare identifier is evidence the title
+	// ranking cannot see, so it sits below the title-ranked band by definition.
+	// Without a reserved slot the detection would be real and inert — a
+	// duplicate correctly identified and never offered, which is this issue's
+	// own failure mode arriving one layer later.
+	//
+	// A BUDGET ALLOCATION, not a threshold (MN13): it changes what may be
+	// considered, never how much is spent, and the corpus's own throttle still
+	// decides whether anything is spent at all.
+	var structural []store.RestatementPair
+	if budget >= 2 {
+		sp, serr := d.Abstraction.RestatementPairsByMatchKind(ctx, branch,
+			[]string{store.MatchPathIdentity, store.MatchRareToken}, budget*shortlistOverfetch)
+		if serr != nil {
+			return nil, h, wrapf(reviewTool, serr, "shortlist: structural rank")
+		}
+		for _, p := range sp {
+			if eligible(p) {
+				structural = append(structural, p)
+			}
+		}
+	}
+	h.StructuralAvailable = len(structural)
+
 	// RESERVE one slot for a widened pair when one exists. A shared canonical
 	// motif is evidence ORTHOGONAL to title similarity — evidence the title
 	// axis cannot see — so the pairs it identifies are below the title-ranked
@@ -581,24 +607,67 @@ func selectRestatementCandidates(ctx context.Context, d Deps, branch string, clu
 	// a corpus that can afford one judgment should spend it on its
 	// best-evidenced candidate rather than on orthogonal evidence about a
 	// lower-ranked one.
-	reserved := 0
-	if budget >= 2 && len(motifPairs) > 0 {
-		reserved = 1
+	// Two reservations, one slot each, and neither may take the last slot: a
+	// corpus that can afford two judgements should still spend one on its
+	// best-evidenced ordinary candidate.
+	structuralReserved, motifReserved := 0, 0
+	if budget >= 2 {
+		if len(structural) > 0 {
+			structuralReserved = 1
+		}
+		if len(motifPairs) > 0 {
+			motifReserved = 1
+		}
+		for structuralReserved+motifReserved >= budget {
+			if motifReserved > 0 {
+				motifReserved--
+				continue
+			}
+			structuralReserved--
+		}
 	}
 
 	var out []store.RestatementPair
-	for _, p := range ordinary {
-		if len(out) >= budget-reserved {
+	taken := map[string]struct{}{}
+	add := func(p store.RestatementPair) bool {
+		key := pathPairKey(p.APath, p.BPath)
+		if _, dup := taken[key]; dup {
+			return false
+		}
+		taken[key] = struct{}{}
+		out = append(out, p)
+		return true
+	}
+
+	// Structural first, within its own reservation. It is the only route by
+	// which a pair the title ranking places nowhere can be judged at all, and a
+	// route that fires only on underfill is decorative (the Q10 ruling on the
+	// motif widener, which this reservation copies).
+	used := 0
+	for _, p := range structural {
+		if used >= structuralReserved {
 			break
 		}
-		out = append(out, p)
+		if add(p) {
+			used++
+			h.StructuralOffered++
+		}
+	}
+	// The ordinary band takes everything the motif reservation does not hold —
+	// including any structural slot that went unused.
+	for _, p := range ordinary {
+		if len(out) >= budget-motifReserved {
+			break
+		}
+		add(p)
 	}
 	for _, p := range motifPairs {
 		if len(out) >= budget {
 			break
 		}
-		out = append(out, p)
-		h.MotifWidened++
+		if add(p) {
+			h.MotifWidened++
+		}
 	}
 	// A reserved slot the ordinary band could not have used is not "reserved"
 	// in any meaningful sense — report only when the signal actually displaced
@@ -784,8 +853,7 @@ func planRestatementShortlist(ctx context.Context, d Deps, sess *store.PipelineS
 	}
 	health.Coverage = float64(have) / float64(total)
 
-	dedupThreshold := store.EmbedderThresholds(d.RI.Embedder()).Dedup
-	refresh, err := refreshRestatementShortlist(ctx, d, branch, dedupThreshold)
+	refresh, err := refreshRestatementShortlist(ctx, d, branch)
 	if err != nil {
 		health.Failure = "shortlist refresh failed"
 		log.Warn().Err(err).Str("session", sess.ID).
@@ -861,6 +929,11 @@ func healthLines(h restatementHealth) []string {
 		// rider Q10). The GATE package needs to state how often it FIRED, and
 		// a line that only ever said "enabled" could not support that claim.
 		motifSignalLine(h),
+		// Likewise for the structural route (#127). Detection that never
+		// reaches the judge is this issue's own failure mode, so the line
+		// reports what was OFFERED beside what was found — the two numbers
+		// diverging is the symptom, and it has to be visible.
+		structuralSignalLine(h),
 	}
 }
 
@@ -877,6 +950,21 @@ func emittedLine(h restatementHealth) string {
 	return fmt.Sprintf("restatement candidates emitted: %d (%d selected but dropped "+
 		"unserved — a half no longer resolves; the pair stays standing and will "+
 		"be re-offered)", h.Emitted, h.Dropped)
+}
+
+// structuralSignalLine reports the path-identity / rare-token route.
+//
+// Standing, eligible and offered are three different populations and the gaps
+// between them are the interesting part: pairs detected but ineligible are
+// pairs prune already sees, while pairs eligible but not offered are the
+// budget saying no.
+func structuralSignalLine(h restatementHealth) string {
+	if h.StandingStructural == 0 {
+		return "structural duplicate detection: no path-identity or rare-token pairs stand in this corpus"
+	}
+	return fmt.Sprintf(
+		"structural duplicate detection: %d standing, %d eligible this session, %d offered",
+		h.StandingStructural, h.StructuralAvailable, h.StructuralOffered)
 }
 
 // motifSignalLine reports what the §7 motif widener contributed this session.
@@ -1110,4 +1198,67 @@ func pairSharesCanonicalMotif(ctx context.Context, d Deps, branch string, p stor
 		}
 	}
 	return false, nil
+}
+
+// ── structural detection ──────────────────────────────────────────────────
+
+// structuralPairs finds duplicate candidates by path identity and by shared
+// rare identifier tokens, and scores them on the title axis so they rank
+// sensibly against each other.
+//
+// A pair whose two title vectors are not both stored is DROPPED rather than
+// given an invented score: the ranking column means "title cosine", and a
+// placeholder there would be a number no measurement produced. The pair is not
+// lost — the axis backfill fills in over sessions, and the next refresh that
+// rescans either fact mints it.
+func structuralPairs(ctx context.Context, d Deps, branch string, requeue []int64, declined map[string]struct{}) ([]store.RestatementPair, error) {
+	if len(requeue) == 0 {
+		return nil, nil
+	}
+	titles, err := d.Abstraction.LiveEpistemicFactTitles(ctx, branch)
+	if err != nil {
+		return nil, wrapf(reviewTool, err, "shortlist: live fact titles")
+	}
+	matches := buildIdentityIndex(titles).structuralCandidates(requeue)
+	if len(matches) == 0 {
+		return nil, nil
+	}
+
+	idSet := map[int64]struct{}{}
+	for _, m := range matches {
+		idSet[m.a] = struct{}{}
+		idSet[m.b] = struct{}{}
+	}
+	ids := make([]int64, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	vecs, err := d.Abstraction.TitleVectorsByFactID(ctx, ids)
+	if err != nil {
+		return nil, wrapf(reviewTool, err, "shortlist: title vectors for structural pairs")
+	}
+
+	out := make([]store.RestatementPair, 0, len(matches))
+	for _, m := range matches {
+		if _, ok := declined[store.FactIDPairKey(m.a, m.b)]; ok {
+			continue
+		}
+		va, aok := vecs[m.a]
+		vb, bok := vecs[m.b]
+		if !aok || !bok {
+			continue
+		}
+		p := store.RestatementPair{
+			APath: titles[m.a].Path, BPath: titles[m.b].Path,
+			AFactID: m.a, BFactID: m.b,
+			TitleCos:  store.CosineSim(va, vb),
+			MatchKind: m.kind,
+		}
+		if p.BPath < p.APath {
+			p.APath, p.BPath = p.BPath, p.APath
+			p.AFactID, p.BFactID = p.BFactID, p.AFactID
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }

@@ -376,6 +376,17 @@ func applyDiscoverStep(ctx context.Context, tool string, d Deps, sess *store.Pip
 	reinforced := applyReinforcements(ctx, d.Facts, d.Search, dec.payload,
 		dec.reinforcements, sess.Branch, fact.ID12(d.RI.ID()), d.OnProgress)
 	if len(reinforced) > 0 {
+		// Reinforcement REWRITES a live fact — it bumps sources and adds a ref
+		// — so every item still queued in this session is carrying a stale
+		// snapshot of it. Discover has no retire path of its own (it writes and
+		// reinforces; nothing here deletes), so this is the whole of discover's
+		// contribution to in-session staleness, and it is the mutated-but-live
+		// half rather than the retired half.
+		if rerr := refreshInFlightItems(ctx, d, sess, sess.Branch,
+			&ReviewStats{Rewritten: reinforced}); rerr != nil {
+			log.Warn().Err(rerr).Str("tool", tool).Str("session", sess.ID).
+				Msg("in-flight work items could not be refreshed after reinforcement")
+		}
 		// Deliberately NOT counted into ReviewStats. Reinforcement creates no
 		// fact, so counting it as Synthesized would overstate what the session
 		// added; and store.PipelineSessionStats has no column of its own for

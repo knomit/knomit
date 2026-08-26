@@ -301,14 +301,9 @@ func planMotifBackfillWork(ctx context.Context, d Deps, sess *store.PipelineSess
 	health := backfillHealth{WithMotifs: with, Backlog: backlog, TotalFacts: total}
 	defer func() { recordBackfillHealth(sess, health) }()
 
-	targets, err := d.Motifs.LiveFactsWithoutMotifs(ctx, branch, maxBackfillFacts)
-	if err != nil || len(targets) == 0 {
+	payload, err := backfillPayloadFor(ctx, d, branch)
+	if err != nil || len(payload.Facts) == 0 {
 		return nil
-	}
-
-	payload := backfillPayload{
-		Facts:      backfillFactsFor(targets),
-		Vocabulary: buildBackfillHints(ctx, d, branch, targets),
 	}
 	health.Offered = len(payload.Facts)
 	health.Vocabulary = len(payload.Vocabulary)
@@ -324,6 +319,28 @@ func planMotifBackfillWork(ctx context.Context, d Deps, sess *store.PipelineSess
 		FactsJSON:  string(blob),
 		Priority:   motifBackfillPriority,
 	})
+}
+
+// backfillPayloadFor derives what a backfill item would offer RIGHT NOW: the
+// oldest facts still lacking a motif, plus the vocabulary to offer them.
+//
+// One derivation, two callers — the planner, and the mid-session refresh that
+// re-materialises the payload when a merge retires one of the facts it was
+// offering. The alternative is two constructions that happen to agree, which is
+// a test asserting an arrangement rather than a rule (the same reasoning that
+// put backfillFactsFor in one place).
+func backfillPayloadFor(ctx context.Context, d Deps, branch string) (backfillPayload, error) {
+	targets, err := d.Motifs.LiveFactsWithoutMotifs(ctx, branch, maxBackfillFacts)
+	if err != nil {
+		return backfillPayload{}, fmt.Errorf("motif backfill: live facts without motifs: %w", err)
+	}
+	if len(targets) == 0 {
+		return backfillPayload{}, nil
+	}
+	return backfillPayload{
+		Facts:      backfillFactsFor(targets),
+		Vocabulary: buildBackfillHints(ctx, d, branch, targets),
+	}, nil
 }
 
 // motifBackfillStepType is the work-item step type for the backfill pass.

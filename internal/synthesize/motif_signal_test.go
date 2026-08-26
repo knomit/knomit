@@ -78,7 +78,7 @@ func TestShortlistWidener_ReservedSlotFiresOnAFullBand(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	// Budget >= 2, so a slot can be reserved without consuming the whole
@@ -122,7 +122,7 @@ func TestShortlistWidener_NoReservationAtBudgetOne(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	const corpus = 200
@@ -153,7 +153,7 @@ func TestShortlistWidener_IsInertWhenTheOrdinaryBandFillsTheBudget(t *testing.T)
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	// Every fact shares a motif, so every pair is widenable — yet nothing is
@@ -180,7 +180,7 @@ func TestShortlistWidener_DoesNotEnlargeTheBudget(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	pairs, _, err := selectRestatementCandidates(ctx, d, env.branch, nil, corpusSizeForBudget)
@@ -197,7 +197,7 @@ func TestShortlistWidener_IsInertWithoutMotifs(t *testing.T) {
 	d := env.deps()
 	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
 	require.NoError(t, err)
-	_, err = refreshRestatementShortlist(ctx, d, env.branch, env.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, d, env.branch)
 	require.NoError(t, err)
 
 	_, h, err := selectRestatementCandidates(ctx, d, env.branch, nil, corpusSizeForBudget)

@@ -231,7 +231,7 @@ func (e *restatementEnv) seedShortlist() {
 	ctx := context.Background()
 	_, _, err := ensureTitleVectors(ctx, e.deps(), e.branch, titleBackfillBudget)
 	require.NoError(e.t, err)
-	_, err = refreshRestatementShortlist(ctx, e.deps(), e.branch, e.dedupThreshold())
+	_, err = refreshRestatementShortlist(ctx, e.deps(), e.branch)
 	require.NoError(e.t, err)
 }
 

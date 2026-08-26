@@ -211,6 +211,20 @@ type PipelineIndex interface {
 	// engine's running totals have to live.
 	AddPipelineSessionStats(ctx context.Context, id string, s PipelineSessionStats) error
 	PipelineWorkItemStats(ctx context.Context, sessionID string) (completed, remaining int, err error)
+	// PendingPipelineWorkItems returns this session's UNANSWERED items, in
+	// queue order. It exists for the mid-session refresh: an item's payload is
+	// materialised when the session is planned, so a merge applied later in the
+	// same session leaves every still-queued item describing a corpus that no
+	// longer exists.
+	PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error)
+	// UpdatePipelineWorkItemFacts rewrites an unanswered item's payload. The
+	// response IS NULL guard is the same CAS the claim protocol uses: an item
+	// answered between the read and the rewrite must not be edited underneath
+	// the answer that is already being applied.
+	UpdatePipelineWorkItemFacts(ctx context.Context, id int64, factsJSON string) (updated bool, err error)
+	// DeletePipelineWorkItem removes an unanswered item, for the case where a
+	// refresh leaves it with too little left to judge. Same CAS guard.
+	DeletePipelineWorkItem(ctx context.Context, id int64) (deleted bool, err error)
 	GetPipelineWatermark(ctx context.Context, tool, branch string) (string, error)
 	SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error
 }
@@ -377,6 +391,19 @@ type AbstractionIndex interface {
 	// dropFactIDs are removed, add is inserted, and coveredNow is recorded as
 	// covered.
 	ReplaceRestatementPairs(ctx context.Context, branch string, dropFactIDs []int64, add []RestatementPair, coveredNow []int64) error
+	// RestatementPairsByMatchKind returns the top `limit` pairs found by one of
+	// the named match kinds, ranked by title cosine WITHIN that population.
+	// Structurally matched pairs are near-certain duplicates whatever their
+	// titles score, so they cannot be reached through the cosine ranking that
+	// serves the title-KNN population.
+	RestatementPairsByMatchKind(ctx context.Context, branch string, kinds []string, limit int) ([]RestatementPair, error)
+	// TitleVectorsByFactID returns STORED title-axis vectors, keyed by fact id.
+	// Symmetric with BodyVectorsByFactID; nothing is re-embedded.
+	TitleVectorsByFactID(ctx context.Context, ids []int64) (map[int64][]float32, error)
+	// LiveEpistemicFactTitles is LiveEpistemicFacts with the title, for the
+	// structural detection pass — which matches on what a fact SAYS IT IS
+	// rather than on where it sits in the vector space.
+	LiveEpistemicFactTitles(ctx context.Context, branch string) (map[int64]LiveFactTitle, error)
 	// RestatementPairsByRank returns the top `limit` pairs by title cosine.
 	RestatementPairsByRank(ctx context.Context, branch string, limit int) ([]RestatementPair, error)
 	// RestatementPairStats describes the standing population. Observability
@@ -436,7 +463,26 @@ type RestatementPair struct {
 	AFactID  int64
 	BFactID  int64
 	TitleCos float64
+	// MatchKind records HOW the pair was found. Selection reads it because the
+	// two routes want different treatment: a title-KNN pair is ranked by its
+	// cosine, while a structurally matched pair is a near-certain duplicate
+	// whatever its cosine happens to be. Empty on construction means
+	// MatchTitleKNN; the store normalises.
+	MatchKind string
 }
+
+// Restatement pair match kinds — how a standing pair was found.
+const (
+	// MatchTitleKNN: the two facts are top-K title neighbours of each other.
+	MatchTitleKNN = "title-knn"
+	// MatchPathIdentity: their paths normalise to one identity — the same
+	// segment set, or one path's segments a subset of the other's, after
+	// casefolding, stemming, and ignoring a UUID filename.
+	MatchPathIdentity = "path-identity"
+	// MatchRareToken: they share a token that is rare in THIS corpus's own
+	// token distribution — an identifier, in practice.
+	MatchRareToken = "rare-token"
+)
 
 // RestatementPairStats describes the standing pair population for health
 // output: how many pairs stand, and where the top of the distribution sits.
@@ -444,6 +490,15 @@ type RestatementPairStats struct {
 	Count int
 	P99   float64
 	P999  float64
+	// Structural counts the pairs found by something other than title
+	// proximity. Observability: reported, read by no branch.
+	Structural int
+}
+
+// LiveFactTitle is one live fact's path and title, keyed by fact id.
+type LiveFactTitle struct {
+	Path  string
+	Title string
 }
 
 // Embedder computes vector embeddings. Roles differ because retrieval models
