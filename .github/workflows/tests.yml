@@ -102,15 +102,29 @@ jobs:
       # helpers, with the `//go:build desktop` packages covered by the desktop
       # job below.
       #
-      # TIMING IS MEASURED. The full run is 169s wall on an Apple-Silicon dev
-      # machine, of which internal/synthesize alone is 160s — it IS the
-      # critical path, everything else runs beside it. That leaves 3.75x of
-      # headroom under go test's 10-minute-PER-PACKAGE default, so no -timeout
-      # is set here and the job's ceiling is left alone. race.yml needs
-      # -timeout 30m because the SAME package takes 744s under -race, which is
-      # over the default; without -race it is not close. If some package ever
-      # does approach 10m, RE-MEASURE and set -timeout then — do not pre-raise
-      # it on a hunch.
+      # TIMING IS MEASURED ON THE RUNNERS THAT ACTUALLY RUN IT.
+      # internal/synthesize is the critical path — everything else runs beside
+      # it — and it takes 385s on ubuntu-latest and 331s on macos-latest, from
+      # this workflow's own first run. The same package is 160s on an
+      # Apple-Silicon dev machine, so a LOCAL figure is a FLOOR, not a
+      # forecast: the runners are ~2.4x slower, and sizing this from the local
+      # number would have left 385s sitting under go test's 600s ceiling with
+      # 1.56x of headroom while a comment claimed 3.75x.
+      #
+      # That margin is too thin to leave alone. go test defaults to 10 minutes
+      # PER PACKAGE, and what happens at that boundary is `panic: test timed
+      # out after 10m0s` — a red that looks like a bug and is not. That is the
+      # wallpaper failure race.yml's own comment exists to avoid, and a single
+      # noisy runner or a handful of new synthesize tests reaches it from 385s.
+      # -timeout 20m is ~3.1x the measured ubuntu figure, the same discipline
+      # race.yml applies (its 30m is ~2.4x the 744s that package takes under
+      # -race). RE-MEASURE before changing this; do not move it on a hunch.
+      #
+      # No timeout-minutes on the job, deliberately: its default ceiling is far
+      # looser than this -timeout, which is the ordering race.yml documents —
+      # the go test timeout has to fire FIRST, because it prints a goroutine
+      # dump naming the stuck test, while a job timeout kills the runner and
+      # leaves a truncated log and no stack.
       #
       # -skip ON PUSH ONLY. TestConformance_BridgeFilesUntouched asserts a
       # NON-EMPTY diff against dev, so that a branch-scoped check cannot pass
@@ -131,7 +145,7 @@ jobs:
           CONFORMANCE_SKIP: ${{ github.event_name == 'push' && '-skip=TestConformance_BridgeFilesUntouched' || '' }}
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test $CONFORMANCE_SKIP ./...
+          CGO_ENABLED=1 go test $CONFORMANCE_SKIP -timeout 20m ./...
 
       # Origin-sync fault matrix: build-tagged contract cells drive the real
       # product clone/sync/push path over an in-process fault-injecting git
