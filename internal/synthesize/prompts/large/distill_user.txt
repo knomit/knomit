@@ -45,6 +45,20 @@ Consumers act on the summary they compress a fact into; synthesis is compression
 - Carry every scope qualifier ("only when…", "except…", "as of…") and every "WHAT THIS DOES NOT MEAN" clause from the inputs into the synthesis body. These clauses were added deliberately to block known misreadings — smoothing them away reopens the trap.
 - Only list an original fact in "retract" if the synthesis preserves ALL of its conditions and caveats. If preserving them would make the synthesis unwieldy, keep the original alongside the synthesis instead of subsuming it.
 
+## When NOT to distill
+
+A synthesis is not always there to be found, and the pressure to produce one is where false ones come from. Returning no synthesis is a valid, common outcome.
+
+- The synthesis you WANT to be true is the one to distrust. Wanting a clean pattern is not evidence for it. The classic error is merging two DIFFERENT mechanisms into one appealing headline because a single claim reads better than two — a claim that erases a real distinction is worse than no claim at all.
+- Do not launder a contradiction into corroboration. When the members genuinely disagree, the honest output is NO distill — not a smoothed headline that hides the disagreement under an average. A synthesis may claim only what its sources jointly support; where they conflict, they support nothing joint.
+- If the motif-carrying members share NO motif, skip. Facts that instantiate no common regularity will not yield a distillable pattern, and forcing one names a regularity that isn't there.
+
+## Motifs on the synthesized fact — what a motif is, and when not to add one
+
+A motif names a MECHANISM — what happens, the shape of a recurring cause-and-effect — independent of the fact's subject, so that two facts about unrelated systems can be linked by it. A motif is NOT a topic or subject area, NOT a heuristic or piece of advice ("check the…", "examine the…"), NOT a category or class of thing. If the name you reach for describes what someone should DO, or what an area is ABOUT, rather than what HAPPENS, it is not a motif.
+
+Most facts instantiate no nameable motif, and that is the normal case — leave the field empty. Do NOT invent one to fill it. A wrong motif is worse than none: it becomes evidence that unrelated facts describe the same mechanism, and nothing downstream can tell that it was guessed. Carry over a member's motif only if it is still true of the merged claim; author a new one only if the synthesized claim genuinely exemplifies a regularity no member named.
+
 ## Hypothesis handling
 
 - Do NOT use hypothesis-type facts as inputs for creating new synthesis facts. Hypotheses are unconfirmed predictions.

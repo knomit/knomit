@@ -21,6 +21,10 @@ Do not write:
 - advice, a judgement about whether the mechanism is good or bad, or how to avoid it
 - anything you would have to see a specific system to know
 
+The test for a definable motif: it must name a CAUSAL ENGINE — what happens, a mechanism or the shape of a failure. A name that is really a heuristic ("check the…", "examine the…", "verify…") is an instruction, not a mechanism, and cannot be defined as one. Neither can a topic, a class of vulnerability, or a choice or trend — those name what a fact is ABOUT or what someone decided, not what happens. The absence of a control is not itself a mechanism; the mechanism is what that absence lets happen.
+
+Define what the mechanism's SUBJECT does, not what a fact about it does. A name read as "the source's own word replacing independent inspection" describes a mechanism; a fact that carefully attributes a claim to its source is the opposite of that, not an instance of it. Read the name as the general thing that happens in the world, and describe that.
+
 If a name is too vague to define without inventing a meaning for it, return an empty definition for that name rather than guessing. A wrong definition is worse than a missing one: it will be used to decide whether unrelated facts describe the same mechanism.
 
 Respond as JSON (no markdown wrapping):
