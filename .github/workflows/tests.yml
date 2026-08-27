@@ -36,6 +36,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, because the test step below now runs ./... and that
+          # includes internal/synthesize, whose TestConformance_BridgeFilesUntouched
+          # diffs the working tree against its merge base with dev.
+          #
+          # MEASURED, not assumed: on a pull_request the default shallow
+          # checkout fetches ONLY refs/pull/N/merge — the ref list in that tree
+          # is literally that one entry, no dev, no master — so the test's
+          # baseRefOrSkip finds no base ref and SKIPS ITSELF, announcing that it
+          # "is NOT being enforced". A conformance check that never runs is the
+          # same silent gap this job was widened to close, so the history it
+          # needs is fetched here. Cost is ~126 MiB per runner, the same order
+          # as the ~75 MiB of native libs `make setup` already pulls into this
+          # job.
+          #
+          # build-test only: the desktop, desktop-ui and embed-smoke jobs below
+          # never build internal/synthesize, so they keep the cheap checkout.
+          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
@@ -60,24 +78,60 @@ jobs:
       - name: Build (CGo) — proves libtokenizers.a links + cloud is Wails-free
         run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...)
 
-      - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
-
-      # Guard: the test harness (test/testenv, test/storytests) must
-      # never be linked into a shipped binary. Pure `go list` graph check, no
-      # native libs / no compile.
-      - name: Test-harness isolation guard
-        run: go test ./test/archtest/
-
-      # Store needs the runtime native libs; internal/web links them transitively
-      # (it constructs a store in tests) and the desktop helper packages
-      # (lockfile/netutil/paths/autostart/singleinstance) are plain Go but run
-      # here too so the build-test job actually exercises them. The desktop
-      # `//go:build desktop` packages are covered by the `desktop` job below.
-      - name: Store, web + desktop-helper tests (runtime native libs)
+      # ./... — EVERY test-bearing package (49 of them), replacing the named
+      # list this step used to carry, which reached 17. The 32 it never ran
+      # included internal/synthesize, internal/mcp, internal/repos,
+      # internal/refs, cmd and all of tools/ — so "CI green" was silent about
+      # most of the tree, and two real bugs (a teardown flake and a data race
+      # in internal/repos) sat on dev undetected because the only job that
+      # could see those packages was race.yml, which is post-merge and
+      # non-blocking. This is that gap closed on the job that actually gates.
+      #
+      # A named list is the wrong shape for this even when it is correct today:
+      # it goes stale silently, every new package is uncovered by default, and
+      # nothing fails when one is forgotten. ./... has no such failure mode —
+      # which is why race.yml was written this way from the start.
+      #
+      # The runtime native libs are exported for the WHOLE run now. The old
+      # three-step split (two steps deliberately without LD_LIBRARY_PATH, one
+      # with) documented which packages need them; ./... cannot express that,
+      # and the export is inert for the packages that do not. The two guards
+      # those steps called out still run here, just not by name: test/archtest
+      # keeps the test harness (test/testenv, test/storytests) out of shipped
+      # binaries, and tools/desktop/internal/... exercises the plain-Go desktop
+      # helpers, with the `//go:build desktop` packages covered by the desktop
+      # job below.
+      #
+      # TIMING IS MEASURED. The full run is 169s wall on an Apple-Silicon dev
+      # machine, of which internal/synthesize alone is 160s — it IS the
+      # critical path, everything else runs beside it. That leaves 3.75x of
+      # headroom under go test's 10-minute-PER-PACKAGE default, so no -timeout
+      # is set here and the job's ceiling is left alone. race.yml needs
+      # -timeout 30m because the SAME package takes 744s under -race, which is
+      # over the default; without -race it is not close. If some package ever
+      # does approach 10m, RE-MEASURE and set -timeout then — do not pre-raise
+      # it on a hunch.
+      #
+      # -skip ON PUSH ONLY. TestConformance_BridgeFilesUntouched asserts a
+      # NON-EMPTY diff against dev, so that a branch-scoped check cannot pass
+      # vacuously. On a push to dev/master the checkout IS that branch
+      # (actions/checkout runs `-B dev refs/remotes/origin/dev`, so `dev`
+      # resolves), the merge base is HEAD, the diff is empty by construction,
+      # and the test fails for a reason that has nothing to do with the commit.
+      # On a pull_request it is exactly where the check means something, so it
+      # runs — which is what the fetch-depth: 0 above buys. The condition is
+      # load-bearing rather than cosmetic: an unconditional -skip, as race.yml
+      # carries for its own push-only trigger, would silently defeat that.
+      # `github.event_name` in a called workflow is the CALLER's event (the
+      # same property embed-smoke below depends on), so a release tag counts as
+      # a push and is skipped too — correct, since a tag is not a branch under
+      # review.
+      - name: Tests — all packages
+        env:
+          CONFORMANCE_SKIP: ${{ github.event_name == 'push' && '-skip=TestConformance_BridgeFilesUntouched' || '' }}
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test ./internal/store/... ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
+          CGO_ENABLED=1 go test $CONFORMANCE_SKIP ./...
 
       # Origin-sync fault matrix: build-tagged contract cells drive the real
       # product clone/sync/push path over an in-process fault-injecting git
