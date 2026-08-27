@@ -234,6 +234,13 @@ func renderDiscoverPrompt(payload DiscoverWorkPayload, ontologyRoot string) stri
 			fmt.Fprintf(&b, "      %s\n", firstLine(m.Body))
 		}
 	}
+	// Source-monoculture guard (#136, MIRROR). A bridge earns its place by
+	// spanning COMMUNITIES; if every member's material traces to one origin,
+	// the shared thread is that origin, not a mechanism that recurs across the
+	// corpus. This is a judgment the prompt must carry because the mechanical
+	// qualify gate reasons over motif recurrence and subject-disjointness, not
+	// over where a fact's content came from.
+	b.WriteString("\nA bridge must span COMMUNITIES, not one source's own material. If the members' primary sources all trace to a single vendor, project, or author, the shared thread is that origin — not a mechanism that recurs across the corpus — and it is not a cross-community bridge. Default to NO.\n")
 	// GATE rider 2 (designer, 2026-08-23). The far-lane demo established that
 	// condition (c) below is not answerable from this prompt at all: novelty
 	// rests on the agent's default-skip rather than on the 0.92 dedup gate

@@ -8,6 +8,27 @@ those transitions reinforce or expose as gaps. The default action is
 methodologies. Proposing a new methodology is rare and the server rejects
 proposals too similar to anything already in the corpus.
 
+Discipline for this judgment — these are themselves methodology lessons,
+and they apply to the reflection you are making right now:
+
+  - Query before declaring a gap. Deciding a transition REINFORCES an
+    existing methodology is safe on the evidence in front of you; declaring
+    the lesson NEW and proposing is not — the methodology you are sure does
+    not exist is the one you would misremember. Read the candidates below
+    before concluding none fit.
+  - Pre-register the check. Name the methodology you expect a transition to
+    reinforce, and what would confirm it, BEFORE you read the transition's
+    outcome. A lesson that turns out to fit after you already assumed it is
+    not the same as one you checked.
+  - A moving rate is not a finding. No per-session metric is independent of
+    that session's input mix; a rate that rose or fell tracks what came in,
+    not a change in method, until something rules the input out. Do not read
+    a number's movement as a methodology lesson on its own.
+  - Widen a claim only on evidence that moves a LEG of its argument. A
+    methodology improves when evidence contradicts part of it and forces a
+    revision; it merely bloats when evidence that already agrees is piled on
+    as more support. Reinforce on genuine load, not on agreement.
+
 {{if .ExistingMethodology}}Existing methodology candidates (the retrieval
 system thinks these may overlap with the lesson):
 

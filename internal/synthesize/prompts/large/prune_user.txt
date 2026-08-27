@@ -39,6 +39,14 @@ Merge output requirements (mandatory):
 Merge fidelity (mandatory):
 - Facts are duplicates only if their conditions and scopes match. Same subject with different qualifiers ("only when…", "except…", different thresholds) is NOT a duplicate — keep both.
 - The merged body must preserve every component of compound conditions, every scope qualifier, and every "WHAT THIS DOES NOT MEAN" clause present in ANY input fact. Never collapse a multi-part condition into a catchier summary — the dropped component is how a true fact becomes a false slogan.
+- Do NOT merge two facts written to PRESERVE a distinction. When one fact carries a clause whose purpose is to warn against conflating it with the other — a "this is not the same as…", a significance note flagging that a neighbouring analysis would miss it — that clause exists precisely to keep the two apart, and merging is what silently destroys the warning. A pair kept separate on purpose reads like a duplicate; it is not one.
+- Same topic, different event is not a duplicate. Two facts about the same subject that record DIFFERENT occurrences, measurements, or moments each stand alone — keep both. And declining to merge is itself a verdict you are accountable for, not a free pass: an all-keep on a small cluster must be a decision you would defend after reading it, not a default reached by not looking.
+
+## Verdict discipline — keep, retract, update
+
+- A confidence DOWNGRADE does not correct a false claim. A fact left at reduced confidence still asserts its claim at full voice to anyone who reads it; lowering the number says "trust this less", never "this is wrong". If the BODY is wrong, correct the body or retract — do not quietly lower confidence and leave the wrong words standing.
+- Set confidence from the EVIDENCE BASE — how many independent sources support the fact, and of what kind — not from how confident the claim's wording sounds. A boldly-worded fact with one source is not more certain than a hedged one with five.
+- Do not retract a correctly-dated snapshot merely because a newer fact has overtaken it. A fact that was true as of its date and says so is history, not error; retracting it deletes the trail that makes the later correction legible. Supersession is recorded by the newer fact existing, not by erasing the older one.
 
 ## Hypothesis handling
 

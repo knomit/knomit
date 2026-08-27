@@ -12,6 +12,8 @@ READ THE CARRIER TITLES. They are the evidence, and the names alone are not. Two
 
 DEFAULT TO "different". Merge only when you can state, in one sentence, the mechanism both names describe. If you cannot write that sentence, the answer is "different" — including when the names look similar, and including when you are unsure. There is no cost to leaving two names separate: a later pass will see them again if evidence accumulates. There is a real cost to merging two mechanisms that are not the same, because nothing downstream can tell it happened.
 
+Beware the mislabelled carrier. Two correct but DISTINCT names can end up on one fact because that fact was given a motif it should not carry. Their co-occurrence there is not evidence that they name the same mechanism — it is evidence of one mislabelling. Do not let a single shared carrier become merge pressure: the harm of a wrong motif is exactly that it becomes evidence in a later merge that cannot be undone.
+
 Merge when:
 - the two names describe the same underlying mechanism in different words, and the carriers on both sides are instances of it
 
@@ -20,6 +22,7 @@ Do NOT merge when:
 - one name is a PROBLEM and the other its REMEDY. Carriers routinely discuss both, so the two read as one topic — but a mechanism and the thing that prevents it are opposites, not synonyms.
 - one name is broader than the other
 - the carriers on one side would not be described by the other name
+- a single fact carries BOTH names, on two different clauses of itself. If the two were phrasings of one regularity, one clause could not need both — a fact that states them separately is proving they are distinct, not that they belong together.
 - you are relying on the names alone because the carriers are unclear
 
 Respond as JSON (no markdown wrapping):
