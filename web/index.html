@@ -25,17 +25,34 @@
       No redirect loop: the replacement path always ends in `/`, so the second
       load returns early.
 
-      Both guards below hold the desktop shell harmless, and either alone would
-      do it. tools/desktop/app.go calls window.SetURL("/"), so the pathname ends
-      in `/` on every platform; and on macOS the shell is served over the custom
+      Two guards hold the desktop shell harmless, and either alone would do it.
+      tools/desktop/app.go calls window.SetURL("/"), so the pathname ends in `/`
+      on every platform; and on macOS the shell is served over the custom
       `wails://localhost` scheme, which the protocol check excludes outright
       rather than reasoning about how a non-special scheme stringifies.
+
+      A third refuses a '//' pathname outright — see the comment on it below.
+
+      NOT guarded: a URL whose last segment is the document itself
+      (`…/proxy/19278/index.html`), where relative resolution is ALREADY correct
+      and this redirect would make it wrong. Unreachable through knomit, because
+      Go's http.FileServer 301s any path ending in index.html to `./` before a
+      browser ever parses this file. A "last segment contains a dot" heuristic
+      was considered and rejected: it would refuse to fix a legitimate mount at
+      e.g. /apps/knomit.dev, trading an unreachable failure for a plausible one.
     -->
     <script>
       (function () {
         if (location.protocol !== 'http:' && location.protocol !== 'https:') return;
         var p = location.pathname;
         if (!p || p.charAt(p.length - 1) === '/') return;
+        // A pathname may begin with '//' (https://host//knomit gives '//knomit').
+        // location.replace would read that as scheme-relative and navigate to
+        // ANOTHER ORIGIN — an open redirect. Resolving through `new URL(…, href)`
+        // does not help: a leading '//' is an authority to the URL parser even
+        // with a base. Refuse instead; the caller keeps a working page at the
+        // cost of the slash it was missing.
+        if (p.charAt(1) === '/') return;
         location.replace(p + '/' + location.search + location.hash);
       })();
     </script>

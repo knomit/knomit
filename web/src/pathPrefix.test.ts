@@ -46,6 +46,14 @@ describe('config.js API base', () => {
     ['mounted under a prefix', 'https://box.example/proxy/19278/', '/proxy/19278'],
     ['mounted under a nested prefix', 'https://box.example/a/b/c/', '/a/b/c'],
     ['ignores query and fragment', 'https://knomit.example/proxy/1/?x=1', '/proxy/1'],
+    // NOT a supported state — the degraded value pinned deliberately. Without a
+    // trailing slash the document's DIRECTORY is the parent, so the base comes
+    // out one segment short and every API call goes to /proxy/api/v1/... This is
+    // what index.html's guard exists to prevent, and it is what a fronting proxy
+    // sending `Content-Security-Policy: script-src 'self'` would silently
+    // reinstate by refusing to run that inline guard. Asserted so the failure
+    // mode has a name in the suite rather than being discovered in a browser.
+    ['no trailing slash (guard defeated)', 'https://box.example/proxy/19278', '/proxy'],
   ])('%s: %s -> %o', (_name, baseURI, expected) => {
     expect(deriveApiBase(baseURI)).toBe(expected);
   });
@@ -117,6 +125,19 @@ describe('trailing-slash guard', () => {
     // The replacement path always ends in '/', so this is the second load.
     expect(runGuard({ protocol: 'https:', pathname: '/proxy/19278/' }).replaced).toBeNull();
     expect(runGuard({ protocol: 'https:', pathname: '/' }).replaced).toBeNull();
+  });
+
+  it('refuses a // pathname rather than redirecting off-origin', () => {
+    // https://host//knomit gives pathname '//knomit'. Appending a slash and
+    // handing that to location.replace navigates to https://knomit/ — the target
+    // is scheme-relative, so the host is attacker-chosen. Resolving through
+    // `new URL(target, location.href)` does NOT fix it: a leading '//' is an
+    // authority to the URL parser even with a base.
+    expect(runGuard({ protocol: 'https:', pathname: '//evil.com/x' }).replaced).toBeNull();
+    expect(runGuard({ protocol: 'https:', pathname: '//knomit' }).replaced).toBeNull();
+    // A single leading slash is the normal case and must still be fixed.
+    expect(runGuard({ protocol: 'https:', pathname: '/proxy/19278' }).replaced)
+      .toBe('/proxy/19278/');
   });
 
   it('leaves the desktop shell alone', () => {
