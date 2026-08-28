@@ -1468,3 +1468,158 @@ func TestLensFanoutDepth_OverflowingOffsetStillClamps(t *testing.T) {
 		})
 	}
 }
+
+// Motif filtering fans out to EVERY mount, carrying the same terms and tier —
+// the per-mount-resolution semantics made testable. Each mount expands the
+// terms against its own alias vocabulary; the handler's job is to make sure
+// every mount is asked the same question.
+func TestLensFacts_MotifFilterReachesEveryMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	if rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=a-b&motif_match=token-2"); rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	for _, repo := range []string{"alpha", "beta"} {
+		opts, ok := stub.lastOpts[repo]
+		if !ok {
+			t.Fatalf("mount %q was never queried", repo)
+		}
+		if got := fmt.Sprint(opts.Motifs); got != "[a-b]" {
+			t.Errorf("%s Motifs: got %v, want [a-b]", repo, opts.Motifs)
+		}
+		if opts.MotifMatch != store.MotifMatchToken2 {
+			t.Errorf("%s MotifMatch: got %q, want token-2", repo, opts.MotifMatch)
+		}
+	}
+}
+
+// The tiers this surface refuses are refused before the fan-out starts — no
+// mount is queried at all (C3/MN6).
+func TestLensFacts_LooseMotifTierRejected(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=a-b&motif_match=token-1")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(stub.lastOpts) != 0 {
+		t.Errorf("mounts were queried despite the rejection: %v", stub.lastOpts)
+	}
+}
+
+// Same two properties on the relevance twin.
+func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{}}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	for _, repo := range []string{"alpha", "beta"} {
+		opts, ok := stub.lastOpts[repo]
+		if !ok {
+			t.Fatalf("mount %q was never queried", repo)
+		}
+		if got := fmt.Sprint(opts.Motifs); got != "[a-b]" {
+			t.Errorf("%s Motifs: got %v, want [a-b]", repo, opts.Motifs)
+		}
+		if opts.MotifMatch != store.MotifMatchToken2 {
+			t.Errorf("%s MotifMatch: got %q, want token-2", repo, opts.MotifMatch)
+		}
+	}
+}
+
+func TestLensSearch_LooseMotifTierRejected(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{}}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-1")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(stub.lastOpts) != 0 {
+		t.Errorf("mounts were queried despite the rejection: %v", stub.lastOpts)
+	}
+}
+
+// The union rows carry each fact's motifs; a motif-free row omits the key.
+func TestLensFacts_MotifsOnTheWire(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {
+			{Path: "kb/a.md", Title: "Carries a motif", Motifs: []string{"a-b"}, CommittedAt: 2},
+			{Path: "kb/b.md", Title: "Carries none", CommittedAt: 1},
+		},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha"}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Facts []map[string]any `json:"facts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(body.Facts) != 2 {
+		t.Fatalf("facts: got %d, want 2; body=%s", len(body.Facts), rec.Body.String())
+	}
+	if got := body.Facts[0]["motifs"]; fmt.Sprint(got) != "[a-b]" {
+		t.Errorf("row 0 motifs: got %v, want [a-b]", got)
+	}
+	if _, present := body.Facts[1]["motifs"]; present {
+		t.Errorf("motif-free row must omit the key entirely; body=%s", rec.Body.String())
+	}
+}
+
+func TestLensSearch_MotifsOnTheWire(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	withMotif := sr("kb/a.md", "Carries a motif", 10)
+	withMotif.Motifs = []string{"a-b"}
+	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+		"alpha": {withMotif, sr("kb/b.md", "Carries none", 5)},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha"}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Results []map[string]any `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(body.Results) != 2 {
+		t.Fatalf("results: got %d, want 2; body=%s", len(body.Results), rec.Body.String())
+	}
+	if got := body.Results[0]["motifs"]; fmt.Sprint(got) != "[a-b]" {
+		t.Errorf("row 0 motifs: got %v, want [a-b]", got)
+	}
+	if _, present := body.Results[1]["motifs"]; present {
+		t.Errorf("motif-free row must omit the key entirely; body=%s", rec.Body.String())
+	}
+}

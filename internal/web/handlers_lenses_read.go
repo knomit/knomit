@@ -77,6 +77,7 @@ type lensFactItem struct {
 	Title       string         `json:"title"`
 	Kind        string         `json:"kind,omitempty"` // omitted when epistemic (the default)
 	Type        string         `json:"type,omitempty"`
+	Motifs      []string       `json:"motifs,omitempty"`
 	CommittedAt int64          `json:"committed_at,omitempty"`
 	Operation   string         `json:"operation,omitempty"`
 	Score       float64        `json:"score"`
@@ -156,6 +157,11 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 		// uses. A kb://-qualified path restricts to a single mount (with the
 		// filter made repo-relative); an unqualified path applies per mount,
 		// skipping mounts whose ontology lacks the topic.
+		motifs, motifMatch, ok := motifParams(w, r)
+		if !ok {
+			return
+		}
+
 		targets, err := federate.ReadTargetsFor(b, path)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
@@ -192,8 +198,15 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
 			IncludeOrigins: splitCSV(qp.Get("origin")),
 			EpisodeOps:     splitCSV(qp.Get("ep")),
-			MinConfidence:  minConfidence,
-			MinSimilarity:  minSimilarity,
+			// Motif terms resolve PER MOUNT against each repo's own alias
+			// vocabulary — there is no cross-mount cluster identity. A mount
+			// that judge-merged two spellings answers for both; one that keeps
+			// them apart answers only for the exact term. Deliberate semantics
+			// (design 2026-08-28), mirrored in openapi.yaml.
+			Motifs:        motifs,
+			MotifMatch:    motifMatch,
+			MinConfidence: minConfidence,
+			MinSimilarity: minSimilarity,
 			// Limit is set per fan-out round below — see `depth`.
 			Offset: 0,
 		}
@@ -323,6 +336,7 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 					Title:       e.Title,
 					Kind:        kind,
 					Type:        e.Type,
+					Motifs:      e.Motifs,
 					CommittedAt: e.CommittedAt,
 					Operation:   e.Operation,
 					Score:       e.Score,
@@ -584,6 +598,7 @@ type lensSearchItem struct {
 	Type       string         `json:"type,omitempty"`
 	Domain     []string       `json:"domain,omitempty"`
 	Entities   []string       `json:"entities,omitempty"`
+	Motifs     []string       `json:"motifs,omitempty"`
 	Confidence float64        `json:"confidence,omitempty"`
 	Source     lensFactSource `json:"source"`
 }
@@ -642,6 +657,11 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 		// Ontology-aware fan-out target selection — the same seam MCP queryFirstCall
 		// uses. A kb://-qualified path restricts to one mount (filter made
 		// repo-relative); an unqualified path applies per mount.
+		motifs, motifMatch, ok := motifParams(w, r)
+		if !ok {
+			return
+		}
+
 		targets, err := federate.ReadTargetsFor(b, qp.Get("path"))
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
@@ -669,9 +689,16 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
 			IncludeOrigins: splitCSV(qp.Get("origin")),
 			EpisodeOps:     splitCSV(qp.Get("ep")),
-			MinConfidence:  minConfidence,
-			MinSimilarity:  minSimilarity,
-			Limit:          maxLensSearchCandidates,
+			// Motif terms resolve PER MOUNT against each repo's own alias
+			// vocabulary — there is no cross-mount cluster identity. A mount
+			// that judge-merged two spellings answers for both; one that keeps
+			// them apart answers only for the exact term. Deliberate semantics
+			// (design 2026-08-28), mirrored in openapi.yaml.
+			Motifs:        motifs,
+			MotifMatch:    motifMatch,
+			MinConfidence: minConfidence,
+			MinSimilarity: minSimilarity,
+			Limit:         maxLensSearchCandidates,
 		}
 
 		// Fan out to every selected mount at its Binding-resolved branch. Any mount
@@ -724,6 +751,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 				Type:       res.Type,
 				Domain:     res.Domain,
 				Entities:   res.Entities,
+				Motifs:     res.Motifs,
 				Confidence: res.Confidence,
 				Source: lensFactSource{
 					Repo:   t.RT.RI.Name(),
