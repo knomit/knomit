@@ -55,6 +55,20 @@ function vendorChunk(id: string): string | undefined {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Relative asset URLs, so the bundle can be mounted under a path prefix.
+  // A reverse proxy (code-server's /proxy/<port>/, an nginx `location`) strips
+  // the prefix before forwarding, so the server still sees `/`-rooted paths and
+  // needs no prefix awareness — but the HTML it returns did, because vite's
+  // default `base: '/'` writes `/assets/index-<hash>.js` and the browser
+  // resolves that against the ORIGIN root, which belongs to the proxy. Every
+  // asset 404s and the page is blank.
+  //
+  // The usual objection to './' is deep links: a document at /a/b/ resolves
+  // './assets/x.js' against /a/b/, not the mount root. It does not apply here
+  // because the app has NO router — no react-router, no history.pushState — so
+  // the document URL never changes after load and is always the mount root.
+  // Adding a router later means revisiting this.
+  base: './',
   plugins: [react(), keepEmbedSentinel()],
   build: {
     rollupOptions: { output: { manualChunks: vendorChunk } },
