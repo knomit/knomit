@@ -89,6 +89,13 @@ type explainMotif struct {
 	// DF counts live facts carrying ANY spelling in the cluster, this one
 	// included. 1 means nothing else instantiates it yet.
 	DF int `json:"df"`
+	// ClusterKey is the cluster's STABLE identity — what GET /motifs/{key}
+	// accepts and what state may be keyed on. Canonical flips with usage;
+	// this does not.
+	ClusterKey string `json:"cluster_key,omitempty"`
+	// MemberCount is how many spellings resolve to this cluster (this one
+	// included). 1 means no aliasing — the common case.
+	MemberCount int `json:"member_count,omitempty"`
 	// Siblings are other facts carrying the cluster, most relevant first and
 	// bounded. Empty at df 1.
 	Siblings []string `json:"siblings,omitempty"`
@@ -660,8 +667,10 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 
 // explainMotifsShown bounds the sibling list per motif. A PROMPT/RESPONSE-SIZE
 // BUDGET: explain answers about one fact, and an unbounded sibling list on a
-// popular motif would bury it.
-const explainMotifsShown = 5
+// popular motif would bury it. Raised 5→8 with the REST vocabulary surface:
+// member_count tells a reader the list is a preview, and the full cluster is
+// one GET /motifs/{cluster_key} away.
+const explainMotifsShown = 8
 
 // explainMotifs resolves a fact's motifs for the §6 explain surface.
 //
@@ -674,6 +683,10 @@ func explainMotifs(ctx context.Context, rt repos.ReadTarget, s mcpStore, parsed 
 		return nil
 	}
 	branch := rt.Branch
+	// Read ONCE for the whole fact, not per motif: the alias table is the same
+	// table for every entry, and a fact carrying five motifs would otherwise
+	// read it five times.
+	aliasRows, aliasErr := s.motifs.AliasRows(ctx, branch)
 	out := make([]explainMotif, 0, len(parsed.Motifs))
 	for _, m := range parsed.Motifs {
 		entry := explainMotif{Motif: m}
@@ -688,6 +701,21 @@ func explainMotifs(ctx context.Context, rt repos.ReadTarget, s mcpStore, parsed 
 		if err != nil {
 			out = append(out, entry)
 			continue
+		}
+		entry.ClusterKey = key
+		// Member count from the alias table; an unresolved cluster has no
+		// rows and is the singleton it degrades to everywhere else.
+		entry.MemberCount = 1
+		if aliasErr == nil {
+			n := 0
+			for _, row := range aliasRows {
+				if row.ClusterKey == key {
+					n++
+				}
+			}
+			if n > 0 {
+				entry.MemberCount = n
+			}
 		}
 		if def, ok, dErr := s.motifs.Definition(ctx, branch, key); dErr == nil && ok {
 			entry.Definition = def
