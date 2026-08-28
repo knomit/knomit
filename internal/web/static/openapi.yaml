@@ -562,6 +562,8 @@ paths:
         - { name: exclude_kind,   in: query, description: CSV, schema: { type: string } }
         - { name: origin,         in: query, description: CSV, schema: { type: string } }
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
+        - $ref: "#/components/parameters/MotifFilter"
+        - $ref: "#/components/parameters/MotifMatchTier"
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
       responses:
         "200":
@@ -811,6 +813,8 @@ paths:
         - { name: exclude_kind,   in: query, description: CSV, schema: { type: string } }
         - { name: origin,         in: query, description: CSV, schema: { type: string } }
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
+        - $ref: "#/components/parameters/MotifFilter"
+        - $ref: "#/components/parameters/MotifMatchTier"
       responses:
         "200":
           description: Collection of search results
@@ -892,6 +896,76 @@ paths:
           content:
             application/hal+json:
               schema: { $ref: "#/components/schemas/FactsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/motifs:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [stats, search]
+      summary: Motif vocabulary (one entry per cluster)
+      description: |
+        The branch's resolved motif vocabulary: one entry per CLUSTER, not per
+        spelling, most frequent first. Two spellings of one mechanism are one
+        entry, with `members` listing both.
+
+        On a corpus whose alias rebuild never ran, every spelling is its own
+        singleton cluster — an empty alias table degrades to singletons here,
+        it does not produce an empty vocabulary.
+
+        Motif clusters do not appear in `/stats`; this endpoint is the
+        vocabulary surface.
+      operationId: listMotifs
+      parameters:
+        - { name: q,      in: query, description: "Case-insensitive substring narrow over member spellings AND definition text. `count` reflects the narrowed total.", schema: { type: string } }
+        - { name: sort,   in: query, description: "`df` (document frequency desc, ties by canonical asc) or `name` (canonical asc). Any other value is a 400.", schema: { type: string, enum: [df, name], default: df } }
+        - { name: limit,  in: query, description: "Page size. Values above the maximum are clamped; zero, negative, or non-integer is a 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, description: "Non-negative; negative or non-integer is 400.", schema: { type: integer, default: 0, minimum: 0 } }
+      responses:
+        "200":
+          description: Motif vocabulary page with a health summary
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/MotifsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/motifs/{key}:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+      - name: key
+        in: path
+        required: true
+        description: |
+          A `cluster_key` or any member spelling; the response and its `self`
+          link always carry the `cluster_key`. A spelling in no cluster is a
+          404.
+        schema: { type: string }
+    get:
+      tags: [stats, search]
+      summary: Motif cluster detail (carriers, aliases, pivot)
+      description: |
+        The collection entry plus a recency-ordered preview of the facts
+        carrying the cluster and the audit trail of how each member spelling
+        joined it.
+
+        `carriers` is a PREVIEW of the same query `_links.facts` performs, so
+        the two can never disagree; `carrier_count` is the corpus total, not
+        the preview length.
+      operationId: getMotifCluster
+      parameters:
+        - { name: limit, in: query, description: "Carrier preview size. Values above the maximum are clamped; zero, negative, or non-integer is a 400.", schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+      responses:
+        "200":
+          description: Motif cluster
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/MotifClusterDetail" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -1617,6 +1691,8 @@ paths:
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
         - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+        - $ref: "#/components/parameters/MotifFilter"
+        - $ref: "#/components/parameters/LensMotifMatchTier"
       responses:
         "200":
           description: Deduped union of facts
@@ -1697,6 +1773,8 @@ paths:
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
         - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+        - $ref: "#/components/parameters/MotifFilter"
+        - $ref: "#/components/parameters/LensMotifMatchTier"
       responses:
         "200":
           description: Fused union of search results
@@ -1906,6 +1984,48 @@ components:
         mount-qualified `kb://<id12>/kb/…` path. Qualified paths must be
         percent-encoded by the client.
       schema: { type: string }
+    MotifFilter:
+      name: motifs
+      in: query
+      description: |
+        CSV of motif spellings. Filters to facts carrying a matching motif —
+        the aspect axis: the general regularity a fact instantiates, independent
+        of its subject.
+
+        Matching is CLUSTER-level by default: a spelling resolves through the
+        repo's alias vocabulary, so a corpus that spells one mechanism two ways
+        answers for both. On a corpus whose alias rebuild never ran, every
+        spelling is its own singleton cluster and the filter is exact.
+
+        A motif filter that resolves to nothing matches nothing — it never
+        silently widens to the unfiltered set.
+      schema: { type: string }
+    MotifMatchTier:
+      name: motif_match
+      in: query
+      description: |
+        Strictness of `motifs` matching. This surface accepts `exact` (the
+        default), `stem`, and `token-2`; any other value is a 400, never a
+        silent downgrade. Looser tiers exist for a reader who types them in a
+        deliberate session and are not reachable from the web API.
+
+        Inert without `motifs`.
+      schema: { type: string, enum: [exact, stem, "token-2"], default: exact }
+    LensMotifMatchTier:
+      name: motif_match
+      in: query
+      description: |
+        Strictness of `motifs` matching. This surface accepts `exact` (the
+        default), `stem`, and `token-2`; any other value is a 400, never a
+        silent downgrade.
+
+        Motif terms resolve per mount against each repo's own alias vocabulary;
+        there is no cross-mount cluster identity. A mount that merged two
+        spellings answers for both; one that keeps them apart answers only for
+        the exact term.
+
+        Inert without `motifs`.
+      schema: { type: string, enum: [exact, stem, "token-2"], default: exact }
     LensRepoNarrow:
       name: repo
       in: query
@@ -2156,6 +2276,7 @@ components:
         confidence:   { type: number, format: double }
         committed_at: { type: string, format: date-time }
         operation:    { type: string }
+        motifs:       { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         _links:       { $ref: "#/components/schemas/LinkMap" }
 
     RefView:
@@ -2336,6 +2457,103 @@ components:
                 domains:
                   type: array
                   items: { $ref: "#/components/schemas/DomainEntry" }
+
+    MotifVocabularyHealth:
+      type: object
+      description: Diagnostic summary of the branch's motif vocabulary. Nothing branches on it.
+      required: [clusters, recurring, mints, links, epistemic_recurring, recurrence_rate, mint_to_link_ratio]
+      properties:
+        clusters:            { type: integer, description: Size of the resolved vocabulary. }
+        recurring:           { type: integer, description: "Clusters with df >= 2 — the ones that actually connect two facts." }
+        mints:               { type: integer, description: "One per cluster: every cluster was minted exactly once." }
+        links:               { type: integer, description: "Every SUBSEQUENT use — total motif instances minus the mints." }
+        epistemic_recurring: { type: integer, description: "Clusters with df >= 2 counting EPISTEMIC carriers only. Diverges from `recurring`, sometimes by a lot." }
+        recurrence_rate:     { type: number, format: double, description: Fraction of clusters carried by more than one fact. }
+        mint_to_link_ratio:  { type: number, format: double, description: "Mints per link. Above 1 means the vocabulary is growing faster than it is reused." }
+
+    MotifClusterEntry:
+      type: object
+      description: |
+        One motif cluster. `cluster_key` is the STABLE identity and what URLs
+        and persisted state key on; `canonical` is the df-elected
+        representative spelling and flips as usage shifts — display it, never
+        key on it.
+      required: [cluster_key, canonical, members, df, definition_state, _links]
+      properties:
+        cluster_key: { type: string, description: Stable cluster identity. }
+        canonical:   { type: string, description: Representative spelling, for display only. }
+        members:     { type: array, items: { type: string }, description: Every spelling resolving to this cluster, sorted. }
+        df:          { type: integer, description: Live facts carrying any member, counted once each. }
+        definition:  { type: string, description: "The cluster's glossary sentence. Absent when none was ever authored; PRESENT when stale (a stale sentence is served as interim rather than gapping the cluster)." }
+        definition_state:
+          type: string
+          enum: [current, stale, missing]
+          description: |
+            Freshness of `definition`, derived by comparing the membership it
+            was authored against with the current membership — not a flag
+            anything has to remember to set. `stale` means the sentence
+            describes a different membership and is served as interim.
+        _links: { $ref: "#/components/schemas/LinkMap" }
+
+    MotifCarrier:
+      type: object
+      required: [path, title, _links]
+      properties:
+        path:         { type: string }
+        title:        { type: string }
+        type:         { type: string }
+        committed_at: { type: integer, format: int64, description: Unix seconds. }
+        _links:       { $ref: "#/components/schemas/LinkMap" }
+
+    MotifAlias:
+      type: object
+      description: |
+        One member spelling with the audit trail of how it joined the cluster.
+        `method` and `rationale` are absent on an unresolved (singleton)
+        corpus — the spelling is a member because nothing has grouped it yet.
+      required: [motif]
+      properties:
+        motif:     { type: string }
+        method:    { type: string, enum: [mechanical, judge], description: How the spelling joined the cluster. }
+        rationale: { type: string, description: "The written rationale, present on judge merges." }
+
+    MotifClusterDetail:
+      allOf:
+        - $ref: "#/components/schemas/MotifClusterEntry"
+        - type: object
+          required: [carrier_count, carriers, aliases]
+          properties:
+            carrier_count:
+              type: integer
+              description: "Total live facts carrying the cluster — the CORPUS count, not the length of `carriers`."
+            carriers:
+              type: array
+              description: |
+                Recency-ordered preview of the carrying facts, bounded by
+                `limit`. This is the same query `_links.facts` performs, so the
+                preview cannot disagree with the full listing.
+              items: { $ref: "#/components/schemas/MotifCarrier" }
+            aliases:
+              type: array
+              items: { $ref: "#/components/schemas/MotifAlias" }
+            _links:
+              allOf:
+                - $ref: "#/components/schemas/LinkMap"
+                - description: "Carries `self` (always the cluster_key) and `facts` (the full pivot: `/facts?motifs=<members>&motif_match=exact`)."
+
+    MotifsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          required: [health]
+          properties:
+            health: { $ref: "#/components/schemas/MotifVocabularyHealth" }
+            _embedded:
+              type: object
+              properties:
+                motifs:
+                  type: array
+                  items: { $ref: "#/components/schemas/MotifClusterEntry" }
 
     Highlight:
       type: object
@@ -2959,6 +3177,7 @@ components:
         type:         { type: string }
         committed_at: { type: integer, format: int64 }
         operation:    { type: string }
+        motifs:       { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         score:        { type: number, format: double }
         source:       { $ref: "#/components/schemas/LensSource" }
 
@@ -2996,6 +3215,7 @@ components:
         type:       { type: string }
         domain:     { type: array, items: { type: string } }
         entities:   { type: array, items: { type: string } }
+        motifs:     { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         confidence: { type: number, format: double }
         source:     { $ref: "#/components/schemas/LensSource" }
 
