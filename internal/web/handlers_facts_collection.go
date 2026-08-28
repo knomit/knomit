@@ -52,6 +52,7 @@ type recentFactItem struct {
 	Type        string      `json:"type,omitempty"`
 	Domain      []string    `json:"domain,omitempty"`
 	Entities    []string    `json:"entities,omitempty"`
+	Motifs      []string    `json:"motifs,omitempty"`
 	CommittedAt int64       `json:"committed_at,omitempty"`
 	Operation   string      `json:"operation,omitempty"`
 	Links       hal.LinkMap `json:"_links"`
@@ -73,6 +74,10 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 			return
 		}
 		offset, ok := offsetParam(w, r)
+		if !ok {
+			return
+		}
+		motifs, motifMatch, ok := motifParams(w, r)
 		if !ok {
 			return
 		}
@@ -117,6 +122,8 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 			ExcludeKinds:   splitCSV(qp.Get("exclude_kind")),
 			IncludeOrigins: splitCSV(qp.Get("origin")),
 			EpisodeOps:     splitCSV(qp.Get("ep")),
+			Motifs:         motifs,
+			MotifMatch:     motifMatch,
 		}
 
 		entries, total, err := provider.RecentFacts(r.Context(), ri, branch, opts)
@@ -163,6 +170,7 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 				Type:        e.Type,
 				Domain:      e.Domain,
 				Entities:    e.Entities,
+				Motifs:      e.Motifs,
 				CommittedAt: e.CommittedAt,
 				Operation:   e.Operation,
 				Links:       hal.LinkMap{"self": {Href: b.Fact(repoName, a, e.Path)}},

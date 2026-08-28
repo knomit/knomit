@@ -59,6 +59,7 @@ type searchResultItem struct {
 	Type       string      `json:"type,omitempty"`
 	Domain     []string    `json:"domain,omitempty"`
 	Entities   []string    `json:"entities,omitempty"`
+	Motifs     []string    `json:"motifs,omitempty"`
 	Confidence float64     `json:"confidence,omitempty"`
 	Links      hal.LinkMap `json:"_links"`
 }
@@ -113,6 +114,10 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 		if !ok {
 			return
 		}
+		motifs, motifMatch, ok := motifParams(w, r)
+		if !ok {
+			return
+		}
 
 		q := store.SearchOptions{
 			Text:           text,
@@ -126,6 +131,8 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 			ExcludeKinds:   splitCSV(excludeKindStr),
 			IncludeOrigins: splitCSV(originStr),
 			EpisodeOps:     splitCSV(epStr),
+			Motifs:         motifs,
+			MotifMatch:     motifMatch,
 			MinConfidence:  minConfidence,
 			MinSimilarity:  minSimilarity,
 			Limit:          limit,
@@ -158,6 +165,7 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 				Type:       res.Type,
 				Domain:     res.Domain,
 				Entities:   res.Entities,
+				Motifs:     res.Motifs,
 				Confidence: res.Confidence,
 				Links:      hal.LinkMap{"self": {Href: b.Fact(repoName, a, res.Path)}},
 			}

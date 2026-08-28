@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -100,4 +101,32 @@ func selfWithQuery(base string, r *http.Request) string {
 		return base + "?" + r.URL.RawQuery
 	}
 	return base
+}
+
+// motifParams parses the motifs / motif_match query parameters shared by the
+// repo and lens search + facts collections.
+//
+// The REST surface accepts only the tiers safe outside a deliberate reader
+// session: exact (default), stem, token-2. The looser tiers are deliberately
+// not named anywhere in this package — the validation is an ALLOWLIST, and the
+// MN6 AST guard (internal/mcp/motif_surfaces_test.go) scans internal/web to
+// keep it that way. The error message therefore lists what IS accepted and
+// stays silent about what exists beyond it.
+//
+// motif_match without motifs parses fine and stays inert, matching the MCP
+// tool and the store (SearchOptions.MotifMatch does nothing without Motifs).
+func motifParams(w http.ResponseWriter, r *http.Request) (motifs []string, tier store.MotifMatchTier, ok bool) {
+	qp := r.URL.Query()
+	motifs = splitCSV(qp.Get("motifs"))
+	switch v := qp.Get("motif_match"); v {
+	case "":
+		tier = store.MotifMatchExact
+	case string(store.MotifMatchExact), string(store.MotifMatchStem), string(store.MotifMatchToken2):
+		tier = store.MotifMatchTier(v)
+	default:
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+			`invalid motif_match value (accepted: "exact", "stem", "token-2")`, r.URL.Path)
+		return nil, "", false
+	}
+	return motifs, tier, true
 }
