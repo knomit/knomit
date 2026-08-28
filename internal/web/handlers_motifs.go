@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -297,4 +298,166 @@ func motifClusterMatches(c store.MotifCluster, definition, q string) bool {
 		}
 	}
 	return strings.Contains(strings.ToLower(definition), q)
+}
+
+// Carrier preview bounds for the cluster detail. The preview reuses the exact
+// pivot query (RecentFacts + Motifs filter), so the full list is always one
+// _links.facts away.
+const (
+	motifCarriersDefaultLimit = 20
+	motifCarriersMaxLimit     = 100
+)
+
+// motifCarrierItem is one carrier fact in the detail preview, recency-ordered
+// like the /facts pivot it previews.
+type motifCarrierItem struct {
+	Path        string      `json:"path"`
+	Title       string      `json:"title"`
+	Type        string      `json:"type,omitempty"`
+	CommittedAt int64       `json:"committed_at,omitempty"`
+	Links       hal.LinkMap `json:"_links"`
+}
+
+// motifAliasItem is one member spelling with the audit trail of how it joined
+// the cluster. Method/rationale are absent on an unresolved (singleton)
+// corpus — the spelling is a member because nothing has grouped it yet.
+type motifAliasItem struct {
+	Motif     string `json:"motif"`
+	Method    string `json:"method,omitempty"`
+	Rationale string `json:"rationale,omitempty"`
+}
+
+// motifDetailView is the cluster detail envelope.
+type motifDetailView struct {
+	ClusterKey      string             `json:"cluster_key"`
+	Canonical       string             `json:"canonical"`
+	Members         []string           `json:"members"`
+	DF              int                `json:"df"`
+	Definition      string             `json:"definition,omitempty"`
+	DefinitionState string             `json:"definition_state"`
+	CarrierCount    int                `json:"carrier_count"`
+	Carriers        []motifCarrierItem `json:"carriers"`
+	Aliases         []motifAliasItem   `json:"aliases"`
+	Links           hal.LinkMap        `json:"_links"`
+}
+
+// handleHALMotifCluster serves GET /repos/{repo}/branches/{branch}/motifs/{key}.
+//
+// {key} accepts a cluster_key OR any member spelling; spellings resolve
+// through the store's ClusterKey (which degrades to the mechanical key on an
+// unrebuilt corpus — C2), and the self link always carries the cluster_key
+// (C1). 404 only when the resolved key matches no cluster in the vocabulary.
+func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts factsCollectionProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		repoName := chi.URLParam(r, "repo")
+		ri := repos.RepoFromContext(r.Context())
+		branch := BranchFromContext(r.Context())
+		a := hal.Anchor{Branch: branch}
+		rawKey := chi.URLParam(r, "key")
+
+		carrierLimit := motifCarriersDefaultLimit
+		if v := r.URL.Query().Get("limit"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 1 {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+					"invalid limit value", r.URL.Path)
+				return
+			}
+			carrierLimit = min(n, motifCarriersMaxLimit)
+		}
+
+		clusters, err := provider.Clusters(r.Context(), ri, branch)
+		if err != nil {
+			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
+			return
+		}
+		byKey := make(map[string]store.MotifCluster, len(clusters))
+		for _, c := range clusters {
+			byKey[c.ClusterKey] = c
+		}
+
+		cluster, found := byKey[rawKey]
+		if !found {
+			// Not a cluster key — treat it as a spelling and resolve.
+			key, kerr := provider.ClusterKey(r.Context(), ri, branch, rawKey)
+			if kerr != nil {
+				writeStoreError(w, r, kerr, "Failed to load motif cluster", branch)
+				return
+			}
+			cluster, found = byKey[key]
+		}
+		if !found {
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown motif",
+				`no motif cluster or spelling "`+rawKey+`" in this branch's vocabulary`, r.URL.Path)
+			return
+		}
+
+		defs, err := provider.Definitions(r.Context(), ri, branch, []string{cluster.ClusterKey})
+		if err != nil {
+			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
+			return
+		}
+		st, defined := defs[cluster.ClusterKey]
+
+		// Carriers ARE the pivot: same filter, same recency order, same code
+		// path as /facts?motifs=<members>&motif_match=exact, so the preview
+		// cannot disagree with the full listing it links to. Passing every
+		// member spelling keeps the union correct on an unrebuilt corpus,
+		// where exact-tier resolution knows nothing about siblings (C2).
+		entries, total, err := facts.RecentFacts(r.Context(), ri, branch, store.SearchOptions{
+			Motifs:     cluster.Members,
+			MotifMatch: store.MotifMatchExact,
+			Limit:      carrierLimit,
+		})
+		if err != nil {
+			writeStoreError(w, r, err, "Failed to load motif carriers", branch)
+			return
+		}
+		carriers := make([]motifCarrierItem, 0, len(entries))
+		for _, e := range entries {
+			carriers = append(carriers, motifCarrierItem{
+				Path:        e.Path,
+				Title:       e.Title,
+				Type:        e.Type,
+				CommittedAt: e.CommittedAt,
+				Links:       hal.LinkMap{"self": {Href: b.Fact(repoName, a, e.Path)}},
+			})
+		}
+
+		aliasRows, err := provider.AliasRows(r.Context(), ri, branch)
+		if err != nil {
+			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
+			return
+		}
+		aliases := make([]motifAliasItem, 0, len(cluster.Members))
+		for _, m := range cluster.Members {
+			item := motifAliasItem{Motif: m}
+			if row, ok := aliasRows[m]; ok && row.ClusterKey == cluster.ClusterKey {
+				item.Method = row.Method
+				item.Rationale = row.Rationale
+			}
+			aliases = append(aliases, item)
+		}
+
+		motifsBase := b.Branch(repoName, a) + "/motifs"
+		pivot := url.Values{}
+		pivot.Set("motifs", strings.Join(cluster.Members, ","))
+		pivot.Set("motif_match", string(store.MotifMatchExact))
+
+		hal.WriteHAL(w, http.StatusOK, motifDetailView{
+			ClusterKey:      cluster.ClusterKey,
+			Canonical:       cluster.CanonicalID,
+			Members:         cluster.Members,
+			DF:              cluster.DF,
+			Definition:      st.Definition,
+			DefinitionState: definitionState(st, defined),
+			CarrierCount:    total,
+			Carriers:        carriers,
+			Aliases:         aliases,
+			Links: hal.LinkMap{
+				"self":  {Href: motifsBase + "/" + cluster.ClusterKey},
+				"facts": {Href: b.Branch(repoName, a) + "/facts?" + pivot.Encode()},
+			},
+		})
+	}
 }

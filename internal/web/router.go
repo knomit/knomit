@@ -202,6 +202,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 				r.Get("/domains", handleHALDomains(b, p.domains))
 				r.Get("/domains/{name}", handleHALDomainFacts(b, p.domains))
 				r.Get("/motifs", handleHALMotifs(b, p.motifs))
+				r.Get("/motifs/{key}", handleHALMotifCluster(b, p.motifs, p.factsCollection))
 				r.Get("/stats", handleHALStats(b, p.stats))
 				r.Get("/events", handleHALEvents())
 

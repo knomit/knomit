@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"knomit/internal/repos"
@@ -277,4 +278,227 @@ func containsSub(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// ── cluster detail ────────────────────────────────────────────────────────────
+
+// motifDetailBody mirrors the cluster detail wire shape.
+type motifDetailBody struct {
+	ClusterKey      string   `json:"cluster_key"`
+	Canonical       string   `json:"canonical"`
+	Members         []string `json:"members"`
+	DF              int      `json:"df"`
+	Definition      string   `json:"definition"`
+	DefinitionState string   `json:"definition_state"`
+	CarrierCount    int      `json:"carrier_count"`
+	Carriers        []struct {
+		Path        string `json:"path"`
+		Title       string `json:"title"`
+		Type        string `json:"type"`
+		CommittedAt int64  `json:"committed_at"`
+	} `json:"carriers"`
+	Aliases []struct {
+		Motif     string `json:"motif"`
+		Method    string `json:"method"`
+		Rationale string `json:"rationale"`
+	} `json:"aliases"`
+	Links struct {
+		Self struct {
+			Href string `json:"href"`
+		} `json:"self"`
+		Facts struct {
+			Href string `json:"href"`
+		} `json:"facts"`
+	} `json:"_links"`
+}
+
+func motifDetailServer(t *testing.T, stub *stubMotifsProvider, facts *stubFactsCollectionProvider) http.Handler {
+	t.Helper()
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			motifs:          stub,
+			factsCollection: facts,
+		},
+	}
+	return s.NewAPIRouter()
+}
+
+func decodeMotifDetail(t *testing.T, rec *httptest.ResponseRecorder) motifDetailBody {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body motifDetailBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	return body
+}
+
+func driftClusterStub() *stubMotifsProvider {
+	return &stubMotifsProvider{
+		clusters: []store.MotifCluster{{
+			ClusterKey:  "drift-config",
+			CanonicalID: "config-drift",
+			Members:     []string{"config-drift", "configuration-drifts"},
+			DF:          4,
+		}},
+		defs: map[string]store.MotifDefinitionStatus{
+			"drift-config": {Definition: "Configured state diverges from applied state."},
+		},
+		aliases: map[string]store.AliasRow{
+			"config-drift": {
+				CanonicalID: "config-drift", ClusterKey: "drift-config",
+				Method: "mechanical",
+			},
+			"configuration-drifts": {
+				CanonicalID: "config-drift", ClusterKey: "drift-config",
+				Method: "judge", Rationale: "same mechanism",
+			},
+		},
+	}
+}
+
+func driftCarriers() *stubFactsCollectionProvider {
+	return &stubFactsCollectionProvider{
+		entries: []store.RecentFactEntry{
+			{Path: "kb/a.md", Title: "Newest carrier", Type: "observation", CommittedAt: 200},
+			{Path: "kb/b.md", Title: "Older carrier", Type: "policy", CommittedAt: 100},
+		},
+		// The corpus holds more carriers than this preview page shows.
+		total: 4,
+	}
+}
+
+func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
+	stub, facts := driftClusterStub(), driftCarriers()
+	r := motifDetailServer(t, stub, facts)
+	body := decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config"))
+
+	if body.ClusterKey != "drift-config" || body.Canonical != "config-drift" {
+		t.Errorf("identity: got %q/%q", body.ClusterKey, body.Canonical)
+	}
+	if len(body.Members) != 2 || body.DF != 4 {
+		t.Errorf("members/df: got %v / %d", body.Members, body.DF)
+	}
+	if body.DefinitionState != "current" {
+		t.Errorf("definition_state: got %q, want current", body.DefinitionState)
+	}
+	if len(body.Carriers) != 2 {
+		t.Fatalf("carriers: got %d, want 2", len(body.Carriers))
+	}
+	if body.Carriers[0].Path != "kb/a.md" || body.Carriers[0].Title != "Newest carrier" {
+		t.Errorf("carrier 0: got %+v", body.Carriers[0])
+	}
+	// carrier_count is the CORPUS total, not the page length — a preview that
+	// reported its own length would claim the cluster has two carriers.
+	if body.CarrierCount != 4 {
+		t.Errorf("carrier_count: got %d, want 4 (the store's total)", body.CarrierCount)
+	}
+	if len(body.Aliases) != 2 {
+		t.Fatalf("aliases: got %d, want 2", len(body.Aliases))
+	}
+	byMotif := map[string]string{}
+	for _, a := range body.Aliases {
+		byMotif[a.Motif] = a.Method + "/" + a.Rationale
+	}
+	if byMotif["config-drift"] != "mechanical/" {
+		t.Errorf("mechanical row: got %q", byMotif["config-drift"])
+	}
+	if byMotif["configuration-drifts"] != "judge/same mechanism" {
+		t.Errorf("judge row: got %q", byMotif["configuration-drifts"])
+	}
+	if !containsSub(body.Links.Self.Href, "/motifs/drift-config") {
+		t.Errorf("self: got %q", body.Links.Self.Href)
+	}
+	wantFacts := "/facts?motif_match=exact&motifs=config-drift%2Cconfiguration-drifts"
+	if !containsSub(body.Links.Facts.Href, wantFacts) {
+		t.Errorf("facts link: got %q, want suffix %q", body.Links.Facts.Href, wantFacts)
+	}
+
+	// The carriers preview IS the pivot query: same filter, same tier, so the
+	// preview can never disagree with the listing it links to.
+	if got := strings.Join(facts.lastOpts.Motifs, ","); got != "config-drift,configuration-drifts" {
+		t.Errorf("carriers query Motifs: got %v, want every member spelling", facts.lastOpts.Motifs)
+	}
+	if facts.lastOpts.MotifMatch != store.MotifMatchExact {
+		t.Errorf("carriers query MotifMatch: got %q, want exact", facts.lastOpts.MotifMatch)
+	}
+	if facts.lastOpts.Limit != 20 {
+		t.Errorf("carriers query Limit: got %d, want the default 20", facts.lastOpts.Limit)
+	}
+}
+
+func TestHandleHALMotifCluster_BySpelling(t *testing.T) {
+	stub := driftClusterStub()
+	stub.clusterKeys = map[string]string{"configuration-drifts": "drift-config"}
+	r := motifDetailServer(t, stub, driftCarriers())
+	body := decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/configuration-drifts"))
+
+	if body.ClusterKey != "drift-config" {
+		t.Errorf("cluster_key: got %q, want drift-config", body.ClusterKey)
+	}
+	// The self link canonicalizes to the cluster key regardless of how the
+	// reader arrived (C1).
+	if !containsSub(body.Links.Self.Href, "/motifs/drift-config") {
+		t.Errorf("self: got %q, want the cluster key", body.Links.Self.Href)
+	}
+}
+
+func TestHandleHALMotifCluster_UnknownIs404(t *testing.T) {
+	r := motifDetailServer(t, driftClusterStub(), driftCarriers())
+	rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/never-heard-of-it")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// An unrebuilt corpus has an empty alias table: every spelling is its own
+// singleton cluster. That degradation is a 200 with one member and no audit
+// rows — never a 404 (C2).
+func TestHandleHALMotifCluster_SingletonOnUnrebuiltCorpus(t *testing.T) {
+	stub := &stubMotifsProvider{
+		clusters: []store.MotifCluster{{
+			ClusterKey: "silent-fallback", CanonicalID: "silent-fallback",
+			Members: []string{"silent-fallback"}, DF: 1,
+		}},
+		aliases: map[string]store.AliasRow{},
+	}
+	rec := getMotifs(t, motifDetailServer(t, stub, driftCarriers()),
+		"/repos/alpha/branches/agent:test/motifs/silent-fallback")
+	body := decodeMotifDetail(t, rec)
+
+	if len(body.Members) != 1 || body.Members[0] != "silent-fallback" {
+		t.Errorf("members: got %v", body.Members)
+	}
+	if body.DefinitionState != "missing" {
+		t.Errorf("definition_state: got %q, want missing", body.DefinitionState)
+	}
+	if len(body.Aliases) != 1 || body.Aliases[0].Method != "" {
+		t.Errorf("aliases: got %+v, want one member with no audit row", body.Aliases)
+	}
+	if !containsSub(rec.Body.String(), `"aliases":[`) {
+		t.Errorf("aliases must serialize as an array, not null: %s", rec.Body.String())
+	}
+}
+
+func TestHandleHALMotifCluster_CarriersLimitParam(t *testing.T) {
+	stub := driftClusterStub()
+	facts := driftCarriers()
+	r := motifDetailServer(t, stub, facts)
+
+	decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=5"))
+	if facts.lastOpts.Limit != 5 {
+		t.Errorf("limit=5: got %d", facts.lastOpts.Limit)
+	}
+
+	decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=500"))
+	if facts.lastOpts.Limit != 100 {
+		t.Errorf("limit=500: got %d, want the 100 ceiling", facts.lastOpts.Limit)
+	}
+
+	if rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=0"); rec.Code != http.StatusBadRequest {
+		t.Errorf("limit=0: got %d, want 400", rec.Code)
+	}
 }
