@@ -178,6 +178,12 @@ func TestHandleHALMotifs_ReturnsRankedCollection(t *testing.T) {
 	}
 }
 
+// TWO requests against ONE stub, deliberately: the name sort must order a COPY,
+// never the slice the provider handed over. Sorting in place would leave the
+// stub's own cluster list permanently reordered, so the df-desc request that
+// follows would answer in name order — which is exactly what a reader of a
+// caching provider would hit in production. Deleting the copy in
+// handlers_motifs.go fails the second half of this test.
 func TestHandleHALMotifs_SortName(t *testing.T) {
 	stub := &stubMotifsProvider{clusters: threeClusters()}
 	r := motifsServer(t, stub)
@@ -187,6 +193,17 @@ func TestHandleHALMotifs_SortName(t *testing.T) {
 	for i, e := range body.Embedded.Motifs {
 		if e.Canonical != want[i] {
 			t.Errorf("entry %d canonical: got %q, want %q", i, e.Canonical, want[i])
+		}
+	}
+
+	// The default (df-desc) order must survive the name-sorted request above.
+	body = decodeMotifs(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs"))
+	wantKeys := []string{"drift-config", "fallback-silent", "creep-scope"}
+	for i, e := range body.Embedded.Motifs {
+		if e.ClusterKey != wantKeys[i] {
+			t.Fatalf("entry %d after a ?sort=name request: got %q, want %q — "+
+				"the name sort reordered the provider's own slice",
+				i, e.ClusterKey, wantKeys[i])
 		}
 	}
 
