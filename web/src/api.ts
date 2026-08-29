@@ -895,6 +895,33 @@ function lensBase(name: string): string {
   return apiUrl(`/api/v1/lenses/${name}`);
 }
 
+/** How strictly a motif filter matches. `exact` already matches at the CLUSTER
+ *  level — pivoting on one spelling includes facts carrying any aliased member —
+ *  so the two looser tiers are for deliberate exploration, not for reaching the
+ *  rest of a cluster. The server rejects anything looser than these. */
+export type MotifMatch = 'exact' | 'stem' | 'token-2';
+
+/** The motif filter, written once for the four list endpoints that take it.
+ *
+ *  CSV in a single param, like `type` and `domain`: the server reads it with
+ *  splitCSV, so two motif chips WIDEN the match. Four hand-written copies would
+ *  be four chances to drift, and api.recent's own comment below records what one
+ *  such drift already cost — two type chips collapsing to `undefined` and
+ *  silently removing all type filtering, on a list that still rendered fine.
+ *
+ *  `exact` is the server's default and is deliberately NOT sent. A widened list
+ *  contains rows that are not carriers of the motif, so the widened state has to
+ *  be legible; an always-present `motif_match=exact` would put the ordinary case
+ *  and the loosened one in the same shape.
+ *
+ *  A tier without motifs is meaningless, so both are gated on the CSV existing.
+ */
+function setMotifParams(p: URLSearchParams, opts?: { motifs?: string[]; motifMatch?: MotifMatch }): void {
+  if (!opts?.motifs?.length) return;
+  p.set('motifs', opts.motifs.join(','));
+  if (opts.motifMatch && opts.motifMatch !== 'exact') p.set('motif_match', opts.motifMatch);
+}
+
 // listLensFacts GETs /api/v1/lenses/{lens}/facts — the recency-ordered, deduped
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
@@ -902,6 +929,7 @@ function lensBase(name: string): string {
 async function listLensFacts(lens: string, opts: {
   path?: string; query?: string; limit?: number; offset?: number; repos?: string[];
   types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+  motifs?: string[]; motifMatch?: MotifMatch;
 }): Promise<{ facts: LensFactEntry[]; total: number }> {
   const p = new URLSearchParams();
   if (opts.path) p.set('path', opts.path);
@@ -918,6 +946,7 @@ async function listLensFacts(lens: string, opts: {
   if (opts.eps?.length) p.set('ep', opts.eps.join(','));
   if (opts.domains?.length) p.set('domain', opts.domains.join(','));
   if (opts.entities?.length) p.set('entities', opts.entities.join(','));
+  setMotifParams(p, opts);
   for (const repo of opts.repos ?? []) p.append('repo', repo);
   const qs = p.toString();
   return fetchJSON<{ facts: LensFactEntry[]; total: number }>(`${lensBase(lens)}/facts${qs ? `?${qs}` : ''}`);
@@ -932,7 +961,8 @@ async function listLensFacts(lens: string, opts: {
 // a bare chip goes to listLensFacts where it can be paged and counted.
 async function lensSearch(
   lens: string, q: string, repos?: string[],
-  opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] },
+  opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+           motifs?: string[]; motifMatch?: MotifMatch },
 ): Promise<(SearchResult & { source: LensSource })[]> {
   const p = new URLSearchParams();
   if (q) p.set('q', q);
@@ -943,6 +973,7 @@ async function lensSearch(
   if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
   if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
   if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
+  setMotifParams(p, opts);
   for (const repo of repos ?? []) p.append('repo', repo);
   const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[] }>(`${lensBase(lens)}/search?${p}`);
   return data.results ?? [];
@@ -1132,7 +1163,8 @@ export const api = {
   },
 
   search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,
-    opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
+    opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+             motifs?: string[]; motifMatch?: MotifMatch }
   ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const allDomains = [...domains, ...(opts?.domains || [])];
@@ -1148,6 +1180,7 @@ export const api = {
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
     if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
+    setMotifParams(p, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => {
       // HAL CollectionView: {_embedded: {results: [...]}}
       const results: SearchResult[] = data._embedded?.results || data.results || [];
@@ -1225,7 +1258,8 @@ export const api = {
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
-    opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
+    opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[];
+             motifs?: string[]; motifMatch?: MotifMatch }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
@@ -1242,6 +1276,7 @@ export const api = {
     if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
     if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
+    setMotifParams(p, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/facts?${p}`).then(data => ({
       // HAL CollectionView: count = total, _embedded.facts = items
       facts: data._embedded?.facts || data.facts || [],
