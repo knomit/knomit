@@ -42,6 +42,7 @@ type storeProviders struct {
 	factSub          factSubProvider
 	stats            statsProvider
 	domains          domainsProvider
+	motifs           motifsProvider
 	completions      completionsProvider
 	factsCollection  factsCollectionProvider
 	activity         activityProvider
@@ -72,6 +73,9 @@ func (p storeProviders) withDefaults() storeProviders {
 	}
 	if p.search == nil {
 		p.search = defaultSearchProvider{}
+	}
+	if p.motifs == nil {
+		p.motifs = defaultMotifsProvider{}
 	}
 	if p.commits == nil {
 		p.commits = defaultCommitsProvider{}

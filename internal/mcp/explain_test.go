@@ -547,3 +547,100 @@ func TestClassifyRefs_EmptySlicesAreNonNil(t *testing.T) {
 	require.Empty(t, cr.Local)
 	require.Empty(t, cr.External)
 }
+
+// expMotif mirrors the explainMotif wire shape. cluster_key and member_count
+// are what let an agent go fact → cluster → REST detail / precise pivot; the
+// pointer on MemberCount distinguishes "key absent" from "present and zero".
+type expMotif struct {
+	Motif       string   `json:"motif"`
+	Canonical   string   `json:"canonical"`
+	Definition  string   `json:"definition"`
+	DF          int      `json:"df"`
+	ClusterKey  string   `json:"cluster_key"`
+	MemberCount *int     `json:"member_count"`
+	Siblings    []string `json:"siblings"`
+}
+
+// writeExplainFactMotifs is writeExplainFact with motifs attached.
+func writeExplainFactMotifs(t *testing.T, ctx context.Context, ri *repos.RepoInstance, path, title string, motifs []string) {
+	t.Helper()
+	f := fact.NewFact(path)
+	f.Title = title
+	f.Body = title + " body text."
+	f.Type = fact.Observation
+	f.Domain = []string{"testing"}
+	f.Confidence = 0.9
+	f.Sources = 1
+	f.Entities = []string{}
+	f.Motifs = motifs
+	content, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	ri.WithRead(func(svc *store.Service) {
+		_, werr := svc.Facts().WriteFact(ctx, explainTestBranch, path, content, "write "+path, "")
+		require.NoError(t, werr)
+	})
+}
+
+// explainMotifsOf re-reads the raw explain response for the motif block, which
+// the expFact mirror deliberately does not carry.
+func explainMotifsOf(t *testing.T, ctx context.Context, file string) []expMotif {
+	t.Helper()
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{"file": file}
+	result, err := ExplainHandler()(ctx, req)
+	require.NoError(t, err)
+	text := resultText(t, result)
+	require.False(t, result.IsError, "explain error: %s", text)
+
+	var resp struct {
+		Facts []struct {
+			Path   string     `json:"path"`
+			Motifs []expMotif `json:"motifs"`
+		} `json:"facts"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &resp), "bad JSON: %s", text)
+	for _, f := range resp.Facts {
+		if f.Path == file {
+			return f.Motifs
+		}
+	}
+	t.Fatalf("explain did not return %s: %s", file, text)
+	return nil
+}
+
+// The explain motif block carries the cluster's STABLE key and how many
+// spellings resolve to it — an agent can then pivot precisely (GET
+// /motifs/{cluster_key}) instead of guessing from the canonical, which flips.
+func TestExplainMotifs_CarryClusterKeyAndMemberCount(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	writeExplainFactMotifs(t, ctx, ri, "kb/one.md", "Drift one", []string{"config-drift"})
+	writeExplainFactMotifs(t, ctx, ri, "kb/two.md", "Drift two", []string{"config-drifts"})
+	writeExplainFactMotifs(t, ctx, ri, "kb/three.md", "Lonely", []string{"silent-fallback"})
+
+	var wantKey string
+	ri.WithRead(func(svc *store.Service) {
+		require.NoError(t, svc.Motifs().RebuildAliases(ctx, explainTestBranch))
+		k, err := svc.Motifs().ClusterKey(ctx, explainTestBranch, "config-drift")
+		require.NoError(t, err)
+		wantKey = k
+	})
+	require.NotEmpty(t, wantKey)
+
+	motifs := explainMotifsOf(t, ctx, "kb/one.md")
+	require.Len(t, motifs, 1)
+	require.Equal(t, "config-drift", motifs[0].Motif)
+	require.Equal(t, wantKey, motifs[0].ClusterKey,
+		"cluster_key must be the store's stable key, not the spelling or canonical")
+	require.NotNil(t, motifs[0].MemberCount)
+	require.Equal(t, 2, *motifs[0].MemberCount,
+		"both spellings resolve to this cluster")
+
+	// A cluster nothing was aliased into is the singleton it degrades to
+	// everywhere else — 1, never 0 or absent.
+	single := explainMotifsOf(t, ctx, "kb/three.md")
+	require.Len(t, single, 1)
+	require.NotNil(t, single[0].MemberCount)
+	require.Equal(t, 1, *single[0].MemberCount)
+}

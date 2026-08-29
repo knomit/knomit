@@ -322,6 +322,9 @@ type MotifIndex interface {
 	// Definition returns a cluster's standing definition, INCLUDING a stale one
 	// — a stale sentence is used as interim rather than gapping the cluster.
 	Definition(ctx context.Context, branch, clusterKey string) (string, bool, error)
+	// Definitions is the bulk Definition + freshness for many clusters at once.
+	// Absent key = no definition. See MotifDefinitionStatus.
+	Definitions(ctx context.Context, branch string, keys []string) (map[string]MotifDefinitionStatus, error)
 	// VocabularyHealth computes the §3.3 metrics over AUTHORED facts only.
 	// Diagnostic; nothing branches on it.
 	VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error)

@@ -1468,3 +1468,323 @@ func TestLensFanoutDepth_OverflowingOffsetStillClamps(t *testing.T) {
 		})
 	}
 }
+
+// Motif filtering fans out to EVERY mount, carrying the same terms and tier —
+// the per-mount-resolution semantics made testable. Each mount expands the
+// terms against its own alias vocabulary; the handler's job is to make sure
+// every mount is asked the same question.
+func TestLensFacts_MotifFilterReachesEveryMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	if rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=a-b&motif_match=token-2"); rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	for _, repo := range []string{"alpha", "beta"} {
+		opts, ok := stub.lastOpts[repo]
+		if !ok {
+			t.Fatalf("mount %q was never queried", repo)
+		}
+		if got := fmt.Sprint(opts.Motifs); got != "[a-b]" {
+			t.Errorf("%s Motifs: got %v, want [a-b]", repo, opts.Motifs)
+		}
+		if opts.MotifMatch != store.MotifMatchToken2 {
+			t.Errorf("%s MotifMatch: got %q, want token-2", repo, opts.MotifMatch)
+		}
+	}
+}
+
+// The tiers this surface refuses are refused before the fan-out starts — no
+// mount is queried at all (C3/MN6).
+func TestLensFacts_LooseMotifTierRejected(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=a-b&motif_match=token-1")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(stub.lastOpts) != 0 {
+		t.Errorf("mounts were queried despite the rejection: %v", stub.lastOpts)
+	}
+}
+
+// Same two properties on the relevance twin.
+func TestLensSearch_MotifFilterReachesEveryMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{}}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-2")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	for _, repo := range []string{"alpha", "beta"} {
+		opts, ok := stub.lastOpts[repo]
+		if !ok {
+			t.Fatalf("mount %q was never queried", repo)
+		}
+		if got := fmt.Sprint(opts.Motifs); got != "[a-b]" {
+			t.Errorf("%s Motifs: got %v, want [a-b]", repo, opts.Motifs)
+		}
+		if opts.MotifMatch != store.MotifMatchToken2 {
+			t.Errorf("%s MotifMatch: got %q, want token-2", repo, opts.MotifMatch)
+		}
+	}
+}
+
+func TestLensSearch_LooseMotifTierRejected(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{}}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=a-b&motif_match=token-1")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if len(stub.lastOpts) != 0 {
+		t.Errorf("mounts were queried despite the rejection: %v", stub.lastOpts)
+	}
+}
+
+// The union rows carry each fact's motifs; a motif-free row omits the key.
+func TestLensFacts_MotifsOnTheWire(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	stub := &lensFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": {
+			{Path: "kb/a.md", Title: "Carries a motif", Motifs: []string{"a-b"}, CommittedAt: 2},
+			{Path: "kb/b.md", Title: "Carries none", CommittedAt: 1},
+		},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha"}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Facts []map[string]any `json:"facts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(body.Facts) != 2 {
+		t.Fatalf("facts: got %d, want 2; body=%s", len(body.Facts), rec.Body.String())
+	}
+	if got := body.Facts[0]["motifs"]; fmt.Sprint(got) != "[a-b]" {
+		t.Errorf("row 0 motifs: got %v, want [a-b]", got)
+	}
+	if _, present := body.Facts[1]["motifs"]; present {
+		t.Errorf("motif-free row must omit the key entirely; body=%s", rec.Body.String())
+	}
+}
+
+func TestLensSearch_MotifsOnTheWire(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	withMotif := sr("kb/a.md", "Carries a motif", 10)
+	withMotif.Motifs = []string{"a-b"}
+	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{
+		"alpha": {withMotif, sr("kb/b.md", "Carries none", 5)},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha"}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Results []map[string]any `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if len(body.Results) != 2 {
+		t.Fatalf("results: got %d, want 2; body=%s", len(body.Results), rec.Body.String())
+	}
+	if got := body.Results[0]["motifs"]; fmt.Sprint(got) != "[a-b]" {
+		t.Errorf("row 0 motifs: got %v, want [a-b]", got)
+	}
+	if _, present := body.Results[1]["motifs"]; present {
+		t.Errorf("motif-free row must omit the key entirely; body=%s", rec.Body.String())
+	}
+}
+
+// motifResolvingLensStub models PER-MOUNT motif resolution: every mount holds
+// its own corpus AND its own alias table, so one query term legitimately
+// reaches two different answers. This is what the openapi
+// LensMotifMatchTier description promises, and asserting only that both mounts
+// received the same terms cannot tell it apart from write-repo-only resolution.
+type motifResolvingLensStub struct {
+	// facts[repo] is that mount's corpus; each entry carries the exact motif
+	// spelling its author wrote.
+	facts map[string][]store.RecentFactEntry
+	// aliases[repo][term] is the set of spellings that mount resolves term to.
+	// A mount that judge-merged two spellings lists both; a mount that never
+	// did resolves a term to itself, which is the store's own degradation.
+	aliases  map[string]map[string][]string
+	lastOpts map[string]store.SearchOptions
+}
+
+// resolve mirrors the store's exact tier: a query term expands to the
+// spellings THIS mount considers the same mechanism.
+func (s *motifResolvingLensStub) resolve(repo string, terms []string) map[string]bool {
+	out := map[string]bool{}
+	for _, term := range terms {
+		if expanded, ok := s.aliases[repo][term]; ok {
+			for _, sp := range expanded {
+				out[sp] = true
+			}
+			continue
+		}
+		out[term] = true
+	}
+	return out
+}
+
+func (s *motifResolvingLensStub) carriers(repo string, opts store.SearchOptions) []store.RecentFactEntry {
+	if s.lastOpts == nil {
+		s.lastOpts = map[string]store.SearchOptions{}
+	}
+	s.lastOpts[repo] = opts
+	corpus := s.facts[repo]
+	if len(opts.Motifs) == 0 {
+		return corpus
+	}
+	want := s.resolve(repo, opts.Motifs)
+	var out []store.RecentFactEntry
+	for _, e := range corpus {
+		for _, m := range e.Motifs {
+			if want[m] {
+				out = append(out, e)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (s *motifResolvingLensStub) RecentFacts(
+	_ context.Context,
+	ri *repos.RepoInstance, _ string, opts store.SearchOptions,
+) ([]store.RecentFactEntry, int, error) {
+	e := s.carriers(ri.Name(), opts)
+	return e, len(e), nil
+}
+
+func (s *motifResolvingLensStub) Search(
+	_ context.Context,
+	ri *repos.RepoInstance, _ store.Embedder, _ string, opts store.SearchOptions,
+) ([]store.SearchResult, error) {
+	var out []store.SearchResult
+	for _, e := range s.carriers(ri.Name(), opts) {
+		out = append(out, store.SearchResult{
+			FactWithBody: store.FactWithBody{
+				FactRecord: store.FactRecord{Path: e.Path, Title: e.Title, Type: "observation", Motifs: e.Motifs},
+			},
+			Score: float64(e.CommittedAt),
+		})
+	}
+	return out, nil
+}
+
+// divergentVocabularies builds the asymmetry the semantics turn on: mount alpha
+// judge-merged "config-drift" and "configuration-drifts"; mount beta never did.
+// A query for "config-drift" must therefore pull alpha's aliased fact and NOT
+// beta's identically-spelled one, while still pulling beta's exact carrier —
+// so "beta answered only exactly" is distinguishable from "beta was never
+// asked".
+func divergentVocabularies() *motifResolvingLensStub {
+	return &motifResolvingLensStub{
+		facts: map[string][]store.RecentFactEntry{
+			"alpha": {
+				{Path: "kb/alpha-aliased.md", Title: "Alpha aliased", Motifs: []string{"configuration-drifts"}, CommittedAt: 40},
+			},
+			"beta": {
+				{Path: "kb/beta-exact.md", Title: "Beta exact", Motifs: []string{"config-drift"}, CommittedAt: 30},
+				{Path: "kb/beta-aliased.md", Title: "Beta aliased", Motifs: []string{"configuration-drifts"}, CommittedAt: 20},
+			},
+		},
+		aliases: map[string]map[string][]string{
+			"alpha": {"config-drift": {"config-drift", "configuration-drifts"}},
+			// beta: no alias table at all — every spelling is its own cluster.
+		},
+	}
+}
+
+func TestLensFacts_MotifResolutionIsPerMountNotShared(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := divergentVocabularies()
+	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=config-drift")
+	body := decodeLensFacts(t, rec)
+
+	titles := map[string]bool{}
+	for _, f := range body.Facts {
+		titles[f.Title] = true
+	}
+	// alpha merged the spellings, so its aliased fact answers the query.
+	if !titles["Alpha aliased"] {
+		t.Errorf("the merging mount's aliased fact is missing: %v", titles)
+	}
+	// beta did not, so its identically-spelled fact must NOT — this is the
+	// assertion that fails if resolution were shared or write-repo-only.
+	if titles["Beta aliased"] {
+		t.Errorf("the non-merging mount answered for an aliased spelling: %v", titles)
+	}
+	// ...but beta WAS queried and did contribute its exact carrier.
+	if !titles["Beta exact"] {
+		t.Errorf("the non-merging mount contributed nothing at all: %v", titles)
+	}
+}
+
+func TestLensSearch_MotifResolutionIsPerMountNotShared(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := divergentVocabularies()
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x&motifs=config-drift")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Results []struct {
+			Title string `json:"title"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	titles := map[string]bool{}
+	for _, res := range body.Results {
+		titles[res.Title] = true
+	}
+	if !titles["Alpha aliased"] {
+		t.Errorf("the merging mount's aliased fact is missing: %v", titles)
+	}
+	if titles["Beta aliased"] {
+		t.Errorf("the non-merging mount answered for an aliased spelling: %v", titles)
+	}
+	if !titles["Beta exact"] {
+		t.Errorf("the non-merging mount contributed nothing at all: %v", titles)
+	}
+}

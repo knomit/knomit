@@ -341,3 +341,48 @@ func (mi *motifIndex) MotifCoverage(ctx context.Context, branch string) (with, t
 	}
 	return with, total, nil
 }
+
+// MotifDefinitionStatus is a cluster's standing definition with its freshness.
+// Stale means it was authored against a different membership — served as
+// interim (the Definition designer ruling), but a consumer may say so.
+type MotifDefinitionStatus struct {
+	Definition string
+	Stale      bool
+}
+
+// Definitions is the bulk form of Definition + the staleness comparison, for
+// readers that page over many clusters (the vocabulary browser): one query for
+// the rows, one for the memberships, instead of 2N point reads.
+//
+// A key with no stored definition is ABSENT from the result — "missing" is the
+// absence, not an empty entry, matching Definition's (_, false, nil).
+func (mi *motifIndex) Definitions(ctx context.Context, branch string, keys []string) (map[string]MotifDefinitionStatus, error) {
+	branchID, err := mi.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("Definitions: %w", err)
+	}
+	stored, err := mi.definitionRows(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	membership, err := mi.clusterMembership(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]MotifDefinitionStatus, len(keys))
+	for _, key := range keys {
+		row, ok := stored[key]
+		if !ok {
+			continue
+		}
+		out[key] = MotifDefinitionStatus{
+			Definition: row.definition,
+			// Same comparison ClustersNeedingDefinition applies: authored-over
+			// membership vs current. On an unrebuilt corpus membership[key] is
+			// "" and a stamped definition reads stale, which is honest — the
+			// vocabulary it described is not the one being served.
+			Stale: row.members != membership[key],
+		}
+	}
+	return out, nil
+}

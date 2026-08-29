@@ -439,3 +439,81 @@ func TestHandleHALFactsCollection_StoreError_Returns500(t *testing.T) {
 		t.Errorf("status: %d, want 500", rec.Code)
 	}
 }
+
+// TestHandleHALFactsCollection_MotifFilterReachesSearchOptions locks in that
+// ?motifs= / ?motif_match= on /facts reach SearchOptions.
+func TestHandleHALFactsCollection_MotifFilterReachesSearchOptions(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?motifs=zero-value-as-valid,silent-fallback&motif_match=stem", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []string{"zero-value-as-valid", "silent-fallback"}, provider.lastOpts.Motifs)
+	require.Equal(t, store.MotifMatchStem, provider.lastOpts.MotifMatch)
+}
+
+// TestHandleHALFactsCollection_LooseMotifTierRejected: refused at the edge,
+// before any store call (C3/MN6).
+func TestHandleHALFactsCollection_LooseMotifTierRejected(t *testing.T) {
+	provider := &stubFactsCollectionProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/facts?motifs=a-b&motif_match=token-1", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Nil(t, provider.lastOpts.Motifs, "provider must not be called on a rejected tier")
+}
+
+// TestHandleHALFactsCollection_MotifsOnTheWire: rows carry their motifs, and a
+// motif-free row omits the key entirely.
+func TestHandleHALFactsCollection_MotifsOnTheWire(t *testing.T) {
+	provider := &stubFactsCollectionProvider{
+		entries: []store.RecentFactEntry{
+			{Path: "kb/a.md", Title: "Carries a motif", Motifs: []string{"a-b"}},
+			{Path: "kb/b.md", Title: "Carries none"},
+		},
+		total: 2,
+	}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			factsCollection: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/agent:test/facts", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var view struct {
+		Embedded struct {
+			Facts []map[string]any `json:"facts"`
+		} `json:"_embedded"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
+	require.Len(t, view.Embedded.Facts, 2)
+	require.Equal(t, []any{"a-b"}, view.Embedded.Facts[0]["motifs"])
+	_, present := view.Embedded.Facts[1]["motifs"]
+	require.False(t, present, "motif-free row must omit the key entirely")
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"knomit/internal/repos"
@@ -260,5 +261,124 @@ func TestHandleSearch_MinSimilarityAndDomainExactReachProvider(t *testing.T) {
 	}
 	if !provider.lastQuery.DomainExact {
 		t.Errorf("DomainExact: got false, want true")
+	}
+}
+
+// TestHandleSearch_MotifFilterReachesSearchOptions locks in that ?motifs= /
+// ?motif_match= on /search reach SearchOptions.Motifs / MotifMatch — the motif
+// axis is only queryable if the params survive the handler.
+func TestHandleSearch_MotifFilterReachesSearchOptions(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x&motifs=zero-value-as-valid,silent-fallback&motif_match=stem", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	want := []string{"zero-value-as-valid", "silent-fallback"}
+	if !reflect.DeepEqual(provider.lastQuery.Motifs, want) {
+		t.Errorf("Motifs: got %v want %v", provider.lastQuery.Motifs, want)
+	}
+	if provider.lastQuery.MotifMatch != store.MotifMatchStem {
+		t.Errorf("MotifMatch: got %q want stem", provider.lastQuery.MotifMatch)
+	}
+}
+
+// TestHandleSearch_LooseMotifTierRejected: the tiers this surface refuses are
+// refused at the edge, before any store call (C3/MN6).
+func TestHandleSearch_LooseMotifTierRejected(t *testing.T) {
+	provider := &stubSearchProvider{}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?motifs=a-b&motif_match=token-1", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if provider.lastQuery.Motifs != nil {
+		t.Errorf("provider was called despite the rejection: %v", provider.lastQuery)
+	}
+}
+
+// TestHandleSearch_MotifsOnTheWire: rows carry their motifs, and a motif-free
+// row serializes with no motifs key at all (byte-compat for corpora that never
+// ran a motif pass).
+func TestHandleSearch_MotifsOnTheWire(t *testing.T) {
+	provider := &stubSearchProvider{
+		results: []store.SearchResult{
+			{
+				FactWithBody: store.FactWithBody{
+					FactRecord: store.FactRecord{
+						Path:   "kb/a.md",
+						Title:  "Carries a motif",
+						Motifs: []string{"a-b"},
+					},
+				},
+			},
+			{
+				FactWithBody: store.FactWithBody{
+					FactRecord: store.FactRecord{
+						Path:  "kb/b.md",
+						Title: "Carries none",
+					},
+				},
+			},
+		},
+	}
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{
+			search: provider,
+		},
+	}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet,
+		"/repos/alpha/branches/agent:test/search?q=x", nil)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var view struct {
+		Embedded struct {
+			Results []map[string]any `json:"results"`
+		} `json:"_embedded"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(view.Embedded.Results) != 2 {
+		t.Fatalf("results: got %d want 2", len(view.Embedded.Results))
+	}
+	got, ok := view.Embedded.Results[0]["motifs"]
+	if !ok {
+		t.Fatalf("row 0: motifs key absent, body=%s", rec.Body.String())
+	}
+	if !reflect.DeepEqual(got, []any{"a-b"}) {
+		t.Errorf("row 0 motifs: got %v want [a-b]", got)
+	}
+	if _, present := view.Embedded.Results[1]["motifs"]; present {
+		t.Errorf("row 1: motif-free row must omit the key entirely, body=%s", rec.Body.String())
 	}
 }

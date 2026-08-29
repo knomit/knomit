@@ -104,9 +104,13 @@ func TestMotifMatch_LooseTiersAreNeverReachedByAutomation(t *testing.T) {
 	// which is never the new one. The previous version named eleven files; a
 	// twelfth selecting token-1 would have been invisible to it.
 	//
-	// The three package directories ARE the rule's scope, so the scan reads the
-	// scope rather than a sample of it.
-	dirs := []string{".", "../synthesize", "../store"}
+	// The package directories ARE the rule's scope, so the scan reads the
+	// scope rather than a sample of it. internal/web joined when the REST
+	// surface began forwarding motif filters: a handler that defaulted to a
+	// loose tier, or an error string that merely NAMED one as available, is
+	// exactly what this scan exists to catch — web validation is an allowlist
+	// and must stay silent about the tiers beyond it.
+	dirs := []string{".", "../synthesize", "../store", "../web"}
 	var files []string
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)

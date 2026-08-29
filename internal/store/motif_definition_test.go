@@ -347,3 +347,46 @@ func TestMotifDefinitions_NoStampReadsCurrentMembership(t *testing.T) {
 				"was written over, so it is current until that membership moves")
 	}
 }
+
+// Definitions is the bulk read the vocabulary browser pages with: one query,
+// keyed on cluster_key, absent = never defined, Stale derived by the same
+// membership comparison ClustersNeedingDefinition uses.
+func TestMotifDefinitions_BulkStatusCurrentStaleMissing(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	writeMotifFact(t, svc, branch, "kb/alpha/one.md", []string{"silent-fallback"})
+	writeMotifFact(t, svc, branch, "kb/alpha/two.md", []string{"config-drift"})
+	writeMotifFact(t, svc, branch, "kb/alpha/three.md", []string{"scope-creep"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	keyCurrent, err := svc.Motifs().ClusterKey(ctx, branch, "silent-fallback")
+	require.NoError(t, err)
+	keyStale, err := svc.Motifs().ClusterKey(ctx, branch, "config-drift")
+	require.NoError(t, err)
+	keyMissing, err := svc.Motifs().ClusterKey(ctx, branch, "scope-creep")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyCurrent,
+		"A component continues serving after a dependency fails.", DefinitionStamp{}))
+	require.NoError(t, svc.Motifs().PutDefinition(ctx, branch, keyStale,
+		"Configured state diverges from applied state.", DefinitionStamp{}))
+
+	// Membership of keyStale's cluster moves: a new spelling joins mechanically.
+	writeMotifFact(t, svc, branch, "kb/alpha/four.md", []string{"config-drifts"})
+	require.NoError(t, svc.Motifs().RebuildAliases(ctx, branch))
+
+	got, err := svc.Motifs().Definitions(ctx, branch,
+		[]string{keyCurrent, keyStale, keyMissing})
+	require.NoError(t, err)
+
+	require.Equal(t, "A component continues serving after a dependency fails.",
+		got[keyCurrent].Definition)
+	require.False(t, got[keyCurrent].Stale, "membership unchanged → current")
+
+	require.Equal(t, "Configured state diverges from applied state.",
+		got[keyStale].Definition, "stale definitions are served as interim, not dropped")
+	require.True(t, got[keyStale].Stale, "membership moved → stale")
+
+	_, ok := got[keyMissing]
+	require.False(t, ok, "never-defined cluster is ABSENT, not empty")
+}
