@@ -428,3 +428,53 @@ func TestReadOnly_EnvOverride(t *testing.T) {
 		t.Fatal("KNOMIT_READ_ONLY=true should set cfg.ReadOnly")
 	}
 }
+
+// TestDefaults_MaxBatchTokensIsAutoSentinel pins the sentinel. It is
+// deliberately ABSENT from Defaults(): Defaults() runs before the TOML and env
+// layers, so a value written there could not be distinguished from an operator
+// who set the same number explicitly. The zero value is what lets the app layer
+// tell "unset" from "chosen", the way remote.known_hosts already does.
+func TestDefaults_MaxBatchTokensIsAutoSentinel(t *testing.T) {
+	if got := Defaults().Embeddings.MaxBatchTokens; got != 0 {
+		t.Errorf("Defaults().Embeddings.MaxBatchTokens = %d, want 0 (the auto sentinel)", got)
+	}
+}
+
+// TestValidate_MaxBatchTokens_AcceptsZero guards the sentinel against a future
+// tightening to "must be > 0", which would reject every config that leaves the
+// knob alone.
+func TestValidate_MaxBatchTokens_AcceptsZero(t *testing.T) {
+	cfg := Defaults()
+	cfg.Embeddings.MaxBatchTokens = 0
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate rejected the auto sentinel: %v", err)
+	}
+}
+
+// TestValidate_MaxBatchTokens_RejectsNegative fails a meaningless budget at
+// boot. A negative value reaching the packer degrades it to one document per
+// inference — a silent ~30x re-embed slowdown rather than a visible error.
+func TestValidate_MaxBatchTokens_RejectsNegative(t *testing.T) {
+	cfg := Defaults()
+	cfg.Embeddings.MaxBatchTokens = -1
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate accepted a negative max_batch_tokens")
+	}
+	if !strings.Contains(err.Error(), "max_batch_tokens") {
+		t.Errorf("error should name the offending key, got: %v", err)
+	}
+}
+
+func TestLoad_MaxBatchTokensEnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+	t.Setenv("KNOMIT_EMBED_MAX_BATCH_TOKENS", "8192")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Embeddings.MaxBatchTokens; got != 8192 {
+		t.Errorf("env override MaxBatchTokens: want 8192, got %d", got)
+	}
+}
