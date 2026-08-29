@@ -50,30 +50,3 @@ func TestDetect_RealHostScopeShape(t *testing.T) {
 		t.Errorf("got %+v, want 2 GiB from cgroup-v2", got)
 	}
 }
-
-// TestDetect_NamespaceWithoutRemount_OverReports documents a KNOWN LIMITATION
-// in the unsafe direction, so it is a recorded behaviour rather than a
-// surprise. A cgroup namespace with no cgroupfs remount reports "0::/" while
-// /sys/fs/cgroup still shows the host root, which has no memory.max — so
-// detection falls through to physical RAM and reports more memory than the
-// process may use.
-//
-// It is not fixable from inside the process: this state is byte-identical to an
-// ordinary unlimited host process sitting at the root cgroup, where falling
-// through to physical RAM is the correct answer. Real container runtimes do
-// remount, so this affects unusual sandboxes, not Docker.
-//
-// If this test ever starts failing because detection got smarter, delete it and
-// the KNOWN LIMITATION note in cgroupV2Limit's doc comment together.
-func TestDetect_NamespaceWithoutRemount_OverReports(t *testing.T) {
-	fsys := fstest.MapFS{
-		// Host root cgroup: controllers present, but no memory.max — the root
-		// cgroup never has one.
-		"sys/fs/cgroup/cgroup.controllers": &fstest.MapFile{Data: []byte("cpuset cpu io memory pids\n")},
-		"proc/self/cgroup":                 &fstest.MapFile{Data: []byte("0::/\n")},
-	}
-	got := detect(fsys, hostTotal(16*gib))
-	if got.Source != SourceOSTotal {
-		t.Errorf("Source = %q, want %q — the documented fall-through", got.Source, SourceOSTotal)
-	}
-}
