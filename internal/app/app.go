@@ -15,6 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
+	"knomit/internal/memlimit"
 	"knomit/internal/repos"
 	"knomit/internal/web"
 )
@@ -74,12 +75,16 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// here rather than in Defaults() because Defaults() runs before the TOML and
 	// env layers and so cannot tell "operator chose this value" from "operator
 	// set nothing" — the same reason remote.known_hosts resolves after the
-	// overlay. Resolution lives at the app layer so a later memory-derived
-	// budget needs no config-package change and no /sys dependency there.
-	maxBatchTokens := cfg.Embeddings.MaxBatchTokens
-	if maxBatchTokens == 0 {
-		maxBatchTokens = embeddings.DefaultMaxBatchTokens
-	}
+	// overlay. Resolution lives at the app layer so the config package needs no
+	// /sys/fs/cgroup dependency.
+	//
+	// Auto-sizing clamps DOWN only: a small host or a memory-capped container
+	// gets a smaller budget, but no machine ever raises the shipped default.
+	// memlimit.Detect never fails — an undetectable ceiling yields the fixed
+	// default, because embeddings are mandatory and must not be blocked by an
+	// unknown amount of memory.
+	budget := resolveMaxBatchTokens(cfg.Embeddings.MaxBatchTokens, memlimit.Detect())
+	maxBatchTokens := budget.Tokens
 	// Warn rather than reject: both bounds are judgement, not correctness.
 	// The low warning catches a predictable operator error — the constant this
 	// replaced was 32 DOCUMENTS, so someone reading a changelog may well set 32
@@ -92,14 +97,33 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 			Msg("embeddings.max_batch_tokens is beyond the measured range; per-row overhead is unmodeled above it and peak memory may exceed expectations")
 	}
 	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"),
-		embeddings.WithMaxBatchTokens(maxBatchTokens))
+		embeddings.WithMaxBatchTokens(maxBatchTokens),
+		embeddings.WithBatchSerialization(budget.Serialize))
 	if err != nil {
 		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
 	}
 	a.closers = append(a.closers, embedder.Close)
+	// The budget's provenance is logged, not just its value: a machine-derived
+	// number with no explanation makes "why is re-embed slow HERE" unanswerable
+	// without access to the box.
 	log.Info().Str("model", model.ID).Int("dim", model.Dim).
 		Int("max_batch_tokens", maxBatchTokens).
+		Str("batch_budget_source", budget.Source).
+		Str("batch_budget_clamped", budget.Clamped).
+		Int64("memory_limit_bytes", budget.LimitBytes).
+		Bool("serialize_batches", budget.Serialize).
 		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
+	if budget.Serialize {
+		log.Info().Int("max_batch_tokens", maxBatchTokens).
+			Str("batch_budget_source", budget.Source).
+			Msg("batch inference serialized — this host's memory constrained the batch budget, so concurrent embedding runs are gated to keep the budget a per-process bound; interactive search is unaffected")
+	}
+	if budget.Clamped == "floor" {
+		log.Warn().Int("max_batch_tokens", maxBatchTokens).
+			Str("batch_budget_source", budget.Source).
+			Int64("memory_limit_bytes", budget.LimitBytes).
+			Msg("embedding batch budget hit its floor — this host has room for barely one full-length document per inference; re-embedding will be slow and memory is the binding constraint")
+	}
 
 	// LLM adapter.
 	var llmAdapter llm.LLMAdapter

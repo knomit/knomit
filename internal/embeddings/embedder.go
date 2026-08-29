@@ -83,6 +83,13 @@ type Embedder struct {
 	// maxBatchTokens is the padded-token budget for one session.Run. Always
 	// positive for an Embedder built by NewEmbedder; see DefaultMaxBatchTokens.
 	maxBatchTokens int
+	// batchSem serializes BATCH inference so the per-run budget is also a
+	// per-process bound. Single-shot paths deliberately bypass it.
+	batchSem batchSem
+	// firstRunRSS logs process RSS immediately before the first inference —
+	// the only moment non-embedding memory is measurable, since the ONNX arena
+	// retains its high-water mark and idle RSS afterwards equals peak RSS.
+	firstRunRSS sync.Once
 }
 
 // Option customizes an Embedder at construction.
@@ -97,6 +104,36 @@ type Option func(*Embedder)
 // machines rather than inheriting a host-derived budget.
 func WithMaxBatchTokens(n int) Option {
 	return func(e *Embedder) { e.maxBatchTokens = n }
+}
+
+// WithBatchSerialization gates BATCH inference behind a capacity-1 semaphore,
+// which turns the per-run token budget into a per-PROCESS memory bound: one
+// shared Embedder plus per-branch locking otherwise lets concurrent runs
+// overlap and their peaks ADD.
+//
+// It is off by default, and that default is deliberate rather than lazy. The
+// cost of serializing depends on batch WIDTH, measured on an 8-core host:
+// 4 workers x 4 rows x 2048 cost 37% (54.66s -> 75.04s), while 2 workers x
+// 8 rows x 2048 cost 2% (60.71s -> 61.78s). A wide batch already saturates the
+// cores via ORT's intra-op parallelism; a narrow one leaves headroom that
+// concurrent Runs exploit.
+//
+// The app enables it only when the derived budget shows the machine actually
+// constrained us — which is also the narrow-batch, expensive end of that range,
+// so this is a deliberate trade rather than a free guarantee. The offline tools
+// run one batch at a time and never contend, so the gate would cost them
+// nothing and buy nothing.
+//
+// Single-row inference (EmbedQuery, EmbedDocument) bypasses the gate whether or
+// not it is enabled, so interactive search never queues behind a rebuild batch.
+func WithBatchSerialization(enabled bool) Option {
+	return func(e *Embedder) {
+		if enabled {
+			e.batchSem = newBatchSem()
+			return
+		}
+		e.batchSem = nil
+	}
 }
 
 // NewEmbedder loads the model+tokenizer for descriptor m from <cacheDir>/<id>/,
@@ -190,7 +227,7 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) 
 	for i := range bodies {
 		texts[i] = e.docText(titles[i], bodies[i])
 	}
-	return embedInBatches(ctx, e.encodeAll(texts), e.maxBatchTokens, e.runRows)
+	return embedInBatches(ctx, e.encodeAll(texts), e.maxBatchTokens, e.batchSem, e.runRows)
 }
 
 // EmbedShortStrings embeds bare short strings — fact titles, and from Phase 2
@@ -208,7 +245,7 @@ func (e *Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]f
 	for i, t := range texts {
 		rendered[i] = e.shortStringText(t)
 	}
-	return embedInBatches(ctx, e.encodeAll(rendered), e.maxBatchTokens, e.runRows)
+	return embedInBatches(ctx, e.encodeAll(rendered), e.maxBatchTokens, e.batchSem, e.runRows)
 }
 
 // shortStringText renders one short string through the model's descriptor. The
@@ -280,6 +317,7 @@ func (e *Embedder) encodeAll(texts []string) []encodedRow {
 // runRows pads rows to the longest in the batch, runs one ONNX inference, pools
 // per the descriptor, and L2-normalizes each row.
 func (e *Embedder) runRows(rows []encodedRow) ([][]float32, error) {
+	e.firstRunRSS.Do(logRSSBeforeFirstInference)
 	n := len(rows)
 	if n == 0 {
 		return nil, nil

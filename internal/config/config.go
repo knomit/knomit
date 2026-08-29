@@ -78,10 +78,15 @@ type EmbeddingsConfig struct {
 	// fixed count of 32 documents ranged from 283 MiB to 9030 MiB on document
 	// length alone. That 9030 MiB run is what OOM-killed the server.
 	//
-	// 0 (the default) means auto: resolved at the app layer, currently to
-	// embeddings.DefaultMaxBatchTokens. A later release derives a smaller value
-	// on memory-constrained hosts and containers without changing this
-	// sentinel, so an explicit 0 keeps meaning "let knomit decide".
+	// 0 (the default) means auto: the app layer derives a value from this
+	// machine's memory ceiling — a cgroup limit when one exists, otherwise
+	// physical RAM. Deriving CLAMPS DOWN ONLY, so auto never exceeds
+	// embeddings.DefaultMaxBatchTokens; a small host or a memory-capped
+	// container gets less, a large machine gets the same as everyone else.
+	// An undetectable ceiling falls back to that default rather than failing.
+	//
+	// Set an explicit value to opt out of derivation entirely — a configured
+	// number is used verbatim and no detection runs.
 	MaxBatchTokens int `toml:"max_batch_tokens"`
 }
 

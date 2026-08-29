@@ -185,7 +185,7 @@ func TestEmbedInBatches_PreservesInputOrder(t *testing.T) {
 		return out, nil
 	}
 
-	got, err := embedInBatches(context.Background(), rows, 4096, run)
+	got, err := embedInBatches(context.Background(), rows, 4096, nil, run)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestEmbedInBatches_BoundsEveryRunByBudget(t *testing.T) {
 		return make([][]float32, len(batch)), nil
 	}
 
-	if _, err := embedInBatches(context.Background(), rows, budget, run); err != nil {
+	if _, err := embedInBatches(context.Background(), rows, budget, nil, run); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -248,7 +248,7 @@ func TestEmbedInBatches_NonPositiveBudgetFallsBackToOneRunPerRow(t *testing.T) {
 		}
 		return make([][]float32, len(batch)), nil
 	}
-	if _, err := embedInBatches(context.Background(), rows, 0, run); err != nil {
+	if _, err := embedInBatches(context.Background(), rows, 0, nil, run); err != nil {
 		t.Fatal(err)
 	}
 	if runs != 2 {
@@ -272,7 +272,7 @@ func TestEmbedInBatches_CancelledBetweenBatches(t *testing.T) {
 			cancel()
 			return make([][]float32, len(batch)), nil
 		}
-		if _, err := embedInBatches(ctx, rows, 4096, run); !errors.Is(err, context.Canceled) {
+		if _, err := embedInBatches(ctx, rows, 4096, nil, run); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
 		if batches != 1 {
@@ -287,7 +287,7 @@ func TestEmbedInBatches_CancelledBetweenBatches(t *testing.T) {
 			t.Fatal("run must not be called on a pre-cancelled context")
 			return nil, nil
 		}
-		if _, err := embedInBatches(ctx, rows, 4096, run); !errors.Is(err, context.Canceled) {
+		if _, err := embedInBatches(ctx, rows, 4096, nil, run); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
 	})
@@ -299,7 +299,7 @@ func TestEmbedInBatches_CancelledBetweenBatches(t *testing.T) {
 			t.Fatal("run must not be called for empty input")
 			return nil, nil
 		}
-		if _, err := embedInBatches(ctx, nil, 4096, run); !errors.Is(err, context.Canceled) {
+		if _, err := embedInBatches(ctx, nil, 4096, nil, run); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
 	})
@@ -337,7 +337,7 @@ func TestEmbedInBatches_ErrorReturnsNoPartialResults(t *testing.T) {
 		return out, nil
 	}
 
-	got, err := embedInBatches(context.Background(), rows, 4096, run)
+	got, err := embedInBatches(context.Background(), rows, 4096, nil, run)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want %v", err, boom)
 	}
@@ -358,7 +358,7 @@ func TestEmbedInBatches_ShortReturnFromRunIsRejected(t *testing.T) {
 	run := func(batch []encodedRow) ([][]float32, error) {
 		return make([][]float32, len(batch)-1), nil // one short
 	}
-	if _, err := embedInBatches(context.Background(), rows, 16384, run); err == nil {
+	if _, err := embedInBatches(context.Background(), rows, 16384, nil, run); err == nil {
 		t.Fatal("short return from run was accepted, want an error")
 	}
 }
