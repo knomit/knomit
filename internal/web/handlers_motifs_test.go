@@ -575,9 +575,22 @@ func TestHandleHALMotifs_OverflowingOffsetIsAnEmptyPage(t *testing.T) {
 func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
 	stub := &stubMotifsProvider{
 		clusters: threeClusters(),
-		// Fewer than len(clusters): the authored-only population is smaller,
-		// exactly as a corpus with distilled facts reports.
-		health: store.MotifVocabularyHealth{Clusters: 2, Recurring: 1, Mints: 2, Links: 3, EpistemicRecurring: 1},
+		// FIVE DISTINCT VALUES, none of them 3 (the cluster count) or 1 (the
+		// ?q=-narrowed count), so every field's assertion below can only pass
+		// if that field is wired to its own source. The previous fixture had
+		// Recurring == EpistemicRecurring == 1 and Clusters == Mints == 2, and
+		// a swap within either pair stayed green — the divergence between
+		// authored_recurring and authored_epistemic_recurring is the whole
+		// reason the qualifier exists, so a fixture that hides it undercuts
+		// the test it belongs to.
+		//
+		// Mints deliberately differs from Clusters here, which the real store
+		// never produces (it mints exactly once per cluster). That is the
+		// point: this fixture pins WIRING, not corpus arithmetic. Do not
+		// "correct" it back into agreement — doing so disarms the assertion.
+		// The genuine invariants are kept, since they are free:
+		// EpistemicRecurring <= Recurring <= Clusters.
+		health: store.MotifVocabularyHealth{Clusters: 9, Recurring: 4, Mints: 8, Links: 7, EpistemicRecurring: 2},
 	}
 	r := motifsServer(t, stub)
 
@@ -585,11 +598,27 @@ func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
 	if body.Count != 3 {
 		t.Errorf("count: got %d, want 3 (every cluster)", body.Count)
 	}
-	if body.Health.AuthoredClusters != 2 {
-		t.Errorf("authored_clusters: got %d, want 2 (the authored-only population)", body.Health.AuthoredClusters)
-	}
-	if body.Health.AuthoredRecurring != 1 || body.Health.AuthoredMints != 2 || body.Health.AuthoredLinks != 3 {
-		t.Errorf("health: got %+v", body.Health)
+	// One assertion per field, each naming its own expected value: a single
+	// combined check reports "health: got {...}" and leaves the reader to work
+	// out which field moved.
+	for _, f := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"authored_clusters", body.Health.AuthoredClusters, 9},
+		{"authored_recurring", body.Health.AuthoredRecurring, 4},
+		{"authored_mints", body.Health.AuthoredMints, 8},
+		{"authored_links", body.Health.AuthoredLinks, 7},
+		// authored AND epistemic — VocabularyHealth computes it with a kind
+		// CASE inside the same origin='authored' filter, so it narrows by kind
+		// as well as origin. Distinct from authored_recurring above precisely
+		// so that wiring this to Recurring fails.
+		{"authored_epistemic_recurring", body.Health.AuthoredEpistemicRecurring, 2},
+	} {
+		if f.got != f.want {
+			t.Errorf("%s: got %d, want %d", f.name, f.got, f.want)
+		}
 	}
 
 	// ?q= narrows count. It does NOT narrow health — the health block is a
@@ -598,15 +627,12 @@ func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
 	if narrowed.Count != 1 {
 		t.Errorf("narrowed count: got %d, want 1", narrowed.Count)
 	}
-	if narrowed.Health.AuthoredClusters != 2 {
-		t.Errorf("authored_clusters under ?q=: got %d, want the unnarrowed 2", narrowed.Health.AuthoredClusters)
+	if narrowed.Health.AuthoredClusters != 9 {
+		t.Errorf("authored_clusters under ?q=: got %d, want the unnarrowed 9", narrowed.Health.AuthoredClusters)
 	}
-
-	// The epistemic count is authored AND epistemic — VocabularyHealth
-	// computes it with a kind CASE inside the same origin='authored' filter —
-	// so it carries the prefix too.
-	if body.Health.AuthoredEpistemicRecurring != 1 {
-		t.Errorf("authored_epistemic_recurring: got %d, want 1", body.Health.AuthoredEpistemicRecurring)
+	if narrowed.Health.AuthoredEpistemicRecurring != 2 {
+		t.Errorf("authored_epistemic_recurring under ?q=: got %d, want the unnarrowed 2",
+			narrowed.Health.AuthoredEpistemicRecurring)
 	}
 
 	// The unqualified names must be gone from the wire: a reader who sees
