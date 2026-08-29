@@ -85,12 +85,26 @@ func detect(fsys fs.FS, total func() (int64, error)) Limit {
 // cgroupV2Limit reads memory.max for this process's cgroup and every ancestor,
 // returning the smallest real limit found.
 //
-// Both halves are load-bearing. Inside a container with a private cgroup
-// namespace (docker's default on v2) /proc/self/cgroup reads "0::/" and the
-// limit is at the mount root. On a non-namespaced host process the path is a
-// real hierarchy whose LEAF usually reads "max" while an ancestor slice holds
-// the limit — so reading only the leaf reports unlimited and skips the clamp
-// entirely.
+// Both halves are load-bearing, and both are verified against the real kernel
+// rather than only against fixtures (see memlimit_container_test.go):
+//
+//   - Inside a container, /proc/self/cgroup reads "0::/" AND the runtime mounts
+//     the container's own cgroup at /sys/fs/cgroup, so the limit is at the mount
+//     root. Reproduced with cgroup+mount namespaces and a fresh cgroup2 mount
+//     under a 2 GiB MemoryMax: detected correctly.
+//   - On a non-namespaced host the path is a real hierarchy whose LEAF usually
+//     reads "max" while an ancestor slice holds the limit, so reading only the
+//     leaf reports unlimited and skips the clamp entirely. Reproduced with
+//     systemd-run --scope -p MemoryMax=2G: detected correctly.
+//
+// KNOWN LIMITATION, in the unsafe direction. A cgroup namespace WITHOUT a
+// cgroupfs remount (e.g. bare `unshare --cgroup`) reports "0::/" while
+// /sys/fs/cgroup still shows the HOST root, which carries no memory.max. We
+// then fall through to physical RAM and over-report — measured 15.56 GiB
+// against a real 2 GiB limit. This is not fixable from inside: that state is
+// indistinguishable from an ordinary unlimited host process at the root cgroup,
+// where falling through to physical RAM is exactly right. Real container
+// runtimes do remount, so this affects unusual sandboxes rather than Docker.
 func cgroupV2Limit(fsys fs.FS) (int64, error) {
 	// The unified hierarchy is identified by this file; without it the mount is
 	// v1 (or absent) and memory.max would not mean what we think.
