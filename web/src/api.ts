@@ -456,7 +456,10 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string): { chip
 
   // The recognised chip categories — the same set in every context. `repo:` is
   // NOT among them: mount scope is state.lensSources, not a filter chip.
-  const cats = 'domain|entity|type|kind|origin|ep|path';
+  // Kept in lockstep with FilterChip['category'] in state.ts — the union and
+  // this alternation are the same set written twice, and a category present in
+  // one but not the other is a chip you can hold but never type (or vice versa).
+  const cats = 'domain|entity|type|kind|origin|ep|path|motif';
   const quotedRe = new RegExp(`(${cats}):"([^"]+)"`, 'g');
   const bareRe = new RegExp(`(${cats}):(\\S+)`, 'g');
 

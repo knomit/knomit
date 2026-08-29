@@ -106,6 +106,32 @@ describe('parseFilterQuery', () => {
     expect(r.text).toBe('');
   });
 
+  it('motif: prefix is recognized as a filter chip', () => {
+    // Distinct sibling categories so a chip landing in the wrong bucket fails
+    // rather than passing on a coincidence.
+    const r = parseFilterQuery('motif:failure-presents-as-success domain:store vacuous');
+    expect(r.chips).toHaveLength(2);
+    expect(r.chips).toContainEqual({ category: 'motif', value: 'failure-presents-as-success' });
+    expect(r.chips).toContainEqual({ category: 'domain', value: 'store' });
+    expect(r.text).toBe('vacuous');
+  });
+
+  it('two motif chips both parse, in order', () => {
+    // The pivot's OR semantics need both to survive; one swallowing the other
+    // would silently narrow the query to a single motif.
+    const r = parseFilterQuery('motif:bypass-defeats-guarantee motif:handle-outlives-target');
+    expect(r.chips).toHaveLength(2);
+    expect(r.chips[0]).toEqual({ category: 'motif', value: 'bypass-defeats-guarantee' });
+    expect(r.chips[1]).toEqual({ category: 'motif', value: 'handle-outlives-target' });
+    expect(r.text).toBe('');
+  });
+
+  it('a bare motif: with no value is left as text, not an empty chip', () => {
+    const r = parseFilterQuery('motif:');
+    expect(r.chips).toEqual([]);
+    expect(r.text).toBe('motif:');
+  });
+
   it('path chip with deep path', () => {
     const r = parseFilterQuery('path:kb/technology/ai/anthropic');
     expect(r.chips).toEqual([{ category: 'path', value: 'kb/technology/ai/anthropic' }]);

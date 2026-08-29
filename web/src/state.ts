@@ -16,7 +16,10 @@ export interface FilterChip {
   // No 'repo' here: scoping a lens to some of its mounts is state.lensSources,
   // driven by the sources dropdown and the summary's Repos rows. It was briefly
   // also a chip, which meant two controls over one scope that could disagree.
-  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
+  // `motif` combines OR, like domain/type/ep — two motif chips WIDEN the list
+  // (the server's `motifs` param is a single CSV read with splitCSV), which is
+  // the opposite of entity's AND. See kb/conventions/ui/filter-multi-chip-semantics.
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path' | 'motif';
   value: string;
 }
 
