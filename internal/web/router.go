@@ -240,7 +240,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(LensMiddleware(s.Manager))
 			r.Get("/facts", handleHALLensFacts(p.factsCollection))
-			r.Get("/facts/*", handleHALLensFact(b, p.factReader))
+			r.Get("/facts/*", handleHALLensFact(b, p.factReader, p.factSub))
 			r.Get("/search", handleHALLensSearch(p.search, s.Embedder))
 			r.Get("/completions", handleHALLensCompletions(p.completions))
 			r.Get("/stats", handleHALLensStats(p.stats, p.activity))

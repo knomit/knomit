@@ -451,7 +451,14 @@ func (v lensFactView) MarshalJSON() ([]byte, error) {
 // genuinely-missing fact — a caller must not be able to tell an unknown mount
 // from an absent fact (no mount-topology leak). A missing/retracted fact is a
 // 404 in parity with the repo handler; a real backend error surfaces as 500.
-func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
+//
+// It is ALSO the lens twin of handleHALFact's sub-resource dispatch: /commits,
+// /incoming and /outgoing are served here against the mount this handler
+// resolves, because the resolution is the same one and only this handler knows
+// how to do it. Registering the reader alone left those suffixes to fall
+// through into the fact read, where "<uuid>.md/incoming" is just a path that
+// does not exist — a deterministic 500 for every fact (issue #178).
+func handleHALLensFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bind := repos.BindingFromContext(r.Context())
 
@@ -461,10 +468,21 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 		// back to the raw capture rather than 500 — ParseQualifiedPath will judge
 		// it.
 		raw := chi.URLParam(r, "*")
-		wire := raw
+		requested := raw
 		if dec, derr := url.PathUnescape(raw); derr == nil {
-			wire = dec
+			requested = dec
 		}
+		if requested == "" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
+				"fact path is required", r.URL.Path)
+			return
+		}
+
+		// Strip the sub-resource suffix BEFORE addressing: the mount is
+		// resolved from the fact path, not from the URL that names one of its
+		// sub-resources. `requested` keeps the full path the client asked for,
+		// so a 404 still echoes what was requested.
+		wire, sub := splitFactSubResource(requested)
 		if wire == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
 				"fact path is required", r.URL.Path)
@@ -481,12 +499,12 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 			// A malformed kb:// path or an unmounted id is indistinguishable, on
 			// the wire, from a fact that simply isn't there — same 404.
 			if err != nil {
-				lensFactNotFound(w, r, wire)
+				lensFactNotFound(w, r, requested)
 				return
 			}
 			rt, ok := bind.ByID(id)
 			if !ok {
-				lensFactNotFound(w, r, wire)
+				lensFactNotFound(w, r, requested)
 				return
 			}
 			ri, branch = rt.RI, rt.Branch
@@ -496,11 +514,18 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader) http.HandlerFunc {
 			ri, branch = bind.Write(), bind.WriteMountBranch()
 		}
 
+		// The mount is resolved, so a sub-resource can be served against it —
+		// with the mount-relative path, which is what the store indexes. The
+		// _links these emit stay repo-scoped, exactly as the fact body's do.
+		if dispatchResolvedFactSubResource(b, subProvider, ri, ri.Name(), branch, rel, sub, w, r) {
+			return
+		}
+
 		a := hal.Anchor{Branch: branch}
 		f, head, err := reader.Read(r.Context(), ri, a, rel, false)
 		if err != nil {
 			if errors.Is(err, errFactNotFound) {
-				lensFactNotFound(w, r, wire)
+				lensFactNotFound(w, r, requested)
 				return
 			}
 			writeStoreError(w, r, err, "Failed to read fact", branch)
