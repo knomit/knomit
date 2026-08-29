@@ -516,6 +516,11 @@ type LiveFactTitle struct {
 // checkpoint and so a future remote embedder (which genuinely could abort a
 // request) needs no signature change — not because this implementation can
 // interrupt itself.
+//
+// Note "one batch" is not a fixed quantity: the in-process implementation packs
+// batches to a padded-token budget (embeddings.max_batch_tokens), so this
+// latency bound scales with that setting and with the length of the documents
+// in flight.
 type Embedder interface {
 	EmbedQuery(ctx context.Context, text string) ([]float32, error)
 	EmbedDocument(ctx context.Context, title, body string) ([]float32, error)

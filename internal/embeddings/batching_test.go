@@ -124,15 +124,38 @@ func TestPackByTokenBudget_ChargesShortRowsAtTheMinimum(t *testing.T) {
 // TestPackByTokenBudget_CliffCutoff pins the padding-waste guard. Descending
 // order keeps neighbours similar, but at a length cliff a long row would
 // otherwise drag short rows up to its width — real ONNX compute, not just
-// memory. One 2048-token doc among 128-token facts must run alone rather than
-// padding seven neighbours to 2048.
+// memory. Budget 16384 would otherwise put the 2048-token doc with seven
+// 128-token facts, all padded to 2048; the cutoff stops it at one neighbour.
 func TestPackByTokenBudget_CliffCutoff(t *testing.T) {
 	lens := append([]int{2048}, repeatLen(128, 99)...)
 	batches := packByTokenBudget(lens, 16384)
-	if len(batches[0]) != 1 {
-		t.Errorf("first batch has %d rows, want 1 — the long doc should not drag "+
-			"128-token rows up to width 2048", len(batches[0]))
+	if len(batches[0]) > 2 {
+		t.Errorf("first batch has %d rows, want at most 2 — the long doc should not "+
+			"drag a run of 128-token rows up to width 2048", len(batches[0]))
 	}
+}
+
+// TestPackByTokenBudget_CliffNeverCutsToSingleton guards the cutoff against
+// eating the packer it protects. A batch of one wastes no padding by
+// definition, so cutting there buys nothing and costs a run. Without the guard
+// a smoothly decaying corpus — every neighbour more than 2x smaller — becomes
+// one run per document, the exact pathology this packer exists to avoid.
+func TestPackByTokenBudget_CliffNeverCutsToSingleton(t *testing.T) {
+	t.Run("adjacent pair stays paired", func(t *testing.T) {
+		batches := packByTokenBudget([]int{2048, 1000}, 16384)
+		if len(batches) != 1 || len(batches[0]) != 2 {
+			t.Errorf("got %v, want a single batch of 2 — a cut here saves no padding", batches)
+		}
+	})
+
+	t.Run("decaying corpus does not become all singletons", func(t *testing.T) {
+		lens := []int{2048, 1000, 490, 240, 118}
+		batches := packByTokenBudget(lens, 16384)
+		if len(batches) >= len(lens) {
+			t.Errorf("got %d batches for %d rows (%v) — a smoothly decaying corpus "+
+				"degenerated to one run per document", len(batches), len(lens), batches)
+		}
+	})
 }
 
 // TestEmbedInBatches_PreservesInputOrder is the correctness cost of packing:

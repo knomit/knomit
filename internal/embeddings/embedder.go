@@ -124,6 +124,15 @@ func NewEmbedder(ctx context.Context, m Model, cacheDir string, opts ...Option) 
 	for _, opt := range opts {
 		opt(e)
 	}
+	// Hold the "always positive" field invariant by construction rather than by
+	// convention at the call site. A non-positive budget reaching the packer
+	// degrades to one row per inference for the process lifetime — a silent
+	// ~30x slowdown, not a failure — and the ways to get one are all plausible:
+	// a tool flag, or a future memory resolver returning 0 on an unreadable
+	// /sys. Clamp here so no caller has to remember.
+	if e.maxBatchTokens <= 0 {
+		e.maxBatchTokens = DefaultMaxBatchTokens
+	}
 	return e, nil
 }
 
@@ -170,6 +179,13 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) 
 	if len(titles) != len(bodies) {
 		return nil, fmt.Errorf("EmbedDocuments: %d titles vs %d bodies", len(titles), len(bodies))
 	}
+	// Checked before tokenizing, not just inside embedInBatches: encodeAll is
+	// evaluated as an argument expression, so without this a cancelled caller
+	// would pay a full tokenization pass (and any truncation warnings) before
+	// the error came back.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	texts := make([]string, len(bodies))
 	for i := range bodies {
 		texts[i] = e.docText(titles[i], bodies[i])
@@ -184,6 +200,10 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) 
 //
 // ctx is checked before each batch, exactly as in EmbedDocuments.
 func (e *Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	// Checked before tokenizing, for the reason given in EmbedDocuments.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	rendered := make([]string, len(texts))
 	for i, t := range texts {
 		rendered[i] = e.shortStringText(t)
@@ -243,6 +263,11 @@ func (e *Embedder) embedBatch(texts []string) ([][]float32, error) {
 
 // encodeAll tokenizes every text into a row of ids and mask, each truncated to
 // the model's MaxTokens.
+//
+// This holds the whole input tokenized at once, which is inherent to
+// length-aware packing: the packer cannot group by width without knowing every
+// width first. The cost is bounded by the caller's request size, and the ids
+// are the model input anyway — the alternative is tokenizing twice.
 func (e *Embedder) encodeAll(texts []string) []encodedRow {
 	rows := make([]encodedRow, len(texts))
 	for i, text := range texts {

@@ -80,6 +80,17 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if maxBatchTokens == 0 {
 		maxBatchTokens = embeddings.DefaultMaxBatchTokens
 	}
+	// Warn rather than reject: both bounds are judgement, not correctness.
+	// The low warning catches a predictable operator error — the constant this
+	// replaced was 32 DOCUMENTS, so someone reading a changelog may well set 32
+	// here and get one max-length document per inference with no other signal.
+	if n := cfg.Embeddings.MaxBatchTokens; n > 0 && n < 2048 {
+		log.Warn().Int("max_batch_tokens", n).
+			Msg("embeddings.max_batch_tokens is below one document's maximum length — the unit is PADDED TOKENS, not documents; every max-length document will run alone")
+	} else if n > 65536 {
+		log.Warn().Int("max_batch_tokens", n).
+			Msg("embeddings.max_batch_tokens is beyond the measured range; per-row overhead is unmodeled above it and peak memory may exceed expectations")
+	}
 	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"),
 		embeddings.WithMaxBatchTokens(maxBatchTokens))
 	if err != nil {
