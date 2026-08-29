@@ -183,3 +183,47 @@ func TestResolve_NeverSizesUp(t *testing.T) {
 		}
 	}
 }
+
+// TestSerialize_BeyondTheLadderGuaranteesRatherThanEstimates: WorstCaseBatchBytes
+// saturates above the measured range, so comparing against it there would
+// understate the real cost. Concretely: an explicit 32768 on an 8 GiB host
+// modelled 5339 MiB for two runs when the real figure is ~9800 MiB — an ungated
+// OOM. Reachable only via an operator value, since derivation never exceeds the
+// default.
+func TestSerialize_BeyondTheLadderGuaranteesRatherThanEstimates(t *testing.T) {
+	for _, tokens := range []int{maxLadderTokens + 1, 65536, 262144} {
+		got := ResolveBudget(tokens, hostLimit(64000))
+		if !got.Serialize {
+			t.Errorf("explicit %d tokens on a 64 GiB host: Serialize=false — memory beyond the "+
+				"measured ladder cannot be modelled, so it must be guaranteed instead", tokens)
+		}
+	}
+}
+
+// TestSerialize_UnreadableCeilingSerializes: SourceUnreadable means we know a
+// limit may apply and could not read it — the opposite of SourceNone. Running
+// the full default budget with unbounded overlap there would be behaviourally
+// identical to the over-report the detector now refuses to make.
+func TestSerialize_UnreadableCeilingSerializes(t *testing.T) {
+	got := ResolveBudget(0, memlimit.Limit{Source: memlimit.SourceUnreadable})
+	if !got.Serialize {
+		t.Error("Serialize=false on an unreadable ceiling — this is the one case where we know we are blind")
+	}
+	if got.Source != string(memlimit.SourceUnreadable) {
+		t.Errorf("Source = %q, want %q so an operator can see it in the boot log", got.Source, memlimit.SourceUnreadable)
+	}
+}
+
+// TestWorstCaseBatchBytes_IsAConsistentInverse checks the two ladder directions
+// against each other across the whole range, not at a couple of points. Two
+// separate pieces of safety math now depend on them agreeing.
+func TestWorstCaseBatchBytes_IsAConsistentInverse(t *testing.T) {
+	for availMiB := int64(0); availMiB <= 2200; availMiB++ {
+		avail := availMiB * mib
+		tokens := BudgetForBatchMemory(avail)
+		if need := WorstCaseBatchBytes(tokens); need > avail && tokens > MinBatchTokens {
+			t.Fatalf("avail=%d MiB -> %d tokens -> needs %d MiB: the inversion is not conservative",
+				availMiB, tokens, need>>20)
+		}
+	}
+}

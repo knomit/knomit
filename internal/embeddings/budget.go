@@ -36,7 +36,18 @@ var budgetLadder = []struct {
 	{4096, 448 << 20},
 	{8192, 910 << 20},
 	{16384, 1820 << 20},
+	// Above the derivation ceiling, and measured for exactly that reason:
+	// BudgetForBatchMemory never returns a value this high, but an OPERATOR may
+	// configure one, and shouldSerialize has to model it. Note the curve is
+	// superlinear here — 8192->16384 adds 910 MiB, 16384->32768 adds 2408 — so
+	// extrapolating the earlier slope would UNDERSTATE the cost, in the unsafe
+	// direction.
+	{32768, 4228 << 20},
 }
+
+// maxLadderTokens is the largest budget the measurements cover. Above it we do
+// not model memory at all — see WorstCaseBatchBytes and shouldSerialize.
+const maxLadderTokens = 32768
 
 // BudgetForBatchMemory returns the largest padded-token budget whose measured
 // worst-case batch fits in availBytes, clamped to [MinBatchTokens,

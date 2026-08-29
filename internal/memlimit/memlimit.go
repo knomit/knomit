@@ -30,6 +30,13 @@ const (
 	SourceCgroupV1 Source = "cgroup-v1"
 	SourceOSTotal  Source = "os-total"
 	SourceNone     Source = "unavailable"
+	// SourceUnreadable means we POSITIVELY KNOW a limit may apply and could not
+	// read it — the cgroup mount is offset from our own cgroup view and the pid
+	// search failed. Distinct from SourceNone ("we found no evidence of a
+	// limit"), because the two justify different behaviour: not knowing is a
+	// reason to fall back, whereas knowing you are blind is a reason to be
+	// careful. Callers must not treat this as "unlimited".
+	SourceUnreadable Source = "unreadable"
 )
 
 // Limit is the memory ceiling this process should size itself against.
@@ -112,7 +119,7 @@ func detectWithPID(fsys fs.FS, total func() (int64, error), pid int) Limit {
 		// over-report. Report unknown instead: the caller falls back to a fixed
 		// default and logs source=unavailable, which an operator can act on by
 		// configuring an explicit budget.
-		return Limit{Source: SourceNone}
+		return Limit{Source: SourceUnreadable, HostTotal: hostTotalOrZero(hostTotal, totalErr)}
 	}
 	if n, err := cgroupV1Limit(fsys); err == nil {
 		// v1 reads the mount root, which in a container IS our own cgroup
@@ -319,6 +326,14 @@ func cgroupMountRoot(fsys fs.FS) (string, error) {
 // The optional fields before " - " are variable in number, so the filesystem
 // type must be read AFTER the separator, not at a fixed index.
 func parseCgroupMountRoot(data []byte) (string, error) {
+	// LAST match, not first: mountinfo lists mounts in order, so with an
+	// overmount on /sys/fs/cgroup the later line is the one actually visible.
+	// Taking the first would read a shadowed mount's root — and in the order
+	// where the shadowed one is misaligned and the visible one is not, that
+	// reads "aligned" for a mount that is not ours, walks a path that is not
+	// ours, finds nothing, and falls through to physical RAM: exactly the
+	// over-report this file exists to prevent, reintroduced from behind.
+	root, found := "", false
 	for _, line := range strings.Split(string(data), "\n") {
 		before, after, ok := strings.Cut(line, " - ")
 		if !ok {
@@ -332,9 +347,12 @@ func parseCgroupMountRoot(data []byte) (string, error) {
 		if len(post) == 0 || post[0] != "cgroup2" {
 			continue
 		}
-		return f[3], nil
+		root, found = f[3], true
 	}
-	return "", errNotFound
+	if !found {
+		return "", errNotFound
+	}
+	return root, nil
 }
 
 // findCgroupByPID locates the cgroup node containing pid by scanning
@@ -346,8 +364,13 @@ func parseCgroupMountRoot(data []byte) (string, error) {
 func findCgroupByPID(fsys fs.FS, pid int) (string, bool) {
 	want := strconv.Itoa(pid)
 	found := ""
+	// Separate from `found` because "" is a LEGITIMATE result: it means our node
+	// is the mount root. Using the empty string as the sentinel would report
+	// "not found" for a real answer — a trap worth avoiding in the one function
+	// whose entire job is to run after the normal assumptions have broken.
+	ok := false
 	_ = fs.WalkDir(fsys, "sys/fs/cgroup", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || d.Name() != "cgroup.procs" || found != "" {
+		if err != nil || d.IsDir() || d.Name() != "cgroup.procs" || ok {
 			return nil //nolint:nilerr // an unreadable subtree is skipped, not fatal
 		}
 		data, err := fs.ReadFile(fsys, p)
@@ -358,10 +381,18 @@ func findCgroupByPID(fsys fs.FS, pid int) (string, bool) {
 			if strings.TrimSpace(line) == want {
 				found = strings.TrimPrefix(path.Dir(p), "sys/fs/cgroup")
 				found = strings.TrimPrefix(found, "/")
+				ok = true
 				return fs.SkipAll
 			}
 		}
 		return nil
 	})
-	return found, found != ""
+	return found, ok
+}
+
+func hostTotalOrZero(n int64, err error) int64 {
+	if err != nil {
+		return 0
+	}
+	return n
 }

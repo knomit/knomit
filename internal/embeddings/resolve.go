@@ -62,6 +62,14 @@ type Budget struct {
 
 // WorstCaseBatchBytes reports the measured worst-case memory for one batch at
 // the given budget, above the resident model.
+//
+// ONLY MEANINGFUL UP TO maxLadderTokens. Above that the ladder has no data and
+// this returns the top rung, which UNDERSTATES the real cost — the curve is
+// superlinear. Callers making a safety decision must treat tokens >
+// maxLadderTokens as unmodelled rather than as "costs the same as the top
+// rung"; shouldSerialize does exactly that. Saturating quietly is the one
+// behaviour that would be wrong in the unsafe direction, which is why this
+// warning is here rather than in a commit message.
 func WorstCaseBatchBytes(tokens int) int64 {
 	if tokens <= budgetLadder[0].tokens {
 		return budgetLadder[0].bytes
@@ -103,7 +111,11 @@ func WorstCaseBatchBytes(tokens int) int64 {
 //     being a genuine absorber, so the safety question must be asked of the real
 //     memory rather than of our share of it.
 //   - An UNKNOWN ceiling does not serialize. We measured nothing, so we know
-//     nothing; an unmeasured host is not a constrained one.
+//     nothing; an unmeasured host is not a constrained one. An UNREADABLE one
+//     does serialize — that is the opposite case, where we know a limit may
+//     apply and failed to read it.
+//   - A budget beyond the measured ladder serializes, because we cannot model
+//     its memory at all and a guarantee beats an estimate.
 //
 // Serialization is independent of where Tokens came from. An explicit value
 // sets the budget; it is not a concurrency policy, and an operator who pins a
@@ -116,7 +128,14 @@ func ResolveBudget(configured int, lim memlimit.Limit) Budget {
 	if configured <= 0 {
 		switch {
 		case !lim.Known():
-			b = Budget{Tokens: DefaultMaxBatchTokens, Source: string(memlimit.SourceNone), Clamped: "none"}
+			// Source is carried through rather than flattened to "unavailable":
+			// "unreadable" means we know a limit may apply and could not read it,
+			// which is what an operator needs to see in the boot log to know an
+			// explicit budget is worth setting.
+			b = Budget{Tokens: DefaultMaxBatchTokens, Source: string(lim.Source), Clamped: "none"}
+			if lim.Source == "" {
+				b.Source = string(memlimit.SourceNone)
+			}
 		default:
 			fraction := sharedFraction
 			if isCgroup(lim.Source) && !lim.Inherited {
@@ -149,6 +168,23 @@ func isCgroup(s memlimit.Source) bool {
 func shouldSerialize(lim memlimit.Limit, tokens int) bool {
 	switch {
 	case isCgroup(lim.Source):
+		return true
+	case lim.Source == memlimit.SourceUnreadable:
+		// We POSITIVELY KNOW a limit may apply and could not read it. The same
+		// reasoning that stops detection reporting physical RAM here applies to
+		// concurrency: falling back to the default budget AND permitting
+		// unbounded overlap would be behaviourally identical to the over-report
+		// this case exists to prevent, with only the log line changed. This is
+		// the one situation where we know we are blind, so it is the one where
+		// guessing is least defensible.
+		return true
+	case tokens > maxLadderTokens:
+		// Beyond the measurements. WorstCaseBatchBytes saturates at the top rung
+		// there, so any comparison against it would understate the real cost and
+		// could clear a budget that does not fit. Reachable only via an explicit
+		// operator value — derivation never exceeds DefaultMaxBatchTokens — and
+		// the honest answer to "we cannot model this" is to guarantee instead of
+		// to estimate.
 		return true
 	case lim.Source == memlimit.SourceOSTotal && lim.HostTotal > 0:
 		absorber := lim.HostTotal - ResidentModelBytes - nonEmbeddingReserve

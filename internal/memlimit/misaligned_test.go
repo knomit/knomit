@@ -86,8 +86,17 @@ func TestDetect_MisalignedMount_UnknownRatherThanOverReport(t *testing.T) {
 	if got.Source == SourceOSTotal {
 		t.Errorf("Source = %q — reporting physical RAM here asserts \"unlimited\" when we know the mount is offset", got.Source)
 	}
-	if got.Source != SourceNone {
-		t.Errorf("Source = %q, want %q", got.Source, SourceNone)
+	// SourceUnreadable, NOT SourceNone. The two are different claims and they
+	// justify different behaviour downstream: "we found no evidence of a limit"
+	// permits normal concurrency, whereas "we know a limit may apply and could
+	// not read it" must not — otherwise we run the full default budget with
+	// unbounded overlap, which is behaviourally identical to the over-report
+	// this branch exists to prevent, with only the log line changed.
+	if got.Source != SourceUnreadable {
+		t.Errorf("Source = %q, want %q", got.Source, SourceUnreadable)
+	}
+	if got.Known() {
+		t.Error("Known()=true for an unreadable ceiling — there is no usable number here")
 	}
 }
 
@@ -119,5 +128,69 @@ func TestDetect_NoMountinfo_AssumesAligned(t *testing.T) {
 	got := detectWithPID(fsys, hostTotal(16*gib), 1)
 	if got.Bytes != 2*gib || got.Source != SourceCgroupV2 {
 		t.Errorf("got %+v, want 2 GiB — a missing mountinfo must not break detection", got)
+	}
+}
+
+// TestCgroupMountRoot_TakesTheLastMatch: mountinfo lists mounts in order, so
+// with an overmount on /sys/fs/cgroup the LATER line is the one actually
+// visible. Taking the first reads a shadowed mount's root — and in this order it
+// would read "aligned" for a mount that is not ours, walk a path that is not
+// ours, find nothing, and fall through to physical RAM: the over-report this
+// package exists to prevent, reintroduced from behind.
+func TestCgroupMountRoot_TakesTheLastMatch(t *testing.T) {
+	const mountinfo = `32 22 0:27 / /sys/fs/cgroup rw shared:9 - cgroup2 cgroup2 rw
+88 22 0:31 /../../.. /sys/fs/cgroup rw - cgroup2 cgroup2 rw
+`
+	got, err := parseCgroupMountRoot([]byte(mountinfo))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/../../.." {
+		t.Errorf("root = %q, want the LAST (visible) mount's root", got)
+	}
+}
+
+// TestCgroupMountRoot_HandlesOptionalFields uses the REAL line from this host,
+// optional fields included. The parser's doc comment specifically explains that
+// the fields before " - " are variable in number — and every other fixture in
+// this package drops them, which is exactly the shape where a fixture stops
+// testing the thing the code was written to handle.
+func TestCgroupMountRoot_HandlesOptionalFields(t *testing.T) {
+	const real = "32 22 0:27 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime shared:9 - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot\n"
+	got, err := parseCgroupMountRoot([]byte(real))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "/" {
+		t.Errorf("root = %q, want %q", got, "/")
+	}
+}
+
+// TestFindCgroupByPID_MountRootIsAValidAnswer: "" means our node IS the mount
+// root, which is a legitimate result and must not be reported as "not found".
+func TestFindCgroupByPID_MountRootIsAValidAnswer(t *testing.T) {
+	fsys := fstest.MapFS{
+		"sys/fs/cgroup/cgroup.procs": &fstest.MapFile{Data: []byte("42\n")},
+	}
+	got, ok := findCgroupByPID(fsys, 42)
+	if !ok {
+		t.Error("ok=false for a pid found at the mount root — \"\" is an answer, not a sentinel")
+	}
+	if got != "" {
+		t.Errorf("path = %q, want \"\" (the mount root)", got)
+	}
+}
+
+// TestCgroupV1_HierarchicalLimitBranch covers the ancestor-accounting field,
+// which had no test at all: both v1 fixtures used memory.limit_in_bytes only.
+func TestCgroupV1_HierarchicalLimitBranch(t *testing.T) {
+	fsys := fstest.MapFS{
+		"sys/fs/cgroup/memory/memory.limit_in_bytes": &fstest.MapFile{Data: []byte("9223372036854771712\n")},
+		"sys/fs/cgroup/memory/memory.stat": &fstest.MapFile{
+			Data: []byte("cache 0\nrss 123\nhierarchical_memory_limit 4294967296\ntotal_rss 456\n")},
+	}
+	got := detect(fsys, hostTotal(64*gib))
+	if got.Bytes != 4*gib || got.Source != SourceCgroupV1 {
+		t.Errorf("got %+v, want 4 GiB from cgroup-v1 via hierarchical_memory_limit", got)
 	}
 }
