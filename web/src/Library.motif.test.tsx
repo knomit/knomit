@@ -27,6 +27,15 @@ vi.mock('./api', () => ({
       total: 26,
     })),
     search: vi.fn(async () => []),
+    // A single motif chip makes the list a PIVOT, and the header then resolves
+    // that motif to name it. Two chips is a union of two shapes with no single
+    // name, so it stays an ordinary filtered list and never asks.
+    motifCluster: vi.fn(async (_r: string, _b: string, key: string) => ({
+      cluster_key: `key-${key}`, canonical: key, members: [key],
+      df: 26, carrier_count: 26, carriers: [], aliases: [],
+      definition: 'An operation that did not achieve its effect returns the same signals a successful one would.',
+      definition_state: 'current',
+    })),
     lensBrowse: vi.fn(async () => ({ children: [] })),
     listLensFacts: vi.fn(async () => ({ facts: [], total: 0 })),
     lensSearch: vi.fn(async () => []),

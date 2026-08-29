@@ -9,6 +9,8 @@ import { currentPath, isLive, isLensContext, canGoBack } from './state';
 import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPath, rowPath } from './utils';
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
+import { useMotifClusters } from './useMotifClusters';
+import { factSubject, subjectSummary } from './motifSubject';
 import type { NavRequest } from './useNavigationManager';
 
 type RowItem = { name: string; fullPath: string; is_dir: boolean };
@@ -207,11 +209,14 @@ const LensFactRow = memo(function LensFactRow({
 
 // ChronoRow is a repo Recent row: title line + basename + relative commit time.
 const ChronoRow = memo(function ChronoRow({
-  fact, index, selected, onSelect, onOpenFact,
+  fact, index, selected, subject, onSelect, onOpenFact,
 }: {
   fact: RecentFactEntry;
   index: number;
   selected: boolean;
+  /** The fact's subject, shown only on a motif pivot — elsewhere every row in
+   *  the list shares one, so printing it would be the same word N times. */
+  subject?: string;
   onSelect: (index: number) => void;
   onOpenFact: (fullPath: string) => void;
 }) {
@@ -230,6 +235,11 @@ const ChronoRow = memo(function ChronoRow({
         {fact.title}
       </div>
       <div style={chronoMetaLine}>
+        {/* On a pivot, what this fact is ABOUT — path segment 3. The whole
+            point of the list is how unlike each other these subjects are, and
+            saying it per row is what makes that readable as you scan rather
+            than only stated in the heading. */}
+        {subject && <><span data-testid="chrono-subject" style={chronoSubject}>{subject}</span><span style={{ color: '#2f3540' }}>·</span></>}
         <span style={chronoName}>{fact.path.split('/').pop()}</span>
         <span>{relativeTimeEpoch(fact.committed_at)}</span>
       </div>
@@ -247,6 +257,7 @@ const lensMetaLine: React.CSSProperties = { display: 'flex', alignItems: 'center
 const lensPath: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
 const chronoMetaLine: React.CSSProperties = { fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 };
 const chronoName: React.CSSProperties = { fontFamily: 'var(--k-font-mono)' };
+const chronoSubject: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', color: '#7f8b9c' };
 
 interface Props {
   state: AppState;
@@ -383,6 +394,14 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     [motifs, state.motifMatch],
   );
   const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
+
+  // THE PIVOT HEADING. One motif chip and no free text means this list IS that
+  // motif's carriers, so the header stops reporting a location — a motif cuts
+  // across the ontology and there is no folder to be in. Two chips is a union
+  // of two shapes and has no single name, so it keeps the ordinary header.
+  const pivotMotif = (motifs.length === 1 && !state.freeText) ? motifs[0] : null;
+  const pivotResolved = useMotifClusters(state.repo, state.branch, pivotMotif ? [pivotMotif] : undefined);
+  const pivotCluster = pivotResolved[0]?.cluster;
 
   useAsync((stale) => {
     if (isLens) return; // lens context reads via the lens effect below
@@ -857,6 +876,16 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   }, [dispatch, path]);
   const goBack = useCallback(() => dispatch({ type: 'NAV_BACK' }), [dispatch]);
 
+  // Whole names or none, ordered by how many rows carry each — the same grammar
+  // the fact header's motif cells follow, so the two surfaces cannot drift.
+  const pivotSubjects = useMemo(() => {
+    if (!pivotMotif) return undefined;
+    const rows = isLens ? lensRows.map(r => r.path) : facts.map(f => f.path);
+    const s = subjectSummary(rows, 3);
+    if (s.shown.length === 0) return undefined;
+    return `across ${s.shown.join(' · ')}${s.more > 0 ? ` · +${s.more} more` : ''}`;
+  }, [pivotMotif, isLens, lensRows, facts]);
+
   return (
     <div data-testid="left-panel" data-sort={effectiveSort} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       <LibraryHeader
@@ -889,6 +918,18 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         canBack={canGoBack(state)}
         onBack={goBack}
         onJumpAncestor={jumpAncestor}
+        motif={pivotMotif ? {
+          // canonical, never the spelling this fact happened to use and never
+          // the cluster_key — the corpus reads by one name.
+          canonical: pivotCluster?.canonical ?? pivotMotif,
+          carrierCount: pivotCluster?.carrier_count ?? null,
+          definition: pivotCluster?.definition,
+          interim: pivotCluster?.definition_state === 'stale',
+          // Computed from the landed rows: this list IS the result, so unlike
+          // the fact panel's version of the same line it is complete rather
+          // than drawn from a capped preview.
+          subjects: pivotSubjects,
+        } : undefined}
       />
       {!isLive(state) && (
         <ReadOnlyBanner message="Showing live library · history views not yet supported by backend" />
@@ -992,6 +1033,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
                 fact={f}
                 index={i}
                 selected={i === selectedIdx}
+                subject={pivotMotif ? factSubject(f.path) : undefined}
                 onSelect={setSelectedIdx}
                 onOpenFact={openFact}
               />
