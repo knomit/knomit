@@ -3,6 +3,7 @@ package embeddings
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -17,7 +18,7 @@ import (
 // is what turns the per-run budget into a per-process bound, which is what
 // makes a memory-derived cap a guarantee rather than an expectation.
 func TestEmbedInBatches_SerializesBatchInference(t *testing.T) {
-	sem := newBatchSem()
+	sem := newBatchSem(1)
 
 	var inFlight, maxInFlight atomic.Int32
 	run := func(batch []encodedRow) ([][]float32, error) {
@@ -60,7 +61,7 @@ func TestEmbedInBatches_SerializesBatchInference(t *testing.T) {
 // Without this the semaphore would convert a cancellable wait into an
 // unbounded one, which is a worse bug than the concurrency it fixes.
 func TestEmbedInBatches_WaitingOnSemaphoreIsCancellable(t *testing.T) {
-	sem := newBatchSem()
+	sem := newBatchSem(1)
 	sem <- struct{}{} // occupy it; nothing will release
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -113,7 +114,7 @@ func TestEmbedInBatches_NilSemaphoreRuns(t *testing.T) {
 // reaching inference panics — that panic IS the evidence it did not block, and
 // a deadlock or timeout here would mean the bypass was lost.
 func TestSingleShotPathsBypassTheSemaphore(t *testing.T) {
-	e := &Embedder{model: Model{QueryTemplate: "search_query: {content}"}, batchSem: newBatchSem()}
+	e := &Embedder{model: Model{QueryTemplate: "search_query: {content}"}, batchSem: newBatchSem(1)}
 	e.batchSem <- struct{}{} // held, never released
 
 	reached := make(chan struct{})
@@ -137,7 +138,7 @@ func TestSingleShotPathsBypassTheSemaphore(t *testing.T) {
 // batch for the life of the process — a far worse outcome than the crash that
 // caused it, and one that would present as "embedding silently stopped".
 func TestEmbedInBatches_PanicDoesNotLeakTheSemaphore(t *testing.T) {
-	sem := newBatchSem()
+	sem := newBatchSem(1)
 	rows := []encodedRow{{ids: make([]int64, 100), mask: make([]int64, 100)}}
 
 	func() {
@@ -152,5 +153,53 @@ func TestEmbedInBatches_PanicDoesNotLeakTheSemaphore(t *testing.T) {
 	case sem <- struct{}{}:
 	case <-time.After(time.Second):
 		t.Fatal("semaphore was not released after a panic — all later batches would deadlock")
+	}
+}
+
+// TestBatchSem_CapacityAdmitsExactlyN is the binding-path check the corpus now
+// requires of any safety constant: a value that does not change behaviour when
+// swept is not protecting anything. Capacity K must admit K concurrent batches
+// and block the K+1th — asserted at both edges, so K=1 vs 2 and K=2 vs 3 are
+// each provably observable.
+func TestBatchSem_CapacityAdmitsExactlyN(t *testing.T) {
+	for _, capacity := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("capacity=%d", capacity), func(t *testing.T) {
+			sem := newBatchSem(capacity)
+
+			var inFlight, maxInFlight atomic.Int32
+			run := func(batch []encodedRow) ([][]float32, error) {
+				n := inFlight.Add(1)
+				for {
+					old := maxInFlight.Load()
+					if n <= old || maxInFlight.CompareAndSwap(old, n) {
+						break
+					}
+				}
+				time.Sleep(3 * time.Millisecond)
+				inFlight.Add(-1)
+				return make([][]float32, len(batch)), nil
+			}
+
+			rows := []encodedRow{{ids: make([]int64, 2048), mask: make([]int64, 2048)}}
+			var wg sync.WaitGroup
+			for range capacity + 3 { // more workers than the gate allows
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if _, err := embedInBatches(context.Background(), rows, 4096, sem, run); err != nil {
+						t.Error(err)
+					}
+				}()
+			}
+			wg.Wait()
+
+			if got := maxInFlight.Load(); int(got) > capacity {
+				t.Errorf("max concurrent = %d, want at most %d", got, capacity)
+			}
+			if capacity > 1 && maxInFlight.Load() < 2 {
+				t.Errorf("max concurrent = %d with capacity %d — the cap is not admitting the concurrency it allows, so sweeping it would show nothing",
+					maxInFlight.Load(), capacity)
+			}
+		})
 	}
 }

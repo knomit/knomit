@@ -83,8 +83,8 @@ type Embedder struct {
 	// maxBatchTokens is the padded-token budget for one session.Run. Always
 	// positive for an Embedder built by NewEmbedder; see DefaultMaxBatchTokens.
 	maxBatchTokens int
-	// batchSem serializes BATCH inference so the per-run budget is also a
-	// per-process bound. Single-shot paths deliberately bypass it.
+	// batchSem caps simultaneous BATCH inferences. Nil means unbounded.
+	// Single-shot paths deliberately bypass it.
 	batchSem batchSem
 	// firstRunRSS logs process RSS immediately before the first inference —
 	// the only moment non-embedding memory is measurable, since the ONNX arena
@@ -113,20 +113,22 @@ func WithMaxBatchTokens(n int) Option {
 	return func(e *Embedder) { e.maxBatchTokens = n }
 }
 
-// WithBatchSerialization gates BATCH inference behind a capacity-1 semaphore,
-// bounding how much batch memory can be in flight at once: one shared Embedder
-// plus per-branch locking otherwise lets concurrent runs overlap and their
-// peaks ADD.
+// WithBatchConcurrency caps how many BATCH inferences may run at once; 0 leaves
+// them unbounded. One shared Embedder plus per-branch locking otherwise lets
+// concurrent runs overlap and their peaks ADD — and because the ONNX arena
+// retains its high-water mark, an overshoot is not a spike but a permanent
+// floor on resident memory.
 //
 // This is NOT a per-process memory bound. Single-row inference bypasses the gate
 // (see below), so it is unbounded in count and sits outside the guarantee.
 //
-// It is off by default, and that default is deliberate rather than lazy. The
-// cost of serializing depends on batch WIDTH, measured on an 8-core host:
+// Unbounded by default, and that default is deliberate rather than lazy. The
+// cost of bounding depends on batch WIDTH, measured on an 8-core host:
 // 4 workers x 4 rows x 2048 cost 37% (54.66s -> 75.04s), while 2 workers x
 // 8 rows x 2048 cost 2% (60.71s -> 61.78s). A wide batch already saturates the
 // cores via ORT's intra-op parallelism; a narrow one leaves headroom that
-// concurrent Runs exploit.
+// concurrent Runs exploit — which is also why capacity 2 preserves most of the
+// benefit where the memory allows it.
 //
 // The app enables it only when the derived budget shows the machine actually
 // constrained us — which is also the narrow-batch, expensive end of that range,
@@ -136,10 +138,10 @@ func WithMaxBatchTokens(n int) Option {
 //
 // Single-row inference (EmbedQuery, EmbedDocument) bypasses the gate whether or
 // not it is enabled, so interactive search never queues behind a rebuild batch.
-func WithBatchSerialization(enabled bool) Option {
+func WithBatchConcurrency(n int) Option {
 	return func(e *Embedder) {
-		if enabled {
-			e.batchSem = newBatchSem()
+		if n > 0 {
+			e.batchSem = newBatchSem(n)
 			return
 		}
 		e.batchSem = nil

@@ -92,13 +92,10 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if n := cfg.Embeddings.MaxBatchTokens; n > 0 && n < 2048 {
 		log.Warn().Int("max_batch_tokens", n).
 			Msg("embeddings.max_batch_tokens is below one document's maximum length — the unit is PADDED TOKENS, not documents; every max-length document will run alone")
-	} else if n > 65536 {
-		log.Warn().Int("max_batch_tokens", n).
-			Msg("embeddings.max_batch_tokens is beyond the measured range; per-row overhead is unmodeled above it and peak memory may exceed expectations")
 	}
 	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"),
 		embeddings.WithMaxBatchTokens(maxBatchTokens),
-		embeddings.WithBatchSerialization(budget.Serialize))
+		embeddings.WithBatchConcurrency(budget.BatchConcurrency))
 	if err != nil {
 		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
 	}
@@ -111,12 +108,20 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		Str("batch_budget_source", budget.Source).
 		Str("batch_budget_clamped", budget.Clamped).
 		Int64("memory_limit_bytes", budget.LimitBytes).
-		Bool("serialize_batches", budget.Serialize).
+		Int("batch_concurrency", budget.BatchConcurrency).
 		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
-	if budget.Serialize {
+	if budget.BatchConcurrency > 0 {
 		log.Info().Int("max_batch_tokens", maxBatchTokens).
 			Str("batch_budget_source", budget.Source).
-			Msg("batch inference serialized — this host's memory constrained the batch budget, so concurrent embedding runs are gated to keep the budget a per-process bound; interactive search is unaffected")
+			Int("batch_concurrency", budget.BatchConcurrency).
+			Msg("concurrent embedding batches capped — this host's memory does not absorb unbounded overlap; interactive search is unaffected, since single-row inference bypasses the cap")
+	}
+	// The explicit-budget warning and the cap share one threshold deliberately.
+	// Three separate thresholds on this axis previously left a band that was
+	// modelled but neither warned nor bounded.
+	if n := cfg.Embeddings.MaxBatchTokens; n > embeddings.DefaultMaxBatchTokens {
+		log.Warn().Int("max_batch_tokens", n).
+			Msg("embeddings.max_batch_tokens is above the shipped default; batch inference is serialized to compensate, and beyond 32768 tokens the memory cost is not covered by any measurement")
 	}
 	if budget.Clamped == "floor" {
 		log.Warn().Int("max_batch_tokens", maxBatchTokens).

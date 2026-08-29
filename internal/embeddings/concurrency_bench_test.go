@@ -65,7 +65,7 @@ func TestConcurrentVsSerializedInference(t *testing.T) {
 	}
 
 	concurrent := run(nil)
-	serialized := run(newBatchSem())
+	serialized := run(newBatchSem(1))
 
 	fmt.Printf("RESULT\tworkers=%d\tconcurrent=%.2fs\tserialized=%.2fs\tratio=%.2f\n",
 		workers, concurrent.Seconds(), serialized.Seconds(),

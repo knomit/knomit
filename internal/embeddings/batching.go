@@ -130,18 +130,19 @@ func packByTokenBudget(lens []int, budget int) [][]int {
 	return batches
 }
 
-// batchSem is the capacity-1 gate serializing BATCH inference. Nil disables
-// serialization, which the pure packing tests rely on.
+// batchSem bounds how many BATCH inferences run at once. Nil disables the
+// bound, which the pure packing tests rely on.
 type batchSem chan struct{}
 
-// newBatchSem builds the gate. Capacity 1 because the gate exists to bound
-// MEMORY — one run at a time makes the per-run token budget a per-process
-// bound — not to optimize scheduling.
+// newBatchSem builds a gate admitting n concurrent batches. The capacity exists
+// to bound MEMORY — concurrent runs' peaks ADD, and the ONNX arena retains the
+// resulting high-water mark for the process lifetime, so an overshoot is not a
+// spike but a permanent floor — not to optimize scheduling.
 //
-// Serializing is NOT free, and its cost depends on batch width. See
-// WithBatchSerialization for the measured numbers and for when the app turns
-// this on; that comment is the single authoritative copy.
-func newBatchSem() batchSem { return make(batchSem, 1) }
+// Capacity is chosen per machine class, not fixed: see WithBatchConcurrency for
+// the classes, the measured costs, and the grounding of each value. That comment
+// is the single authoritative copy.
+func newBatchSem(n int) batchSem { return make(batchSem, n) }
 
 // embedInBatches packs rows into budget-bounded batches, runs each, and
 // restores every result to its INPUT position. The reordering is why that last
@@ -153,7 +154,7 @@ func newBatchSem() batchSem { return make(batchSem, 1) }
 // ctx is checked at entry and before each batch. It is a checkpoint, not an
 // abort: sess.Run cannot be interrupted, so cancelling bounds latency to one
 // batch, exactly as store.Embedder documents.
-// sem serializes the inference calls when non-nil, bounding concurrent BATCH
+// sem bounds concurrent inference calls when non-nil, capping concurrent BATCH
 // memory: app.New shares one Embedder and lockBranch is per-branch, so without
 // it a rebuild on one branch and a learn on another run concurrently and their
 // peaks ADD.

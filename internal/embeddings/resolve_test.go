@@ -31,7 +31,7 @@ func TestSerialize_CgroupAlwaysSerializes(t *testing.T) {
 	// on the hard path only moves the cliff rather than removing it.
 	for _, mib := range []int64{2048, 4300, 4400, 5120, 8192, 65536} {
 		got := ResolveBudget(0, cgroupLimit(mib, false))
-		if !got.Serialize {
+		if !got.Serialized() {
 			t.Errorf("cgroup %d MiB: Serialize=false — a hard limit must get a hard guarantee", mib)
 		}
 	}
@@ -45,7 +45,7 @@ func TestSerialize_CgroupWithExplicitBudgetStillSerializes(t *testing.T) {
 	if got.Tokens != 4096 {
 		t.Errorf("Tokens = %d, want the configured 4096", got.Tokens)
 	}
-	if !got.Serialize {
+	if !got.Serialized() {
 		t.Error("Serialize=false for an explicit budget under a cgroup — serialization derives from the ceiling, not from where Tokens came from")
 	}
 }
@@ -55,10 +55,10 @@ func TestSerialize_RoomyHostKeepsConcurrency(t *testing.T) {
 	// knomit's own footprint) comfortably funds a batch, so it is not
 	// floor-class and keeps concurrency — no behaviour change on a box we
 	// confirmed healthy under real load.
-	if got := ResolveBudget(0, hostLimit(15900)); got.Serialize {
+	if got := ResolveBudget(0, hostLimit(15900)); got.Serialized() {
 		t.Error("Serialize=true on the deployed 15.9 GiB host")
 	}
-	if got := ResolveBudget(0, hostLimit(8192)); got.Serialize {
+	if got := ResolveBudget(0, hostLimit(8192)); got.Serialized() {
 		t.Error("Serialize=true on an 8 GiB host — above the floor-class boundary")
 	}
 }
@@ -70,7 +70,7 @@ func TestSerialize_RoomyHostKeepsConcurrency(t *testing.T) {
 // physical RAM. Same constants, opposite conclusions.
 func TestSerialize_FloorClassHostSerializes(t *testing.T) {
 	got := ResolveBudget(0, hostLimit(4096))
-	if !got.Serialize {
+	if !got.Serialized() {
 		t.Error("Serialize=false on a 4 GiB host that clamps to the floor")
 	}
 	if got.Clamped != "floor" {
@@ -87,7 +87,7 @@ func TestSerialize_FloorClassIsProvenanceIndependent(t *testing.T) {
 	if got.Tokens != 8192 {
 		t.Errorf("Tokens = %d, want the configured 8192", got.Tokens)
 	}
-	if !got.Serialize {
+	if !got.Serialized() {
 		t.Error("Serialize=false for an explicit budget on a floor-class host — the gate must key on the machine, not on where Tokens came from")
 	}
 }
@@ -95,10 +95,10 @@ func TestSerialize_FloorClassIsProvenanceIndependent(t *testing.T) {
 // TestSerialize_FloorClassBoundary pins the threshold itself, so a constant
 // drifting moves this test rather than silently moving the boundary.
 func TestSerialize_FloorClassBoundary(t *testing.T) {
-	if !ResolveBudget(0, hostLimit(7168)).Serialize {
+	if !ResolveBudget(0, hostLimit(7168)).Serialized() {
 		t.Error("7 GiB should be floor-class")
 	}
-	if ResolveBudget(0, hostLimit(8192)).Serialize {
+	if ResolveBudget(0, hostLimit(8192)).Serialized() {
 		t.Error("8 GiB should not be floor-class")
 	}
 }
@@ -107,7 +107,7 @@ func TestSerialize_UnknownCeilingDoesNotSerialize(t *testing.T) {
 	// We measured nothing, so we know nothing. An unmeasured host is not a
 	// constrained one, and imposing the throughput cost on it is unfounded.
 	got := ResolveBudget(0, memlimit.Limit{Source: memlimit.SourceNone})
-	if got.Serialize {
+	if got.Serialized() {
 		t.Error("Serialize=true on an undetectable ceiling")
 	}
 	if got.Tokens != DefaultMaxBatchTokens {
@@ -127,7 +127,7 @@ func TestSerialize_MonotonicInMemory(t *testing.T) {
 				lim = hostLimit(mib)
 			}
 			b := ResolveBudget(0, lim)
-			if !b.Serialize {
+			if !b.Serialized() {
 				lost = true
 			} else if lost {
 				t.Errorf("%s: gate came back ON at %d MiB after switching off at less memory — non-monotonic", src, mib)
@@ -227,7 +227,7 @@ func TestResolve_NeverSizesUp(t *testing.T) {
 func TestSerialize_BeyondTheLadderGuaranteesRatherThanEstimates(t *testing.T) {
 	for _, tokens := range []int{maxLadderTokens + 1, 65536, 262144} {
 		got := ResolveBudget(tokens, hostLimit(64000))
-		if !got.Serialize {
+		if !got.Serialized() {
 			t.Errorf("explicit %d tokens on a 64 GiB host: Serialize=false — memory beyond the "+
 				"measured ladder cannot be modelled, so it must be guaranteed instead", tokens)
 		}
@@ -240,7 +240,7 @@ func TestSerialize_BeyondTheLadderGuaranteesRatherThanEstimates(t *testing.T) {
 // identical to the over-report the detector now refuses to make.
 func TestSerialize_UnreadableCeilingSerializes(t *testing.T) {
 	got := ResolveBudget(0, memlimit.Limit{Source: memlimit.SourceUnreadable})
-	if !got.Serialize {
+	if !got.Serialized() {
 		t.Error("Serialize=false on an unreadable ceiling — this is the one case where we know we are blind")
 	}
 	if got.Source != string(memlimit.SourceUnreadable) {
@@ -258,6 +258,70 @@ func TestWorstCaseBatchBytes_IsAConsistentInverse(t *testing.T) {
 		if need := WorstCaseBatchBytes(tokens); need > avail && tokens > MinBatchTokens {
 			t.Fatalf("avail=%d MiB -> %d tokens -> needs %d MiB: the inversion is not conservative",
 				availMiB, tokens, need>>20)
+		}
+	}
+}
+
+// ── Decision 13: the gate is a CAPACITY, chosen per machine class.
+// Tested as capacity x source, not each alone: the previous round's H4 was a
+// two-axis property with only one axis pinned.
+
+func TestBatchConcurrency_ByMachineClass(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lim  memlimit.Limit
+		want int
+	}{
+		{"cgroup is a hard wall", cgroupLimit(8192, false), 1},
+		{"cgroup, inherited", cgroupLimit(8192, true), 1},
+		{"floor-class host", hostLimit(4096), 1},
+		{"roomy host is capped, not unbounded", hostLimit(15900), roomyHostConcurrency},
+		{"very large host still capped", hostLimit(256000), roomyHostConcurrency},
+		{"unreadable ceiling", memlimit.Limit{Source: memlimit.SourceUnreadable}, 1},
+		{"unknown ceiling is unbounded", memlimit.Limit{Source: memlimit.SourceNone}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveBudget(0, tc.lim).BatchConcurrency; got != tc.want {
+				t.Errorf("BatchConcurrency = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBatchConcurrency_RoomyHostBoundsMultiplicity is H1. The deployed machine
+// derives the ceiling budget and previously took NO bound at all, so a 3-way
+// overlap was 3 x 1820 = 5460 MiB of batch against the 3.97 GiB the fraction
+// claims is knomit's entire share — and because the arena retains its
+// high-water mark, that overshoot would have become resting RSS for the process
+// lifetime rather than a spike.
+func TestBatchConcurrency_RoomyHostBoundsMultiplicity(t *testing.T) {
+	got := ResolveBudget(0, hostLimit(15900))
+	if got.BatchConcurrency == 0 {
+		t.Fatal("BatchConcurrency = 0 on the deployed host — unbounded overlap on a shared box")
+	}
+	// But NOT serialized: 2-way overlap is what that machine demonstrably
+	// absorbed (4025 MiB measured across three repos), so capping at 2 codifies
+	// observed behaviour rather than changing it. Only a third batch queues.
+	if got.Serialized() {
+		t.Error("Serialized on the deployed host — capping multiplicity must not become serializing")
+	}
+}
+
+// TestBatchConcurrency_ExplicitAboveDefaultSerializes is H3, collapsed to ONE
+// threshold. Previously three thresholds governed this axis — warn above 65536,
+// ladder ends at 32768, forced gate above 32768 — leaving 16385..32768 modelled
+// but neither warned nor bounded, and 40000 gated but unwarned.
+func TestBatchConcurrency_ExplicitAboveDefaultSerializes(t *testing.T) {
+	host := hostLimit(15900) // roomy: would otherwise get capacity 2
+	if got := ResolveBudget(DefaultMaxBatchTokens, host); got.Serialized() {
+		t.Errorf("explicit %d (exactly the default) serialized — the boundary is ABOVE the default",
+			DefaultMaxBatchTokens)
+	}
+	for _, tokens := range []int{DefaultMaxBatchTokens + 1, 17000, 40000, 65536} {
+		if got := ResolveBudget(tokens, host); !got.Serialized() {
+			t.Errorf("explicit %d tokens: BatchConcurrency = %d, want 1 — above the shipped default the "+
+				"operator has overridden our sizing and is least likely to have modelled overlap",
+				tokens, got.BatchConcurrency)
 		}
 	}
 }
