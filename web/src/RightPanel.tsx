@@ -20,7 +20,7 @@ import { MotifCell } from './MotifCell';
 import { MotifOverflowCell, orderMotifs, OVERFLOW } from './MotifRow';
 import { useMotifClusters } from './useMotifClusters';
 import { MotifPanel } from './MotifPanel';
-import { ShapesBlock } from './ShapesBlock';
+import { MotifsBlock } from './MotifsBlock';
 import type { OrderedMotifs } from './MotifRow';
 import { RepoRows } from './RepoRows';
 import type { NavRequest } from './useNavigationManager';
@@ -103,7 +103,7 @@ function renderFact(
   // ROW 3 IS TWO THINGS, and the border is the line between them.
   //
   // `edgesGroup` holds everything that opens the panel below — what cites this
-  // fact, what it cites, and what has the same shape. One border, hairline
+  // fact, what it cites, and what shares its motif. One border, hairline
   // dividers, every child borderless: the recipe the connections cells were
   // built on, extended rather than replaced.
   //
@@ -997,7 +997,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                   block is ABSENT there rather than showing one mount's names as
                   if they were the union's. The pivot still works in a lens;
                   browsing the vocabulary is what cannot. */}
-              <ShapesBlock repo={state.repo} branch={state.branch}
+              <MotifsBlock repo={state.repo} branch={state.branch} path={path}
                 onPick={motif => dispatch({ type: 'PIVOT_MOTIF', motif })} />
               <HighlightsPanel
                 highlights={stats.highlights}

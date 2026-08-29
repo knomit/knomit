@@ -176,12 +176,12 @@ export function LibraryHeader({
 
       {/* The pivot is not a location. A motif cuts ACROSS the ontology, so the
           reader is not in a folder and the ancestors line has nothing to say —
-          it names the shape instead, and the leaf names the motif. */}
+          it names the relation instead, and the leaf names the motif. */}
       {motif ? (
         <div data-testid="library-motif" style={{ flex: 1, minWidth: 0, fontFamily: 'var(--k-font-mono)' }}>
           <div style={{ fontSize: 10.5, color: '#7f8b9c', marginBottom: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ color: '#6d7788' }}>{MOTIF_GLYPH}</span>
-            <span>same shape as</span>
+            <span>same motif as</span>
           </div>
           {/* Near-white, not the green a folder gets: the motif is the one thing
               here making no claim about what a fact is about. */}

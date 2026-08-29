@@ -157,6 +157,20 @@ describe('the /motifs collection and cluster clients', () => {
     expect(p.get('offset')).toBe('100');
   });
 
+  // `path` is scope: it decides which corpus the vocabulary is of, and the
+  // server narrows the health block along with the list. An absent path sends
+  // no param at all rather than an empty one — "the whole branch" is the
+  // server's own default, not a value the client invents.
+  it('sends the path scope, and omits it when there is none', async () => {
+    const f = jsonOnce(COLLECTION);
+    await api.motifs('r', 'b', { path: 'kb/decisions' });
+    expect(urlOf(f).searchParams.get('path')).toBe('kb/decisions');
+
+    const g = jsonOnce(COLLECTION);
+    await api.motifs('r', 'b', {});
+    expect(urlOf(g).searchParams.has('path')).toBe(false);
+  });
+
   it('caps limit at the server maximum rather than sending a value it rejects', async () => {
     const f = jsonOnce(COLLECTION);
     await api.motifs('r', 'b', { limit: 5000 });

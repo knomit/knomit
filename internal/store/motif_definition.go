@@ -258,6 +258,19 @@ func (h MotifVocabularyHealth) MintToLinkRatio() float64 {
 // mechanism instead of the thing the mechanism exists to detect, and would
 // climb most on exactly the corpora where the axis is doing least.
 func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error) {
+	return mi.VocabularyHealthUnder(ctx, branch, "")
+}
+
+// VocabularyHealthUnder is VocabularyHealth over the authored facts under
+// pathPrefix — the health of one subtree's vocabulary.
+//
+// It exists so a path-scoped vocabulary view can put its health strip and its
+// list over the SAME facts. The scoped list already drops clusters no fact
+// there carries; a branch-wide strip beside it would report a recurrence rate
+// for a population the reader cannot see, in a row a few pixels from the count
+// that IS scoped. Narrowing by ?q= is the opposite case and stays unnarrowed:
+// a search is a way of reading the list, a path is which corpus you are in.
+func (mi *motifIndex) VocabularyHealthUnder(ctx context.Context, branch, pathPrefix string) (MotifVocabularyHealth, error) {
 	var h MotifVocabularyHealth
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
@@ -282,6 +295,12 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 	// AcceptSeed and epistemicLiveJoin apply, which is what makes this number
 	// the one the activation floor reads rather than merely a similar one.
 	key := motifClusterKeyExpr("m.motif")
+	scope := ""
+	args := []any{branchID}
+	if pathPrefix != "" {
+		scope = " AND bf.path LIKE ?"
+		args = append(args, pathPrefix+"%")
+	}
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
 		SELECT `+key+`,
 		       COUNT(DISTINCT bf.path),
@@ -290,8 +309,8 @@ func (mi *motifIndex) VocabularyHealth(ctx context.Context, branch string) (Moti
 		  JOIN facts f ON f.id = bf.fact_id
 		  JOIN fact_motifs m ON m.fact_id = bf.fact_id
 		  LEFT JOIN motif_aliases a ON a.branch_id = bf.branch_id AND a.motif = m.motif
-		 WHERE bf.branch_id = ? AND f.origin = 'authored'
-		 GROUP BY `+key, branchID)
+		 WHERE bf.branch_id = ? AND f.origin = 'authored'`+scope+`
+		 GROUP BY `+key, args...)
 	if err != nil {
 		return h, fmt.Errorf("VocabularyHealth: %w", err)
 	}

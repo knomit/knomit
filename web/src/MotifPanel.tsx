@@ -63,7 +63,7 @@ export function MotifPanel({ motifs, focused, onClose, onPivot, menuRef, onMouse
         fontFamily: 'var(--k-font-mono)', fontSize: 10, letterSpacing: '0.06em',
         textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0,
       }}>
-        <span style={{ color: '#e8eef6' }}>{MOTIF_GLYPH} same shape</span>
+        <span style={{ color: '#e8eef6' }}>{MOTIF_GLYPH} same motif</span>
         <span style={{ fontSize: 13, fontWeight: 600, color: '#e8eef6' }}>{motifs.length}</span>
         <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{

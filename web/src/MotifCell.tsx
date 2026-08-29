@@ -45,7 +45,7 @@ export function MotifCell({ motif, open, onToggle, panelId }: {
     return (
       <div data-testid="motif-cell" data-interactive="false" data-state="zero" style={cell('#333')}>
         <span aria-hidden style={glyph}>{MOTIF_GLYPH}</span>
-        <span style={label}>same shape</span>
+        <span style={label}>same motif</span>
         <b style={count}>0</b>
       </div>
     );
@@ -64,7 +64,7 @@ export function MotifCell({ motif, open, onToggle, panelId }: {
     ? `Count unavailable: ${motif.error ?? 'request failed'}`
     : loading
       ? `${motif.motif} — loading`
-      : `${motif.cluster?.carrier_count ?? 0} facts share this shape`;
+      : `${motif.cluster?.carrier_count ?? 0} facts share this motif`;
 
   return (
     <button

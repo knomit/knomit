@@ -920,6 +920,19 @@ paths:
         vocabulary surface.
       operationId: listMotifs
       parameters:
+        - name: path
+          in: query
+          description: |
+            Path prefix SCOPE — the vocabulary of one subtree rather than of the
+            branch, matched exactly as `/stats?path=` matches. A cluster no fact
+            under the prefix carries is ABSENT rather than present with a zero,
+            `df` counts carriers in the subtree (`df_total` keeps the
+            branch-wide count), and `health` is counted over the same subtree.
+
+            That last part is the difference between this and `q`: a path says
+            which corpus you are asking about, so it narrows the health block
+            too; a search is a way of reading one page, so it does not.
+          schema: { type: string }
         - { name: q,      in: query, description: "Case-insensitive substring narrow over member spellings AND definition text. `count` reflects the narrowed total.", schema: { type: string } }
         - { name: sort,   in: query, description: "`df` (document frequency desc, ties by canonical asc) or `name` (canonical asc). Any other value is a 400.", schema: { type: string, enum: [df, name], default: df } }
         - { name: limit,  in: query, description: "1–200; out-of-range or non-integer is 400. The maximum is a hard ceiling, not a clamp.", schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
@@ -2497,7 +2510,7 @@ components:
         and persisted state key on; `canonical` is the df-elected
         representative spelling and flips as usage shifts — display it, never
         key on it.
-      required: [cluster_key, canonical, members, df, definition_state, _links]
+      required: [cluster_key, canonical, members, df, df_total, definition_state, _links]
       properties:
         cluster_key: { type: string, description: Stable cluster identity. }
         canonical:   { type: string, description: Representative spelling, for display only. }
@@ -2511,6 +2524,20 @@ components:
             comes from the pivot query itself and is the authority on how many
             facts `_links.facts` returns. The two are the same quantity asked of
             two independent queries and can differ in flight.
+
+            NARROWED BY `path`: under a path scope this counts the carriers in
+            that subtree, and `df_total` keeps the branch-wide figure.
+        df_total:
+          type: integer
+          description: |
+            `df` ignoring `path` — the branch-wide carrier count. Equal to `df`
+            on an unscoped request, and always sent, so its absence never has to
+            mean two things.
+
+            It exists because the pivot a row opens DROPS the path (a motif cuts
+            across the ontology), so a scoped row's own count is not what the
+            pivot will return. `df` says how much of the shape is here; this says
+            how much there is.
         definition:  { type: string, description: "The cluster's glossary sentence. Absent when none was ever authored; PRESENT when stale (a stale sentence is served as interim rather than gapping the cluster)." }
         definition_state:
           type: string
@@ -2584,7 +2611,7 @@ components:
             health:
               allOf:
                 - $ref: "#/components/schemas/MotifVocabularyHealth"
-                - description: "Corpus-level and authored-only; unlike `count`, it is NOT narrowed by `q`."
+                - description: "Authored-only, and over whatever corpus `path` scopes to; unlike `count`, it is NOT narrowed by `q`."
             _embedded:
               type: object
               properties:

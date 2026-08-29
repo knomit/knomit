@@ -305,6 +305,13 @@ type MotifIndex interface {
 	// Clusters returns the resolved vocabulary — one row per CLUSTER, most
 	// frequent first, deterministic on ties.
 	Clusters(ctx context.Context, branch string) ([]MotifCluster, error)
+	// ClustersUnder is Clusters narrowed to the facts under a path prefix: a
+	// cluster no fact there carries is ABSENT, and DF counts carriers in that
+	// subtree while DFTotal keeps the branch-wide figure. An empty prefix is
+	// exactly Clusters. Membership and CanonicalID stay branch-wide either way,
+	// so a scoped view never renames a cluster the unscoped one has already
+	// named.
+	ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]MotifCluster, error)
 	// CarrierTitles returns up to limit titles of live facts carrying the
 	// cluster. The judge sees these: string-only clustering keeps
 	// adjacent-family false merges (§12-E3), and the titles are what expose it.
@@ -328,6 +335,12 @@ type MotifIndex interface {
 	// VocabularyHealth computes the §3.3 metrics over AUTHORED facts only.
 	// Diagnostic; nothing branches on it.
 	VocabularyHealth(ctx context.Context, branch string) (MotifVocabularyHealth, error)
+	// VocabularyHealthUnder is VocabularyHealth over the authored facts under a
+	// path prefix. An empty prefix is exactly VocabularyHealth. It exists so a
+	// scoped vocabulary view can report health for the SAME facts its list is
+	// counted over — a branch-wide strip beside a subtree-wide list would put
+	// two populations in one row.
+	VocabularyHealthUnder(ctx context.Context, branch, pathPrefix string) (MotifVocabularyHealth, error)
 	// MotifCoverage reports how many live authored facts carry a motif, out of
 	// how many there are. Both counts come from one query over one denominator
 	// so they cannot disagree (knomit#124). The backlog term left with the

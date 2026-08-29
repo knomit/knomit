@@ -56,7 +56,7 @@ describe('the landed pivot', () => {
     draw(pivoted());
     await waitFor(() => expect(screen.getByTestId('library-motif')).toBeTruthy());
     expect(screen.getByTestId('library-leaf').textContent).toBe('failure-presents-as-success');
-    expect(screen.getByTestId('library-motif')).toHaveTextContent('same shape as');
+    expect(screen.getByTestId('library-motif')).toHaveTextContent('same motif as');
     await waitFor(() => expect(screen.getByTestId('library-motif-definition').textContent)
       .toContain('same signals a successful one would'));
     // Not a location: the ancestors line is gone, because a motif cuts across

@@ -10,7 +10,7 @@ import { displayLensPath } from './utils';
 // THREE ROWS.
 //   1. the values — type, kind, confidence, sources, and the mount in a lens
 //   2. the path (or, once the fact's own title has scrolled away, the title)
-//   3. the edges: what cites this fact, what it cites, what has the same shape,
+//   3. the edges: what cites this fact, what it cites, what shares its motif,
 //      and — outside the border — the version, its date, and retract.
 //
 // It was one row until the motif names arrived. Names are long, variable and
