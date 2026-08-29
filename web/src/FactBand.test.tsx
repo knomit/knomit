@@ -27,6 +27,19 @@ describe('FactBand', () => {
       'agent/mindev.local-8ef0cd32', fact.path]) {
       expect(t).toContain(part);
     }
+    // Three rows now: values, path, edges. The path moved to a row of its own
+    // when the edges row arrived — motif names are long enough that sharing a
+    // line with them was never going to hold.
+    expect(screen.getByTestId('fact-band-path').textContent).toBe(fact.path);
+  });
+
+  it('strips the kb://<id12>/ qualifier from the displayed path', () => {
+    // Moved here from FactMetaLine with the path itself. The mount is already
+    // named by the source badge on row 1, so repeating its opaque id on row 2
+    // spends characters on something the reader has just been told.
+    render(<FactBand fact={{ ...fact, path: 'kb://bbbbbbbbbbbb/kb/api/auth.md' }}
+      dispatch={vi.fn()} lensMeta={lensMeta} pinned={false} actions={actions} />);
+    expect(screen.getByTestId('fact-band-path').textContent).toBe('kb/api/auth.md');
   });
 
   it('does not repeat the title while the real one is on screen', () => {
@@ -44,34 +57,45 @@ describe('FactBand', () => {
     render(<FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned actions={actions} />);
     const t = band().textContent!;
     expect(screen.getByTestId('fact-band-title').textContent).toBe(fact.title);
+    // Every VALUE survives — that is the half of the old rule that still holds.
     for (const kept of ['synthesis', 'distilled', '0.85', '1 source', 'core',
-      'agent/mindev.local-8ef0cd32', fact.path]) {
+      'agent/mindev.local-8ef0cd32']) {
       expect(t).toContain(kept);
     }
+    // The path is what yields, and now it yields unconditionally: with rows
+    // explicit, keeping both it and the title always costs a fourth row. The
+    // old band measured whether the path had wrapped and let it yield only
+    // then; there is nothing left to measure, so the judgement that survived
+    // that measurement — the path is worth less than the title while reading —
+    // simply applies every time.
+    expect(screen.queryByTestId('fact-band-path')).toBeNull();
   });
 
-  it('pinned and unpinned differ by exactly one element: the title', () => {
+  it('pinned and unpinned are the same shape — only row 2 changes', () => {
+    // The band must not change HEIGHT as a fact scrolls: growing a row
+    // mid-scroll shifts the prose under the reader's eye, which is the thing
+    // the old wrap-measurement was contorting itself to avoid. Three rows in
+    // both states, and the swap is contained to the middle one.
     const { rerender } = render(
       <FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned={false} actions={actions} />);
-    const open = screen.getByTestId('fact-meta').children.length;
+    const rows = band().children.length;
+    const values = screen.getByTestId('fact-meta').children.length;
+
     rerender(<FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned actions={actions} />);
-    // +2: the title and the zero-height break that puts it on its own row.
-    expect(screen.getByTestId('fact-meta').children.length).toBe(open + 2);
+    expect(band().children.length).toBe(rows);
+    expect(screen.getByTestId('fact-meta').children.length).toBe(values);
   });
 
   it('pinned: the title takes its OWN row, under the values', () => {
-    // Not inline among them: a title is long and variable, so sharing the row
-    // made the values it sits beside shift as it changed. It goes where the
-    // path goes when the row runs out — the line below.
+    // Still true, and now structural rather than coaxed out of a wrapping flex
+    // row with a zero-height break. A title is long and variable; sharing the
+    // values' row made them shift as it changed.
     render(<FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned actions={actions} />);
-    const line = screen.getByTestId('fact-meta');
     const title = screen.getByTestId('fact-band-title');
-    // The break before it is a full-width zero-height flex item, which is what
-    // makes the wrap deterministic rather than dependent on the row's fullness.
-    const brk = title.previousElementSibling as HTMLElement;
-    expect(brk.style.flexBasis).toBe('100%');
-    expect(brk.style.height).toBe('0px');
-    expect(line.lastElementChild).toBe(title);
+    expect(title.parentElement).toBe(band());
+    expect(screen.getByTestId('fact-meta').contains(title)).toBe(false);
+    // Row 2 of three: under the values, above the edges.
+    expect(band().children[1]).toBe(title);
   });
 
   it('keeps the actions in both states — they are the point of pinning', () => {
@@ -82,12 +106,14 @@ describe('FactBand', () => {
     expect(screen.getByTestId('the-actions')).toBeTruthy();
   });
 
-  it('wraps the meta, never the actions', () => {
-    // When the row runs out of room the path drops to a second line INSIDE the
-    // meta group; the actions sit outside it and never move. Aligned to the
-    // top, so they stay on the first line rather than centring against two.
+  it('wraps the values, and keeps the actions out of them', () => {
+    // The band is a column of rows now, so "the path drops to a second line"
+    // is no longer a thing that can happen — it has a line. What survives is
+    // the part that still matters: the values may wrap among themselves, and
+    // the actions are never inside them, so a long value cannot push the
+    // retract button somewhere new.
     render(<FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned={false} actions={actions} />);
-    expect(band().style.alignItems).toBe('flex-start');
+    expect(band().style.flexDirection).toBe('column');
 
     const meta = screen.getByTestId('fact-band-meta');
     expect(meta.style.flexWrap).toBe('wrap');
@@ -98,6 +124,10 @@ describe('FactBand', () => {
     expect(act.style.flex).toBe('0 0 auto');
     expect(act.contains(screen.getByTestId('the-actions'))).toBe(true);
     expect(meta.contains(screen.getByTestId('the-actions'))).toBe(false);
+    // And they live on the edges row, pinned to its right — outside the border
+    // that will hold the panel-openers.
+    expect(screen.getByTestId('fact-band-edges').contains(act)).toBe(true);
+    expect(act.style.marginLeft).toBe('auto');
   });
 
   it('shows no mount or branch in a repo context', () => {
@@ -110,38 +140,15 @@ describe('FactBand', () => {
   // jsdom has no layout: every offsetTop is 0, so the wrapped case cannot
   // happen by itself and has to be staged. Without this the "path yields"
   // branch would never run in the suite at all.
-  function withWrappedPath(run: () => void) {
-    const proto = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
-    Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
-      configurable: true,
-      get(this: HTMLElement) {
-        // The path is the only mono value that starts with kb/ or src://.
-        return /^(kb|src)[:/]/.test(this.textContent || '') ? 30 : 0;
-      },
-    });
-    try { run(); } finally {
-      if (proto) Object.defineProperty(HTMLElement.prototype, 'offsetTop', proto);
-    }
-  }
-
-  it('pinned: the path YIELDS when it had wrapped — the title takes that line', () => {
-    // A wrapped path sits exactly where the title is about to go. Keeping both
-    // makes a three-row band; the path is the one worth less while reading.
-    withWrappedPath(() => {
-      const { rerender } = render(
-        <FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned={false} actions={actions} />);
-      expect(band().textContent).toContain(fact.path);
-      rerender(<FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned actions={actions} />);
-      expect(band().textContent).not.toContain(fact.path);
-      expect(screen.getByTestId('fact-band-title')).toBeTruthy();
-    });
-  });
-
-  it('pinned: the path STAYS when it was inline — nothing is in the way', () => {
-    // The default jsdom layout reports every element at the same offsetTop,
-    // which is exactly the inline case.
+  it('pinned: the path yields every time, not only when it had wrapped', () => {
+    // Supersedes "the path STAYS when it was inline". That test described a
+    // band where the path shared the values' row, so keeping it cost nothing
+    // unless it had already wrapped — a fact the old code established by
+    // measuring offsetTop. With the path on a row of its own, keeping it
+    // alongside the title always costs a fourth row, so it always yields and
+    // the measurement is gone.
     render(<FactBand fact={fact} dispatch={vi.fn()} lensMeta={lensMeta} pinned actions={actions} />);
-    expect(band().textContent).toContain(fact.path);
+    expect(band().textContent).not.toContain(fact.path);
     expect(screen.getByTestId('fact-band-title')).toBeTruthy();
   });
 });

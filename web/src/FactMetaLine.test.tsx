@@ -19,7 +19,9 @@ describe('FactMetaLine', () => {
   it('says everything the four stacked rows said, on one line', () => {
     render(<FactMetaLine fact={fact} dispatch={vi.fn()} />);
     const t = line().textContent!;
-    for (const part of ['synthesis', 'distilled', '0.60', '1', fact.path]) {
+    // The path is no longer among them: it has a row of its own in FactBand
+    // since the edges row arrived, and this component is now row 1 alone.
+    for (const part of ['synthesis', 'distilled', '0.60', '1']) {
       expect(t).toContain(part);
     }
   });
@@ -123,14 +125,6 @@ describe('FactMetaLine', () => {
     expect(screen.getByTestId('fact-branch').textContent).toContain('agent/mindev.local-8ef0cd32');
   });
 
-  it('strips the kb://<id12>/ qualifier from the displayed path', () => {
-    render(<FactMetaLine
-      fact={{ ...fact, path: 'kb://bbbbbbbbbbbb/kb/api/auth.md' }}
-      dispatch={vi.fn()}
-      lensMeta={{ repo: 'docs', branch: 'main' }} />);
-    expect(line().textContent).toContain('kb/api/auth.md');
-    expect(line().textContent).not.toContain('bbbbbbbbbbbb');
-  });
 
   it('omits what a fact does not have rather than printing a gap', () => {
     render(<FactMetaLine

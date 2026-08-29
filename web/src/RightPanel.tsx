@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import { useAsync } from './hooks';
 import { api } from './api';
@@ -16,6 +16,10 @@ import { ConnectionsPanel } from './ConnectionsPanel';
 import { VersionWalker } from './VersionWalker';
 import { HighlightsPanel } from './HighlightsPanel';
 import { FacetPanel } from './FacetPanel';
+import { MotifCell } from './MotifCell';
+import { MotifOverflowCell, orderMotifs, OVERFLOW } from './MotifRow';
+import { useMotifClusters } from './useMotifClusters';
+import type { OrderedMotifs } from './MotifRow';
 import { RepoRows } from './RepoRows';
 import type { NavRequest } from './useNavigationManager';
 
@@ -60,6 +64,11 @@ function renderFact(
   // The band lives OUTSIDE the scroller and needs to know when the fact's own
   // title has left it; RightPanel owns the observer, this owns the ref.
   band?: { pinned: boolean; titleRef: React.RefObject<HTMLDivElement | null>; scrollRef: React.RefObject<HTMLDivElement | null> },
+  // The fact's motifs, already resolved by the panel above, and the slot that
+  // owns which one is open. Both optional so the many call sites that render a
+  // fact without the motif surface (diff views, tests) stay unchanged.
+  motifs: OrderedMotifs = { shown: [], hidden: [] },
+  motifSlot?: { open: string | null; onToggle: (motif: string) => void; panelId: string },
   // Whether a tag or origin click can still become a filter chip.
   //
   // NOT `readOnly`, which is why this is its own parameter: read-only means
@@ -83,20 +92,109 @@ function renderFact(
   const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
   // Pinned commit for in-body ref hops (narrowed to string for the closure).
   const refAnchor = fact.commit_hash;
-  // The controls travel into the band, so they stay reachable on a long fact —
-  // retract most of all, which otherwise needed a scroll back to the top.
-  const controls = (
-    <>
-          {/* The control menu: connections, version, retract. position:relative
-              so the panel can hang from it; the hover handlers cover the whole
-              group so moving between a cell and the panel (across the 6px gap,
-              which belongs to neither) does not dismiss it. */}
+  // ROW 3 IS TWO THINGS, and the border is the line between them.
+  //
+  // `edgesGroup` holds everything that opens the panel below — what cites this
+  // fact, what it cites, and what has the same shape. One border, hairline
+  // dividers, every child borderless: the recipe the connections cells were
+  // built on, extended rather than replaced.
+  //
+  // `actions` is everything else on that row: the version (a mode change, not a
+  // panel), the date it is read with, and retract, which destroys the fact
+  // rather than inspecting it. None of them belong inside a border that means
+  // "opens a panel".
+  const edgesGroup = (
           <span
             ref={connections?.menuRef}
             onMouseEnter={connections?.onMouseEnter}
             onMouseLeave={connections?.onMouseLeave}
-            style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginTop: 4 }}
+            style={{ position: 'relative', display: 'flex', minWidth: 0 }}
           >
+            <span data-testid="fact-control-strip" style={controlStrip}>
+              {connections && (
+                <>
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="in"
+                      count={connections.incoming.length}
+                      open={connections.open === 'in'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                      error={connections.error}
+                    />
+                  </span>
+                  <span style={stripDivider} />
+                  <span style={stripCell}>
+                    <ConnectionsCell
+                      dir="out"
+                      count={connections.outgoing.length}
+                      open={connections.open === 'out'}
+                      onToggle={connections.onToggle}
+                      panelId={connections.panelId}
+                      error={connections.error}
+                    />
+                  </span>
+                </>
+              )}
+              {/* The shape cells. Ordered by how many facts carry each motif,
+                  never by the order the author typed them into the file — that
+                  order means nothing, and the panel below sorts the same way so
+                  the row and the panel cannot disagree about one list. */}
+              {motifs.shown.map(m => (
+                <span key={m.motif} style={{ display: 'inline-flex' }}>
+                  <span style={stripDivider} />
+                  <span style={stripCell}>
+                    <MotifCell
+                      motif={m}
+                      open={motifSlot?.open === m.motif}
+                      onToggle={motifSlot?.onToggle ?? (() => {})}
+                      panelId={motifSlot?.panelId ?? ''}
+                    />
+                  </span>
+                </span>
+              ))}
+              {motifs.shown.length === 0 && (
+                <>
+                  <span style={stripDivider} />
+                  <span style={stripCell}>
+                    <MotifCell motif={null} open={false} onToggle={() => {}} panelId="" />
+                  </span>
+                </>
+              )}
+              {motifs.hidden.length > 0 && (
+                <>
+                  <span style={stripDivider} />
+                  <span style={stripCell}>
+                    <MotifOverflowCell
+                      hidden={motifs.hidden}
+                      open={motifSlot?.open === OVERFLOW}
+                      onToggle={motifSlot?.onToggle ?? (() => {})}
+                      panelId={motifSlot?.panelId ?? ''}
+                    />
+                  </span>
+                </>
+              )}
+            </span>
+            {connections && (
+              <ConnectionsPanel
+                id={connections.panelId}
+                open={connections.open}
+                incoming={connections.incoming}
+                outgoing={connections.outgoing}
+                error={connections.error}
+                onClose={connections.onClose}
+                onHop={connections.onHop}
+                menuRef={connections.menuRef}
+                onMouseEnter={connections.onMouseEnter}
+                onMouseLeave={connections.onMouseLeave}
+              />
+            )}
+          </span>
+  );
+
+  const actions = (
+    <>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             {fact.commit_date && (
               // WHEN THIS VERSION OF THE FACT WAS COMMITTED — not the anchor's
               // date. It sits here, left of the control strip, for two reasons:
@@ -134,34 +232,15 @@ function renderFact(
               the navigation controls would make the destructive action look
               like one more place to click.
             */}
-            <span data-testid="fact-control-strip" style={controlStrip}>
-              {connections && (
-                <>
-                  <span style={stripCell}>
-                    <ConnectionsCell
-                      dir="in"
-                      count={connections.incoming.length}
-                      open={connections.open === 'in'}
-                      onToggle={connections.onToggle}
-                      panelId={connections.panelId}
-                      error={connections.error}
-                    />
-                  </span>
-                  <span style={stripDivider} />
-                  <span style={stripCell}>
-                    <ConnectionsCell
-                      dir="out"
-                      count={connections.outgoing.length}
-                      open={connections.open === 'out'}
-                      onToggle={connections.onToggle}
-                      panelId={connections.panelId}
-                      error={connections.error}
-                    />
-                  </span>
-                </>
-              )}
-              {connections && fact.commit_hash && <span style={stripDivider} />}
-              {fact.commit_hash && (
+            {/* VERSION LEFT THE BORDER. Everything inside the group opens the
+                panel below; the version walker does something else entirely —
+                it puts the app into history and rotates the left rail into a
+                timeline — and it removes itself while its own commits load and
+                on a fact with no recorded versions. Outside, it can come and go
+                without leaving a hole in a border, and it sits beside the date
+                it is read with, which is where "v2 · 3d ago" reads as one
+                statement. */}
+            {fact.commit_hash && (
               <VersionWalker
                 repo={histAnchor.repo}
                 branch={histAnchor.branch}
@@ -169,8 +248,7 @@ function renderFact(
                 currentCommit={fact.commit_hash}
                 onScrub={onScrub ?? (() => {})}
               />
-              )}
-            </span>
+            )}
             {retractedAt && (
               <span
                 data-testid="retracted-version-badge"
@@ -196,20 +274,6 @@ function renderFact(
                 onMouseLeave={e => { if (!retractDisabled) (e.currentTarget as HTMLElement).style.opacity = '0.6'; }}
               ><RetractIcon color={retractColor} size={15} /></button>
             )}
-            {connections && (
-              <ConnectionsPanel
-                id={connections.panelId}
-                open={connections.open}
-                incoming={connections.incoming}
-                outgoing={connections.outgoing}
-                error={connections.error}
-                onClose={connections.onClose}
-                onHop={connections.onHop}
-                menuRef={connections.menuRef}
-                onMouseEnter={connections.onMouseEnter}
-                onMouseLeave={connections.onMouseLeave}
-              />
-            )}
           </span>
     </>
   );
@@ -217,7 +281,7 @@ function renderFact(
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <FactBand fact={fact} dispatch={dispatch} lensMeta={lensMeta}
-        pinned={band?.pinned ?? false} actions={controls} filterable={filterable} />
+        pinned={band?.pinned ?? false} edges={edgesGroup} actions={actions} filterable={filterable} />
       <div ref={band?.scrollRef}
         style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 28px 24px', boxSizing: 'border-box' }}>
         <div ref={band?.titleRef} data-testid="fact-title" style={{
@@ -493,9 +557,33 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   const connectionsMenuRef = useRef<HTMLSpanElement>(null);
   const connectionsTimer = useRef<number | undefined>(undefined);
 
+  // Which motif's panel is open, if any. Its own state rather than a widened
+  // `connectionsOpen`: the two panels show different things and only one may be
+  // open at a time, which the toggles below enforce by closing the other.
+  const [motifOpen, setMotifOpen] = useState<string | null>(null);
+  const toggleMotif = useCallback((motif: string) => {
+    setConnectionsOpen(null);
+    setMotifOpen(cur => (cur === motif ? null : motif));
+  }, []);
+
+  // The open fact's motifs, resolved to their clusters. The NAMES came with the
+  // fact and cost nothing; each count is a request, so the row draws the names
+  // at once and fills the counts in — see useMotifClusters.
+  //
+  // The anchor is the fact's own history anchor, the same one the edges use, so
+  // a lens fact resolves against the mount it actually lives in rather than the
+  // write repo.
+  const motifAnchor = factHistoryAnchor(state);
+  const resolvedMotifs = useMotifClusters(motifAnchor.repo, motifAnchor.branch, fact?.motifs);
+  const orderedMotifs = useMemo(() => orderMotifs(resolvedMotifs), [resolvedMotifs]);
+  const motifPanelId = 'motif-panel';
+
   const closeConnections = useCallback(() => setConnectionsOpen(null), []);
   const toggleConnections = useCallback(
-    (dir: EdgeDir) => setConnectionsOpen(cur => (cur === dir ? null : dir)), []);
+    (dir: EdgeDir) => {
+      setMotifOpen(null);
+      setConnectionsOpen(cur => (cur === dir ? null : dir));
+    }, []);
 
   const cancelConnectionsClose = useCallback(() => {
     window.clearTimeout(connectionsTimer.current);
@@ -939,6 +1027,8 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
             onMouseLeave: scheduleConnectionsClose,
           },
           { pinned: titlePinned, titleRef, scrollRef },
+          orderedMotifs,
+          { open: motifOpen, onToggle: toggleMotif, panelId: motifPanelId },
           isLive(state),
         )}
       </div>

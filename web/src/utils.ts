@@ -248,6 +248,16 @@ export function chipStyle(category: string, value: string):
 export type EdgeDir = 'in' | 'out';
 export const EDGE_ACCENT: Record<EdgeDir, string> = { in: '#8af', out: '#fa8' };
 export const EDGE_GLYPH: Record<EdgeDir, string> = { in: '↙', out: '↗' };
+/** What each direction is CALLED, defined once so the cell and the panel it
+ *  opens cannot drift. The cells gained words when the motif names arrived and
+ *  the row became a list of named things rather than a row of symbols; the
+ *  panel headings were renamed to match, rather than leaving one gesture with
+ *  two vocabularies ("cited by" on the button, "Referenced by" on the panel).
+ *
+ *  The direction lives in the verb, not only in the arrow — so the two never
+ *  read alike at a glance, which spelling them out in full ("referenced by" /
+ *  "references") could not manage in 240px. */
+export const EDGE_LABEL: Record<EdgeDir, string> = { in: 'cited by', out: 'cites' };
 // A direction whose edges could not be fetched, on the cell and in the panel
 // body. Shared so the warning in the header and the message it opens read as
 // the same failure rather than two unrelated red things.

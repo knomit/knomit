@@ -1,5 +1,5 @@
 import type { EdgeDir } from './utils';
-import { EDGE_ACCENT, EDGE_ERROR, EDGE_GLYPH } from './utils';
+import { EDGE_ACCENT, EDGE_ERROR, EDGE_GLYPH, EDGE_LABEL } from './utils';
 
 interface Props {
   dir: EdgeDir;
@@ -71,6 +71,7 @@ export function ConnectionsCell({ dir, count, open, onToggle, panelId, error = n
   const inner = (
     <>
       <span style={{ fontSize: 10, opacity: 0.9 }}>{EDGE_GLYPH[dir]}</span>
+      <span data-testid={`connections-label-${dir}`}>{EDGE_LABEL[dir]}</span>
       <span style={{ fontWeight: 600 }}>{failed ? '!' : count}</span>
     </>
   );
