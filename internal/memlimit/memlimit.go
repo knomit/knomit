@@ -231,6 +231,15 @@ func ownCgroupV2Path(fsys fs.FS) (string, error) {
 //
 // Within whatever directory we do read, hierarchical_memory_limit accounts for
 // ancestor limits and is preferred over memory.limit_in_bytes when smaller.
+//
+// DEFERRED, with a trigger condition rather than left as an oversight: giving v1
+// the same treatment v2 has (read /proc/self/cgroup, walk the hierarchy) is not
+// done, because the exposure needs a NON-containerized host process under a v1
+// LEAF limit — a legacy shape, since v2 has been the default since roughly 2021
+// and v1 containers work via the bind-mount above. The failure is also in the
+// safe direction: such a host sizes from physical RAM, which over-budgets the
+// batch rather than under-detecting a wall. Revisit if a v1 host deployment
+// ever actually exists.
 func cgroupV1Limit(fsys fs.FS) (int64, error) {
 	best := int64(0)
 	if n, err := readInt(fsys, "sys/fs/cgroup/memory/memory.limit_in_bytes"); err == nil && n > 0 && n < v1Unlimited {
