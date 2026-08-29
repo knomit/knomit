@@ -83,7 +83,8 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// memlimit.Detect never fails — an undetectable ceiling yields the fixed
 	// default, because embeddings are mandatory and must not be blocked by an
 	// unknown amount of memory.
-	budget := embeddings.ResolveBudget(cfg.Embeddings.MaxBatchTokens, memlimit.Detect())
+	lim := memlimit.Detect()
+	budget := embeddings.ResolveBudget(cfg.Embeddings.MaxBatchTokens, lim)
 	maxBatchTokens := budget.Tokens
 	// Warn rather than reject: both bounds are judgement, not correctness.
 	// The low warning catches a predictable operator error — the constant this
@@ -130,7 +131,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		log.Warn().Int("max_batch_tokens", n).
 			Msg("embeddings.max_batch_tokens is above the shipped default; batch inference is serialized to compensate, and beyond 32768 tokens the memory cost is not covered by any measurement")
 	}
-	if budget.Clamped == "floor" {
+	// FloorClass, not budget.Clamped: Clamped is always "none" for an explicit
+	// budget, so an operator pinning a value on a small host would get no warning
+	// at all — and for a cgroup source Clamped derives from a different fraction
+	// and a different ceiling, so it answers a different question. The warning
+	// should track the MACHINE, which is what FloorClass computes.
+	if embeddings.FloorClass(lim) {
 		log.Warn().Int("max_batch_tokens", maxBatchTokens).
 			Str("batch_budget_source", budget.Source).
 			Int64("memory_limit_bytes", budget.LimitBytes).

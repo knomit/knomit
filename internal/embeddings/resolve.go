@@ -118,25 +118,39 @@ func WorstCaseBatchBytes(tokens int) int64 {
 //     roomy shape   1 batch  of 8x2048 (1820 MiB)   65.42s vs 65.25s   ratio 1.00
 //     mid-size      2 batches of 4x2048 ( 910 MiB)  57.71s vs 78.54s   ratio 1.36
 //
-//     So capping costs ~0% on a roomy host and ~36% on a ~10 GiB one, whose
-//     smaller derived budget puts it in the narrow-batch regime where
-//     concurrency still buys something. Do not write "costs nothing" — that is
-//     true only at the top of the range.
+//     Read those precisely. Both are TWO-worker numbers, i.e. they measure
+//     capping 2-way overlap to 1-way — the SMALLEST reduction this cap ever
+//     performs. The production observation that motivated all of this was THREE
+//     concurrent repos, and no wide-shape measurement exists at 3 or 4 workers.
+//     So "capping from 2-way to 1-way at the governed shape costs ~0%" is
+//     supported; "roomy hosts pay ~0%" is not. Do not write "costs nothing":
+//     at ~10 GiB, where the derived budget is narrower, capping costs ~36%.
 //
-//     Taken anyway, for two reasons. The coherence argument STRENGTHENS at
-//     mid-size: capacity 2 there retains 135% of the share sharedFraction
-//     claims, against 109% on a roomy host. And the asymmetry that decides it is
-//     retention versus recoverability — the ONNX arena keeps a memory overspend
-//     for the process lifetime, while 36% is transient wall-clock on re-embedding,
-//     an operation that is rare by design.
+//     Taken anyway. Capacity 2 exceeds the fraction's envelope across the WHOLE
+//     detected range — roughly 126-145% of the share sharedFraction claims,
+//     peaking near 12 GiB — so there is no part of the range where it is
+//     coherent with our own sizing. (An earlier comment claimed the overspend
+//     "strengthens at mid-size" by comparing 135% against 109%; those were two
+//     different accountings, one including nonEmbeddingReserve and one not.
+//     Computed consistently the curve is flat or reversed, and not monotone in
+//     either direction. The range above is the honest statement.)
 //
-//     NO capacity-2 tier for mid-size hosts, and the reason is this design's own
-//     history: every regime boundary it has carried produced a review finding AT
-//     that boundary — the clamping proxy at the ceiling, the absorber premise at
-//     the floor, the threshold mismatch at the ladder edge. A second tier adds
-//     two more boundaries to defend; "bounded wherever we detected anything"
-//     adds none. On the evidence of this change, fewer boundaries is itself a
-//     safety property.
+//     The asymmetry that actually decides it is RETENTION versus
+//     RECOVERABILITY: the ONNX arena keeps a memory overspend for the process
+//     lifetime, while the throughput cost is transient wall-clock. Note the
+//     gated path is not only rebuilds — learn.go embeds a whole incoming write
+//     request and motif_alias.go a whole motif vocabulary — so the cost lands on
+//     interactive writes too, not merely on a rare operation.
+//
+//     NO capacity-2 tier for mid-size hosts, and the reason is evidential
+//     rather than architectural: NOTHING AT MID-SIZE HAS BEEN MEASURED THAT
+//     COULD GROUND ONE. There are two 2-worker throughput points and zero
+//     memory measurements under 2-way overlap on a mid-size host — which is
+//     precisely the standard that killed capacity 2 twice already. Revisit if
+//     that measurement is taken. A further reason to expect the 36% to shrink
+//     there, also unmeasured: a ~10 GiB host is typically a 2-4 vCPU VM, where
+//     ORT's intra-op parallelism saturates sooner and concurrency buys less
+//     than it does on the 8-core box these numbers came from.
 //
 //   - An UNREADABLE ceiling serializes: we know a limit may apply and could not
 //     read it, which is the one case where we know we are blind.
@@ -207,68 +221,49 @@ func batchConcurrency(lim memlimit.Limit, tokens int) int {
 		// the operator has overridden the sizing that would have bounded it.
 		// Both want the same answer, so there is one threshold rather than three.
 		return 1
+
 	case isCgroup(lim.Source):
+		// A hard wall with no absorber behind it.
 		return 1
+
 	case lim.Source == memlimit.SourceUnreadable:
-		// We POSITIVELY KNOW a limit may apply and could not read it. The same
-		// reasoning that stops detection reporting physical RAM here applies to
-		// concurrency: falling back to the default budget AND permitting
-		// unbounded overlap would be behaviourally identical to the over-report
-		// this case exists to prevent, with only the log line changed. This is
-		// the one situation where we know we are blind, so it is the one where
-		// guessing is least defensible.
+		// We POSITIVELY KNOW a limit may apply and could not read it. Falling
+		// back to the default budget AND permitting unbounded overlap would be
+		// behaviourally identical to the over-report this case exists to
+		// prevent, with only the log line changed. The one situation where we
+		// know we are blind is the one where guessing is least defensible.
 		return 1
+
 	case lim.Source == memlimit.SourceOSTotal && lim.HostTotal > 0:
-		// Every DETECTED ceiling is capped at 1, floor-class or not — see
-		// ResolveBudget for why the roomy-host exemption was withdrawn.
-		// Floor-class is still computed (FloorClass) but drives only an operator
-		// warning now, not the cap.
-		return 1
-	case lim.Source == memlimit.SourceUnreadable:
-		// We POSITIVELY KNOW a limit may apply and could not read it. The same
-		// reasoning that stops detection reporting physical RAM here applies to
-		// concurrency: falling back to the default budget AND permitting
-		// unbounded overlap would be behaviourally identical to the over-report
-		// this case exists to prevent, with only the log line changed. This is
-		// the one situation where we know we are blind, so it is the one where
-		// guessing is least defensible.
-		return 1
-	case lim.Source == memlimit.SourceOSTotal && lim.HostTotal > 0:
-		// Any detected ceiling gets the bound; see ResolveBudget. Floor-class is
-		// still computed because it drives an operator WARNING — that host is
-		// small enough to change how knomit runs — but it no longer changes the
-		// cap, which is 1 either way.
+		// EVERY detected ceiling caps at 1, floor-class or not.
 		//
-		// FLOOR-CLASS MACHINE: our share of this host cannot fund even the
-		// smallest budget's batch. Computed from the machine alone — HostTotal
-		// and the constants, never the resolved Tokens — so it is independent of
-		// whether the budget was derived or configured. An operator pinning a
-		// budget on a small laptop must not silently lose the guarantee.
+		// An earlier revision exempted roomier hosts, keying on whether our
+		// share of the machine could fund even a minimum batch (the "floor-class"
+		// predicate, still computed by FloorClass for the operator warning).
+		// That exemption is withdrawn: measured at the shape a roomy host
+		// actually runs, capacity 2 bought nothing.
 		//
-		// Note this applies sharedFraction, i.e. the SAME envelope the budget
-		// math uses. An earlier form asked the question of raw HostTotal on the
-		// theory that unclaimed RAM absorbs overlap. That was over-read from an
-		// observation about the incident machine: its unclaimed ~12 GiB was not
-		// idle, it held code-server and a coding agent, and it absorbed the
-		// overlap because the overlap was small relative to the box, not because
-		// the memory was free. Using two different envelopes also made the app
-		// self-contradictory — on a 4 GiB host it warned that memory was the
-		// binding constraint while permitting unbounded overlap.
-		//
-		// Keying on "floor-class" is a proxy, and the corpus says to check a
+		// Keying on floor-class was a proxy, and the corpus says to check a
 		// proxy's correlation direction per source before trusting it. Here it
-		// is POSITIVELY correlated with constraint: no fraction is spent on a
+		// is POSITIVELY correlated with constraint — no fraction is spent on a
 		// first batch before the comparison, so a smaller machine always means a
-		// smaller share. That is the opposite of the cgroup path, where the
-		// analogous proxy was ANTI-correlated and produced an OOM window.
+		// smaller share — the opposite of the cgroup path, where the analogous
+		// proxy was ANTI-correlated and produced an OOM window. It was sound as
+		// far as it went; it simply stopped being the question once capacity 2
+		// turned out to buy nothing anywhere it applied.
 		//
-		// Boundary is 7696 MiB of physical RAM (7.52 GiB), from
-		// 0.25*H <= 225 + 675 + 1024 MiB.
-		share := int64(float64(lim.HostTotal)*sharedFraction) - ResidentModelBytes - nonEmbeddingReserve
-		_ = share // retained for the floor-class WARN; see FloorClass below.
+		// Note also that an earlier form of this branch asked whether raw
+		// physical RAM could absorb the overlap, on the theory that memory we do
+		// not claim is free. That was over-read from an observation about the
+		// deployed machine: its unclaimed portion was not idle, it held
+		// code-server and a coding agent. Using two different envelopes also made
+		// the app self-contradictory — on a 4 GiB host it warned that memory was
+		// the binding constraint while permitting unbounded overlap.
 		return 1
+
 	default:
-		// Unknown ceiling: no bound, stated openly rather than hidden.
+		// Unknown ceiling: no bound, stated openly rather than hidden. The
+		// operator is warned; see app.New.
 		return 0
 	}
 }

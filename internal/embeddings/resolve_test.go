@@ -346,7 +346,12 @@ func TestFloorClass_DrivesTheWarningNotTheCap(t *testing.T) {
 func TestBatchConcurrency_ExplicitAboveDefaultSerializes(t *testing.T) {
 	// Isolated on an UNKNOWN ceiling, the only class that is otherwise
 	// unbounded — on any detected host the cap would be 1 regardless, so this
-	// rule could not be observed there.
+	// rule cannot be observed there at all.
+	//
+	// Worth knowing: that makes this the ONLY fixture under which the
+	// explicit>default branch is reachable. A rule guarding an operator override
+	// now hangs on a single test class, so if the unknown-ceiling case ever
+	// changes, this rule silently loses its coverage rather than failing.
 	unknown := memlimit.Limit{Source: memlimit.SourceNone}
 	if got := ResolveBudget(DefaultMaxBatchTokens, unknown); got.BatchConcurrency != 0 {
 		t.Errorf("explicit %d (exactly the default) on an unmeasured host: cap = %d, want 0 — the boundary is ABOVE the default",
