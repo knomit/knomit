@@ -19,6 +19,7 @@ import { FacetPanel } from './FacetPanel';
 import { MotifCell } from './MotifCell';
 import { MotifOverflowCell, orderMotifs, OVERFLOW } from './MotifRow';
 import { useMotifClusters } from './useMotifClusters';
+import { MotifPanel } from './MotifPanel';
 import type { OrderedMotifs } from './MotifRow';
 import { RepoRows } from './RepoRows';
 import type { NavRequest } from './useNavigationManager';
@@ -68,7 +69,13 @@ function renderFact(
   // owns which one is open. Both optional so the many call sites that render a
   // fact without the motif surface (diff views, tests) stay unchanged.
   motifs: OrderedMotifs = { shown: [], hidden: [] },
-  motifSlot?: { open: string | null; onToggle: (motif: string) => void; panelId: string },
+  motifSlot?: {
+    open: string | null;
+    onToggle: (motif: string) => void;
+    onClose: () => void;
+    onPivot: (motif: string) => void;
+    panelId: string;
+  },
   // Whether a tag or origin click can still become a filter chip.
   //
   // NOT `readOnly`, which is why this is its own parameter: read-only means
@@ -175,6 +182,18 @@ function renderFact(
                 </>
               )}
             </span>
+            {motifSlot?.open && motifs.shown.length + motifs.hidden.length > 0 && (
+              <MotifPanel
+                id={motifSlot.panelId}
+                motifs={[...motifs.shown, ...motifs.hidden]}
+                focused={motifSlot.open === OVERFLOW ? null : motifSlot.open}
+                onClose={motifSlot.onClose}
+                onPivot={motifSlot.onPivot}
+                menuRef={connections?.menuRef ?? { current: null }}
+                onMouseEnter={connections?.onMouseEnter ?? (() => {})}
+                onMouseLeave={connections?.onMouseLeave ?? (() => {})}
+              />
+            )}
             {connections && (
               <ConnectionsPanel
                 id={connections.panelId}
@@ -577,6 +596,16 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   const resolvedMotifs = useMotifClusters(motifAnchor.repo, motifAnchor.branch, fact?.motifs);
   const orderedMotifs = useMemo(() => orderMotifs(resolvedMotifs), [resolvedMotifs]);
   const motifPanelId = 'motif-panel';
+
+  const closeMotif = useCallback(() => setMotifOpen(null), []);
+  // The pivot: one intent-named action in the reducer, which sets the chip, the
+  // sort, the tier and the open fact together and pushes exactly one history
+  // entry. The panel closes because the view underneath it is about to be a
+  // different list.
+  const pivotMotif = useCallback((motif: string) => {
+    setMotifOpen(null);
+    dispatch({ type: 'PIVOT_MOTIF', motif });
+  }, [dispatch]);
 
   const closeConnections = useCallback(() => setConnectionsOpen(null), []);
   const toggleConnections = useCallback(
@@ -1028,7 +1057,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
           },
           { pinned: titlePinned, titleRef, scrollRef },
           orderedMotifs,
-          { open: motifOpen, onToggle: toggleMotif, panelId: motifPanelId },
+          { open: motifOpen, onToggle: toggleMotif, onClose: closeMotif, onPivot: pivotMotif, panelId: motifPanelId },
           isLive(state),
         )}
       </div>
