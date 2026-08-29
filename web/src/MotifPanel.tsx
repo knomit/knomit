@@ -19,8 +19,8 @@ export const MOTIF_PANEL_WIDTH = 420;
  *
  * The shell is ConnectionsPanel's, deliberately: same width, same surfaces, the
  * same `esc` chip. A reader who has opened one has opened both. There is no
- * version tab, because the version is not a panel-opener and no longer sits in
- * the border this hangs from.
+ * version tab, because the version is not a panel-opener and does not sit with
+ * the cells this hangs from.
  */
 export function MotifPanel({ motifs, focused, onClose, onPivot, menuRef, onMouseEnter, onMouseLeave, id }: {
   /** Every motif on the fact, in the row's order — the panel and the row must

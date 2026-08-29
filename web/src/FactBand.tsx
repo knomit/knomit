@@ -11,7 +11,7 @@ import { displayLensPath } from './utils';
 //   1. the values — type, kind, confidence, sources, and the mount in a lens
 //   2. the path (or, once the fact's own title has scrolled away, the title)
 //   3. the edges: what cites this fact, what it cites, what shares its motif,
-//      and — outside the border — the version, its date, and retract.
+//      and — pinned to the far right — the version, its date, and retract.
 //
 // It was one row until the motif names arrived. Names are long, variable and
 // worth reading, and there is no honest way to fit two of them beside a path, a
@@ -40,10 +40,12 @@ export function FactBand({ fact, dispatch, lensMeta, pinned, actions, edges, fil
   lensMeta?: { repo: string; branch: string };
   /** True once the fact's own title has scrolled out of the view below. */
   pinned: boolean;
-  /** The bordered edges group: everything that opens the panel below. */
+  /** The edges group: everything that opens the panel below. It used to be
+   *  drawn inside a border, which is where the version's exclusion below came
+   *  from; the border is gone and the left/right split carries it now. */
   edges?: ReactNode;
-  /** Version, date and retract — drawn OUTSIDE the border, because the border
-   *  means "opens a panel below" and none of these do. */
+  /** Version, date and retract — pinned right, APART from the edges group,
+   *  because that group means "opens a panel below" and none of these do. */
   actions: ReactNode;
   /** Whether the origin badge is a filter control — see renderFact. */
   filterable?: boolean;
@@ -75,11 +77,11 @@ export function FactBand({ fact, dispatch, lensMeta, pinned, actions, edges, fil
         }}>{lensMeta ? displayLensPath(fact.path) : fact.path}</div>
       )}
 
-      {/* Row 3. The bordered group holds only panel-openers; the version, the
-          date it is read with and the retract button sit outside it. Version
-          removes itself while its own history loads and is absent entirely on a
-          fact with no recorded versions — outside the border it can come and go
-          without leaving a hole in one. */}
+      {/* Row 3. The left group holds only panel-openers; the version, the date
+          it is read with and the retract button are pinned right, apart from
+          them. Version removes itself while its own history loads and is
+          absent entirely on a fact with no recorded versions — over there it
+          can come and go without leaving a gap among the openers. */}
       <div data-testid="fact-band-edges" style={{
         display: 'flex', alignItems: 'center', gap: 12, minWidth: 0,
       }}>
