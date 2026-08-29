@@ -286,9 +286,16 @@ func ourShare(lim memlimit.Limit) int64 {
 // cgroup — floor-clamped, one document per inference, the single deployment
 // shape this feature exists for — booted with no warning at all.
 //
-// The boundary therefore depends on the source, because the fraction does:
-// 7.52 GiB of physical RAM, but roughly 2.1 GiB for a dedicated cgroup, which
-// claims a larger share of a smaller ceiling.
+// The boundary therefore depends on the source, because the fraction does.
+// From `fraction*B - ResidentModelBytes - nonEmbeddingReserve <= 225 MiB`:
+//
+//	os-total / inherited cgroup:  1924/0.25 = 7696 MiB (7.52 GiB)
+//	dedicated cgroup:             1924/0.80 = 2405 MiB (2.35 GiB)
+//
+// A dedicated cgroup claims a larger share of a smaller ceiling, so it clears
+// the floor sooner. Both are pinned by TestFloorClass_Boundaries — an operator
+// sizes a container off these numbers, so a comment drifting from the code here
+// is a number someone acts on.
 //
 // Computed from the MACHINE, never from the resolved budget, so it holds for an
 // explicit budget too. That makes it precisely "what Clamped would have been had

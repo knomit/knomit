@@ -414,3 +414,45 @@ func TestFloorClass_MatchesDerivedClamp(t *testing.T) {
 		}
 	}
 }
+
+// TestFloorClass_Boundaries pins the numbers stated in FloorClass's doc. They
+// are operator-facing — someone sizing a container reads them and decides
+// between 2 GiB and 2.5 GiB — so a comment drifting from the code is a number
+// acted on, not a cosmetic error.
+//
+// The doc previously said "roughly 2.1 GiB" for a dedicated cgroup, which came
+// from (675+1024)/0.8 = 2124 MiB: the 225 MiB batch term dropped. That is a
+// 350 MiB error straddling a container size people actually choose.
+func TestFloorClass_Boundaries(t *testing.T) {
+	// Largest ceiling that is still floor-class, by binary search over the
+	// predicate rather than by recomputing its arithmetic — a test that repeats
+	// the formula cannot catch the formula being wrong.
+	boundary := func(mk func(int64) memlimit.Limit) int64 {
+		lo, hi := int64(256), int64(65536)
+		for lo < hi {
+			mid := (lo + hi + 1) / 2
+			if FloorClass(mk(mid << 20)) {
+				lo = mid
+			} else {
+				hi = mid - 1
+			}
+		}
+		return lo
+	}
+
+	if got := boundary(func(b int64) memlimit.Limit {
+		return memlimit.Limit{Bytes: b, Source: memlimit.SourceOSTotal, HostTotal: b}
+	}); got != 7696 {
+		t.Errorf("os-total boundary = %d MiB, want 7696 (7.52 GiB, as documented)", got)
+	}
+	if got := boundary(func(b int64) memlimit.Limit {
+		return memlimit.Limit{Bytes: b, Source: memlimit.SourceCgroupV2, HostTotal: 64 << 30}
+	}); got != 2405 {
+		t.Errorf("dedicated-cgroup boundary = %d MiB, want 2405 (2.35 GiB, as documented)", got)
+	}
+	if got := boundary(func(b int64) memlimit.Limit {
+		return memlimit.Limit{Bytes: b, Source: memlimit.SourceCgroupV2, Inherited: true, HostTotal: 64 << 30}
+	}); got != 7696 {
+		t.Errorf("inherited-cgroup boundary = %d MiB, want 7696 — an inherited limit takes the shared fraction", got)
+	}
+}
