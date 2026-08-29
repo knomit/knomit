@@ -134,10 +134,13 @@ func packByTokenBudget(lens []int, budget int) [][]int {
 // serialization, which the pure packing tests rely on.
 type batchSem chan struct{}
 
-// newBatchSem builds the gate. Capacity 1 by design: ONNX Runtime already
-// parallelizes a single Run across cores intra-op, so two concurrent Runs
-// contend for the same cores while doubling peak memory — 2x the memory for
-// little or no wall-clock.
+// newBatchSem builds the gate. Capacity 1 because the gate exists to bound
+// MEMORY — one run at a time makes the per-run token budget a per-process
+// bound — not to optimize scheduling.
+//
+// Serializing is NOT free, and its cost depends on batch width. See
+// WithBatchSerialization for the measured numbers and for when the app turns
+// this on; that comment is the single authoritative copy.
 func newBatchSem() batchSem { return make(batchSem, 1) }
 
 // embedInBatches packs rows into budget-bounded batches, runs each, and
