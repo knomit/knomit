@@ -114,9 +114,12 @@ func WithMaxBatchTokens(n int) Option {
 }
 
 // WithBatchSerialization gates BATCH inference behind a capacity-1 semaphore,
-// which turns the per-run token budget into a per-PROCESS memory bound: one
-// shared Embedder plus per-branch locking otherwise lets concurrent runs
-// overlap and their peaks ADD.
+// bounding how much batch memory can be in flight at once: one shared Embedder
+// plus per-branch locking otherwise lets concurrent runs overlap and their
+// peaks ADD.
+//
+// This is NOT a per-process memory bound. Single-row inference bypasses the gate
+// (see below), so it is unbounded in count and sits outside the guarantee.
 //
 // It is off by default, and that default is deliberate rather than lazy. The
 // cost of serializing depends on batch WIDTH, measured on an 8-core host:

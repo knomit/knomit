@@ -38,11 +38,6 @@ const (
 // logs have been read across a few real boots.
 const nonEmbeddingReserve = int64(1) << 30
 
-// expectedConcurrentRuns is how many inferences the safety check assumes may
-// overlap when the gate is off. Two, because that is what was observed in
-// production: a rebuild on one branch concurrent with a learn on another.
-const expectedConcurrentRuns = 2
-
 // Budget is a resolved batch budget plus the provenance an operator needs to
 // understand it. A machine-derived number with no explanation makes "why is
 // re-embed slow HERE" unanswerable without access to the box.
@@ -55,8 +50,14 @@ type Budget struct {
 	Clamped string
 	// LimitBytes is the detected ceiling, 0 when unknown.
 	LimitBytes int64
-	// Serialize gates batch inference behind a capacity-1 semaphore, making the
-	// per-run budget a per-PROCESS bound. See ResolveBudget for the rule.
+	// Serialize gates BATCH inference behind a capacity-1 semaphore, so at most
+	// one batch is in flight at a time.
+	//
+	// Scope precisely: this bounds concurrent BATCH memory, NOT the process.
+	// EmbedQuery and EmbedDocument bypass the gate by design (so interactive
+	// search never queues behind a rebuild), and each is up to one MaxTokens row
+	// — ~225 MiB measured — retained by the same arena. A busy single-shot path
+	// is therefore unbounded in count and outside this guarantee.
 	Serialize bool
 }
 
@@ -106,7 +107,7 @@ func WorstCaseBatchBytes(tokens int) int64 {
 //     width-dependent (~2% at the wide shapes a container running a big rebuild
 //     actually hits, more at narrow ones) and is the price of the guarantee.
 //   - PHYSICAL RAM serializes when the machine is FLOOR-CLASS: our share of it
-//     cannot fund even the smallest budget's batch (~7.7 GiB boundary). Computed
+//     cannot fund even the smallest budget's batch (7.52 GiB boundary). Computed
 //     from the machine, not from the resolved budget, so it does not depend on
 //     whether that budget was derived or configured.
 //   - An UNKNOWN ceiling does not serialize. We measured nothing, so we know
@@ -162,8 +163,8 @@ func isCgroup(s memlimit.Source) bool {
 	return s == memlimit.SourceCgroupV2 || s == memlimit.SourceCgroupV1
 }
 
-// shouldSerialize answers "can this machine survive expectedConcurrentRuns
-// overlapping batches" — see ResolveBudget for why that, and not "did we clamp".
+// shouldSerialize decides whether batch inference is gated. See ResolveBudget
+// for the rule and for why it is not "did we clamp".
 func shouldSerialize(lim memlimit.Limit, tokens int) bool {
 	switch {
 	case isCgroup(lim.Source):
@@ -209,7 +210,8 @@ func shouldSerialize(lim memlimit.Limit, tokens int) bool {
 		// smaller share. That is the opposite of the cgroup path, where the
 		// analogous proxy was ANTI-correlated and produced an OOM window.
 		//
-		// Boundary is ~7.7 GiB of physical RAM.
+		// Boundary is 7696 MiB of physical RAM (7.52 GiB), from
+		// 0.25*H <= 225 + 675 + 1024 MiB.
 		share := int64(float64(lim.HostTotal)*sharedFraction) - ResidentModelBytes - nonEmbeddingReserve
 		return share <= WorstCaseBatchBytes(MinBatchTokens)
 	default:

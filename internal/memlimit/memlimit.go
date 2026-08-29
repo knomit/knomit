@@ -40,7 +40,11 @@ const (
 )
 
 // Limit is the memory ceiling this process should size itself against.
-// Bytes is 0 exactly when Source is SourceNone.
+//
+// Bytes is 0 whenever no usable number was found — both SourceNone ("no evidence
+// of a limit") and SourceUnreadable ("a limit may apply and we could not read
+// it"). Use Known() rather than testing Source, and note the two zero cases mean
+// different things to a caller deciding how careful to be.
 type Limit struct {
 	Bytes  int64
 	Source Source
@@ -101,7 +105,16 @@ func detectWithPID(fsys fs.FS, total func() (int64, error), pid int) Limit {
 
 	clamp := func(n int64, src Source, inherited bool) Limit {
 		if totalErr == nil && hostTotal > 0 && n > hostTotal {
+			// The clamp BINDS: the cgroup's own limit is above physical RAM, so
+			// the effective ceiling is the machine, shared with everything on it.
+			// "An operator drew this limit around our workload" stops being true
+			// at that point, and a caller sizing its claim by provenance would
+			// take the dedicated share of memory that is not dedicated at all.
+			// Generous template limits (k8s, systemd units) make this ordinary,
+			// not exotic: memory.max=32Gi on a 4 GiB node yields a 6.9x larger
+			// budget than the same box seen as physical RAM.
 			n = hostTotal
+			inherited = true
 		}
 		l := Limit{Bytes: n, Source: src, Inherited: inherited}
 		if totalErr == nil {

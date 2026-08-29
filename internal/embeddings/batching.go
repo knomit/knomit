@@ -153,10 +153,16 @@ func newBatchSem() batchSem { return make(batchSem, 1) }
 // ctx is checked at entry and before each batch. It is a checkpoint, not an
 // abort: sess.Run cannot be interrupted, so cancelling bounds latency to one
 // batch, exactly as store.Embedder documents.
-// sem serializes the inference calls when non-nil, which is what converts the
-// per-run memory budget into a per-PROCESS bound: app.New shares one Embedder
-// and lockBranch is per-branch, so without it a rebuild on one branch and a
-// learn on another run concurrently and their peaks ADD.
+// sem serializes the inference calls when non-nil, bounding concurrent BATCH
+// memory: app.New shares one Embedder and lockBranch is per-branch, so without
+// it a rebuild on one branch and a learn on another run concurrently and their
+// peaks ADD.
+//
+// NOT a per-process bound, despite how it is tempting to describe it. Only
+// batched calls reach here; EmbedQuery and EmbedDocument go through embedBatch
+// and are deliberately ungated, so single-shot inference remains unbounded in
+// count. Calling this a process guarantee would overstate what an operator is
+// buying with up to 37% of their throughput.
 //
 // Only BATCH inference is gated. EmbedQuery and EmbedDocument go through
 // embedBatch and never reach here, so an interactive search contends for cores

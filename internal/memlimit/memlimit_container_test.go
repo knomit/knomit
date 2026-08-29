@@ -50,3 +50,73 @@ func TestDetect_RealHostScopeShape(t *testing.T) {
 		t.Errorf("got %+v, want 2 GiB from cgroup-v2", got)
 	}
 }
+
+// The Inherited bit swings the budget by up to 3.2x downstream, and until now
+// nothing drove it through detect() — every test of it hand-constructed a Limit
+// in another package. These pin it against the walk that actually sets it.
+
+func TestDetect_InheritedFalse_WhenTheLimitIsOnOurOwnCgroup(t *testing.T) {
+	fsys := fstest.MapFS{
+		"sys/fs/cgroup/cgroup.controllers":                     &fstest.MapFile{Data: []byte("memory\n")},
+		"sys/fs/cgroup/system.slice/memory.max":                &fstest.MapFile{Data: []byte("max\n")},
+		"sys/fs/cgroup/system.slice/knomit.service/memory.max": &fstest.MapFile{Data: []byte("2147483648\n")},
+		"proc/self/cgroup":                                     &fstest.MapFile{Data: []byte("0::/system.slice/knomit.service\n")},
+	}
+	got := detect(fsys, hostTotal(64*gib))
+	if got.Inherited {
+		t.Error("Inherited=true for a limit on our own leaf cgroup — this is the dedicated case")
+	}
+}
+
+func TestDetect_InheritedTrue_WhenAnAncestorIsSmaller(t *testing.T) {
+	fsys := fstest.MapFS{
+		"sys/fs/cgroup/cgroup.controllers":                     &fstest.MapFile{Data: []byte("memory\n")},
+		"sys/fs/cgroup/system.slice/memory.max":                &fstest.MapFile{Data: []byte("2147483648\n")},
+		"sys/fs/cgroup/system.slice/knomit.service/memory.max": &fstest.MapFile{Data: []byte("8589934592\n")},
+		"proc/self/cgroup":                                     &fstest.MapFile{Data: []byte("0::/system.slice/knomit.service\n")},
+	}
+	got := detect(fsys, hostTotal(64*gib))
+	if got.Bytes != 2*gib {
+		t.Errorf("Bytes = %d, want the smaller ANCESTOR limit", got.Bytes)
+	}
+	if !got.Inherited {
+		t.Error("Inherited=false although the winning limit came from a shared parent slice")
+	}
+}
+
+// TestDetect_InheritedFalse_OnATie: leaf and ancestor carry the same limit. The
+// walk visits the leaf first and `n < best` is strict, so the leaf keeps it —
+// the right call, since a limit that is also present on our own cgroup is
+// plausibly ours.
+func TestDetect_InheritedFalse_OnATie(t *testing.T) {
+	fsys := fstest.MapFS{
+		"sys/fs/cgroup/cgroup.controllers":                     &fstest.MapFile{Data: []byte("memory\n")},
+		"sys/fs/cgroup/system.slice/memory.max":                &fstest.MapFile{Data: []byte("2147483648\n")},
+		"sys/fs/cgroup/system.slice/knomit.service/memory.max": &fstest.MapFile{Data: []byte("2147483648\n")},
+		"proc/self/cgroup":                                     &fstest.MapFile{Data: []byte("0::/system.slice/knomit.service\n")},
+	}
+	if got := detect(fsys, hostTotal(64*gib)); got.Inherited {
+		t.Error("Inherited=true on a tie — the leaf should win")
+	}
+}
+
+// TestDetect_ClampBindingMarksTheLimitShared is H4: a cgroup limit ABOVE
+// physical RAM (generous k8s/systemd template limits are ordinary) clamps down
+// to the machine — at which point the effective ceiling is physical RAM, shared
+// with everything, and treating it as dedicated claims 0.8 of a box we do not
+// own. Measured before the fix: 14203 tokens vs 2048 for the same 4 GiB box
+// seen as physical RAM, a 6.9x swing.
+func TestDetect_ClampBindingMarksTheLimitShared(t *testing.T) {
+	fsys := fstest.MapFS{
+		"sys/fs/cgroup/cgroup.controllers": &fstest.MapFile{Data: []byte("memory\n")},
+		"sys/fs/cgroup/memory.max":         &fstest.MapFile{Data: []byte("34359738368\n")}, // 32 GiB
+		"proc/self/cgroup":                 &fstest.MapFile{Data: []byte("0::/\n")},
+	}
+	got := detect(fsys, hostTotal(4*gib))
+	if got.Bytes != 4*gib {
+		t.Errorf("Bytes = %d, want the clamp to physical RAM", got.Bytes)
+	}
+	if !got.Inherited {
+		t.Error("Inherited=false after the clamp bound — once the effective ceiling IS physical RAM, the limit is not dedicated to us")
+	}
+}
