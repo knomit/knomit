@@ -1,4 +1,4 @@
-import type { Lens, LensSource } from './api';
+import type { Lens, LensSource, MotifMatch } from './api';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -87,6 +87,10 @@ export interface AppState {
   remotePushError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
+  /** How strictly the motif chips match. Not a chip: two motif chips are two
+   *  motifs, while the tier is one setting over the whole query. It changes
+   *  WHICH rows exist, so it belongs in NavEntry too — see pushNav/NAV_BACK. */
+  motifMatch: MotifMatch;
   notice: string;
   searching: boolean;            // a relevance (free-text) search request is in flight
   serverReadOnly: boolean;       // instance-level read-only (demo mode)
@@ -172,6 +176,7 @@ export const init: AppState = {
   // Ontology browsing, not chrono: the tree is how the corpus is organised, so
   // arriving at a folder listing beats arriving at a flat by-date feed.
   librarySort: 'path',
+  motifMatch: 'exact',
   notice: '',
   searching: false,
   serverReadOnly: false,

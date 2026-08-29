@@ -362,8 +362,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const staleStateRef = useRef(state);
   staleStateRef.current = state;
 
-  const { domains, entities, types, kinds, origins, eps } = useMemo(() => {
-    const domains: string[] = [], entities: string[] = [], types: string[] = [], kinds: string[] = [], origins: string[] = [], eps: string[] = [];
+  const { domains, entities, types, kinds, origins, eps, motifs } = useMemo(() => {
+    const domains: string[] = [], entities: string[] = [], types: string[] = [], kinds: string[] = [], origins: string[] = [], eps: string[] = [], motifs: string[] = [];
     for (const f of state.filters) {
       if (f.category === 'domain') domains.push(f.value);
       else if (f.category === 'entity') entities.push(f.value);
@@ -371,9 +371,17 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       else if (f.category === 'kind') kinds.push(f.value);
       else if (f.category === 'origin') origins.push(f.value);
       else if (f.category === 'ep') eps.push(f.value);
+      else if (f.category === 'motif') motifs.push(f.value);
     }
-    return { domains, entities, types, kinds, origins, eps };
+    return { domains, entities, types, kinds, origins, eps, motifs };
   }, [state.filters]);
+  // The match tier is NOT a chip. Two motif chips are two motifs; how strictly
+  // each one matches is one setting over the whole query, so it rides state and
+  // has to be in the deps of every read below alongside filtersKey.
+  const motifOpts = useMemo(
+    () => (motifs.length ? { motifs, motifMatch: state.motifMatch } : {}),
+    [motifs, state.motifMatch],
+  );
   const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
 
   useAsync((stale) => {
@@ -389,6 +397,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
       eps: eps.length ? eps : undefined,
+      ...motifOpts,
     }).then(r => {
       if (stale()) return;
       setFacts(r.facts || []);
@@ -400,7 +409,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: loaded[0].path });
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
-  }, [path, state.headCommit, state.freeText, state.repo, state.branch, filtersKey, effectiveSort, isLens]);
+  }, [path, state.headCommit, state.freeText, state.repo, state.branch, filtersKey, state.motifMatch, effectiveSort, isLens]);
 
   // Recent mode highlights by index only (path/relevance sync inside their
   // fetch). Keep the highlighted row tied to the open fact so any factPath
@@ -428,6 +437,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       eps: eps.length ? eps : undefined,
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
+      ...motifOpts,
     }).then(r => {
       if (stale()) return;
       dispatch({ type: 'SET_SEARCHING', value: false });
@@ -446,7 +456,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
       }
     }).catch(() => { if (!stale()) { setChildren([]); dispatch({ type: 'SET_SEARCHING', value: false }); } });
-  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, isLens]);
+  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, state.motifMatch, isLens]);
 
   // ── Lens union list: api.listLensFacts (recent/path) or api.lensSearch
   // (relevance). `lensSources` narrows the fan-out: null = all mounts (no repos
@@ -549,6 +559,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         eps: eps.length ? eps : undefined,
         domains: domains.length ? domains : undefined,
         entities: entities.length ? entities : undefined,
+        ...motifOpts,
       }).then(results => {
         if (stale()) return;
         dispatch({ type: 'SET_SEARCHING', value: false });
@@ -580,6 +591,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         eps: eps.length ? eps : undefined,
         domains: domains.length ? domains : undefined,
         entities: entities.length ? entities : undefined,
+        ...motifOpts,
     }).then(r => {
       if (stale()) return;
       const rows = (r.facts || []).map(f => ({ path: f.path, title: f.title, type: f.type, source: f.source }));
@@ -591,7 +603,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       setLensLoading(false);
       openFirstRow(rows);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
-  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit, state.ontologyRoot]);
+  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.motifMatch, state.headCommit, state.ontologyRoot]);
 
   // Keep the highlighted lens row tied to the open fact (mirrors the repo
   // Recent behavior) so returning to a fact re-selects its row.
@@ -648,6 +660,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         eps: eps.length ? eps : undefined,
         domains: domains.length ? domains : undefined,
         entities: entities.length ? entities : undefined,
+        ...motifOpts,
       })
         .then(r => {
           if (gen !== lensGenRef.current) return;
@@ -673,6 +686,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
       eps: eps.length ? eps : undefined,
+      ...motifOpts,
     }).then(r => {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
