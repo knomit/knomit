@@ -334,8 +334,12 @@ func TestFloorClass_DrivesTheWarningNotTheCap(t *testing.T) {
 	if a, b := ResolveBudget(0, small).BatchConcurrency, ResolveBudget(0, large).BatchConcurrency; a != b {
 		t.Errorf("cap differs by floor-class (%d vs %d) — it should not any more", a, b)
 	}
-	if FloorClass(cgroupLimit(2048, false)) {
-		t.Error("FloorClass must be false for a cgroup source — it is a physical-RAM notion")
+	// A cgroup source IS floor-class when its own share cannot fund a batch.
+	// An earlier version of this assertion said the opposite — that FloorClass
+	// "is a physical-RAM notion" — which is exactly the guard that silently
+	// denied every container its floor warning. See TestFloorClass_EverySource.
+	if !FloorClass(cgroupLimit(2048, false)) {
+		t.Error("a 2 GiB dedicated cgroup is floor-class: 0.8 x 2048 does not fund the model plus a batch")
 	}
 }
 
@@ -362,6 +366,51 @@ func TestBatchConcurrency_ExplicitAboveDefaultSerializes(t *testing.T) {
 			t.Errorf("explicit %d tokens: cap = %d, want 1 — above the shipped default the operator has "+
 				"overridden our sizing and is least likely to have modelled overlap",
 				tokens, got.BatchConcurrency)
+		}
+	}
+}
+
+// TestFloorClass_EverySource is how the os-total-only guard got through: every
+// FloorClass assertion used a physical-RAM fixture, so a predicate that
+// returned false for all containers looked correct. A 2 GiB container is the
+// single deployment shape this whole feature exists for, and it was the one
+// losing its warning.
+func TestFloorClass_EverySource(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lim  memlimit.Limit
+		want bool
+	}{
+		{"2 GiB dedicated cgroup", cgroupLimit(2048, false), true},
+		{"3 GiB dedicated cgroup has room", cgroupLimit(3072, false), false},
+		{"4 GiB inherited slice", cgroupLimit(4096, true), true},
+		{"8 GiB dedicated cgroup", cgroupLimit(8192, false), false},
+		{"4 GiB bare host", hostLimit(4096), true},
+		{"15.9 GiB bare host", hostLimit(15900), false},
+		{"unknown ceiling is not floor-class", memlimit.Limit{Source: memlimit.SourceNone}, false},
+		{"unreadable ceiling is not floor-class", memlimit.Limit{Source: memlimit.SourceUnreadable}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := FloorClass(tc.lim); got != tc.want {
+				t.Errorf("FloorClass = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFloorClass_MatchesDerivedClamp pins the property the predicate exists to
+// provide: it is what Clamped WOULD have been had the budget been derived. That
+// is what makes it usable for an explicit budget, where Clamped is always
+// "none".
+func TestFloorClass_MatchesDerivedClamp(t *testing.T) {
+	for _, lim := range []memlimit.Limit{
+		cgroupLimit(2048, false), cgroupLimit(3072, false), cgroupLimit(8192, true),
+		hostLimit(4096), hostLimit(8192), hostLimit(15900),
+	} {
+		derived := ResolveBudget(0, lim).Clamped == "floor"
+		if got := FloorClass(lim); got != derived {
+			t.Errorf("%s %d MiB: FloorClass=%v but a derived budget clamps %q",
+				lim.Source, lim.Bytes>>20, got, ResolveBudget(0, lim).Clamped)
 		}
 	}
 }

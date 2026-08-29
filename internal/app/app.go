@@ -140,7 +140,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		log.Warn().Int("max_batch_tokens", maxBatchTokens).
 			Str("batch_budget_source", budget.Source).
 			Int64("memory_limit_bytes", budget.LimitBytes).
-			Msg("embedding batch budget hit its floor — this host has room for barely one full-length document per inference; re-embedding will be slow and memory is the binding constraint")
+			Msg("this host has room for barely one full-length document per embedding inference; re-embedding will be slow and memory is the binding constraint")
 	}
 
 	// LLM adapter.

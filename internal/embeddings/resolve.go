@@ -184,11 +184,7 @@ func ResolveBudget(configured int, lim memlimit.Limit) Budget {
 				b.Source = string(memlimit.SourceNone)
 			}
 		default:
-			fraction := sharedFraction
-			if isCgroup(lim.Source) && !lim.Inherited {
-				fraction = dedicatedFraction
-			}
-			avail := int64(float64(lim.Bytes)*fraction) - ResidentModelBytes - nonEmbeddingReserve
+			avail := ourShare(lim) - ResidentModelBytes - nonEmbeddingReserve
 			tokens := BudgetForBatchMemory(avail)
 
 			clamped := "none"
@@ -268,13 +264,40 @@ func batchConcurrency(lim memlimit.Limit, tokens int) int {
 	}
 }
 
+// ourShare is the portion of a detected ceiling knomit claims, by source. Used
+// by BOTH the budget derivation and FloorClass, deliberately: when they had
+// separate copies of this choice they disagreed about what "our share" means,
+// and small containers silently lost their floor warning as a result.
+func ourShare(lim memlimit.Limit) int64 {
+	fraction := sharedFraction
+	if isCgroup(lim.Source) && !lim.Inherited {
+		fraction = dedicatedFraction
+	}
+	return int64(float64(lim.Bytes) * fraction)
+}
+
 // FloorClass reports that our share of this machine cannot fund even the
-// smallest budget's batch (7.52 GiB of physical RAM). It drives an operator
-// warning, not the concurrency cap — every detected ceiling is capped at 1.
+// smallest budget's batch — the host has room for barely one full-length
+// document per inference. It drives an operator warning, not the concurrency
+// cap; every detected ceiling is capped at 1 regardless.
+//
+// Defined for EVERY source, which an earlier version was not: it guarded on
+// SourceOSTotal and so returned false for every container, meaning a 2 GiB
+// cgroup — floor-clamped, one document per inference, the single deployment
+// shape this feature exists for — booted with no warning at all.
+//
+// The boundary therefore depends on the source, because the fraction does:
+// 7.52 GiB of physical RAM, but roughly 2.1 GiB for a dedicated cgroup, which
+// claims a larger share of a smaller ceiling.
+//
+// Computed from the MACHINE, never from the resolved budget, so it holds for an
+// explicit budget too. That makes it precisely "what Clamped would have been had
+// the budget been derived" — and it is the reason this is a separate predicate
+// rather than a read of Clamped, which is always "none" when an operator pins a
+// value.
 func FloorClass(lim memlimit.Limit) bool {
-	if lim.Source != memlimit.SourceOSTotal || lim.HostTotal <= 0 {
+	if !lim.Known() {
 		return false
 	}
-	share := int64(float64(lim.HostTotal)*sharedFraction) - ResidentModelBytes - nonEmbeddingReserve
-	return share <= WorstCaseBatchBytes(MinBatchTokens)
+	return ourShare(lim)-ResidentModelBytes-nonEmbeddingReserve <= WorstCaseBatchBytes(MinBatchTokens)
 }
