@@ -25,17 +25,22 @@ import (
 const DefaultMaxBatchTokens = 16384
 
 // minRowCharge is the floor each row is charged when packing, whatever its real
-// token length. It caps a batch at DefaultMaxBatchTokens/minRowCharge = 256
-// rows, which the token budget alone would not: at 2048 rows of 8 tokens the
-// measured delta is 1683 MiB against ~1150 MiB for the same token count in
-// fewer, longer rows — a per-row cost of ~0.26 MiB that the token model does
-// not capture.
+// token length. It caps a batch at budget/minRowCharge rows — 256 at the
+// default budget, scaling with whatever the operator configures — which the
+// token budget alone would not: at 2048 rows of 8 tokens the measured delta is
+// 1683 MiB against ~1150 MiB for the same token count in fewer, longer rows, a
+// per-row cost of ~0.26 MiB the token model does not capture.
 //
-// It also preserves the cancellation contract documented on store.Embedder
-// ("cancelling bounds latency to one batch"). Two callers are bounded by no
-// constant at all — learn.go embeds an entire incoming write request, and
-// motif_alias.go embeds a whole motif vocabulary in one call — so without this
-// floor either could become a single uninterruptible session.Run.
+// It also bounds cancellation latency, which store.Embedder documents as "one
+// batch". Be honest about the direction: two callers are bounded by no constant
+// at all (learn.go embeds an entire incoming write request, motif_alias.go a
+// whole motif vocabulary), so without this floor either could become one
+// unbounded uninterruptible session.Run. But against the OLD fixed 32-document
+// chunk, short-string cancellation latency GROWS — up to 256 rows per run at
+// the default rather than 32. The new contract is uniform rather than strictly
+// better: cancelling costs at most one budget's worth of inference on every
+// path, which for short strings is more than before and for long documents far
+// less.
 const minRowCharge = 64
 
 // encodedRow is one tokenized text: input ids and attention mask, already
@@ -102,14 +107,24 @@ func packByTokenBudget(lens []int, budget int) [][]int {
 		// narrow ones up to its width — and padding is real ONNX compute, not
 		// just memory. Compare doubled rather than halved to avoid the rounding
 		// that integer division would introduce at small widths.
-		for j := i + 1; j < end; j++ {
+		//
+		// Never cut to a singleton (hence j > i+1): a batch of one wastes no
+		// padding by definition, so cutting there buys nothing and costs a run.
+		// Without this guard a smoothly decaying corpus — every neighbour more
+		// than 2x smaller, e.g. 2048/1000/490/240/118 — degenerates into one
+		// run per document, which is the pathology this packer exists to avoid.
+		for j := i + 2; j < end; j++ {
 			if charge(lens[idx[j]])*2 < width {
 				end = j
 				break
 			}
 		}
 
-		batches = append(batches, idx[i:end])
+		// Three-index slice: batches must not share spare capacity with idx, or
+		// a later append to one would overwrite the next batch's first index —
+		// silently, and as exactly the neighbour's-vector corruption the
+		// scatter-back comment below warns about.
+		batches = append(batches, idx[i:end:end])
 		i = end
 	}
 	return batches
