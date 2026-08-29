@@ -3,8 +3,10 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -247,11 +249,10 @@ func TestHandleHALMotifs_Paging(t *testing.T) {
 		t.Error("prev link missing on the second page")
 	}
 
-	// Over the ceiling clamps rather than erroring.
-	if rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?limit=500"); rec.Code != http.StatusOK {
-		t.Errorf("limit=500: got %d, want 200 (clamped, not refused), body=%s", rec.Code, rec.Body.String())
-	}
-	for _, bad := range []string{"limit=0", "limit=x", "offset=-1", "offset=x"} {
+	// The ceiling is HARD, not a clamp (the params.go house rule): a client
+	// that asked for 500 and silently got 200 rows cannot tell that from "there
+	// were only 200".
+	for _, bad := range []string{"limit=201", "limit=500", "limit=0", "limit=x", "offset=-1", "offset=x"} {
 		if rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?"+bad); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d, want 400", bad, rec.Code)
 		}
@@ -493,12 +494,40 @@ func TestHandleHALMotifCluster_CarriersLimitParam(t *testing.T) {
 		t.Errorf("limit=5: got %d", facts.lastOpts.Limit)
 	}
 
-	decodeMotifDetail(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=500"))
-	if facts.lastOpts.Limit != 100 {
-		t.Errorf("limit=500: got %d, want the 100 ceiling", facts.lastOpts.Limit)
+	// The carrier ceiling is hard too: over it is a 400, never a quiet 100.
+	for _, bad := range []string{"limit=101", "limit=500", "limit=0", "limit=x"} {
+		if rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?"+bad); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: got %d, want 400", bad, rec.Code)
+		}
 	}
+}
 
-	if rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=0"); rec.Code != http.StatusBadRequest {
-		t.Errorf("limit=0: got %d, want 400", rec.Code)
+// An offset near MaxInt passes the `n < 0` parse guard, and then offset+limit
+// WRAPS NEGATIVE — clearing every `< total` comparison written as a sum and
+// reaching the slice expression as a negative bound. The result is a bounds
+// panic on an unauthenticated GET, so the arithmetic must never form the sum.
+// Mirrors TestLensFanoutDepth_OverflowingOffsetStillClamps.
+func TestHandleHALMotifs_OverflowingOffsetIsAnEmptyPage(t *testing.T) {
+	stub := &stubMotifsProvider{clusters: threeClusters()}
+	r := motifsServer(t, stub)
+
+	for _, offset := range []string{
+		strconv.Itoa(math.MaxInt),
+		strconv.Itoa(math.MaxInt - 10),
+		"9223372036854775807",
+	} {
+		t.Run(offset, func(t *testing.T) {
+			rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?offset="+offset)
+			body := decodeMotifs(t, rec)
+			if len(body.Embedded.Motifs) != 0 {
+				t.Errorf("page: got %d entries, want none past the end", len(body.Embedded.Motifs))
+			}
+			if body.Count != 3 {
+				t.Errorf("count: got %d, want the unnarrowed total 3", body.Count)
+			}
+			if body.Links.Next != nil {
+				t.Errorf("next must be absent past the end: %q", body.Links.Next.Href)
+			}
+		})
 	}
 }

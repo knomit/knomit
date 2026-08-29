@@ -100,7 +100,9 @@ func (defaultMotifsProvider) ClusterKey(ctx context.Context, ri *repos.RepoInsta
 
 // Paging bounds for the motifs collection. Its own knobs rather than
 // limitParam's: a vocabulary page is one row per CLUSTER with members and a
-// definition attached, a different weight class from fact rows.
+// definition attached, a different weight class from fact rows. The MAXIMUM is
+// a hard ceiling exactly as limitParam's is — over it is a 400, never a quiet
+// smaller page.
 const (
 	motifsDefaultLimit = 50
 	motifsMaxLimit     = 200
@@ -175,12 +177,15 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 		limit := motifsDefaultLimit
 		if v := qp.Get("limit"); v != "" {
 			n, err := strconv.Atoi(v)
-			if err != nil || n < 1 {
+			// A HARD CEILING, not a clamp, matching limitParam: a client that
+			// asked for 500 and silently received 200 rows has no way to tell
+			// that from "there were only 200".
+			if err != nil || n < 1 || n > motifsMaxLimit {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 					"invalid limit value", r.URL.Path)
 				return
 			}
-			limit = min(n, motifsMaxLimit)
+			limit = n
 		}
 		offset := 0
 		if v := qp.Get("offset"); v != "" {
@@ -244,11 +249,23 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 		}
 
 		total := len(clusters)
+		// Page bounds by REMAINDER, never by the sum offset+limit. An offset
+		// near MaxInt clears the `n < 0` parse guard above and then wraps the
+		// sum NEGATIVE, which passes every `< total` test written as a sum and
+		// reaches the slice expression as a negative bound — a bounds panic on
+		// an unauthenticated GET. `limit < total-offset` asks the same question
+		// with operands that cannot overflow (offset is capped at total first).
+		start := min(offset, total)
+		end := total
+		if limit < total-start {
+			end = start + limit
+		}
+
 		motifsBase := b.Branch(repoName, a) + "/motifs"
 		links := hal.LinkMap{"self": {Href: selfWithQuery(motifsBase, r)}}
-		if offset+limit < total {
+		if end < total {
 			nextQ := r.URL.Query()
-			nextQ.Set("offset", strconv.Itoa(offset+limit))
+			nextQ.Set("offset", strconv.Itoa(end))
 			links["next"] = hal.Link{Href: motifsBase + "?" + nextQ.Encode()}
 		}
 		if offset > 0 {
@@ -257,7 +274,7 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 			links["prev"] = hal.Link{Href: motifsBase + "?" + prevQ.Encode()}
 		}
 
-		page := clusters[min(offset, total):min(offset+limit, total)]
+		page := clusters[start:end]
 		items := make([]motifEntry, 0, len(page))
 		for _, c := range page {
 			st, ok := defs[c.ClusterKey]
@@ -302,7 +319,7 @@ func motifClusterMatches(c store.MotifCluster, definition, q string) bool {
 
 // Carrier preview bounds for the cluster detail. The preview reuses the exact
 // pivot query (RecentFacts + Motifs filter), so the full list is always one
-// _links.facts away.
+// _links.facts away. The maximum is a hard ceiling (400 above it), not a clamp.
 const (
 	motifCarriersDefaultLimit = 20
 	motifCarriersMaxLimit     = 100
@@ -358,12 +375,13 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 		carrierLimit := motifCarriersDefaultLimit
 		if v := r.URL.Query().Get("limit"); v != "" {
 			n, err := strconv.Atoi(v)
-			if err != nil || n < 1 {
+			// Hard ceiling, same reasoning as the collection's limit.
+			if err != nil || n < 1 || n > motifCarriersMaxLimit {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 					"invalid limit value", r.URL.Path)
 				return
 			}
-			carrierLimit = min(n, motifCarriersMaxLimit)
+			carrierLimit = n
 		}
 
 		clusters, err := provider.Clusters(r.Context(), ri, branch)
