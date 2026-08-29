@@ -944,6 +944,16 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 // rebuildEmbeddings computes embeddings for all facts missing from facts_vec.
 // Bodies are fetched one chunk at a time so memory usage is bounded by batchSize,
 // not by the total number of facts.
+//
+// batchSize bounds a DOCUMENT COUNT — the number of rowids in one IN clause and
+// so the number of bodies held at once — not any byte total. It is no longer
+// the inference safety rail: the embedder now splits whatever it is handed into
+// batches bounded by a padded-token budget, so a chunk of long facts becomes
+// several session.Runs rather than one oversized one.
+//
+// Raising it is therefore safe for INFERENCE memory specifically. It is not
+// free: raw bodies, the tokenized rows encodeAll retains, and the result slice
+// all scale linearly with it. It stays at 32 until a raise is measured.
 func (si *searchIndex) rebuildEmbeddings(ctx context.Context, progress RebuildProgress) (int, error) {
 	emb := si.rh.getEmbedder()
 	if emb == nil {

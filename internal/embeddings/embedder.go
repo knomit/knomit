@@ -17,11 +17,6 @@ import (
 	"knomit/internal/embeddings/params"
 )
 
-// docBatchSize is how many documents share one ONNX session.Run in
-// EmbedDocuments. Each run pads its texts to the longest in the chunk, so a
-// modest batch keeps padding waste low while amortizing per-call overhead.
-const docBatchSize = 32
-
 // ortOnce ensures InitializeEnvironment is called only once per process.
 var ortOnce sync.Once
 var ortInitErr error
@@ -85,13 +80,30 @@ type Embedder struct {
 	model Model
 	sess  *ort.DynamicAdvancedSession
 	tk    *tok.Tokenizer
+	// maxBatchTokens is the padded-token budget for one session.Run. Always
+	// positive for an Embedder built by NewEmbedder; see DefaultMaxBatchTokens.
+	maxBatchTokens int
+}
+
+// Option customizes an Embedder at construction.
+type Option func(*Embedder)
+
+// WithMaxBatchTokens sets the padded-token budget for one session.Run.
+//
+// The caller is responsible for passing a positive value: the app layer
+// resolves an unset config (0, the documented auto sentinel) to
+// DefaultMaxBatchTokens before calling. Absent this option the default applies,
+// which is what keeps tools/calibrate and tools/motifannex deterministic across
+// machines rather than inheriting a host-derived budget.
+func WithMaxBatchTokens(n int) Option {
+	return func(e *Embedder) { e.maxBatchTokens = n }
 }
 
 // NewEmbedder loads the model+tokenizer for descriptor m from <cacheDir>/<id>/,
 // downloading them first if missing. ctx bounds those downloads — cancelling it
 // aborts a fetch in progress, which is what keeps a dead mirror from hanging
 // server boot (embeddings are mandatory, so this runs before the server listens).
-func NewEmbedder(ctx context.Context, m Model, cacheDir string) (*Embedder, error) {
+func NewEmbedder(ctx context.Context, m Model, cacheDir string, opts ...Option) (*Embedder, error) {
 	if err := initORT(); err != nil {
 		return nil, fmt.Errorf("onnxruntime init: %w", err)
 	}
@@ -108,7 +120,20 @@ func NewEmbedder(ctx context.Context, m Model, cacheDir string) (*Embedder, erro
 		_ = tk.Close()
 		return nil, fmt.Errorf("create onnx session: %w", err)
 	}
-	return &Embedder{model: m, sess: sess, tk: tk}, nil
+	e := &Embedder{model: m, sess: sess, tk: tk, maxBatchTokens: DefaultMaxBatchTokens}
+	for _, opt := range opts {
+		opt(e)
+	}
+	// Hold the "always positive" field invariant by construction rather than by
+	// convention at the call site. A non-positive budget reaching the packer
+	// degrades to one row per inference for the process lifetime — a silent
+	// ~30x slowdown, not a failure — and the ways to get one are all plausible:
+	// a tool flag, or a future memory resolver returning 0 on an unreadable
+	// /sys. Clamp here so no caller has to remember.
+	if e.maxBatchTokens <= 0 {
+		e.maxBatchTokens = DefaultMaxBatchTokens
+	}
+	return e, nil
 }
 
 func (e *Embedder) Dim() int   { return e.model.Dim }
@@ -146,18 +171,26 @@ func (e *Embedder) EmbedDocument(ctx context.Context, title, body string) ([]flo
 }
 
 // EmbedDocuments embeds (title, body) pairs, batching the ONNX inference so a
-// full-corpus re-embed issues one session.Run per docBatchSize docs rather than
-// one per doc. ctx is checked before each batch, so cancelling a re-embed costs
-// at most one in-flight batch rather than the remainder of the corpus.
+// full-corpus re-embed issues one session.Run per maxBatchTokens of padded
+// input rather than one per doc. ctx is checked before each batch, so
+// cancelling a re-embed costs at most one in-flight batch rather than the
+// remainder of the corpus.
 func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) ([][]float32, error) {
 	if len(titles) != len(bodies) {
 		return nil, fmt.Errorf("EmbedDocuments: %d titles vs %d bodies", len(titles), len(bodies))
+	}
+	// Checked before tokenizing, not just inside embedInBatches: encodeAll is
+	// evaluated as an argument expression, so without this a cancelled caller
+	// would pay a full tokenization pass (and any truncation warnings) before
+	// the error came back.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	texts := make([]string, len(bodies))
 	for i := range bodies {
 		texts[i] = e.docText(titles[i], bodies[i])
 	}
-	return embedInBatches(ctx, texts, e.embedBatch)
+	return embedInBatches(ctx, e.encodeAll(texts), e.maxBatchTokens, e.runRows)
 }
 
 // EmbedShortStrings embeds bare short strings — fact titles, and from Phase 2
@@ -167,11 +200,15 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) 
 //
 // ctx is checked before each batch, exactly as in EmbedDocuments.
 func (e *Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]float32, error) {
+	// Checked before tokenizing, for the reason given in EmbedDocuments.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	rendered := make([]string, len(texts))
 	for i, t := range texts {
 		rendered[i] = e.shortStringText(t)
 	}
-	return embedInBatches(ctx, rendered, e.embedBatch)
+	return embedInBatches(ctx, e.encodeAll(rendered), e.maxBatchTokens, e.runRows)
 }
 
 // shortStringText renders one short string through the model's descriptor. The
@@ -179,34 +216,6 @@ func (e *Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]f
 // template is not reached at all.
 func (e *Embedder) shortStringText(s string) string {
 	return fillTemplate(e.model.ShortStringTemplate, "", s)
-}
-
-// embedInBatches splits texts into docBatchSize chunks and feeds each to run,
-// abandoning the remainder as soon as ctx is done. Split out from
-// EmbedDocuments (rather than inlined) so the cancellation checkpoint — the
-// only cancellation this layer can actually offer — is exercisable without a
-// loaded ONNX session.
-func embedInBatches(ctx context.Context, texts []string, run func([]string) ([][]float32, error)) ([][]float32, error) {
-	// Checked at entry as well as per batch: with no texts the loop body never
-	// runs, and returning (empty, nil) on a cancelled context would break the
-	// "observed at entry to each call" promise the Embedder interface makes —
-	// and that EmbedQuery / EmbedDocument already keep.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	out := make([][]float32, 0, len(texts))
-	for i := 0; i < len(texts); i += docBatchSize {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		end := min(i+docBatchSize, len(texts))
-		vecs, err := run(texts[i:end])
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, vecs...)
-	}
-	return out, nil
 }
 
 // docText renders a document for embedding. When the model's DocTemplate has a
@@ -244,20 +253,41 @@ func (e *Embedder) encode(text string) (ids, mask []int64) {
 	return ids, mask
 }
 
-// embedBatch tokenizes texts, pads them to the longest in the batch, runs one
-// ONNX inference, pools per the descriptor, and L2-normalizes each row.
+// embedBatch tokenizes texts and runs them as a single batch. The single-shot
+// paths (EmbedQuery, EmbedDocument) use it directly; the batched paths encode
+// once through encodeAll instead, so packing can read token lengths without
+// tokenizing twice.
 func (e *Embedder) embedBatch(texts []string) ([][]float32, error) {
-	n := len(texts)
+	return e.runRows(e.encodeAll(texts))
+}
+
+// encodeAll tokenizes every text into a row of ids and mask, each truncated to
+// the model's MaxTokens.
+//
+// This holds the whole input tokenized at once, which is inherent to
+// length-aware packing: the packer cannot group by width without knowing every
+// width first. The cost is bounded by the caller's request size, and the ids
+// are the model input anyway — the alternative is tokenizing twice.
+func (e *Embedder) encodeAll(texts []string) []encodedRow {
+	rows := make([]encodedRow, len(texts))
+	for i, text := range texts {
+		ids, mask := e.encode(text)
+		rows[i] = encodedRow{ids: ids, mask: mask}
+	}
+	return rows
+}
+
+// runRows pads rows to the longest in the batch, runs one ONNX inference, pools
+// per the descriptor, and L2-normalizes each row.
+func (e *Embedder) runRows(rows []encodedRow) ([][]float32, error) {
+	n := len(rows)
 	if n == 0 {
 		return nil, nil
 	}
-	rowIDs := make([][]int64, n)
-	rowMask := make([][]int64, n)
 	maxLen := 0
-	for i, text := range texts {
-		rowIDs[i], rowMask[i] = e.encode(text)
-		if len(rowIDs[i]) > maxLen {
-			maxLen = len(rowIDs[i])
+	for _, r := range rows {
+		if len(r.ids) > maxLen {
+			maxLen = len(r.ids)
 		}
 	}
 	if maxLen == 0 {
@@ -268,9 +298,9 @@ func (e *Embedder) embedBatch(texts []string) ([][]float32, error) {
 	// (pad token id 0 + attention_mask 0, so padding is ignored downstream).
 	flatIDs := make([]int64, n*maxLen)
 	flatMask := make([]int64, n*maxLen)
-	for i := range n {
-		copy(flatIDs[i*maxLen:], rowIDs[i])
-		copy(flatMask[i*maxLen:], rowMask[i])
+	for i, r := range rows {
+		copy(flatIDs[i*maxLen:], r.ids)
+		copy(flatMask[i*maxLen:], r.mask)
 	}
 
 	inputs, err := e.buildInputs(flatIDs, flatMask, int64(n), int64(maxLen))

@@ -70,12 +70,35 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("embedder model config invalid (embeddings.model=%q): %w", cfg.Embeddings.Model, err)
 	}
-	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"))
+	// 0 is the documented auto sentinel for embeddings.max_batch_tokens, resolved
+	// here rather than in Defaults() because Defaults() runs before the TOML and
+	// env layers and so cannot tell "operator chose this value" from "operator
+	// set nothing" — the same reason remote.known_hosts resolves after the
+	// overlay. Resolution lives at the app layer so a later memory-derived
+	// budget needs no config-package change and no /sys dependency there.
+	maxBatchTokens := cfg.Embeddings.MaxBatchTokens
+	if maxBatchTokens == 0 {
+		maxBatchTokens = embeddings.DefaultMaxBatchTokens
+	}
+	// Warn rather than reject: both bounds are judgement, not correctness.
+	// The low warning catches a predictable operator error — the constant this
+	// replaced was 32 DOCUMENTS, so someone reading a changelog may well set 32
+	// here and get one max-length document per inference with no other signal.
+	if n := cfg.Embeddings.MaxBatchTokens; n > 0 && n < 2048 {
+		log.Warn().Int("max_batch_tokens", n).
+			Msg("embeddings.max_batch_tokens is below one document's maximum length — the unit is PADDED TOKENS, not documents; every max-length document will run alone")
+	} else if n > 65536 {
+		log.Warn().Int("max_batch_tokens", n).
+			Msg("embeddings.max_batch_tokens is beyond the measured range; per-row overhead is unmodeled above it and peak memory may exceed expectations")
+	}
+	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"),
+		embeddings.WithMaxBatchTokens(maxBatchTokens))
 	if err != nil {
 		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
 	}
 	a.closers = append(a.closers, embedder.Close)
 	log.Info().Str("model", model.ID).Int("dim", model.Dim).
+		Int("max_batch_tokens", maxBatchTokens).
 		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
 
 	// LLM adapter.
