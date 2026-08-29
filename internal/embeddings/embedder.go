@@ -83,6 +83,13 @@ type Embedder struct {
 	// maxBatchTokens is the padded-token budget for one session.Run. Always
 	// positive for an Embedder built by NewEmbedder; see DefaultMaxBatchTokens.
 	maxBatchTokens int
+	// batchSem caps simultaneous BATCH inferences. Nil means unbounded.
+	// Single-shot paths deliberately bypass it.
+	batchSem batchSem
+	// firstRunRSS logs process RSS immediately before the first inference —
+	// the only moment non-embedding memory is measurable, since the ONNX arena
+	// retains its high-water mark and idle RSS afterwards equals peak RSS.
+	firstRunRSS sync.Once
 }
 
 // Option customizes an Embedder at construction.
@@ -90,13 +97,74 @@ type Option func(*Embedder)
 
 // WithMaxBatchTokens sets the padded-token budget for one session.Run.
 //
-// The caller is responsible for passing a positive value: the app layer
-// resolves an unset config (0, the documented auto sentinel) to
-// DefaultMaxBatchTokens before calling. Absent this option the default applies,
-// which is what keeps tools/calibrate and tools/motifannex deterministic across
-// machines rather than inheriting a host-derived budget.
+// The caller is responsible for passing a positive value; ResolveBudget
+// produces one from the config value and the detected memory ceiling.
+//
+// SUPERSEDES an earlier decision that the offline tools should skip derivation
+// to stay deterministic across machines. They no longer do: a memory ceiling is
+// a property of the MACHINE, not of the entry point, and a tool running
+// 16384-token batches on a 2 GiB host is the exact shape the derivation exists
+// to clamp. Batch-shape numerics sit inside the cosine >= 0.9999 envelope that
+// TestEmbedDocumentsBatchMatchesSingle already accepts, so calibration is not
+// meaningfully machine-dependent through this path. The tools still skip the
+// SERIALIZATION gate, which is a separate option — they run one batch at a time
+// and never contend, so it would cost them nothing and buy nothing.
 func WithMaxBatchTokens(n int) Option {
 	return func(e *Embedder) { e.maxBatchTokens = n }
+}
+
+// WithBatchConcurrency caps how many BATCH inferences may run at once; 0 leaves
+// them unbounded. One shared Embedder plus per-branch locking otherwise lets
+// concurrent runs overlap and their peaks ADD — and because the ONNX arena
+// retains its high-water mark, an overshoot is not a spike but a permanent
+// floor on resident memory.
+//
+// This is NOT a per-process memory bound. Single-row inference bypasses the gate
+// (see below), so it is unbounded in count and sits outside the guarantee.
+//
+// Unbounded by default, and that default is deliberate rather than lazy.
+//
+// On cost, stated as what was actually measured. An earlier version of this
+// comment attributed the numbers below to batch WIDTH; that was wrong — the
+// benchmark hardcoded its budget, so both runs used identical 4x2048 batches
+// and only the WORKER COUNT differed. Corrected reading, 8-core host:
+//
+//	4 concurrent workers vs fully serialized:  54.66s -> 75.04s  (37%)
+//	2 concurrent workers vs fully serialized:  60.71s -> 61.78s  ( 1.8%)
+//
+// Note the 1.8% above did NOT reproduce: the same configuration on a single
+// clean build measured 1.36, so treat that figure as history rather than data.
+//
+// Batch WIDTH does matter, and it was finally measured properly by holding
+// workers and total work fixed while varying only the shape (results-4, one
+// build, the harness printing rows/budget/batches):
+//
+//	2 batches of 4x2048 ( 910 MiB)  57.71s concurrent vs 78.54s serialized
+//	1 batch  of 8x2048 (1820 MiB)  65.42s concurrent vs 65.25s serialized
+//
+// A wide batch already saturates the cores through ORT intra-op parallelism, so
+// bounding concurrency costs nothing there; a narrow one leaves headroom that
+// concurrency exploits. This is the same claim an earlier version of this
+// comment made and had withdrawn as unmeasured — the earlier evidence was a
+// hardcoded budget that produced identical shapes in both arms. It is restated
+// here because THIS pair measured it, not because the old wording was right.
+//
+// The app enables it only when the derived budget shows the machine actually
+// constrained us — which is also the narrow-batch, expensive end of that range,
+// so this is a deliberate trade rather than a free guarantee. The offline tools
+// run one batch at a time and never contend, so the gate would cost them
+// nothing and buy nothing.
+//
+// Single-row inference (EmbedQuery, EmbedDocument) bypasses the gate whether or
+// not it is enabled, so interactive search never queues behind a rebuild batch.
+func WithBatchConcurrency(n int) Option {
+	return func(e *Embedder) {
+		if n > 0 {
+			e.batchSem = newBatchSem(n)
+			return
+		}
+		e.batchSem = nil
+	}
 }
 
 // NewEmbedder loads the model+tokenizer for descriptor m from <cacheDir>/<id>/,
@@ -190,7 +258,7 @@ func (e *Embedder) EmbedDocuments(ctx context.Context, titles, bodies []string) 
 	for i := range bodies {
 		texts[i] = e.docText(titles[i], bodies[i])
 	}
-	return embedInBatches(ctx, e.encodeAll(texts), e.maxBatchTokens, e.runRows)
+	return embedInBatches(ctx, e.encodeAll(texts), e.maxBatchTokens, e.batchSem, e.runRows)
 }
 
 // EmbedShortStrings embeds bare short strings — fact titles, and from Phase 2
@@ -208,7 +276,7 @@ func (e *Embedder) EmbedShortStrings(ctx context.Context, texts []string) ([][]f
 	for i, t := range texts {
 		rendered[i] = e.shortStringText(t)
 	}
-	return embedInBatches(ctx, e.encodeAll(rendered), e.maxBatchTokens, e.runRows)
+	return embedInBatches(ctx, e.encodeAll(rendered), e.maxBatchTokens, e.batchSem, e.runRows)
 }
 
 // shortStringText renders one short string through the model's descriptor. The
@@ -280,6 +348,7 @@ func (e *Embedder) encodeAll(texts []string) []encodedRow {
 // runRows pads rows to the longest in the batch, runs one ONNX inference, pools
 // per the descriptor, and L2-normalizes each row.
 func (e *Embedder) runRows(rows []encodedRow) ([][]float32, error) {
+	e.firstRunRSS.Do(logRSSBeforeFirstInference)
 	n := len(rows)
 	if n == 0 {
 		return nil, nil

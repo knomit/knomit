@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
+	"knomit/internal/memlimit"
 )
 
 func newEmbeddingsCmd() *cobra.Command {
@@ -213,7 +214,12 @@ func measure(id, cacheDir string, docs []doc) (dists, error) {
 	// A calibration run is a foreground CLI sweep with no caller to cancel it,
 	// so Background is the honest ctx for both the model fetch and the embeds.
 	ctx := context.Background()
-	e, err := embeddings.NewEmbedder(ctx, m, cacheDir)
+	e, err := embeddings.NewEmbedder(ctx, m, cacheDir,
+		// The memory ceiling is a property of the machine, not of the entry
+		// point: an offline tool on a small host must clamp its batches the
+		// same way the server does. No serialization — this runs one batch at
+		// a time and never contends.
+		embeddings.WithMaxBatchTokens(toolBatchBudget()))
 	if err != nil {
 		return dists{}, err
 	}
@@ -320,4 +326,14 @@ func summary(name string, s []float64) string {
 	mean /= float64(len(s))
 	return fmt.Sprintf("%-12s n=%-8d min=%.3f p50=%.3f p90=%.3f p95=%.3f p99=%.3f max=%.3f mean=%.3f",
 		name, len(s), s[0], quantile(s, .5), quantile(s, .9), quantile(s, .95), quantile(s, .99), s[len(s)-1], mean)
+}
+
+// toolBatchBudget derives this machine's batch budget and says so on stderr.
+// The server logs provenance on its boot line; without the same here, a developer
+// on a small host gets a silently slower tool and nothing explaining why.
+func toolBatchBudget() int {
+	b := embeddings.ResolveBudget(0, memlimit.Detect())
+	fmt.Fprintf(os.Stderr, "embed batch budget: %d tokens (source=%s, clamped=%s)\n",
+		b.Tokens, b.Source, b.Clamped)
+	return b.Tokens
 }

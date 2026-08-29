@@ -130,6 +130,20 @@ func packByTokenBudget(lens []int, budget int) [][]int {
 	return batches
 }
 
+// batchSem bounds how many BATCH inferences run at once. Nil disables the
+// bound, which the pure packing tests rely on.
+type batchSem chan struct{}
+
+// newBatchSem builds a gate admitting n concurrent batches. The capacity exists
+// to bound MEMORY — concurrent runs' peaks ADD, and the ONNX arena retains the
+// resulting high-water mark for the process lifetime, so an overshoot is not a
+// spike but a permanent floor — not to optimize scheduling.
+//
+// Capacity is chosen per machine class, not fixed: see WithBatchConcurrency for
+// the classes, the measured costs, and the grounding of each value. That comment
+// is the single authoritative copy.
+func newBatchSem(n int) batchSem { return make(batchSem, n) }
+
 // embedInBatches packs rows into budget-bounded batches, runs each, and
 // restores every result to its INPUT position. The reordering is why that last
 // step matters: callers correlate the returned slice positionally with the
@@ -140,7 +154,21 @@ func packByTokenBudget(lens []int, budget int) [][]int {
 // ctx is checked at entry and before each batch. It is a checkpoint, not an
 // abort: sess.Run cannot be interrupted, so cancelling bounds latency to one
 // batch, exactly as store.Embedder documents.
-func embedInBatches(ctx context.Context, rows []encodedRow, budget int, run func([]encodedRow) ([][]float32, error)) ([][]float32, error) {
+// sem bounds concurrent inference calls when non-nil, capping concurrent BATCH
+// memory: app.New shares one Embedder and lockBranch is per-branch, so without
+// it a rebuild on one branch and a learn on another run concurrently and their
+// peaks ADD.
+//
+// NOT a per-process bound, despite how it is tempting to describe it. Only
+// batched calls reach here; EmbedQuery and EmbedDocument go through embedBatch
+// and are deliberately ungated, so single-shot inference remains unbounded in
+// count. Calling this a process guarantee would overstate what an operator is
+// buying with up to 37% of their throughput.
+//
+// Only BATCH inference is gated. EmbedQuery and EmbedDocument go through
+// embedBatch and never reach here, so an interactive search contends for cores
+// with a running rebuild — as it always did — rather than queueing behind it.
+func embedInBatches(ctx context.Context, rows []encodedRow, budget int, sem batchSem, run func([]encodedRow) ([][]float32, error)) ([][]float32, error) {
 	// Checked at entry as well as per batch: with no rows the loop body never
 	// runs, and returning (empty, nil) on a cancelled context would break the
 	// "observed at entry to each call" promise the Embedder interface makes.
@@ -164,7 +192,30 @@ func embedInBatches(ctx context.Context, rows []encodedRow, budget int, run func
 			sub[j] = rows[at]
 		}
 
-		vecs, err := run(sub)
+		// Waiting for the gate must itself be cancellable: a caller queued behind
+		// a long rebuild batch would otherwise wait unboundedly, which is a worse
+		// failure than the overlapping peaks the gate exists to prevent.
+		if sem != nil {
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		// Released via defer inside a closure rather than after the call: a panic
+		// in inference would otherwise leak the gate permanently, deadlocking
+		// every later batch for the process lifetime. Recovered panics are a
+		// real path here — the server installs a crash reporter around them.
+		vecs, err := func() ([][]float32, error) {
+			defer releaseBatchSem(sem)
+			// Re-checked AFTER acquiring: the wait above may have taken a while,
+			// and starting a fresh inference for a caller that gave up during it
+			// is what the checkpoint contract exists to avoid.
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return run(sub)
+		}()
 		if err != nil {
 			// Return nothing rather than the partially scattered slice: it would
 			// be the right length with nil holes, which a caller checking only
@@ -180,4 +231,11 @@ func embedInBatches(ctx context.Context, rows []encodedRow, budget int, run func
 		}
 	}
 	return out, nil
+}
+
+// releaseBatchSem frees the gate, tolerating a nil semaphore.
+func releaseBatchSem(sem batchSem) {
+	if sem != nil {
+		<-sem
+	}
 }
