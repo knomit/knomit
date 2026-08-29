@@ -517,8 +517,35 @@ func handleHALLensFact(b hal.URLBuilder, reader FactReader, subProvider factSubP
 		// The mount is resolved, so a sub-resource can be served against it —
 		// with the mount-relative path, which is what the store indexes. The
 		// _links these emit stay repo-scoped, exactly as the fact body's do.
-		if dispatchResolvedFactSubResource(b, subProvider, ri, ri.Name(), branch, rel, sub, w, r) {
-			return
+		//
+		// GATED ON THE FACT BEING READABLE THROUGH THE LENS, and that gate is
+		// what keeps this route from becoming a mount-topology oracle. The
+		// sub-resource handlers report failure through writeStoreError, whose
+		// detail names the branch, and handleFactCommits does not fail at all
+		// for a path with no commits — it answers an empty 200 whose
+		// _links.self carries the mount's repo name and branch. Either one lets
+		// a caller iterate candidate id12s and read "mounted" off the response,
+		// which is exactly what lensFactNotFound exists to prevent. Reading
+		// first collapses "unmounted id", "malformed kb:// path" and "no such
+		// fact" back into one answer for the sub-resources too.
+		//
+		// It also keeps the lens surface internally consistent: a fact you
+		// cannot read through the lens has no sub-resources through it either.
+		// (Residual: an index that lags the git tree could still surface
+		// ErrFactNotLive from a handler, whose detail names the mount branch.
+		// That needs a mounted id to reach at all, so it is not an oracle.)
+		if sub != "" {
+			if _, _, err := reader.Read(r.Context(), ri, hal.Anchor{Branch: branch}, rel, false); err != nil {
+				if errors.Is(err, errFactNotFound) {
+					lensFactNotFound(w, r, requested)
+					return
+				}
+				writeStoreError(w, r, err, "Failed to read fact", branch)
+				return
+			}
+			if dispatchResolvedFactSubResource(b, subProvider, ri, ri.Name(), branch, rel, sub, w, r) {
+				return
+			}
 		}
 
 		a := hal.Anchor{Branch: branch}

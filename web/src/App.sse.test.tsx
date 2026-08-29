@@ -701,3 +701,33 @@ describe('App — head re-poll', () => {
     expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb');
   });
 });
+
+// The poll must never move the head BACKWARDS. Nothing orders a slow poll
+// response against the SSE stream, so a response captured before a newer
+// `status` event can land after it and re-stale the tab the poll exists to
+// un-stale — for a further 30s, with every consumer keyed on state.headCommit
+// (useFactEdges' own anchor included) refetching at the older commit.
+describe('App — head re-poll ordering', () => {
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a slow poll response cannot overwrite a newer head', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+
+    // Put a poll in flight, holding its response.
+    let resolvePoll: ((v: unknown) => void) | undefined;
+    api.status.mockImplementation(() => new Promise(r => { resolvePoll = r as (v: unknown) => void; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+    expect(resolvePoll).toBeDefined();
+
+    // A newer head arrives on the stream while that poll is still out.
+    act(() => { es.emit('status', { head: 'ccccccc3333' }); });
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('ccccccc');
+
+    // The poll now answers with what was current when it was issued.
+    await act(async () => { resolvePoll!({ ...STATUS, head: 'aaaaaaa1111' }); });
+
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('ccccccc');
+  });
+});

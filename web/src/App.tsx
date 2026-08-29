@@ -56,8 +56,13 @@ const REMOTE_RECHECK_MS = 60_000;
 // server used to DROP a head broadcast whenever the commit landed while the
 // previous notification's callback was still running (issue #178). This poll is
 // the belt-and-braces half of that fix, and it covers the lossy-stream case the
-// server fix cannot: it is cheap, and only a changed head re-renders anything
-// (SET_HEAD returns the same state for an unchanged one).
+// server fix cannot.
+//
+// It dispatches SET_HEAD, not SET_STATUS, and the distinction is the whole
+// reason it is cheap: SET_HEAD returns the SAME state object for an unchanged
+// head, so a quiet repo re-renders nothing, while SET_STATUS rebuilds state
+// unconditionally and would re-render every open tab every 30s forever. The
+// stream already carries full status; this only needs to carry the head.
 export const HEAD_POLL_MS = 30_000;
 
 function loadLeftPanelWidth(): number {
@@ -515,8 +520,18 @@ export default function App() {
     if (!state.repo || !state.branch) return;
     let cancelled = false;
     const id = setInterval(() => {
+      // What the head was when this request went out. Nothing orders a poll
+      // response against the SSE stream, so a response captured before a newer
+      // `status` event can land after it — and writing it back would re-stale
+      // the tab for another full interval, which is the opposite of this
+      // effect's purpose. If anything moved the head while we were in flight,
+      // that source is fresher than this answer by construction; drop it.
+      const issuedAt = stateRef.current.headCommit;
       api.status(state.repo, state.branch)
-        .then(s => { if (!cancelled) dispatch(statusAction(s)); })
+        .then(s => {
+          if (cancelled || stateRef.current.headCommit !== issuedAt) return;
+          dispatch({ type: 'SET_HEAD', head: s.head });
+        })
         .catch(() => {
           // Best-effort. A failed poll tells us nothing new about the head, and
           // the stream (or the next tick) is still the primary path — logging

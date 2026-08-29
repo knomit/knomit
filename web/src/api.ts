@@ -1477,11 +1477,17 @@ export const api = {
     incoming: RefGroup[];
     outgoing: RefGroup[];
   }> => {
-    // When commit is set, use the commit-anchored sub-resource endpoints so
-    // refs reflect the state of the source/target at that commit (the
-    // commit-anchored handler dispatches /incoming and /outgoing to the
-    // *AtCommit store primitives). Without this, navigating to a specific
-    // version of a fact in the Explain view would show no refs.
+    // When commit is set, use the commit-anchored sub-resource endpoints so the
+    // refs are THIS version's.
+    //
+    // Both routes end in the same version-aware primitives — the HEAD route's
+    // ExplainFact resolves the path's HEAD-active commit out of branch_facts
+    // and then calls IncomingAtCommit/OutgoingAtCommit itself — so the anchor
+    // does not decide whether edges carry a target_commit. What it decides is
+    // WHICH VERSION OF THIS FACT the edges belong to: HEAD-active, or the one
+    // live at the pinned commit. Reading an older version through the HEAD
+    // route would therefore show the HEAD version's refs, and a fact retracted
+    // at HEAD would show none at all (ErrFactNotLive → 404).
     const factURL = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;

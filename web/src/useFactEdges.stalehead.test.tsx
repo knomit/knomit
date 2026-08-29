@@ -10,6 +10,7 @@
 // answer: re-read the head and retry. A history/diff anchor is the opposite —
 // the commit is the user's pin, and dropping it would violate
 // kb/invariants/ui/navigation/every-hop-is-path-plus-commit.
+import { useState } from 'react';
 import { it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { useFactEdges } from './useFactEdges';
@@ -114,4 +115,31 @@ it('a live 404 that survives a fresh head is reported, not retried forever', asy
 
   const edgeCalls = urls.filter(u => u.includes('/facts/kb/x/1.md/'));
   expect(edgeCalls.length).toBe(2); // one incoming + one outgoing, no retry storm
+});
+
+// The tests above hold `state` fixed, so the effect never re-runs and the
+// hook's own retry is what settles. App is not shaped like that: reporting the
+// head re-anchors the state, which changes the `anchor` dep, which re-runs the
+// effect — so the retry's own fetches are dropped by their `stale()` guard and
+// a fresh run is what renders. Pin the caller shape App actually has, so this
+// file stops asserting a path the product does not take.
+it('recovers in a caller that re-anchors on the reported head', async () => {
+  function AppShaped() {
+    const [headCommit, setHead] = useState('staleHEAD');
+    const edges = useFactEdges({ ...liveStale, headCommit }, setHead);
+    if (edges.loading) return <div data-testid="out">loading</div>;
+    return <div data-testid="out">{edges.error ?? `ok:${edges.incoming.length}`}</div>;
+  }
+
+  render(<AppShaped />);
+  await waitFor(() => expect(screen.getByTestId('out').textContent).toBe('ok:1'));
+
+  // Bounded, whichever run settles it: the head is re-read exactly once. A
+  // second 404 would find the head unmoved and fail out rather than loop.
+  const statusCalls = urls.filter(u => u.endsWith('/repos/alpha/branches/agent:main'));
+  expect(statusCalls.length).toBe(1);
+
+  // Recovery is at the fresh head, and the stale one is never revisited.
+  expect(urls.some(u => u.includes('/commits/freshHEAD/facts/kb/x/1.md/incoming'))).toBe(true);
+  expect(urls.filter(u => u.includes('/commits/staleHEAD/')).length).toBe(2); // the original pair only
 });

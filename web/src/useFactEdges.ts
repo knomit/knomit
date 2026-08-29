@@ -68,6 +68,16 @@ const EMPTY: FactEdges = {
  * `onHead` is read through a ref rather than taken as a dependency: it exists to
  * report a discovery, and letting a caller's callback identity re-trigger the
  * fetch would make an unmemoized prop a refetch loop.
+ *
+ * WHICH RUN ACTUALLY RENDERS depends on the caller, and both are correct. In a
+ * caller that re-anchors on the reported head (App does: SET_HEAD → headCommit →
+ * `anchor`), reporting changes a dep, the effect re-runs, and the retry's own
+ * fetches are discarded by their `stale()` guard — the fresh run is what
+ * renders, at the cost of one redundant pair. Keeping the local retry anyway is
+ * what makes the hook correct on its own: a caller that passes no `onHead`, or
+ * ignores it, still recovers instead of sitting on the error. Either way the
+ * head is re-read at most once per failure — a second 404 finds the head
+ * unmoved and reports it, so there is no loop.
  */
 export function useFactEdges(state: AppState, onHead?: (head: string) => void): FactEdges {
   const [edges, setEdges] = useState<{ incoming: RefGroup[]; outgoing: RefGroup[] }>({ incoming: [], outgoing: [] });
@@ -115,9 +125,16 @@ export function useFactEdges(state: AppState, onHead?: (head: string) => void): 
         .catch(err => {
           if (stale()) return;
           // Only a live view anchored on a cached head can be wrong about WHERE
-          // it is looking. Anything else — a lens context (no commit in the
-          // URL), a user's history pin, a non-404 — is reported as-is.
-          if (!mayRefreshHead || !live || at === '' || !isNotFound(err)) {
+          // it is looking. Anything else — a lens context, a user's history
+          // pin, a non-404 — is reported as-is.
+          //
+          // `!lensCtx` is redundant TODAY (edgeAnchorCommit returns '' for a
+          // lens, so `at === ''` already excludes it) and is stated anyway,
+          // because the thing it guards is not local: state.headCommit is the
+          // WRITE repo's head, so if lens live edges ever became anchored on
+          // the mount head, this would write a READ MOUNT's head into it. The
+          // assumption is cheaper to pin here than to rediscover there.
+          if (!mayRefreshHead || !live || lensCtx || at === '' || !isNotFound(err)) {
             fail(err);
             return;
           }
