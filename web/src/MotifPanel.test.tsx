@@ -5,8 +5,15 @@ import { MotifPanel } from './MotifPanel';
 import type { ResolvedMotif } from './useMotifClusters';
 import type { MotifCluster } from './api';
 
+// df and carrier_count are DIFFERENT NUMBERS with different meanings — df is
+// how many facts use the name, carrier_count is how many the pivot returns —
+// and they are equal in practice, which is exactly why a fixture must not tie
+// them. Every builder here derives df as carrier_count + 100 so a component
+// reading the wrong field fails loudly instead of passing on a coincidence.
+// See kb/conventions/testing/wiring-fixtures.
 const cluster = (over: Partial<MotifCluster> & { canonical: string; carrier_count: number }): MotifCluster => ({
-  cluster_key: `key-${over.canonical}`, members: [over.canonical], df: over.carrier_count,
+  cluster_key: `key-${over.canonical}`, members: [over.canonical],
+  df: over.carrier_count + 100,
   carriers: [], aliases: [{ motif: over.canonical, method: 'canonical' }], ...over,
 });
 
@@ -132,6 +139,30 @@ describe('MotifPanel', () => {
     const b = screen.getByTestId('motif-spellings') as HTMLButtonElement;
     expect(b.textContent).toBe('1 spelling');
     expect(b.disabled).toBe(true);
+  });
+
+  it('offers no pivot when only this fact carries the motif', () => {
+    // The modal case, not an edge one: 36 of this base's 73 clusters are
+    // carried by exactly one fact. A live "Open all 1 carriers" is both a dead
+    // end — the list it opens is the fact you are already reading — and a
+    // sentence that does not parse.
+    panel([ok('layout-shifts-under-cursor', {
+      carrier_count: 1,
+      definition: 'Content is inserted or resized in place, displacing the target a user is aiming at.',
+    })], 'layout-shifts-under-cursor');
+
+    expect(screen.queryByTestId('motif-pivot')).toBeNull();
+    // Said plainly rather than left blank: the reader learns the shape has been
+    // named once, which is a fact about the vocabulary worth knowing.
+    expect(screen.getByTestId('motif-carrier-count').textContent).toBe('only this fact');
+    // The meaning is still the reason to have opened it.
+    expect(screen.getByTestId('motif-definition')).toBeTruthy();
+  });
+
+  it('counts in the plural only when there is more than one', () => {
+    panel([ok('two-carriers', { carrier_count: 2 })], 'two-carriers');
+    expect(screen.getByTestId('motif-carrier-count').textContent).toBe('2 carriers');
+    expect(screen.getByTestId('motif-pivot').textContent).toContain('Open all 2 carriers');
   });
 
   it('says a cluster could not be read, rather than showing it as empty', () => {

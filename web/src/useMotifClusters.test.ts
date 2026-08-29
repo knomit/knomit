@@ -17,7 +17,8 @@ vi.mock('./api', () => ({ api: { motifCluster: vi.fn() } }));
 
 const cluster = (canonical: string, carrier_count: number) => ({
   cluster_key: `key-${canonical}`, canonical, members: [canonical],
-  df: carrier_count, carrier_count, carriers: [], aliases: [],
+  // Distinct, so a consumer reading df where it means carrier_count fails.
+  df: carrier_count + 100, carrier_count, carriers: [], aliases: [],
 });
 
 describe('useMotifClusters', () => {

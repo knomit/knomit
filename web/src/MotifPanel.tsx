@@ -103,7 +103,7 @@ function MotifSection({ motif, expanded, onPivot }: {
           <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11.5, color: '#c8cfdb' }}>{motif.motif}</span>
           <span style={{
             marginLeft: 'auto', fontFamily: 'var(--k-font-mono)', fontSize: 10, color: '#6d7788',
-          }}>{c ? `${c.carrier_count} carriers` : motif.status === 'error' ? '!' : '···'}</span>
+          }}>{c ? carrierLabel(c.carrier_count) : motif.status === 'error' ? '!' : '···'}</span>
         </div>
       </div>
     );
@@ -125,7 +125,7 @@ function MotifSection({ motif, expanded, onPivot }: {
         }}>
           {/* carrier_count, not df: this is the number of facts the button below
               will actually land on, so it has to be the query's own answer. */}
-          {c ? `${c.carrier_count} carriers` : motif.status === 'error' ? 'count unavailable' : '···'}
+          {c ? carrierLabel(c.carrier_count) : motif.status === 'error' ? 'count unavailable' : '···'}
         </span>
       </div>
 
@@ -178,13 +178,21 @@ function MotifSection({ motif, expanded, onPivot }: {
           display: 'flex', alignItems: 'center', gap: 12,
           marginTop: 4, paddingTop: 10, borderTop: '1px solid #1a1a1a',
         }}>
-          {/* The only thing here that leaves the fact, and it says so. */}
-          <button type="button" data-testid="motif-pivot" onClick={() => onPivot(motif.motif)}
-            style={{
-              fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#dbe2ec',
-              background: 'none', border: '1px solid #3a4150', borderRadius: 3,
-              padding: '4px 10px', cursor: 'pointer', outline: 'none',
-            }}>Open all {c.carrier_count} carriers &nbsp;→</button>
+          {/* The only thing here that leaves the fact, and it says so.
+              NOT OFFERED AT ONE CARRIER, which is the commonest case rather
+              than an edge one — 36 of this base's 73 clusters are carried by a
+              single fact. The list it would open is the fact already on screen,
+              so the button would be a dead end that also reads "1 carriers".
+              The count line above says "only this fact" instead: an answer,
+              and a real thing to know about a name minted once. */}
+          {c.carrier_count > 1 && (
+            <button type="button" data-testid="motif-pivot" onClick={() => onPivot(motif.motif)}
+              style={{
+                fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#dbe2ec',
+                background: 'none', border: '1px solid #3a4150', borderRadius: 3,
+                padding: '4px 10px', cursor: 'pointer', outline: 'none',
+              }}>Open all {c.carrier_count} carriers &nbsp;→</button>
+          )}
           <button type="button" data-testid="motif-spellings"
             onClick={() => setShowAliases(v => !v)}
             disabled={c.aliases.length < 2}
@@ -203,6 +211,16 @@ function MotifSection({ motif, expanded, onPivot }: {
       {showAliases && c && <Aliases aliases={c.aliases} canonical={c.canonical} />}
     </div>
   );
+}
+
+/** How many facts carry this motif, in words that parse at every value.
+ *
+ *  One is not "1 carriers", and it is not a number worth printing either: the
+ *  useful thing at one is that there is nowhere to go, which is what the phrase
+ *  says. Below the fold this is also what tells a reader the shape has been
+ *  named once — an authoring-hygiene fact, not a fault. */
+function carrierLabel(n: number): string {
+  return n === 1 ? 'only this fact' : `${n} carriers`;
 }
 
 /** Which parts of the system this motif's other facts are about.

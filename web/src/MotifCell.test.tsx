@@ -12,11 +12,14 @@ import type { ResolvedMotif } from './useMotifClusters';
 
 const LONGEST = 'threshold-encodes-unmeasured-distribution';
 
+// df deliberately differs from carrier_count: the cell must show the number the
+// pivot would land on, and a fixture where the two agree could not tell the
+// fields apart. See kb/conventions/testing/wiring-fixtures.
 const ok = (motif: string, carrier_count: number): ResolvedMotif => ({
   motif, status: 'ok',
   cluster: {
     cluster_key: 'k', canonical: motif, members: [motif],
-    df: carrier_count, carrier_count, carriers: [], aliases: [],
+    df: carrier_count + 100, carrier_count, carriers: [], aliases: [],
   },
 });
 

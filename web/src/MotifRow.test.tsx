@@ -7,7 +7,12 @@ import type { ResolvedMotif } from './useMotifClusters';
 
 const ok = (motif: string, carrier_count: number): ResolvedMotif => ({
   motif, status: 'ok',
-  cluster: { cluster_key: 'k', canonical: motif, members: [motif], df: carrier_count, carrier_count, carriers: [], aliases: [] },
+  // df runs INVERSE to carrier_count here, not merely offset from it. Ordering
+  // is the thing under test, and an offset preserves relative order — a sort
+  // reading df would have produced an identical list and passed. Inverted, a
+  // df-based sort reverses the rows and the test fails, which is the whole
+  // point of a falsifiable fixture (kb/conventions/testing/wiring-fixtures).
+  cluster: { cluster_key: 'k', canonical: motif, members: [motif], df: 1000 - carrier_count, carrier_count, carriers: [], aliases: [] },
 });
 const pending = (motif: string): ResolvedMotif => ({ motif, status: 'loading' });
 const failed = (motif: string): ResolvedMotif => ({ motif, status: 'error', error: 'boom' });
