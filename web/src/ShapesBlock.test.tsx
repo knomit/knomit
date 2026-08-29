@@ -148,3 +148,18 @@ describe('ShapesBlock', () => {
     expect(screen.queryByTestId('shapes-error')).toBeNull();
   });
 });
+
+describe('where there is no vocabulary endpoint', () => {
+  it('absents itself rather than reporting a fault', () => {
+    // The public /explore build vendors these components against a static
+    // bundle with no live endpoint. "Unavailable" is a third thing from
+    // "failed" and "empty": an error there would report a fault in a build
+    // working exactly as intended, and a hole in the panel would be worse.
+    const real = api.motifs;
+    // @ts-expect-error — modelling the vendored client, which has no such call
+    api.motifs = undefined;
+    const { container } = render(<ShapesBlock repo="r" branch="b" onPick={vi.fn()} />);
+    expect(container.firstChild).toBeNull();
+    api.motifs = real;
+  });
+});

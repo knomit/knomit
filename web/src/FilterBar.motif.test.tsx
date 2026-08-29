@@ -98,6 +98,18 @@ describe('the motif category in the picker', () => {
       .toContain('Couldn’t read the vocabulary'));
   });
 
+  it('is absent where there is no vocabulary endpoint at all', () => {
+    const real = api.motifs;
+    // @ts-expect-error — the vendored /explore client has no such call
+    api.motifs = undefined;
+    openPicker();
+    // A rail row that opened onto a permanent error is worse than a rail
+    // without it. The pivot still works there: a pivot is a filter.
+    expect(screen.queryByTestId('picker-cat-motif')).toBeNull();
+    expect(screen.getByTestId('picker-cat-domain')).toBeTruthy();
+    api.motifs = real;
+  });
+
   it('is absent in a lens, where no single vocabulary exists', () => {
     openPicker(repoState({ context: { kind: 'lens', name: 'dev' } }));
     // Nothing to list: cross-mount cluster identity does not exist, and

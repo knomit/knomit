@@ -111,7 +111,12 @@ const PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|motif|path):(\S*)$/;
 export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail, embedded = false }: Props) {
   const isLens   = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
-  const CATEGORIES = isLens ? LENS_CATEGORIES : FACT_CATEGORIES;
+  // Motif is offered only where its vocabulary can be read: not in a lens (no
+  // cross-mount identity) and not in a build with no such endpoint — the
+  // vendored /explore bundle swaps this client for a static one. A rail row
+  // that opened onto a permanent error is worse than a rail without it.
+  const CATEGORIES = (isLens || typeof api.motifs !== 'function')
+    ? LENS_CATEGORIES : FACT_CATEGORIES;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);

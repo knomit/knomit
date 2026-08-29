@@ -73,6 +73,16 @@ export function ShapesBlock({ repo, branch, onPick }: {
   }, [repo, branch, q, sort, reloads]);
 
   if (!repo) return null;
+  // ABSENT, not broken, where there is no vocabulary endpoint to ask.
+  //
+  // The public /explore build vendors these components and swaps api.ts for a
+  // static bundle; browsing a vocabulary needs a live endpoint that bundle does
+  // not carry. "Unavailable" is a third thing from "failed" and "empty" — an
+  // error message there would report a fault in a build that is working
+  // exactly as intended — so the block simply is not there, and the panel has
+  // three columns instead of three columns and a block. The pivot still works,
+  // because a pivot is a filter.
+  if (typeof api.motifs !== 'function') return null;
 
   // df=1 names are half the vocabulary and none of the reading: a name minted
   // once says something about authoring hygiene and nothing about the corpus's
