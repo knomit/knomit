@@ -46,6 +46,20 @@ const TASK_LINGER_MS = 8_000;
 // screen. Nothing polls while the remote is healthy — see the recheck effect.
 const REMOTE_RECHECK_MS = 60_000;
 
+// How often the branch head is re-read as a fallback for the SSE `status`
+// stream. Exported for the test that pins the behavior.
+//
+// The head is otherwise only ever moved by three one-shot events — the
+// page-load bootstrap, a `status` event, and the post-task refresh — so a
+// stream that goes quiet leaves the tab pinned to whatever it last heard, with
+// no signal and no recovery short of a reload. That is not hypothetical: the
+// server used to DROP a head broadcast whenever the commit landed while the
+// previous notification's callback was still running (issue #178). This poll is
+// the belt-and-braces half of that fix, and it covers the lossy-stream case the
+// server fix cannot: it is cheap, and only a changed head re-renders anything
+// (SET_HEAD returns the same state for an unchanged one).
+export const HEAD_POLL_MS = 30_000;
+
 function loadLeftPanelWidth(): number {
   const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
   try {
@@ -292,7 +306,11 @@ export default function App() {
   // same api.explain call independently, for the same fact at the same anchor.
   // The anchor rules — which mount, which commit, when to fall back — moved
   // into the hook with the fetch; see useFactEdges.
-  const edges = useFactEdges(state);
+  // A live edges 404 means this tab's cached head is stale; the hook re-reads
+  // the head to recover and hands it back here so the whole app stops being
+  // stale, not just the fetch that noticed.
+  const applyDiscoveredHead = useCallback((head: string) => dispatch({ type: 'SET_HEAD', head }), []);
+  const edges = useFactEdges(state, applyDiscoveredHead);
 
 
   // 12-hex KB-store id → repo name, for the References labels in FactBody. The
@@ -489,6 +507,25 @@ export default function App() {
     }, 2000);
     return () => { cancelled = true; clearInterval(id); };
   }, [state.indexState, state.repo, state.branch]);
+
+  // Re-read the branch head on a slow cycle. See HEAD_POLL_MS: this is the
+  // fallback for a `status` event that never arrives, whether because the
+  // server dropped it or because the stream is dead.
+  useEffect(() => {
+    if (!state.repo || !state.branch) return;
+    let cancelled = false;
+    const id = setInterval(() => {
+      api.status(state.repo, state.branch)
+        .then(s => { if (!cancelled) dispatch(statusAction(s)); })
+        .catch(() => {
+          // Best-effort. A failed poll tells us nothing new about the head, and
+          // the stream (or the next tick) is still the primary path — logging
+          // it would put a line in the console every 30s for an outage the SSE
+          // handler already reports.
+        });
+    }, HEAD_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [state.repo, state.branch]);
 
   // Reconcile the remote-error banner with the PERSISTED remote status.
   //

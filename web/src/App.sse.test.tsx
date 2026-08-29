@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
-import App from './App';
+import App, { HEAD_POLL_MS } from './App';
 
 // Characterization tests for the SSE wiring in App (the effect keyed on
 // [state.repo, state.branch]). These pin CURRENT behavior — the diagnostics the
@@ -671,5 +671,33 @@ describe('App SSE — teardown and resubscribe', () => {
     const es = FakeEventSource.instances[0];
     unmount();
     expect(es.closeCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The head has to stay fresh even when the stream does not deliver.
+//
+// Before this, state.headCommit moved only on the page-load bootstrap, an SSE
+// `status` event, and the post-task refresh. A single dropped broadcast — which
+// commitObserver used to do whenever a commit landed while the previous
+// callback was still running — pinned the tab to that commit until the user
+// reloaded, and every fact created afterwards 404'd its edges (issue #178). A
+// dead or lossy stream does the same thing without any server bug at all.
+// ---------------------------------------------------------------------------
+describe('App — head re-poll', () => {
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('picks up a head whose status broadcast never arrived', async () => {
+    const api = await apiMock();
+    await mountApp();
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('aaaaaaa');
+
+    // A commit lands; its `status` event is never delivered.
+    api.status.mockResolvedValue({ ...STATUS, head: 'bbbbbbb2222' });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb');
   });
 });
