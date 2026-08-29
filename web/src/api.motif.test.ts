@@ -104,3 +104,105 @@ describe('motif filter params', () => {
     });
   });
 });
+
+describe('the /motifs collection and cluster clients', () => {
+  function jsonOnce(body: unknown) {
+    const f = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body });
+    globalThis.fetch = f as unknown as typeof fetch;
+    return f;
+  }
+
+  const COLLECTION = {
+    count: 73,
+    health: {
+      authored_clusters: 73, authored_recurring: 37, authored_mints: 73,
+      authored_links: 183, authored_epistemic_recurring: 29,
+      recurrence_rate: 0.51, mint_to_link_ratio: 0.4,
+    },
+    _embedded: {
+      motifs: [{
+        cluster_key: 'as-failure-present-success',
+        canonical: 'failure-presents-as-success',
+        members: ['failure-presents-as-success'],
+        df: 26,
+        definition: 'An operation that did not achieve its effect returns the same signals a successful one would.',
+        definition_state: 'current',
+      }],
+    },
+  };
+
+  it('lists with the default df order and unwraps count, health and entries', async () => {
+    const f = jsonOnce(COLLECTION);
+    const r = await api.motifs('knomit-kb', 'agent/test');
+    // Branch names go through the house encoding (slash → colon), not percent
+    // encoding — the same shape every other branch-scoped endpoint uses.
+    expect(urlOf(f).pathname).toBe('/api/v1/repos/knomit-kb/branches/agent:test/motifs');
+    expect(r.count).toBe(73);
+    // Distinct values throughout, so a field read from the wrong key fails.
+    expect(r.health.authored_recurring).toBe(37);
+    expect(r.health.authored_links).toBe(183);
+    expect(r.health.recurrence_rate).toBe(0.51);
+    expect(r.motifs[0].canonical).toBe('failure-presents-as-success');
+    expect(r.motifs[0].df).toBe(26);
+    expect(r.motifs[0].definition_state).toBe('current');
+  });
+
+  it('passes q, sort and paging through', async () => {
+    const f = jsonOnce(COLLECTION);
+    await api.motifs('r', 'b', { q: 'signal', sort: 'name', limit: 50, offset: 100 });
+    const p = urlOf(f).searchParams;
+    expect(p.get('q')).toBe('signal');
+    expect(p.get('sort')).toBe('name');
+    expect(p.get('limit')).toBe('50');
+    expect(p.get('offset')).toBe('100');
+  });
+
+  it('caps limit at the server maximum rather than sending a value it rejects', async () => {
+    const f = jsonOnce(COLLECTION);
+    await api.motifs('r', 'b', { limit: 5000 });
+    expect(urlOf(f).searchParams.get('limit')).toBe('200');
+  });
+
+  it('falls back to an empty list when the embedded shape is missing', async () => {
+    jsonOnce({ count: 0 });
+    const r = await api.motifs('r', 'b');
+    expect(r.motifs).toEqual([]);
+  });
+
+  it('reads one cluster by key, percent-encoding it', async () => {
+    const f = jsonOnce({
+      cluster_key: 'collapse-defection-restraint',
+      canonical: 'defection-collapses-restraint',
+      members: ['defection-collapses-restraint', 'restraint-without-reciprocity'],
+      df: 6,
+      carrier_count: 6,
+      definition: 'A restraint only prevents the outcome if all parties keep it.',
+      definition_state: 'stale',
+      carriers: [{ path: 'kb/x/y/z.md', title: 'T', type: 'observation', committed_at: 7 }],
+      aliases: [
+        { motif: 'defection-collapses-restraint', method: 'canonical' },
+        { motif: 'restraint-without-reciprocity', method: 'judge', rationale: 'Both name the same collapse.' },
+      ],
+    });
+    const c = await api.motifCluster('r', 'b', 'a/b key');
+    expect(urlOf(f).pathname).toBe('/api/v1/repos/r/branches/b/motifs/a%2Fb%20key');
+    // carrier_count and df are different numbers with different meanings; the
+    // fixture keeps them equal in the wild but the client must not conflate the
+    // fields, so the assertions name each one.
+    expect(c.carrier_count).toBe(6);
+    expect(c.df).toBe(6);
+    expect(c.definition_state).toBe('stale');
+    expect(c.aliases).toHaveLength(2);
+    expect(c.aliases[1].method).toBe('judge');
+    expect(c.aliases[1].rationale).toBe('Both name the same collapse.');
+    expect(c.carriers[0].title).toBe('T');
+  });
+
+  it('tolerates a cluster with no carriers or aliases', async () => {
+    jsonOnce({ cluster_key: 'k', canonical: 'c', members: ['c'], df: 1, carrier_count: 1 });
+    const c = await api.motifCluster('r', 'b', 'k');
+    expect(c.carriers).toEqual([]);
+    expect(c.aliases).toEqual([]);
+    expect(c.definition).toBeUndefined();
+  });
+});

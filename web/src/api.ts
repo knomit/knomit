@@ -922,6 +922,78 @@ function setMotifParams(p: URLSearchParams, opts?: { motifs?: string[]; motifMat
   if (opts.motifMatch && opts.motifMatch !== 'exact') p.set('motif_match', opts.motifMatch);
 }
 
+/** One cluster in the /motifs collection. `cluster_key` is the STABLE identity
+ *  (URLs key on it); `canonical` is the most-used spelling and is what a reader
+ *  is shown — keys look like stemmed token strings ("drift-config") and read as
+ *  wrong-order nonsense, which is why `canonical` exists. Never show a bare key.
+ *
+ *  `df` is the VOCABULARY count: live facts carrying any member, counted once
+ *  each. It is not `carrier_count` (below) and the two must not be conflated —
+ *  df is a share of the vocabulary, carrier_count is a promise about a query. */
+export interface MotifEntry {
+  cluster_key: string;
+  canonical: string;
+  members: string[];
+  df: number;
+  definition?: string;
+  /** `stale` is an INTERIM state, not an error: membership moved since the
+   *  sentence was written and it is still served. `missing` is an absence. */
+  definition_state?: 'current' | 'stale' | 'missing';
+}
+
+/** The corpus-health header on the collection. Counted over AUTHORED facts only
+ *  and NOT narrowed by `q` — it describes the vocabulary, not the result list
+ *  sitting under it. `recurrence_rate` and `mint_to_link_ratio` are the two that
+ *  say whether names are being reused or every fact is minting its own. */
+export interface MotifHealth {
+  authored_clusters: number;
+  authored_recurring: number;
+  authored_mints: number;
+  authored_links: number;
+  authored_epistemic_recurring: number;
+  recurrence_rate: number;
+  mint_to_link_ratio: number;
+}
+
+export interface MotifCarrier {
+  path: string;
+  title: string;
+  type?: string;
+  committed_at: number;
+}
+
+/** How a spelling joined its cluster. `judge` merges carry a written rationale —
+ *  the provenance surface for "why are these the same motif". Their presence is
+ *  also load-bearing elsewhere: a cluster with NO judge alias cannot have a
+ *  looser `stem` match than `exact`, which is how the widen control knows a rung
+ *  would add nothing without asking the server. */
+export interface MotifAlias {
+  motif: string;
+  method: string;
+  rationale?: string;
+}
+
+export interface MotifCluster extends MotifEntry {
+  /** The number of facts the pivot actually returns — the number the UI shows
+   *  beside a name, because that is the promise the row makes. */
+  carrier_count: number;
+  /** Most-recent-first and CAPPED (20 by default): a preview, not the list.
+   *  Anything derived from it is approximate; `carrier_count` is the total. */
+  carriers: MotifCarrier[];
+  aliases: MotifAlias[];
+}
+
+/** The server caps `limit` at 200 and 400s anything larger rather than clamping
+ *  silently (internal/web/params.go). Clamping here keeps a caller's optimism
+ *  from becoming a failed request. */
+const MOTIFS_MAX_LIMIT = 200;
+
+const EMPTY_MOTIF_HEALTH: MotifHealth = {
+  authored_clusters: 0, authored_recurring: 0, authored_mints: 0,
+  authored_links: 0, authored_epistemic_recurring: 0,
+  recurrence_rate: 0, mint_to_link_ratio: 0,
+};
+
 // listLensFacts GETs /api/v1/lenses/{lens}/facts — the recency-ordered, deduped
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
@@ -1126,6 +1198,38 @@ export const api = {
   updateLens,
   deleteLens,
   renameLens,
+  /** The per-repo motif vocabulary. `q` narrows over member spellings AND
+   *  definition text — which is what the browser's "Search names and meanings"
+   *  placeholder is promising, and what its sibling facet boxes cannot do. */
+  motifs: (repo: string, branch: string,
+    opts?: { q?: string; sort?: 'df' | 'name'; limit?: number; offset?: number }
+  ): Promise<{ count: number; health: MotifHealth; motifs: MotifEntry[] }> => {
+    const p = new URLSearchParams();
+    if (opts?.q) p.set('q', opts.q);
+    if (opts?.sort) p.set('sort', opts.sort);
+    if (opts?.limit !== undefined) p.set('limit', String(Math.min(opts.limit, MOTIFS_MAX_LIMIT)));
+    if (opts?.offset) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return fetchJSON<any>(`${branchBase(repo, branch)}/motifs${qs ? `?${qs}` : ''}`).then(data => ({
+      count: data.count ?? 0,
+      health: data.health ?? EMPTY_MOTIF_HEALTH,
+      motifs: data._embedded?.motifs ?? [],
+    }));
+  },
+
+  /** One cluster. `key` accepts the cluster_key or any member spelling, and is
+   *  encoded because neither is guaranteed URL-safe. Carriers and aliases
+   *  default to [] so a caller never has to guard the shape — but note that an
+   *  empty `carriers` with a non-zero `carrier_count` is a real state (a preview
+   *  the server chose not to send), not a contradiction to paper over. */
+  motifCluster: (repo: string, branch: string, key: string): Promise<MotifCluster> =>
+    fetchJSON<any>(`${branchBase(repo, branch)}/motifs/${encodeURIComponent(key)}`).then(data => ({
+      ...data,
+      members: data.members ?? [],
+      carriers: data.carriers ?? [],
+      aliases: data.aliases ?? [],
+    })),
+
   listLensFacts,
   lensSearch,
   lensCompletions,
