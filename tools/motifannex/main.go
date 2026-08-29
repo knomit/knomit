@@ -42,6 +42,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
+	"knomit/internal/memlimit"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"
@@ -250,7 +251,12 @@ func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.R
 		svc.Close()
 		return nil, nil, "", nil, err
 	}
-	emb, err := embeddings.NewEmbedder(ctx, model, filepath.Join(home, ".knomit", "models"))
+	emb, err := embeddings.NewEmbedder(ctx, model, filepath.Join(home, ".knomit", "models"),
+		// The memory ceiling is a property of the machine, not of the entry
+		// point: an offline tool on a small host must clamp its batches the
+		// same way the server does. No serialization — this runs one batch at
+		// a time and never contends.
+		embeddings.WithMaxBatchTokens(embeddings.ResolveBudget(0, memlimit.Detect()).Tokens))
 	if err != nil {
 		svc.Close()
 		return nil, nil, "", nil, fmt.Errorf("embedder: %w", err)

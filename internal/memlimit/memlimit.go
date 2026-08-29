@@ -37,6 +37,21 @@ const (
 type Limit struct {
 	Bytes  int64
 	Source Source
+	// Inherited reports that the winning limit was found on an ANCESTOR cgroup
+	// rather than on our own. It matters because the two mean different things:
+	// a limit on our own cgroup was drawn around this workload, while one on a
+	// parent slice was drawn around a GROUP we merely belong to, and claiming
+	// most of that would be claiming most of someone else's budget.
+	//
+	// Always false when Source is SourceOSTotal (physical RAM is shared with
+	// everything by definition, which callers already treat as unknown
+	// co-tenants) or SourceNone.
+	Inherited bool
+	// HostTotal is physical RAM as reported by the OS, 0 when unknown. Kept
+	// alongside Bytes because they answer different questions: Bytes is what we
+	// may not exceed, HostTotal is how much slack exists outside our claim to
+	// absorb a mistake.
+	HostTotal int64
 }
 
 // Known reports whether a usable limit was found.
@@ -77,16 +92,20 @@ func detect(fsys fs.FS, total func() (int64, error)) Limit {
 func detectWithPID(fsys fs.FS, total func() (int64, error), pid int) Limit {
 	hostTotal, totalErr := total()
 
-	clamp := func(n int64, src Source) Limit {
+	clamp := func(n int64, src Source, inherited bool) Limit {
 		if totalErr == nil && hostTotal > 0 && n > hostTotal {
 			n = hostTotal
 		}
-		return Limit{Bytes: n, Source: src}
+		l := Limit{Bytes: n, Source: src, Inherited: inherited}
+		if totalErr == nil {
+			l.HostTotal = hostTotal
+		}
+		return l
 	}
 
-	switch n, err := cgroupV2Limit(fsys, pid); {
+	switch n, inherited, err := cgroupV2Limit(fsys, pid); {
 	case err == nil:
-		return clamp(n, SourceCgroupV2)
+		return clamp(n, SourceCgroupV2, inherited)
 	case errors.Is(err, errMisaligned):
 		// We know the mount is offset from our own cgroup, so a missing
 		// memory.max is NOT evidence of "unlimited" and physical RAM would be an
@@ -96,10 +115,12 @@ func detectWithPID(fsys fs.FS, total func() (int64, error), pid int) Limit {
 		return Limit{Source: SourceNone}
 	}
 	if n, err := cgroupV1Limit(fsys); err == nil {
-		return clamp(n, SourceCgroupV1)
+		// v1 reads the mount root, which in a container IS our own cgroup
+		// directory (the runtime bind-mounts it there) — see cgroupV1Limit.
+		return clamp(n, SourceCgroupV1, false)
 	}
 	if totalErr == nil && hostTotal > 0 {
-		return Limit{Bytes: hostTotal, Source: SourceOSTotal}
+		return Limit{Bytes: hostTotal, Source: SourceOSTotal, HostTotal: hostTotal}
 	}
 	return Limit{Source: SourceNone}
 }
@@ -132,16 +153,18 @@ func detectWithPID(fsys fs.FS, total func() (int64, error), pid int) Limit {
 // recover the real node and read the real limit. All three shapes now detect
 // 2.00 GiB under a MemoryMax=2G scope, while an genuinely unlimited host still
 // falls through to physical RAM.
-func cgroupV2Limit(fsys fs.FS, pid int) (int64, error) {
+// Returns the limit, whether it came from an ancestor rather than our own
+// cgroup, and an error.
+func cgroupV2Limit(fsys fs.FS, pid int) (limit int64, inherited bool, err error) {
 	// The unified hierarchy is identified by this file; without it the mount is
 	// v1 (or absent) and memory.max would not mean what we think.
 	if _, err := fs.Stat(fsys, "sys/fs/cgroup/cgroup.controllers"); err != nil {
-		return 0, errNotFound
+		return 0, false, errNotFound
 	}
 
 	rel, err := ownCgroupV2Path(fsys)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 
 	// Does the mount actually correspond to the path we just read? The kernel
@@ -157,16 +180,19 @@ func cgroupV2Limit(fsys fs.FS, pid int) (int64, error) {
 		// works when the pid namespace is unshared.
 		found, ok := findCgroupByPID(fsys, pid)
 		if !ok {
-			return 0, errMisaligned
+			return 0, false, errMisaligned
 		}
 		rel = found
 	}
 
 	best := int64(0)
-	for dir := path.Join("sys/fs/cgroup", rel); ; dir = path.Dir(dir) {
+	fromAncestor := false
+	leaf := path.Join("sys/fs/cgroup", rel)
+	for dir := leaf; ; dir = path.Dir(dir) {
 		if n, err := readInt(fsys, path.Join(dir, "memory.max")); err == nil && n > 0 {
 			if best == 0 || n < best {
 				best = n
+				fromAncestor = dir != leaf
 			}
 		}
 		if dir == "sys/fs/cgroup" || dir == "." || dir == "/" {
@@ -174,9 +200,9 @@ func cgroupV2Limit(fsys fs.FS, pid int) (int64, error) {
 		}
 	}
 	if best == 0 {
-		return 0, errNotFound
+		return 0, false, errNotFound
 	}
-	return best, nil
+	return best, fromAncestor, nil
 }
 
 // ownCgroupV2Path returns this process's cgroup path from the "0::<path>" line
@@ -194,9 +220,17 @@ func ownCgroupV2Path(fsys fs.FS) (string, error) {
 	return "", errNotFound
 }
 
-// cgroupV1Limit reads the v1 memory controller. hierarchical_memory_limit in
-// memory.stat already accounts for ancestor limits, so v1 needs no walk; it is
-// preferred over memory.limit_in_bytes when present and smaller.
+// cgroupV1Limit reads the v1 memory controller AT THE MOUNT ROOT
+// (/sys/fs/cgroup/memory/). Be precise about why that is usually enough, because
+// the obvious reading is wrong: it is NOT that hierarchical_memory_limit saves us
+// a walk. This function never consults /proc/self/cgroup at all, so on a v1 HOST
+// a process inside a limited cgroup detects nothing here and falls through to
+// physical RAM — the safe direction, but a real gap. It works in CONTAINERS
+// because the runtime bind-mounts the container's own cgroup directory at that
+// path, so the "root" already is our cgroup.
+//
+// Within whatever directory we do read, hierarchical_memory_limit accounts for
+// ancestor limits and is preferred over memory.limit_in_bytes when smaller.
 func cgroupV1Limit(fsys fs.FS) (int64, error) {
 	best := int64(0)
 	if n, err := readInt(fsys, "sys/fs/cgroup/memory/memory.limit_in_bytes"); err == nil && n > 0 && n < v1Unlimited {

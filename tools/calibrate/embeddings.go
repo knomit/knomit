@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
+	"knomit/internal/memlimit"
 )
 
 func newEmbeddingsCmd() *cobra.Command {
@@ -213,7 +214,12 @@ func measure(id, cacheDir string, docs []doc) (dists, error) {
 	// A calibration run is a foreground CLI sweep with no caller to cancel it,
 	// so Background is the honest ctx for both the model fetch and the embeds.
 	ctx := context.Background()
-	e, err := embeddings.NewEmbedder(ctx, m, cacheDir)
+	e, err := embeddings.NewEmbedder(ctx, m, cacheDir,
+		// The memory ceiling is a property of the machine, not of the entry
+		// point: an offline tool on a small host must clamp its batches the
+		// same way the server does. No serialization — this runs one batch at
+		// a time and never contends.
+		embeddings.WithMaxBatchTokens(embeddings.ResolveBudget(0, memlimit.Detect()).Tokens))
 	if err != nil {
 		return dists{}, err
 	}

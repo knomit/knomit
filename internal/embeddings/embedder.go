@@ -97,11 +97,18 @@ type Option func(*Embedder)
 
 // WithMaxBatchTokens sets the padded-token budget for one session.Run.
 //
-// The caller is responsible for passing a positive value: the app layer
-// resolves an unset config (0, the documented auto sentinel) to
-// DefaultMaxBatchTokens before calling. Absent this option the default applies,
-// which is what keeps tools/calibrate and tools/motifannex deterministic across
-// machines rather than inheriting a host-derived budget.
+// The caller is responsible for passing a positive value; ResolveBudget
+// produces one from the config value and the detected memory ceiling.
+//
+// SUPERSEDES an earlier decision that the offline tools should skip derivation
+// to stay deterministic across machines. They no longer do: a memory ceiling is
+// a property of the MACHINE, not of the entry point, and a tool running
+// 16384-token batches on a 2 GiB host is the exact shape the derivation exists
+// to clamp. Batch-shape numerics sit inside the cosine >= 0.9999 envelope that
+// TestEmbedDocumentsBatchMatchesSingle already accepts, so calibration is not
+// meaningfully machine-dependent through this path. The tools still skip the
+// SERIALIZATION gate, which is a separate option — they run one batch at a time
+// and never contend, so it would cost them nothing and buy nothing.
 func WithMaxBatchTokens(n int) Option {
 	return func(e *Embedder) { e.maxBatchTokens = n }
 }

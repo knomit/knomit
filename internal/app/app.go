@@ -83,7 +83,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// memlimit.Detect never fails — an undetectable ceiling yields the fixed
 	// default, because embeddings are mandatory and must not be blocked by an
 	// unknown amount of memory.
-	budget := resolveMaxBatchTokens(cfg.Embeddings.MaxBatchTokens, memlimit.Detect())
+	budget := embeddings.ResolveBudget(cfg.Embeddings.MaxBatchTokens, memlimit.Detect())
 	maxBatchTokens := budget.Tokens
 	// Warn rather than reject: both bounds are judgement, not correctness.
 	// The low warning catches a predictable operator error — the constant this

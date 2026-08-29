@@ -85,8 +85,9 @@ type EmbeddingsConfig struct {
 	// container gets less, a large machine gets the same as everyone else.
 	// An undetectable ceiling falls back to that default rather than failing.
 	//
-	// Set an explicit value to opt out of derivation entirely — a configured
-	// number is used verbatim and no detection runs.
+	// Set an explicit value to opt out of derivation — a configured number is
+	// used verbatim. (Detection still runs; its result is logged and then
+	// ignored for the budget, which is useful for diagnosing a host.)
 	MaxBatchTokens int `toml:"max_batch_tokens"`
 }
 
