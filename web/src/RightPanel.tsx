@@ -20,6 +20,7 @@ import { MotifCell } from './MotifCell';
 import { MotifOverflowCell, orderMotifs, OVERFLOW } from './MotifRow';
 import { useMotifClusters } from './useMotifClusters';
 import { MotifPanel } from './MotifPanel';
+import { ShapesBlock } from './ShapesBlock';
 import type { OrderedMotifs } from './MotifRow';
 import { RepoRows } from './RepoRows';
 import type { NavRequest } from './useNavigationManager';
@@ -991,6 +992,13 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                 )}
               </div>
               <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
+              {/* Repo context only. There is no single vocabulary across a
+                  lens — cross-mount cluster identity does not exist — so the
+                  block is ABSENT there rather than showing one mount's names as
+                  if they were the union's. The pivot still works in a lens;
+                  browsing the vocabulary is what cannot. */}
+              <ShapesBlock repo={state.repo} branch={state.branch}
+                onPick={motif => dispatch({ type: 'PIVOT_MOTIF', motif })} />
               <HighlightsPanel
                 highlights={stats.highlights}
                 axis={axis ?? stats.default_axis}
