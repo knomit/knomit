@@ -107,25 +107,44 @@ func WorstCaseBatchBytes(tokens int) int64 {
 //   - A CGROUP limit ALWAYS serializes (capacity 1). It is a hard wall with no
 //     absorber behind it, and any K-run threshold is beatable by K+1 concurrent
 //     branches, so a threshold there moves the cliff rather than removing it.
+//
 //   - A FLOOR-CLASS physical-RAM host serializes (capacity 1): our share of it
 //     cannot fund even the smallest budget's batch (7.52 GiB boundary).
-//   - A ROOMIER physical-RAM host gets capacity 2 rather than no bound at all.
-//     Concurrent peaks ADD and the arena RETAINS the high-water mark, so an
-//     unlucky 3-way overlap does not spike and recover — it raises resting RSS
-//     for the process lifetime. On the deployed 15.9 GiB machine, 3-way overlap
-//     is 5460 MiB of batch against the 3.97 GiB that the fraction claims is
-//     knomit's entire share of the box.
-//     K=2 is grounded in inputs INDEPENDENT of the sizing chain, which is the
-//     discipline a previous tautological gate here failed: that machine was
-//     OBSERVED absorbing ~2 runs' worth (4025 MiB peak across three repos), and
-//     2 workers is where the measured concurrency win still lives. It does not
-//     change the common case — 2-way overlap is untouched; only a third
-//     simultaneous batch queues.
+//
+//   - ANY detected physical-RAM host serializes too, floor-class or not, and
+//     this is a TRADE rather than a free win. Measured, one build, with the
+//     harness printing its batch shape so the numbers cannot be misattributed:
+//
+//     roomy shape   1 batch  of 8x2048 (1820 MiB)   65.42s vs 65.25s   ratio 1.00
+//     mid-size      2 batches of 4x2048 ( 910 MiB)  57.71s vs 78.54s   ratio 1.36
+//
+//     So capping costs ~0% on a roomy host and ~36% on a ~10 GiB one, whose
+//     smaller derived budget puts it in the narrow-batch regime where
+//     concurrency still buys something. Do not write "costs nothing" — that is
+//     true only at the top of the range.
+//
+//     Taken anyway, for two reasons. The coherence argument STRENGTHENS at
+//     mid-size: capacity 2 there retains 135% of the share sharedFraction
+//     claims, against 109% on a roomy host. And the asymmetry that decides it is
+//     retention versus recoverability — the ONNX arena keeps a memory overspend
+//     for the process lifetime, while 36% is transient wall-clock on re-embedding,
+//     an operation that is rare by design.
+//
+//     NO capacity-2 tier for mid-size hosts, and the reason is this design's own
+//     history: every regime boundary it has carried produced a review finding AT
+//     that boundary — the clamping proxy at the ceiling, the absorber premise at
+//     the floor, the threshold mismatch at the ladder edge. A second tier adds
+//     two more boundaries to defend; "bounded wherever we detected anything"
+//     adds none. On the evidence of this change, fewer boundaries is itself a
+//     safety property.
+//
 //   - An UNREADABLE ceiling serializes: we know a limit may apply and could not
 //     read it, which is the one case where we know we are blind.
+//
 //   - An UNKNOWN ceiling is UNBOUNDED. We measured nothing, so we know nothing,
 //     and imposing a cost on an unmeasured host is unfounded. Stated openly
 //     rather than hidden: this is the one class with no memory bound at all.
+//
 //   - An EXPLICIT budget above DefaultMaxBatchTokens serializes AND warns. The
 //     operator has overridden our sizing, so they are least likely to have
 //     modelled overlap, and beyond the ladder we cannot model it either. The
@@ -200,6 +219,26 @@ func batchConcurrency(lim memlimit.Limit, tokens int) int {
 		// guessing is least defensible.
 		return 1
 	case lim.Source == memlimit.SourceOSTotal && lim.HostTotal > 0:
+		// Every DETECTED ceiling is capped at 1, floor-class or not — see
+		// ResolveBudget for why the roomy-host exemption was withdrawn.
+		// Floor-class is still computed (FloorClass) but drives only an operator
+		// warning now, not the cap.
+		return 1
+	case lim.Source == memlimit.SourceUnreadable:
+		// We POSITIVELY KNOW a limit may apply and could not read it. The same
+		// reasoning that stops detection reporting physical RAM here applies to
+		// concurrency: falling back to the default budget AND permitting
+		// unbounded overlap would be behaviourally identical to the over-report
+		// this case exists to prevent, with only the log line changed. This is
+		// the one situation where we know we are blind, so it is the one where
+		// guessing is least defensible.
+		return 1
+	case lim.Source == memlimit.SourceOSTotal && lim.HostTotal > 0:
+		// Any detected ceiling gets the bound; see ResolveBudget. Floor-class is
+		// still computed because it drives an operator WARNING — that host is
+		// small enough to change how knomit runs — but it no longer changes the
+		// cap, which is 1 either way.
+		//
 		// FLOOR-CLASS MACHINE: our share of this host cannot fund even the
 		// smallest budget's batch. Computed from the machine alone — HostTotal
 		// and the constants, never the resolved Tokens — so it is independent of
@@ -226,22 +265,21 @@ func batchConcurrency(lim memlimit.Limit, tokens int) int {
 		// Boundary is 7696 MiB of physical RAM (7.52 GiB), from
 		// 0.25*H <= 225 + 675 + 1024 MiB.
 		share := int64(float64(lim.HostTotal)*sharedFraction) - ResidentModelBytes - nonEmbeddingReserve
-		if share <= WorstCaseBatchBytes(MinBatchTokens) {
-			return 1
-		}
-		// Roomier, but not unbounded — see ResolveBudget for K=2's grounding.
-		return roomyHostConcurrency
+		_ = share // retained for the floor-class WARN; see FloorClass below.
+		return 1
 	default:
 		// Unknown ceiling: no bound, stated openly rather than hidden.
 		return 0
 	}
 }
 
-// roomyHostConcurrency caps simultaneous batches on a physical-RAM host that is
-// above floor-class. Not derived from the budget ladder, deliberately: a
-// previous gate here compared two quantities that were exact inverses of each
-// other and was therefore unsatisfiable. This value comes from two independent
-// observations — the deployed machine absorbed ~2 runs' worth under real load
-// (4025 MiB across three concurrent repos), and 2 workers is where the measured
-// concurrency benefit still lives.
-const roomyHostConcurrency = 2
+// FloorClass reports that our share of this machine cannot fund even the
+// smallest budget's batch (7.52 GiB of physical RAM). It drives an operator
+// warning, not the concurrency cap — every detected ceiling is capped at 1.
+func FloorClass(lim memlimit.Limit) bool {
+	if lim.Source != memlimit.SourceOSTotal || lim.HostTotal <= 0 {
+		return false
+	}
+	share := int64(float64(lim.HostTotal)*sharedFraction) - ResidentModelBytes - nonEmbeddingReserve
+	return share <= WorstCaseBatchBytes(MinBatchTokens)
+}

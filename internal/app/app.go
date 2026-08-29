@@ -110,6 +110,13 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		Int64("memory_limit_bytes", budget.LimitBytes).
 		Int("batch_concurrency", budget.BatchConcurrency).
 		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
+	if budget.BatchConcurrency == 0 {
+		// The one class with no memory bound at all. An operator on a host we
+		// could not measure is exactly who needs telling, and a bare
+		// batch_concurrency=0 field on the line above does not say it.
+		log.Warn().Str("batch_budget_source", budget.Source).
+			Msg("could not determine this host's memory ceiling, so concurrent embedding batches are UNBOUNDED and the batch budget is the shipped default; set embeddings.max_batch_tokens explicitly if this host is memory-constrained")
+	}
 	if budget.BatchConcurrency > 0 {
 		log.Info().Int("max_batch_tokens", maxBatchTokens).
 			Str("batch_budget_source", budget.Source).

@@ -50,16 +50,22 @@ func TestSerialize_CgroupWithExplicitBudgetStillSerializes(t *testing.T) {
 	}
 }
 
-func TestSerialize_RoomyHostKeepsConcurrency(t *testing.T) {
-	// The deployed machine. Its share (0.25 x 15.9 GiB, less the model and
-	// knomit's own footprint) comfortably funds a batch, so it is not
-	// floor-class and keeps concurrency — no behaviour change on a box we
-	// confirmed healthy under real load.
-	if got := ResolveBudget(0, hostLimit(15900)); got.Serialized() {
-		t.Error("Serialize=true on the deployed 15.9 GiB host")
-	}
-	if got := ResolveBudget(0, hostLimit(8192)); got.Serialized() {
-		t.Error("Serialize=true on an 8 GiB host — above the floor-class boundary")
+// TestSerialize_EveryDetectedCeilingIsCapped replaces an earlier test that
+// asserted roomy hosts keep concurrency. That exemption was withdrawn in
+// decision 14: measured at the shape a roomy host actually runs (8x2048
+// batches), capacity 2 vs 1 was 65.42s vs 65.25s — ratio 1.00, no benefit —
+// while spending 109% of the share sharedFraction claims, retained for the
+// process lifetime.
+func TestSerialize_EveryDetectedCeilingIsCapped(t *testing.T) {
+	for _, lim := range []memlimit.Limit{
+		hostLimit(4096), hostLimit(15900), hostLimit(256000),
+		cgroupLimit(2048, false), cgroupLimit(65536, true),
+		{Source: memlimit.SourceUnreadable},
+	} {
+		if got := ResolveBudget(0, lim); !got.Serialized() {
+			t.Errorf("%s (%d MiB): BatchConcurrency = %d, want 1",
+				lim.Source, lim.Bytes>>20, got.BatchConcurrency)
+		}
 	}
 }
 
@@ -92,13 +98,13 @@ func TestSerialize_FloorClassIsProvenanceIndependent(t *testing.T) {
 	}
 }
 
-// TestSerialize_FloorClassBoundary pins the threshold itself, so a constant
-// drifting moves this test rather than silently moving the boundary.
-func TestSerialize_FloorClassBoundary(t *testing.T) {
-	if !ResolveBudget(0, hostLimit(7168)).Serialized() {
+// TestFloorClassBoundary pins the threshold, which now drives the operator
+// warning rather than the cap.
+func TestFloorClassBoundary(t *testing.T) {
+	if !FloorClass(hostLimit(7168)) {
 		t.Error("7 GiB should be floor-class")
 	}
-	if ResolveBudget(0, hostLimit(8192)).Serialized() {
+	if FloorClass(hostLimit(8192)) {
 		t.Error("8 GiB should not be floor-class")
 	}
 }
@@ -115,24 +121,31 @@ func TestSerialize_UnknownCeilingDoesNotSerialize(t *testing.T) {
 	}
 }
 
-// TestSerialize_MonotonicInMemory is the property the old rule violated: adding
-// memory must never remove the guarantee. Sweeps both sources across the window
-// where the old trigger flipped.
-func TestSerialize_MonotonicInMemory(t *testing.T) {
+// TestBatchConcurrency_MonotonicInMemory is the property the original clamping
+// rule violated: more memory must never LOOSEN the bound. Asserted on the
+// capacity, not on a boolean — a boolean cannot distinguish capacity 2 from
+// capacity 0, which is precisely the distinction decision 13 introduced, so a
+// host jumping from 2 to unbounded would have passed the old form.
+func TestBatchConcurrency_MonotonicInMemory(t *testing.T) {
+	// Looseness order: 1 (tightest) < 2 < 0 (unbounded).
+	looseness := func(n int) int {
+		if n == 0 {
+			return 1 << 30
+		}
+		return n
+	}
 	for _, src := range []string{"cgroup", "os-total"} {
-		lost := false
+		prev := 0
 		for mib := int64(1024); mib <= 65536; mib += 128 {
 			lim := cgroupLimit(mib, false)
 			if src == "os-total" {
 				lim = hostLimit(mib)
 			}
-			b := ResolveBudget(0, lim)
-			if !b.Serialized() {
-				lost = true
-			} else if lost {
-				t.Errorf("%s: gate came back ON at %d MiB after switching off at less memory — non-monotonic", src, mib)
-				break
+			got := looseness(ResolveBudget(0, lim).BatchConcurrency)
+			if got < prev {
+				t.Fatalf("%s at %d MiB: bound TIGHTENED as memory grew (%d after %d)", src, mib, got, prev)
 			}
+			prev = got
 		}
 	}
 }
@@ -275,8 +288,8 @@ func TestBatchConcurrency_ByMachineClass(t *testing.T) {
 		{"cgroup is a hard wall", cgroupLimit(8192, false), 1},
 		{"cgroup, inherited", cgroupLimit(8192, true), 1},
 		{"floor-class host", hostLimit(4096), 1},
-		{"roomy host is capped, not unbounded", hostLimit(15900), roomyHostConcurrency},
-		{"very large host still capped", hostLimit(256000), roomyHostConcurrency},
+		{"roomy host is capped like any detected host", hostLimit(15900), 1},
+		{"very large host still capped", hostLimit(256000), 1},
 		{"unreadable ceiling", memlimit.Limit{Source: memlimit.SourceUnreadable}, 1},
 		{"unknown ceiling is unbounded", memlimit.Limit{Source: memlimit.SourceNone}, 0},
 	} {
@@ -288,22 +301,41 @@ func TestBatchConcurrency_ByMachineClass(t *testing.T) {
 	}
 }
 
-// TestBatchConcurrency_RoomyHostBoundsMultiplicity is H1. The deployed machine
+// TestBatchConcurrency_RoomyHostBoundsMultiplicity is H1: the deployed machine
 // derives the ceiling budget and previously took NO bound at all, so a 3-way
-// overlap was 3 x 1820 = 5460 MiB of batch against the 3.97 GiB the fraction
-// claims is knomit's entire share — and because the arena retains its
-// high-water mark, that overshoot would have become resting RSS for the process
-// lifetime rather than a spike.
+// overlap was 5460 MiB of batch against the 3975 MiB the fraction claims is
+// knomit's entire share — and because the arena retains its high-water mark,
+// that overshoot becomes resting RSS for the process lifetime rather than a
+// spike.
+//
+// It is capped at 1, not 2. Capacity 2 was measured at the shape the cap
+// actually governs (8x2048 batches, one build) as 65.42s concurrent vs 65.25s
+// serialized — ratio 1.00, no benefit — while spending 109% of the claimed
+// share against 63% at capacity 1. The cap and the sizing fraction agree at
+// exactly one value.
 func TestBatchConcurrency_RoomyHostBoundsMultiplicity(t *testing.T) {
 	got := ResolveBudget(0, hostLimit(15900))
-	if got.BatchConcurrency == 0 {
-		t.Fatal("BatchConcurrency = 0 on the deployed host — unbounded overlap on a shared box")
+	if got.BatchConcurrency != 1 {
+		t.Errorf("BatchConcurrency = %d on the deployed host, want 1", got.BatchConcurrency)
 	}
-	// But NOT serialized: 2-way overlap is what that machine demonstrably
-	// absorbed (4025 MiB measured across three repos), so capping at 2 codifies
-	// observed behaviour rather than changing it. Only a third batch queues.
-	if got.Serialized() {
-		t.Error("Serialized on the deployed host — capping multiplicity must not become serializing")
+}
+
+// TestFloorClass_DrivesTheWarningNotTheCap: floor-class no longer changes the
+// cap (every detected ceiling is 1), but it still identifies a host small
+// enough to change how knomit runs, which an operator is told about.
+func TestFloorClass_DrivesTheWarningNotTheCap(t *testing.T) {
+	small, large := hostLimit(4096), hostLimit(15900)
+	if !FloorClass(small) {
+		t.Error("4 GiB host is not floor-class")
+	}
+	if FloorClass(large) {
+		t.Error("15.9 GiB host is floor-class")
+	}
+	if a, b := ResolveBudget(0, small).BatchConcurrency, ResolveBudget(0, large).BatchConcurrency; a != b {
+		t.Errorf("cap differs by floor-class (%d vs %d) — it should not any more", a, b)
+	}
+	if FloorClass(cgroupLimit(2048, false)) {
+		t.Error("FloorClass must be false for a cgroup source — it is a physical-RAM notion")
 	}
 }
 
@@ -312,15 +344,18 @@ func TestBatchConcurrency_RoomyHostBoundsMultiplicity(t *testing.T) {
 // ladder ends at 32768, forced gate above 32768 — leaving 16385..32768 modelled
 // but neither warned nor bounded, and 40000 gated but unwarned.
 func TestBatchConcurrency_ExplicitAboveDefaultSerializes(t *testing.T) {
-	host := hostLimit(15900) // roomy: would otherwise get capacity 2
-	if got := ResolveBudget(DefaultMaxBatchTokens, host); got.Serialized() {
-		t.Errorf("explicit %d (exactly the default) serialized — the boundary is ABOVE the default",
-			DefaultMaxBatchTokens)
+	// Isolated on an UNKNOWN ceiling, the only class that is otherwise
+	// unbounded — on any detected host the cap would be 1 regardless, so this
+	// rule could not be observed there.
+	unknown := memlimit.Limit{Source: memlimit.SourceNone}
+	if got := ResolveBudget(DefaultMaxBatchTokens, unknown); got.BatchConcurrency != 0 {
+		t.Errorf("explicit %d (exactly the default) on an unmeasured host: cap = %d, want 0 — the boundary is ABOVE the default",
+			DefaultMaxBatchTokens, got.BatchConcurrency)
 	}
 	for _, tokens := range []int{DefaultMaxBatchTokens + 1, 17000, 40000, 65536} {
-		if got := ResolveBudget(tokens, host); !got.Serialized() {
-			t.Errorf("explicit %d tokens: BatchConcurrency = %d, want 1 — above the shipped default the "+
-				"operator has overridden our sizing and is least likely to have modelled overlap",
+		if got := ResolveBudget(tokens, unknown); !got.Serialized() {
+			t.Errorf("explicit %d tokens: cap = %d, want 1 — above the shipped default the operator has "+
+				"overridden our sizing and is least likely to have modelled overlap",
 				tokens, got.BatchConcurrency)
 		}
 	}

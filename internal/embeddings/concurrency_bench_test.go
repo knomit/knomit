@@ -47,6 +47,7 @@ func TestConcurrentVsSerializedInference(t *testing.T) {
 	}
 
 	workers := envInt("KNOMIT_BENCH_WORKERS", 4)
+	budget := envInt("KNOMIT_BENCH_BUDGET", 8192)
 	run := func(sem batchSem) time.Duration {
 		start := time.Now()
 		var wg sync.WaitGroup
@@ -55,7 +56,7 @@ func TestConcurrentVsSerializedInference(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				rows := makeRows()
-				if _, err := embedInBatches(context.Background(), rows, 8192, sem, e.runRows); err != nil {
+				if _, err := embedInBatches(context.Background(), rows, budget, sem, e.runRows); err != nil {
 					t.Error(err)
 				}
 			}()
@@ -67,8 +68,15 @@ func TestConcurrentVsSerializedInference(t *testing.T) {
 	concurrent := run(nil)
 	serialized := run(newBatchSem(1))
 
-	fmt.Printf("RESULT\tworkers=%d\tconcurrent=%.2fs\tserialized=%.2fs\tratio=%.2f\n",
-		workers, concurrent.Seconds(), serialized.Seconds(),
+	// rows AND budget are printed because they jointly determine the batch
+	// SHAPE, and a result without them is not comparable to another: an earlier
+	// pair of results was read as varying batch width when a hardcoded budget
+	// meant both runs used identical 4x2048 batches and only the worker count
+	// differed.
+	batches := packByTokenBudget(lensOf(makeRows()), budget)
+	fmt.Printf("RESULT\tworkers=%d\trows=%d\tbudget=%d\tbatches=%d\trows_per_batch=%d\tconcurrent=%.2fs\tserialized=%.2fs\tratio=%.2f\n",
+		workers, rowsPerBatch, budget, len(batches), len(batches[0]),
+		concurrent.Seconds(), serialized.Seconds(),
 		serialized.Seconds()/concurrent.Seconds())
 }
 
@@ -95,4 +103,12 @@ func memAvailableMiB(t *testing.T) int64 {
 		}
 	}
 	return 0
+}
+
+func lensOf(rows []encodedRow) []int {
+	out := make([]int, len(rows))
+	for i, r := range rows {
+		out[i] = len(r.ids)
+	}
+	return out
 }

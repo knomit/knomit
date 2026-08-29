@@ -122,13 +122,32 @@ func WithMaxBatchTokens(n int) Option {
 // This is NOT a per-process memory bound. Single-row inference bypasses the gate
 // (see below), so it is unbounded in count and sits outside the guarantee.
 //
-// Unbounded by default, and that default is deliberate rather than lazy. The
-// cost of bounding depends on batch WIDTH, measured on an 8-core host:
-// 4 workers x 4 rows x 2048 cost 37% (54.66s -> 75.04s), while 2 workers x
-// 8 rows x 2048 cost 2% (60.71s -> 61.78s). A wide batch already saturates the
-// cores via ORT's intra-op parallelism; a narrow one leaves headroom that
-// concurrent Runs exploit — which is also why capacity 2 preserves most of the
-// benefit where the memory allows it.
+// Unbounded by default, and that default is deliberate rather than lazy.
+//
+// On cost, stated as what was actually measured. An earlier version of this
+// comment attributed the numbers below to batch WIDTH; that was wrong — the
+// benchmark hardcoded its budget, so both runs used identical 4x2048 batches
+// and only the WORKER COUNT differed. Corrected reading, 8-core host:
+//
+//	4 concurrent workers vs fully serialized:  54.66s -> 75.04s  (37%)
+//	2 concurrent workers vs fully serialized:  60.71s -> 61.78s  ( 1.8%)
+//
+// Note the 1.8% above did NOT reproduce: the same configuration on a single
+// clean build measured 1.36, so treat that figure as history rather than data.
+//
+// Batch WIDTH does matter, and it was finally measured properly by holding
+// workers and total work fixed while varying only the shape (results-4, one
+// build, the harness printing rows/budget/batches):
+//
+//	2 batches of 4x2048 ( 910 MiB)  57.71s concurrent vs 78.54s serialized
+//	1 batch  of 8x2048 (1820 MiB)  65.42s concurrent vs 65.25s serialized
+//
+// A wide batch already saturates the cores through ORT intra-op parallelism, so
+// bounding concurrency costs nothing there; a narrow one leaves headroom that
+// concurrency exploits. This is the same claim an earlier version of this
+// comment made and had withdrawn as unmeasured — the earlier evidence was a
+// hardcoded budget that produced identical shapes in both arms. It is restated
+// here because THIS pair measured it, not because the old wording was right.
 //
 // The app enables it only when the derived budget shows the machine actually
 // constrained us — which is also the narrow-batch, expensive end of that range,
