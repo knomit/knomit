@@ -105,11 +105,10 @@ func WorstCaseBatchBytes(tokens int) int64 {
 //     so a threshold there moves the cliff rather than removing it. The cost is
 //     width-dependent (~2% at the wide shapes a container running a big rebuild
 //     actually hits, more at narrow ones) and is the price of the guarantee.
-//   - PHYSICAL RAM serializes only when the real envelope cannot absorb
-//     expectedConcurrentRuns. Note this uses HostTotal, NOT the fraction: the
-//     deployed 15.9 GiB machine's safety came from the ~75% it never claimed
-//     being a genuine absorber, so the safety question must be asked of the real
-//     memory rather than of our share of it.
+//   - PHYSICAL RAM serializes when the machine is FLOOR-CLASS: our share of it
+//     cannot fund even the smallest budget's batch (~7.7 GiB boundary). Computed
+//     from the machine, not from the resolved budget, so it does not depend on
+//     whether that budget was derived or configured.
 //   - An UNKNOWN ceiling does not serialize. We measured nothing, so we know
 //     nothing; an unmeasured host is not a constrained one. An UNREADABLE one
 //     does serialize — that is the opposite case, where we know a limit may
@@ -187,8 +186,32 @@ func shouldSerialize(lim memlimit.Limit, tokens int) bool {
 		// to estimate.
 		return true
 	case lim.Source == memlimit.SourceOSTotal && lim.HostTotal > 0:
-		absorber := lim.HostTotal - ResidentModelBytes - nonEmbeddingReserve
-		return absorber < int64(expectedConcurrentRuns)*WorstCaseBatchBytes(tokens)
+		// FLOOR-CLASS MACHINE: our share of this host cannot fund even the
+		// smallest budget's batch. Computed from the machine alone — HostTotal
+		// and the constants, never the resolved Tokens — so it is independent of
+		// whether the budget was derived or configured. An operator pinning a
+		// budget on a small laptop must not silently lose the guarantee.
+		//
+		// Note this applies sharedFraction, i.e. the SAME envelope the budget
+		// math uses. An earlier form asked the question of raw HostTotal on the
+		// theory that unclaimed RAM absorbs overlap. That was over-read from an
+		// observation about the incident machine: its unclaimed ~12 GiB was not
+		// idle, it held code-server and a coding agent, and it absorbed the
+		// overlap because the overlap was small relative to the box, not because
+		// the memory was free. Using two different envelopes also made the app
+		// self-contradictory — on a 4 GiB host it warned that memory was the
+		// binding constraint while permitting unbounded overlap.
+		//
+		// Keying on "floor-class" is a proxy, and the corpus says to check a
+		// proxy's correlation direction per source before trusting it. Here it
+		// is POSITIVELY correlated with constraint: no fraction is spent on a
+		// first batch before the comparison, so a smaller machine always means a
+		// smaller share. That is the opposite of the cgroup path, where the
+		// analogous proxy was ANTI-correlated and produced an OOM window.
+		//
+		// Boundary is ~7.7 GiB of physical RAM.
+		share := int64(float64(lim.HostTotal)*sharedFraction) - ResidentModelBytes - nonEmbeddingReserve
+		return share <= WorstCaseBatchBytes(MinBatchTokens)
 	default:
 		return false
 	}

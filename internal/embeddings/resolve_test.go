@@ -51,21 +51,55 @@ func TestSerialize_CgroupWithExplicitBudgetStillSerializes(t *testing.T) {
 }
 
 func TestSerialize_RoomyHostKeepsConcurrency(t *testing.T) {
-	// The incident machine. Its real safety never came from the gate: it came
-	// from the unclaimed ~75% of physical RAM being a genuine absorber. So the
-	// check uses the PHYSICAL envelope while the fraction only sizes the budget.
-	got := ResolveBudget(0, hostLimit(15900))
-	if got.Serialize {
-		t.Error("Serialize=true on the deployed 15.9 GiB host — this would be a behaviour change on a machine we confirmed healthy")
+	// The deployed machine. Its share (0.25 x 15.9 GiB, less the model and
+	// knomit's own footprint) comfortably funds a batch, so it is not
+	// floor-class and keeps concurrency — no behaviour change on a box we
+	// confirmed healthy under real load.
+	if got := ResolveBudget(0, hostLimit(15900)); got.Serialize {
+		t.Error("Serialize=true on the deployed 15.9 GiB host")
+	}
+	if got := ResolveBudget(0, hostLimit(8192)); got.Serialize {
+		t.Error("Serialize=true on an 8 GiB host — above the floor-class boundary")
 	}
 }
 
-func TestSerialize_TinyHostSerializes(t *testing.T) {
-	// A 2 GiB laptop has no absorber left once the model and knomit's own
-	// footprint are accounted for.
-	got := ResolveBudget(0, hostLimit(2048))
+// TestSerialize_FloorClassHostSerializes: on a ~4 GiB shared laptop our share
+// does not fund even a minimum batch. Before decision 12 this host was warned
+// that "memory is the binding constraint" and simultaneously permitted
+// unbounded overlap, because the WARN used our share and the gate used raw
+// physical RAM. Same constants, opposite conclusions.
+func TestSerialize_FloorClassHostSerializes(t *testing.T) {
+	got := ResolveBudget(0, hostLimit(4096))
 	if !got.Serialize {
-		t.Error("Serialize=false on a 2 GiB host — two overlapping runs do not fit in what remains")
+		t.Error("Serialize=false on a 4 GiB host that clamps to the floor")
+	}
+	if got.Clamped != "floor" {
+		t.Errorf("Clamped = %q — the gate and the clamp must agree about this machine", got.Clamped)
+	}
+}
+
+// TestSerialize_FloorClassIsProvenanceIndependent is why the rule is computed
+// from the MACHINE rather than from the resolved budget. Keying on Clamped
+// would re-couple the gate to provenance and reintroduce the defect where an
+// operator who pins a budget loses the memory guarantee.
+func TestSerialize_FloorClassIsProvenanceIndependent(t *testing.T) {
+	got := ResolveBudget(8192, hostLimit(4096))
+	if got.Tokens != 8192 {
+		t.Errorf("Tokens = %d, want the configured 8192", got.Tokens)
+	}
+	if !got.Serialize {
+		t.Error("Serialize=false for an explicit budget on a floor-class host — the gate must key on the machine, not on where Tokens came from")
+	}
+}
+
+// TestSerialize_FloorClassBoundary pins the threshold itself, so a constant
+// drifting moves this test rather than silently moving the boundary.
+func TestSerialize_FloorClassBoundary(t *testing.T) {
+	if !ResolveBudget(0, hostLimit(7168)).Serialize {
+		t.Error("7 GiB should be floor-class")
+	}
+	if ResolveBudget(0, hostLimit(8192)).Serialize {
+		t.Error("8 GiB should not be floor-class")
 	}
 }
 
