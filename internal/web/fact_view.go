@@ -12,13 +12,21 @@ import (
 // handles both HEAD-anchored and commit-anchored views; the anchor passed
 // to BuildFactView determines the link set.
 type FactView struct {
-	Path       string    `json:"path"`
-	Title      string    `json:"title"`
-	Body       string    `json:"body,omitempty"` // omitted in collection items (hard rule §3 #8)
-	Kind       string    `json:"kind,omitempty"` // omitted when epistemic (the default)
-	Type       string    `json:"type,omitempty"`
-	Domain     []string  `json:"domain"`
-	Entities   []string  `json:"entities"`
+	Path     string   `json:"path"`
+	Title    string   `json:"title"`
+	Body     string   `json:"body,omitempty"` // omitted in collection items (hard rule §3 #8)
+	Kind     string   `json:"kind,omitempty"` // omitted when epistemic (the default)
+	Type     string   `json:"type,omitempty"`
+	Domain   []string `json:"domain"`
+	Entities []string `json:"entities"`
+	// Motifs names the general regularities this fact instantiates. Present on
+	// every collection item already; here so the OPEN fact carries what its own
+	// row carries — the fact header reads this envelope, and a header whose
+	// contents depended on how the reader arrived would be showing motifs on
+	// some facts and not others with no way to tell the cases apart.
+	//
+	// omitempty: most facts carry none, and those responses stay as they were.
+	Motifs     []string  `json:"motifs,omitempty"`
 	Refs       []RefView `json:"refs"`
 	Confidence float64   `json:"confidence"`
 	Sources    int       `json:"sources"`
@@ -104,6 +112,7 @@ func BuildFactView(
 		Type:        string(f.Type),
 		Domain:      f.Domain,
 		Entities:    f.Entities,
+		Motifs:      f.Motifs,
 		Confidence:  f.Confidence,
 		Sources:     f.Sources,
 		Origin:      origin,

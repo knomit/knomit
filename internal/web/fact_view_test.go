@@ -208,3 +208,37 @@ func TestBuildFactLinks_CommitAnchoredHasIncoming(t *testing.T) {
 		t.Errorf("incoming href: got %q, want %q", got, want)
 	}
 }
+
+// The open fact must carry the motifs its own row already carries.
+//
+// Every COLLECTION view serializes motifs (recentFactItem, the search item, the
+// lens twins). The single-fact envelope did not — so the fact header, which
+// renders from this view, had no names to show, while the list row behind it
+// did. The alternative considered was carrying the names over from whichever
+// row opened the fact; that fails for a fact reached by a ref hop, a highlight
+// or a restored URL, and fails invisibly, which is worse than not having them.
+func TestFactView_Motifs_SerializedWhenPresentAndOmittedWhenEmpty(t *testing.T) {
+	b := hal.URLBuilder{Base: "/api/v1"}
+	a := hal.Anchor{Branch: "agent/test"}
+	resolver := &stubRefResolver{existing: map[string]bool{"know/ai/ml/xyz99999.md": true}}
+
+	// Two distinct motifs, in the order the fact declares them: a view that
+	// dropped one, or reordered them, fails here rather than in a UI that would
+	// have rendered a plausible-looking subset.
+	f := makeTestFact()
+	f.Motifs = []string{"failure-presents-as-success", "absence-encodes-value"}
+	view := BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver, testLocalRepoID)
+	require.Equal(t, []string{"failure-presents-as-success", "absence-encodes-value"}, view.Motifs)
+	raw, err := json.Marshal(view)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"motifs":["failure-presents-as-success","absence-encodes-value"]`)
+
+	// Zero motifs is the common case — most facts carry none — so the key is
+	// omitted entirely and those responses stay byte-identical to before.
+	f.Motifs = nil
+	view = BuildFactView(b, "alpha", a, "7f3a8b2c", f, resolver, testLocalRepoID)
+	require.Empty(t, view.Motifs)
+	raw, err = json.Marshal(view)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), `"motifs"`)
+}

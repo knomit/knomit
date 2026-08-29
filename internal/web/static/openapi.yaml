@@ -2250,6 +2250,7 @@ components:
           enum: [observation, concept, process, principle, pattern, reference, synthesis, insight, hypothesis, methodology]
         domain:     { type: array, items: { type: string } }
         entities:   { type: array, items: { type: string } }
+        motifs:     { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none — the same shape FactSummary uses, so the open fact and its list row agree." }
         refs:
           type: array
           items: { $ref: "#/components/schemas/RefView" }

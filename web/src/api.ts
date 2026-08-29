@@ -274,7 +274,7 @@ export interface FactRef {
   _links?: { target?: { href: string } };
 }
 
-export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; motifs?: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 
 // normalizeFactResponse maps the HAL FactView shape to the Fact interface.
 //
@@ -309,6 +309,10 @@ function normalizeFactResponse(data: any): Fact {
     confidence: data.confidence,
     sources: data.sources,
     entities: data.entities || [],
+    // Omitted on a fact carrying none, which is most of them — so this is
+    // `undefined` far more often than it is a list, and every reader of it
+    // has to treat absence as the ordinary case rather than as missing data.
+    motifs: data.motifs,
     refs,
     parse_error: data.parse_error,
     from_commit: data.from_commit,
