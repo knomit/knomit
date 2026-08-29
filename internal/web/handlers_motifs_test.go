@@ -56,6 +56,8 @@ type motifsCollectionBody struct {
 		AuthoredMints     int     `json:"authored_mints"`
 		AuthoredLinks     int     `json:"authored_links"`
 		RecurrenceRate    float64 `json:"recurrence_rate"`
+
+		AuthoredEpistemicRecurring int `json:"authored_epistemic_recurring"`
 	} `json:"health"`
 	Links struct {
 		Self struct {
@@ -275,6 +277,12 @@ func TestHandleHALMotifs_Paging(t *testing.T) {
 		if rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?"+bad); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d, want 400", bad, rec.Code)
 		}
+	}
+	// A refusal that says only "invalid" makes the caller guess the bound; the
+	// ceiling refusal names the number, as limitParam's does.
+	rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?limit=201")
+	if !containsSub(rec.Body.String(), "limit must not exceed 200") {
+		t.Errorf("over-ceiling detail must name the ceiling: %s", rec.Body.String())
 	}
 }
 
@@ -519,6 +527,10 @@ func TestHandleHALMotifCluster_CarriersLimitParam(t *testing.T) {
 			t.Errorf("%s: got %d, want 400", bad, rec.Code)
 		}
 	}
+	rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs/drift-config?limit=101")
+	if !containsSub(rec.Body.String(), "limit must not exceed 100") {
+		t.Errorf("over-ceiling detail must name the ceiling: %s", rec.Body.String())
+	}
 }
 
 // An offset near MaxInt passes the `n < 0` parse guard, and then offset+limit
@@ -530,13 +542,17 @@ func TestHandleHALMotifs_OverflowingOffsetIsAnEmptyPage(t *testing.T) {
 	stub := &stubMotifsProvider{clusters: threeClusters()}
 	r := motifsServer(t, stub)
 
-	for _, offset := range []string{
-		strconv.Itoa(math.MaxInt),
-		strconv.Itoa(math.MaxInt - 10),
-		"9223372036854775807",
+	// Three DISTINCT points, each genuinely inside the overflow window FOR ITS
+	// OWN LIMIT — the window is offset > MaxInt-limit, so it moves with the
+	// limit and a case must carry the limit that puts it inside. The third
+	// lands the old sum exactly on MaxInt+1, the shallowest overflow there is.
+	for _, tc := range []struct{ name, query string }{
+		{"MaxInt at the default limit", "offset=" + strconv.Itoa(math.MaxInt)},
+		{"MaxInt-10 at the default limit", "offset=" + strconv.Itoa(math.MaxInt-10)},
+		{"overflows exactly at MaxInt+1", "offset=" + strconv.Itoa(math.MaxInt-199) + "&limit=200"},
 	} {
-		t.Run(offset, func(t *testing.T) {
-			rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?offset="+offset)
+		t.Run(tc.name, func(t *testing.T) {
+			rec := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?"+tc.query)
 			body := decodeMotifs(t, rec)
 			if len(body.Embedded.Motifs) != 0 {
 				t.Errorf("page: got %d entries, want none past the end", len(body.Embedded.Motifs))
@@ -586,10 +602,17 @@ func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
 		t.Errorf("authored_clusters under ?q=: got %d, want the unnarrowed 2", narrowed.Health.AuthoredClusters)
 	}
 
+	// The epistemic count is authored AND epistemic — VocabularyHealth
+	// computes it with a kind CASE inside the same origin='authored' filter —
+	// so it carries the prefix too.
+	if body.Health.AuthoredEpistemicRecurring != 1 {
+		t.Errorf("authored_epistemic_recurring: got %d, want 1", body.Health.AuthoredEpistemicRecurring)
+	}
+
 	// The unqualified names must be gone from the wire: a reader who sees
 	// "clusters" beside "count" reads them as the same population.
 	raw := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs").Body.String()
-	for _, gone := range []string{`"clusters"`, `"recurring"`, `"mints"`, `"links"`} {
+	for _, gone := range []string{`"clusters"`, `"recurring"`, `"mints"`, `"links"`, `"epistemic_recurring"`} {
 		if containsSub(raw, gone) {
 			t.Errorf("unqualified health field %s is still on the wire: %s", gone, raw)
 		}

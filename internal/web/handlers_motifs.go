@@ -137,11 +137,18 @@ type motifHealthView struct {
 	AuthoredRecurring int `json:"authored_recurring"`
 	AuthoredMints     int `json:"authored_mints"`
 	AuthoredLinks     int `json:"authored_links"`
-	// EpistemicRecurring keeps its own name: it already names its population,
-	// and it is a NARROWER one than the authored_* counts (kind, not origin).
-	EpistemicRecurring int     `json:"epistemic_recurring"`
-	RecurrenceRate     float64 `json:"recurrence_rate"`
-	MintToLinkRatio    float64 `json:"mint_to_link_ratio"`
+	// AuthoredEpistemicRecurring narrows the authored population AGAIN, by
+	// kind: VocabularyHealth counts it with a `kind = 'epistemic'` CASE
+	// evaluated INSIDE the same `origin = 'authored'` filter as every other
+	// count here, so its population is authored AND epistemic — not epistemic
+	// instead of authored. It is the number the activation floor reads, and it
+	// diverges from AuthoredRecurring badly enough (measured up to 5x) that
+	// the qualifier has to be on the wire.
+	AuthoredEpistemicRecurring int `json:"authored_epistemic_recurring"`
+	// The two ratios are derived from the authored counts above, so they carry
+	// the same population as everything else in this block.
+	RecurrenceRate  float64 `json:"recurrence_rate"`
+	MintToLinkRatio float64 `json:"mint_to_link_ratio"`
 }
 
 // motifsView is the collection envelope. Not hal.CollectionView because the
@@ -189,10 +196,18 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 			n, err := strconv.Atoi(v)
 			// A HARD CEILING, not a clamp, matching limitParam: a client that
 			// asked for 500 and silently received 200 rows has no way to tell
-			// that from "there were only 200".
-			if err != nil || n < 1 || n > motifsMaxLimit {
-				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-					"invalid limit value", r.URL.Path)
+			// that from "there were only 200". Split into limitParam's three
+			// messages so the refusal says WHICH bound was missed and what it
+			// is, rather than making the caller guess.
+			switch {
+			case err != nil:
+				badParam(w, r, "invalid limit value")
+				return
+			case n < 1:
+				badParam(w, r, "limit must be at least 1")
+				return
+			case n > motifsMaxLimit:
+				badParam(w, r, "limit must not exceed "+strconv.Itoa(motifsMaxLimit))
 				return
 			}
 			limit = n
@@ -200,9 +215,12 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 		offset := 0
 		if v := qp.Get("offset"); v != "" {
 			n, err := strconv.Atoi(v)
-			if err != nil || n < 0 {
-				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-					"invalid offset value", r.URL.Path)
+			switch {
+			case err != nil:
+				badParam(w, r, "invalid offset value")
+				return
+			case n < 0:
+				badParam(w, r, "offset must not be negative")
 				return
 			}
 			offset = n
@@ -305,13 +323,13 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 			// motifHealthView for why its fields carry the population prefix.
 			Count: total,
 			Health: motifHealthView{
-				AuthoredClusters:   health.Clusters,
-				AuthoredRecurring:  health.Recurring,
-				AuthoredMints:      health.Mints,
-				AuthoredLinks:      health.Links,
-				EpistemicRecurring: health.EpistemicRecurring,
-				RecurrenceRate:     health.RecurrenceRate(),
-				MintToLinkRatio:    health.MintToLinkRatio(),
+				AuthoredClusters:           health.Clusters,
+				AuthoredRecurring:          health.Recurring,
+				AuthoredMints:              health.Mints,
+				AuthoredLinks:              health.Links,
+				AuthoredEpistemicRecurring: health.EpistemicRecurring,
+				RecurrenceRate:             health.RecurrenceRate(),
+				MintToLinkRatio:            health.MintToLinkRatio(),
 			},
 			Links:    links,
 			Embedded: map[string][]motifEntry{"motifs": items},
@@ -388,10 +406,17 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 		carrierLimit := motifCarriersDefaultLimit
 		if v := r.URL.Query().Get("limit"); v != "" {
 			n, err := strconv.Atoi(v)
-			// Hard ceiling, same reasoning as the collection's limit.
-			if err != nil || n < 1 || n > motifCarriersMaxLimit {
-				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-					"invalid limit value", r.URL.Path)
+			// Hard ceiling, same reasoning and same messages as the
+			// collection's limit.
+			switch {
+			case err != nil:
+				badParam(w, r, "invalid limit value")
+				return
+			case n < 1:
+				badParam(w, r, "limit must be at least 1")
+				return
+			case n > motifCarriersMaxLimit:
+				badParam(w, r, "limit must not exceed "+strconv.Itoa(motifCarriersMaxLimit))
 				return
 			}
 			carrierLimit = n

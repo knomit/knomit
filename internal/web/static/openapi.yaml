@@ -2470,15 +2470,24 @@ components:
         vocabulary listing over every origin. The two therefore disagree
         routinely and for two independent reasons, which is why the field names
         carry their population.
-      required: [authored_clusters, authored_recurring, authored_mints, authored_links, epistemic_recurring, recurrence_rate, mint_to_link_ratio]
+      required: [authored_clusters, authored_recurring, authored_mints, authored_links, authored_epistemic_recurring, recurrence_rate, mint_to_link_ratio]
       properties:
         authored_clusters:   { type: integer, description: "Size of the resolved vocabulary over authored facts. NOT the envelope's `count`, which spans every origin and is narrowed by `q`." }
         authored_recurring:  { type: integer, description: "Authored clusters with df >= 2 — the ones that actually connect two facts." }
         authored_mints:      { type: integer, description: "One per authored cluster: every cluster was minted exactly once." }
         authored_links:      { type: integer, description: "Every SUBSEQUENT use — total motif instances minus the mints." }
-        epistemic_recurring: { type: integer, description: "Clusters with df >= 2 counting EPISTEMIC carriers only — a narrower population again (kind, not origin). Diverges from `authored_recurring`, sometimes by a lot." }
-        recurrence_rate:     { type: number, format: double, description: Fraction of clusters carried by more than one fact. }
-        mint_to_link_ratio:  { type: number, format: double, description: "Mints per link. Above 1 means the vocabulary is growing faster than it is reused." }
+        authored_epistemic_recurring:
+          type: integer
+          description: |
+            Clusters with df >= 2 counting AUTHORED AND EPISTEMIC carriers —
+            the epistemic test is applied within the same authored-only
+            population as every other count here, narrowing it by kind as WELL
+            as origin, not instead of it. This is the number the motif
+            activation floor reads, and it diverges from `authored_recurring`
+            sometimes by several times over, so the two are reported side by
+            side deliberately.
+        recurrence_rate:     { type: number, format: double, description: "Fraction of clusters carried by more than one fact. Derived from the authored counts above, so it describes the same authored-only population." }
+        mint_to_link_ratio:  { type: number, format: double, description: "Mints per link. Above 1 means the vocabulary is growing faster than it is reused. Derived from the authored counts above, so it describes the same authored-only population." }
 
     MotifClusterEntry:
       type: object
