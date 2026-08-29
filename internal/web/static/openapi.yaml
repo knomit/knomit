@@ -2492,7 +2492,15 @@ components:
         cluster_key: { type: string, description: Stable cluster identity. }
         canonical:   { type: string, description: Representative spelling, for display only. }
         members:     { type: array, items: { type: string }, description: Every spelling resolving to this cluster, sorted. }
-        df:          { type: integer, description: Live facts carrying any member, counted once each. }
+        df:
+          type: integer
+          description: |
+            Live facts carrying any member, counted once each, computed by the
+            VOCABULARY query. Read it as the cluster's frequency and its rank
+            among its siblings — the pivot's own total is `carrier_count`, which
+            comes from the pivot query itself and is the authority on how many
+            facts `_links.facts` returns. The two are the same quantity asked of
+            two independent queries and can differ in flight.
         definition:  { type: string, description: "The cluster's glossary sentence. Absent when none was ever authored; PRESENT when stale (a stale sentence is served as interim rather than gapping the cluster)." }
         definition_state:
           type: string
@@ -2534,7 +2542,14 @@ components:
           properties:
             carrier_count:
               type: integer
-              description: "Total live facts carrying the cluster — the CORPUS count, not the length of `carriers`."
+              description: |
+                Total live facts carrying the cluster — the CORPUS count, not
+                the length of `carriers`.
+
+                AUTHORITATIVE for "how many facts does `_links.facts` return":
+                it is produced by that very query. `df` answers the same
+                question from the vocabulary query instead, so prefer this one
+                whenever the number is about the pivot.
             carriers:
               type: array
               description: |
