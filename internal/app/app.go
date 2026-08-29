@@ -70,12 +70,24 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("embedder model config invalid (embeddings.model=%q): %w", cfg.Embeddings.Model, err)
 	}
-	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"))
+	// 0 is the documented auto sentinel for embeddings.max_batch_tokens, resolved
+	// here rather than in Defaults() because Defaults() runs before the TOML and
+	// env layers and so cannot tell "operator chose this value" from "operator
+	// set nothing" — the same reason remote.known_hosts resolves after the
+	// overlay. Resolution lives at the app layer so a later memory-derived
+	// budget needs no config-package change and no /sys dependency there.
+	maxBatchTokens := cfg.Embeddings.MaxBatchTokens
+	if maxBatchTokens == 0 {
+		maxBatchTokens = embeddings.DefaultMaxBatchTokens
+	}
+	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"),
+		embeddings.WithMaxBatchTokens(maxBatchTokens))
 	if err != nil {
 		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
 	}
 	a.closers = append(a.closers, embedder.Close)
 	log.Info().Str("model", model.ID).Int("dim", model.Dim).
+		Int("max_batch_tokens", maxBatchTokens).
 		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
 
 	// LLM adapter.

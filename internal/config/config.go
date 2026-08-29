@@ -71,6 +71,18 @@ type LLMConfig struct {
 // EmbeddingsConfig selects the embedding model (by registry id).
 type EmbeddingsConfig struct {
 	Model string `toml:"model"`
+	// MaxBatchTokens bounds the PADDED token count — rows × the longest row —
+	// fed to one ONNX session.Run. Memory scales with that product, not with
+	// the document count: at a fixed 16384 padded tokens the measured peak is
+	// the same (within 1.3%) whether it is 128×128, 64×256 or 256×64, while a
+	// fixed count of 32 documents ranged from 283 MiB to 9030 MiB on document
+	// length alone. That 9030 MiB run is what OOM-killed the server.
+	//
+	// 0 (the default) means auto: resolved at the app layer, currently to
+	// embeddings.DefaultMaxBatchTokens. A later release derives a smaller value
+	// on memory-constrained hosts and containers without changing this
+	// sentinel, so an explicit 0 keeps meaning "let knomit decide".
+	MaxBatchTokens int `toml:"max_batch_tokens"`
 }
 
 // LogConfig controls logging output. The default is collector-friendly:
@@ -313,6 +325,7 @@ func Load() (Config, error) {
 		envFloatOr("KNOMIT_METHODOLOGY_MIN_SCORE", &cfg.MethodologyMinScore),
 		envFloatOr("KNOMIT_DISCOVERY_CONFIDENCE_THRESHOLD", &cfg.Discovery.ConfidenceThreshold),
 		envIntOr("KNOMIT_DISCOVERY_BLAST_RADIUS_THRESHOLD", &cfg.Discovery.BlastRadiusThreshold),
+		envIntOr("KNOMIT_EMBED_MAX_BATCH_TOKENS", &cfg.Embeddings.MaxBatchTokens),
 		envIntOr("KNOMIT_LOG_MAX_SIZE", &cfg.Log.MaxSizeMB),
 		envIntOr("KNOMIT_LOG_MAX_BACKUPS", &cfg.Log.MaxBackups),
 		envIntOr("KNOMIT_LOG_MAX_AGE", &cfg.Log.MaxAgeDays),
@@ -389,6 +402,14 @@ func (c Config) Validate() error {
 	// meaning — a typo that should fail loudly at boot, like confidence_threshold.
 	if c.Discovery.BlastRadiusThreshold < 0 {
 		return fmt.Errorf("config: discovery.blast_radius_threshold must be >= 0, got %d", c.Discovery.BlastRadiusThreshold)
+	}
+	// embeddings.max_batch_tokens is a padded-token budget, so a negative value
+	// is meaningless and would otherwise reach the packer, which degrades to one
+	// document per inference — a silent ~30x slowdown on re-embed rather than a
+	// visible failure. 0 is VALID and is the documented auto sentinel (the app
+	// layer resolves it), exactly as "" means "normal" for discovery.effort_default.
+	if c.Embeddings.MaxBatchTokens < 0 {
+		return fmt.Errorf("config: embeddings.max_batch_tokens must be >= 0 (0 = auto), got %d", c.Embeddings.MaxBatchTokens)
 	}
 	// log.format selects the sink encoding; an unknown value would silently
 	// fall through to console — fail at boot instead. Empty maps to console.
