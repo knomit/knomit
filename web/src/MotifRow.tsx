@@ -1,4 +1,5 @@
 import { MOTIF_GLYPH } from './utils';
+import { CELL_PAD_X } from './ConnectionsMenu';
 import type { ResolvedMotif } from './useMotifClusters';
 
 /** The id the overflow cell answers to, so the row and the panel agree on which
@@ -86,7 +87,7 @@ export function MotifOverflowCell({ hidden, open, onToggle, panelId }: {
         background: open ? '#151515' : 'none',
         boxShadow: open ? 'inset 0 -2px 0 currentColor' : 'none',
         border: 'none', outline: 'none', borderRadius: 0,
-        padding: '3px 9px', whiteSpace: 'nowrap', cursor: 'pointer',
+        padding: `3px ${CELL_PAD_X}px`, whiteSpace: 'nowrap', cursor: 'pointer',
         fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1.4,
       }}
     >

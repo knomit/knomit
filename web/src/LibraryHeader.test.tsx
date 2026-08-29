@@ -321,3 +321,68 @@ describe('the Relevance segment while searching', () => {
     expect(screen.getByTestId('sort-relevance')).not.toBeDisabled();
   });
 });
+
+
+// THE FOURTH MODE. A motif pivot is not a place, a moment or a ranking: it is
+// every fact in the corpus carrying one shape. It used to land in Recent with
+// the mode strip unchanged, so the one indicator telling a reader which of the
+// modes they were in said "chronological" while they were looking at a shape.
+//
+// It is DERIVED, exactly like relevance — the motif chip is what makes the list
+// a pivot, nothing in the strip can enter it, and so its segment is an exit.
+describe('the Motif segment', () => {
+  const MOTIF = { canonical: 'failure-presents-as-success' };
+
+  it('is absent until a pivot is on', () => {
+    render(<LibraryHeader {...base} />);
+    expect(screen.queryByTestId('sort-motif')).toBeNull();
+  });
+
+  it('appears and is the lit mode while pivoting', () => {
+    // `sort` still arrives as the EFFECTIVE axis, which is 'recent' throughout
+    // a pivot because the tree cannot honour a chip. Without the pivot
+    // outranking it, Recent would light up beside the motif and the strip would
+    // name the ordering while the reader is asking about a shape.
+    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
+    expect(screen.getByTestId('sort-motif')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('sort-recent')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('leaves the pivot when pressed, and never re-enters it', () => {
+    const onExitMotif = vi.fn();
+    const onSortChange = vi.fn();
+    render(<LibraryHeader {...base} sort="recent" motif={MOTIF}
+      onExitMotif={onExitMotif} onSortChange={onSortChange} />);
+    fireEvent.click(screen.getByTestId('sort-motif'));
+    expect(onExitMotif).toHaveBeenCalled();
+    // The trap the Relevance segment fell into: a derived mode wired to
+    // onSortChange writes the derived value over the remembered one.
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
+  it('is the only live control — the pivot forces the ordering', () => {
+    // Path cannot hold a shape at all, and Recent is the axis the list already
+    // has: clicking it would write what is already there and clear the open
+    // fact for nothing. An enabled button whose whole effect is overridden is
+    // worse than a disabled one.
+    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
+    expect(screen.getByTestId('sort-path')).toBeDisabled();
+    expect(screen.getByTestId('sort-recent')).toBeDisabled();
+    expect(screen.getByTestId('sort-motif')).not.toBeDisabled();
+  });
+
+  it('says it is an exit, not a sort', () => {
+    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
+    const seg = screen.getByTestId('sort-motif');
+    expect(seg).toHaveAttribute('aria-label', 'Leave this motif');
+    expect(seg).toHaveAttribute('title', 'Leave this motif and go back');
+  });
+
+  it('renders the count of the list, pivot or not', () => {
+    // One number, one source. On a pivot this used to be the cluster's
+    // carrier_count, which stopped agreeing with the rows the moment any other
+    // chip narrowed them.
+    render(<LibraryHeader {...base} count={8} motif={MOTIF} onExitMotif={vi.fn()} />);
+    expect(screen.getByTestId('library-count')).toHaveTextContent('8');
+  });
+});

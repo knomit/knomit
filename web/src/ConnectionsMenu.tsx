@@ -16,6 +16,19 @@ interface Props {
 }
 
 /**
+ * Horizontal padding shared by every cell in the fact header's edges row —
+ * connections, motifs and the motif overflow alike.
+ *
+ * ONE constant because the row no longer has a border or dividers to space its
+ * cells: the padding IS the spacing, so two cells with different values read as
+ * unevenly spaced rather than as two kinds of thing. RightPanel also cancels
+ * exactly this much on the strip's left edge to keep the row's first character
+ * in the same column as the two rows above it, which only works while there is
+ * one value to cancel.
+ */
+export const CELL_PAD_X = 7;
+
+/**
  * One edge-count cell in the fact header's control menu, which reads
  * `↙2 ↗3 ⏱v1 ⊗` — connections, then version, then retract.
  *
@@ -60,14 +73,13 @@ export function ConnectionsCell({ dir, count, open, onToggle, panelId, error = n
     // Unset both, or the cell renders as a rounded pill at 16px next to an 11px
     // chip — and the <button> and the <div> a zero renders as would be
     // different heights, so a count going 0 → 1 would move the header.
-    // Square: the cell fills its slot in the header's control strip, which
-    // draws the outer radius and the dividers. A radius here would round the
-    // corners of a cell that sits flush against a hairline.
+    // Square, still: the open state paints a fill and an inset underline, and a
+    // radius would round a highlight the neighbouring cells draw square.
     borderRadius: 0,
     fontFamily: 'var(--k-font-mono)',
     fontSize: 11,
     lineHeight: 1.4,
-    padding: '2px 7px',
+    padding: `2px ${CELL_PAD_X}px`,
   };
 
   // Same two slots either way, so the warning occupies the width a count would

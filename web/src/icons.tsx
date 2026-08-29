@@ -178,6 +178,16 @@ export const TargetIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// Two stacked waves — the ≈ the motif already owns everywhere else, drawn at
+// icon weight so the fourth mode segment reads as a peer of the other three
+// rather than as a stray character in a row of glyphs.
+export const MotifIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M3 9.5q4.5-5 9 0t9 0"/>
+    <path d="M3 16.5q4.5-5 9 0t9 0"/>
+  </svg>
+);
+
 // Broadcast waves — the "return to live" action in the history timeline.
 export const BroadcastIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

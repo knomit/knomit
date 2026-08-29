@@ -22,7 +22,16 @@ const CARRIERS = [
 vi.mock('./api', () => ({
   api: {
     browse: vi.fn(async () => ({ children: [] })),
-    recent: vi.fn(async () => ({ facts: CARRIERS, total: 26 })),
+    // The narrowed total is deliberately NOT 26. The pivot's heading used to
+    // print the cluster's carrier_count, which is the same number as the list
+    // total right up until another chip narrows the list — so a mock that
+    // returned 26 either way could not tell the two apart, and the count test
+    // passed on a coincidence while the bug shipped.
+    recent: vi.fn(async (_r: string, _b: string, _p: string, _q: string, _l: number, _o: number,
+                         opts?: { domains?: string[] }) =>
+      (opts?.domains?.length
+        ? { facts: CARRIERS.slice(0, 2), total: 2 }
+        : { facts: CARRIERS, total: 26 })),
     search: vi.fn(async () => []),
     motifCluster: vi.fn(async (_r: string, _b: string, key: string) => ({
       cluster_key: 'as-failure-present-success',
@@ -56,7 +65,14 @@ describe('the landed pivot', () => {
     draw(pivoted());
     await waitFor(() => expect(screen.getByTestId('library-motif')).toBeTruthy());
     expect(screen.getByTestId('library-leaf').textContent).toBe('failure-presents-as-success');
-    expect(screen.getByTestId('library-motif')).toHaveTextContent('same motif as');
+    // The heading names the motif and NOTHING ELSE. It used to carry a
+    // `≈ same motif as` label above the name, which was the third ≈ on screen
+    // once the chip and the mode segment each grew one.
+    expect(screen.getByTestId('library-motif')).not.toHaveTextContent('same motif as');
+    // But the slot it lived in still renders, non-breaking space and all: both
+    // lines have to exist in every state or the header changes height on the
+    // first pivot and the whole list jumps under the cursor.
+    expect(screen.getByTestId('library-motif').children).toHaveLength(2);
     await waitFor(() => expect(screen.getByTestId('library-motif-definition').textContent)
       .toContain('same signals a successful one would'));
     // Not a location: the ancestors line is gone, because a motif cuts across
@@ -70,9 +86,25 @@ describe('the landed pivot', () => {
       .toBe('failure-presents-as-success'));
   });
 
-  it('counts carriers, not the page', async () => {
-    draw(pivoted());
+  it('counts the list, and keeps counting it when another chip narrows it', async () => {
+    // THE BUG THIS PINS. The heading printed the cluster's carrier_count, so
+    // adding a domain chip took the rows 26 → 2 while the number beside them
+    // went on saying 26 — and the one reading a reader checks to see whether
+    // their filter did anything was the one reading that could not move.
+    // (Reproduced against the live app: 14 carriers, `domain:reliability`,
+    // 8 rows, header still 14.)
+    const plain = draw(pivoted());
     await waitFor(() => expect(screen.getByTestId('library-count').textContent).toBe('26'));
+    plain.unmount();
+
+    draw(pivoted({ filters: [
+      { category: 'motif', value: 'failure-presents-as-success' },
+      { category: 'domain', value: 'store' },
+    ] }));
+    await waitFor(() => expect(screen.getByTestId('library-count').textContent).toBe('2'));
+    // Still the pivot — the heading has not given up naming the shape just
+    // because the list under it is narrower.
+    expect(screen.getByTestId('library-leaf').textContent).toBe('failure-presents-as-success');
   });
 
   it('names the areas the carriers are about, from the rows themselves', async () => {

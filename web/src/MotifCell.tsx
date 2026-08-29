@@ -1,4 +1,5 @@
 import { MOTIF_GLYPH } from './utils';
+import { CELL_PAD_X } from './ConnectionsMenu';
 import type { ResolvedMotif } from './useMotifClusters';
 
 /**
@@ -93,6 +94,11 @@ export function MotifCell({ motif, open, onToggle, panelId }: {
 // are unset here for the same reason ConnectionsCell unsets them — a rounded
 // 16px pill beside an 11px chip, and a height that differs from the <div> the
 // zero state renders as, which would move the header as a fact gained a motif.
+//
+// The horizontal padding is ConnectionsCell's, not a value of its own: with the
+// row's border and dividers gone the padding is what spaces the cells, so a
+// motif cell padded differently from the counter beside it would read as
+// unevenly spaced rather than as a different kind of cell.
 const cell = (color: string): React.CSSProperties => ({
   color,
   display: 'inline-flex',
@@ -102,7 +108,7 @@ const cell = (color: string): React.CSSProperties => ({
   border: 'none',
   outline: 'none',
   borderRadius: 0,
-  padding: '3px 9px',
+  padding: `3px ${CELL_PAD_X}px`,
   whiteSpace: 'nowrap',
   fontFamily: 'var(--k-font-mono)',
   fontSize: 11,

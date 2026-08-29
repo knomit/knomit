@@ -11,7 +11,6 @@ import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import { useMotifClusters } from './useMotifClusters';
 import { factSubject, subjectSummary } from './motifSubject';
-import { MotifTiers, stemCanAdd, admittedBy } from './MotifTiers';
 import type { NavRequest } from './useNavigationManager';
 
 type RowItem = { name: string; fullPath: string; is_dir: boolean };
@@ -210,7 +209,7 @@ const LensFactRow = memo(function LensFactRow({
 
 // ChronoRow is a repo Recent row: title line + basename + relative commit time.
 const ChronoRow = memo(function ChronoRow({
-  fact, index, selected, subject, near, onSelect, onOpenFact,
+  fact, index, selected, subject, onSelect, onOpenFact,
 }: {
   fact: RecentFactEntry;
   index: number;
@@ -218,9 +217,6 @@ const ChronoRow = memo(function ChronoRow({
   /** The fact's subject, shown only on a motif pivot — elsewhere every row in
    *  the list shares one, so printing it would be the same word N times. */
   subject?: string;
-  /** The spelling that let this row into a WIDENED list. Present only when the
-   *  row is not a carrier of the motif itself. */
-  near?: string;
   onSelect: (index: number) => void;
   onOpenFact: (fullPath: string) => void;
 }) {
@@ -232,7 +228,7 @@ const ChronoRow = memo(function ChronoRow({
       data-testid="chrono-item"
       data-path={fact.path}
       onClick={onClick}
-      style={{ ...(selected ? factRowSelected : factRow), ...(near ? { opacity: 0.72 } : null) }}
+      style={selected ? factRowSelected : factRow}
     >
       <div style={chronoTitleLine}>
         <span style={entryIcon}><TypeIcon type={fact.type || ''} color={ts.color} size={12} /></span>
@@ -244,9 +240,6 @@ const ChronoRow = memo(function ChronoRow({
             saying it per row is what makes that readable as you scan rather
             than only stated in the heading. */}
         {subject && <><span data-testid="chrono-subject" style={chronoSubject}>{subject}</span><span style={{ color: '#2f3540' }}>·</span></>}
-        {near && (
-          <span data-testid="chrono-near" style={nearTag}>near · admitted by {near}</span>
-        )}
         <span style={chronoName}>{fact.path.split('/').pop()}</span>
         <span>{relativeTimeEpoch(fact.committed_at)}</span>
       </div>
@@ -265,12 +258,6 @@ const lensPath: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', fontSi
 const chronoMetaLine: React.CSSProperties = { fontSize: 10, color: '#666', marginTop: 1, display: 'flex', gap: 8 };
 const chronoName: React.CSSProperties = { fontFamily: 'var(--k-font-mono)' };
 const chronoSubject: React.CSSProperties = { fontFamily: 'var(--k-font-mono)', color: '#7f8b9c' };
-// Dashed, not filled: the same outline that marks a widened chip, so the chip
-// and the rows it admitted read as one statement.
-const nearTag: React.CSSProperties = {
-  fontFamily: 'var(--k-font-mono)', fontSize: 9, color: '#8a93a3',
-  border: '1px dashed #4a5262', borderRadius: 2, padding: '0 4px',
-};
 
 interface Props {
   state: AppState;
@@ -399,13 +386,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     return { domains, entities, types, kinds, origins, eps, motifs };
   }, [state.filters]);
-  // The match tier is NOT a chip. Two motif chips are two motifs; how strictly
-  // each one matches is one setting over the whole query, so it rides state and
-  // has to be in the deps of every read below alongside filtersKey.
-  const motifOpts = useMemo(
-    () => (motifs.length ? { motifs, motifMatch: state.motifMatch } : {}),
-    [motifs, state.motifMatch],
-  );
+  // Motif chips ride filtersKey like every other chip. There is no match tier
+  // to carry alongside them: the client asks for the motif itself and nothing
+  // looser, so `exact` is the server's default and we send no override.
+  const motifOpts = useMemo(() => (motifs.length ? { motifs } : {}), [motifs]);
   const filtersKey = state.filters.map(f => `${f.category}:${f.value}`).join('\0');
 
   // THE PIVOT HEADING. One motif chip and no free text means this list IS that
@@ -415,29 +399,6 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const pivotMotif = (motifs.length === 1 && !state.freeText) ? motifs[0] : null;
   const pivotResolved = useMotifClusters(state.repo, state.branch, pivotMotif ? [pivotMotif] : undefined);
   const pivotCluster = pivotResolved[0]?.cluster;
-
-  // WHAT EACH RUNG WOULD ADD, measured rather than assumed.
-  //
-  // stem is free: it matches on the mechanical stemmed-token key, which is how
-  // the cluster was formed, so the only way it can differ from exact is a
-  // cluster a judge merged out of two mechanical groups. No judge alias means
-  // stem ≡ exact, provably, from a response we already have.
-  //
-  // token-2 needs one count-only request, made after the rows are on screen so
-  // it never delays them. Asking before the click is the point: making a reader
-  // click to discover that nothing happened is the failure the dash prevents.
-  const [tokenTotal, setTokenTotal] = useState<number | null>(null);
-  const exactTotal = pivotCluster?.carrier_count ?? null;
-  useAsync((stale) => {
-    setTokenTotal(null);
-    if (!pivotMotif || isLens || state.motifMatch !== 'exact') return;
-    api.recent(state.repo, state.branch, path, '', 1, 0,
-      { motifs: [pivotMotif], motifMatch: 'token-2' })
-      .then(r => { if (!stale()) setTokenTotal(r.total); })
-      // A delta we could not measure stays null, which renders the rung live
-      // rather than dead: a rung is not declared empty until something looked.
-      .catch(() => { if (!stale()) setTokenTotal(null); });
-  }, [pivotMotif, isLens, state.repo, state.branch, path, state.motifMatch]);
 
   useAsync((stale) => {
     if (isLens) return; // lens context reads via the lens effect below
@@ -464,7 +425,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: loaded[0].path });
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
-  }, [path, state.headCommit, state.freeText, state.repo, state.branch, filtersKey, state.motifMatch, effectiveSort, isLens]);
+  }, [path, state.headCommit, state.freeText, state.repo, state.branch, filtersKey, effectiveSort, isLens]);
 
   // Recent mode highlights by index only (path/relevance sync inside their
   // fetch). Keep the highlighted row tied to the open fact so any factPath
@@ -511,7 +472,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
       }
     }).catch(() => { if (!stale()) { setChildren([]); dispatch({ type: 'SET_SEARCHING', value: false }); } });
-  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, state.motifMatch, isLens]);
+  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, isLens]);
 
   // ── Lens union list: api.listLensFacts (recent/path) or api.lensSearch
   // (relevance). `lensSources` narrows the fan-out: null = all mounts (no repos
@@ -658,7 +619,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       setLensLoading(false);
       openFirstRow(rows);
     }).catch(() => { if (!stale()) { setLensRows([]); setLensLoading(false); } });
-  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.motifMatch, state.headCommit, state.ontologyRoot]);
+  }, [isLens, lensName, path, state.freeText, effectiveSort, reposKey, emptyScope, filtersKey, state.headCommit, state.ontologyRoot]);
 
   // Keep the highlighted lens row tied to the open fact (mirrors the repo
   // Recent behavior) so returning to a fact re-selects its row.
@@ -948,6 +909,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         contentFiltered={hasContentFilters}
         onSortChange={(sort) => dispatch({ type: 'SET_LIBRARY_SORT', sort })}
         onExitSearch={() => dispatch({ type: 'EXIT_SEARCH' })}
+        onExitMotif={() => dispatch({ type: 'EXIT_MOTIF' })}
         // No liveness gate: in history this whole layer is inert (LeftPanel
         // swaps in TimelineNav, which carries its own back button), so gating
         // here only made the control look conditional when it is not.
@@ -958,22 +920,12 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
           // canonical, never the spelling this fact happened to use and never
           // the cluster_key — the corpus reads by one name.
           canonical: pivotCluster?.canonical ?? pivotMotif,
-          carrierCount: pivotCluster?.carrier_count ?? null,
           definition: pivotCluster?.definition,
           interim: pivotCluster?.definition_state === 'stale',
           // Computed from the landed rows: this list IS the result, so unlike
           // the fact panel's version of the same line it is complete rather
           // than drawn from a capped preview.
           subjects: pivotSubjects,
-          tiers: (
-            <MotifTiers
-              active={state.motifMatch}
-              exactCount={exactTotal}
-              stemDelta={pivotCluster ? (stemCanAdd(pivotCluster) ? null : 0) : null}
-              tokenDelta={tokenTotal === null || exactTotal === null ? null : Math.max(0, tokenTotal - exactTotal)}
-              onPick={tier => dispatch({ type: 'SET_MOTIF_MATCH', match: tier })}
-            />
-          ),
         } : undefined}
       />
       {!isLive(state) && (
@@ -1079,9 +1031,6 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
                 index={i}
                 selected={i === selectedIdx}
                 subject={pivotMotif ? factSubject(f.path) : undefined}
-                near={pivotMotif && state.motifMatch !== 'exact'
-                  ? admittedBy(f.motifs, pivotCluster?.members ?? [pivotMotif]) ?? undefined
-                  : undefined}
                 onSelect={setSelectedIdx}
                 onOpenFact={openFact}
               />
