@@ -83,6 +83,22 @@ describe('ShapesBlock', () => {
       .toHaveTextContent('returns success signals');
   });
 
+  it('lets a definition wrap rather than cutting it mid-claim', async () => {
+    // The sentence the reader opened the browser to read, and one whose point
+    // is usually in its second half — "…so callers record it as having worked"
+    // IS the motif. Clipping mid-clause is the failure that banned the ellipsis
+    // on names, one level up: what survives the cut reads as a complete and
+    // different statement.
+    resolve();
+    draw();
+    await waitFor(() => expect(screen.getByTestId('shapes-more')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('shapes-more'));
+    const def = (await screen.findAllByTestId('shapes-definition'))[0];
+    expect(def.style.whiteSpace).not.toBe('nowrap');
+    expect(def.style.textOverflow).toBe('');
+    expect(def.textContent).toBe(REUSED[0].definition);
+  });
+
   it('promises to search meanings as well as names', async () => {
     resolve();
     draw();

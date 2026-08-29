@@ -202,9 +202,14 @@ export function ShapesBlock({ repo, branch, onPick }: {
             }}>{e.df}</span>
           </div>
           {expanded && e.definition && (
-            <div style={{
+            <div data-testid="shapes-definition" style={{
+              // WRAPS. This is the sentence the reader opened the browser to
+              // read, and it is a claim whose point is usually in its second
+              // half — "…so callers and monitoring record it as having worked"
+              // is the whole motif. Clipping it mid-clause is the same failure
+              // that banned the ellipsis on motif names, one level up: what
+              // survives the cut reads as a complete and different statement.
               fontSize: 11, lineHeight: 1.5, color: '#8a93a3', marginTop: 3,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>{e.definition}</div>
           )}
         </div>

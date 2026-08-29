@@ -444,9 +444,12 @@ function applyAction(s: AppState, a: Action): AppState {
       // pivot is "show me this shape", and two motif chips widen, so keeping
       // the old one would silently return a union nobody asked for.
       //
-      // Path is dropped for the same reason the facet pick drops it: a shape
-      // cuts ACROSS the ontology, so scoping it to one folder is the opposite
-      // of what the reader asked for.
+      // Path is dropped because a shape cuts ACROSS the ontology: scoping it to
+      // one folder is the opposite of what the reader asked for. This is the
+      // ONLY chip operation that clears path — ADD_FILTER leaves an existing
+      // path chip in place, deliberately, because a domain or type chip narrows
+      // within where you are. Nothing else here behaves this way, so the reason
+      // has to stand on its own rather than lean on a precedent.
       const filters = s.filters.filter(f => f.category !== 'motif' && f.category !== 'path');
       return {
         ...s,

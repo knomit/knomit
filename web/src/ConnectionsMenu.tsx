@@ -38,7 +38,11 @@ interface Props {
 export function ConnectionsCell({ dir, count, open, onToggle, panelId, error = null }: Props) {
   const failed = !!error;
   const interactive = count > 0 || failed;
-  const noun = dir === 'in' ? 'incoming' : 'outgoing';
+  // The SAME words the cell shows and the panel is headed. EDGE_LABEL exists to
+  // stop one gesture having two vocabularies; leaving the screen-reader layer on
+  // the old pair would have kept exactly that split, for the readers least able
+  // to reconcile it against the visible label.
+  const noun = EDGE_LABEL[dir];
 
   // The accent lives HERE, so the glyph, the count and the open indicator all
   // resolve currentColor from one place. On a child instead, the indicator
@@ -90,10 +94,10 @@ export function ConnectionsCell({ dir, count, open, onToggle, panelId, error = n
       onClick={() => onToggle(dir)}
       aria-expanded={open}
       aria-controls={panelId}
-      aria-label={failed ? `${noun} references unavailable` : `${count} ${noun} references`}
+      aria-label={failed ? `${noun} — count unavailable` : `${noun} ${count}`}
       // The error itself on hover: the panel carries the full text, but a
       // reader should not have to open it to learn that this is a failure.
-      title={failed ? error : `${count} ${noun} references`}
+      title={failed ? error : `${noun} ${count}`}
       style={style}
     >{inner}</button>
   );
