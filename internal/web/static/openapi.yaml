@@ -2460,14 +2460,23 @@ components:
 
     MotifVocabularyHealth:
       type: object
-      description: Diagnostic summary of the branch's motif vocabulary. Nothing branches on it.
-      required: [clusters, recurring, mints, links, epistemic_recurring, recurrence_rate, mint_to_link_ratio]
+      description: |
+        Diagnostic summary of the branch's motif vocabulary. Nothing branches
+        on it.
+
+        Every count here is computed over AUTHORED facts only, and none of them
+        is narrowed by the collection's `q` parameter — this block describes the
+        CORPUS, while the envelope's `count` describes the (possibly narrowed)
+        vocabulary listing over every origin. The two therefore disagree
+        routinely and for two independent reasons, which is why the field names
+        carry their population.
+      required: [authored_clusters, authored_recurring, authored_mints, authored_links, epistemic_recurring, recurrence_rate, mint_to_link_ratio]
       properties:
-        clusters:            { type: integer, description: Size of the resolved vocabulary. }
-        recurring:           { type: integer, description: "Clusters with df >= 2 — the ones that actually connect two facts." }
-        mints:               { type: integer, description: "One per cluster: every cluster was minted exactly once." }
-        links:               { type: integer, description: "Every SUBSEQUENT use — total motif instances minus the mints." }
-        epistemic_recurring: { type: integer, description: "Clusters with df >= 2 counting EPISTEMIC carriers only. Diverges from `recurring`, sometimes by a lot." }
+        authored_clusters:   { type: integer, description: "Size of the resolved vocabulary over authored facts. NOT the envelope's `count`, which spans every origin and is narrowed by `q`." }
+        authored_recurring:  { type: integer, description: "Authored clusters with df >= 2 — the ones that actually connect two facts." }
+        authored_mints:      { type: integer, description: "One per authored cluster: every cluster was minted exactly once." }
+        authored_links:      { type: integer, description: "Every SUBSEQUENT use — total motif instances minus the mints." }
+        epistemic_recurring: { type: integer, description: "Clusters with df >= 2 counting EPISTEMIC carriers only — a narrower population again (kind, not origin). Diverges from `authored_recurring`, sometimes by a lot." }
         recurrence_rate:     { type: number, format: double, description: Fraction of clusters carried by more than one fact. }
         mint_to_link_ratio:  { type: number, format: double, description: "Mints per link. Above 1 means the vocabulary is growing faster than it is reused." }
 
@@ -2547,7 +2556,10 @@ components:
         - type: object
           required: [health]
           properties:
-            health: { $ref: "#/components/schemas/MotifVocabularyHealth" }
+            health:
+              allOf:
+                - $ref: "#/components/schemas/MotifVocabularyHealth"
+                - description: "Corpus-level and authored-only; unlike `count`, it is NOT narrowed by `q`."
             _embedded:
               type: object
               properties:

@@ -124,11 +124,21 @@ type motifEntry struct {
 
 // motifHealthView is MotifVocabularyHealth on the wire, plus the two derived
 // ratios so a browser header needs no arithmetic.
+//
+// Every count is PREFIXED with the population it measures, because this block
+// sits beside `count` in the same envelope and the two are not the same
+// number. VocabularyHealth is computed over AUTHORED facts only, while `count`
+// comes from the vocabulary query and includes every origin; and `count` is
+// narrowed by ?q= while these are not — health describes the corpus, not the
+// page. Bare `clusters` next to `count` reads as a contradiction; the prefix
+// is what makes the disagreement legible instead of a bug report.
 type motifHealthView struct {
-	Clusters           int     `json:"clusters"`
-	Recurring          int     `json:"recurring"`
-	Mints              int     `json:"mints"`
-	Links              int     `json:"links"`
+	AuthoredClusters  int `json:"authored_clusters"`
+	AuthoredRecurring int `json:"authored_recurring"`
+	AuthoredMints     int `json:"authored_mints"`
+	AuthoredLinks     int `json:"authored_links"`
+	// EpistemicRecurring keeps its own name: it already names its population,
+	// and it is a NARROWER one than the authored_* counts (kind, not origin).
 	EpistemicRecurring int     `json:"epistemic_recurring"`
 	RecurrenceRate     float64 `json:"recurrence_rate"`
 	MintToLinkRatio    float64 `json:"mint_to_link_ratio"`
@@ -290,12 +300,15 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 		}
 
 		hal.WriteHAL(w, http.StatusOK, motifsView{
+			// Count is the post-narrowing total over EVERY origin; the health
+			// block beside it is authored-only and unnarrowed. See
+			// motifHealthView for why its fields carry the population prefix.
 			Count: total,
 			Health: motifHealthView{
-				Clusters:           health.Clusters,
-				Recurring:          health.Recurring,
-				Mints:              health.Mints,
-				Links:              health.Links,
+				AuthoredClusters:   health.Clusters,
+				AuthoredRecurring:  health.Recurring,
+				AuthoredMints:      health.Mints,
+				AuthoredLinks:      health.Links,
 				EpistemicRecurring: health.EpistemicRecurring,
 				RecurrenceRate:     health.RecurrenceRate(),
 				MintToLinkRatio:    health.MintToLinkRatio(),

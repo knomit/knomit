@@ -51,9 +51,11 @@ func (s *stubMotifsProvider) ClusterKey(_ context.Context, _ *repos.RepoInstance
 type motifsCollectionBody struct {
 	Count  int `json:"count"`
 	Health struct {
-		Clusters       int     `json:"clusters"`
-		Recurring      int     `json:"recurring"`
-		RecurrenceRate float64 `json:"recurrence_rate"`
+		AuthoredClusters  int     `json:"authored_clusters"`
+		AuthoredRecurring int     `json:"authored_recurring"`
+		AuthoredMints     int     `json:"authored_mints"`
+		AuthoredLinks     int     `json:"authored_links"`
+		RecurrenceRate    float64 `json:"recurrence_rate"`
 	} `json:"health"`
 	Links struct {
 		Self struct {
@@ -137,7 +139,7 @@ func TestHandleHALMotifs_ReturnsRankedCollection(t *testing.T) {
 	if body.Count != 3 {
 		t.Errorf("count: got %d, want 3", body.Count)
 	}
-	if body.Health.Clusters != 3 || body.Health.Recurring != 3 {
+	if body.Health.AuthoredClusters != 3 || body.Health.AuthoredRecurring != 3 {
 		t.Errorf("health: got %+v", body.Health)
 	}
 	if body.Health.RecurrenceRate != 1 {
@@ -529,5 +531,50 @@ func TestHandleHALMotifs_OverflowingOffsetIsAnEmptyPage(t *testing.T) {
 				t.Errorf("next must be absent past the end: %q", body.Links.Next.Href)
 			}
 		})
+	}
+}
+
+// `count` and the health block count DIFFERENT POPULATIONS, and the wire names
+// have to say so. count is every cluster from the vocabulary query and is
+// narrowed by ?q=; health is computed over AUTHORED facts only and is NOT
+// narrowed. Two numbers that disagree for two good reasons are a bug report
+// waiting to happen unless the names carry the qualifier.
+func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
+	stub := &stubMotifsProvider{
+		clusters: threeClusters(),
+		// Fewer than len(clusters): the authored-only population is smaller,
+		// exactly as a corpus with distilled facts reports.
+		health: store.MotifVocabularyHealth{Clusters: 2, Recurring: 1, Mints: 2, Links: 3, EpistemicRecurring: 1},
+	}
+	r := motifsServer(t, stub)
+
+	body := decodeMotifs(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs"))
+	if body.Count != 3 {
+		t.Errorf("count: got %d, want 3 (every cluster)", body.Count)
+	}
+	if body.Health.AuthoredClusters != 2 {
+		t.Errorf("authored_clusters: got %d, want 2 (the authored-only population)", body.Health.AuthoredClusters)
+	}
+	if body.Health.AuthoredRecurring != 1 || body.Health.AuthoredMints != 2 || body.Health.AuthoredLinks != 3 {
+		t.Errorf("health: got %+v", body.Health)
+	}
+
+	// ?q= narrows count. It does NOT narrow health — the health block is a
+	// corpus-level diagnostic, not a description of the page.
+	narrowed := decodeMotifs(t, getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs?q=fallback"))
+	if narrowed.Count != 1 {
+		t.Errorf("narrowed count: got %d, want 1", narrowed.Count)
+	}
+	if narrowed.Health.AuthoredClusters != 2 {
+		t.Errorf("authored_clusters under ?q=: got %d, want the unnarrowed 2", narrowed.Health.AuthoredClusters)
+	}
+
+	// The unqualified names must be gone from the wire: a reader who sees
+	// "clusters" beside "count" reads them as the same population.
+	raw := getMotifs(t, r, "/repos/alpha/branches/agent:test/motifs").Body.String()
+	for _, gone := range []string{`"clusters"`, `"recurring"`, `"mints"`, `"links"`} {
+		if containsSub(raw, gone) {
+			t.Errorf("unqualified health field %s is still on the wire: %s", gone, raw)
+		}
 	}
 }
