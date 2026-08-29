@@ -325,7 +325,11 @@ export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string; prev?: string }
-export interface RecentFactEntry { path: string; title: string; kind?: string; type?: string; committed_at: number; operation?: string; score?: number }
+export interface RecentFactEntry { path: string; title: string; kind?: string; type?: string; committed_at: number; operation?: string; score?: number;
+  /** The spellings this fact carries. Free on every collection row, and what
+   *  lets a widened pivot mark the rows a looser tier let in — a row carrying
+   *  none of the cluster's members is here on a technicality, not as a carrier. */
+  motifs?: string[] }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitAuthor { name: string; email: string }

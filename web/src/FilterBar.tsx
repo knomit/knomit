@@ -573,9 +573,15 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
         return (
           <span key={i} data-testid="filter-chip"
             data-category={chip.category} data-value={chip.value}
+            data-widened={chip.category === 'motif' && state.motifMatch !== 'exact' ? 'true' : undefined}
             style={{
             background: colors.bg,
             color: colors.text,
+            // A widened motif chip is drawn dashed: the list behind it contains
+            // rows that are NOT carriers of this motif, and the chip is the one
+            // thing on screen the whole time claiming to describe that list.
+            ...(chip.category === 'motif' && state.motifMatch !== 'exact'
+              ? { border: '1px dashed #4a5262', padding: '1px 7px' } : null),
             padding: '2px 8px',
             borderRadius: 3,
             fontSize: 11,
