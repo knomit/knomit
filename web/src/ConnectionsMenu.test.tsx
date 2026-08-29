@@ -14,8 +14,12 @@ describe('ConnectionsCell', () => {
 
   it('is reachable by accessible name', () => {
     render(<><ConnectionsCell {...base} /><ConnectionsCell {...base} dir="out" count={3} /></>);
-    expect(screen.getByRole('button', { name: '2 incoming references' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '3 outgoing references' })).toBeInTheDocument();
+    // The same words the cell shows and the panel it opens is headed. Leaving
+    // the screen-reader layer on "incoming/outgoing references" would have kept
+    // one gesture with two vocabularies — for the readers least able to
+    // reconcile the two against each other.
+    expect(screen.getByRole('button', { name: 'cited by 2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'cites 3' })).toBeInTheDocument();
   });
 
   it('fires onToggle with its direction', () => {
@@ -61,7 +65,7 @@ describe('ConnectionsCell', () => {
     expect(cell).not.toHaveTextContent('0');
     expect(cell).toHaveTextContent('!');
     expect(cell.style.color).toBe('rgb(255, 102, 102)'); // #f66, matching the panel's error text
-    expect(cell).toHaveAccessibleName('incoming references unavailable');
+    expect(cell).toHaveAccessibleName('cited by — count unavailable');
     expect(cell).toHaveAttribute('title', 'Error: fetch failed');
   });
 

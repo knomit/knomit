@@ -4,7 +4,7 @@ import type { RefGroup } from './api';
 import { EdgeRow } from './EdgeRow';
 import { useDismiss } from './hooks';
 import type { EdgeDir } from './utils';
-import { EDGE_ACCENT, EDGE_ERROR, EDGE_GLYPH } from './utils';
+import { EDGE_ACCENT, EDGE_ERROR, EDGE_GLYPH, EDGE_LABEL } from './utils';
 
 export const CONNECTIONS_PANEL_WIDTH = 360;
 
@@ -60,7 +60,8 @@ export function ConnectionsPanel({
   const dir: EdgeDir = open ?? 'in';
   const groups = dir === 'in' ? incoming : outgoing;
   const accent = EDGE_ACCENT[dir];
-  const title = dir === 'in' ? `${EDGE_GLYPH.in} Referenced by` : `${EDGE_GLYPH.out} References`;
+  // Same words as the cell that opened this — one wording for one thing.
+  const title = `${EDGE_GLYPH[dir]} ${EDGE_LABEL[dir]}`;
   const live = groups.filter(g => !g.deleted).length;
   const retracted = groups.filter(g => g.deleted).length;
 

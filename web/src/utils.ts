@@ -172,6 +172,12 @@ export function shortBranch(branch: string): string {
  *  ghost chip, the filter picker's Origin rows and the chip they produce — one
  *  definition so the three cannot drift apart. `authored` is the default and is
  *  elided on the wire, so it rarely renders. */
+/** The motif mark. Every other glyph in this app names a THING — a diamond for
+ *  a principle, a folder for a directory, a scale for a policy. This one names a
+ *  RELATION: "has the same shape as". It is the only operator in the set, which
+ *  is what stops a motif reading as one more kind of tag. */
+export const MOTIF_GLYPH = '≈';
+
 export const originGlyphs: Record<string, string> = {
   authored: '✎',
   distilled: '⚗',
@@ -192,6 +198,16 @@ export const chipColors: Record<string, { bg: string; text: string; close: strin
   origin: { bg: '#1a3434', text: '#7dd', close: '#4a8a8a' },
   ep:     { bg: '#3a3a2a', text: '#fa8', close: '#8a7a5a' },
   path:   { bg: '#333',   text: '#aaa', close: '#666' },
+  // Motifs take NO hue, and this entry has to exist for that to be true:
+  // chipStyle's fallback is `chipColors.path`, so an absent motif entry would
+  // not fail loudly — it would silently render every motif chip as a path chip.
+  //
+  // Colourless is the statement, not the leftover. Every hue above names a
+  // subject (domain green, entity blue, a colour per type); a motif is the one
+  // filter that cuts ACROSS subject, so a hue of its own would say the opposite
+  // of what it is. Near-white text on a near-black fill instead: the brightest
+  // chip in the bar, and the only one making no claim about what a fact is about.
+  motif:  { bg: '#20232a', text: '#e8eef6', close: '#5f6a7c' },
 };
 
 /** The visual for one filter value — the chip it becomes, and the row that
@@ -217,6 +233,12 @@ export function chipStyle(category: string, value: string):
   if (category === 'origin' && originGlyphs[value]) {
     return { ...chipColors.origin, glyph: originGlyphs[value] };
   }
+  // Per-CATEGORY, unlike `type` above: a motif's mark and colour say "this is a
+  // shape", never which shape. Two motif chips must be indistinguishable but
+  // for their text, or the hueless rule leaks back into a per-value palette.
+  if (category === 'motif') {
+    return { ...chipColors.motif, glyph: MOTIF_GLYPH };
+  }
   return chipColors[category] || chipColors.path;
 }
 
@@ -226,6 +248,16 @@ export function chipStyle(category: string, value: string):
 export type EdgeDir = 'in' | 'out';
 export const EDGE_ACCENT: Record<EdgeDir, string> = { in: '#8af', out: '#fa8' };
 export const EDGE_GLYPH: Record<EdgeDir, string> = { in: '↙', out: '↗' };
+/** What each direction is CALLED, defined once so the cell and the panel it
+ *  opens cannot drift. The cells gained words when the motif names arrived and
+ *  the row became a list of named things rather than a row of symbols; the
+ *  panel headings were renamed to match, rather than leaving one gesture with
+ *  two vocabularies ("cited by" on the button, "Referenced by" on the panel).
+ *
+ *  The direction lives in the verb, not only in the arrow — so the two never
+ *  read alike at a glance, which spelling them out in full ("referenced by" /
+ *  "references") could not manage in 240px. */
+export const EDGE_LABEL: Record<EdgeDir, string> = { in: 'cited by', out: 'cites' };
 // A direction whose edges could not be fetched, on the cell and in the panel
 // body. Shared so the warning in the header and the message it opens read as
 // the same failure rather than two unrelated red things.

@@ -274,7 +274,7 @@ export interface FactRef {
   _links?: { target?: { href: string } };
 }
 
-export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
+export interface Fact { path: string; title: string; kind?: string; type?: string; origin?: string; body: string; domain: string[]; confidence: number; sources: number; entities: string[]; motifs?: string[]; refs: FactRef[]; ref_warnings?: string[]; parse_error?: string; from_commit?: string; commit_hash?: string; commit_date?: string }
 
 // normalizeFactResponse maps the HAL FactView shape to the Fact interface.
 //
@@ -309,6 +309,10 @@ function normalizeFactResponse(data: any): Fact {
     confidence: data.confidence,
     sources: data.sources,
     entities: data.entities || [],
+    // Omitted on a fact carrying none, which is most of them — so this is
+    // `undefined` far more often than it is a list, and every reader of it
+    // has to treat absence as the ordinary case rather than as missing data.
+    motifs: data.motifs,
     refs,
     parse_error: data.parse_error,
     from_commit: data.from_commit,
@@ -321,7 +325,11 @@ export interface HistoryEntry { commit: string; date: string; message: string }
 export interface FileCounts { added?: number; modified?: number; deleted?: number }
 export interface HistoryEntryWithTags { commit: string; date: string; message: string; operation?: string; files?: FileCounts }
 export interface HistoryResponse { entries: HistoryEntryWithTags[]; next?: string; prev?: string }
-export interface RecentFactEntry { path: string; title: string; kind?: string; type?: string; committed_at: number; operation?: string; score?: number }
+export interface RecentFactEntry { path: string; title: string; kind?: string; type?: string; committed_at: number; operation?: string; score?: number;
+  /** The spellings this fact carries. Free on every collection row, and what
+   *  lets a widened pivot mark the rows a looser tier let in — a row carrying
+   *  none of the cluster's members is here on a technicality, not as a carrier. */
+  motifs?: string[] }
 export interface RecentResponse { facts: RecentFactEntry[]; total: number }
 export interface CommitFile { path: string; action: string; title?: string }
 export interface CommitAuthor { name: string; email: string }
@@ -456,7 +464,10 @@ export function parseFilterQuery(raw: string, lookupHead?: () => string): { chip
 
   // The recognised chip categories — the same set in every context. `repo:` is
   // NOT among them: mount scope is state.lensSources, not a filter chip.
-  const cats = 'domain|entity|type|kind|origin|ep|path';
+  // Kept in lockstep with FilterChip['category'] in state.ts — the union and
+  // this alternation are the same set written twice, and a category present in
+  // one but not the other is a chip you can hold but never type (or vice versa).
+  const cats = 'domain|entity|type|kind|origin|ep|path|motif';
   const quotedRe = new RegExp(`(${cats}):"([^"]+)"`, 'g');
   const bareRe = new RegExp(`(${cats}):(\\S+)`, 'g');
 
@@ -892,6 +903,105 @@ function lensBase(name: string): string {
   return apiUrl(`/api/v1/lenses/${name}`);
 }
 
+/** How strictly a motif filter matches. `exact` already matches at the CLUSTER
+ *  level — pivoting on one spelling includes facts carrying any aliased member —
+ *  so the two looser tiers are for deliberate exploration, not for reaching the
+ *  rest of a cluster. The server rejects anything looser than these. */
+export type MotifMatch = 'exact' | 'stem' | 'token-2';
+
+/** The motif filter, written once for the four list endpoints that take it.
+ *
+ *  CSV in a single param, like `type` and `domain`: the server reads it with
+ *  splitCSV, so two motif chips WIDEN the match. Four hand-written copies would
+ *  be four chances to drift, and api.recent's own comment below records what one
+ *  such drift already cost — two type chips collapsing to `undefined` and
+ *  silently removing all type filtering, on a list that still rendered fine.
+ *
+ *  `exact` is the server's default and is deliberately NOT sent. A widened list
+ *  contains rows that are not carriers of the motif, so the widened state has to
+ *  be legible; an always-present `motif_match=exact` would put the ordinary case
+ *  and the loosened one in the same shape.
+ *
+ *  A tier without motifs is meaningless, so both are gated on the CSV existing.
+ */
+function setMotifParams(p: URLSearchParams, opts?: { motifs?: string[]; motifMatch?: MotifMatch }): void {
+  if (!opts?.motifs?.length) return;
+  p.set('motifs', opts.motifs.join(','));
+  if (opts.motifMatch && opts.motifMatch !== 'exact') p.set('motif_match', opts.motifMatch);
+}
+
+/** One cluster in the /motifs collection. `cluster_key` is the STABLE identity
+ *  (URLs key on it); `canonical` is the most-used spelling and is what a reader
+ *  is shown — keys look like stemmed token strings ("drift-config") and read as
+ *  wrong-order nonsense, which is why `canonical` exists. Never show a bare key.
+ *
+ *  `df` is the VOCABULARY count: live facts carrying any member, counted once
+ *  each. It is not `carrier_count` (below) and the two must not be conflated —
+ *  df is a share of the vocabulary, carrier_count is a promise about a query. */
+export interface MotifEntry {
+  cluster_key: string;
+  canonical: string;
+  members: string[];
+  df: number;
+  definition?: string;
+  /** `stale` is an INTERIM state, not an error: membership moved since the
+   *  sentence was written and it is still served. `missing` is an absence. */
+  definition_state?: 'current' | 'stale' | 'missing';
+}
+
+/** The corpus-health header on the collection. Counted over AUTHORED facts only
+ *  and NOT narrowed by `q` — it describes the vocabulary, not the result list
+ *  sitting under it. `recurrence_rate` and `mint_to_link_ratio` are the two that
+ *  say whether names are being reused or every fact is minting its own. */
+export interface MotifHealth {
+  authored_clusters: number;
+  authored_recurring: number;
+  authored_mints: number;
+  authored_links: number;
+  authored_epistemic_recurring: number;
+  recurrence_rate: number;
+  mint_to_link_ratio: number;
+}
+
+export interface MotifCarrier {
+  path: string;
+  title: string;
+  type?: string;
+  committed_at: number;
+}
+
+/** How a spelling joined its cluster. `judge` merges carry a written rationale —
+ *  the provenance surface for "why are these the same motif". Their presence is
+ *  also load-bearing elsewhere: a cluster with NO judge alias cannot have a
+ *  looser `stem` match than `exact`, which is how the widen control knows a rung
+ *  would add nothing without asking the server. */
+export interface MotifAlias {
+  motif: string;
+  method: string;
+  rationale?: string;
+}
+
+export interface MotifCluster extends MotifEntry {
+  /** The number of facts the pivot actually returns — the number the UI shows
+   *  beside a name, because that is the promise the row makes. */
+  carrier_count: number;
+  /** Most-recent-first and CAPPED (20 by default): a preview, not the list.
+   *  Anything derived from it is approximate; `carrier_count` is the total. */
+  carriers: MotifCarrier[];
+  aliases: MotifAlias[];
+}
+
+/** The server caps `limit` at 200 and 400s anything larger rather than clamping
+ *  silently (internal/web/params.go). Clamping here keeps a caller's optimism
+ *  from becoming a failed request. */
+const MOTIFS_MAX_LIMIT = 200;
+
+const EMPTY_MOTIF_HEALTH: MotifHealth = {
+  authored_clusters: 0, authored_recurring: 0, authored_mints: 0,
+  authored_links: 0, authored_epistemic_recurring: 0,
+  recurrence_rate: 0, mint_to_link_ratio: 0,
+};
+
 // listLensFacts GETs /api/v1/lenses/{lens}/facts — the recency-ordered, deduped
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
@@ -899,6 +1009,7 @@ function lensBase(name: string): string {
 async function listLensFacts(lens: string, opts: {
   path?: string; query?: string; limit?: number; offset?: number; repos?: string[];
   types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+  motifs?: string[]; motifMatch?: MotifMatch;
 }): Promise<{ facts: LensFactEntry[]; total: number }> {
   const p = new URLSearchParams();
   if (opts.path) p.set('path', opts.path);
@@ -915,6 +1026,7 @@ async function listLensFacts(lens: string, opts: {
   if (opts.eps?.length) p.set('ep', opts.eps.join(','));
   if (opts.domains?.length) p.set('domain', opts.domains.join(','));
   if (opts.entities?.length) p.set('entities', opts.entities.join(','));
+  setMotifParams(p, opts);
   for (const repo of opts.repos ?? []) p.append('repo', repo);
   const qs = p.toString();
   return fetchJSON<{ facts: LensFactEntry[]; total: number }>(`${lensBase(lens)}/facts${qs ? `?${qs}` : ''}`);
@@ -929,7 +1041,8 @@ async function listLensFacts(lens: string, opts: {
 // a bare chip goes to listLensFacts where it can be paged and counted.
 async function lensSearch(
   lens: string, q: string, repos?: string[],
-  opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] },
+  opts?: { path?: string; types?: string[]; kinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+           motifs?: string[]; motifMatch?: MotifMatch },
 ): Promise<(SearchResult & { source: LensSource })[]> {
   const p = new URLSearchParams();
   if (q) p.set('q', q);
@@ -940,6 +1053,7 @@ async function lensSearch(
   if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
   if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
   if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
+  setMotifParams(p, opts);
   for (const repo of repos ?? []) p.append('repo', repo);
   const data = await fetchJSON<{ results?: (SearchResult & { source: LensSource })[] }>(`${lensBase(lens)}/search?${p}`);
   return data.results ?? [];
@@ -1092,6 +1206,38 @@ export const api = {
   updateLens,
   deleteLens,
   renameLens,
+  /** The per-repo motif vocabulary. `q` narrows over member spellings AND
+   *  definition text — which is what the browser's "Search names and meanings"
+   *  placeholder is promising, and what its sibling facet boxes cannot do. */
+  motifs: (repo: string, branch: string,
+    opts?: { q?: string; sort?: 'df' | 'name'; limit?: number; offset?: number }
+  ): Promise<{ count: number; health: MotifHealth; motifs: MotifEntry[] }> => {
+    const p = new URLSearchParams();
+    if (opts?.q) p.set('q', opts.q);
+    if (opts?.sort) p.set('sort', opts.sort);
+    if (opts?.limit !== undefined) p.set('limit', String(Math.min(opts.limit, MOTIFS_MAX_LIMIT)));
+    if (opts?.offset) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return fetchJSON<any>(`${branchBase(repo, branch)}/motifs${qs ? `?${qs}` : ''}`).then(data => ({
+      count: data.count ?? 0,
+      health: data.health ?? EMPTY_MOTIF_HEALTH,
+      motifs: data._embedded?.motifs ?? [],
+    }));
+  },
+
+  /** One cluster. `key` accepts the cluster_key or any member spelling, and is
+   *  encoded because neither is guaranteed URL-safe. Carriers and aliases
+   *  default to [] so a caller never has to guard the shape — but note that an
+   *  empty `carriers` with a non-zero `carrier_count` is a real state (a preview
+   *  the server chose not to send), not a contradiction to paper over. */
+  motifCluster: (repo: string, branch: string, key: string): Promise<MotifCluster> =>
+    fetchJSON<any>(`${branchBase(repo, branch)}/motifs/${encodeURIComponent(key)}`).then(data => ({
+      ...data,
+      members: data.members ?? [],
+      carriers: data.carriers ?? [],
+      aliases: data.aliases ?? [],
+    })),
+
   listLensFacts,
   lensSearch,
   lensCompletions,
@@ -1129,7 +1275,8 @@ export const api = {
   },
 
   search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,
-    opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[] }
+    opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
+             motifs?: string[]; motifMatch?: MotifMatch }
   ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const allDomains = [...domains, ...(opts?.domains || [])];
@@ -1145,6 +1292,7 @@ export const api = {
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
     if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
+    setMotifParams(p, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => {
       // HAL CollectionView: {_embedded: {results: [...]}}
       const results: SearchResult[] = data._embedded?.results || data.results || [];
@@ -1222,7 +1370,8 @@ export const api = {
     fetchJSON(`${branchBase(repo, branch)}/index-rebuilds`, { method: 'POST' }),
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
-    opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[] }
+    opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[];
+             motifs?: string[]; motifMatch?: MotifMatch }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
@@ -1239,6 +1388,7 @@ export const api = {
     if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
     if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
+    setMotifParams(p, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/facts?${p}`).then(data => ({
       // HAL CollectionView: count = total, _embedded.facts = items
       facts: data._embedded?.facts || data.facts || [],

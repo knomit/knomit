@@ -29,14 +29,16 @@ describe('ConnectionsPanel', () => {
   // direction's rows must be ABSENT, not merely below the fold.
   it('IN shows incoming only', () => {
     render(<ConnectionsPanel {...base} open="in" />);
-    expect(screen.getByText('↙ Referenced by')).toBeInTheDocument();
+    // Renamed with the cells, so one gesture has one vocabulary: the button
+    // reads "cited by" and so does the panel it opens.
+    expect(screen.getByText('↙ cited by')).toBeInTheDocument();
     expect(screen.getByText('Inbound')).toBeInTheDocument();
     expect(screen.queryByText('Outbound')).toBeNull();
   });
 
   it('OUT shows outgoing only', () => {
     render(<ConnectionsPanel {...base} open="out" />);
-    expect(screen.getByText('↗ References')).toBeInTheDocument();
+    expect(screen.getByText('↗ cites')).toBeInTheDocument();
     expect(screen.getByText('Outbound')).toBeInTheDocument();
     expect(screen.queryByText('Inbound')).toBeNull();
   });

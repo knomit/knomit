@@ -22,6 +22,17 @@ vi.mock('./api', () => ({
     factDiff: vi.fn().mockResolvedValue({ from: null, to: null }),
     commitDetail: vi.fn().mockResolvedValue(null),
     factCommits: vi.fn().mockResolvedValue({ entries: [] }),
+    // The summary panel now carries a Shapes block, which fetches its own
+    // vocabulary — the facet columns' stats payload deliberately does not
+    // include motifs.
+    motifs: vi.fn().mockResolvedValue({
+      count: 0, motifs: [],
+      health: {
+        authored_clusters: 0, authored_recurring: 0, authored_mints: 0,
+        authored_links: 0, authored_epistemic_recurring: 0,
+        recurrence_rate: 0, mint_to_link_ratio: 0,
+      },
+    }),
   },
 }));
 

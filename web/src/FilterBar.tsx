@@ -3,7 +3,7 @@ import type { Dispatch } from 'react';
 import type { AppState, Action, FilterChip } from './state';
 import { isLive, isLensContext, selectTrail } from './state';
 import { api, parseFilterQuery } from './api';
-import { chipColors, chipStyle, originGlyphs, typeStyles } from './utils';
+import { chipColors, chipStyle, originGlyphs, typeStyles, MOTIF_GLYPH } from './utils';
 import { TrailBreadcrumb } from './TrailBreadcrumb';
 
 interface Props {
@@ -23,8 +23,17 @@ const FACT_CATEGORIES: { key: FilterChip['category']; label: string }[] = [
   { key: 'kind',   label: 'Kind' },
   { key: 'type',   label: 'Type' },
   { key: 'origin', label: 'Origin' },
+  { key: 'motif',  label: 'Motif' },
   { key: 'path',   label: 'Path' },
 ];
+
+// In a LENS the motif row is absent. There is no single vocabulary across
+// several repositories — cross-mount cluster identity does not exist — so there
+// is nothing to list, and listing the write repo's names would offer the reader
+// a vocabulary the union does not have. A motif chip arriving from a pivot
+// still filters correctly there: each mount answers with its own spellings.
+// Same reasoning that keeps `repo` out of this rail.
+const LENS_CATEGORIES = FACT_CATEGORIES.filter(c => c.key !== 'motif');
 
 // There is deliberately NO `repo` facet here, in any context. Scoping a lens to
 // one of its mounts is not a content filter — it is a move, and it has two
@@ -67,6 +76,9 @@ function valueMark(cat: FilterChip['category'], value: string): { glyph?: string
   if (cat === 'domain') return { color: 'rgba(119,204,153,0.6)' };
   if (cat === 'entity') return { color: 'rgba(136,170,255,0.6)' };
   if (cat === 'path')   return { color: '#7f8b9c' };
+  // The motif owns a glyph, so it uses it — and it is the only category here
+  // whose rows carry no hue, which is the same statement the fact header makes.
+  if (cat === 'motif')  return { glyph: MOTIF_GLYPH, color: chipColors.motif.text };
   return { color: (chipColors[cat] || chipColors.path).text };
 }
 
@@ -79,6 +91,11 @@ function valueMark(cat: FilterChip['category'], value: string): { glyph?: string
 // already carries meaning: types arrive grouped epistemic-then-pragmatic, and
 // kind and origin are curated pairs and triples. Alphabetising those would
 // destroy information.
+//
+// `motif` is NOT here: its values arrive most-used-first, which is an order the
+// server chose and which carries meaning. Motif joins type/kind/origin on that
+// side of the line — the alphabetise rule is only for facets handed over with
+// no order at all.
 const UNORDERED_FACETS = new Set<string>(['domain', 'entity', 'path']);
 
 function orderValues(cat: FilterChip['category'], values: string[]): string[] {
@@ -89,12 +106,17 @@ function orderValues(cat: FilterChip['category'], values: string[]): string[] {
 
 // Match a trailing prefix token at end of input — the same set in both
 // contexts, since `repo` is not a filter facet (see above).
-const PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|path):(\S*)$/;
+const PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|motif|path):(\S*)$/;
 
 export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail, embedded = false }: Props) {
   const isLens   = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
-  const CATEGORIES = FACT_CATEGORIES;
+  // Motif is offered only where its vocabulary can be read: not in a lens (no
+  // cross-mount identity) and not in a build with no such endpoint — the
+  // vendored /explore bundle swaps this client for a static one. A rail row
+  // that opened onto a permanent error is worse than a rail without it.
+  const CATEGORIES = (isLens || typeof api.motifs !== 'function')
+    ? LENS_CATEGORIES : FACT_CATEGORIES;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
@@ -104,6 +126,8 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
   const [categoryValues, setCategoryValues]       = useState<string[]>([]);
   const [activeCategory, setActiveCategory]       = useState<FilterChip['category'] | null>(null);
   const [categorySearch, setCategorySearch]       = useState('');
+  // Only the motif pane can fail — see fetchCompletions.
+  const [motifFailed, setMotifFailed]             = useState(false);
 
   const inputRef        = useRef<HTMLInputElement>(null);
   const debounceRef     = useRef<number>(0);
@@ -116,10 +140,20 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
   // completions endpoint — it unions values across all mounts. Routing to the
   // repo endpoint instead would suggest write-repo values only, silently hiding
   // every read mount's domains/entities/paths. Repo context is unchanged.
-  const fetchCompletions = (category: FilterChip['category'] | string, prefix: string): Promise<{ values: string[] }> =>
-    isLens
+  const fetchCompletions = (category: FilterChip['category'] | string, prefix: string): Promise<{ values: string[] }> => {
+    // Motifs have their own collection — already ranked, already able to
+    // narrow, and its search reaches the DEFINITIONS as well as the names, so
+    // typing "silent" can surface a motif whose name never says it. The shared
+    // completions endpoint returns bare strings and could do none of that. The
+    // cost is a heavier payload, which is why it takes a page at a time.
+    if (category === 'motif') {
+      return api.motifs(state.repo, state.branch, { q: prefix || undefined, sort: 'df', limit: 60 })
+        .then(r => ({ values: r.motifs.map(m => m.canonical) }));
+    }
+    return isLens
       ? api.lensCompletions(lensName, String(category), prefix)
       : api.completions(state.repo, state.branch, category, prefix);
+  };
 
   // Scroll selected suggestion into view
   useEffect(() => {
@@ -274,11 +308,15 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
     // the directory, so it does not.
     if (cat === 'path') setPathPrefix(at.replace(/\/$/, ''));
     const seq = ++catSearchSeqRef.current;
+    setMotifFailed(false);
     try {
       const res = await fetchCompletions(cat, at);
       if (seq === catSearchSeqRef.current) setCategoryValues(res.values || []);
     } catch {
-      if (seq === catSearchSeqRef.current) setCategoryValues([]);
+      if (seq === catSearchSeqRef.current) {
+        setCategoryValues([]);
+        setMotifFailed(cat === 'motif');
+      }
     }
   }
 
@@ -471,7 +509,8 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
                       <input
                         data-testid="picker-search"
                         autoFocus
-                        placeholder={`Search ${activeCategory}…`}
+                        placeholder={activeCategory === 'motif'
+                          ? 'Search names and meanings…' : `Search ${activeCategory}…`}
                         aria-label={`Search ${activeCategory}`}
                         value={categorySearch}
                         onChange={e => {
@@ -513,8 +552,15 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
                     gap: '0 18px', height: 150, overflowY: 'auto', alignContent: 'start',
                   }}>
                     {values.length === 0 && (
-                      <div style={{ fontSize: 11, color: '#5a6675', padding: '4px 0' }}>
-                        {categorySearch ? 'No matches' : 'loading…'}
+                      // Motif is the one category that ASKS: its siblings read a
+                      // list the picker already holds and can only come back
+                      // full or empty, so "loading…" was a safe stand-in for
+                      // both. Here a request can fail, and a failure showing as
+                      // an empty vocabulary would say this repo has no shared
+                      // shapes.
+                      <div data-testid="picker-empty" style={{ fontSize: 11, color: motifFailed ? '#e0a0a0' : '#5a6675', padding: '4px 0' }}>
+                        {motifFailed ? 'Couldn’t read the vocabulary.'
+                          : categorySearch ? 'No matches' : 'loading…'}
                       </div>
                     )}
                     {values.map(v => {
@@ -573,9 +619,15 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
         return (
           <span key={i} data-testid="filter-chip"
             data-category={chip.category} data-value={chip.value}
+            data-widened={chip.category === 'motif' && state.motifMatch !== 'exact' ? 'true' : undefined}
             style={{
             background: colors.bg,
             color: colors.text,
+            // A widened motif chip is drawn dashed: the list behind it contains
+            // rows that are NOT carriers of this motif, and the chip is the one
+            // thing on screen the whole time claiming to describe that list.
+            ...(chip.category === 'motif' && state.motifMatch !== 'exact'
+              ? { border: '1px dashed #4a5262', padding: '1px 7px' } : null),
             padding: '2px 8px',
             borderRadius: 3,
             fontSize: 11,

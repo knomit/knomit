@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+import { MOTIF_GLYPH } from './utils';
 import type { LibrarySort } from './state';
 import type { ComponentType } from 'react';
 import { TreeIcon, StopwatchIcon, TargetIcon, ChevronLeftIcon } from './icons';
@@ -41,6 +43,26 @@ interface Props {
   onBack: () => void;
   /** Index into the FULL ancestors array (not the collapsed layout). */
   onJumpAncestor: (index: number) => void;
+  /** Present when the list IS a motif pivot: every fact in the corpus with one
+   *  shape. It replaces the location line, because the reader is no longer
+   *  anywhere in the ontology — a motif cuts across it. */
+  motif?: MotifPivot;
+}
+
+export interface MotifPivot {
+  /** The spelling the corpus reads by — never a bare cluster_key, which is a
+   *  stemmed token string and reads as wrong-order nonsense. */
+  canonical: string;
+  /** carrier_count: how many facts this list actually contains. */
+  carrierCount: number | null;
+  definition?: string;
+  interim?: boolean;
+  /** "across a · b · c · +N more", computed from the FULL landed rows — the
+   *  panel's version of this line comes from a capped preview and can only
+   *  understate; this one is complete. */
+  subjects?: string;
+  /** The widen control, rendered by the caller. */
+  tiers?: ReactNode;
 }
 
 type IconType = ComponentType<{ color: string; size?: number }>;
@@ -121,12 +143,13 @@ const ROOT_LABEL: Record<LibrarySort, string> = {
 
 export function LibraryHeader({
   count, ancestors, leaf, narrow, sort, searchActive, contentFiltered,
-  onSortChange, onExitSearch, canBack, onBack, onJumpAncestor,
+  onSortChange, onExitSearch, canBack, onBack, onJumpAncestor, motif,
 }: Props) {
   const visible = segments.filter(s => s.value !== 'relevance' || searchActive);
   const items = layoutAncestors(ancestors.length, narrow);
 
   return (
+    <>
     <div
       data-testid="library-header"
       style={{
@@ -151,7 +174,24 @@ export function LibraryHeader({
         <ChevronLeftIcon color={canBack ? '#888' : '#2e2e2e'} size={13} />
       </button>
 
-      {/* Location: ancestors above, current folder below. */}
+      {/* The pivot is not a location. A motif cuts ACROSS the ontology, so the
+          reader is not in a folder and the ancestors line has nothing to say —
+          it names the shape instead, and the leaf names the motif. */}
+      {motif ? (
+        <div data-testid="library-motif" style={{ flex: 1, minWidth: 0, fontFamily: 'var(--k-font-mono)' }}>
+          <div style={{ fontSize: 10.5, color: '#7f8b9c', marginBottom: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ color: '#6d7788' }}>{MOTIF_GLYPH}</span>
+            <span>same shape as</span>
+          </div>
+          {/* Near-white, not the green a folder gets: the motif is the one thing
+              here making no claim about what a fact is about. */}
+          <div data-testid="library-leaf" style={{
+            fontSize: 12, color: '#e8eef6', letterSpacing: 0.3,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{motif.canonical}</div>
+        </div>
+      ) : (
+      /* Location: ancestors above, current folder below. */
       <div style={{ flex: 1, minWidth: 0, fontFamily: 'var(--k-font-mono)' }}>
         <div
           data-testid="library-ancestors"
@@ -197,8 +237,14 @@ export function LibraryHeader({
           }}
         >{leaf ?? ROOT_LABEL[sort]}</div>
       </div>
+      )}
 
-      <span data-testid="library-count" style={{ fontSize: 10, color: '#666', fontFamily: 'var(--k-font-mono)', flexShrink: 0 }}>{count}</span>
+      <span data-testid="library-count" style={{ fontSize: 10, color: '#666', fontFamily: 'var(--k-font-mono)', flexShrink: 0 }}>
+        {/* On a pivot this is carrier_count — the number of facts this list
+            actually holds — rather than the paging total, which is the same
+            number said less directly. */}
+        {motif ? (motif.carrierCount ?? '···') : count}
+      </span>
 
       {/* Sort axes as borderless glyphs — state reads through color alone:
           accent green = active, muted = idle, brighter on hover. No pill, no
@@ -257,6 +303,32 @@ export function LibraryHeader({
         })}
       </div>
     </div>
+
+    {/* The second line: what the shape MEANS, and what its facts are about.
+        The areas line is the point of the whole pivot — those facts have
+        nothing in common but this — and unlike the panel's version of it, this
+        one is computed from the full landed rows rather than a capped preview,
+        so it is complete. */}
+    {motif && (motif.definition || motif.subjects || motif.tiers) && (
+      <div data-testid="library-motif-meta" style={{ padding: '0 10px 2px 32px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+        {motif.definition && (
+          <div data-testid="library-motif-definition" style={{
+            fontSize: 11.5, lineHeight: 1.55, color: '#8a93a3',
+            fontFamily: 'var(--k-font-body)', maxWidth: 520,
+          }}>{motif.definition}</div>
+        )}
+        {motif.definition && motif.interim && (
+          <div style={{ fontSize: 9.5, color: '#5f6a7c' }}>written before a spelling joined · interim</div>
+        )}
+        {motif.subjects && (
+          <div data-testid="library-motif-subjects" style={{ fontSize: 10, lineHeight: 1.7, color: '#5f6a7c' }}>
+            {motif.subjects}
+          </div>
+        )}
+        {motif.tiers}
+      </div>
+    )}
+    </>
   );
 }
 

@@ -1,4 +1,4 @@
-import type { Lens, LensSource } from './api';
+import type { Lens, LensSource, MotifMatch } from './api';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -16,7 +16,10 @@ export interface FilterChip {
   // No 'repo' here: scoping a lens to some of its mounts is state.lensSources,
   // driven by the sources dropdown and the summary's Repos rows. It was briefly
   // also a chip, which meant two controls over one scope that could disagree.
-  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path';
+  // `motif` combines OR, like domain/type/ep — two motif chips WIDEN the list
+  // (the server's `motifs` param is a single CSV read with splitCSV), which is
+  // the opposite of entity's AND. See kb/conventions/ui/filter-multi-chip-semantics.
+  category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path' | 'motif';
   value: string;
 }
 
@@ -45,6 +48,12 @@ interface NavEntry {
   // one mount would return you to a view you were never in. SET_LENS_SOURCES
   // does not push either — a dropdown toggle refines the current view.
   lensSources: string[] | null;
+  // The motif match tier, for the same reason again: `stem` and `token-2` admit
+  // rows that are NOT carriers of the motif, so the tier decides which rows
+  // exist. Unlike sort and sources, widening IS a move — a reader who loosens a
+  // pivot expects Back to tighten it again — so SET_MOTIF_MATCH pushes, and this
+  // field is what its Back has to restore.
+  motifMatch: MotifMatch;
 }
 
 export interface AppState {
@@ -84,6 +93,10 @@ export interface AppState {
   remotePushError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
+  /** How strictly the motif chips match. Not a chip: two motif chips are two
+   *  motifs, while the tier is one setting over the whole query. It changes
+   *  WHICH rows exist, so it belongs in NavEntry too — see pushNav/NAV_BACK. */
+  motifMatch: MotifMatch;
   notice: string;
   searching: boolean;            // a relevance (free-text) search request is in flight
   serverReadOnly: boolean;       // instance-level read-only (demo mode)
@@ -133,6 +146,12 @@ export type Action =
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
+  // "Show me every fact with this shape." ONE action, not ADD_FILTER +
+  // SET_LIBRARY_SORT + a tier reset: three dispatches would be three chances to
+  // push and, as the lens-sources bug showed, in practice none.
+  | { type: 'PIVOT_MOTIF'; motif: string }
+  // Loosening or tightening the pivot. A move, so it pushes — see NavEntry.
+  | { type: 'SET_MOTIF_MATCH'; match: MotifMatch }
   | { type: 'EXIT_SEARCH' }
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
@@ -169,6 +188,7 @@ export const init: AppState = {
   // Ontology browsing, not chrono: the tree is how the corpus is organised, so
   // arriving at a folder listing beats arriving at a flat by-date feed.
   librarySort: 'path',
+  motifMatch: 'exact',
   notice: '',
   searching: false,
   serverReadOnly: false,
@@ -186,6 +206,7 @@ function pushNav(s: AppState): NavEntry[] {
     asOf: s.asOf,
     sort: s.librarySort,
     lensSources: s.lensSources === null ? null : [...s.lensSources],
+    motifMatch: s.motifMatch,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -293,6 +314,7 @@ function applyAction(s: AppState, a: Action): AppState {
           branch: '',
           librarySort: prev.sort,
           lensSources: prev.lensSources,
+          motifMatch: prev.motifMatch,
           navStack: s.navStack.slice(0, -1),
         };
       }
@@ -305,6 +327,7 @@ function applyAction(s: AppState, a: Action): AppState {
         freeText: prev.freeText,
         librarySort: prev.sort,
         lensSources: prev.lensSources,
+        motifMatch: prev.motifMatch,
         navStack: s.navStack.slice(0, -1),
         rightPanelFocused: false,
       };
@@ -413,6 +436,36 @@ function applyAction(s: AppState, a: Action): AppState {
         factPath: null,
         navStack: pushNav(s),
       };
+    case 'PIVOT_MOTIF': {
+      // Everything the pivot changes, set in one arm: the chip that IS the
+      // query, the sort it must arrive in, the tier it starts at, and the open
+      // fact cleared so the refetched list selects its own first row. The
+      // motif chip REPLACES any previous one rather than accumulating — a
+      // pivot is "show me this shape", and two motif chips widen, so keeping
+      // the old one would silently return a union nobody asked for.
+      //
+      // Path is dropped because a shape cuts ACROSS the ontology: scoping it to
+      // one folder is the opposite of what the reader asked for. This is the
+      // ONLY chip operation that clears path — ADD_FILTER leaves an existing
+      // path chip in place, deliberately, because a domain or type chip narrows
+      // within where you are. Nothing else here behaves this way, so the reason
+      // has to stand on its own rather than lean on a precedent.
+      const filters = s.filters.filter(f => f.category !== 'motif' && f.category !== 'path');
+      return {
+        ...s,
+        filters: [...filters, { category: 'motif', value: a.motif }],
+        librarySort: 'recent',
+        motifMatch: 'exact',
+        factPath: null,
+        navStack: pushNav(s),
+      };
+    }
+    case 'SET_MOTIF_MATCH':
+      // No-op when nothing changes: re-clicking the lit rung would otherwise
+      // bury the list under identical entries, and Back would appear inert
+      // until the reader had pressed it as many times as they had clicked.
+      if (a.match === s.motifMatch) return s;
+      return { ...s, motifMatch: a.match, factPath: null, navStack: pushNav(s) };
     case 'SET_FACT_SOURCE':
       return { ...s, factSource: a.source };
     case 'SET_REMOTE_ERROR':
