@@ -19,13 +19,22 @@ import viteConfigSrc from '../vite.config.ts?raw';
 // --- vite base -------------------------------------------------------------
 
 describe('vite base', () => {
-  it('emits relative asset URLs', () => {
-    // Line comments are stripped first so that the config's own prose about
-    // `base: '/'` cannot satisfy — or defeat — the assertion.
-    const code = viteConfigSrc.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  // Line comments are stripped first so that the config's own prose about
+  // `base: '/'` cannot satisfy — or defeat — the assertions.
+  const code = viteConfigSrc.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+
+  it('emits relative asset URLs when there is no mount', () => {
     // Absolute ('/', vite's default) makes the browser resolve /assets/… against
     // the ORIGIN root, which under a proxy belongs to the proxy, not knomit.
-    expect(code).toMatch(/^\s*base:\s*'\.\/',\s*$/m);
+    expect(code).toMatch(/^\s*base:\s*mount\s*\?\s*`\$\{mount\}\/`\s*:\s*'\.\/',\s*$/m);
+  });
+
+  it('never lets a mount reach the build', () => {
+    // The dev mount is a serve-only affordance. If `mount` were read
+    // unconditionally, a KNOMIT_DEV_BASE left in the shell would bake a path
+    // prefix into `npm run build` and the shipped bundle would only work under
+    // that one mount.
+    expect(code).toMatch(/^\s*const mount = command === 'serve' \? devMount\(\) : ''$/m);
   });
 });
 
