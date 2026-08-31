@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { reducer, init } from './state';
-import type { AppState } from './state';
+import type { AppState, FilterChip } from './state';
 
 const at = (over: Partial<AppState> = {}): AppState => ({
   ...init, repo: 'knomit-kb', branch: 'agent/test',
@@ -76,6 +76,21 @@ describe('PIVOT_MOTIF', () => {
       filters: [{ category: 'motif', value: MOTIF, returnPath: 'kb/gotchas' }],
     });
     expect(reducer(pinned, { type: 'PIVOT_MOTIF', motif: MOTIF })).toBe(pinned);
+  });
+
+  it('collapses a typed union even when the pivot names its first chip', () => {
+    // Motif chips accumulate when TYPED into the FilterBar (ADD_FILTER appends
+    // them), and two of them are a union — the one thing this arm exists to
+    // undo. Reading "is this already pinned?" off the first matching chip
+    // no-opped that collapse, and only when the reader had typed the pivoted
+    // shape FIRST: same gesture, opposite outcome, decided by typing order.
+    const union: FilterChip[] = [{ category: 'motif', value: 'a' }, { category: 'motif', value: 'b' }];
+    for (const filters of [union, [...union].reverse()]) {
+      const s = at({ filters });
+      const after = reducer(s, { type: 'PIVOT_MOTIF', motif: 'a' });
+      expect(after.filters).toEqual([{ category: 'motif', value: 'a' }]);
+      expect(after.navStack.length - s.navStack.length).toBe(1);
+    }
   });
 
   it('still pivots when the same motif is pinned but a path chip is there to drop', () => {

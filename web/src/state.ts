@@ -514,12 +514,20 @@ function applyAction(s: AppState, a: Action): AppState {
       // answer on the common path: the motif was read off the open fact, so
       // that fact is a carrier and the reader keeps their place.
       const pathChip = s.filters.find(f => f.category === 'path');
-      const prevMotif = s.filters.find(f => f.category === 'motif');
+      const motifChips = s.filters.filter(f => f.category === 'motif');
+      const prevMotif = motifChips[0];
       // Nothing to do: this shape is already the query and there is no path to
       // displace, so the only thing a rebuild would add is a Back press that
       // returns to the identical view. EXIT_MOTIF guards its stray dispatch
       // the same way.
-      if (prevMotif?.value === a.motif && !pathChip) return s;
+      //
+      // ONE motif chip, counted — not "the first motif chip happens to match".
+      // Chips typed into the FilterBar accumulate, so `motif:a` + `motif:b` is
+      // a reachable union, and a `.find()` here would read the union's FIRST
+      // member and no-op a pivot whose whole job is to collapse it: the reader
+      // asks for one shape, keeps two, and the answer depends on which order
+      // they typed them in. Collapsing is exactly what the arm below does.
+      if (motifChips.length === 1 && prevMotif.value === a.motif && !pathChip) return s;
       const filters = s.filters.filter(f => f.category !== 'motif' && f.category !== 'path');
       const returnPath = pathChip?.value ?? prevMotif?.returnPath;
       return {
