@@ -474,8 +474,7 @@ function applyAction(s: AppState, a: Action): AppState {
       };
     case 'PIVOT_MOTIF': {
       // Everything the pivot changes, set in one arm: the chip that IS the
-      // query, the sort it must arrive in, and the open fact cleared so the
-      // refetched list selects its own first row. The
+      // query, and the path it displaces. The
       // motif chip REPLACES any previous one rather than accumulating — a
       // pivot is "show me this shape", and two motif chips widen, so keeping
       // the old one would silently return a union nobody asked for.
@@ -500,14 +499,32 @@ function applyAction(s: AppState, a: Action): AppState {
       // erasing the only record of where the reader came from. That is the
       // exact bug EXIT_SEARCH's comment describes, and it is why leaving a
       // pivot can now put an ontology browser back in the ontology.
+      //
+      // factPath is NOT cleared, and that is the whole of the fix for two
+      // faults that shared one cause. Clearing it here was justified by "the
+      // refetched list selects its own first row" — but every list branch
+      // already does that, and each does it only when the open fact did NOT
+      // survive the refetch (api.recent, api.search and the lens rows hold the
+      // same guard). So the clear decided nothing the fetch would not decide
+      // better, while owning the gap between the two: with no fact to draw,
+      // the right panel fell back to the ontology dashboard, which FLASHED up
+      // mid-pivot and then STAYED whenever the pivot changed no query — the
+      // same motif pinned again from a carrier's own header refetches nothing,
+      // so nothing ever re-selected. Leaving the fact alone is also the better
+      // answer on the common path: the motif was read off the open fact, so
+      // that fact is a carrier and the reader keeps their place.
       const pathChip = s.filters.find(f => f.category === 'path');
       const prevMotif = s.filters.find(f => f.category === 'motif');
+      // Nothing to do: this shape is already the query and there is no path to
+      // displace, so the only thing a rebuild would add is a Back press that
+      // returns to the identical view. EXIT_MOTIF guards its stray dispatch
+      // the same way.
+      if (prevMotif?.value === a.motif && !pathChip) return s;
       const filters = s.filters.filter(f => f.category !== 'motif' && f.category !== 'path');
       const returnPath = pathChip?.value ?? prevMotif?.returnPath;
       return {
         ...s,
         filters: [...filters, { category: 'motif' as const, value: a.motif, ...(returnPath ? { returnPath } : {}) }],
-        factPath: null,
         navStack: pushNav(s),
       };
     }
