@@ -530,7 +530,37 @@ export default function App() {
       api.status(state.repo, state.branch)
         .then(s => {
           if (cancelled || stateRef.current.headCommit !== issuedAt) return;
-          dispatch({ type: 'SET_HEAD', head: s.head });
+          // Advance to the INDEXED head, not raw git HEAD. The two differ, and
+          // only during the window this poll is most likely to fire in. The
+          // branch root reports `head` straight off Branches().HeadCommit,
+          // while the SSE `status` broadcast is emitted only AFTER the commit
+          // observer's IndexManager().SyncLocked returns — so every head the
+          // stream delivers is one the index has already absorbed, and this
+          // one is not. Writing an un-indexed head back mid-sync points every
+          // consumer keyed on state.headCommit (Library's search/chrono
+          // effects, useFactEdges, RightPanel) at a half-built index; worse,
+          // SET_HEAD short-circuits on an unchanged hash, so the post-sync
+          // broadcast of that SAME hash is a no-op and the stale results stand
+          // indefinitely rather than for the length of the sync. index_commit
+          // is the sync watermark — the newest commit the index has absorbed —
+          // which is exactly what the stream broadcasts.
+          //
+          // Fallback when the watermark is unavailable (SyncWatermark errored,
+          // or the branch has never been indexed) is the raw head: it reports
+          // "" then, and this poll is the recovery path for a dead or lossy
+          // stream, so refusing to move the head would wedge the tab for as
+          // long as that condition lasts — the failure this effect exists to
+          // prevent. Preferring the watermark is a correctness win when it is
+          // there; its absence must not cost us the recovery.
+          //
+          // An empty head is not an answer either way. defaultBranchRootReader
+          // discards WithRead's error, and WithRead returns the Acquire error
+          // without running the closure, so during a store swap or open the
+          // branch endpoint answers 200 with head "". Same guard the SSE
+          // `status` handler applies.
+          const head = s.index_commit || s.head;
+          if (!head) return;
+          dispatch({ type: 'SET_HEAD', head });
         })
         .catch(() => {
           // Best-effort. A failed poll tells us nothing new about the head, and
