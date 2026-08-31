@@ -10,7 +10,7 @@ import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
 import { FactBody } from './FactBody';
 import { FactBand } from './FactBand';
-import { ConnectionsCell } from './ConnectionsMenu';
+import { ConnectionsCell, CELL_PAD_X } from './ConnectionsMenu';
 import type { EdgeDir } from './utils';
 import { ConnectionsPanel } from './ConnectionsPanel';
 import { VersionWalker } from './VersionWalker';
@@ -20,7 +20,7 @@ import { MotifCell } from './MotifCell';
 import { MotifOverflowCell, orderMotifs, OVERFLOW } from './MotifRow';
 import { useMotifClusters } from './useMotifClusters';
 import { MotifPanel } from './MotifPanel';
-import { ShapesBlock } from './ShapesBlock';
+import { MotifsBlock } from './MotifsBlock';
 import type { OrderedMotifs } from './MotifRow';
 import { RepoRows } from './RepoRows';
 import type { NavRequest } from './useNavigationManager';
@@ -100,17 +100,25 @@ function renderFact(
   const retractedAt = anchorShort && factShort && anchorShort !== factShort ? anchorShort : '';
   // Pinned commit for in-body ref hops (narrowed to string for the closure).
   const refAnchor = fact.commit_hash;
-  // ROW 3 IS TWO THINGS, and the border is the line between them.
+  // ROW 3 IS TWO THINGS: panel-openers on the left, everything else pinned
+  // right.
   //
   // `edgesGroup` holds everything that opens the panel below — what cites this
-  // fact, what it cites, and what has the same shape. One border, hairline
-  // dividers, every child borderless: the recipe the connections cells were
-  // built on, extended rather than replaced.
+  // fact, what it cites, and what shares its motif.
+  //
+  // IT USED TO BE A BORDERED STRIP with hairline dividers, so the border could
+  // mean exactly one thing. Nothing else in the fact's chrome is drawn that
+  // way: the meta line above it and the path line above that are bare text and
+  // bare glyphs on the band's own ground. A box around three of the header's
+  // cells made them read as a widget bolted onto the fact rather than as part
+  // of it — so the box is gone and the cells sit on the band like everything
+  // else. What the border was carrying, the cells already say for themselves:
+  // colour for live, grey for inert, red for failed, and an inset underline in
+  // currentColor for the one that is open. Those four states are untouched.
   //
   // `actions` is everything else on that row: the version (a mode change, not a
   // panel), the date it is read with, and retract, which destroys the fact
-  // rather than inspecting it. None of them belong inside a border that means
-  // "opens a panel".
+  // rather than inspecting it. They stay pinned right, where they always were.
   const edgesGroup = (
           <span
             ref={connections?.menuRef}
@@ -131,7 +139,6 @@ function renderFact(
                       error={connections.error}
                     />
                   </span>
-                  <span style={stripDivider} />
                   <span style={stripCell}>
                     <ConnectionsCell
                       dir="out"
@@ -149,38 +156,29 @@ function renderFact(
                   order means nothing, and the panel below sorts the same way so
                   the row and the panel cannot disagree about one list. */}
               {motifs.shown.map(m => (
-                <span key={m.motif} style={{ display: 'inline-flex' }}>
-                  <span style={stripDivider} />
-                  <span style={stripCell}>
-                    <MotifCell
-                      motif={m}
-                      open={motifSlot?.open === m.motif}
-                      onToggle={motifSlot?.onToggle ?? (() => {})}
-                      panelId={motifSlot?.panelId ?? ''}
-                    />
-                  </span>
+                <span key={m.motif} style={stripCell}>
+                  <MotifCell
+                    motif={m}
+                    open={motifSlot?.open === m.motif}
+                    onToggle={motifSlot?.onToggle ?? (() => {})}
+                    panelId={motifSlot?.panelId ?? ''}
+                  />
                 </span>
               ))}
               {motifs.shown.length === 0 && (
-                <>
-                  <span style={stripDivider} />
-                  <span style={stripCell}>
-                    <MotifCell motif={null} open={false} onToggle={() => {}} panelId="" />
-                  </span>
-                </>
+                <span style={stripCell}>
+                  <MotifCell motif={null} open={false} onToggle={() => {}} panelId="" />
+                </span>
               )}
               {motifs.hidden.length > 0 && (
-                <>
-                  <span style={stripDivider} />
-                  <span style={stripCell}>
-                    <MotifOverflowCell
-                      hidden={motifs.hidden}
-                      open={motifSlot?.open === OVERFLOW}
-                      onToggle={motifSlot?.onToggle ?? (() => {})}
-                      panelId={motifSlot?.panelId ?? ''}
-                    />
-                  </span>
-                </>
+                <span style={stripCell}>
+                  <MotifOverflowCell
+                    hidden={motifs.hidden}
+                    open={motifSlot?.open === OVERFLOW}
+                    onToggle={motifSlot?.onToggle ?? (() => {})}
+                    panelId={motifSlot?.panelId ?? ''}
+                  />
+                </span>
               )}
             </span>
             {motifSlot?.open && motifs.shown.length + motifs.hidden.length > 0 && (
@@ -241,25 +239,22 @@ function renderFact(
               </span>
             )}
             {/*
-              THE CONTROL STRIP: connections in, connections out, version.
-              One border and hairline dividers, and every child renders
-              borderless inside it — three different treatments (two bare
-              glyphs and a bordered chip) is what made these read as unrelated
-              things floating beside the title.
-
-              RETRACT IS DELIBERATELY OUTSIDE IT. Everything in the strip
-              inspects the fact; retract destroys it. Sharing a cell wall with
+              RETRACT AND VERSION ARE NOT PANEL-OPENERS, and they are drawn
+              apart from the ones that are: pinned right, with the strip's
+              cells pinned left. Retract destroys the fact where everything in
+              the strip only inspects it, and sitting shoulder to shoulder with
               the navigation controls would make the destructive action look
-              like one more place to click.
+              like one more place to click. The version walker puts the app
+              into history and rotates the left rail into a timeline, and it
+              removes itself while its own commits load and on a fact with no
+              recorded versions — over here it can come and go without leaving
+              a hole, beside the date it is read with, which is where
+              "v2 · 3d ago" reads as one statement.
+
+              This separation used to be carried by a border drawn around the
+              openers. The border is gone (nothing else in the fact's chrome
+              wears one) and the left/right split now carries it alone.
             */}
-            {/* VERSION LEFT THE BORDER. Everything inside the group opens the
-                panel below; the version walker does something else entirely —
-                it puts the app into history and rotates the left rail into a
-                timeline — and it removes itself while its own commits load and
-                on a fact with no recorded versions. Outside, it can come and go
-                without leaving a hole in a border, and it sits beside the date
-                it is read with, which is where "v2 · 3d ago" reads as one
-                statement. */}
             {fact.commit_hash && (
               <VersionWalker
                 repo={histAnchor.repo}
@@ -509,15 +504,22 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
 
 // ─── Main RightPanel ─────────────────────────────────────────────────────────
 
-// The fact header's control strip. One border, one fill, hairline dividers —
-// the children draw none of their own.
+// The fact header's control strip: no border, no fill, no dividers — the same
+// bare treatment the two rows above it get. Separation comes from the gap and
+// from each cell's own padding, and `overflow` is deliberately NOT hidden:
+// there is no radius left to clip, and clipping would eat the inset underline
+// an open cell draws on its bottom edge.
 const controlStrip: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'stretch',
-  border: '1px solid #2a2a2a', borderRadius: 4, background: '#141414',
-  overflow: 'hidden', flexShrink: 0,
+  display: 'inline-flex', alignItems: 'stretch', gap: 2, flexShrink: 0,
+  // Every cell carries CELL_PAD_X of its own, which an open cell needs so its
+  // fill and underline are not flush against the text. With no border to sit
+  // inside, that padding pushed the first cell's text one notch right of the
+  // path and the meta line above it — three rows of a header that no longer
+  // started in the same column. The negative margin gives exactly that padding
+  // back, so the text aligns and the highlight still has room.
+  marginLeft: -CELL_PAD_X,
 };
 const stripCell: React.CSSProperties = { display: 'inline-flex', alignItems: 'center' };
-const stripDivider: React.CSSProperties = { width: 1, background: '#2a2a2a', flexShrink: 0 };
 
 const EMPTY_REF_COMMITS: Map<string, string> = new Map();
 // Stable identities, so a default does not defeat the memo with a fresh array.
@@ -997,7 +999,7 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                   block is ABSENT there rather than showing one mount's names as
                   if they were the union's. The pivot still works in a lens;
                   browsing the vocabulary is what cannot. */}
-              <ShapesBlock repo={state.repo} branch={state.branch}
+              <MotifsBlock repo={state.repo} branch={state.branch} path={path}
                 onPick={motif => dispatch({ type: 'PIVOT_MOTIF', motif })} />
               <HighlightsPanel
                 highlights={stats.highlights}

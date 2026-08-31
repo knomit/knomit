@@ -86,13 +86,20 @@ describe('motif chips reach the list request', () => {
     expect(opts.domains).toEqual(['store']);
   });
 
-  it('carries the match tier from state, not from the chips', async () => {
+  it('sends NO match tier — the client asks for the motif itself and nothing looser', async () => {
+    // The widen rungs are gone (measured: `stem` was live on 0 of 178 clusters
+    // across four corpora, and the 10% where `token-2` lit up was driven by
+    // shared stopwords — `control-coarser-than-failure` pulling in
+    // `failure-faster-than-success` because both contain `than` and `failure`).
+    // Omitting the parameter, rather than sending motif_match=exact, keeps the
+    // server's default the single definition of what exact means.
     render(<Library dispatch={vi.fn()} navigate={vi.fn()} state={repoState({
       filters: [{ category: 'motif', value: 'failure-presents-as-success' }],
-      motifMatch: 'token-2',
     })} />);
     await waitFor(() => expect(api.recent).toHaveBeenCalled());
-    expect(optsOf(api.recent, 6).motifMatch).toBe('token-2');
+    const opts = optsOf(api.recent, 6);
+    expect(opts.motifs).toEqual(['failure-presents-as-success']);
+    expect(opts).not.toHaveProperty('motifMatch');
   });
 
   it('reaches the lens list endpoint too', async () => {

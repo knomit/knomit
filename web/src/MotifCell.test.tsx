@@ -68,7 +68,7 @@ describe('MotifCell', () => {
     render(<MotifCell motif={null} open={false} onToggle={vi.fn()} panelId="p" />);
     // Present, so the header is the same shape on every fact in a list; inert,
     // so it offers nothing to click. Both halves matter.
-    expect(cell()).toHaveTextContent('same shape');
+    expect(cell()).toHaveTextContent('same motif');
     expect(cell()).toHaveTextContent('0');
     expect(cell().getAttribute('data-interactive')).toBe('false');
     expect(cell().tagName).toBe('DIV');
@@ -87,6 +87,6 @@ describe('MotifCell', () => {
 
   it('names the action rather than restating the name', () => {
     render(<MotifCell motif={ok('absence-encodes-value', 7)} open={false} onToggle={vi.fn()} panelId="p" />);
-    expect(cell().getAttribute('title')).toBe('7 facts share this shape');
+    expect(cell().getAttribute('title')).toBe('7 facts share this motif');
   });
 });

@@ -1,8 +1,6 @@
-import type { ReactNode } from 'react';
-import { MOTIF_GLYPH } from './utils';
 import type { LibrarySort } from './state';
 import type { ComponentType } from 'react';
-import { TreeIcon, StopwatchIcon, TargetIcon, ChevronLeftIcon } from './icons';
+import { TreeIcon, StopwatchIcon, TargetIcon, MotifIcon, ChevronLeftIcon } from './icons';
 import { OverflowCrumb } from './OverflowCrumb';
 
 interface Props {
@@ -39,6 +37,9 @@ interface Props {
   onSortChange: (sort: LibrarySort) => void;
   /** Leave the search and fall back to the mode the reader was in before it. */
   onExitSearch?: () => void;
+  /** Leave the motif pivot the same way — drop the chip that IS the query and
+   *  fall back to the mode the reader was in before it. */
+  onExitMotif?: () => void;
   canBack: boolean;
   onBack: () => void;
   /** Index into the FULL ancestors array (not the collapsed layout). */
@@ -53,27 +54,39 @@ export interface MotifPivot {
   /** The spelling the corpus reads by — never a bare cluster_key, which is a
    *  stemmed token string and reads as wrong-order nonsense. */
   canonical: string;
-  /** carrier_count: how many facts this list actually contains. */
-  carrierCount: number | null;
   definition?: string;
   interim?: boolean;
   /** "across a · b · c · +N more", computed from the FULL landed rows — the
    *  panel's version of this line comes from a capped preview and can only
    *  understate; this one is complete. */
   subjects?: string;
-  /** The widen control, rendered by the caller. */
-  tiers?: ReactNode;
 }
 
 type IconType = ComponentType<{ color: string; size?: number }>;
 
+/**
+ * The four ways of looking. Three of them are also sort axes; `motif` is not.
+ *
+ * A motif pivot is a MODE, not an ordering: the list is every fact in the
+ * corpus carrying one shape, which is neither a place (Path), a moment
+ * (Recent), nor a ranking (Relevance). It earns a segment for the same reason
+ * relevance has one — the reader needs to see which of the four they are in,
+ * and needs one gesture back out.
+ *
+ * Two of the four are DERIVED and cannot be entered from this strip: relevance
+ * appears only while a search is running, motif only while a pivot is on. Their
+ * segment is therefore an exit, never an entry — clicking a lit one leaves.
+ */
+type Mode = LibrarySort | 'motif';
+
 // Sort axes render as theme-colored glyphs (tree = path hierarchy, stopwatch =
-// recency, target = best-match relevance); the label survives as the tooltip
-// and accessible name.
-const segments: { value: LibrarySort; label: string; testid: string; Icon: IconType }[] = [
+// recency, target = best-match relevance, waves = one motif's carriers); the
+// label survives as the tooltip and accessible name.
+const segments: { value: Mode; label: string; testid: string; Icon: IconType }[] = [
   { value: 'path',      label: 'Path',      testid: 'sort-path',      Icon: TreeIcon },
   { value: 'recent',    label: 'Recent',    testid: 'sort-recent',    Icon: StopwatchIcon },
   { value: 'relevance', label: 'Relevance', testid: 'sort-relevance', Icon: TargetIcon },
+  { value: 'motif',     label: 'Motif',     testid: 'sort-motif',     Icon: MotifIcon },
 ];
 
 type AncItem =
@@ -143,9 +156,20 @@ const ROOT_LABEL: Record<LibrarySort, string> = {
 
 export function LibraryHeader({
   count, ancestors, leaf, narrow, sort, searchActive, contentFiltered,
-  onSortChange, onExitSearch, canBack, onBack, onJumpAncestor, motif,
+  onSortChange, onExitSearch, onExitMotif, canBack, onBack, onJumpAncestor, motif,
 }: Props) {
-  const visible = segments.filter(s => s.value !== 'relevance' || searchActive);
+  // A pivot outranks the sort axis it is being read in. `sort` arrives as the
+  // EFFECTIVE axis, which is 'recent' throughout a pivot because the tree
+  // cannot honour a chip — so without this the Recent segment would light up
+  // and the strip would name the ordering while the reader is asking about a
+  // shape.
+  const pivoting = !!motif;
+  const mode: Mode = pivoting ? 'motif' : sort;
+  // A derived mode's segment exists only while that mode is on: neither can be
+  // entered from here, so a permanently greyed one would be a control that is
+  // dead in every state a reader could click it in.
+  const visible = segments.filter(s =>
+    (s.value !== 'relevance' || searchActive) && (s.value !== 'motif' || pivoting));
   const items = layoutAncestors(ancestors.length, narrow);
 
   return (
@@ -175,14 +199,16 @@ export function LibraryHeader({
       </button>
 
       {/* The pivot is not a location. A motif cuts ACROSS the ontology, so the
-          reader is not in a folder and the ancestors line has nothing to say —
-          it names the shape instead, and the leaf names the motif. */}
+          reader is not in a folder and the ancestors line has nothing to say.
+          It used to say `≈ same motif as`, which was the third ≈ on screen —
+          the chip carries one and the mode segment now carries another — and a
+          label naming the relation earns less than the name it sits above. The
+          slot still RENDERS (a non-breaking space, the same trick the root
+          uses) because both lines must exist in every state or the header
+          changes height and the list shifts under the cursor. */}
       {motif ? (
         <div data-testid="library-motif" style={{ flex: 1, minWidth: 0, fontFamily: 'var(--k-font-mono)' }}>
-          <div style={{ fontSize: 10.5, color: '#7f8b9c', marginBottom: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ color: '#6d7788' }}>{MOTIF_GLYPH}</span>
-            <span>same shape as</span>
-          </div>
+          <div aria-hidden="true" style={ancestorPlaceholder}>{'\u00a0'}</div>
           {/* Near-white, not the green a folder gets: the motif is the one thing
               here making no claim about what a fact is about. */}
           <div data-testid="library-leaf" style={{
@@ -240,10 +266,14 @@ export function LibraryHeader({
       )}
 
       <span data-testid="library-count" style={{ fontSize: 10, color: '#666', fontFamily: 'var(--k-font-mono)', flexShrink: 0 }}>
-        {/* On a pivot this is carrier_count — the number of facts this list
-            actually holds — rather than the paging total, which is the same
-            number said less directly. */}
-        {motif ? (motif.carrierCount ?? '···') : count}
+        {/* ALWAYS the list's own count, a pivot included. This used to render
+            the cluster's carrier_count on a pivot, on the grounds that it was
+            the same number said more directly — true only while nothing else
+            narrowed the list. Add a domain chip and the rows went 14 → 8 while
+            this went on saying 14, so the one number a reader checks to see
+            whether their filter did anything was the one number that could not
+            move. A count beside a list must be OF that list. */}
+        {count}
       </span>
 
       {/* Sort axes as borderless glyphs — state reads through color alone:
@@ -251,26 +281,37 @@ export function LibraryHeader({
           selection border. The icon inherits the button's CSS color. */}
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
         {visible.map(seg => {
-          const active = sort === seg.value;
-          // While searching, order is forced to relevance — Path/Recent can't
-          // change it and clicking one only resets the open fact. Disable them
-          // so Relevance is the only live control.
+          const active = mode === seg.value;
+          // A DERIVED mode forces the ordering, so nothing else in the strip
+          // can change it: while searching, order is relevance; while pivoting,
+          // the list is one motif's carriers newest-first and the tree cannot
+          // hold a shape at all. In both, the derived segment is the only live
+          // control. An enabled button whose entire effect is overridden is
+          // worse than a disabled one — it gives no feedback and the reader is
+          // left clicking it — and in a pivot Recent is exactly that: it writes
+          // the axis the list already has and clears the open fact for nothing.
           //
-          // A chip disables PATH alone, for the same reason one level down: the
-          // tree cannot honour a content filter, so Library overrides Path to
-          // Recent while one is set. An enabled button whose entire effect is
-          // overridden is worse than a disabled one — it gives no feedback at
-          // all, and the reader is left clicking it. Recent stays live, because
-          // it is what the list is already doing and the reader may want to say
-          // so explicitly before removing the chip.
+          // A content chip on its own (no search, no pivot) still disables PATH
+          // alone: the tree cannot honour a filter, so Library borrows Recent,
+          // and Recent stays live because the reader may want to say explicitly
+          // that that is what they are in before removing the chip.
           const pathBlocked = contentFiltered && seg.value === 'path';
-          const disabled = (searchActive && seg.value !== 'relevance') || pathBlocked;
-          // ...and give that one live control a job. Relevance is DERIVED from
-          // searchActive, so "set sort to relevance" was a no-op that still
-          // nulled the open fact — the reader got the dashboard beside a list
-          // of matches. Pressed while lit, it now leaves the search and drops
-          // back to whichever mode was showing before.
-          const exits = searchActive && seg.value === 'relevance' && !!onExitSearch;
+          const derived: Mode | null = searchActive ? 'relevance' : pivoting ? 'motif' : null;
+          // The motif segment is an exit and nothing else, and the exit needs
+          // the optional onExitMotif. Without one, an enabled segment would
+          // fall through to onSortChange and dispatch 'motif' — not a
+          // LibrarySort, a value every list effect early-returns on. A dead
+          // segment misleads less than a panel-blanking one.
+          const disabled = (derived !== null && seg.value !== derived) || pathBlocked
+            || (seg.value === 'motif' && !onExitMotif);
+          // ...and give that one live control a job. Both derived modes are
+          // entered from elsewhere — a search box, a motif cell — so setting
+          // them from here was a no-op that still nulled the open fact. Pressed
+          // while lit, each now LEAVES: the search is cleared, or the motif
+          // chip that IS the pivot is dropped, and the reader falls back to
+          // whichever mode was showing before.
+          const exitsSearch = searchActive && seg.value === 'relevance' && !!onExitSearch;
+          const exitsMotif = pivoting && seg.value === 'motif' && !!onExitMotif;
           const color = disabled ? '#3a3a3a' : active ? '#7c9' : '#666';
           return (
             <button
@@ -279,13 +320,16 @@ export function LibraryHeader({
               disabled={disabled}
               onClick={() => {
                 if (disabled) return;
-                if (exits) onExitSearch(); else onSortChange(seg.value);
+                if (exitsSearch) onExitSearch!();
+                else if (exitsMotif) onExitMotif!();
+                else onSortChange(seg.value as LibrarySort);
               }}
-              aria-label={exits ? 'Clear search' : `Sort by ${seg.label}`}
+              aria-label={exitsSearch ? 'Clear search' : exitsMotif ? 'Leave this motif' : `Sort by ${seg.label}`}
               aria-pressed={active}
               title={pathBlocked ? 'The tree cannot filter — remove the chip to browse it'
-                : disabled ? 'Sorting is disabled while searching'
-                : exits ? 'Clear search and go back'
+                : disabled ? (pivoting ? 'Sorting is disabled inside a motif' : 'Sorting is disabled while searching')
+                : exitsSearch ? 'Clear search and go back'
+                : exitsMotif ? 'Leave this motif and go back'
                 : `Sort by ${seg.label}`}
               onMouseEnter={e => { if (!disabled && !active) e.currentTarget.style.color = '#aaa'; }}
               onMouseLeave={e => { if (!disabled && !active) e.currentTarget.style.color = color; }}
@@ -309,7 +353,7 @@ export function LibraryHeader({
         nothing in common but this — and unlike the panel's version of it, this
         one is computed from the full landed rows rather than a capped preview,
         so it is complete. */}
-    {motif && (motif.definition || motif.subjects || motif.tiers) && (
+    {motif && (motif.definition || motif.subjects) && (
       <div data-testid="library-motif-meta" style={{ padding: '0 10px 2px 32px', display: 'flex', flexDirection: 'column', gap: 5 }}>
         {motif.definition && (
           <div data-testid="library-motif-definition" style={{
@@ -325,7 +369,6 @@ export function LibraryHeader({
             {motif.subjects}
           </div>
         )}
-        {motif.tiers}
       </div>
     )}
     </>

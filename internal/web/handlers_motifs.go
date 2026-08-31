@@ -19,16 +19,16 @@ import (
 // on. Every method is a straight pass-through to store.MotifIndex — the seam
 // exists for test injection, mirroring domainsProvider.
 type motifsProvider interface {
-	Clusters(ctx context.Context, ri *repos.RepoInstance, branch string) ([]store.MotifCluster, error)
+	Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]store.MotifCluster, error)
 	Definitions(ctx context.Context, ri *repos.RepoInstance, branch string, keys []string) (map[string]store.MotifDefinitionStatus, error)
-	VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch string) (store.MotifVocabularyHealth, error)
+	VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.MotifVocabularyHealth, error)
 	AliasRows(ctx context.Context, ri *repos.RepoInstance, branch string) (map[string]store.AliasRow, error)
 	ClusterKey(ctx context.Context, ri *repos.RepoInstance, branch, motif string) (string, error)
 }
 
 type defaultMotifsProvider struct{}
 
-func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstance, branch string) ([]store.MotifCluster, error) {
+func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) ([]store.MotifCluster, error) {
 	var (
 		out []store.MotifCluster
 		err error
@@ -37,7 +37,7 @@ func (defaultMotifsProvider) Clusters(ctx context.Context, ri *repos.RepoInstanc
 		if svc == nil {
 			return
 		}
-		out, err = svc.Motifs().Clusters(ctx, branch)
+		out, err = svc.Motifs().ClustersUnder(ctx, branch, pathPrefix)
 	})
 	return out, err
 }
@@ -56,7 +56,7 @@ func (defaultMotifsProvider) Definitions(ctx context.Context, ri *repos.RepoInst
 	return out, err
 }
 
-func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch string) (store.MotifVocabularyHealth, error) {
+func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix string) (store.MotifVocabularyHealth, error) {
 	var (
 		out store.MotifVocabularyHealth
 		err error
@@ -65,7 +65,7 @@ func (defaultMotifsProvider) VocabularyHealth(ctx context.Context, ri *repos.Rep
 		if svc == nil {
 			return
 		}
-		out, err = svc.Motifs().VocabularyHealth(ctx, branch)
+		out, err = svc.Motifs().VocabularyHealthUnder(ctx, branch, pathPrefix)
 	})
 	return out, err
 }
@@ -113,10 +113,16 @@ const (
 // cluster_key is the STABLE identity and what self links carry; canonical is
 // the df-elected representative and merely what humans read (design C1).
 type motifEntry struct {
-	ClusterKey      string      `json:"cluster_key"`
-	Canonical       string      `json:"canonical"`
-	Members         []string    `json:"members"`
-	DF              int         `json:"df"`
+	ClusterKey string   `json:"cluster_key"`
+	Canonical  string   `json:"canonical"`
+	Members    []string `json:"members"`
+	DF         int      `json:"df"`
+	// DFTotal is DF ignoring ?path=, so a scoped page can say how much of a
+	// shape is HERE and how much the pivot — which drops the path — will
+	// return. Equal to DF on an unscoped page, and sent either way: a field
+	// that appears only when the numbers differ makes its absence mean two
+	// things.
+	DFTotal         int         `json:"df_total"`
 	Definition      string      `json:"definition,omitempty"`
 	DefinitionState string      `json:"definition_state"`
 	Links           hal.LinkMap `json:"_links"`
@@ -226,12 +232,18 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 			offset = n
 		}
 
-		clusters, err := provider.Clusters(r.Context(), ri, branch)
+		// ?path= is SCOPE, not a filter over the page: it says which corpus
+		// this vocabulary is of, exactly as it does on /stats — so it narrows
+		// the health block too, while ?q= (a way of reading the page) narrows
+		// only the list and the count.
+		pathPrefix := qp.Get("path")
+
+		clusters, err := provider.Clusters(r.Context(), ri, branch, pathPrefix)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
 		}
-		health, err := provider.VocabularyHealth(r.Context(), ri, branch)
+		health, err := provider.VocabularyHealth(r.Context(), ri, branch, pathPrefix)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
@@ -311,6 +323,7 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 				Canonical:       c.CanonicalID,
 				Members:         c.Members,
 				DF:              c.DF,
+				DFTotal:         c.DFTotal,
 				Definition:      st.Definition,
 				DefinitionState: definitionState(st, ok),
 				Links:           hal.LinkMap{"self": {Href: motifsBase + "/" + c.ClusterKey}},
@@ -381,6 +394,7 @@ type motifDetailView struct {
 	Canonical       string             `json:"canonical"`
 	Members         []string           `json:"members"`
 	DF              int                `json:"df"`
+	DFTotal         int                `json:"df_total"`
 	Definition      string             `json:"definition,omitempty"`
 	DefinitionState string             `json:"definition_state"`
 	CarrierCount    int                `json:"carrier_count"`
@@ -422,7 +436,10 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 			carrierLimit = n
 		}
 
-		clusters, err := provider.Clusters(r.Context(), ri, branch)
+		// Branch-wide, with no path scope: a cluster is being addressed by
+		// identity here, and its detail is the same detail wherever the reader
+		// happened to be standing when they picked it.
+		clusters, err := provider.Clusters(r.Context(), ri, branch, "")
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif cluster", branch)
 			return
@@ -505,6 +522,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 			Canonical:       cluster.CanonicalID,
 			Members:         cluster.Members,
 			DF:              cluster.DF,
+			DFTotal:         cluster.DFTotal,
 			Definition:      st.Definition,
 			DefinitionState: definitionState(st, defined),
 			CarrierCount:    total,

@@ -22,9 +22,14 @@ type stubMotifsProvider struct {
 	health      store.MotifVocabularyHealth
 	aliases     map[string]store.AliasRow
 	clusterKeys map[string]string // spelling → cluster key for ClusterKey()
+	// gotPath records the ?path= the handler passed down, so a test can assert
+	// the scope reached the store rather than only that the page rendered.
+	gotPath       string
+	gotHealthPath string
 }
 
-func (s *stubMotifsProvider) Clusters(_ context.Context, _ *repos.RepoInstance, _ string) ([]store.MotifCluster, error) {
+func (s *stubMotifsProvider) Clusters(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) ([]store.MotifCluster, error) {
+	s.gotPath = pathPrefix
 	return s.clusters, s.clustersErr
 }
 
@@ -32,7 +37,8 @@ func (s *stubMotifsProvider) Definitions(_ context.Context, _ *repos.RepoInstanc
 	return s.defs, nil
 }
 
-func (s *stubMotifsProvider) VocabularyHealth(_ context.Context, _ *repos.RepoInstance, _ string) (store.MotifVocabularyHealth, error) {
+func (s *stubMotifsProvider) VocabularyHealth(_ context.Context, _ *repos.RepoInstance, _, pathPrefix string) (store.MotifVocabularyHealth, error) {
+	s.gotHealthPath = pathPrefix
 	return s.health, nil
 }
 
@@ -76,6 +82,7 @@ type motifsCollectionBody struct {
 			Canonical       string   `json:"canonical"`
 			Members         []string `json:"members"`
 			DF              int      `json:"df"`
+			DFTotal         int      `json:"df_total"`
 			Definition      string   `json:"definition"`
 			DefinitionState string   `json:"definition_state"`
 			Links           struct {
@@ -316,6 +323,7 @@ type motifDetailBody struct {
 	Canonical       string   `json:"canonical"`
 	Members         []string `json:"members"`
 	DF              int      `json:"df"`
+	DFTotal         int      `json:"df_total"`
 	Definition      string   `json:"definition"`
 	DefinitionState string   `json:"definition_state"`
 	CarrierCount    int      `json:"carrier_count"`
@@ -371,6 +379,10 @@ func driftClusterStub() *stubMotifsProvider {
 			CanonicalID: "config-drift",
 			Members:     []string{"config-drift", "configuration-drifts"},
 			DF:          4,
+			// Distinct from DF so a handler writing df twice fails. The live
+			// store cannot produce this on the detail's unscoped read (the two
+			// are one number there); the gap is what makes the copy visible.
+			DFTotal: 7,
 		}},
 		defs: map[string]store.MotifDefinitionStatus{
 			"drift-config": {Definition: "Configured state diverges from applied state."},
@@ -409,6 +421,12 @@ func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
 	}
 	if len(body.Members) != 2 || body.DF != 4 {
 		t.Errorf("members/df: got %v / %d", body.Members, body.DF)
+	}
+	// The spec requires df_total on every cluster body, the detail included —
+	// MotifClusterDetail composes MotifClusterEntry via allOf. A detail without
+	// it violates the schema the server publishes.
+	if body.DFTotal != 7 {
+		t.Errorf("df_total: got %d, want 7 (the cluster's DFTotal, on the wire)", body.DFTotal)
 	}
 	if body.DefinitionState != "current" {
 		t.Errorf("definition_state: got %q, want current", body.DefinitionState)
@@ -642,5 +660,57 @@ func TestHandleHALMotifs_HealthNamesItsPopulationAndIgnoresQ(t *testing.T) {
 		if containsSub(raw, gone) {
 			t.Errorf("unqualified health field %s is still on the wire: %s", gone, raw)
 		}
+	}
+}
+
+// ?path= is SCOPE and reaches the store, for the list AND for the health block:
+// the two sit in one row of the panel, and counting them over different
+// populations is what makes a reader read the pair as a bug.
+func TestHandleHALMotifs_PathScopesListAndHealth(t *testing.T) {
+	stub := &stubMotifsProvider{
+		clusters: threeClusters(),
+		health:   store.MotifVocabularyHealth{Clusters: 3, Recurring: 3, Mints: 3, Links: 6},
+	}
+	rec := getMotifs(t, motifsServer(t, stub),
+		"/repos/alpha/branches/agent:test/motifs?path=kb%2Fdecisions")
+	decodeMotifs(t, rec)
+
+	if stub.gotPath != "kb/decisions" {
+		t.Errorf("clusters path: got %q, want %q", stub.gotPath, "kb/decisions")
+	}
+	if stub.gotHealthPath != "kb/decisions" {
+		t.Errorf("health path: got %q, want %q — a branch-wide strip beside a scoped list "+
+			"reports on facts the reader cannot see", stub.gotHealthPath, "kb/decisions")
+	}
+}
+
+// df and df_total are both on the wire, always. The row shows what is HERE; the
+// pivot it opens drops the path, and df_total is how the row can say so.
+func TestHandleHALMotifs_CarriesBothCounts(t *testing.T) {
+	stub := &stubMotifsProvider{
+		clusters: []store.MotifCluster{
+			{ClusterKey: "fallback-silent", CanonicalID: "silent-fallback",
+				Members: []string{"silent-fallback"}, DF: 2, DFTotal: 9},
+		},
+	}
+	body := decodeMotifs(t, getMotifs(t, motifsServer(t, stub),
+		"/repos/alpha/branches/agent:test/motifs?path=kb%2Fdecisions"))
+
+	e := body.Embedded.Motifs[0]
+	if e.DF != 2 || e.DFTotal != 9 {
+		t.Errorf("counts: got df=%d df_total=%d, want 2 and 9", e.DF, e.DFTotal)
+	}
+}
+
+// No ?path= is an unscoped read, not a defaulted one: the store's own empty
+// prefix is what "the whole branch" means, and the handler must not invent a
+// substitute for it.
+func TestHandleHALMotifs_NoPathPassesEmptyPrefix(t *testing.T) {
+	stub := &stubMotifsProvider{clusters: threeClusters()}
+	stub.gotPath = "sentinel"
+	stub.gotHealthPath = "sentinel"
+	decodeMotifs(t, getMotifs(t, motifsServer(t, stub), "/repos/alpha/branches/agent:test/motifs"))
+	if stub.gotPath != "" || stub.gotHealthPath != "" {
+		t.Errorf("prefixes: got %q/%q, want empty", stub.gotPath, stub.gotHealthPath)
 	}
 }

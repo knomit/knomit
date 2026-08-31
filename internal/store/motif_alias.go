@@ -671,6 +671,12 @@ type MotifCluster struct {
 	ClusterKey  string   // stable identity — KEY state on this
 	Members     []string // every spelling resolving here, sorted
 	DF          int      // live facts carrying any member, counted once each
+	// DFTotal is DF over the WHOLE branch, which is what DF already is unless
+	// ClustersUnder narrowed it to a subtree. The pair is reported together
+	// because the two numbers answer different questions and a scoped view
+	// needs both: DF says how much of this shape is HERE, DFTotal says how much
+	// the pivot will return — and the pivot deliberately leaves the path behind.
+	DFTotal int
 }
 
 // Clusters returns this branch's resolved motif vocabulary, most frequent
@@ -679,6 +685,22 @@ type MotifCluster struct {
 // One row per CLUSTER, not per spelling: the vocabulary a reader or a judge
 // deals in is mechanisms, and two spellings of one mechanism are one entry.
 func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifCluster, error) {
+	return mi.ClustersUnder(ctx, branch, "")
+}
+
+// ClustersUnder is Clusters restricted to the facts under pathPrefix — the
+// vocabulary of one subtree rather than of the branch.
+//
+// The narrowing is applied to the DF COUNTS ONLY, never to membership or to the
+// canonical election. A cluster's members and its representative spelling are
+// properties of the cluster, not of where you are standing: electing a
+// representative from the in-scope spellings would let one folder call a
+// cluster `silent-fallback` and another call the same cluster
+// `quiet-degradation`, and the pivot heading — which is branch-wide — would
+// then disagree with the row that opened it. So both are computed exactly as
+// the unscoped call computes them, and the prefix decides only which clusters
+// survive and what number each shows.
+func (mi *motifIndex) ClustersUnder(ctx context.Context, branch, pathPrefix string) ([]MotifCluster, error) {
 	branchID, err := mi.rh.branchID(ctx, branch)
 	if err != nil {
 		return nil, fmt.Errorf("Clusters: %w", err)
@@ -715,6 +737,17 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 	// such motifs stay separate singletons instead of collapsing into one
 	// bogus empty-key group. RebuildAliases makes the same choice by skipping
 	// them.
+	// The scope predicate is spelled into the query rather than appended as a
+	// WHERE, because the two counts have to come out of ONE pass over the same
+	// rows: a scoped list whose totals were fetched by a second query could
+	// report a cluster as 3-here-of-2-everywhere the moment a write landed
+	// between them. In scope for everything when no prefix is given.
+	inScope := "1"
+	args := []any{branchID}
+	if pathPrefix != "" {
+		inScope = "path LIKE ?"
+		args = append(args, pathPrefix+"%")
+	}
 	rows, err := conn(ctx, mi.rh.db).QueryContext(ctx, `
 		WITH resolved AS (
 		  SELECT bf.path AS path,
@@ -734,13 +767,16 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 		    FROM resolved GROUP BY cluster_key, motif
 		),
 		per_cluster AS (
-		  SELECT cluster_key, COUNT(DISTINCT path) AS cluster_df
+		  SELECT cluster_key,
+		         COUNT(DISTINCT CASE WHEN `+inScope+` THEN path END) AS cluster_df,
+		         COUNT(DISTINCT path) AS cluster_df_total
 		    FROM resolved GROUP BY cluster_key
 		)
 		SELECT pm.cluster_key, pm.motif, pm.motif_df,
-		       COALESCE(pm.canonical_id, ''), pc.cluster_df
+		       COALESCE(pm.canonical_id, ''), pc.cluster_df, pc.cluster_df_total
 		  FROM per_motif pm
-		  JOIN per_cluster pc ON pc.cluster_key = pm.cluster_key`, branchID)
+		  JOIN per_cluster pc ON pc.cluster_key = pm.cluster_key
+		 WHERE pc.cluster_df > 0`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("Clusters: %w", err)
 	}
@@ -753,18 +789,19 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 		members []spelling
 		stored  string // canonical_id from the alias table, when resolved
 		df      int
+		dfTotal int
 	}
 	byKey := map[string]*acc{}
 	var order []string
 	for rows.Next() {
 		var key, motif, stored string
-		var motifDF, clusterDF int
-		if err := rows.Scan(&key, &motif, &motifDF, &stored, &clusterDF); err != nil {
+		var motifDF, clusterDF, clusterDFTotal int
+		if err := rows.Scan(&key, &motif, &motifDF, &stored, &clusterDF, &clusterDFTotal); err != nil {
 			return nil, fmt.Errorf("Clusters: scan: %w", err)
 		}
 		a, seen := byKey[key]
 		if !seen {
-			a = &acc{df: clusterDF}
+			a = &acc{df: clusterDF, dfTotal: clusterDFTotal}
 			byKey[key] = a
 			order = append(order, key)
 		}
@@ -779,7 +816,7 @@ func (mi *motifIndex) Clusters(ctx context.Context, branch string) ([]MotifClust
 	out := make([]MotifCluster, 0, len(order))
 	for _, key := range order {
 		a := byKey[key]
-		c := MotifCluster{ClusterKey: key, CanonicalID: a.stored, DF: a.df}
+		c := MotifCluster{ClusterKey: key, CanonicalID: a.stored, DF: a.df, DFTotal: a.dfTotal}
 		if c.CanonicalID == "" {
 			c.CanonicalID = electCanonical(a.members)
 		}

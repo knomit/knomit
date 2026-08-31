@@ -962,6 +962,12 @@ export interface MotifEntry {
   canonical: string;
   members: string[];
   df: number;
+  /** `df` ignoring the `path` scope — the branch-wide count. Equal to `df` on an
+   *  unscoped read, and always sent by a current server. It is what lets a
+   *  path-scoped row say how much of a shape is HERE and how much the pivot will
+   *  return: the pivot drops the path, because a motif cuts across the ontology.
+   *  Optional so an older server's page still types; fall back to `df`. */
+  df_total?: number;
   definition?: string;
   /** `stale` is an INTERIM state, not an error: membership moved since the
    *  sentence was written and it is still served. `missing` is an absence. */
@@ -1227,12 +1233,19 @@ export const api = {
   renameLens,
   /** The per-repo motif vocabulary. `q` narrows over member spellings AND
    *  definition text — which is what the browser's "Search names and meanings"
-   *  placeholder is promising, and what its sibling facet boxes cannot do. */
+   *  placeholder is promising, and what its sibling facet boxes cannot do.
+   *  `path` scopes the whole answer to one subtree: a cluster no fact there
+   *  carries is absent, `df` counts the carriers under it, and `health` is
+   *  counted over the same facts. */
   motifs: (repo: string, branch: string,
-    opts?: { q?: string; sort?: 'df' | 'name'; limit?: number; offset?: number }
+    opts?: { q?: string; path?: string; sort?: 'df' | 'name'; limit?: number; offset?: number }
   ): Promise<{ count: number; health: MotifHealth; motifs: MotifEntry[] }> => {
     const p = new URLSearchParams();
     if (opts?.q) p.set('q', opts.q);
+    // `path` is SCOPE, not a filter over the page — it says which corpus the
+    // vocabulary is of, exactly as it does on /stats, and it narrows the health
+    // block along with the list. `q` is a way of reading one page and does not.
+    if (opts?.path) p.set('path', opts.path);
     if (opts?.sort) p.set('sort', opts.sort);
     if (opts?.limit !== undefined) p.set('limit', String(Math.min(opts.limit, MOTIFS_MAX_LIMIT)));
     if (opts?.offset) p.set('offset', String(opts.offset));

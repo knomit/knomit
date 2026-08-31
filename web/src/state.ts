@@ -1,4 +1,4 @@
-import type { Lens, LensSource, MotifMatch } from './api';
+import type { Lens, LensSource } from './api';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -21,6 +21,15 @@ export interface FilterChip {
   // the opposite of entity's AND. See kb/conventions/ui/filter-multi-chip-semantics.
   category: 'domain' | 'entity' | 'type' | 'kind' | 'origin' | 'ep' | 'path' | 'motif';
   value: string;
+  // Motif chips minted by PIVOT_MOTIF only: the path scope the pivot displaced,
+  // so EXIT_MOTIF can put the reader back in the folder they pivoted from. ON
+  // THE CHIP, not a top-level field, deliberately: pushNav snapshots filters,
+  // so the stash rides through NAV_BACK for free and dies with the chip —
+  // a separate field would need its own lifecycle in every arm that touches
+  // history or filters. A motif chip typed into the FilterBar never carries it
+  // (ADD_FILTER displaces no path), and that absence is load-bearing: absent
+  // means "restore nothing", never "restore root".
+  returnPath?: string;
 }
 
 export type AsOf =
@@ -48,12 +57,6 @@ interface NavEntry {
   // one mount would return you to a view you were never in. SET_LENS_SOURCES
   // does not push either — a dropdown toggle refines the current view.
   lensSources: string[] | null;
-  // The motif match tier, for the same reason again: `stem` and `token-2` admit
-  // rows that are NOT carriers of the motif, so the tier decides which rows
-  // exist. Unlike sort and sources, widening IS a move — a reader who loosens a
-  // pivot expects Back to tighten it again — so SET_MOTIF_MATCH pushes, and this
-  // field is what its Back has to restore.
-  motifMatch: MotifMatch;
 }
 
 export interface AppState {
@@ -93,10 +96,6 @@ export interface AppState {
   remotePushError: string;
   rightPanelFocused: boolean;
   librarySort: LibrarySort;
-  /** How strictly the motif chips match. Not a chip: two motif chips are two
-   *  motifs, while the tier is one setting over the whole query. It changes
-   *  WHICH rows exist, so it belongs in NavEntry too — see pushNav/NAV_BACK. */
-  motifMatch: MotifMatch;
   notice: string;
   searching: boolean;            // a relevance (free-text) search request is in flight
   serverReadOnly: boolean;       // instance-level read-only (demo mode)
@@ -146,13 +145,15 @@ export type Action =
   | { type: 'APPLY_NAV'; view: View; factPath: string | null; asOf: AsOf; filters?: FilterChip[]; freeText?: string; sort?: LibrarySort; hop?: boolean }
   | { type: 'AMEND_NAV'; factPath: string | null; asOf?: AsOf }
   | { type: 'SET_LIBRARY_SORT'; sort: LibrarySort }
-  // "Show me every fact with this shape." ONE action, not ADD_FILTER +
-  // SET_LIBRARY_SORT + a tier reset: three dispatches would be three chances to
-  // push and, as the lens-sources bug showed, in practice none.
+  // "Show me every fact with this shape." ONE action, not ADD_FILTER plus a
+  // path clear: two dispatches would be two chances to push and, as the
+  // lens-sources bug showed, in practice none.
   | { type: 'PIVOT_MOTIF'; motif: string }
-  // Loosening or tightening the pivot. A move, so it pushes — see NavEntry.
-  | { type: 'SET_MOTIF_MATCH'; match: MotifMatch }
+  // The two derived modes' exits. Each leaves its mode and puts you back where
+  // you were — see the reducer arms, which are twins: search kept your folder
+  // all along, the pivot restores the one it displaced.
   | { type: 'EXIT_SEARCH' }
+  | { type: 'EXIT_MOTIF' }
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
@@ -188,7 +189,6 @@ export const init: AppState = {
   // Ontology browsing, not chrono: the tree is how the corpus is organised, so
   // arriving at a folder listing beats arriving at a flat by-date feed.
   librarySort: 'path',
-  motifMatch: 'exact',
   notice: '',
   searching: false,
   serverReadOnly: false,
@@ -206,7 +206,6 @@ function pushNav(s: AppState): NavEntry[] {
     asOf: s.asOf,
     sort: s.librarySort,
     lensSources: s.lensSources === null ? null : [...s.lensSources],
-    motifMatch: s.motifMatch,
   };
   const stack = [...s.navStack, entry];
   if (stack.length > 20) stack.shift();
@@ -297,6 +296,35 @@ function applyAction(s: AppState, a: Action): AppState {
       const sort = s.librarySort === 'relevance' ? 'recent' : s.librarySort;
       return { ...s, filters: kept, freeText: '', factPath: null, librarySort: sort, navStack: pushNav(s) };
     }
+    // EXIT_MOTIF is EXIT_SEARCH's twin for the other derived mode: leaving a
+    // pivot without moving you. The motif chip IS the pivot, so dropping it is
+    // the whole of leaving — and librarySort is untouched for the same reason,
+    // because it still holds the mode the reader came from and PIVOT_MOTIF
+    // deliberately no longer overwrites it.
+    //
+    // ONLY the motif chip goes. A domain the reader added to narrow the pivot
+    // survives, because it narrows where they are rather than being what they
+    // are looking at. (EXIT_SEARCH drops all non-path chips; a search's
+    // refinements belong to the search. A pivot's do not.)
+    //
+    // ...and the folder the pivot displaced COMES BACK. EXIT_SEARCH's comment
+    // states the rule this arm long violated: leaving a derived mode should
+    // not also teleport you out of the folder you were in. Search never drops
+    // the path chip so its exit keeps it for free; the pivot must drop it on
+    // the way in (a shape cuts across the ontology), so its exit restores it
+    // from the chip's own stash — otherwise "Leave this motif and go back"
+    // lands an ontology browser at the root, one gesture away from a chevron
+    // that goes back properly. A path chip already present wins over the
+    // stash: it says where the reader is NOW, and a reveal can plant one.
+    case 'EXIT_MOTIF': {
+      const motifChip = s.filters.find(f => f.category === 'motif');
+      if (!motifChip) return s;
+      const rest = s.filters.filter(f => f.category !== 'motif');
+      const kept = motifChip.returnPath && !rest.some(f => f.category === 'path')
+        ? [...rest, { category: 'path' as const, value: motifChip.returnPath }]
+        : rest;
+      return { ...s, filters: kept, factPath: null, navStack: pushNav(s) };
+    }
     case 'NAV_BACK': {
       if (s.navStack.length === 0) return s;
       const prev = s.navStack[s.navStack.length - 1];
@@ -314,7 +342,6 @@ function applyAction(s: AppState, a: Action): AppState {
           branch: '',
           librarySort: prev.sort,
           lensSources: prev.lensSources,
-          motifMatch: prev.motifMatch,
           navStack: s.navStack.slice(0, -1),
         };
       }
@@ -327,7 +354,6 @@ function applyAction(s: AppState, a: Action): AppState {
         freeText: prev.freeText,
         librarySort: prev.sort,
         lensSources: prev.lensSources,
-        motifMatch: prev.motifMatch,
         navStack: s.navStack.slice(0, -1),
         rightPanelFocused: false,
       };
@@ -448,8 +474,8 @@ function applyAction(s: AppState, a: Action): AppState {
       };
     case 'PIVOT_MOTIF': {
       // Everything the pivot changes, set in one arm: the chip that IS the
-      // query, the sort it must arrive in, the tier it starts at, and the open
-      // fact cleared so the refetched list selects its own first row. The
+      // query, the sort it must arrive in, and the open fact cleared so the
+      // refetched list selects its own first row. The
       // motif chip REPLACES any previous one rather than accumulating — a
       // pivot is "show me this shape", and two motif chips widen, so keeping
       // the old one would silently return a union nobody asked for.
@@ -460,22 +486,31 @@ function applyAction(s: AppState, a: Action): AppState {
       // path chip in place, deliberately, because a domain or type chip narrows
       // within where you are. Nothing else here behaves this way, so the reason
       // has to stand on its own rather than lean on a precedent.
+      //
+      // Dropped, not forgotten: the displaced value is stashed on the new chip
+      // as returnPath so EXIT_MOTIF can restore it. A re-pivot finds no path
+      // chip to displace — the reader is inside a pivot — so it carries the
+      // previous chip's stash forward: the place they were LAST STANDING is
+      // still the record.
+      //
+      // librarySort is NOT written. The pivot already arrives in Recent by
+      // DERIVATION — a motif chip is a content filter and the tree cannot
+      // honour one, so effectiveSort overrides Path for its duration — and
+      // writing it here would store the derived value over the remembered one,
+      // erasing the only record of where the reader came from. That is the
+      // exact bug EXIT_SEARCH's comment describes, and it is why leaving a
+      // pivot can now put an ontology browser back in the ontology.
+      const pathChip = s.filters.find(f => f.category === 'path');
+      const prevMotif = s.filters.find(f => f.category === 'motif');
       const filters = s.filters.filter(f => f.category !== 'motif' && f.category !== 'path');
+      const returnPath = pathChip?.value ?? prevMotif?.returnPath;
       return {
         ...s,
-        filters: [...filters, { category: 'motif', value: a.motif }],
-        librarySort: 'recent',
-        motifMatch: 'exact',
+        filters: [...filters, { category: 'motif' as const, value: a.motif, ...(returnPath ? { returnPath } : {}) }],
         factPath: null,
         navStack: pushNav(s),
       };
     }
-    case 'SET_MOTIF_MATCH':
-      // No-op when nothing changes: re-clicking the lit rung would otherwise
-      // bury the list under identical entries, and Back would appear inert
-      // until the reader had pressed it as many times as they had clicked.
-      if (a.match === s.motifMatch) return s;
-      return { ...s, motifMatch: a.match, factPath: null, navStack: pushNav(s) };
     case 'SET_FACT_SOURCE':
       return { ...s, factSource: a.source };
     case 'SET_REMOTE_ERROR':
