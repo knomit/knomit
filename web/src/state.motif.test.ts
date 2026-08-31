@@ -33,7 +33,11 @@ describe('PIVOT_MOTIF', () => {
     });
     const after = reducer(before, { type: 'PIVOT_MOTIF', motif: MOTIF });
 
-    expect(after.filters).toEqual([{ category: 'motif', value: MOTIF }]);
+    // The displaced path rides ON the chip. The pivot is right to drop it — a
+    // shape cuts across the ontology — but the drop is bookkeeping the reader
+    // never saw, and the ≈ segment promises "go back": the chip that IS the
+    // pivot carries where it came from, so leaving can honour the promise.
+    expect(after.filters).toEqual([{ category: 'motif', value: MOTIF, returnPath: 'kb/gotchas' }]);
     expect(after.factPath).toBeNull();
     // Exactly one — a delta, not "non-empty". Two dispatches for one intent is
     // the smell the invariant names; so is a move that pushes twice.
@@ -60,6 +64,19 @@ describe('PIVOT_MOTIF', () => {
     );
     expect(after.filters).toEqual([{ category: 'motif', value: 'b' }]);
   });
+
+  it('carries the displaced path through a re-pivot', () => {
+    // Pivot from kb/gotchas, then pivot again from inside the first pivot: the
+    // second chip replaces the first, but the place the reader was LAST
+    // STANDING is still kb/gotchas — no path chip existed to displace during
+    // the re-pivot, so the first chip's stash is the record and must survive.
+    const first = reducer(
+      at({ filters: [{ category: 'path', value: 'kb/gotchas' }] }),
+      { type: 'PIVOT_MOTIF', motif: 'a' },
+    );
+    const second = reducer(first, { type: 'PIVOT_MOTIF', motif: 'b' });
+    expect(second.filters).toEqual([{ category: 'motif', value: 'b', returnPath: 'kb/gotchas' }]);
+  });
 });
 
 describe('EXIT_MOTIF', () => {
@@ -70,6 +87,26 @@ describe('EXIT_MOTIF', () => {
     expect(after.filters).toEqual([]);
     expect(after.factPath).toBeNull();
     expect(after.navStack.length - before.navStack.length).toBe(1);
+  });
+
+  it('restores the folder the pivot displaced', () => {
+    // "Leave this motif and go back" — the segment's own words. PIVOT_MOTIF
+    // dropped the path chip, so without the chip's stash this exit landed an
+    // ontology browser at the ROOT: the mode came back, the place did not,
+    // while the chevron one gesture away restored both. Two adjacent "back"s
+    // must not land in different places.
+    const pivoted = reducer(
+      at({ filters: [{ category: 'path', value: 'kb/gotchas' }] }),
+      { type: 'PIVOT_MOTIF', motif: MOTIF },
+    );
+    const left = reducer(pivoted, { type: 'EXIT_MOTIF' });
+    expect(left.filters).toEqual([{ category: 'path', value: 'kb/gotchas' }]);
+  });
+
+  it('conjures no folder for a pivot entered from the root', () => {
+    // Nothing was displaced, so nothing comes back: root in, root out.
+    const pivoted = reducer(at(), { type: 'PIVOT_MOTIF', motif: MOTIF });
+    expect(reducer(pivoted, { type: 'EXIT_MOTIF' }).filters).toEqual([]);
   });
 
   it('keeps chips the reader added to NARROW the pivot', () => {
@@ -102,7 +139,22 @@ describe('the round trip', () => {
     const pivoted = reducer(browsing, { type: 'PIVOT_MOTIF', motif: MOTIF });
     const left = reducer(pivoted, { type: 'EXIT_MOTIF' });
     expect(left.librarySort).toBe('path');
-    expect(left.filters).toEqual([]);
+    // ...and in the FOLDER they were browsing, not at the root. The mode
+    // half of this round trip shipped first; the place half is the chip's
+    // returnPath doing its one job.
+    expect(left.filters).toEqual([{ category: 'path', value: 'kb/gotchas' }]);
+  });
+
+  it('the stash survives history: back into a pivot, out again, same folder', () => {
+    // pushNav snapshots filters, and the stash lives on the chip — so a pivot
+    // re-entered through NAV_BACK still knows where it came from, with no
+    // top-level field to go stale beside the stack.
+    const browsing = at({ librarySort: 'path', filters: [{ category: 'path', value: 'kb/gotchas' }] });
+    const pivoted = reducer(browsing, { type: 'PIVOT_MOTIF', motif: MOTIF });
+    const left = reducer(pivoted, { type: 'EXIT_MOTIF' });
+    const backInPivot = reducer(left, { type: 'NAV_BACK' });
+    const leftAgain = reducer(backInPivot, { type: 'EXIT_MOTIF' });
+    expect(leftAgain.filters).toEqual([{ category: 'path', value: 'kb/gotchas' }]);
   });
 
   it('NAV_BACK out of a pivot restores the fact it was entered from', () => {
