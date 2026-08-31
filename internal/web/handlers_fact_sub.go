@@ -210,9 +210,7 @@ type graphRefEntry struct {
 
 // handleFactCommits serves GET /repos/{repo}/branches/{branch}/facts/*/commits.
 // Dispatched from handleHALFact when the wildcard path ends with "/commits".
-func handleFactCommits(b hal.URLBuilder, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
-	ri := repos.RepoFromContext(r.Context())
-
+func handleFactCommits(b hal.URLBuilder, provider factSubProvider, ri *repos.RepoInstance, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
 	limit, ok := limitParam(w, r)
 	if !ok {
 		return
@@ -270,9 +268,7 @@ func handleFactCommits(b hal.URLBuilder, provider factSubProvider, repoName, bra
 }
 
 // handleFactIncoming serves GET /repos/{repo}/branches/{branch}/facts/*/incoming.
-func handleFactIncoming(b hal.URLBuilder, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
-	ri := repos.RepoFromContext(r.Context())
-
+func handleFactIncoming(b hal.URLBuilder, provider factSubProvider, ri *repos.RepoInstance, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
 	result, err := provider.ExplainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load incoming refs", branch)
@@ -294,9 +290,7 @@ func handleFactIncoming(b hal.URLBuilder, provider factSubProvider, repoName, br
 }
 
 // handleFactOutgoing serves GET /repos/{repo}/branches/{branch}/facts/*/outgoing.
-func handleFactOutgoing(b hal.URLBuilder, provider factSubProvider, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
-	ri := repos.RepoFromContext(r.Context())
-
+func handleFactOutgoing(b hal.URLBuilder, provider factSubProvider, ri *repos.RepoInstance, repoName, branch, factPath string, w http.ResponseWriter, r *http.Request) {
 	result, err := provider.ExplainFact(r.Context(), ri, branch, factPath)
 	if err != nil {
 		writeStoreError(w, r, err, "Failed to load outgoing refs", branch)
@@ -341,31 +335,61 @@ func buildGraphRefItems(b hal.URLBuilder, repoName string, a hal.Anchor, refs []
 	return items
 }
 
+// factSubResources are the suffixes a facts/* wildcard may address instead of
+// the fact itself.
+var factSubResources = [...]string{"commits", "incoming", "outgoing"}
+
+// splitFactSubResource splits a facts/* wildcard path into the fact path and
+// the sub-resource it addresses, or (path, "") when it addresses the fact.
+//
+// Splitting is separated from dispatching because the lens route has to do it
+// FIRST: its path may be kb://<id12>-qualified, and the mount must be resolved
+// from the fact path with the suffix already off. Leaving the two fused is what
+// let "<uuid>.md/incoming" travel into the store as a fact path (issue #178).
+func splitFactSubResource(path string) (factPath, sub string) {
+	for _, s := range factSubResources {
+		if strings.HasSuffix(path, "/"+s) {
+			return strings.TrimSuffix(path, "/"+s), s
+		}
+	}
+	return path, ""
+}
+
 // dispatchFactSubResource checks if a fact wildcard path ends with a known
 // sub-resource suffix and dispatches accordingly. Returns true if dispatched.
 func dispatchFactSubResource(
 	b hal.URLBuilder,
 	subProvider factSubProvider,
+	ri *repos.RepoInstance,
 	repoName, branch string,
 	w http.ResponseWriter,
 	r *http.Request,
 ) bool {
-	path := chi.URLParam(r, "*")
+	factPath, sub := splitFactSubResource(chi.URLParam(r, "*"))
+	return dispatchResolvedFactSubResource(b, subProvider, ri, repoName, branch, factPath, sub, w, r)
+}
 
-	if strings.HasSuffix(path, "/commits") {
-		actualPath := strings.TrimSuffix(path, "/commits")
-		handleFactCommits(b, subProvider, repoName, branch, actualPath, w, r)
-		return true
+// dispatchResolvedFactSubResource dispatches an ALREADY-split sub-resource
+// against an already-resolved mount. The repo route reaches it through
+// dispatchFactSubResource; the lens route calls it directly, after resolving
+// the addressed mount itself.
+func dispatchResolvedFactSubResource(
+	b hal.URLBuilder,
+	subProvider factSubProvider,
+	ri *repos.RepoInstance,
+	repoName, branch, factPath, sub string,
+	w http.ResponseWriter,
+	r *http.Request,
+) bool {
+	switch sub {
+	case "commits":
+		handleFactCommits(b, subProvider, ri, repoName, branch, factPath, w, r)
+	case "incoming":
+		handleFactIncoming(b, subProvider, ri, repoName, branch, factPath, w, r)
+	case "outgoing":
+		handleFactOutgoing(b, subProvider, ri, repoName, branch, factPath, w, r)
+	default:
+		return false
 	}
-	if strings.HasSuffix(path, "/incoming") {
-		actualPath := strings.TrimSuffix(path, "/incoming")
-		handleFactIncoming(b, subProvider, repoName, branch, actualPath, w, r)
-		return true
-	}
-	if strings.HasSuffix(path, "/outgoing") {
-		actualPath := strings.TrimSuffix(path, "/outgoing")
-		handleFactOutgoing(b, subProvider, repoName, branch, actualPath, w, r)
-		return true
-	}
-	return false
+	return true
 }

@@ -192,12 +192,13 @@ func handleHALFact(b hal.URLBuilder, reader FactReader, subProvider factSubProvi
 		repoName := chi.URLParam(r, "repo")
 		branch := BranchFromContext(r.Context())
 
+		ri := repos.RepoFromContext(r.Context())
+
 		// Dispatch sub-resource requests before any other processing.
-		if dispatchFactSubResource(b, subProvider, repoName, branch, w, r) {
+		if dispatchFactSubResource(b, subProvider, ri, repoName, branch, w, r) {
 			return
 		}
 
-		ri := repos.RepoFromContext(r.Context())
 		path := chi.URLParam(r, "*")
 		if path == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",

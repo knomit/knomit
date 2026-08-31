@@ -376,7 +376,17 @@ function applyAction(s: AppState, a: Action): AppState {
     case 'SET_STATUS':
       return {
         ...s,
-        headCommit: a.head,
+        // A blank head is the server declining to answer, not a repo with no
+        // commits: the branch root discards WithRead's error, and WithRead
+        // skips the closure when Acquire fails, so a store swap or open makes
+        // it answer 200 with head "". Both refresh call sites (the 2s indexing
+        // poll and the post-task refresh) run in exactly that window. Blanking
+        // headCommit there drops the head pill, sends edge reads to the
+        // un-anchored route and churns every refetch keyed on it. Keeping the
+        // last known head cannot smuggle a stale one across a repo switch:
+        // SET_CONTEXT and SET_LENS both clear headCommit before the status
+        // bootstrap re-runs, so `s.headCommit` is already "" by then.
+        headCommit: a.head || s.headCommit,
         branch: a.branch,
         embeddingsEnabled: a.embeddingsEnabled,
         ontologyRoot: a.ontologyRoot || s.ontologyRoot,

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	knomitfact "knomit/internal/fact"
@@ -1786,5 +1787,202 @@ func TestLensSearch_MotifResolutionIsPerMountNotShared(t *testing.T) {
 	}
 	if !titles["Beta exact"] {
 		t.Errorf("the non-merging mount contributed nothing at all: %v", titles)
+	}
+}
+
+// ── Lens fact sub-resources ──────────────────────────────────────────────────
+//
+// The lens facts route registered only the fact READER, so
+// /lenses/{lens}/facts/{path}/incoming matched the facts/* wildcard as the
+// literal path "…/<uuid>.md/incoming" and fell into the reader, which 500s
+// ("readFileWithHash: entry …: object not found") for EVERY fact. The web UI
+// only escaped it by fetching edges through the source mount's repo-scoped
+// route; any direct API consumer deriving an edge URL from a lens fact URL hit
+// the 500, which reads like corruption but is a missing route (issue #178).
+
+// lensFactSubStub records which mount a sub-resource request resolved to, so a
+// test can assert the dispatch used the addressed mount rather than whatever
+// LensMiddleware happened to leave in the request context (the WRITE repo).
+type lensFactSubStub struct {
+	*stubFactSubProvider
+	gotRepo   string
+	gotBranch string
+	gotPath   string
+}
+
+func (s *lensFactSubStub) ExplainFact(
+	ctx context.Context,
+	ri *repos.RepoInstance, branch, path string,
+) (store.ExplainResult, error) {
+	s.gotRepo, s.gotBranch, s.gotPath = ri.Name(), branch, path
+	return s.stubFactSubProvider.ExplainFact(ctx, ri, branch, path)
+}
+
+type lensRefsBody struct {
+	Count    int         `json:"count"`
+	Links    hal.LinkMap `json:"_links"`
+	Embedded struct {
+		Refs []struct {
+			Path  string `json:"path"`
+			Title string `json:"title"`
+		} `json:"refs"`
+	} `json:"_embedded"`
+}
+
+// A bare kb/… path's /incoming resolves the same way the lens fact READ does:
+// the write repo at its read-mount branch.
+func TestLensFactIncoming_BarePathReadsWriteRepo(t *testing.T) {
+	m, _ := newTestLensManager(t, "zulu", "alpha")
+	sub := &lensFactSubStub{stubFactSubProvider: &stubFactSubProvider{
+		explain: store.ExplainResult{
+			Incoming: []store.RefSummary{
+				{Path: "kb/x/2.md", Title: "Cites it"},
+				{Path: "kb/x/3.md", Title: "Also cites it"},
+			},
+		},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{
+		// The fact must exist at the mount: sub-resources are gated on the same
+		// read the fact endpoint performs, so an absent fact 404s here too.
+		factReader: &lensFactReaderStub{head: "deadbeef", byRepo: map[string]map[string]knomitfact.Fact{
+			"zulu": {"kb/x/1.md": mkFact("kb/x/1.md", "Write copy")},
+		}},
+		factSub: sub,
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"zulu","reads":[{"repo":"alpha"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts/kb/x/1.md/incoming")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body lensRefsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body.Count != 2 || len(body.Embedded.Refs) != 2 {
+		t.Fatalf("refs: count=%d len=%d, want 2", body.Count, len(body.Embedded.Refs))
+	}
+	zulu := m.Get("zulu")
+	if sub.gotRepo != "zulu" || sub.gotBranch != zulu.AgentBranch() {
+		t.Errorf("resolved to %s@%s, want the write repo zulu@%s", sub.gotRepo, sub.gotBranch, zulu.AgentBranch())
+	}
+	// The sub-resource suffix must be stripped before the path reaches the
+	// store — this is the misparse that produced the 500.
+	if sub.gotPath != "kb/x/1.md" {
+		t.Errorf("path: got %q, want the fact path with /incoming stripped", sub.gotPath)
+	}
+}
+
+// A kb://<id12>/… path's /outgoing resolves to THAT mount at its own branch —
+// not the write repo LensMiddleware leaves in the request context.
+func TestLensFactOutgoing_QualifiedPathHitsMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	sub := &lensFactSubStub{stubFactSubProvider: &stubFactSubProvider{
+		explain: store.ExplainResult{
+			Outgoing: []store.RefSummary{{Path: "kb/y/9.md", Title: "Derived from"}},
+		},
+	}}
+	s := &Server{Manager: m, providers: storeProviders{
+		factReader: &lensFactReaderStub{head: "cafe1234", byRepo: map[string]map[string]knomitfact.Fact{
+			"beta": {"kb/y/2.md": mkFact("kb/y/2.md", "Read only")},
+		}},
+		factSub: sub,
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	beta := m.Get("beta")
+	id := federate.ID12(beta.ID())
+	rec := getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape("kb://"+id+"/kb/y/2.md")+"/outgoing")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body lensRefsBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body.Count != 1 {
+		t.Fatalf("count: got %d, want 1; body=%s", body.Count, rec.Body.String())
+	}
+	if sub.gotRepo != "beta" || sub.gotBranch != beta.AgentBranch() {
+		t.Errorf("resolved to %s@%s, want the addressed mount beta@%s", sub.gotRepo, sub.gotBranch, beta.AgentBranch())
+	}
+	// The store is queried with the MOUNT-RELATIVE path — the kb://<id12>/
+	// qualifier addresses the mount and must not survive into the lookup.
+	if sub.gotPath != "kb/y/2.md" {
+		t.Errorf("path: got %q, want the mount-relative kb/y/2.md", sub.gotPath)
+	}
+}
+
+// An unmounted id12 must 404 through the sub-resource route too, with the same
+// body as a missing fact — the dispatch may not become a mount-topology oracle.
+func TestLensFactSub_UnknownID404(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		factReader: &lensFactReaderStub{head: "cafe1234"},
+		factSub:    &lensFactSubStub{stubFactSubProvider: &stubFactSubProvider{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts/"+url.PathEscape("kb://0123456789ab/kb/y/2.md")+"/incoming")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	var pb struct {
+		Title string `json:"title"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &pb)
+	if pb.Title != "Fact not found" {
+		t.Errorf("title: got %q, want %q", pb.Title, "Fact not found")
+	}
+}
+
+// A sub-resource on a MOUNTED id whose fact does not exist must answer exactly
+// like an unmounted id: 404, naming nothing about the mount.
+//
+// Registering the dispatch reopened the topology oracle the read path closes.
+// The sub-resource handlers report failure through writeStoreError, not
+// lensFactNotFound, and handleFactCommits does not fail at all for a path with
+// no commits — it returns an empty 200 whose _links.self carries the mount's
+// real repo name and branch. So a caller could iterate candidate id12s and read
+// "mounted" off a 200 versus a 404, which is precisely what lensFactNotFound's
+// doc and openapi.yaml both promise cannot happen.
+func TestLensFactSub_AbsentFactNeverNamesTheMount(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		factReader: &lensFactReaderStub{head: "cafe1234"}, // no facts anywhere
+		factSub:    &lensFactSubStub{stubFactSubProvider: &stubFactSubProvider{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	beta := m.Get("beta")
+	id := federate.ID12(beta.ID())
+	mounted := url.PathEscape("kb://" + id + "/kb/y/2.md")
+	unmounted := url.PathEscape("kb://0123456789ab/kb/y/2.md")
+
+	for _, sub := range []string{"commits", "incoming", "outgoing"} {
+		recMounted := getLensFacts(t, r, "/lenses/eng/facts/"+mounted+"/"+sub)
+		recUnmounted := getLensFacts(t, r, "/lenses/eng/facts/"+unmounted+"/"+sub)
+
+		if recMounted.Code != http.StatusNotFound {
+			t.Errorf("/%s on a mounted id with no such fact: got %d, want 404; body=%s",
+				sub, recMounted.Code, recMounted.Body.String())
+		}
+		if recUnmounted.Code != recMounted.Code {
+			t.Errorf("/%s: mounted=%d unmounted=%d — the status alone reveals the mount",
+				sub, recMounted.Code, recUnmounted.Code)
+		}
+		// The body may echo the requested path (it differs by id), but it must
+		// never name the mount's repo or its branch.
+		body := recMounted.Body.String()
+		if strings.Contains(body, `"beta"`) || strings.Contains(body, "/repos/beta/") {
+			t.Errorf("/%s response names the mount repo: %s", sub, body)
+		}
+		if strings.Contains(body, beta.AgentBranch()) {
+			t.Errorf("/%s response names the mount branch %q: %s", sub, beta.AgentBranch(), body)
+		}
 	}
 }
