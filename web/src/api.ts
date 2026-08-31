@@ -547,6 +547,25 @@ function parseSSELines(text: string): SSEEvent[] {
 // `title` is the class; `error` remains as a fallback for any body that
 // predates the problem+json unification. Callers pass a statusText fallback
 // for non-JSON bodies.
+/**
+ * An Error carrying the HTTP status that produced it, so a caller can tell a
+ * 404 ("no such thing there") from a transport failure or a 500. The status is
+ * ADDED to an ordinary Error rather than carried by a subclass so `String(err)`
+ * stays byte-identical for every existing consumer that renders it.
+ */
+export interface HttpError extends Error { status?: number }
+
+function httpError(status: number, message: string): HttpError {
+  const e = new Error(message) as HttpError;
+  e.status = status;
+  return e;
+}
+
+/** True when err is an HTTP 404 — a missing resource, not a failed request. */
+export function isNotFound(err: unknown): boolean {
+  return (err as HttpError | null)?.status === 404;
+}
+
 function errorText(body: unknown, fallback: string): string {
   const b = body as { detail?: string; title?: string; error?: string } | null;
   return b?.detail || b?.title || b?.error || fallback;
@@ -1458,11 +1477,17 @@ export const api = {
     incoming: RefGroup[];
     outgoing: RefGroup[];
   }> => {
-    // When commit is set, use the commit-anchored sub-resource endpoints so
-    // refs reflect the state of the source/target at that commit (the
-    // commit-anchored handler dispatches /incoming and /outgoing to the
-    // *AtCommit store primitives). Without this, navigating to a specific
-    // version of a fact in the Explain view would show no refs.
+    // When commit is set, use the commit-anchored sub-resource endpoints so the
+    // refs are THIS version's.
+    //
+    // Both routes end in the same version-aware primitives — the HEAD route's
+    // ExplainFact resolves the path's HEAD-active commit out of branch_facts
+    // and then calls IncomingAtCommit/OutgoingAtCommit itself — so the anchor
+    // does not decide whether edges carry a target_commit. What it decides is
+    // WHICH VERSION OF THIS FACT the edges belong to: HEAD-active, or the one
+    // live at the pinned commit. Reading an older version through the HEAD
+    // route would therefore show the HEAD version's refs, and a fact retracted
+    // at HEAD would show none at all (ErrFactNotLive → 404).
     const factURL = commit
       ? `${branchBase(repo, branch)}/commits/${commit}/facts/${path}`
       : `${branchBase(repo, branch)}/facts/${path}`;
@@ -1556,8 +1581,8 @@ export const api = {
       });
     };
     return Promise.all([
-      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
-      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw new Error(errorText(e, r.statusText)); })),
+      fetch(`${factURL}/incoming${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText)); })),
+      fetch(`${factURL}/outgoing${edgeQuery}`).then(r => r.ok ? r.json() : r.json().then((e: unknown) => { throw httpError(r.status, errorText(e, r.statusText)); })),
     ]).then(([inc, out]) => ({
       incoming: groupRefs(parseRefs(inc), 'incoming'),
       outgoing: groupRefs(parseRefs(out), 'outgoing'),

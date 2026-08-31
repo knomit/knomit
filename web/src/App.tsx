@@ -46,6 +46,25 @@ const TASK_LINGER_MS = 8_000;
 // screen. Nothing polls while the remote is healthy — see the recheck effect.
 const REMOTE_RECHECK_MS = 60_000;
 
+// How often the branch head is re-read as a fallback for the SSE `status`
+// stream. Exported for the test that pins the behavior.
+//
+// The head is otherwise only ever moved by three one-shot events — the
+// page-load bootstrap, a `status` event, and the post-task refresh — so a
+// stream that goes quiet leaves the tab pinned to whatever it last heard, with
+// no signal and no recovery short of a reload. That is not hypothetical: the
+// server used to DROP a head broadcast whenever the commit landed while the
+// previous notification's callback was still running (issue #178). This poll is
+// the belt-and-braces half of that fix, and it covers the lossy-stream case the
+// server fix cannot.
+//
+// It dispatches SET_HEAD, not SET_STATUS, and the distinction is the whole
+// reason it is cheap: SET_HEAD returns the SAME state object for an unchanged
+// head, so a quiet repo re-renders nothing, while SET_STATUS rebuilds state
+// unconditionally and would re-render every open tab every 30s forever. The
+// stream already carries full status; this only needs to carry the head.
+export const HEAD_POLL_MS = 30_000;
+
 function loadLeftPanelWidth(): number {
   const fallback = Math.max(LEFT_PANEL_MIN, Math.round(window.innerWidth * LEFT_PANEL_DEFAULT_FRACTION));
   try {
@@ -292,7 +311,11 @@ export default function App() {
   // same api.explain call independently, for the same fact at the same anchor.
   // The anchor rules — which mount, which commit, when to fall back — moved
   // into the hook with the fetch; see useFactEdges.
-  const edges = useFactEdges(state);
+  // A live edges 404 means this tab's cached head is stale; the hook re-reads
+  // the head to recover and hands it back here so the whole app stops being
+  // stale, not just the fetch that noticed.
+  const applyDiscoveredHead = useCallback((head: string) => dispatch({ type: 'SET_HEAD', head }), []);
+  const edges = useFactEdges(state, applyDiscoveredHead);
 
 
   // 12-hex KB-store id → repo name, for the References labels in FactBody. The
@@ -489,6 +512,65 @@ export default function App() {
     }, 2000);
     return () => { cancelled = true; clearInterval(id); };
   }, [state.indexState, state.repo, state.branch]);
+
+  // Re-read the branch head on a slow cycle. See HEAD_POLL_MS: this is the
+  // fallback for a `status` event that never arrives, whether because the
+  // server dropped it or because the stream is dead.
+  useEffect(() => {
+    if (!state.repo || !state.branch) return;
+    let cancelled = false;
+    const id = setInterval(() => {
+      // What the head was when this request went out. Nothing orders a poll
+      // response against the SSE stream, so a response captured before a newer
+      // `status` event can land after it — and writing it back would re-stale
+      // the tab for another full interval, which is the opposite of this
+      // effect's purpose. If anything moved the head while we were in flight,
+      // that source is fresher than this answer by construction; drop it.
+      const issuedAt = stateRef.current.headCommit;
+      api.status(state.repo, state.branch)
+        .then(s => {
+          if (cancelled || stateRef.current.headCommit !== issuedAt) return;
+          // Advance to the INDEXED head, not raw git HEAD. The two differ, and
+          // only during the window this poll is most likely to fire in. The
+          // branch root reports `head` straight off Branches().HeadCommit,
+          // while the SSE `status` broadcast is emitted only AFTER the commit
+          // observer's IndexManager().SyncLocked returns — so every head the
+          // stream delivers is one the index has already absorbed, and this
+          // one is not. Writing an un-indexed head back mid-sync points every
+          // consumer keyed on state.headCommit (Library's search/chrono
+          // effects, useFactEdges, RightPanel) at a half-built index; worse,
+          // SET_HEAD short-circuits on an unchanged hash, so the post-sync
+          // broadcast of that SAME hash is a no-op and the stale results stand
+          // indefinitely rather than for the length of the sync. index_commit
+          // is the sync watermark — the newest commit the index has absorbed —
+          // which is exactly what the stream broadcasts.
+          //
+          // Fallback when the watermark is unavailable (SyncWatermark errored,
+          // or the branch has never been indexed) is the raw head: it reports
+          // "" then, and this poll is the recovery path for a dead or lossy
+          // stream, so refusing to move the head would wedge the tab for as
+          // long as that condition lasts — the failure this effect exists to
+          // prevent. Preferring the watermark is a correctness win when it is
+          // there; its absence must not cost us the recovery.
+          //
+          // An empty head is not an answer either way. defaultBranchRootReader
+          // discards WithRead's error, and WithRead returns the Acquire error
+          // without running the closure, so during a store swap or open the
+          // branch endpoint answers 200 with head "". Same guard the SSE
+          // `status` handler applies.
+          const head = s.index_commit || s.head;
+          if (!head) return;
+          dispatch({ type: 'SET_HEAD', head });
+        })
+        .catch(() => {
+          // Best-effort. A failed poll tells us nothing new about the head, and
+          // the stream (or the next tick) is still the primary path — logging
+          // it would put a line in the console every 30s for an outage the SSE
+          // handler already reports.
+        });
+    }, HEAD_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [state.repo, state.branch]);
 
   // Reconcile the remote-error banner with the PERSISTED remote status.
   //

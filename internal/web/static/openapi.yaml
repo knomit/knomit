@@ -1728,13 +1728,24 @@ paths:
         Every not-found case — unknown mount id, malformed `kb://` path,
         missing or retracted fact — returns a byte-identical 404, so a caller
         cannot probe the lens's mount topology.
+
+        Sub-resources match the repo route: when the path terminates with
+        `/commits`, `/incoming` or `/outgoing`, the suffix is stripped before
+        the mount is addressed and the response is that sub-resource, served
+        from the addressed mount at its resolved branch. They are gated on the
+        same read as the fact itself, so a fact you cannot read through the
+        lens 404s identically for its sub-resources — including the empty
+        commit log that would otherwise be a 200 naming the mount.
       operationId: getLensFact
       responses:
         "200":
-          description: Fact with its source mount
+          description: Fact with its source mount, or a sub-resource collection
           content:
             application/hal+json:
-              schema: { $ref: "#/components/schemas/LensFact" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/LensFact" }
+                  - { $ref: "#/components/schemas/RefsCollection" }
         "400":
           description: Empty fact path
           content:

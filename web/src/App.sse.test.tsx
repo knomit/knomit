@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
-import App from './App';
+import App, { HEAD_POLL_MS } from './App';
 
 // Characterization tests for the SSE wiring in App (the effect keyed on
 // [state.repo, state.branch]). These pin CURRENT behavior — the diagnostics the
@@ -671,5 +671,138 @@ describe('App SSE — teardown and resubscribe', () => {
     const es = FakeEventSource.instances[0];
     unmount();
     expect(es.closeCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The head has to stay fresh even when the stream does not deliver.
+//
+// Before this, state.headCommit moved only on the page-load bootstrap, an SSE
+// `status` event, and the post-task refresh. A single dropped broadcast — which
+// commitObserver used to do whenever a commit landed while the previous
+// callback was still running — pinned the tab to that commit until the user
+// reloaded, and every fact created afterwards 404'd its edges (issue #178). A
+// dead or lossy stream does the same thing without any server bug at all.
+// ---------------------------------------------------------------------------
+describe('App — head re-poll', () => {
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('picks up a head whose status broadcast never arrived', async () => {
+    const api = await apiMock();
+    await mountApp();
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('aaaaaaa');
+
+    // A commit lands and IS indexed — head and watermark agree, which is the
+    // state the stream would have broadcast — but its `status` event is never
+    // delivered.
+    api.status.mockResolvedValue({ ...STATUS, head: 'bbbbbbb2222', index_commit: 'bbbbbbb2222' });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb');
+  });
+});
+
+// The poll must never move the head BACKWARDS. Nothing orders a slow poll
+// response against the SSE stream, so a response captured before a newer
+// `status` event can land after it and re-stale the tab the poll exists to
+// un-stale — for a further 30s, with every consumer keyed on state.headCommit
+// (useFactEdges' own anchor included) refetching at the older commit.
+describe('App — head re-poll ordering', () => {
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a slow poll response cannot overwrite a newer head', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+
+    // Put a poll in flight, holding its response.
+    let resolvePoll: ((v: unknown) => void) | undefined;
+    api.status.mockImplementation(() => new Promise(r => { resolvePoll = r as (v: unknown) => void; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+    expect(resolvePoll).toBeDefined();
+
+    // A newer head arrives on the stream while that poll is still out.
+    act(() => { es.emit('status', { head: 'ccccccc3333' }); });
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('ccccccc');
+
+    // The poll now answers with what was current when it was issued.
+    await act(async () => { resolvePoll!({ ...STATUS, head: 'aaaaaaa1111' }); });
+
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('ccccccc');
+  });
+});
+
+// The poll must never advance the head PAST what the index has absorbed.
+//
+// The branch root reports `head` as raw git HEAD, but the SSE `status`
+// broadcast fires only after the commit observer's SyncLocked returns — so the
+// stream's head is always an indexed commit and the poll's is not. During a
+// long post-commit sync the two diverge, and adopting the raw head points every
+// consumer keyed on state.headCommit at a half-built index. The sharp part is
+// that it does not heal: SET_HEAD short-circuits on an unchanged hash, so the
+// post-sync broadcast of that same hash is a no-op and the stale reads stand
+// until something else moves the head.
+describe('App — head re-poll respects the index watermark', () => {
+  beforeEach(() => { vi.useFakeTimers({ shouldAdvanceTime: true }); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('does not adopt a head the index has not reached yet', async () => {
+    const api = await apiMock();
+    await mountApp();
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('aaaaaaa');
+
+    // A commit landed; the observer's sync is still running, so the watermark
+    // still names the previous commit.
+    api.status.mockResolvedValue({ ...STATUS, head: 'bbbbbbb2222', index_commit: 'aaaaaaa1111' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('aaaaaaa');
+
+    // Sync completes. The next tick picks it up — the poll waits, it does not
+    // give up on the commit.
+    api.status.mockResolvedValue({ ...STATUS, head: 'bbbbbbb2222', index_commit: 'bbbbbbb2222' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb');
+  });
+
+  // Deliberate fallback semantics. An unreadable watermark (SyncWatermark
+  // errored, or the branch was never indexed) reports "". This poll IS the
+  // recovery path for a dead stream, so it must keep moving the head rather
+  // than wedge the tab for as long as that condition lasts.
+  it('falls back to the raw head when the watermark is unavailable', async () => {
+    const api = await apiMock();
+    await mountApp();
+
+    api.status.mockResolvedValue({ ...STATUS, head: 'bbbbbbb2222', index_commit: '' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('bbbbbbb');
+  });
+
+  // A store swap makes the branch endpoint answer 200 with head "": the reader
+  // discards WithRead's error, and WithRead skips its closure when Acquire
+  // fails. SET_HEAD has no falsy guard of its own, so an unguarded dispatch
+  // blanks the head — same reason the SSE `status` handler tests `if (s.head)`.
+  it('ignores an empty head', async () => {
+    const api = await apiMock();
+    await mountApp();
+
+    api.status.mockResolvedValue({ ...STATUS, head: '', index_commit: '' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(HEAD_POLL_MS + 100); });
+
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('aaaaaaa');
+  });
+
+  // The same server window reaches the OTHER refresh paths, which apply the
+  // whole payload through SET_STATUS rather than SET_HEAD.
+  it('a post-task status refresh with an empty head keeps the last known head', async () => {
+    const api = await apiMock();
+    const es = await mountApp();
+
+    api.status.mockResolvedValue({ ...STATUS, head: '', index_commit: '' });
+    await act(async () => { es.emit('task', { op: 'sync', status: 'done', message: 'done' }); });
+
+    expect(screen.getByTestId('footer-commit')).toHaveTextContent('aaaaaaa');
   });
 });
