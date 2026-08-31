@@ -323,6 +323,7 @@ type motifDetailBody struct {
 	Canonical       string   `json:"canonical"`
 	Members         []string `json:"members"`
 	DF              int      `json:"df"`
+	DFTotal         int      `json:"df_total"`
 	Definition      string   `json:"definition"`
 	DefinitionState string   `json:"definition_state"`
 	CarrierCount    int      `json:"carrier_count"`
@@ -378,6 +379,10 @@ func driftClusterStub() *stubMotifsProvider {
 			CanonicalID: "config-drift",
 			Members:     []string{"config-drift", "configuration-drifts"},
 			DF:          4,
+			// Distinct from DF so a handler writing df twice fails. The live
+			// store cannot produce this on the detail's unscoped read (the two
+			// are one number there); the gap is what makes the copy visible.
+			DFTotal: 7,
 		}},
 		defs: map[string]store.MotifDefinitionStatus{
 			"drift-config": {Definition: "Configured state diverges from applied state."},
@@ -416,6 +421,12 @@ func TestHandleHALMotifCluster_ByClusterKey(t *testing.T) {
 	}
 	if len(body.Members) != 2 || body.DF != 4 {
 		t.Errorf("members/df: got %v / %d", body.Members, body.DF)
+	}
+	// The spec requires df_total on every cluster body, the detail included —
+	// MotifClusterDetail composes MotifClusterEntry via allOf. A detail without
+	// it violates the schema the server publishes.
+	if body.DFTotal != 7 {
+		t.Errorf("df_total: got %d, want 7 (the cluster's DFTotal, on the wire)", body.DFTotal)
 	}
 	if body.DefinitionState != "current" {
 		t.Errorf("definition_state: got %q, want current", body.DefinitionState)

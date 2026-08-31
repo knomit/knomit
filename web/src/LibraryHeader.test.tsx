@@ -371,6 +371,19 @@ describe('the Motif segment', () => {
     expect(screen.getByTestId('sort-motif')).not.toBeDisabled();
   });
 
+  it('is dead without a way out, never a sort writer', () => {
+    // The segment's only job is the exit, and the exit needs the optional
+    // onExitMotif. Without one, an enabled segment would fall through to
+    // onSortChange and dispatch 'motif' — not a LibrarySort, and a value every
+    // list effect early-returns on, leaving the panel permanently blank.
+    const onSortChange = vi.fn();
+    render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onSortChange={onSortChange} />);
+    const seg = screen.getByTestId('sort-motif');
+    expect(seg).toBeDisabled();
+    fireEvent.click(seg);
+    expect(onSortChange).not.toHaveBeenCalled();
+  });
+
   it('says it is an exit, not a sort', () => {
     render(<LibraryHeader {...base} sort="recent" motif={MOTIF} onExitMotif={vi.fn()} />);
     const seg = screen.getByTestId('sort-motif');

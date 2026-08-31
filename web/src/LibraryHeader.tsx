@@ -297,7 +297,13 @@ export function LibraryHeader({
           // that that is what they are in before removing the chip.
           const pathBlocked = contentFiltered && seg.value === 'path';
           const derived: Mode | null = searchActive ? 'relevance' : pivoting ? 'motif' : null;
-          const disabled = (derived !== null && seg.value !== derived) || pathBlocked;
+          // The motif segment is an exit and nothing else, and the exit needs
+          // the optional onExitMotif. Without one, an enabled segment would
+          // fall through to onSortChange and dispatch 'motif' — not a
+          // LibrarySort, a value every list effect early-returns on. A dead
+          // segment misleads less than a panel-blanking one.
+          const disabled = (derived !== null && seg.value !== derived) || pathBlocked
+            || (seg.value === 'motif' && !onExitMotif);
           // ...and give that one live control a job. Both derived modes are
           // entered from elsewhere — a search box, a motif cell — so setting
           // them from here was a no-op that still nulled the open fact. Pressed

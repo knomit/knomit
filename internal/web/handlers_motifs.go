@@ -394,6 +394,7 @@ type motifDetailView struct {
 	Canonical       string             `json:"canonical"`
 	Members         []string           `json:"members"`
 	DF              int                `json:"df"`
+	DFTotal         int                `json:"df_total"`
 	Definition      string             `json:"definition,omitempty"`
 	DefinitionState string             `json:"definition_state"`
 	CarrierCount    int                `json:"carrier_count"`
@@ -521,6 +522,7 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 			Canonical:       cluster.CanonicalID,
 			Members:         cluster.Members,
 			DF:              cluster.DF,
+			DFTotal:         cluster.DFTotal,
 			Definition:      st.Definition,
 			DefinitionState: definitionState(st, defined),
 			CarrierCount:    total,

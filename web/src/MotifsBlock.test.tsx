@@ -195,6 +195,43 @@ describe('MotifsBlock', () => {
       'knomit-kb', 'agent/test', expect.objectContaining({ q: undefined })));
   });
 
+  // The a–z ordering belongs to the browser. The collapsed six claim to be the
+  // top six, so a summary sliced from an alphabetical list would show the six
+  // alphabetically-first — with every share bar scaled against whatever df
+  // happened to come first instead of the maximum.
+  it('leaves the sort behind when it closes', async () => {
+    resolve();
+    draw();
+    await waitFor(() => expect(screen.getByTestId('motifs-more')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('motifs-more'));
+    fireEvent.click(await screen.findByTestId('motifs-sort-name'));
+    await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
+      'knomit-kb', 'agent/test', expect.objectContaining({ sort: 'name' })));
+
+    fireEvent.click(screen.getByTestId('motifs-back'));
+    await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
+      'knomit-kb', 'agent/test', expect.objectContaining({ sort: 'df' })));
+  });
+
+  // A pick leaves through the same door as ← Back, so the same state goes with
+  // it: a collapsed block still narrowed by a search nobody can see, or ordered
+  // a–z under bars scaled to the wrong maximum, is the browser leaking into the
+  // summary.
+  it('drops the search and the sort when a pick closes the browser', async () => {
+    resolve();
+    draw();
+    await waitFor(() => expect(screen.getByTestId('motifs-more')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('motifs-more'));
+    fireEvent.change(await screen.findByTestId('motifs-search'), { target: { value: 'signal' } });
+    fireEvent.click(screen.getByTestId('motifs-sort-name'));
+    await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
+      'knomit-kb', 'agent/test', expect.objectContaining({ q: 'signal', sort: 'name' })));
+
+    fireEvent.click(screen.getAllByTestId('motifs-row')[0]);
+    await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
+      'knomit-kb', 'agent/test', expect.objectContaining({ q: undefined, sort: 'df' })));
+  });
+
   // A pick is a move, not a selection: the browser closes behind it the way the
   // facet browser does, so returning to the panel does not find it still open.
   it('closes the browser when a name is picked', async () => {
@@ -226,6 +263,31 @@ describe('MotifsBlock', () => {
     rerender(<MotifsBlock repo="knomit-kb" branch="agent/test" path="kb/gotchas" onPick={vi.fn()} />);
     await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
       'knomit-kb', 'agent/test', expect.objectContaining({ path: 'kb/gotchas' })));
+  });
+
+  // A folder click mid-search: the dashboard stays mounted, the path prop
+  // moves, the query survives. The list is then the new folder's, and health
+  // held from the old one must not sit beside it under a tooltip claiming they
+  // are one population — better no strip than that strip.
+  it('drops health counted over another folder rather than pairing it with the new list', async () => {
+    resolve();
+    const { rerender } = render(
+      <MotifsBlock repo="knomit-kb" branch="agent/test" path="kb/decisions" onPick={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('motifs-health')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('motifs-more'));
+    fireEvent.change(await screen.findByTestId('motifs-search'), { target: { value: 'signal' } });
+    await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
+      'knomit-kb', 'agent/test', expect.objectContaining({ q: 'signal' })));
+
+    rerender(<MotifsBlock repo="knomit-kb" branch="agent/test" path="kb/gotchas" onPick={vi.fn()} />);
+    await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
+      'knomit-kb', 'agent/test', expect.objectContaining({ path: 'kb/gotchas', q: 'signal' })));
+    await waitFor(() => expect(screen.queryByTestId('motifs-health')).toBeNull());
+
+    // Clearing the search refills the strip from the new folder's response.
+    fireEvent.change(screen.getByTestId('motifs-search'), { target: { value: '' } });
+    await waitFor(() => expect(screen.getByTestId('motifs-health')).toBeTruthy());
   });
 
   // The row shows what is HERE, because that is what every count in this panel

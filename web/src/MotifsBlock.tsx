@@ -54,6 +54,8 @@ export function MotifsBlock({ repo, branch, path, onPick }: {
   const [sort, setSort] = useState<'df' | 'name'>('df');
   const [reloads, setReloads] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
+  // The scope the held health figures were counted over — see the guard below.
+  const healthFor = useRef('');
 
   // The search takes focus when the browser opens — the reader clicked `+N
   // more` to look for something, and the sibling facet browser does the same.
@@ -84,8 +86,15 @@ export function MotifsBlock({ repo, branch, path, onPick }: {
         // overwrite it with a figure counted over the matches. The PATH is a
         // different thing and does reach it: the server counts health over the
         // same subtree it counted the list over, so the strip and the rows are
-        // always about one population.
-        if (!q) setHealth(r.health);
+        // always about one population. Which is why the held figures are KEYED
+        // by scope: a folder click mid-search refetches the list but leaves
+        // the query set, and a bare `if (!q)` would hold the old folder's
+        // figures over the new folder's rows — the exact two-populations row
+        // the pairing rule forbids. Better no strip than that strip; clearing
+        // the search refills it.
+        const scope = `${repo}\n${branch}\n${path}`;
+        if (!q) { setHealth(r.health); healthFor.current = scope; }
+        else if (healthFor.current !== scope) setHealth(null);
         setStatus('ok');
       })
       .catch(() => { if (!stale()) setStatus('error'); });
@@ -130,14 +139,20 @@ export function MotifsBlock({ repo, branch, path, onPick }: {
   // be unconditional before.
   const bandInline = once.length > 0 && reused.length <= TOP_N;
 
+  // Leaving takes the browser's state with it. The search and the a–z ordering
+  // belong to the browser; a collapsed summary rendered under either is six
+  // rows claiming to be the top six when they are not — sliced from an
+  // alphabetical list, with `max` above no longer the maximum and the share
+  // bars scaled past their track.
+  const close = () => { setBrowsing(false); setQ(''); setSort('df'); };
+
   // Picking CLOSES the browser, exactly as picking a facet value does. A pivot
   // is a move: the list refetches, the first fact opens, and this panel is not
   // what the reader is looking at any more — so coming back to a panel still
   // holding an open browser would be the app remembering a gesture that
-  // finished. Adding a second motif means opening it again.
-  const pick = (motif: string) => { setBrowsing(false); onPick(motif); };
-
-  const close = () => { setBrowsing(false); setQ(''); };
+  // finished. Adding a second motif means opening it again. Same door out as
+  // ← Back, so the same state leaves with it.
+  const pick = (motif: string) => { close(); onPick(motif); };
 
   return (
     <div data-testid="motifs-block" style={{ marginTop: 18 }}
