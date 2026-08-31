@@ -1872,6 +1872,115 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /lenses/{lens}/motifs:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+    get:
+      tags: [lenses, stats, search]
+      summary: Merged motif vocabulary across the lens's mounts
+      description: |
+        The lens-wide motif vocabulary: every mount's clusters merged into one
+        list, in the same envelope the per-repo vocabulary uses. A lens answers
+        exactly like a single repo — there is no coverage or skipped-mount
+        metadata, here or anywhere else.
+
+        Clusters merge when they share a `cluster_key` OR any member spelling.
+        The key is mechanical (a normalized, sorted token form of the
+        spelling), so it names the same shape in every repo; a judge merge is
+        per-branch, so one mount can file a spelling under a key another mount
+        has not adopted, and merging on the key alone would put that one
+        spelling in two rows. The merged `cluster_key` is the smallest of the
+        constituent keys — stable under df change, which is what definitions
+        and this endpoint's own URLs hang off.
+
+        `df` and `df_total` are per-mount SUMS. Mounts are distinct repos but
+        not necessarily disjoint: a re-rooted fork mounted beside its upstream
+        shares fact UUIDs, so such a fact is counted once per mount — the same
+        accepted over-count `/lenses/{lens}/stats` makes on its histograms, and
+        for the same reason (an aggregate carries no per-fact paths to dedupe
+        on). `carriers` on the detail DO carry paths and dedupe exactly.
+
+        `health` counts are pooled across mounts and the two ratios are derived
+        from the pooled totals once — never averaged across mounts.
+
+        Motif clusters do not appear in `/lenses/{lens}/stats`; this endpoint is
+        the vocabulary surface.
+      operationId: listLensMotifs
+      parameters:
+        - name: path
+          in: query
+          description: |
+            Path prefix SCOPE, applied to every mount — the vocabulary of one
+            subtree rather than of the lens. It narrows `health` as well as the
+            list, exactly as it does on the per-repo endpoint. From
+            `kb/<topic>/…` onward, mounts whose ontology lacks the topic are
+            skipped rather than queried.
+          schema: { type: string }
+        - $ref: "#/components/parameters/LensRepoNarrow"
+        - { name: q,      in: query, description: "Case-insensitive substring narrow over member spellings AND definition text, across the merged vocabulary. `count` reflects the narrowed total.", schema: { type: string } }
+        - { name: sort,   in: query, description: "`df` (document frequency desc, ties by canonical asc) or `name` (canonical asc). Any other value is a 400.", schema: { type: string, enum: [df, name], default: df } }
+        - { name: limit,  in: query, description: "1–200; out-of-range or non-integer is 400. The maximum is a hard ceiling, not a clamp.", schema: { type: integer, default: 50, minimum: 1, maximum: 200 } }
+        - { name: offset, in: query, description: "Non-negative; negative or non-integer is 400.", schema: { type: integer, default: 0, minimum: 0 } }
+      responses:
+        "200":
+          description: Merged motif vocabulary page with a pooled health summary
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/MotifsCollection" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422":
+          description: "`repo=` names a mount that is not in this lens"
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /lenses/{lens}/motifs/{key}:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+      - name: key
+        in: path
+        required: true
+        description: |
+          The merged `cluster_key`, ANY mount's own `cluster_key`, or any member
+          spelling — all three name the same merged cluster, and a reader
+          arriving from a repo-scoped link holds the second kind. The response
+          and its `self` link always carry the merged `cluster_key`. A key or
+          spelling in no cluster is a 404.
+        schema: { type: string }
+    get:
+      tags: [lenses, stats, search]
+      summary: Merged motif cluster detail through a lens
+      description: |
+        One merged cluster, with a carrier preview drawn from every mount.
+
+        Branch-wide on every mount, and `repo=` is not accepted: a cluster is
+        addressed by IDENTITY here, and its identity is a property of the lens
+        rather than of where the reader was standing.
+
+        `carriers` is a PREVIEW of the same query `_links.facts` performs —
+        `/lenses/{lens}/facts?motifs=<merged members>&motif_match=exact`, so
+        every mount expands the union against its own alias table and the two
+        cannot disagree. Carrier `path` is the canonical wire form (bare for
+        the write mount, `kb://<id12>/…` for a read mount), qualified after the
+        write-mount-wins dedupe. `carrier_count` counts MATCHES, never the rows
+        transferred: exact when no mount was truncated, otherwise the summed
+        per-mount total (an upper bound, off by the cross-mount path
+        collisions) — the same trade `/lenses/{lens}/facts` makes on `total`.
+      operationId: getLensMotifCluster
+      parameters:
+        - { name: limit, in: query, description: "Carrier preview size, per mount and for the merged list. 1–100; out-of-range or non-integer is 400. The maximum is a hard ceiling, not a clamp.", schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+      responses:
+        "200":
+          description: Merged motif cluster
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/MotifClusterDetail" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /lenses/{lens}/topics:
     parameters:
       - $ref: "#/components/parameters/Lens"

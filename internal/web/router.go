@@ -243,6 +243,8 @@ func (s *Server) NewAPIRouter() chi.Router {
 			r.Get("/facts/*", handleHALLensFact(b, p.factReader, p.factSub))
 			r.Get("/search", handleHALLensSearch(p.search, s.Embedder))
 			r.Get("/completions", handleHALLensCompletions(p.completions))
+			r.Get("/motifs", handleHALLensMotifs(b, p.motifs))
+			r.Get("/motifs/{key}", handleHALLensMotifCluster(b, p.motifs, p.factsCollection))
 			r.Get("/stats", handleHALLensStats(p.stats, p.activity))
 			r.Get("/topics", handleHALLensTopics(p.topicLister, s.OntologyRoot))
 			r.Get("/topics/*", handleHALLensTopics(p.topicLister, s.OntologyRoot))
