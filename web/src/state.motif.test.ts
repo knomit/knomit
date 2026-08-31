@@ -15,7 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { reducer, init } from './state';
-import type { AppState } from './state';
+import type { AppState, FilterChip } from './state';
 
 const at = (over: Partial<AppState> = {}): AppState => ({
   ...init, repo: 'knomit-kb', branch: 'agent/test',
@@ -25,7 +25,7 @@ const at = (over: Partial<AppState> = {}): AppState => ({
 const MOTIF = 'failure-presents-as-success';
 
 describe('PIVOT_MOTIF', () => {
-  it('sets the chip, drops path and the open fact in ONE arm, with exactly one push', () => {
+  it('sets the chip and drops path in ONE arm, with exactly one push', () => {
     const before = at({
       librarySort: 'path',
       factPath: 'kb/gotchas/store/testing/searchoptions-zero-limit/71123f5f.md',
@@ -38,10 +38,74 @@ describe('PIVOT_MOTIF', () => {
     // never saw, and the ≈ segment promises "go back": the chip that IS the
     // pivot carries where it came from, so leaving can honour the promise.
     expect(after.filters).toEqual([{ category: 'motif', value: MOTIF, returnPath: 'kb/gotchas' }]);
-    expect(after.factPath).toBeNull();
     // Exactly one — a delta, not "non-empty". Two dispatches for one intent is
     // the smell the invariant names; so is a move that pushes twice.
     expect(after.navStack.length - before.navStack.length).toBe(1);
+  });
+
+  it('leaves the open fact ALONE — the list that arrives decides whether it survives', () => {
+    // This arm used to clear factPath, on the grounds that the refetched list
+    // would select its own first row. Every list branch already does that, and
+    // only when the open fact did NOT survive the refetch (api.recent,
+    // api.search and the lens rows each hold the same guard), so the clear
+    // bought nothing and cost two bugs:
+    //
+    //   • Between the dispatch and the response the right panel had no fact
+    //     to draw, so the ontology dashboard FLASHED up in the middle of a
+    //     move that never meant to leave the fact.
+    //   • When the pivot changed no query at all — the same motif pinned
+    //     again from a carrier's own header — nothing refetched, so nothing
+    //     re-selected, and the dashboard stayed: a dead end reached by a
+    //     button that promised a list.
+    //
+    // Keeping it is also the better answer on the common path: you pivot on a
+    // motif OF the fact you are reading, so that fact is a carrier, is in the
+    // list, and reading it should not be interrupted to show you row 0.
+    const open = 'kb/gotchas/store/testing/searchoptions-zero-limit/71123f5f.md';
+    const after = reducer(at({ factPath: open }), { type: 'PIVOT_MOTIF', motif: MOTIF });
+    expect(after.factPath).toBe(open);
+  });
+
+  it('is a no-op when the motif asked for is the one already pinned', () => {
+    // Reached from a carrier's own header: the chip, the list and the fact are
+    // already what the button offers, so there is nothing to do and nothing to
+    // remember — pushing here would spend a Back press on a view that never
+    // changed. Same defence as EXIT_MOTIF's stray-dispatch arm below.
+    const pinned = at({
+      factPath: 'kb/gotchas/store/testing/searchoptions-zero-limit/71123f5f.md',
+      filters: [{ category: 'motif', value: MOTIF, returnPath: 'kb/gotchas' }],
+    });
+    expect(reducer(pinned, { type: 'PIVOT_MOTIF', motif: MOTIF })).toBe(pinned);
+  });
+
+  it('collapses a typed union even when the pivot names its first chip', () => {
+    // Motif chips accumulate when TYPED into the FilterBar (ADD_FILTER appends
+    // them), and two of them are a union — the one thing this arm exists to
+    // undo. Reading "is this already pinned?" off the first matching chip
+    // no-opped that collapse, and only when the reader had typed the pivoted
+    // shape FIRST: same gesture, opposite outcome, decided by typing order.
+    const union: FilterChip[] = [{ category: 'motif', value: 'a' }, { category: 'motif', value: 'b' }];
+    for (const filters of [union, [...union].reverse()]) {
+      const s = at({ filters });
+      const after = reducer(s, { type: 'PIVOT_MOTIF', motif: 'a' });
+      expect(after.filters).toEqual([{ category: 'motif', value: 'a' }]);
+      expect(after.navStack.length - s.navStack.length).toBe(1);
+    }
+  });
+
+  it('still pivots when the same motif is pinned but a path chip is there to drop', () => {
+    // Not a no-op: the chip set is the same shape, but the path narrows the
+    // list, so dropping it is a real change to what the reader is looking at
+    // — and the displaced folder has to be stashed for the exit.
+    const s = at({
+      filters: [
+        { category: 'motif', value: MOTIF },
+        { category: 'path', value: 'kb/gotchas' },
+      ],
+    });
+    const after = reducer(s, { type: 'PIVOT_MOTIF', motif: MOTIF });
+    expect(after.filters).toEqual([{ category: 'motif', value: MOTIF, returnPath: 'kb/gotchas' }]);
+    expect(after.navStack.length - s.navStack.length).toBe(1);
   });
 
   it('does NOT write librarySort — the mode the reader came from is the record', () => {
