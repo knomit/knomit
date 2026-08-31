@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:proxy": "KNOMIT_DEV_BASE=/absproxy/5173 vite --port 5173",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
