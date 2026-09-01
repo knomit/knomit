@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -603,6 +605,265 @@ func TestLensMotifCluster_IsBranchWideOnEveryMount(t *testing.T) {
 	for _, name := range []string{"alpha", "beta"} {
 		if stub.lastPath[name] != "" {
 			t.Errorf("%s: got path %q, want branch-wide (\"\")", name, stub.lastPath[name])
+		}
+	}
+}
+
+// ─── the pivot the vocabulary promises ───────────────────────────────────────
+
+// lensPivotFactsStub models the ONE thing that matters about the store's exact
+// tier: a term matches a fact only if the fact literally carries a spelling in
+// the term list.
+//
+// That is a faithful model of store.expandMotifQuery at the exact tier. It
+// resolves a term through THIS branch's alias table — `canonicalOf[term]`, or
+// the term itself when the branch has never seen it — and then matches the
+// spellings whose canonical equals that. On a mount that spells the shape
+// differently, a term it has never seen resolves to itself, no member's
+// canonical equals it, and the mount contributes nothing.
+type lensPivotFactsStub struct {
+	byRepo   map[string][]store.RecentFactEntry
+	lastOpts map[string]store.SearchOptions
+}
+
+func (s *lensPivotFactsStub) carriers(ri *repos.RepoInstance, opts store.SearchOptions) ([]store.RecentFactEntry, int) {
+	if s.lastOpts == nil {
+		s.lastOpts = map[string]store.SearchOptions{}
+	}
+	s.lastOpts[ri.Name()] = opts
+	want := map[string]bool{}
+	for _, m := range opts.Motifs {
+		want[m] = true
+	}
+	var out []store.RecentFactEntry
+	for _, e := range s.byRepo[ri.Name()] {
+		for _, m := range e.Motifs {
+			if want[m] {
+				out = append(out, e)
+				break
+			}
+		}
+	}
+	return out, len(out)
+}
+
+func (s *lensPivotFactsStub) RecentFacts(
+	_ context.Context, ri *repos.RepoInstance, _ string, opts store.SearchOptions,
+) ([]store.RecentFactEntry, int, error) {
+	out, n := s.carriers(ri, opts)
+	return out, n, nil
+}
+
+func (s *lensPivotFactsStub) Search(
+	_ context.Context, ri *repos.RepoInstance, _ store.Embedder, _ string, opts store.SearchOptions,
+) ([]store.SearchResult, error) {
+	out, _ := s.carriers(ri, opts)
+	res := make([]store.SearchResult, 0, len(out))
+	for _, e := range out {
+		var sr store.SearchResult
+		sr.Path, sr.Title, sr.Motifs = e.Path, e.Title, e.Motifs
+		res = append(res, sr)
+	}
+	return res, nil
+}
+
+// The carriers of the merged `drift-config` cluster, split across mounts by
+// SPELLING: alpha's five carry `config-drift` (the elected canonical), beta's
+// two carry `configuration-drifts` and nothing else. splitVocabularyStub says
+// df 5 + 2, so the merged row promises 7.
+func driftCarriersByMount() *lensPivotFactsStub {
+	alpha := make([]store.RecentFactEntry, 0, 5)
+	for i := range 5 {
+		alpha = append(alpha, store.RecentFactEntry{
+			Path: "kb/a" + strconv.Itoa(i) + ".md", Title: "alpha " + strconv.Itoa(i),
+			Motifs: []string{"config-drift"}, CommittedAt: int64(200 + i),
+		})
+	}
+	return &lensPivotFactsStub{byRepo: map[string][]store.RecentFactEntry{
+		"alpha": alpha,
+		"beta": {
+			{Path: "kb/b0.md", Title: "beta 0", Motifs: []string{"configuration-drifts"}, CommittedAt: 100},
+			{Path: "kb/b1.md", Title: "beta 1", Motifs: []string{"configuration-drifts"}, CommittedAt: 101},
+		},
+	}}
+}
+
+// THE REGRESSION. A pivot minted from the merged vocabulary sends ONE name —
+// the elected canonical — and the store's exact tier is per-branch canonical
+// equality, so beta (which spells the shape `configuration-drifts`) used to
+// contribute zero. The row said df 7 and the list under it held 5.
+//
+// The count and the list are the same query or the surface is lying, so the
+// assertion is exactly that: the pivot's total equals the df beside the name.
+func TestLensFacts_PivotOnAMergedCanonicalReachesEveryMount(t *testing.T) {
+	motifs := splitVocabularyStub()
+	carriers := driftCarriersByMount()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{motifs: motifs, factsCollection: carriers, search: carriers}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	// The df the vocabulary row promises.
+	vocab := decodeMotifs(t, getLensFacts(t, r, "/lenses/eng/motifs"))
+	wantDF := 0
+	var canonical string
+	for _, e := range vocab.Embedded.Motifs {
+		if e.ClusterKey == "drift-config" {
+			wantDF, canonical = e.DF, e.Canonical
+		}
+	}
+	if wantDF != 7 || canonical != "config-drift" {
+		t.Fatalf("fixture: got df=%d canonical=%q, want 7/config-drift", wantDF, canonical)
+	}
+
+	// The list that name pivots to.
+	body := decodeLensFacts(t, getLensFacts(t, r,
+		"/lenses/eng/facts?motifs="+canonical+"&motif_match=exact"))
+	if body.Total != wantDF {
+		t.Errorf("pivot total: got %d, want %d — the df the row beside it promised", body.Total, wantDF)
+	}
+	if len(body.Facts) != wantDF {
+		t.Errorf("pivot rows: got %d, want %d", len(body.Facts), wantDF)
+	}
+	// Specifically: the mount that spells it differently is IN the answer.
+	fromBeta := 0
+	for _, f := range body.Facts {
+		if f.Source.Repo == "beta" {
+			fromBeta++
+		}
+	}
+	if fromBeta != 2 {
+		t.Errorf("beta contributed %d rows, want 2 — it carries the cluster under another spelling", fromBeta)
+	}
+	// Every mount was asked about the WHOLE shape, not about one mount's name.
+	for _, name := range []string{"alpha", "beta"} {
+		got := strings.Join(motifSorted(carriers.lastOpts[name].Motifs), ",")
+		if got != "config-drift,configuration-drifts" {
+			t.Errorf("%s was asked for %q, want the merged member list", name, got)
+		}
+	}
+}
+
+// motifSorted copies and sorts, so an assertion on the widened set does not
+// depend on the union's iteration order.
+func motifSorted(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
+// /search takes the same widening — the pivot's ≈ segment and the filter chip
+// both reach it, and a relevance query that dropped a mount would be the same
+// defect with a different envelope.
+func TestLensSearch_PivotOnAMergedCanonicalReachesEveryMount(t *testing.T) {
+	carriers := driftCarriersByMount()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		motifs: splitVocabularyStub(), factsCollection: carriers, search: carriers}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=drift&motifs=config-drift&motif_match=exact")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := strings.Join(motifSorted(carriers.lastOpts["beta"].Motifs), ","); got != "config-drift,configuration-drifts" {
+		t.Errorf("beta was asked for %q, want the merged member list", got)
+	}
+}
+
+// The widening runs over the FULL read set, never the narrowed one. A term
+// minted from the whole vocabulary has to keep naming the same shape when the
+// list under it is narrowed — resolving it through a one-mount union would
+// re-run the exact bug, since that mount is the one spelling it differently.
+func TestLensFacts_PivotWideningIgnoresRepoNarrowing(t *testing.T) {
+	carriers := driftCarriersByMount()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		motifs: splitVocabularyStub(), factsCollection: carriers, search: carriers}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r,
+		"/lenses/eng/facts?motifs=config-drift&motif_match=exact&repo=beta"))
+	if body.Total != 2 {
+		t.Errorf("narrowed pivot: got %d, want beta's 2 — the term still names the merged shape", body.Total)
+	}
+}
+
+// A term in no cluster is left exactly as the caller sent it: its own
+// singleton, which is what the store does with it too.
+func TestLensFacts_UnknownMotifTermIsPassedThroughUnchanged(t *testing.T) {
+	carriers := driftCarriersByMount()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		motifs: splitVocabularyStub(), factsCollection: carriers, search: carriers}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?motifs=nothing-like-this")
+	for _, name := range []string{"alpha", "beta"} {
+		if got := strings.Join(carriers.lastOpts[name].Motifs, ","); got != "nothing-like-this" {
+			t.Errorf("%s was asked for %q, want the term unchanged", name, got)
+		}
+	}
+}
+
+// A lens over ONE repo must send exactly what a repo request sends: the
+// widening is an identity there, because every member of a cluster already
+// resolves to that cluster's canonical inside the one branch.
+func TestLensFacts_WideningIsAnIdentityForALensOfOne(t *testing.T) {
+	carriers := driftCarriersByMount()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		motifs: &lensMotifsStub{clusters: map[string][]store.MotifCluster{
+			"alpha": {{ClusterKey: "drift-config", CanonicalID: "config-drift", Members: []string{"config-drift"}, DF: 5, DFTotal: 5}},
+		}},
+		factsCollection: carriers, search: carriers}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"solo","write":"alpha","reads":[]}`)
+
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/solo/facts?motifs=config-drift&motif_match=exact"))
+	if body.Total != 5 {
+		t.Errorf("lens of one: got %d, want alpha's 5", body.Total)
+	}
+	if got := strings.Join(carriers.lastOpts["alpha"].Motifs, ","); got != "config-drift" {
+		t.Errorf("lens of one sent %q, want the bare term", got)
+	}
+}
+
+// A cluster key is a mechanical function of a spelling, so two corpora can
+// reach the SAME key with different membership. Here beta files the spelling
+// `configuration-drifts` under the key `drift-config` too — but as a cluster of
+// its own, with a rationale that has nothing to do with the merged one. That
+// row must not be attributed to a spelling this mount files elsewhere.
+//
+// The guard has to read the per-mount key set, not the union's: the union holds
+// every mount's keys, so checking it would accept exactly this row.
+func TestLensMotifCluster_AliasAttributionIsPerMount(t *testing.T) {
+	stub := &lensMotifsStub{
+		clusters: map[string][]store.MotifCluster{
+			// Only alpha contributes the merged cluster.
+			"alpha": {{ClusterKey: "drift-config", CanonicalID: "config-drift",
+				Members: []string{"config-drift", "configuration-drifts"}, DF: 5, DFTotal: 5}},
+			// beta has a DIFFERENT cluster; it never contributed drift-config.
+			"beta": {{ClusterKey: "creep-scope", CanonicalID: "scope-creep",
+				Members: []string{"scope-creep"}, DF: 2, DFTotal: 2}},
+		},
+		aliases: map[string]map[string]store.AliasRow{
+			// beta's row for the spelling claims a key beta did not contribute
+			// to this merge. Reading the union's key set would take it.
+			"beta": {"configuration-drifts": {
+				ClusterKey: "drift-config", CanonicalID: "something-else",
+				Method: "judge", Rationale: "beta's own unrelated merge"}},
+		},
+	}
+	r, _ := lensMotifsServer(t, stub, &lensCarriersStub{})
+	body := decodeMotifDetail(t, getLensFacts(t, r, "/lenses/eng/motifs/drift-config"))
+
+	for _, a := range body.Aliases {
+		if a.Motif == "configuration-drifts" && a.Rationale != "" {
+			t.Errorf("took a non-contributing mount's audit trail: %+v", a)
 		}
 	}
 }

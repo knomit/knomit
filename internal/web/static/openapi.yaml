@@ -1683,6 +1683,17 @@ paths:
 
         Any mount error fails the whole request — a lens never silently shrinks
         its read set.
+
+        MOTIF FILTERS ARE WIDENED TO THE LENS'S MERGED CLUSTERS before the
+        fan-out. A motif term resolves through ONE branch's alias table, and a
+        cluster's representative spelling is elected per branch, so a term sent
+        as-is would return nothing from a mount that carries the same shape
+        under a different spelling — a pivot whose count came from the merged
+        vocabulary would then list fewer facts than the count promised. Each
+        term is therefore replaced by every spelling in its merged cluster,
+        resolved over the FULL read set: `?path=` and `?repo=` narrow the LIST,
+        never what the term means. A term in no cluster is passed through
+        unchanged.
       operationId: listLensFacts
       parameters:
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -1780,6 +1791,17 @@ paths:
         by repo-relative path with the write mount's copy winning, even when a
         shadowed copy ranks higher. Read-mount paths are qualified as
         `kb://<id12>/…`.
+
+        MOTIF FILTERS ARE WIDENED TO THE LENS'S MERGED CLUSTERS before the
+        fan-out. A motif term resolves through ONE branch's alias table, and a
+        cluster's representative spelling is elected per branch, so a term sent
+        as-is would return nothing from a mount that carries the same shape
+        under a different spelling — a pivot whose count came from the merged
+        vocabulary would then list fewer facts than the count promised. Each
+        term is therefore replaced by every spelling in its merged cluster,
+        resolved over the FULL read set: `?path=` and `?repo=` narrow the LIST,
+        never what the term means. A term in no cluster is passed through
+        unchanged.
       operationId: searchLens
       parameters:
         - { name: q,              in: query, schema: { type: string } }
@@ -1901,7 +1923,13 @@ paths:
         on). `carriers` on the detail DO carry paths and dedupe exactly.
 
         `health` counts are pooled across mounts and the two ratios are derived
-        from the pooled totals once — never averaged across mounts.
+        from the pooled totals once — never averaged across mounts. They are
+        SUMS, and so carry the same over-count as `df`: a cluster present on two
+        mounts contributes to both mounts' `authored_clusters`, while `count`
+        above counts the merged cluster once. The two are already different
+        populations in the per-repo response — `health` is authored-only,
+        `count` spans every origin — and in a lens they differ by the overlap
+        as well, so do not read `count`/`authored_clusters` as a fraction.
 
         Motif clusters do not appear in `/lenses/{lens}/stats`; this endpoint is
         the vocabulary surface.
@@ -1958,6 +1986,13 @@ paths:
         Branch-wide on every mount, and `repo=` is not accepted: a cluster is
         addressed by IDENTITY here, and its identity is a property of the lens
         rather than of where the reader was standing.
+
+        A consequence worth stating: when the COLLECTION was narrowed with
+        `repo=`, a row's `self` link still resolves here against the FULL read
+        set, so the cluster it opens can carry a larger `df` and more `members`
+        than the narrowed row promised. It never 404s — a narrowed component's
+        smallest key is always in the full union's key set — and the merged key
+        the row carries is the key this endpoint answers to.
 
         `carriers` is a PREVIEW of the same query `_links.facts` performs —
         `/lenses/{lens}/facts?motifs=<merged members>&motif_match=exact`, so
