@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -155,7 +156,17 @@ func expandLensMotifs(
 	}
 	out, err := federate.ExpandMotifTerms(r.Context(), bind, read, terms)
 	if err != nil {
-		writeStoreError(w, r, err, "Failed to resolve motif filter", "")
+		// The failing mount's branch, not "": writeStoreError renders
+		// store.ErrBranchNotFound as `no branch named "<branch>"`, and this is
+		// the fan-out where a mount pinned to a deleted branch actually shows
+		// up. An empty branch there would print the message with the one word
+		// it exists to carry missing.
+		var readErr *federate.MotifReadError
+		branch := ""
+		if errors.As(err, &readErr) {
+			branch = readErr.Branch
+		}
+		writeStoreError(w, r, err, "Failed to resolve motif filter", branch)
 		return nil, false
 	}
 	return out, true

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -25,6 +26,9 @@ type lensMotifsStub struct {
 	health   map[string]store.MotifVocabularyHealth
 	aliases  map[string]map[string]store.AliasRow
 	errRepo  string
+	// errWith overrides what errRepo fails with, so a test can drive the
+	// sentinel-specific error responses rather than only the generic 500.
+	errWith error
 
 	lastPath       map[string]string
 	lastHealthPath map[string]string
@@ -37,6 +41,9 @@ func (s *lensMotifsStub) Clusters(_ context.Context, ri *repos.RepoInstance, _, 
 	}
 	s.lastPath[ri.Name()] = pathPrefix
 	if s.errRepo != "" && ri.Name() == s.errRepo {
+		if s.errWith != nil {
+			return nil, s.errWith
+		}
 		return nil, errors.New("db on fire")
 	}
 	return s.clusters[ri.Name()], nil
@@ -809,9 +816,20 @@ func TestLensFacts_UnknownMotifTermIsPassedThroughUnchanged(t *testing.T) {
 	}
 }
 
-// A lens over ONE repo must send exactly what a repo request sends: the
-// widening is an identity there, because every member of a cluster already
-// resolves to that cluster's canonical inside the one branch.
+// A lens over ONE repo must send exactly what a repo request sends.
+//
+// NOT because the widening would be an identity there — it would not. Within
+// one branch ClustersUnder groups mechanically-equal spellings into one cluster
+// while the store's exact tier resolves a bare term through PER-SPELLING
+// canonicals, so a widened single-mount term would reach a cluster sibling the
+// same repo read directly does not. The skip is what keeps a lens of one
+// answering exactly like the repo it wraps.
+//
+// This stub's cluster has one member, so it is identity by construction and
+// cannot see that divergence: it checks the WIRING (nothing widened, bare term
+// forwarded). The semantic pin is the MCP twin,
+// TestQueryFederation_MotifWideningIsSkippedForOneMount, which runs against
+// real stores with two mechanically-equal spellings in one repo.
 func TestLensFacts_WideningIsAnIdentityForALensOfOne(t *testing.T) {
 	carriers := driftCarriersByMount()
 	m, _ := newTestLensManager(t, "alpha", "beta")
@@ -865,5 +883,66 @@ func TestLensMotifCluster_AliasAttributionIsPerMount(t *testing.T) {
 		if a.Motif == "configuration-drifts" && a.Rationale != "" {
 			t.Errorf("took a non-contributing mount's audit trail: %+v", a)
 		}
+	}
+}
+
+// The widening reads every mount, so a mount pinned to a deleted branch fails
+// there — and the 404 it produces has to NAME that branch. writeStoreError
+// renders store.ErrBranchNotFound as `no branch named "<branch>"`, so a
+// fan-out that dropped the branch on its way out would print the message with
+// the one word it exists to carry missing.
+func TestLensFacts_MotifWideningNamesTheFailingMountsBranch(t *testing.T) {
+	motifs := splitVocabularyStub()
+	motifs.errRepo = "beta"
+	motifs.errWith = store.ErrBranchNotFound
+	carriers := driftCarriersByMount()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		motifs: motifs, factsCollection: carriers, search: carriers}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=config-drift&motif_match=exact")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	// Decoded, not substring-matched: the detail carries the branch in quotes
+	// and the body is JSON, so a literal-quote Contains check compares against
+	// the wrong escaping and passes or fails for the wrong reason.
+	var problem struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	wantBranch := m.Get("beta").AgentBranch()
+	if want := `no branch named "` + wantBranch + `"`; problem.Detail != want {
+		t.Errorf("detail: got %q, want %q — the failing mount's branch, not an empty one",
+			problem.Detail, want)
+	}
+}
+
+// A mount failing the widening fails the WHOLE request, exactly as a mount
+// failing the vocabulary read does — the term is resolved against the lens, and
+// a lens does not answer from a shrunken read set (RFC §9.1). This is the same
+// rule as everywhere else; it is asserted here because the widening is the one
+// place it reaches a mount the caller did not ask about.
+func TestLensFacts_MotifWideningFailsTheWholeRequest(t *testing.T) {
+	motifs := splitVocabularyStub()
+	motifs.errRepo = "beta"
+	carriers := driftCarriersByMount()
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		motifs: motifs, factsCollection: carriers, search: carriers}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	// ...and it does so even when the caller narrowed beta AWAY: the term's
+	// meaning is lens-wide, so beta is still read to resolve it. That coupling
+	// is deliberate and documented; this pins that it is real rather than
+	// accidental, so a later change cannot quietly drop it as a bug.
+	rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=config-drift&repo=alpha")
+	if rec.Code == http.StatusOK {
+		t.Fatalf("a mount excluded by repo= still resolves the term, so its failure must not produce 200; body=%s", rec.Body.String())
 	}
 }

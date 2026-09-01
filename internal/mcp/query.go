@@ -113,7 +113,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithArray("motifs",
-			mcpgo.Description("Filter by motif — the general regularity a fact instantiates (mechanism, failure shape, pattern), independent of its subject. Use to find facts about DIFFERENT subjects that exemplify the same thing."),
+			mcpgo.Description("Filter by motif — the general regularity a fact instantiates (mechanism, failure shape, pattern), independent of its subject. Use to find facts about DIFFERENT subjects that exemplify the same thing. Through a lens the mounts share ONE motif vocabulary, so a term reaches every spelling any mount groups with it, on every mount."),
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithString("motif_match",

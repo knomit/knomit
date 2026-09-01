@@ -265,18 +265,39 @@ func (u *MotifUnion) ExpandTerms(terms []string) []string {
 // growing an interface each caller would have to satisfy twice.
 type MotifClusterReader func(ctx context.Context, rt repos.ReadTarget) ([]store.MotifCluster, error)
 
+// MotifReadError names the mount whose vocabulary read failed.
+//
+// The mount has to travel with the error because the consumers' error responses
+// are ABOUT the mount: the web layer turns store.ErrBranchNotFound into a 404
+// reading `no branch named "<branch>"`, and a fan-out that dropped the branch
+// would render that message as `no branch named ""` in exactly the case it
+// exists for — a mount pinned to a deleted branch. Unwrap keeps errors.Is
+// working through it, so the sentinel checks downstream are unaffected.
+type MotifReadError struct {
+	Repo   string
+	Branch string
+	Err    error
+}
+
+func (e *MotifReadError) Error() string {
+	return "motif vocabulary read failed on mount " + e.Repo + "@" + e.Branch + ": " + e.Err.Error()
+}
+
+func (e *MotifReadError) Unwrap() error { return e.Err }
+
 // BuildMotifUnion reads every target's vocabulary and merges it.
 //
 // Any mount error fails the WHOLE call (RFC §9.1 — a lens never silently
 // shrinks its read set): a union missing a mount is a smaller vocabulary
 // presented as the whole one, which no field in any response is allowed to
-// disclose.
+// disclose. The failure is returned as *MotifReadError so the caller can name
+// the mount it came from.
 func BuildMotifUnion(ctx context.Context, targets []Target, read MotifClusterReader) (*MotifUnion, error) {
 	u := NewMotifUnion()
 	for _, t := range targets {
 		clusters, err := read(ctx, t.RT)
 		if err != nil {
-			return nil, err
+			return nil, &MotifReadError{Repo: t.RT.RI.Name(), Branch: t.RT.Branch, Err: err}
 		}
 		for _, c := range clusters {
 			u.Add(t.RT.RI, c)
