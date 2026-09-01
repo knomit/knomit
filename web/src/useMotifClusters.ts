@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { api } from './api';
 import type { MotifCluster } from './api';
+import type { MotifEndpoint } from './motifEndpoint';
+import { canReadMotifCluster, motifEndpointKey, readMotifCluster } from './motifEndpoint';
 import { useAsync } from './hooks';
 
 /** One motif on a fact, and how far its resolution has got.
@@ -40,25 +41,32 @@ const NONE: ResolvedMotif[] = [];
  * different fact re-fetches. `stale()` guards the write-back: opening a second
  * fact while the first fact's requests are in flight must not paint the first
  * fact's counts beside the second fact's names.
+ *
+ * The counts are of whatever corpus `endpoint` names, which in a lens is the
+ * WHOLE lens rather than the mount the fact happens to live on. That is the
+ * number the reader can act on: the count sits beside a pivot, and the pivot
+ * lists the lens. A mount-scoped count under a lens-scoped pivot would promise
+ * one number and deliver another.
  */
 export function useMotifClusters(
-  repo: string, branch: string, motifs: string[] | undefined,
+  endpoint: MotifEndpoint, motifs: string[] | undefined,
 ): ResolvedMotif[] {
   const names = motifs ?? NONE.map(String);
   const key = names.join('\0');
+  const endpointKey = motifEndpointKey(endpoint);
   const [resolved, setResolved] = useState<Record<string, ResolvedMotif>>({});
 
   useAsync((stale) => {
     if (names.length === 0) return;
-    // No repo yet (App picks one from /api/v1/repos on mount) means any request
-    // is a certain 404, which would render as a failed count on a fact whose
-    // motifs are perfectly fine. Waiting is the honest state; the entries below
-    // stay 'loading' until there is somewhere to ask.
-    if (!repo || !branch) return;
+    // Nowhere to ask yet (App picks a repo from /api/v1/repos on mount) means
+    // any request is a certain 404, which would render as a failed count on a
+    // fact whose motifs are perfectly fine. Waiting is the honest state; the
+    // entries below stay 'loading' until there is somewhere to ask.
+    if (!canReadMotifCluster(endpoint)) return;
 
     setResolved({});
     for (const motif of names) {
-      api.motifCluster(repo, branch, motif)
+      readMotifCluster(endpoint, motif)
         .then(cluster => {
           if (stale()) return;
           setResolved(prev => ({ ...prev, [motif]: { motif, status: 'ok', cluster } }));
@@ -68,10 +76,10 @@ export function useMotifClusters(
           setResolved(prev => ({ ...prev, [motif]: { motif, status: 'error', error: String(err) } }));
         });
     }
-    // `key`, not `motifs`: the array identity changes on every render of the
-    // fact view, and depending on it would re-issue every request each time.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, repo, branch]);
+    // `key` and `endpointKey`, not `motifs` and `endpoint`: both of those are
+    // rebuilt on every render of the fact view, and depending on them would
+    // re-issue every request each time.
+  }, [key, endpointKey]);
 
   if (names.length === 0) return NONE;
   // Built from the NAMES, in the fact's own order — so an unanswered motif is a

@@ -1027,6 +1027,51 @@ const EMPTY_MOTIF_HEALTH: MotifHealth = {
   recurrence_rate: 0, mint_to_link_ratio: 0,
 };
 
+/** The vocabulary query. `repos` is lens-only (repeated `repo=`, narrowing the
+ *  fan-out); the repo endpoint has no mounts to narrow and ignores it. */
+export interface MotifsQuery {
+  q?: string; path?: string; sort?: 'df' | 'name';
+  limit?: number; offset?: number; repos?: string[];
+}
+
+export interface MotifsPage { count: number; health: MotifHealth; motifs: MotifEntry[] }
+
+/** The vocabulary reads, written ONCE against a base URL.
+ *
+ *  A lens's motif vocabulary is the SAME resource as a repo's — same query,
+ *  same envelope, same defaults — over a bigger corpus, and the server keeps
+ *  it that way deliberately (one shared renderer behind both handlers). Two
+ *  clients kept in step would be two chances to drift on the shape the server
+ *  went out of its way to make single; the base URL is the only difference,
+ *  so it is the only parameter. */
+function fetchMotifs(base: string, opts?: MotifsQuery): Promise<MotifsPage> {
+  const p = new URLSearchParams();
+  if (opts?.q) p.set('q', opts.q);
+  // `path` is SCOPE, not a filter over the page — it says which corpus the
+  // vocabulary is of, exactly as it does on /stats, and it narrows the health
+  // block along with the list. `q` is a way of reading one page and does not.
+  if (opts?.path) p.set('path', opts.path);
+  if (opts?.sort) p.set('sort', opts.sort);
+  if (opts?.limit !== undefined) p.set('limit', String(Math.min(opts.limit, MOTIFS_MAX_LIMIT)));
+  if (opts?.offset) p.set('offset', String(opts.offset));
+  for (const repo of opts?.repos ?? []) p.append('repo', repo);
+  const qs = p.toString();
+  return fetchJSON<any>(`${base}/motifs${qs ? `?${qs}` : ''}`).then(data => ({
+    count: data.count ?? 0,
+    health: data.health ?? EMPTY_MOTIF_HEALTH,
+    motifs: data._embedded?.motifs ?? [],
+  }));
+}
+
+function fetchMotifCluster(base: string, key: string): Promise<MotifCluster> {
+  return fetchJSON<any>(`${base}/motifs/${encodeURIComponent(key)}`).then(data => ({
+    ...data,
+    members: data.members ?? [],
+    carriers: data.carriers ?? [],
+    aliases: data.aliases ?? [],
+  }));
+}
+
 // listLensFacts GETs /api/v1/lenses/{lens}/facts — the recency-ordered, deduped
 // union of the lens's write repo + read mounts. Flat envelope ({facts,total});
 // each row carries a canonical `path` and its `source` mount. `repos` maps to
@@ -1237,25 +1282,14 @@ export const api = {
    *  `path` scopes the whole answer to one subtree: a cluster no fact there
    *  carries is absent, `df` counts the carriers under it, and `health` is
    *  counted over the same facts. */
-  motifs: (repo: string, branch: string,
-    opts?: { q?: string; path?: string; sort?: 'df' | 'name'; limit?: number; offset?: number }
-  ): Promise<{ count: number; health: MotifHealth; motifs: MotifEntry[] }> => {
-    const p = new URLSearchParams();
-    if (opts?.q) p.set('q', opts.q);
-    // `path` is SCOPE, not a filter over the page — it says which corpus the
-    // vocabulary is of, exactly as it does on /stats, and it narrows the health
-    // block along with the list. `q` is a way of reading one page and does not.
-    if (opts?.path) p.set('path', opts.path);
-    if (opts?.sort) p.set('sort', opts.sort);
-    if (opts?.limit !== undefined) p.set('limit', String(Math.min(opts.limit, MOTIFS_MAX_LIMIT)));
-    if (opts?.offset) p.set('offset', String(opts.offset));
-    const qs = p.toString();
-    return fetchJSON<any>(`${branchBase(repo, branch)}/motifs${qs ? `?${qs}` : ''}`).then(data => ({
-      count: data.count ?? 0,
-      health: data.health ?? EMPTY_MOTIF_HEALTH,
-      motifs: data._embedded?.motifs ?? [],
-    }));
-  },
+  motifs: (repo: string, branch: string, opts?: MotifsQuery): Promise<MotifsPage> =>
+    fetchMotifs(branchBase(repo, branch), opts),
+
+  /** The lens-wide motif vocabulary: every mount's clusters merged into one
+   *  list, in the repo endpoint's own envelope. `repos` narrows the fan-out to
+   *  the named mounts, like every other lens union read. */
+  lensMotifs: (lens: string, opts?: MotifsQuery): Promise<MotifsPage> =>
+    fetchMotifs(lensBase(lens), opts),
 
   /** One cluster. `key` accepts the cluster_key or any member spelling, and is
    *  encoded because neither is guaranteed URL-safe. Carriers and aliases
@@ -1263,12 +1297,15 @@ export const api = {
    *  empty `carriers` with a non-zero `carrier_count` is a real state (a preview
    *  the server chose not to send), not a contradiction to paper over. */
   motifCluster: (repo: string, branch: string, key: string): Promise<MotifCluster> =>
-    fetchJSON<any>(`${branchBase(repo, branch)}/motifs/${encodeURIComponent(key)}`).then(data => ({
-      ...data,
-      members: data.members ?? [],
-      carriers: data.carriers ?? [],
-      aliases: data.aliases ?? [],
-    })),
+    fetchMotifCluster(branchBase(repo, branch), key),
+
+  /** One MERGED cluster through a lens. `key` additionally accepts any single
+   *  mount's own cluster_key, because a merged cluster's key is the smallest of
+   *  its constituents' and a reader can hold either. Carrier paths come back in
+   *  the canonical lens form (bare for the write mount, kb://<id12>/… for a
+   *  read mount), so they are openable through the lens as they arrive. */
+  lensMotifCluster: (lens: string, key: string): Promise<MotifCluster> =>
+    fetchMotifCluster(lensBase(lens), key),
 
   listLensFacts,
   lensSearch,

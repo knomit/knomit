@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { api } from './api';
 import type { MotifEntry, MotifHealth } from './api';
+import type { MotifEndpoint } from './motifEndpoint';
+import { canReadMotifs, motifEndpointKey, readMotifs } from './motifEndpoint';
 import { useAsync } from './hooks';
 import { MOTIF_GLYPH } from './utils';
 
@@ -9,11 +10,15 @@ import { MOTIF_GLYPH } from './utils';
  *
  * NOT A NAVIGATION ENTRY. A nav entry captures a WAY OF LOOKING at the corpus,
  * and this is not one — it is a list of names, and the way of looking it leads
- * to is the pivot, which already exists. It is also per-repository: there is no
- * single vocabulary across a lens, so an entry would have to go dark whenever
- * one was open, and an entry live for two of the four things above it is a
- * feature with a switch on it. A block simply absent from a panel is a far
- * smaller absence than a hole in the navigation.
+ * to is the pivot, which already exists. A block simply absent from a panel is
+ * a far smaller absence than a hole in the navigation, and this block is
+ * absent in builds with no vocabulary endpoint to ask.
+ *
+ * It renders in a lens as readily as in a repo. The v1 exclusion — "there is
+ * no single vocabulary across a lens" — was true of the SERVER at the time and
+ * is not true now: /lenses/{lens}/motifs merges every mount's clusters into
+ * one list in this same envelope, so the block reads a lens's vocabulary
+ * through `endpoint` without knowing which kind it holds.
  *
  * It borrows the three facet columns' mechanics — ranked rows, a share bar, an
  * overflow row that opens the whole thing full-width with a search and a way
@@ -34,9 +39,10 @@ import { MOTIF_GLYPH } from './utils';
  * to load must never render as a vocabulary with nothing in it — "no names"
  * would claim this corpus has no shared motifs at all.
  */
-export function MotifsBlock({ repo, branch, path, onPick }: {
-  repo: string;
-  branch: string;
+export function MotifsBlock({ endpoint, path, onPick }: {
+  /** Which surface to read from — a repo branch or a lens. The two answer with
+   *  the same shape, so nothing below this prop branches on it. */
+  endpoint: MotifEndpoint;
   /** The ontology path the panel is describing. SCOPE, not a filter: the block
    *  lists the vocabulary of the folder the reader is standing in, exactly as
    *  the facet columns beside it list that folder's domains and entities. A
@@ -61,46 +67,49 @@ export function MotifsBlock({ repo, branch, path, onPick }: {
   // more` to look for something, and the sibling facet browser does the same.
   useEffect(() => { if (browsing) searchRef.current?.focus(); }, [browsing]);
 
+  const endpointKey = motifEndpointKey(endpoint);
+  const readable = canReadMotifs(endpoint);
+
   useAsync((stale) => {
-    if (!repo || !branch) return;
+    if (!readable) return;
     setStatus('loading');
-    // try/catch around the CALL, not just the promise: a client that throws
-    // synchronously would otherwise take the whole summary panel down with it,
-    // and this block is a fourth thing on a dashboard whose other three have
-    // nothing to do with motifs. A vocabulary that cannot be read is this
-    // block's problem to report, not the panel's problem to crash on.
-    let pending: ReturnType<typeof api.motifs>;
+    // try/catch around the CALL and the subscription, not just the promise's
+    // rejection: a client that throws synchronously — or hands back something
+    // that is not a promise at all — would otherwise take the whole summary
+    // panel down with it, and this block is a fourth thing on a dashboard
+    // whose other three have nothing to do with motifs. A vocabulary that
+    // cannot be read is this block's problem to report, not the panel's
+    // problem to crash on.
     try {
-      pending = api.motifs(repo, branch, { q: q || undefined, path: path || undefined, sort, limit: 200 });
+      readMotifs(endpoint, { q: q || undefined, path: path || undefined, sort, limit: 200 })
+        .then(r => {
+          if (stale()) return;
+          setEntries(r.motifs);
+          setCount(r.count);
+          // The health block is NOT narrowed by the search — it describes the
+          // vocabulary, not the list under it — so a narrowing query must not
+          // overwrite it with a figure counted over the matches. The PATH is a
+          // different thing and does reach it: the server counts health over the
+          // same subtree it counted the list over, so the strip and the rows are
+          // always about one population. Which is why the held figures are KEYED
+          // by scope: a folder click mid-search refetches the list but leaves
+          // the query set, and a bare `if (!q)` would hold the old folder's
+          // figures over the new folder's rows — the exact two-populations row
+          // the pairing rule forbids. Better no strip than that strip; clearing
+          // the search refills it.
+          const scope = `${endpointKey}\n${path}`;
+          if (!q) { setHealth(r.health); healthFor.current = scope; }
+          else if (healthFor.current !== scope) setHealth(null);
+          setStatus('ok');
+        })
+        .catch(() => { if (!stale()) setStatus('error'); });
     } catch {
       setStatus('error');
-      return;
     }
-    pending
-      .then(r => {
-        if (stale()) return;
-        setEntries(r.motifs);
-        setCount(r.count);
-        // The health block is NOT narrowed by the search — it describes the
-        // vocabulary, not the list under it — so a narrowing query must not
-        // overwrite it with a figure counted over the matches. The PATH is a
-        // different thing and does reach it: the server counts health over the
-        // same subtree it counted the list over, so the strip and the rows are
-        // always about one population. Which is why the held figures are KEYED
-        // by scope: a folder click mid-search refetches the list but leaves
-        // the query set, and a bare `if (!q)` would hold the old folder's
-        // figures over the new folder's rows — the exact two-populations row
-        // the pairing rule forbids. Better no strip than that strip; clearing
-        // the search refills it.
-        const scope = `${repo}\n${branch}\n${path}`;
-        if (!q) { setHealth(r.health); healthFor.current = scope; }
-        else if (healthFor.current !== scope) setHealth(null);
-        setStatus('ok');
-      })
-      .catch(() => { if (!stale()) setStatus('error'); });
-  }, [repo, branch, path, q, sort, reloads]);
+    // `endpointKey`, not `endpoint`: the object is rebuilt on every render of
+    // the panel, and depending on it would re-issue the request each time.
+  }, [endpointKey, path, q, sort, reloads]);
 
-  if (!repo) return null;
   // ABSENT, not broken, where there is no vocabulary endpoint to ask.
   //
   // The public /explore build vendors these components and swaps api.ts for a
@@ -110,7 +119,10 @@ export function MotifsBlock({ repo, branch, path, onPick }: {
   // exactly as intended — so the block simply is not there, and the panel has
   // three columns instead of three columns and a block. The pivot still works,
   // because a pivot is a filter.
-  if (typeof api.motifs !== 'function') return null;
+  //
+  // The same absence covers an endpoint that is not addressable yet: App picks
+  // a repo from /repos on mount, so the first render has no repo to ask about.
+  if (!readable) return null;
 
   // Names used once are half the vocabulary and none of the reading: a name
   // minted once says something about authoring hygiene and nothing about the

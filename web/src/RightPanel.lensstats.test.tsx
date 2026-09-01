@@ -15,6 +15,9 @@ vi.mock('./api', () => ({
     fact: vi.fn(),
     getLensFact: vi.fn(),
     getLensStats: vi.fn(),
+    // Resolved by default: the summary renders the motif block, and a mock
+    // handing back a non-promise would blank the panel these tests are about.
+    lensMotifs: vi.fn().mockResolvedValue({ count: 0, health: {}, motifs: [] }),
     getAgentBranch: vi.fn().mockResolvedValue('agent/main'),
     stats: vi.fn().mockResolvedValue(null),
     activity: vi.fn().mockResolvedValue(null),
@@ -208,5 +211,36 @@ describe('RightPanel — the summary honours the mount selection', () => {
     render(<RightPanel state={withSources([])} dispatch={vi.fn()} />);
     await screen.findByTestId('lens-stats-empty');
     expect(api.getLensStats).not.toHaveBeenCalled();
+  });
+});
+
+// The lens summary carries the merged motif vocabulary in the same slot the
+// repo summary gives it. It used to be absent here because there was no single
+// vocabulary across a lens to show.
+describe('RightPanel — the lens summary motif block', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  it('reads the lens vocabulary, never the write repo’s', async () => {
+    (api.getLensStats as ReturnType<typeof vi.fn>).mockResolvedValue(unionStats);
+    (api.lensMotifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 1, health: { authored_clusters: 1 },
+      motifs: [{ cluster_key: 'as-failure-present-success', canonical: 'failure-presents-as-success', members: ['failure-presents-as-success'], df: 26, df_total: 26 }],
+    });
+    render(<RightPanel state={lensSummaryState()} dispatch={vi.fn()} />);
+    await screen.findByTestId('motifs-block');
+    await waitFor(() => expect(api.lensMotifs).toHaveBeenCalledWith('eng', expect.anything()));
+    expect(screen.getByText('failure-presents-as-success')).toBeTruthy();
+  });
+
+  it('dispatches the pivot on a pick, as the repo summary does', async () => {
+    const dispatch = vi.fn();
+    (api.getLensStats as ReturnType<typeof vi.fn>).mockResolvedValue(unionStats);
+    (api.lensMotifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 1, health: { authored_clusters: 1 },
+      motifs: [{ cluster_key: 'as-failure-present-success', canonical: 'failure-presents-as-success', members: ['failure-presents-as-success'], df: 26, df_total: 26 }],
+    });
+    render(<RightPanel state={lensSummaryState()} dispatch={dispatch} />);
+    fireEvent.click(await screen.findByText('failure-presents-as-success'));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'PIVOT_MOTIF', motif: 'failure-presents-as-success' });
   });
 });
