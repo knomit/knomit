@@ -169,3 +169,50 @@ func TestQueryFederation_TwoMountsResolveThroughTheUnionsVocabulary(t *testing.T
 	titles := queryTitles(t, text)
 	require.Len(t, titles, 2, "both spellings are one shape once a union exists: %s", text)
 }
+
+// §9.1 ON THE WIDENING PATH: a mount that cannot be read while a motif term is
+// being resolved fails the WHOLE query.
+//
+// This is the rule everywhere else in the fan-out, but the widening is where it
+// bites hardest and where it was going unpinned: a lens must never answer a
+// motif query from a smaller read set than it has, and an unreadable mount is
+// precisely a mount whose contribution is unknown. Answering anyway would hand
+// back a plausible, smaller result with nothing on it to say so — the failure
+// mode the whole no-federation-metadata decision is built around.
+//
+// The mount is broken by pinning it to a branch that does not exist, which is
+// the realistic version of this (a lens outliving a deleted branch), and the
+// message has to NAME it — that is what federate.MotifReadError carries.
+//
+// WHICH ASSERTION IS LOAD-BEARING: the message one. A broken mount is read
+// twice on this path — once to resolve the term, once by the fan-out — so
+// IsError stays true even if the widening never touched it, and on its own that
+// check cannot tell the two apart. Naming the mount is what distinguishes them:
+// the widening's failure is a federate.MotifReadError carrying repo@branch,
+// while the fan-out's is a bare "RecentFacts: branch ... not found". Verified
+// against the write-mount-only mutant, which leaves IsError true and fails on
+// exactly these two lines.
+func TestQueryFederation_MotifWideningFailureFailsTheWholeQuery(t *testing.T) {
+	repoA, ctxA := fedRepo(t)
+	repoB, _ := fedRepo(t)
+	seedMotifFact(t, ctxA, "seed-a", "AlphaCarrier", []any{"config-drift"})
+
+	b := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "no/such/branch"},
+	)
+
+	for _, sort := range []string{"recent", "relevance"} {
+		t.Run(sort, func(t *testing.T) {
+			result, text := queryVia(t, b, map[string]any{
+				"motifs": []any{"config-drift"}, "motif_match": "exact", "sort": sort,
+			})
+			require.Truef(t, result.IsError,
+				"an unreadable mount must fail the query, not shrink the read set silently: %s", text)
+			// Naming the mount is the difference between a diagnosable failure
+			// and "something went wrong somewhere in your lens".
+			require.Contains(t, text, repoB.Name(), "the failure must name the mount: %s", text)
+			require.Contains(t, text, "no/such/branch", "the failure must name the branch: %s", text)
+		})
+	}
+}

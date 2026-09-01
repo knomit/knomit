@@ -942,7 +942,12 @@ func TestLensFacts_MotifWideningFailsTheWholeRequest(t *testing.T) {
 	// is deliberate and documented; this pins that it is real rather than
 	// accidental, so a later change cannot quietly drop it as a bug.
 	rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=config-drift&repo=alpha")
-	if rec.Code == http.StatusOK {
-		t.Fatalf("a mount excluded by repo= still resolves the term, so its failure must not produce 200; body=%s", rec.Body.String())
+	// The exact status, not merely "not 200": the stub fails with a plain
+	// error, so 500 is the one right answer here. A future change that broke
+	// repo= narrowing into a 4xx would still be "not 200" and would leave this
+	// green while the coupling it pins had silently changed.
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("got %d, want 500 — a mount excluded by repo= still resolves the term, so its failure fails the request; body=%s",
+			rec.Code, rec.Body.String())
 	}
 }
