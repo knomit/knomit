@@ -184,14 +184,19 @@ func TestQueryFederation_TwoMountsResolveThroughTheUnionsVocabulary(t *testing.T
 // the realistic version of this (a lens outliving a deleted branch), and the
 // message has to NAME it — that is what federate.MotifReadError carries.
 //
-// WHICH ASSERTION IS LOAD-BEARING: the message one. A broken mount is read
-// twice on this path — once to resolve the term, once by the fan-out — so
-// IsError stays true even if the widening never touched it, and on its own that
-// check cannot tell the two apart. Naming the mount is what distinguishes them:
-// the widening's failure is a federate.MotifReadError carrying repo@branch,
-// while the fan-out's is a bare "RecentFacts: branch ... not found". Verified
-// against the write-mount-only mutant, which leaves IsError true and fails on
-// exactly these two lines.
+// WHICH ASSERTION IS LOAD-BEARING, because it is none of the obvious ones. A
+// broken mount is read TWICE on this path — once to resolve the term, once by
+// the fan-out — so under a mutant where the widening never touches it the query
+// still errors, from RecentFacts, and IsError stays true. Nor does asserting
+// the branch discriminate: the fan-out's own message is
+// `RecentFacts: branch "no/such/branch": branch not found`, which carries it
+// verbatim. And the repo NAME is worthless here — these fixtures name every
+// repo "test", four characters that also sit inside the healthy mount's
+// agent/test.
+//
+// Only federate.MotifReadError's own prefix can distinguish them, because only
+// the widening produces it. That is what is asserted, and the write-mount-only
+// mutant dies on exactly that line.
 func TestQueryFederation_MotifWideningFailureFailsTheWholeQuery(t *testing.T) {
 	repoA, ctxA := fedRepo(t)
 	repoB, _ := fedRepo(t)
@@ -209,10 +214,14 @@ func TestQueryFederation_MotifWideningFailureFailsTheWholeQuery(t *testing.T) {
 			})
 			require.Truef(t, result.IsError,
 				"an unreadable mount must fail the query, not shrink the read set silently: %s", text)
-			// Naming the mount is the difference between a diagnosable failure
-			// and "something went wrong somewhere in your lens".
-			require.Contains(t, text, repoB.Name(), "the failure must name the mount: %s", text)
-			require.Contains(t, text, "no/such/branch", "the failure must name the branch: %s", text)
+			// The widening's own error, which nothing else on this path can
+			// produce — this is the line that says the term was resolved
+			// against the whole read set rather than part of it.
+			require.Containsf(t, text, "motif vocabulary read failed on mount",
+				"the failure must come from the widening, not merely from the later fan-out: %s", text)
+			// ...and it must be diagnosable: which mount, at which branch.
+			require.Containsf(t, text, repoB.Name()+"@no/such/branch",
+				"the failure must name the mount and its branch: %s", text)
 		})
 	}
 }
