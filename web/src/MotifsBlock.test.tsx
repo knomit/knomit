@@ -115,6 +115,50 @@ describe('MotifsBlock', () => {
       'knomit-kb', 'agent/test', expect.objectContaining({ q: 'silent' })));
   });
 
+  // The denominator of "N of M" is the UNNARROWED COUNT, never a health figure.
+  // The two are different populations — health is counted over authored facts
+  // only while the list spans every origin, and in a lens health is a per-mount
+  // sum while the list counts each merged cluster once — so "12 of 73" could
+  // compare merged clusters against per-mount cluster instances. The fixture
+  // above happens to give both the same number, which is why this one pulls
+  // them apart: only the count answers the question the phrase asks.
+  it('takes the "of M" from the unnarrowed count, not from the health block', async () => {
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 40, health: { ...HEALTH, authored_clusters: 73 }, motifs: [...REUSED, ...ONCE],
+    });
+    draw();
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('40'));
+
+    fireEvent.click(screen.getByTestId('motifs-more'));
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 3, health: { ...HEALTH, authored_clusters: 73 }, motifs: REUSED.slice(0, 3),
+    });
+    fireEvent.change(await screen.findByTestId('motifs-search'), { target: { value: 'signal' } });
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('3 of 40'));
+  });
+
+  // A folder click mid-search moves the scope: a denominator counted over the
+  // previous folder must not sit over the new folder's rows, exactly as the
+  // health strip must not. Better a bare count than a wrong fraction.
+  it('drops the "of M" counted over another folder', async () => {
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 40, health: HEALTH, motifs: [...REUSED, ...ONCE],
+    });
+    const { rerender } = render(
+      <MotifsBlock endpoint={REPO} path="kb/decisions" onPick={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('40'));
+
+    fireEvent.click(screen.getByTestId('motifs-more'));
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 3, health: HEALTH, motifs: REUSED.slice(0, 3),
+    });
+    fireEvent.change(await screen.findByTestId('motifs-search'), { target: { value: 'signal' } });
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('3 of 40'));
+
+    rerender(<MotifsBlock endpoint={REPO} path="kb/gotchas" onPick={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('3'));
+  });
+
   it('narrows the block count but NEVER the health figures', async () => {
     resolve();
     draw();

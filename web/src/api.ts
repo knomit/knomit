@@ -1027,11 +1027,16 @@ const EMPTY_MOTIF_HEALTH: MotifHealth = {
   recurrence_rate: 0, mint_to_link_ratio: 0,
 };
 
-/** The vocabulary query. `repos` is lens-only (repeated `repo=`, narrowing the
- *  fan-out); the repo endpoint has no mounts to narrow and ignores it. */
+/** The vocabulary query.
+ *
+ *  No `repos`: the lens collection accepts a repeated `repo=` narrow, but
+ *  nothing in this client sends one, and a field no caller sets is a field
+ *  whose behaviour nobody has checked — it would also be silently dropped
+ *  against the repo endpoint, which has no mounts to narrow. Add it back with
+ *  the caller that needs it. */
 export interface MotifsQuery {
   q?: string; path?: string; sort?: 'df' | 'name';
-  limit?: number; offset?: number; repos?: string[];
+  limit?: number; offset?: number;
 }
 
 export interface MotifsPage { count: number; health: MotifHealth; motifs: MotifEntry[] }
@@ -1054,7 +1059,6 @@ function fetchMotifs(base: string, opts?: MotifsQuery): Promise<MotifsPage> {
   if (opts?.sort) p.set('sort', opts.sort);
   if (opts?.limit !== undefined) p.set('limit', String(Math.min(opts.limit, MOTIFS_MAX_LIMIT)));
   if (opts?.offset) p.set('offset', String(opts.offset));
-  for (const repo of opts?.repos ?? []) p.append('repo', repo);
   const qs = p.toString();
   return fetchJSON<any>(`${base}/motifs${qs ? `?${qs}` : ''}`).then(data => ({
     count: data.count ?? 0,
@@ -1286,8 +1290,7 @@ export const api = {
     fetchMotifs(branchBase(repo, branch), opts),
 
   /** The lens-wide motif vocabulary: every mount's clusters merged into one
-   *  list, in the repo endpoint's own envelope. `repos` narrows the fan-out to
-   *  the named mounts, like every other lens union read. */
+   *  list, in the repo endpoint's own envelope. */
   lensMotifs: (lens: string, opts?: MotifsQuery): Promise<MotifsPage> =>
     fetchMotifs(lensBase(lens), opts),
 

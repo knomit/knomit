@@ -1015,11 +1015,10 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                 )}
               </div>
               <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
-              {/* Repo context only. There is no single vocabulary across a
-                  lens — cross-mount cluster identity does not exist — so the
-                  block is ABSENT there rather than showing one mount's names as
-                  if they were the union's. The pivot still works in a lens;
-                  browsing the vocabulary is what cannot. */}
+              {/* The repo's vocabulary. The lens summary above renders the
+                  same block against its own merged vocabulary — cross-mount
+                  cluster identity is what /lenses/{lens}/motifs defines — so
+                  this is one block in two contexts, not a repo-only feature. */}
               <MotifsBlock endpoint={motifEndpoint} path={path}
                 onPick={motif => dispatch({ type: 'PIVOT_MOTIF', motif })} />
               <HighlightsPanel

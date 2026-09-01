@@ -54,6 +54,16 @@ export function MotifsBlock({ endpoint, path, onPick }: {
   const [entries, setEntries] = useState<MotifEntry[]>([]);
   const [health, setHealth] = useState<MotifHealth | null>(null);
   const [count, setCount] = useState(0);
+  /** The count with NO search applied — the denominator of "N of M".
+   *
+   *  It used to be health.authored_clusters, which is a different population
+   *  from the rows twice over: health is counted over AUTHORED facts while the
+   *  list spans every origin, and in a lens health is a per-mount SUM while the
+   *  list counts each merged cluster once. "12 of 73" then compared a number of
+   *  merged clusters against a number of per-mount cluster instances. The
+   *  unnarrowed count is the same query as the rows with the search taken off,
+   *  which is exactly what the phrase claims. */
+  const [total, setTotal] = useState<number | null>(null);
   const [status, setStatus] = useState<'loading' | 'ok' | 'error'>('loading');
   const [browsing, setBrowsing] = useState(false);
   const [q, setQ] = useState('');
@@ -98,8 +108,12 @@ export function MotifsBlock({ endpoint, path, onPick }: {
           // the pairing rule forbids. Better no strip than that strip; clearing
           // the search refills it.
           const scope = `${endpointKey}\n${path}`;
-          if (!q) { setHealth(r.health); healthFor.current = scope; }
-          else if (healthFor.current !== scope) setHealth(null);
+          // `total` is held under the SAME scope rule as health, and for the
+          // same reason: a folder click mid-search refetches the list but
+          // leaves the query set, so a denominator counted over the previous
+          // folder would sit over the new folder's rows. Better no "of M".
+          if (!q) { setHealth(r.health); setTotal(r.count); healthFor.current = scope; }
+          else if (healthFor.current !== scope) { setHealth(null); setTotal(null); }
           setStatus('ok');
         })
         .catch(() => { if (!stale()) setStatus('error'); });
@@ -183,9 +197,14 @@ export function MotifsBlock({ endpoint, path, onPick }: {
           Motifs
         </span>
         {/* The block count IS narrowed by the search; the health figures beside
-            it are not. They sit close together, so each says which it is. */}
+            it are not. They sit close together, so each says which it is — and
+            the "of M" is the unnarrowed COUNT, never a health figure, so both
+            halves of the fraction describe the same population. With no
+            denominator held for THIS scope the fraction is dropped rather than
+            defaulted to the numerator — "3 of 3" would claim the search matched
+            everything. */}
         <span data-testid="motifs-count" style={{ fontSize: 10, color: '#5f6a7c', fontFamily: 'var(--k-font-mono)' }}>
-          {status === 'ok' ? (q ? `${count} of ${health?.authored_clusters ?? count}` : count) : ''}
+          {status !== 'ok' ? '' : q && total !== null ? `${count} of ${total}` : count}
         </span>
         {health && (
           <span data-testid="motifs-health" style={{
