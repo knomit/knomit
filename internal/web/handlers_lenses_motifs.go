@@ -1,9 +1,9 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -14,61 +14,40 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// ─── the union ───────────────────────────────────────────────────────────────
-//
-// A motif cluster_key is a MECHANICAL function of a spelling (store's
-// groupingKey: canonicalize → tokenize → sort → join), so the same key names
-// the same shape in every repo and merging by key is sound. It is not
-// SUFFICIENT, though: a judge merge is per-branch, so one mount can have pulled
-// `quiet-degradation` under the key `fallback-silent` while another still keys
-// it `degradation-quiet`. Merging by key alone would then emit that one
-// spelling in two rows of one vocabulary, and the two rows would pivot to
-// different lists from names the reader cannot tell apart.
-//
-// So per-mount clusters are unioned TRANSITIVELY: two clusters are the same
-// cluster when they share a cluster_key OR share any member spelling (within a
-// mount a spelling belongs to exactly one cluster, so a shared spelling is
-// evidence the two are one shape). That rule is also what makes the pivot
-// correct by construction — the merged member list IS the `motifs=` CSV the
-// detail's _links.facts sends, and every mount expands that union against its
-// own alias table, which is exactly what the lens search/facts fan-out already
-// does with a caller-supplied motif filter.
+// The lens-wide motif vocabulary lives in internal/federate (MotifUnion), not
+// here, because TWO surfaces answer motif queries against a lens: this REST
+// group and the MCP knomit_query fan-out. This file holds only what is a
+// rendering concern — the definition election and the pooled health block —
+// and reaches for federate for everything that decides which spellings are one
+// shape.
 
-// motifGroup is one merged cluster under construction.
-type motifGroup struct {
-	// keys is every constituent cluster key, from every mount. The merged
-	// cluster is addressed by the smallest of them (see clusterKey).
-	keys    map[string]bool
-	members map[string]bool
-	// df / dfTotal are per-mount SUMS. Mounts are distinct repos, but distinct
-	// is not disjoint: a re-rooted fork mounted beside its upstream shares
-	// server-generated fact UUIDs, so one fact can be counted twice. That is
-	// the same accepted over-count the /lenses/{lens}/stats histograms make,
-	// for the same reason — an aggregate carries no per-fact paths to dedupe
-	// on (kb/gotchas/lens/browsing-ui-accepted-gaps). The carrier list on the
-	// detail DOES carry paths, and dedupes exactly.
-	df      int
-	dfTotal int
-	// canonical is ELECTED, mirroring store.electCanonical at the granularity
-	// the wire gives us: the representative of the highest-df constituent,
-	// ties broken lexicographically. Deterministic, and independent of mount
-	// order.
-	canonical string
-	bestDF    int
-	// The definition shown is the FRESHEST across mounts: current beats stale
-	// beats missing, ties broken write-mount-first then binding order.
-	def      store.MotifDefinitionStatus
-	defRank  int // 0 none, 1 stale, 2 current
-	defWrite bool
-	// mountKeys[ri] is the set of keys THAT MOUNT contributed, which is not
-	// the same set as `keys` and must not be confused with it. `keys` is the
-	// union across mounts, so it holds keys this mount never used — and a key
-	// another mount coined can perfectly well name an UNRELATED cluster here,
-	// since a cluster key is a mechanical function of a spelling and two
-	// corpora can both have that spelling in different company. Anything
-	// asking "did THIS mount file this row under THIS cluster" has to read
-	// the per-mount set; the alias attribution below is that question.
-	mountKeys map[*repos.RepoInstance]map[string]bool
+// motifDefinitionOf elects the definition shown for a MERGED cluster: the
+// freshest across mounts (current beats stale beats missing), ties broken
+// write-mount-first then binding order.
+//
+// Kept here rather than in the union because a definition is a thing the web
+// surface DISPLAYS; the union's job is which spellings are one shape. It reads
+// each mount's own constituent key via ContributedKey, never the union's key
+// set — a key another mount coined can name an unrelated cluster on this one.
+func motifDefinitionOf(
+	g *federate.MotifGroup, targets []federate.Target, write *repos.RepoInstance,
+	defsByMount []map[string]store.MotifDefinitionStatus,
+) (store.MotifDefinitionStatus, bool) {
+	var best store.MotifDefinitionStatus
+	bestRank, bestWrite := 0, false
+	for i, t := range targets {
+		isWrite := t.RT.RI == write
+		for key, st := range defsByMount[i] {
+			if !g.ContributedKey(t.RT.RI, key) {
+				continue
+			}
+			rank := definitionRank(st, true)
+			if rank > bestRank || (rank == bestRank && isWrite && !bestWrite) {
+				best, bestRank, bestWrite = st, rank, isWrite
+			}
+		}
+	}
+	return best, bestRank > 0
 }
 
 // definitionRank scores a mount's definition for the election above.
@@ -83,233 +62,57 @@ func definitionRank(st store.MotifDefinitionStatus, ok bool) int {
 	}
 }
 
-// motifUnion merges per-mount vocabularies into one lens-wide vocabulary.
+// gatherLensMotifs reads every target's vocabulary into one merged union, and
+// (optionally) each mount's definitions and pooled health beside it.
 //
-// Union-find over group indices: byKey and byMember can point at an absorbed
-// group, and find() walks to the survivor. Absorption always goes into the
-// LOWER index, so the result does not depend on which order two groups happened
-// to meet.
-type motifUnion struct {
-	groups   []*motifGroup
-	parent   []int
-	byKey    map[string]int
-	byMember map[string]int
-}
-
-func newMotifUnion() *motifUnion {
-	return &motifUnion{byKey: map[string]int{}, byMember: map[string]int{}}
-}
-
-func (u *motifUnion) find(i int) int {
-	for u.parent[i] != i {
-		u.parent[i] = u.parent[u.parent[i]]
-		i = u.parent[i]
-	}
-	return i
-}
-
-// absorb folds group b into group a (a < b), applying every election rule.
-func (u *motifUnion) absorb(a, b int) {
-	ga, gb := u.groups[a], u.groups[b]
-	for k := range gb.keys {
-		ga.keys[k] = true
-	}
-	for ri, keys := range gb.mountKeys {
-		if ga.mountKeys[ri] == nil {
-			ga.mountKeys[ri] = map[string]bool{}
-		}
-		for k := range keys {
-			ga.mountKeys[ri][k] = true
-		}
-	}
-	for m := range gb.members {
-		ga.members[m] = true
-	}
-	ga.df += gb.df
-	ga.dfTotal += gb.dfTotal
-	if gb.bestDF > ga.bestDF || (gb.bestDF == ga.bestDF && gb.canonical < ga.canonical) {
-		ga.canonical, ga.bestDF = gb.canonical, gb.bestDF
-	}
-	if gb.defRank > ga.defRank || (gb.defRank == ga.defRank && gb.defWrite && !ga.defWrite) {
-		ga.def, ga.defRank, ga.defWrite = gb.def, gb.defRank, gb.defWrite
-	}
-	u.parent[b] = a
-	u.groups[b] = nil
-}
-
-// add folds one mount's cluster into the union.
-func (u *motifUnion) add(ri *repos.RepoInstance, c store.MotifCluster, def store.MotifDefinitionStatus, defined, isWrite bool) {
-	g := &motifGroup{
-		keys:      map[string]bool{c.ClusterKey: true},
-		members:   map[string]bool{},
-		df:        c.DF,
-		dfTotal:   c.DFTotal,
-		canonical: c.CanonicalID,
-		bestDF:    c.DF,
-		def:       def,
-		defRank:   definitionRank(def, defined),
-		defWrite:  isWrite,
-		mountKeys: map[*repos.RepoInstance]map[string]bool{ri: {c.ClusterKey: true}},
-	}
-	for _, m := range c.Members {
-		g.members[m] = true
-	}
-	idx := len(u.groups)
-	u.groups = append(u.groups, g)
-	u.parent = append(u.parent, idx)
-
-	// Every existing group this cluster touches, by key or by any spelling.
-	touched := map[int]bool{}
-	if i, ok := u.byKey[c.ClusterKey]; ok {
-		touched[u.find(i)] = true
-	}
-	for _, m := range c.Members {
-		if i, ok := u.byMember[m]; ok {
-			touched[u.find(i)] = true
-		}
-	}
-	root := idx
-	for other := range touched {
-		a, b := min(root, other), max(root, other)
-		if a == b {
-			continue
-		}
-		u.absorb(a, b)
-		root = a
-	}
-	// Re-point every index this group owns at the survivor. Cheap, and it
-	// keeps find() shallow.
-	g = u.groups[root]
-	for k := range g.keys {
-		u.byKey[k] = root
-	}
-	for m := range g.members {
-		u.byMember[m] = root
-	}
-}
-
-// clusterKey is a merged cluster's identity: the lexicographically smallest
-// constituent key.
-//
-// Smallest rather than, say, the highest-df mount's, because a cluster key is
-// what definitions and URLs hang off and the store's own rule is that it must
-// be STABLE UNDER DF CHANGE. min() is that, is deterministic, does not depend
-// on mount order, and for a lens over one repo is the repo's own key — so a
-// lens of one answers with the vocabulary of the repo it wraps, unchanged.
-func (g *motifGroup) clusterKey() string {
-	key := ""
-	for k := range g.keys {
-		if key == "" || k < key {
-			key = k
-		}
-	}
-	return key
-}
-
-func (g *motifGroup) sortedMembers() []string {
-	out := make([]string, 0, len(g.members))
-	for m := range g.members {
-		out = append(out, m)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// resolve renders the merged vocabulary in the store's own order (df-desc,
-// canonical-asc), plus the definition map keyed by merged cluster key —
-// presence meaning "some mount had one", exactly as the per-repo Definitions
-// bulk read means it.
-func (u *motifUnion) resolve() ([]store.MotifCluster, map[string]store.MotifDefinitionStatus) {
-	clusters := make([]store.MotifCluster, 0, len(u.groups))
-	defs := make(map[string]store.MotifDefinitionStatus, len(u.groups))
-	for i, g := range u.groups {
-		if g == nil || u.find(i) != i {
-			continue
-		}
-		key := g.clusterKey()
-		clusters = append(clusters, store.MotifCluster{
-			ClusterKey:  key,
-			CanonicalID: g.canonical,
-			Members:     g.sortedMembers(),
-			DF:          g.df,
-			DFTotal:     g.dfTotal,
-		})
-		if g.defRank > 0 {
-			defs[key] = g.def
-		}
-	}
-	sort.Slice(clusters, func(i, j int) bool {
-		if clusters[i].DF != clusters[j].DF {
-			return clusters[i].DF > clusters[j].DF
-		}
-		return clusters[i].CanonicalID < clusters[j].CanonicalID
-	})
-	return clusters, defs
-}
-
-// lookup resolves a raw {key} path segment to a merged group. It accepts the
-// merged cluster key, ANY mount's constituent key, and any member spelling —
-// all three name the same cluster, and a reader arriving from a repo-scoped
-// link holds the second kind.
-//
-// No fallback to the store's per-branch ClusterKey resolution, unlike the repo
-// detail: Clusters returns members straight from fact_motifs, so every spelling
-// carried by a live fact is already a member here, and a spelling carried by no
-// live fact resolves to a key with no cluster — a 404 either way.
-func (u *motifUnion) lookup(raw string) (*motifGroup, bool) {
-	if i, ok := u.byKey[raw]; ok {
-		return u.groups[u.find(i)], true
-	}
-	if i, ok := u.byMember[raw]; ok {
-		return u.groups[u.find(i)], true
-	}
-	return nil, false
-}
-
-// gatherLensMotifs fans the vocabulary read out over targets and folds every
-// mount's clusters into one union, pooling the health counts as it goes.
+// COST, and a FAILURE COUPLING. This is a per-mount Clusters read on every
+// call, and there is no cache behind it. Affordable on the vocabulary block and the picker, which fire once
+// per panel; worth knowing about on the cluster detail, which runs once PER
+// MOTIF on an opened fact — a 3-motif fact in a 5-mount lens is 15 Clusters
+// reads. Anything more would be a cache, and a cache would need an invalidation
+// story per mount per branch. (The motif-filter expansion path shares the same
+// union machinery but goes through federate.ExpandMotifTerms, which reads
+// clusters only and skips a single-mount binding entirely.)
 //
 // Any mount error fails the WHOLE request (RFC §9.1 — a lens never silently
 // shrinks its read set): returning the surviving mounts' vocabulary would
 // present a smaller union as if it were the whole one, which no field in the
-// response is allowed to disclose (kb/decisions/lens/no-federation-metadata-in-responses).
-// On that path it writes the problem response and returns ok=false.
-// COST. This is a per-mount Clusters read (plus Definitions, plus
-// VocabularyHealth) on every call, and there is no cache behind it. That is
-// affordable on the vocabulary block and the picker, which fire once per
-// panel; it is worth knowing about on the two callers that fire repeatedly:
-// expandLensMotifs runs on every motif-filtered list request, and the cluster
-// detail runs once PER MOTIF on an opened fact — so a 3-motif fact in a
-// 5-mount lens is 15 Clusters reads. `withDefs` and `withHealth` exist to keep
-// each caller from paying for reads it does not use (the expansion path needs
-// neither), which is the whole optimisation here. Anything more would be a
-// cache, and a cache would need an invalidation story per mount per branch.
+// response is allowed to disclose. On that path it writes the problem response
+// and returns ok=false.
+//
+// On the FILTER path (federate.ExpandMotifTerms) that rule reaches further than
+// it used to, and it is worth saying plainly: because a term's meaning is
+// lens-wide, the expansion reads EVERY mount even for a `repo=`-narrowed
+// request, so a mount the caller excluded can fail their query. That follows
+// from §9.1 — the term is resolved against the lens, and a lens does not answer
+// from a shrunken read set — but it is a coupling a narrowed query did not have
+// before this shipped.
 func gatherLensMotifs(
 	w http.ResponseWriter, r *http.Request, bind *repos.Binding,
 	provider motifsProvider, targets []federate.Target, withDefs, withHealth bool,
-) (*motifUnion, store.MotifVocabularyHealth, bool) {
-	u := newMotifUnion()
+) (*federate.MotifUnion, []map[string]store.MotifDefinitionStatus, store.MotifVocabularyHealth, bool) {
 	var pooled store.MotifVocabularyHealth
-	for _, t := range targets {
-		isWrite := t.RT.RI == bind.Write()
+	defsByMount := make([]map[string]store.MotifDefinitionStatus, len(targets))
+	u := federate.NewMotifUnion()
+	for i, t := range targets {
 		clusters, err := provider.Clusters(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
-			return nil, pooled, false
+			return nil, nil, pooled, false
 		}
-		var defs map[string]store.MotifDefinitionStatus
 		if withDefs {
-			defs, err = provider.Definitions(r.Context(), t.RT.RI, t.RT.Branch, motifClusterKeys(clusters))
+			defs, err := provider.Definitions(r.Context(), t.RT.RI, t.RT.Branch, motifClusterKeys(clusters))
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
-				return nil, pooled, false
+				return nil, nil, pooled, false
 			}
+			defsByMount[i] = defs
 		}
 		if withHealth {
 			h, err := provider.VocabularyHealth(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 			if err != nil {
 				writeStoreError(w, r, err, "Failed to load motif vocabulary", t.RT.Branch)
-				return nil, pooled, false
+				return nil, nil, pooled, false
 			}
 			// POOLED counts. The two ratios are derived from the pooled totals
 			// exactly ONCE, below — never averaged across mounts. Averaging
@@ -325,45 +128,20 @@ func gatherLensMotifs(
 			pooled.EpistemicRecurring += h.EpistemicRecurring
 		}
 		for _, c := range clusters {
-			st, defined := defs[c.ClusterKey]
-			u.add(t.RT.RI, c, st, defined, isWrite)
+			u.Add(t.RT.RI, c)
 		}
 	}
-	return u, pooled, true
+	return u, defsByMount, pooled, true
 }
 
-// expandLensMotifs widens a caller's motif terms to the lens's MERGED clusters,
-// so every mount is asked about the whole shape rather than about one mount's
-// name for it.
+// expandLensMotifs widens a caller's motif terms through the lens's merged
+// vocabulary before a filtered read fans out. A thin adapter over
+// federate.ExpandMotifTerms — the ONE definition the MCP fan-out shares, so a
+// chip minted anywhere is correct because the seam resolves it, not because
+// the caller remembered to send members. See that function for the semantics
+// this establishes and the failure coupling it accepts.
 //
-// This is the correctness seam for every motif-filtered lens read, and without
-// it a lens pivot silently drops mounts its own count included. The store's
-// exact tier is per-branch canonical equality (store.expandMotifQuery): a term
-// resolves through THAT branch's alias table, and a mount that carries the
-// cluster under a different spelling — because the canonical is ELECTED per
-// branch, and a judge merge is per-branch — resolves the term to itself, finds
-// no member with that canonical, and contributes ZERO facts. So a row reading
-// "df 7" pivots to a list of 5, on a surface whose entire promise is that the
-// count and the list are the same query.
-//
-// The detail's carrier preview never had the bug because it sends the merged
-// member list. Fixing it HERE rather than teaching each client to send members
-// is the point: a chip minted anywhere — the vocabulary block, the filter
-// picker's completions, a hand-typed motif:, a script — is now correct because
-// the ENDPOINT resolves it, not because the caller remembered to.
-//
-// Expansion runs over the FULL read set, branch-wide, and deliberately ignores
-// the calling query's own ?path= and ?repo= narrowing. Cluster identity is a
-// property of the LENS (the same reason the cluster detail refuses ?repo=), and
-// a term minted from the whole vocabulary must keep meaning the same shape when
-// the list under it is narrowed. Resolving through a narrowed union would
-// re-run the exact bug this fixes: narrow to the one mount that spells it
-// differently, and the term resolves to nothing.
-//
-// A term in no cluster is left alone — its own singleton, which is what the
-// store does with it too. On a lens of one the expansion is an identity: every
-// member of a cluster resolves to that cluster's canonical anyway, so the
-// widened set selects exactly the rows the bare term did.
+// On error it writes the problem response and returns ok=false.
 func expandLensMotifs(
 	w http.ResponseWriter, r *http.Request, bind *repos.Binding,
 	provider motifsProvider, terms []string,
@@ -371,36 +149,14 @@ func expandLensMotifs(
 	if len(terms) == 0 || provider == nil {
 		return terms, true
 	}
-	targets, err := federate.ReadTargetsFor(bind, "")
+	read := func(ctx context.Context, rt repos.ReadTarget) ([]store.MotifCluster, error) {
+		// Branch-wide: identity is not scoped by where the reader stands.
+		return provider.Clusters(ctx, rt.RI, rt.Branch, "")
+	}
+	out, err := federate.ExpandMotifTerms(r.Context(), bind, read, terms)
 	if err != nil {
-		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
+		writeStoreError(w, r, err, "Failed to resolve motif filter", "")
 		return nil, false
-	}
-	// Neither definitions nor health: this path only needs which spellings
-	// belong together, and it runs on every motif-filtered list request.
-	u, _, ok := gatherLensMotifs(w, r, bind, provider, targets, false, false)
-	if !ok {
-		return nil, false
-	}
-	// Order-preserving and duplicate-free: two terms in one cluster (two chips
-	// the reader widened with) must not send the same spelling twice.
-	seen := make(map[string]bool, len(terms))
-	out := make([]string, 0, len(terms))
-	add := func(s string) {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-	for _, term := range terms {
-		g, found := u.lookup(term)
-		if !found {
-			add(term)
-			continue
-		}
-		for _, m := range g.sortedMembers() {
-			add(m)
-		}
 	}
 	return out, true
 }
@@ -445,11 +201,31 @@ func handleHALLensMotifs(b hal.URLBuilder, provider motifsProvider) http.Handler
 			return
 		}
 
-		u, health, ok := gatherLensMotifs(w, r, bind, provider, targets, true, true)
+		u, defsByMount, health, ok := gatherLensMotifs(w, r, bind, provider, targets, true, true)
 		if !ok {
 			return
 		}
-		clusters, defs := u.resolve()
+
+		// Render the merged vocabulary through the SAME renderer the per-repo
+		// endpoint uses. `defs` carries presence as meaning, exactly as the
+		// per-mount bulk read does: a key absent from it has no definition on
+		// any mount.
+		groups := u.Groups()
+		clusters := make([]store.MotifCluster, 0, len(groups))
+		defs := make(map[string]store.MotifDefinitionStatus, len(groups))
+		for _, g := range groups {
+			key := g.Key()
+			clusters = append(clusters, store.MotifCluster{
+				ClusterKey:  key,
+				CanonicalID: g.Canonical,
+				Members:     g.Members(),
+				DF:          g.DF,
+				DFTotal:     g.DFTotal,
+			})
+			if st, defined := motifDefinitionOf(g, targets, bind.Write(), defsByMount); defined {
+				defs[key] = st
+			}
+		}
 
 		renderMotifCollection(w, r, b.Lens(lensName)+"/motifs", clusters, defs, health, p)
 	}
@@ -486,17 +262,18 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 			return
 		}
 
-		u, _, ok := gatherLensMotifs(w, r, bind, provider, targets, true, false)
+		u, defsByMount, _, ok := gatherLensMotifs(w, r, bind, provider, targets, true, false)
 		if !ok {
 			return
 		}
-		group, found := u.lookup(rawKey)
+		group, found := u.Lookup(rawKey)
 		if !found {
 			hal.WriteProblem(w, http.StatusNotFound, "Unknown motif",
 				`no motif cluster or spelling "`+rawKey+`" in this lens's vocabulary`, r.URL.Path)
 			return
 		}
-		key, members := group.clusterKey(), group.sortedMembers()
+		key, members := group.Key(), group.Members()
+		def, defined := motifDefinitionOf(group, targets, bind.Write(), defsByMount)
 
 		// Carriers ARE the pivot: the same filter, the same tier, the same code
 		// path as /lenses/{lens}/facts?motifs=<members>&motif_match=exact, so
@@ -609,7 +386,7 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 					// corpora can reach the same key with different membership.
 					// Checking the union set would attribute another mount's
 					// audit trail to a spelling this one files somewhere else.
-					if row, ok := rows[m]; ok && group.mountKeys[t.RT.RI][row.ClusterKey] {
+					if row, ok := rows[m]; ok && group.ContributedKey(t.RT.RI, row.ClusterKey) {
 						rowFor[m] = row
 					}
 				}
@@ -631,12 +408,12 @@ func handleHALLensMotifCluster(b hal.URLBuilder, provider motifsProvider, facts 
 
 		hal.WriteHAL(w, http.StatusOK, motifDetailView{
 			ClusterKey:      key,
-			Canonical:       group.canonical,
+			Canonical:       group.Canonical,
 			Members:         members,
-			DF:              group.df,
-			DFTotal:         group.dfTotal,
-			Definition:      group.def.Definition,
-			DefinitionState: definitionState(group.def, group.defRank > 0),
+			DF:              group.DF,
+			DFTotal:         group.DFTotal,
+			Definition:      def.Definition,
+			DefinitionState: definitionState(def, defined),
 			CarrierCount:    carrierCount,
 			Carriers:        carriers,
 			Aliases:         aliases,

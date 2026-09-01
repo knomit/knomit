@@ -1694,6 +1694,24 @@ paths:
         resolved over the FULL read set: `?path=` and `?repo=` narrow the LIST,
         never what the term means. A term in no cluster is passed through
         unchanged.
+
+        WHAT THAT MEANS FOR JUDGE MERGES: a judge merge on ANY mount changes
+        what a motif term returns for the WHOLE lens. Read through a lens the
+        mounts share one vocabulary, exactly as one repo's folders share one —
+        which is what "a lens answers like a single repo" comes to when the
+        question is about motifs. It is READ-ONLY: no mount's alias table,
+        canonical election or verdict history is touched, and the same repo read
+        directly still answers with its own vocabulary alone. A lens over a
+        single mount is likewise left alone, so it answers exactly as that repo
+        does.
+
+        Two consequences worth planning for. Because the term's meaning is
+        lens-wide, a mount EXCLUDED by `repo=` is still read to resolve it, so
+        that mount failing fails the request — a coupling a narrowed query did
+        not have before. And over two or more mounts a term can reach spellings
+        that a single unrebuilt repo's exact tier would not, because the union
+        groups mechanically-equal spellings the per-branch canonicals keep
+        apart; that is the shared vocabulary, not a leak in the tier.
       operationId: listLensFacts
       parameters:
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
@@ -1802,6 +1820,24 @@ paths:
         resolved over the FULL read set: `?path=` and `?repo=` narrow the LIST,
         never what the term means. A term in no cluster is passed through
         unchanged.
+
+        WHAT THAT MEANS FOR JUDGE MERGES: a judge merge on ANY mount changes
+        what a motif term returns for the WHOLE lens. Read through a lens the
+        mounts share one vocabulary, exactly as one repo's folders share one —
+        which is what "a lens answers like a single repo" comes to when the
+        question is about motifs. It is READ-ONLY: no mount's alias table,
+        canonical election or verdict history is touched, and the same repo read
+        directly still answers with its own vocabulary alone. A lens over a
+        single mount is likewise left alone, so it answers exactly as that repo
+        does.
+
+        Two consequences worth planning for. Because the term's meaning is
+        lens-wide, a mount EXCLUDED by `repo=` is still read to resolve it, so
+        that mount failing fails the request — a coupling a narrowed query did
+        not have before. And over two or more mounts a term can reach spellings
+        that a single unrebuilt repo's exact tier would not, because the union
+        groups mechanically-equal spellings the per-branch canonicals keep
+        apart; that is the shared vocabulary, not a leak in the tier.
       operationId: searchLens
       parameters:
         - { name: q,              in: query, schema: { type: string } }
