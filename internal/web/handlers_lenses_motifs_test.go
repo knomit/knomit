@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"knomit/internal/federate"
@@ -629,15 +630,22 @@ func TestLensMotifCluster_IsBranchWideOnEveryMount(t *testing.T) {
 // differently, a term it has never seen resolves to itself, no member's
 // canonical equals it, and the mount contributes nothing.
 type lensPivotFactsStub struct {
-	byRepo   map[string][]store.RecentFactEntry
+	byRepo map[string][]store.RecentFactEntry
+	// mu guards lastOpts. The lens SEARCH fan-out calls this stub once per
+	// mount concurrently, so the recording is shared across goroutines — the
+	// production providers are stateless and need no lock. (The facts fan-out
+	// this stub also serves is still serial; the lock is harmless there.)
+	mu       sync.Mutex
 	lastOpts map[string]store.SearchOptions
 }
 
 func (s *lensPivotFactsStub) carriers(ri *repos.RepoInstance, opts store.SearchOptions) ([]store.RecentFactEntry, int) {
+	s.mu.Lock()
 	if s.lastOpts == nil {
 		s.lastOpts = map[string]store.SearchOptions{}
 	}
 	s.lastOpts[ri.Name()] = opts
+	s.mu.Unlock()
 	want := map[string]bool{}
 	for _, m := range opts.Motifs {
 		want[m] = true
