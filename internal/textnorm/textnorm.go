@@ -17,6 +17,7 @@ package textnorm
 
 import (
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/gertd/go-pluralize"
@@ -82,11 +83,59 @@ func Canonicalize(s string) string {
 //
 // Both guards are symmetric (applied identically at index and query time), so
 // they never break matching; they only avoid mangling internal keys.
+//
+// MEMOIZED, and that is a performance fix rather than a design choice about
+// meaning: go-pluralize's Singular runs a table of backtracking regexes and
+// costs ~25µs per token, which is three to four orders of magnitude more than
+// everything else on this path. That price used to be paid per token per motif
+// per ROW, inside the knomit_motif_key SQL callback, on every request — the
+// motif vocabulary of a single repo took ~40ms, and a five-mount lens paid it
+// five times. Memoizing takes Stem to tens of nanoseconds — three orders of
+// magnitude, and 0 allocations on the hit — and the lens vocabulary from
+// ~133ms to ~9ms. See BenchmarkStem, which records the orders rather than the
+// digits, because the warm figure moves run to run.
+//
+// It needs NO invalidation, ever. Stem is a pure function of its argument, so
+// the memo is not derived corpus state that can go stale — it is the same
+// answer, remembered. That is why it lives here on the primitive rather than
+// as a per-branch cache in a consumer: one seam, and every caller — groupingKey,
+// domain matching, the motif-term tiers in store.expandMotifQuery, the motif
+// subject-word strip — gets it. Free-text search is NOT one of them: opts.Text
+// goes to the embedder, and never through this package.
+//
+// Unbounded, deliberately, and matching store.branchCache's posture. What
+// bounds it is worth stating exactly, because it is NOT only the corpus: the
+// keys are single tokens from a corpus's own vocabulary PLUS whatever
+// domain and motif filter tokens callers have asked about — ?domain= and
+// ?motifs= reach here through store.canonicalizeDomain and the motif tiers, so
+// a request can mint an entry. There is still no size to pick that would not
+// be a guess about how big a corpus is, but see the Clone below for what that
+// admission costs.
+var stemMemo sync.Map // token → singular form
+
 func Stem(t string) string {
 	if len(t) <= 3 || strings.HasSuffix(t, "ics") {
 		return t
 	}
-	return pluralizer.Singular(t)
+	if s, ok := stemMemo.Load(t); ok {
+		return s.(string)
+	}
+	// CLONED BEFORE IT IS STORED, and that is about retention, not correctness.
+	// Tokens hands us a strings.FieldsFunc substring, which shares the
+	// canonicalized input's backing array — so storing it as-is would pin the
+	// WHOLE canonical string for the entry's life, and Singular returning its
+	// argument unchanged (the common case) would pin it through the value too.
+	// One token off a long ?domain= would hold that whole filter value forever.
+	// Cloning first, and singularizing the clone, means an entry retains its
+	// own bytes and nothing else. It costs one allocation on a MISS; the hit
+	// path above never reaches here.
+	//
+	// Racing callers may both compute this; Singular is pure, so they compute
+	// the same string and the second Store is a no-op in everything but timing.
+	key := strings.Clone(t)
+	s := pluralizer.Singular(key)
+	stemMemo.Store(key, s)
+	return s
 }
 
 // Tokens returns the stemmed, de-duplicated token set of a canonical string,
