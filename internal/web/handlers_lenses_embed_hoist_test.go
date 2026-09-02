@@ -116,10 +116,23 @@ func TestLensSearch_EveryMountGetsTheSameQueryVector(t *testing.T) {
 	}
 }
 
-// The results a hoisted embed produces are the ones per-mount embedding
-// produced. Driven by passing the SAME stub the same rows and comparing the
-// wire bodies: the hoist is a pure move of where the vector is computed, so the
-// fused order, the dedupe and the totals must all be untouched.
+// Hoisting the embed does not perturb the fusion, the dedupe or the totals.
+//
+// Be precise about what this can and cannot show. lensSearchStub answers from
+// canned rows and ignores the embedder entirely, so both arms retrieve the same
+// rows by construction — this is NOT evidence that a hoisted vector retrieves
+// what N per-mount vectors would have. It pins the surrounding machinery: that
+// setting base.QueryVec, and the extra code path that comes with it, leaves the
+// RRF order, the write-mount dedupe and `total` exactly as they were.
+//
+// The other half of the claim lives elsewhere, deliberately:
+//   - that every mount receives the SAME vector — the test below.
+//   - that the same embedder and string produce it, so the N vectors were
+//     already identical — repos.Manager installs one Embedder on every repo
+//     instance (internal/repos/swapstore.go, builder.go).
+//   - that real retrieval is unchanged end to end — 14 lens reads captured from
+//     the pre- and post-change binaries against the same corpus, byte-for-byte
+//     identical (see the branch's measurement writeup).
 func TestLensSearch_HoistedEmbedMatchesPerMountEmbed(t *testing.T) {
 	rows := map[string][]store.SearchResult{
 		"alpha": {sr("kb/a/1.md", "A one", 3), sr("kb/shared.md", "Shadowed", 99)},

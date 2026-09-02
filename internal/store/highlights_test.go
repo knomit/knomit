@@ -485,6 +485,15 @@ func TestHighlights_NarrowCallUsesTheAxisItIsGiven(t *testing.T) {
 	viaStats, err := svc.FactQuery().Stats(ctx, branch, "", other)
 	require.NoError(t, err)
 
+	// The premise, made explicit: the two axes must actually order this fixture
+	// differently. If they agreed, "answered for the axis it was given" and
+	// "silently re-derived the default" would produce the same rows and the
+	// assertion below would hold for a call that ignored its argument entirely.
+	require.NotEqual(t, full.Highlights, viaStats.Highlights,
+		"fixture no longer distinguishes axis %q from the default %q — this test "+
+			"cannot fail as written, so it must be reseeded rather than trusted",
+		other, full.DefaultAxis)
+
 	require.Equal(t, viaStats.Highlights, pinned,
 		"the narrow call answered for some axis other than the one it was given")
 }

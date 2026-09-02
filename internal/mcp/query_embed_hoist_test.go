@@ -80,21 +80,31 @@ func countingFedRepo(t *testing.T, emb countingFedEmbedder) (*repos.RepoInstance
 }
 
 // A federated text query embeds the query ONCE for the whole fan-out, not once
-// per mount.
+// per mount — on BOTH knomit_query fan-outs.
 //
 // Both sides of this test run the same query over the same 3-mount binding; the
 // only difference is whether QueryHandler was given the embedder to hoist with.
 // Without it, each mount embeds for itself inside store.Search — 3 inferences of
 // the identical string. That is the shape that made the REST twin 88% embedding
 // on a 5-mount lens, and it is a fixed per-mount cost, not a corpus-size one.
+//
+// sort=recent is covered because it is NOT a filter-only path: RecentFacts
+// delegates to recentFactsSearch whenever there is a text query
+// (internal/store/search_query.go), so the recency browse embeds exactly like
+// the relevance one. It hoists in queryRecent, a second call site that a
+// regression could revert on its own — and one nothing else here would notice,
+// since re-embedding is invisible to every assertion except this count.
 func TestQueryFederation_EmbedsQueryOncePerFanout(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
+		sort   string
 		hoists bool
 		want   int64
 	}{
-		{"hoisted", true, 1},
-		{"per-mount (pre-fix shape)", false, 3},
+		{"relevance/hoisted", sortRelevance, true, 1},
+		{"relevance/per-mount (pre-fix shape)", sortRelevance, false, 3},
+		{"recent/hoisted", sortRecent, true, 1},
+		{"recent/per-mount (pre-fix shape)", sortRecent, false, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var meter atomic.Int64
@@ -119,7 +129,7 @@ func TestQueryFederation_EmbedsQueryOncePerFanout(t *testing.T) {
 				handler = QueryHandler(emb)
 			}
 			var req mcpgo.CallToolRequest
-			req.Params.Arguments = map[string]any{"text": "alpha"}
+			req.Params.Arguments = map[string]any{"text": "alpha", "sort": tc.sort}
 			result, err := handler(repos.WithBinding(context.Background(), b), req)
 			require.NoError(t, err)
 			require.NotNil(t, result)
@@ -133,27 +143,31 @@ func TestQueryFederation_EmbedsQueryOncePerFanout(t *testing.T) {
 }
 
 // A text-LESS query must not reach an embedder at all — the hoist adds no
-// inference to a pure filter browse.
+// inference to a pure filter browse, on either fan-out.
 func TestQueryFederation_FilterOnlyQueryNeverEmbeds(t *testing.T) {
-	var meter atomic.Int64
-	emb := countingFedEmbedder{queries: &meter}
-	repoA, ctxA := countingFedRepo(t, emb)
-	repoB, _ := countingFedRepo(t, emb)
-	seedFedFact(t, ctxA, "seed-a", "mission/store", "alpha fact", "store", nil)
+	for _, sort := range []string{sortRelevance, sortRecent} {
+		t.Run(sort, func(t *testing.T) {
+			var meter atomic.Int64
+			emb := countingFedEmbedder{queries: &meter}
+			repoA, ctxA := countingFedRepo(t, emb)
+			repoB, _ := countingFedRepo(t, emb)
+			seedFedFact(t, ctxA, "seed-a", "mission/store", "alpha fact", "store", nil)
 
-	b := repos.NewBindingForTest(repoA,
-		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
-		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
-	)
-	meter.Store(0)
+			b := repos.NewBindingForTest(repoA,
+				repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+				repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+			)
+			meter.Store(0)
 
-	var req mcpgo.CallToolRequest
-	req.Params.Arguments = map[string]any{"domain": []any{"store"}}
-	result, err := QueryHandler(emb)(repos.WithBinding(context.Background(), b), req)
-	require.NoError(t, err)
-	require.Falsef(t, result.IsError, "query failed: %s", resultText(t, result))
+			var req mcpgo.CallToolRequest
+			req.Params.Arguments = map[string]any{"domain": []any{"store"}, "sort": sort}
+			result, err := QueryHandler(emb)(repos.WithBinding(context.Background(), b), req)
+			require.NoError(t, err)
+			require.Falsef(t, result.IsError, "query failed: %s", resultText(t, result))
 
-	if got := meter.Load(); got != 0 {
-		t.Errorf("EmbedQuery called %d times for a filter-only query, want 0", got)
+			if got := meter.Load(); got != 0 {
+				t.Errorf("EmbedQuery called %d times for a filter-only query, want 0", got)
+			}
+		})
 	}
 }

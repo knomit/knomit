@@ -47,8 +47,22 @@ func fanOutMounts(targets []federate.Target, fn func(i int, t federate.Target) (
 	failures := make([]*mountFailure, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
+		// The mount's label is built HERE, before the goroutine, and without
+		// dereferencing anything that might be absent.
+		//
+		// It is the recover handler's message, and a recover handler that can
+		// itself panic is worse than none: the second panic escapes the
+		// goroutine and kills the process — precisely what the recover exists
+		// to prevent. RepoInstance.Name() reads a field, so it panics on a nil
+		// instance, and a nil RepoInstance is the same archive/shutdown-race
+		// family that motivates the recover in the first place. Naming the
+		// mount must never be the thing that fails.
+		label := "mount " + t.RT.Branch
+		if t.RT.RI != nil {
+			label = "mount " + t.RT.RI.Name() + "@" + t.RT.Branch
+		}
 		wg.Add(1)
-		go func(i int, t federate.Target) {
+		go func(i int, t federate.Target, label string) {
 			defer wg.Done()
 			// A panic here must become this mount's error, not the process's
 			// death. net/http recovers panics on the REQUEST goroutine only, so
@@ -61,13 +75,13 @@ func fanOutMounts(targets []federate.Target, fn func(i int, t federate.Target) (
 			defer func() {
 				if p := recover(); p != nil {
 					failures[i] = &mountFailure{Mount: i, Title: "Mount failed",
-						Err: fmt.Errorf("mount %s@%s panicked: %v", t.RT.RI.Name(), t.RT.Branch, p)}
+						Err: fmt.Errorf("%s panicked: %v", label, p)}
 				}
 			}()
 			if title, err := fn(i, t); err != nil {
 				failures[i] = &mountFailure{Mount: i, Title: title, Err: err}
 			}
-		}(i, t)
+		}(i, t, label)
 	}
 	wg.Wait()
 	for _, f := range failures {
