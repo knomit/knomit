@@ -19,6 +19,8 @@ import { FacetPanel } from './FacetPanel';
 import { MotifCell } from './MotifCell';
 import { MotifOverflowCell, orderMotifs, OVERFLOW } from './MotifRow';
 import { useMotifClusters } from './useMotifClusters';
+import { motifEndpointOf } from './motifEndpoint';
+import type { MotifEndpoint } from './motifEndpoint';
 import { MotifPanel } from './MotifPanel';
 import { MotifsBlock } from './MotifsBlock';
 import type { OrderedMotifs } from './MotifRow';
@@ -457,12 +459,19 @@ function StatFigure({ label, value, color = '#e8edf3' }: {
 // sums, total-weighted confidence, max last_commit — computed server-side by
 // GET /lenses/{lens}/stats) over the merged histograms, then one compact row
 // per mount.
-function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
+function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate, motifEndpoint, path }: {
   stats: LensStats;
   dispatch: Dispatch<Action>;
   axis: RankAxis;
   onAxisChange: (a: RankAxis) => void;
   navigate?: (req: NavRequest) => void;
+  /** Passed in rather than derived here: RightPanel already holds the app
+   *  state this comes from, and one derivation keeps the summary block and the
+   *  fact header reading the same vocabulary. */
+  motifEndpoint: MotifEndpoint;
+  /** The ontology path the panel is describing — SCOPE for the motif block,
+   *  exactly as it is for the repo summary's. */
+  path: string;
 }) {
   const domainCount = Object.keys(stats.domains).length;
   const entityCount = Object.keys(stats.entities).length;
@@ -488,6 +497,13 @@ function LensStatsView({ stats, dispatch, axis, onAxisChange, navigate }: {
         )}
       </div>
       <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
+      {/* The lens's own merged vocabulary, in the same slot the repo summary
+          gives it. It used to be absent here because there was no single
+          vocabulary across a lens to show; /lenses/{lens}/motifs is that
+          vocabulary, so the block is a block in both contexts now rather than
+          a feature with a switch on it. */}
+      <MotifsBlock endpoint={motifEndpoint} path={path}
+        onPick={motif => dispatch({ type: 'PIVOT_MOTIF', motif })} />
       <HighlightsPanel
         highlights={stats.highlights}
         axis={axis}
@@ -592,11 +608,15 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // fact and cost nothing; each count is a request, so the row draws the names
   // at once and fills the counts in — see useMotifClusters.
   //
-  // The anchor is the fact's own history anchor, the same one the edges use, so
-  // a lens fact resolves against the mount it actually lives in rather than the
-  // write repo.
-  const motifAnchor = factHistoryAnchor(state);
-  const resolvedMotifs = useMotifClusters(motifAnchor.repo, motifAnchor.branch, fact?.motifs);
+  // Resolved against the corpus the reader is BROWSING, not the mount the fact
+  // happens to live on: in a lens that is the whole lens. The count sits beside
+  // a pivot, and the pivot lists the lens — a mount-scoped count under a
+  // lens-scoped pivot would promise one number and deliver another. (Edges and
+  // history still anchor on the fact's own mount, via factHistoryAnchor: those
+  // are questions about the fact's history, which is a property of where it
+  // lives.)
+  const motifEndpoint = motifEndpointOf(state);
+  const resolvedMotifs = useMotifClusters(motifEndpoint, fact?.motifs);
   const orderedMotifs = useMemo(() => orderMotifs(resolvedMotifs), [resolvedMotifs]);
   const motifPanelId = 'motif-panel';
 
@@ -963,7 +983,8 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
               ? <div data-testid="lens-stats-error" style={{ color: '#f88' }}>Couldn’t load lens stats — a mount failed to respond.</div>
               : lensStats
                 ? <LensStatsView stats={lensStats} dispatch={dispatch} axis={axis ?? lensStats.default_axis}
-                    onAxisChange={setAxis} navigate={navigate} />
+                    onAxisChange={setAxis} navigate={navigate}
+                    motifEndpoint={motifEndpoint} path={path} />
                 : <div style={{ color: '#666' }}>Loading lens stats…</div>}
           </div>
         </div>
@@ -994,12 +1015,11 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
                 )}
               </div>
               <FacetPanel domains={stats.domains} entities={stats.entities} types={stats.types} dispatch={dispatch} />
-              {/* Repo context only. There is no single vocabulary across a
-                  lens — cross-mount cluster identity does not exist — so the
-                  block is ABSENT there rather than showing one mount's names as
-                  if they were the union's. The pivot still works in a lens;
-                  browsing the vocabulary is what cannot. */}
-              <MotifsBlock repo={state.repo} branch={state.branch} path={path}
+              {/* The repo's vocabulary. The lens summary above renders the
+                  same block against its own merged vocabulary — cross-mount
+                  cluster identity is what /lenses/{lens}/motifs defines — so
+                  this is one block in two contexts, not a repo-only feature. */}
+              <MotifsBlock endpoint={motifEndpoint} path={path}
                 onPick={motif => dispatch({ type: 'PIVOT_MOTIF', motif })} />
               <HighlightsPanel
                 highlights={stats.highlights}

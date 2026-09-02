@@ -10,6 +10,7 @@ import { typeStyles, defaultTypeStyle, relativeTimeEpoch, repoHue, displayLensPa
 import { TypeIcon, FolderIcon } from './icons';
 import { LibraryHeader } from './LibraryHeader';
 import { useMotifClusters } from './useMotifClusters';
+import { motifEndpointOf } from './motifEndpoint';
 import { factSubject, subjectSummary } from './motifSubject';
 import type { NavRequest } from './useNavigationManager';
 
@@ -397,7 +398,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // across the ontology and there is no folder to be in. Two chips is a union
   // of two shapes and has no single name, so it keeps the ordinary header.
   const pivotMotif = (motifs.length === 1 && !state.freeText) ? motifs[0] : null;
-  const pivotResolved = useMotifClusters(state.repo, state.branch, pivotMotif ? [pivotMotif] : undefined);
+  // Resolved against the corpus the list is OF: in a lens, the lens. The
+  // heading this feeds sits over a lens-wide union, so a write-repo-only
+  // cluster would name and count a different set than the rows beneath it.
+  const pivotResolved = useMotifClusters(motifEndpointOf(state), pivotMotif ? [pivotMotif] : undefined);
   const pivotCluster = pivotResolved[0]?.cluster;
 
   useAsync((stale) => {

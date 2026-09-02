@@ -3,7 +3,11 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { MotifsBlock } from './MotifsBlock';
 import { api } from './api';
 
-vi.mock('./api', () => ({ api: { motifs: vi.fn() } }));
+vi.mock('./api', () => ({ api: { motifs: vi.fn(), lensMotifs: vi.fn() } }));
+
+// The endpoint the block reads from. A repo branch for most of the file; the
+// lens block below asserts the same behaviour against /lenses/{lens}/motifs.
+const REPO = { kind: 'repo', repo: 'knomit-kb', branch: 'agent/test' } as const;
 
 const entry = (canonical: string, df: number, definition?: string) => ({
   cluster_key: `key-${canonical}`, canonical, members: [canonical], df, definition,
@@ -34,7 +38,7 @@ const resolve = (over: Partial<{ count: number; motifs: typeof REUSED }> = {}) =
   });
 
 const draw = (onPick = vi.fn(), path = '') => {
-  render(<MotifsBlock repo="knomit-kb" branch="agent/test" path={path} onPick={onPick} />);
+  render(<MotifsBlock endpoint={REPO} path={path} onPick={onPick} />);
   return onPick;
 };
 
@@ -109,6 +113,50 @@ describe('MotifsBlock', () => {
     fireEvent.change(box, { target: { value: 'silent' } });
     await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
       'knomit-kb', 'agent/test', expect.objectContaining({ q: 'silent' })));
+  });
+
+  // The denominator of "N of M" is the UNNARROWED COUNT, never a health figure.
+  // The two are different populations — health is counted over authored facts
+  // only while the list spans every origin, and in a lens health is a per-mount
+  // sum while the list counts each merged cluster once — so "12 of 73" could
+  // compare merged clusters against per-mount cluster instances. The fixture
+  // above happens to give both the same number, which is why this one pulls
+  // them apart: only the count answers the question the phrase asks.
+  it('takes the "of M" from the unnarrowed count, not from the health block', async () => {
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 40, health: { ...HEALTH, authored_clusters: 73 }, motifs: [...REUSED, ...ONCE],
+    });
+    draw();
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('40'));
+
+    fireEvent.click(screen.getByTestId('motifs-more'));
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 3, health: { ...HEALTH, authored_clusters: 73 }, motifs: REUSED.slice(0, 3),
+    });
+    fireEvent.change(await screen.findByTestId('motifs-search'), { target: { value: 'signal' } });
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('3 of 40'));
+  });
+
+  // A folder click mid-search moves the scope: a denominator counted over the
+  // previous folder must not sit over the new folder's rows, exactly as the
+  // health strip must not. Better a bare count than a wrong fraction.
+  it('drops the "of M" counted over another folder', async () => {
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 40, health: HEALTH, motifs: [...REUSED, ...ONCE],
+    });
+    const { rerender } = render(
+      <MotifsBlock endpoint={REPO} path="kb/decisions" onPick={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('40'));
+
+    fireEvent.click(screen.getByTestId('motifs-more'));
+    (api.motifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 3, health: HEALTH, motifs: REUSED.slice(0, 3),
+    });
+    fireEvent.change(await screen.findByTestId('motifs-search'), { target: { value: 'signal' } });
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('3 of 40'));
+
+    rerender(<MotifsBlock endpoint={REPO} path="kb/gotchas" onPick={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('motifs-count').textContent).toBe('3'));
   });
 
   it('narrows the block count but NEVER the health figures', async () => {
@@ -257,10 +305,10 @@ describe('MotifsBlock', () => {
   it('re-asks when the reader moves to another folder', async () => {
     resolve();
     const { rerender } = render(
-      <MotifsBlock repo="knomit-kb" branch="agent/test" path="kb/decisions" onPick={vi.fn()} />);
+      <MotifsBlock endpoint={REPO} path="kb/decisions" onPick={vi.fn()} />);
     await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
       'knomit-kb', 'agent/test', expect.objectContaining({ path: 'kb/decisions' })));
-    rerender(<MotifsBlock repo="knomit-kb" branch="agent/test" path="kb/gotchas" onPick={vi.fn()} />);
+    rerender(<MotifsBlock endpoint={REPO} path="kb/gotchas" onPick={vi.fn()} />);
     await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
       'knomit-kb', 'agent/test', expect.objectContaining({ path: 'kb/gotchas' })));
   });
@@ -272,7 +320,7 @@ describe('MotifsBlock', () => {
   it('drops health counted over another folder rather than pairing it with the new list', async () => {
     resolve();
     const { rerender } = render(
-      <MotifsBlock repo="knomit-kb" branch="agent/test" path="kb/decisions" onPick={vi.fn()} />);
+      <MotifsBlock endpoint={REPO} path="kb/decisions" onPick={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('motifs-health')).toBeTruthy());
 
     fireEvent.click(screen.getByTestId('motifs-more'));
@@ -280,7 +328,7 @@ describe('MotifsBlock', () => {
     await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
       'knomit-kb', 'agent/test', expect.objectContaining({ q: 'signal' })));
 
-    rerender(<MotifsBlock repo="knomit-kb" branch="agent/test" path="kb/gotchas" onPick={vi.fn()} />);
+    rerender(<MotifsBlock endpoint={REPO} path="kb/gotchas" onPick={vi.fn()} />);
     await waitFor(() => expect(api.motifs).toHaveBeenLastCalledWith(
       'knomit-kb', 'agent/test', expect.objectContaining({ path: 'kb/gotchas', q: 'signal' })));
     await waitFor(() => expect(screen.queryByTestId('motifs-health')).toBeNull());
@@ -372,6 +420,48 @@ describe('MotifsBlock', () => {
   });
 });
 
+// The v1 block was repo-only: there was no single vocabulary across a lens to
+// show, so it was absent there. /lenses/{lens}/motifs merges every mount's
+// clusters into one, and the block reads it through the same props — the point
+// of these three is that NOTHING about the block itself is lens-aware.
+describe('in a lens', () => {
+  const LENS = { kind: 'lens', lens: 'eng' } as const;
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reads the lens vocabulary and never the write repo', async () => {
+    (api.lensMotifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 73, health: HEALTH, motifs: [...REUSED, ...ONCE],
+    });
+    render(<MotifsBlock endpoint={LENS} path="kb/decisions" onPick={vi.fn()} />);
+    await waitFor(() => expect(api.lensMotifs).toHaveBeenLastCalledWith(
+      'eng', expect.objectContaining({ path: 'kb/decisions' })));
+    // Not a fallback to one mount: a write-repo vocabulary shown in a lens
+    // would be one mount's names presented as the union's.
+    expect(api.motifs).not.toHaveBeenCalled();
+    expect(await screen.findByText('failure-presents-as-success')).toBeTruthy();
+  });
+
+  it('pivots on a pick exactly as it does in a repo', async () => {
+    (api.lensMotifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 73, health: HEALTH, motifs: [...REUSED, ...ONCE],
+    });
+    const onPick = vi.fn();
+    render(<MotifsBlock endpoint={LENS} path="" onPick={onPick} />);
+    fireEvent.click(await screen.findByText('failure-presents-as-success'));
+    expect(onPick).toHaveBeenCalledWith('failure-presents-as-success');
+  });
+
+  it('absents itself where the lens vocabulary cannot be read', () => {
+    const real = api.lensMotifs;
+    // @ts-expect-error — modelling the vendored client, which has no such call
+    api.lensMotifs = undefined;
+    const { container } = render(<MotifsBlock endpoint={LENS} path="" onPick={vi.fn()} />);
+    expect(container.firstChild).toBeNull();
+    api.lensMotifs = real;
+  });
+});
+
 describe('where there is no vocabulary endpoint', () => {
   it('absents itself rather than reporting a fault', () => {
     // The public /explore build vendors these components against a static
@@ -381,7 +471,7 @@ describe('where there is no vocabulary endpoint', () => {
     const real = api.motifs;
     // @ts-expect-error — modelling the vendored client, which has no such call
     api.motifs = undefined;
-    const { container } = render(<MotifsBlock repo="r" branch="b" path="" onPick={vi.fn()} />);
+    const { container } = render(<MotifsBlock endpoint={{ kind: 'repo', repo: 'r', branch: 'b' }} path="" onPick={vi.fn()} />);
     expect(container.firstChild).toBeNull();
     api.motifs = real;
   });

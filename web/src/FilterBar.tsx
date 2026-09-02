@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import type { Dispatch } from 'react';
 import type { AppState, Action, FilterChip } from './state';
 import { isLive, isLensContext, selectTrail } from './state';
+import { canReadMotifs, motifEndpointOf, readMotifs } from './motifEndpoint';
 import { api, parseFilterQuery } from './api';
 import { chipColors, chipStyle, originGlyphs, typeStyles, MOTIF_GLYPH } from './utils';
 import { TrailBreadcrumb } from './TrailBreadcrumb';
@@ -111,12 +112,13 @@ const PREFIX_RE = /(?:^|\s)(domain|entity|type|kind|origin|motif|path):(\S*)$/;
 export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail, embedded = false }: Props) {
   const isLens   = isLensContext(state);
   const lensName = state.context.kind === 'lens' ? state.context.name : '';
-  // Motif is offered only where its vocabulary can be read: not in a lens (no
-  // cross-mount identity) and not in a build with no such endpoint — the
-  // vendored /explore bundle swaps this client for a static one. A rail row
-  // that opened onto a permanent error is worse than a rail without it.
-  const CATEGORIES = (isLens || typeof api.motifs !== 'function')
-    ? LENS_CATEGORIES : FACT_CATEGORIES;
+  // Motif is offered wherever its vocabulary can be read. That now includes a
+  // lens — /lenses/{lens}/motifs merges every mount's clusters into one
+  // vocabulary — and excludes only a build with no such endpoint: the vendored
+  // /explore bundle swaps this client for a static one. A rail row that opened
+  // onto a permanent error is worse than a rail without it.
+  const motifEndpoint = motifEndpointOf(state);
+  const CATEGORIES = canReadMotifs(motifEndpoint) ? FACT_CATEGORIES : LENS_CATEGORIES;
 
   const [inputValue, setInputValue]               = useState('');
   const [suggestions, setSuggestions]             = useState<string[]>([]);
@@ -147,7 +149,7 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
     // completions endpoint returns bare strings and could do none of that. The
     // cost is a heavier payload, which is why it takes a page at a time.
     if (category === 'motif') {
-      return api.motifs(state.repo, state.branch, { q: prefix || undefined, sort: 'df', limit: 60 })
+      return readMotifs(motifEndpoint, { q: prefix || undefined, sort: 'df', limit: 60 })
         .then(r => ({ values: r.motifs.map(m => m.canonical) }));
     }
     return isLens

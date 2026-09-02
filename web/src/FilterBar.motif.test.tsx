@@ -14,7 +14,7 @@ import { init } from './state';
 import type { AppState } from './state';
 
 vi.mock('./api', () => ({
-  api: { motifs: vi.fn(), completions: vi.fn(async () => ({ values: [] })), lensCompletions: vi.fn(async () => ({ values: [] })) },
+  api: { motifs: vi.fn(), lensMotifs: vi.fn(), completions: vi.fn(async () => ({ values: [] })), lensCompletions: vi.fn(async () => ({ values: [] })) },
   parseFilterQuery: (raw: string) => ({ chips: [], text: raw, warnings: [] }),
 }));
 
@@ -110,12 +110,33 @@ describe('the motif category in the picker', () => {
     api.motifs = real;
   });
 
-  it('is absent in a lens, where no single vocabulary exists', () => {
+  // The row used to be absent in a lens because cross-mount cluster identity
+  // did not exist and offering the write repo's names would have handed the
+  // reader a vocabulary the union does not have. /lenses/{lens}/motifs IS that
+  // identity, so the row is offered — and it must read the LENS, because the
+  // old objection is still exactly right about the alternative.
+  it('offers Motif in a lens, reading the merged vocabulary', async () => {
+    (api.lensMotifs as ReturnType<typeof vi.fn>).mockResolvedValue({
+      count: 3, health: {}, motifs: RANKED.map((canonical, i) => ({
+        cluster_key: `k${i}`, canonical, members: [canonical], df: 26 - i * 9,
+      })),
+    });
     openPicker(repoState({ context: { kind: 'lens', name: 'dev' } }));
-    // Nothing to list: cross-mount cluster identity does not exist, and
-    // offering the write repo's names would hand the reader a vocabulary the
-    // union does not have. The same reasoning keeps `repo` out of this rail.
+    fireEvent.click(screen.getByTestId('picker-cat-motif'));
+    await waitFor(() => expect(api.lensMotifs).toHaveBeenCalledWith('dev',
+      expect.objectContaining({ sort: 'df' })));
+    expect(api.motifs).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId('picker-value').map(e => e.getAttribute('data-value')))
+      .toEqual(RANKED);
+  });
+
+  it('is absent in a lens with no lens vocabulary endpoint', () => {
+    const real = api.lensMotifs;
+    // @ts-expect-error — modelling the vendored client, which has no such call
+    api.lensMotifs = undefined;
+    openPicker(repoState({ context: { kind: 'lens', name: 'dev' } }));
     expect(screen.queryByTestId('picker-cat-motif')).toBeNull();
     expect(screen.getByTestId('picker-cat-domain')).toBeTruthy();
+    api.lensMotifs = real;
   });
 });

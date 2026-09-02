@@ -113,7 +113,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithArray("motifs",
-			mcpgo.Description("Filter by motif — the general regularity a fact instantiates (mechanism, failure shape, pattern), independent of its subject. Use to find facts about DIFFERENT subjects that exemplify the same thing."),
+			mcpgo.Description("Filter by motif — the general regularity a fact instantiates (mechanism, failure shape, pattern), independent of its subject. Use to find facts about DIFFERENT subjects that exemplify the same thing. Through a lens the mounts share ONE motif vocabulary, so a term reaches every spelling any mount groups with it, on every mount."),
 			mcpgo.WithStringItems(),
 		),
 		mcpgo.WithString("motif_match",
@@ -251,6 +251,10 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	if msg := motifMatchUnavailable(q); msg != "" {
 		return mcpgo.NewToolResultError(msg), nil
 	}
+	// Widen motif terms to the lens's merged clusters BEFORE the fan-out.
+	if err := widenMotifsForLens(ctx, b, &q); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 	targets, err := federate.ReadTargetsFor(b, q.Path)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -362,6 +366,41 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 	return queryResume(ctx, b, sWrite, sess.ID, pageSize, includeBody)
 }
 
+// mcpMotifClusters reads one mount's resolved motif vocabulary — the union's
+// per-mount read, in MCP's own store-acquisition idiom.
+//
+// Branch-wide (no path scope): cluster identity is a property of the lens, not
+// of the path filter the caller happened to send.
+func mcpMotifClusters(ctx context.Context, rt repos.ReadTarget) ([]store.MotifCluster, error) {
+	s, release, err := storeIndices(rt.RI)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.motifs.ClustersUnder(ctx, rt.Branch, "")
+}
+
+// widenMotifsForLens replaces each caller-supplied motif term with every
+// spelling in its MERGED cluster, so a lens-bound query asks every mount about
+// the whole shape rather than about one mount's name for it.
+//
+// The SAME seam the REST lens reads go through (federate.ExpandMotifTerms), and
+// deliberately not a second implementation: without it a motif-filtered
+// knomit_query against a lens silently drops every mount that spells the shape
+// differently — the store's exact tier is per-branch canonical equality, and a
+// judge merge is per-branch. That makes recall, the most-used motif path,
+// answer from a smaller read set than the lens has, which is precisely what
+// RFC §9.1 forbids. A single-mount binding is skipped: with nothing to merge
+// the expansion is provably an identity.
+func widenMotifsForLens(ctx context.Context, b *repos.Binding, q *store.SearchOptions) error {
+	widened, err := federate.ExpandMotifTerms(ctx, b, mcpMotifClusters, q.Motifs)
+	if err != nil {
+		return err
+	}
+	q.Motifs = widened
+	return nil
+}
+
 // parseQueryFilters reads the shared filter arguments into SearchOptions.
 // Limit is set by the caller per mode.
 func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
@@ -421,6 +460,12 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 	}
 	if !hasAnyFilter(q) {
 		return mcpgo.NewToolResultError("at least one of text, entities, domain, applies_to, path, type, origin, motifs, or min_confidence is required"), nil
+	}
+	// Widen motif terms to the lens's merged clusters BEFORE the fan-out. After
+	// hasAnyFilter, so the "no filter supplied" message stays about what the
+	// caller actually sent.
+	if err := widenMotifsForLens(ctx, b, &q); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
 	}
 	targets, err := federate.ReadTargetsFor(b, q.Path)
 	if err != nil {

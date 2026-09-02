@@ -178,6 +178,191 @@ func definitionState(st store.MotifDefinitionStatus, ok bool) string {
 	}
 }
 
+// motifCollectionParams is the parsed query of a motif vocabulary collection.
+//
+// Parsed ONCE, in motifCollectionQuery, because the repo and lens surfaces must
+// take the same knobs with the same bounds and the same refusals. Two
+// hand-written copies would agree until one of them was edited — the split
+// this codebase closes by construction rather than by discipline.
+type motifCollectionParams struct {
+	// Sort is "df" (default) or "name"; anything else is a 400.
+	sort string
+	// Q narrows the LIST and the count. A way of reading one page: it never
+	// touches the health block.
+	q string
+	// Path is SCOPE, not a filter over the page: it says which corpus this
+	// vocabulary is of, exactly as it does on /stats — so it narrows the
+	// health block too. The caller applies it (per repo, or per mount).
+	path          string
+	limit, offset int
+}
+
+// motifCollectionQuery parses and validates the vocabulary collection's query.
+// On any refusal it writes the problem response and returns ok=false; the
+// caller must return immediately without writing again.
+func motifCollectionQuery(w http.ResponseWriter, r *http.Request) (motifCollectionParams, bool) {
+	qp := r.URL.Query()
+	p := motifCollectionParams{
+		sort:   qp.Get("sort"),
+		q:      qp.Get("q"),
+		path:   qp.Get("path"),
+		limit:  motifsDefaultLimit,
+		offset: 0,
+	}
+	if p.sort == "" {
+		p.sort = "df"
+	}
+	if p.sort != "df" && p.sort != "name" {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+			`invalid sort value (accepted: "df", "name")`, r.URL.Path)
+		return p, false
+	}
+	if v := qp.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		// A HARD CEILING, not a clamp, matching limitParam: a client that
+		// asked for 500 and silently received 200 rows has no way to tell
+		// that from "there were only 200". Split into limitParam's three
+		// messages so the refusal says WHICH bound was missed and what it
+		// is, rather than making the caller guess.
+		switch {
+		case err != nil:
+			badParam(w, r, "invalid limit value")
+			return p, false
+		case n < 1:
+			badParam(w, r, "limit must be at least 1")
+			return p, false
+		case n > motifsMaxLimit:
+			badParam(w, r, "limit must not exceed "+strconv.Itoa(motifsMaxLimit))
+			return p, false
+		}
+		p.limit = n
+	}
+	if v := qp.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		switch {
+		case err != nil:
+			badParam(w, r, "invalid offset value")
+			return p, false
+		case n < 0:
+			badParam(w, r, "offset must not be negative")
+			return p, false
+		}
+		p.offset = n
+	}
+	return p, true
+}
+
+// motifClusterKeys is the bulk-Definitions argument for a cluster list.
+func motifClusterKeys(clusters []store.MotifCluster) []string {
+	keys := make([]string, len(clusters))
+	for i, c := range clusters {
+		keys[i] = c.ClusterKey
+	}
+	return keys
+}
+
+// renderMotifCollection narrows, orders, pages and writes the vocabulary
+// collection — the whole wire body below the point where a repo and a lens
+// stop differing.
+//
+// base is the surface's own /motifs URL, and it is the ONLY thing that differs:
+// a lens answers exactly like a single repo (no federation metadata, same
+// envelope, same links shape), so everything from the ?q= narrowing down is one
+// implementation rather than two kept in step. `defs` carries presence as
+// meaning: a key absent from it has no definition at all.
+func renderMotifCollection(
+	w http.ResponseWriter, r *http.Request, base string,
+	clusters []store.MotifCluster, defs map[string]store.MotifDefinitionStatus,
+	health store.MotifVocabularyHealth, p motifCollectionParams,
+) {
+	if q := strings.ToLower(strings.TrimSpace(p.q)); q != "" {
+		// A NEW slice, never clusters[:0]: filtering in place rewrites the
+		// backing array the provider handed over, so a provider that
+		// returns a cached or shared slice would be silently corrupted by
+		// a read request.
+		kept := make([]store.MotifCluster, 0, len(clusters))
+		for _, c := range clusters {
+			if motifClusterMatches(c, defs[c.ClusterKey].Definition, q) {
+				kept = append(kept, c)
+			}
+		}
+		clusters = kept
+	}
+
+	// Clusters arrives df-desc / canonical-asc from the store (and from the
+	// lens union, which re-sorts by the same rule); only the name sort
+	// re-orders.
+	if p.sort == "name" {
+		// Same reasoning as the narrowing above: sort a copy, never the
+		// provider's own slice.
+		sorted := make([]store.MotifCluster, len(clusters))
+		copy(sorted, clusters)
+		clusters = sorted
+		sort.Slice(clusters, func(i, j int) bool {
+			return clusters[i].CanonicalID < clusters[j].CanonicalID
+		})
+	}
+
+	total := len(clusters)
+	// Page bounds by REMAINDER, never by the sum offset+limit. An offset
+	// near MaxInt clears the `n < 0` parse guard above and then wraps the
+	// sum NEGATIVE, which passes every `< total` test written as a sum and
+	// reaches the slice expression as a negative bound — a bounds panic on
+	// an unauthenticated GET. `limit < total-offset` asks the same question
+	// with operands that cannot overflow (offset is capped at total first).
+	start := min(p.offset, total)
+	end := total
+	if p.limit < total-start {
+		end = start + p.limit
+	}
+
+	links := hal.LinkMap{"self": {Href: selfWithQuery(base, r)}}
+	if end < total {
+		nextQ := r.URL.Query()
+		nextQ.Set("offset", strconv.Itoa(end))
+		links["next"] = hal.Link{Href: base + "?" + nextQ.Encode()}
+	}
+	if p.offset > 0 {
+		prevQ := r.URL.Query()
+		prevQ.Set("offset", strconv.Itoa(max(p.offset-p.limit, 0)))
+		links["prev"] = hal.Link{Href: base + "?" + prevQ.Encode()}
+	}
+
+	page := clusters[start:end]
+	items := make([]motifEntry, 0, len(page))
+	for _, c := range page {
+		st, ok := defs[c.ClusterKey]
+		items = append(items, motifEntry{
+			ClusterKey:      c.ClusterKey,
+			Canonical:       c.CanonicalID,
+			Members:         c.Members,
+			DF:              c.DF,
+			DFTotal:         c.DFTotal,
+			Definition:      st.Definition,
+			DefinitionState: definitionState(st, ok),
+			Links:           hal.LinkMap{"self": {Href: base + "/" + c.ClusterKey}},
+		})
+	}
+
+	hal.WriteHAL(w, http.StatusOK, motifsView{
+		// Count is the post-narrowing total over EVERY origin; the health
+		// block beside it is authored-only and unnarrowed. See
+		// motifHealthView for why its fields carry the population prefix.
+		Count: total,
+		Health: motifHealthView{
+			AuthoredClusters:           health.Clusters,
+			AuthoredRecurring:          health.Recurring,
+			AuthoredMints:              health.Mints,
+			AuthoredLinks:              health.Links,
+			AuthoredEpistemicRecurring: health.EpistemicRecurring,
+			RecurrenceRate:             health.RecurrenceRate(),
+			MintToLinkRatio:            health.MintToLinkRatio(),
+		},
+		Links:    links,
+		Embedded: map[string][]motifEntry{"motifs": items},
+	})
+}
+
 // handleHALMotifs serves GET /repos/{repo}/branches/{branch}/motifs — the
 // per-repo motif vocabulary, one entry per cluster, df-desc by default.
 func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc {
@@ -186,64 +371,18 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 		ri := repos.RepoFromContext(r.Context())
 		branch := BranchFromContext(r.Context())
 		a := hal.Anchor{Branch: branch}
-		qp := r.URL.Query()
 
-		sortBy := qp.Get("sort")
-		if sortBy == "" {
-			sortBy = "df"
-		}
-		if sortBy != "df" && sortBy != "name" {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
-				`invalid sort value (accepted: "df", "name")`, r.URL.Path)
+		p, ok := motifCollectionQuery(w, r)
+		if !ok {
 			return
 		}
-		limit := motifsDefaultLimit
-		if v := qp.Get("limit"); v != "" {
-			n, err := strconv.Atoi(v)
-			// A HARD CEILING, not a clamp, matching limitParam: a client that
-			// asked for 500 and silently received 200 rows has no way to tell
-			// that from "there were only 200". Split into limitParam's three
-			// messages so the refusal says WHICH bound was missed and what it
-			// is, rather than making the caller guess.
-			switch {
-			case err != nil:
-				badParam(w, r, "invalid limit value")
-				return
-			case n < 1:
-				badParam(w, r, "limit must be at least 1")
-				return
-			case n > motifsMaxLimit:
-				badParam(w, r, "limit must not exceed "+strconv.Itoa(motifsMaxLimit))
-				return
-			}
-			limit = n
-		}
-		offset := 0
-		if v := qp.Get("offset"); v != "" {
-			n, err := strconv.Atoi(v)
-			switch {
-			case err != nil:
-				badParam(w, r, "invalid offset value")
-				return
-			case n < 0:
-				badParam(w, r, "offset must not be negative")
-				return
-			}
-			offset = n
-		}
 
-		// ?path= is SCOPE, not a filter over the page: it says which corpus
-		// this vocabulary is of, exactly as it does on /stats — so it narrows
-		// the health block too, while ?q= (a way of reading the page) narrows
-		// only the list and the count.
-		pathPrefix := qp.Get("path")
-
-		clusters, err := provider.Clusters(r.Context(), ri, branch, pathPrefix)
+		clusters, err := provider.Clusters(r.Context(), ri, branch, p.path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
 		}
-		health, err := provider.VocabularyHealth(r.Context(), ri, branch, pathPrefix)
+		health, err := provider.VocabularyHealth(r.Context(), ri, branch, p.path)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
@@ -251,102 +390,13 @@ func handleHALMotifs(b hal.URLBuilder, provider motifsProvider) http.HandlerFunc
 
 		// Definitions for every cluster in one bulk read. Fetched before
 		// narrowing because ?q= matches definition text too.
-		keys := make([]string, len(clusters))
-		for i, c := range clusters {
-			keys[i] = c.ClusterKey
-		}
-		defs, err := provider.Definitions(r.Context(), ri, branch, keys)
+		defs, err := provider.Definitions(r.Context(), ri, branch, motifClusterKeys(clusters))
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to load motif vocabulary", branch)
 			return
 		}
 
-		if q := strings.ToLower(strings.TrimSpace(qp.Get("q"))); q != "" {
-			// A NEW slice, never clusters[:0]: filtering in place rewrites the
-			// backing array the provider handed over, so a provider that
-			// returns a cached or shared slice would be silently corrupted by
-			// a read request.
-			kept := make([]store.MotifCluster, 0, len(clusters))
-			for _, c := range clusters {
-				if motifClusterMatches(c, defs[c.ClusterKey].Definition, q) {
-					kept = append(kept, c)
-				}
-			}
-			clusters = kept
-		}
-
-		// Clusters arrives df-desc / canonical-asc from the store; only the
-		// name sort re-orders.
-		if sortBy == "name" {
-			// Same reasoning as the narrowing above: sort a copy, never the
-			// provider's own slice.
-			sorted := make([]store.MotifCluster, len(clusters))
-			copy(sorted, clusters)
-			clusters = sorted
-			sort.Slice(clusters, func(i, j int) bool {
-				return clusters[i].CanonicalID < clusters[j].CanonicalID
-			})
-		}
-
-		total := len(clusters)
-		// Page bounds by REMAINDER, never by the sum offset+limit. An offset
-		// near MaxInt clears the `n < 0` parse guard above and then wraps the
-		// sum NEGATIVE, which passes every `< total` test written as a sum and
-		// reaches the slice expression as a negative bound — a bounds panic on
-		// an unauthenticated GET. `limit < total-offset` asks the same question
-		// with operands that cannot overflow (offset is capped at total first).
-		start := min(offset, total)
-		end := total
-		if limit < total-start {
-			end = start + limit
-		}
-
-		motifsBase := b.Branch(repoName, a) + "/motifs"
-		links := hal.LinkMap{"self": {Href: selfWithQuery(motifsBase, r)}}
-		if end < total {
-			nextQ := r.URL.Query()
-			nextQ.Set("offset", strconv.Itoa(end))
-			links["next"] = hal.Link{Href: motifsBase + "?" + nextQ.Encode()}
-		}
-		if offset > 0 {
-			prevQ := r.URL.Query()
-			prevQ.Set("offset", strconv.Itoa(max(offset-limit, 0)))
-			links["prev"] = hal.Link{Href: motifsBase + "?" + prevQ.Encode()}
-		}
-
-		page := clusters[start:end]
-		items := make([]motifEntry, 0, len(page))
-		for _, c := range page {
-			st, ok := defs[c.ClusterKey]
-			items = append(items, motifEntry{
-				ClusterKey:      c.ClusterKey,
-				Canonical:       c.CanonicalID,
-				Members:         c.Members,
-				DF:              c.DF,
-				DFTotal:         c.DFTotal,
-				Definition:      st.Definition,
-				DefinitionState: definitionState(st, ok),
-				Links:           hal.LinkMap{"self": {Href: motifsBase + "/" + c.ClusterKey}},
-			})
-		}
-
-		hal.WriteHAL(w, http.StatusOK, motifsView{
-			// Count is the post-narrowing total over EVERY origin; the health
-			// block beside it is authored-only and unnarrowed. See
-			// motifHealthView for why its fields carry the population prefix.
-			Count: total,
-			Health: motifHealthView{
-				AuthoredClusters:           health.Clusters,
-				AuthoredRecurring:          health.Recurring,
-				AuthoredMints:              health.Mints,
-				AuthoredLinks:              health.Links,
-				AuthoredEpistemicRecurring: health.EpistemicRecurring,
-				RecurrenceRate:             health.RecurrenceRate(),
-				MintToLinkRatio:            health.MintToLinkRatio(),
-			},
-			Links:    links,
-			Embedded: map[string][]motifEntry{"motifs": items},
-		})
+		renderMotifCollection(w, r, b.Branch(repoName, a)+"/motifs", clusters, defs, health, p)
 	}
 }
 
@@ -368,6 +418,31 @@ const (
 	motifCarriersDefaultLimit = 20
 	motifCarriersMaxLimit     = 100
 )
+
+// motifCarrierLimit parses the cluster detail's carrier preview bound, shared
+// by the repo and lens details so the two cannot drift on the ceiling or on
+// what they say when it is missed. On a refusal it writes the problem response
+// and returns ok=false; the caller must return without writing again.
+func motifCarrierLimit(w http.ResponseWriter, r *http.Request) (int, bool) {
+	v := r.URL.Query().Get("limit")
+	if v == "" {
+		return motifCarriersDefaultLimit, true
+	}
+	n, err := strconv.Atoi(v)
+	// Hard ceiling, same reasoning and same messages as the collection's limit.
+	switch {
+	case err != nil:
+		badParam(w, r, "invalid limit value")
+		return 0, false
+	case n < 1:
+		badParam(w, r, "limit must be at least 1")
+		return 0, false
+	case n > motifCarriersMaxLimit:
+		badParam(w, r, "limit must not exceed "+strconv.Itoa(motifCarriersMaxLimit))
+		return 0, false
+	}
+	return n, true
+}
 
 // motifCarrierItem is one carrier fact in the detail preview, recency-ordered
 // like the /facts pivot it previews.
@@ -417,23 +492,9 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 		a := hal.Anchor{Branch: branch}
 		rawKey := chi.URLParam(r, "key")
 
-		carrierLimit := motifCarriersDefaultLimit
-		if v := r.URL.Query().Get("limit"); v != "" {
-			n, err := strconv.Atoi(v)
-			// Hard ceiling, same reasoning and same messages as the
-			// collection's limit.
-			switch {
-			case err != nil:
-				badParam(w, r, "invalid limit value")
-				return
-			case n < 1:
-				badParam(w, r, "limit must be at least 1")
-				return
-			case n > motifCarriersMaxLimit:
-				badParam(w, r, "limit must not exceed "+strconv.Itoa(motifCarriersMaxLimit))
-				return
-			}
-			carrierLimit = n
+		carrierLimit, ok := motifCarrierLimit(w, r)
+		if !ok {
+			return
 		}
 
 		// Branch-wide, with no path scope: a cluster is being addressed by

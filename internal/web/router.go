@@ -239,10 +239,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 		r.Group(func(r chi.Router) {
 			r.Use(LensMiddleware(s.Manager))
-			r.Get("/facts", handleHALLensFacts(p.factsCollection))
+			r.Get("/facts", handleHALLensFacts(p.factsCollection, p.motifs))
 			r.Get("/facts/*", handleHALLensFact(b, p.factReader, p.factSub))
-			r.Get("/search", handleHALLensSearch(p.search, s.Embedder))
+			r.Get("/search", handleHALLensSearch(p.search, s.Embedder, p.motifs))
 			r.Get("/completions", handleHALLensCompletions(p.completions))
+			r.Get("/motifs", handleHALLensMotifs(b, p.motifs))
+			r.Get("/motifs/{key}", handleHALLensMotifCluster(b, p.motifs, p.factsCollection))
 			r.Get("/stats", handleHALLensStats(p.stats, p.activity))
 			r.Get("/topics", handleHALLensTopics(p.topicLister, s.OntologyRoot))
 			r.Get("/topics/*", handleHALLensTopics(p.topicLister, s.OntologyRoot))

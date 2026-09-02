@@ -62,6 +62,7 @@ type motifsCollectionBody struct {
 		AuthoredMints     int     `json:"authored_mints"`
 		AuthoredLinks     int     `json:"authored_links"`
 		RecurrenceRate    float64 `json:"recurrence_rate"`
+		MintToLinkRatio   float64 `json:"mint_to_link_ratio"`
 
 		AuthoredEpistemicRecurring int `json:"authored_epistemic_recurring"`
 	} `json:"health"`

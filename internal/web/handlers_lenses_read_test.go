@@ -1705,10 +1705,9 @@ func (s *motifResolvingLensStub) Search(
 
 // divergentVocabularies builds the asymmetry the semantics turn on: mount alpha
 // judge-merged "config-drift" and "configuration-drifts"; mount beta never did.
-// A query for "config-drift" must therefore pull alpha's aliased fact and NOT
-// beta's identically-spelled one, while still pulling beta's exact carrier —
-// so "beta answered only exactly" is distinguishable from "beta was never
-// asked".
+// Each mount's own resolution is modelled faithfully — beta still answers only
+// for the exact spelling — so what the LENS does with that asymmetry is
+// visible rather than assumed.
 func divergentVocabularies() *motifResolvingLensStub {
 	return &motifResolvingLensStub{
 		facts: map[string][]store.RecentFactEntry{
@@ -1727,15 +1726,48 @@ func divergentVocabularies() *motifResolvingLensStub {
 	}
 }
 
-func TestLensFacts_MotifResolutionIsPerMountNotShared(t *testing.T) {
+// divergentVocabulariesUnion is the motif VOCABULARY behind the same asymmetry:
+// alpha's judge merge produced one cluster holding both spellings; beta filed
+// its lone spelling as a singleton. The two share the spelling
+// `configuration-drifts`, so the lens union merges them into one shape.
+//
+// Supplying this is what makes the tests below test anything. Without a motifs
+// provider the union is empty, every term falls through unwidened, and the
+// assertions pass by describing a code path that never ran.
+func divergentVocabulariesUnion() *lensMotifsStub {
+	return &lensMotifsStub{clusters: map[string][]store.MotifCluster{
+		"alpha": {{ClusterKey: "config-drift", CanonicalID: "config-drift",
+			Members: []string{"config-drift", "configuration-drifts"}, DF: 1, DFTotal: 1}},
+		"beta": {{ClusterKey: "configuration-drifts", CanonicalID: "configuration-drifts",
+			Members: []string{"configuration-drifts"}, DF: 1, DFTotal: 1}},
+	}}
+}
+
+// A JUDGE MERGE ON ANY MOUNT BINDS THE WHOLE LENS, FOR READS.
+//
+// This test used to assert the opposite — that beta's identically-spelled fact
+// must NOT answer, because beta never merged the spellings. That was the
+// pre-lens rule, fossilized: it is what "resolution is per-mount" means when
+// there is no lens-wide vocabulary to resolve against. There is one now, and it
+// says these two spellings are one shape, so every mount answers for it.
+//
+// That follows from what a lens IS rather than from a preference. A lens
+// answers exactly like a single repo (kb/decisions/lens/no-federation-metadata-in-responses),
+// and inside a single repo one judge merge binds every fact in it. Keeping the
+// old rule would mean a lens whose answer depends on which mount a reader's
+// vocabulary happened to come from — which is the shape the merged vocabulary
+// exists to remove.
+//
+// READ-ONLY, and the companion below pins it: nothing is written back to beta.
+func TestLensFacts_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := divergentVocabularies()
-	s := &Server{Manager: m, providers: storeProviders{factsCollection: stub}}
+	s := &Server{Manager: m, providers: storeProviders{
+		factsCollection: stub, motifs: divergentVocabulariesUnion()}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
-	rec := getLensFacts(t, r, "/lenses/eng/facts?motifs=config-drift")
-	body := decodeLensFacts(t, rec)
+	body := decodeLensFacts(t, getLensFacts(t, r, "/lenses/eng/facts?motifs=config-drift"))
 
 	titles := map[string]bool{}
 	for _, f := range body.Facts {
@@ -1745,21 +1777,51 @@ func TestLensFacts_MotifResolutionIsPerMountNotShared(t *testing.T) {
 	if !titles["Alpha aliased"] {
 		t.Errorf("the merging mount's aliased fact is missing: %v", titles)
 	}
-	// beta did not, so its identically-spelled fact must NOT — this is the
-	// assertion that fails if resolution were shared or write-repo-only.
-	if titles["Beta aliased"] {
-		t.Errorf("the non-merging mount answered for an aliased spelling: %v", titles)
+	// beta never merged them — and answers anyway, because the LENS did. This
+	// is the assertion that inverted.
+	if !titles["Beta aliased"] {
+		t.Errorf("the non-merging mount did not answer for the merged shape: %v", titles)
 	}
-	// ...but beta WAS queried and did contribute its exact carrier.
+	// ...and beta's exact carrier is still there, so "beta answered for the
+	// whole shape" stays distinguishable from "beta answered for nothing".
 	if !titles["Beta exact"] {
 		t.Errorf("the non-merging mount contributed nothing at all: %v", titles)
 	}
 }
 
-func TestLensSearch_MotifResolutionIsPerMountNotShared(t *testing.T) {
+// The merge binds READS through the lens; it rewrites nothing. Beta's own
+// vocabulary is untouched, so beta read directly still resolves only its exact
+// spelling — the per-mount rule the test above used to assert is still the rule
+// for a mount read on its own.
+func TestLensFacts_TheMergeBindsReadsAndRewritesNothing(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := divergentVocabularies()
-	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	s := &Server{Manager: m, providers: storeProviders{
+		factsCollection: stub, motifs: divergentVocabulariesUnion()}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/facts?motifs=config-drift")
+
+	// The lens widened the TERM. It did not touch beta's alias table, and beta
+	// resolved the widened term with its own vocabulary exactly as before —
+	// which is why "Beta aliased" came back: the term now names its spelling,
+	// not because beta learned a merge.
+	if len(stub.aliases["beta"]) != 0 {
+		t.Errorf("the read mount's alias table was written to: %v", stub.aliases["beta"])
+	}
+	got := stub.lastOpts["beta"].Motifs
+	if len(got) != 2 {
+		t.Errorf("beta was asked for %v, want both spellings of the merged shape", got)
+	}
+}
+
+// The /search twin of the inversion above — the same rule, the other envelope.
+func TestLensSearch_AMergeOnAnyMountBindsTheWholeLens(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	stub := divergentVocabularies()
+	s := &Server{Manager: m, providers: storeProviders{
+		search: stub, motifs: divergentVocabulariesUnion()}}
 	r := s.NewAPIRouter()
 	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
 
@@ -1782,8 +1844,8 @@ func TestLensSearch_MotifResolutionIsPerMountNotShared(t *testing.T) {
 	if !titles["Alpha aliased"] {
 		t.Errorf("the merging mount's aliased fact is missing: %v", titles)
 	}
-	if titles["Beta aliased"] {
-		t.Errorf("the non-merging mount answered for an aliased spelling: %v", titles)
+	if !titles["Beta aliased"] {
+		t.Errorf("the non-merging mount did not answer for the merged shape: %v", titles)
 	}
 	if !titles["Beta exact"] {
 		t.Errorf("the non-merging mount contributed nothing at all: %v", titles)

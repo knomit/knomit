@@ -99,7 +99,7 @@ type lensFactsResponse struct {
 // federate.ReadTargetsFor, fetch each mount's RecentFacts at its pinned branch,
 // dedupe by repo-relative path (the write mount's copy wins), merge by
 // committed_at across mounts, and qualify read-mount paths (kb://<id12>/…).
-func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
+func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -153,15 +153,24 @@ func handleHALLensFacts(provider factsCollectionProvider) http.HandlerFunc {
 			}
 		}
 
-		// Ontology-aware fan-out target selection — the same seam MCP queryRecent
-		// uses. A kb://-qualified path restricts to a single mount (with the
-		// filter made repo-relative); an unqualified path applies per mount,
-		// skipping mounts whose ontology lacks the topic.
 		motifs, motifMatch, ok := motifParams(w, r)
 		if !ok {
 			return
 		}
 
+		// Widen each term to its MERGED cluster before the fan-out. The store's
+		// tiers resolve a term through ONE branch's alias table, so a mount that
+		// spells the shape differently would contribute nothing to a filter the
+		// lens's own vocabulary counted — see expandLensMotifs.
+		motifs, ok = expandLensMotifs(w, r, b, motifsP, motifs)
+		if !ok {
+			return
+		}
+
+		// Ontology-aware fan-out target selection — the same seam MCP queryRecent
+		// uses. A kb://-qualified path restricts to a single mount (with the
+		// filter made repo-relative); an unqualified path applies per mount,
+		// skipping mounts whose ontology lacks the topic.
 		targets, err := federate.ReadTargetsFor(b, path)
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
@@ -675,7 +684,7 @@ type lensSearchResponse struct {
 // the facts collection dedupes. A shadowed copy is dropped even when it ranks
 // higher in the fused order than the winner. Read-mount paths are qualified
 // (kb://<id12>/…); each row carries its source {repo,id,branch}.
-func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.HandlerFunc {
+func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP motifsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -706,14 +715,23 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder) http.Handl
 			return
 		}
 
-		// Ontology-aware fan-out target selection — the same seam MCP queryFirstCall
-		// uses. A kb://-qualified path restricts to one mount (filter made
-		// repo-relative); an unqualified path applies per mount.
 		motifs, motifMatch, ok := motifParams(w, r)
 		if !ok {
 			return
 		}
 
+		// Widen each term to its MERGED cluster before the fan-out. The store's
+		// tiers resolve a term through ONE branch's alias table, so a mount that
+		// spells the shape differently would contribute nothing to a filter the
+		// lens's own vocabulary counted — see expandLensMotifs.
+		motifs, ok = expandLensMotifs(w, r, b, motifsP, motifs)
+		if !ok {
+			return
+		}
+
+		// Ontology-aware fan-out target selection — the same seam MCP queryFirstCall
+		// uses. A kb://-qualified path restricts to one mount (filter made
+		// repo-relative); an unqualified path applies per mount.
 		targets, err := federate.ReadTargetsFor(b, qp.Get("path"))
 		if err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
