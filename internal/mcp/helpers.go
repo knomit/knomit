@@ -1,7 +1,10 @@
 package mcp
 
 import (
+	"context"
 	"errors"
+
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -52,4 +55,36 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 		branches:    svc.Branches(),
 		motifs:      svc.Motifs(),
 	}, release, nil
+}
+
+// fanoutQueryVec embeds a federated query's text ONCE, for every mount in the
+// fan-out to share, and is the reason a lens query is not N inferences of the
+// same string.
+//
+// Without it the cost is real and it is the whole request: store.Search embeds
+// whenever SearchOptions.QueryVec is empty (internal/store/search_query.go), so
+// an N-mount fan-out ran the identical ~81 ms ONNX inference N times. It is a
+// fixed per-mount cost, independent of corpus size — the same query against an
+// EMPTY mount also cost 81 ms, while that mount answered a text-less filter in
+// 0.4 ms. A single-repo binding never showed it: there is only one mount to pay
+// for.
+//
+// The hoist cannot change a result. repos.Manager installs ONE embedder on
+// every repo instance, so the N vectors were already identical by construction
+// — this computes one of them instead of N.
+//
+// A nil vector is the DEGRADED path, not an error: with no embedder, no text,
+// or a failed inference, each mount falls back to exactly what it does today
+// (its own embedder, else keyword-only search). Never fail a query because it
+// could not be embedded.
+func fanoutQueryVec(ctx context.Context, emb store.Embedder, text string) []float32 {
+	if text == "" || emb == nil {
+		return nil
+	}
+	vec, err := emb.EmbedQuery(ctx, text)
+	if err != nil {
+		log.Warn().Err(err).Msg("federated query: embed query failed")
+		return nil
+	}
+	return vec
 }
