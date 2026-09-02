@@ -28,6 +28,15 @@ func (s *stubStatsProvider) Stats(_ context.Context, _ *repos.RepoInstance, _, p
 	return s.result, s.err
 }
 
+// The repo-scoped /stats handler never calls Highlights — only the lens union's
+// axis correction does. Served from the same fixture so the two paths cannot
+// disagree if a future handler starts using it.
+func (s *stubStatsProvider) Highlights(_ context.Context, _ *repos.RepoInstance, _, pathPrefix, axis string) ([]store.Highlight, bool, error) {
+	s.pathPrefix = pathPrefix
+	s.axis = axis
+	return s.result.Highlights, s.result.HighlightsFallback, s.err
+}
+
 func TestHandleHALStats_ReturnsHAL(t *testing.T) {
 	provider := &stubStatsProvider{
 		result: store.StatsResult{

@@ -234,6 +234,35 @@ type StatsResult struct {
 	ObservationEdges   int  `json:"-"`
 }
 
+// Highlights returns just the top-N highlight rows a Stats call would have
+// returned, under an EXPLICIT axis, without computing any of the aggregates
+// around them.
+//
+// It exists for the lens union's axis correction. That handler resolves a
+// POOLED default axis across mounts, and when the pooled verdict differs from
+// what a mount chose for itself, that mount's top-N was cut by the wrong axis
+// for the union and has to be re-fetched. Re-fetching it through Stats meant
+// recomputing the count, both json_each histograms, the type counts and the
+// separation counters — every one of them already in hand and about to be
+// thrown away. On the 5-mount `all` lens that second pass cost 37.0 ms of an
+// 84 ms request; the highlights inside it were 10.6 ms.
+//
+// It shares fq.highlights with Stats rather than reimplementing the query, so
+// the corrected rows cannot drift from the ones Stats would have produced —
+// including the second return value, the per-scope fallback flag whose meaning
+// the union handler depends on (see the comment on fq.highlights).
+//
+// axis is used as given. Unlike Stats it does not fall back to this branch's
+// own DefaultAxis, because the whole point of the call is to pin a mount to an
+// axis it did not choose; NormalizeAxis is the caller's to apply.
+func (fq *factQuery) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]Highlight, bool, error) {
+	branchID, err := fq.rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, false, fmt.Errorf("highlights: %w", err)
+	}
+	return fq.highlights(ctx, branchID, pathPrefix, axis)
+}
+
 // Stats returns aggregate statistics over all indexed facts on a branch,
 // optionally filtered to those whose path starts with pathPrefix. axis
 // selects the Highlights ranking (see NormalizeAxis); it does not affect

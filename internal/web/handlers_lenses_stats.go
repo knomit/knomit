@@ -245,15 +245,28 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 				break
 			}
 		}
+		//
+		// It re-fetches the HIGHLIGHTS ONLY, not the whole StatsResult. Every
+		// other field this handler reads from a mount — the count, the average
+		// confidence, both histograms, the type counts, the separation
+		// counters — is axis-INDEPENDENT and already summed from the pass
+		// above; re-running Stats recomputed all of it to use none of it. On
+		// the 5-mount `all` lens that was 37.0 ms of an 84 ms request, against
+		// 10.6 ms for the highlights it actually wanted.
+		//
+		// This is not a second, parallel definition of a highlight: the narrow
+		// store call shares fq.highlights with Stats (one query, two callers),
+		// so the corrected rows and the fallback flag are the ones Stats would
+		// have returned for the same axis.
 		if store.NormalizeAxis(axis, "") == "" && mountsDisagreeWithResolved {
 			for i, t := range targets {
-				st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
+				hs, fb, err := statsP.Highlights(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
 				if err != nil {
 					writeStoreError(w, r, err, "Failed to load stats", t.RT.Branch)
 					return
 				}
-				highlights[i] = st.Highlights
-				fallback[i] = st.HighlightsFallback
+				highlights[i] = hs
+				fallback[i] = fb
 			}
 		}
 

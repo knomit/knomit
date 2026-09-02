@@ -32,6 +32,11 @@ type lensStatsStub struct {
 	errRepo    string
 	lastPath   map[string]string
 	lastAxis   map[string]string
+	// statsCalls / highlightCalls count the two fan-out passes separately, so a
+	// test can assert that the axis correction re-fetches HIGHLIGHTS rather
+	// than re-running the whole aggregate.
+	statsCalls     int
+	highlightCalls int
 }
 
 func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix, axis string) (store.StatsResult, error) {
@@ -42,6 +47,7 @@ func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ strin
 		s.lastAxis = map[string]string{}
 	}
 	name := ri.Name()
+	s.statsCalls++
 	s.lastPath[name] = pathPrefix
 	s.lastAxis[name] = axis
 	if s.errRepo != "" && name == s.errRepo {
@@ -53,6 +59,21 @@ func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ strin
 		}
 	}
 	return s.byRepo[name], nil
+}
+
+// Highlights answers the axis-correction pass from the SAME fixtures Stats
+// answers from, deliberately: the production narrow call shares fq.highlights
+// with Stats, and a stub that served the two paths from different data would
+// hide a divergence rather than pin its absence. Every existing axis-correction
+// assertion therefore keeps its exact meaning.
+func (s *lensStatsStub) Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]store.Highlight, bool, error) {
+	res, err := s.Stats(ctx, ri, branch, pathPrefix, axis)
+	s.statsCalls-- // the delegation above is bookkeeping, not a second aggregate fetch
+	s.highlightCalls++
+	if err != nil {
+		return nil, false, err
+	}
+	return res.Highlights, res.HighlightsFallback, nil
 }
 
 // lensActivityStub is the per-repo activityProvider twin of lensStatsStub.
@@ -866,5 +887,72 @@ func TestLensStats_AnEmptyMountDoesNotCountAsARealHighlightList(t *testing.T) {
 	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats?axis=confidence"))
 	if len(body.Highlights) != 1 {
 		t.Fatalf("highlights: got %d, want the read mount's own; %+v", len(body.Highlights), body.Highlights)
+	}
+}
+
+// The axis correction re-fetches HIGHLIGHTS, not the whole StatsResult.
+//
+// Everything else the union reads from a mount — total, avg_confidence, both
+// histograms, type counts, separation counters — is axis-independent and
+// already in hand after the first pass. Re-running Stats recomputed all of it
+// to use none of it: 37.0 ms of an 84 ms request on the 5-mount `all` lens,
+// against 10.6 ms for the highlights it wanted. Two counters, because "it got
+// faster" is not something a unit test can see, but "it stopped asking for the
+// aggregates twice" is.
+func TestLensStats_AxisCorrectionRefetchesOnlyHighlights(t *testing.T) {
+	// alpha defaults to impact, beta to confidence: the mounts disagree, which
+	// is what arms the corrective pass at all.
+	byRepo := map[string]store.StatsResult{
+		"alpha": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
+			Highlights: []store.Highlight{{Path: "kb/a.md", Type: "synthesis", Impact: 9}}},
+		"beta": {Total: 1, DefaultAxis: "confidence",
+			Highlights: []store.Highlight{{Path: "kb/b.md", Type: "synthesis", Confidence: 0.9}}},
+	}
+	stub := &lensStatsStub{byRepo: byRepo}
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    stub,
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/stats")
+
+	const mounts = 2
+	if stub.highlightCalls != mounts {
+		t.Errorf("Highlights called %d times, want %d — the corrective pass did not run, "+
+			"so this test is no longer measuring what it claims", stub.highlightCalls, mounts)
+	}
+	if stub.statsCalls != mounts {
+		t.Errorf("Stats called %d times, want %d (one pass); a second full fan-out is the "+
+			"regression this test exists to catch", stub.statsCalls, mounts)
+	}
+}
+
+// With every mount already agreeing with the pooled verdict there is nothing to
+// correct, and the narrow call must not fire at all — the fast path stays one
+// fan-out, exactly as before.
+func TestLensStats_AgreeingMountsSkipTheHighlightsRefetch(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
+			Highlights: []store.Highlight{{Path: "kb/a.md", Type: "synthesis", Impact: 9}}},
+		"beta": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
+			Highlights: []store.Highlight{{Path: "kb/b.md", Type: "synthesis", Impact: 5}}},
+	}
+	stub := &lensStatsStub{byRepo: byRepo}
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    stub,
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	getLensFacts(t, r, "/lenses/eng/stats")
+
+	if stub.highlightCalls != 0 {
+		t.Errorf("Highlights called %d times, want 0 — nothing disagreed with the pooled axis",
+			stub.highlightCalls)
 	}
 }

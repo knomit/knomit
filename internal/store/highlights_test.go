@@ -427,3 +427,64 @@ func TestHighlights_AnEmptyScopeIsNotAFallback(t *testing.T) {
 	require.Empty(t, res.Highlights)
 	require.False(t, res.HighlightsFallback)
 }
+
+// FactQuery.Highlights must return exactly what Stats would have returned for
+// the same axis — rows AND fallback flag. It exists so the lens union's axis
+// correction can re-cut one mount's top-N without recomputing the aggregates it
+// already holds; the moment the two disagree, that correction starts producing
+// a top-N the union could never have got from Stats, and nothing else would
+// notice.
+//
+// Swept across every axis and both scopes of the fixture (the root, where real
+// highlights exist, and the pure-observation subtree, where the fallback
+// fires), because "agrees with Stats" is a claim about the whole surface, not
+// about one lucky axis.
+func TestHighlights_NarrowCallAgreesWithStats(t *testing.T) {
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+	ctx := context.Background()
+
+	for _, scope := range []string{"", "kb/o", "kb/nothing-here"} {
+		for _, axis := range []string{AxisImpact, AxisConfidence, AxisRecent} {
+			t.Run(scope+"/"+axis, func(t *testing.T) {
+				full, err := svc.FactQuery().Stats(ctx, branch, scope, axis)
+				require.NoError(t, err)
+
+				narrowRows, narrowFallback, err := svc.FactQuery().Highlights(ctx, branch, scope, axis)
+				require.NoError(t, err)
+
+				require.Equal(t, full.Highlights, narrowRows,
+					"narrow Highlights diverged from the rows Stats returned for the same axis")
+				require.Equal(t, full.HighlightsFallback, narrowFallback,
+					"narrow Highlights diverged from Stats on whether the fallback fired")
+			})
+		}
+	}
+}
+
+// Unlike Stats, the narrow call does NOT substitute the branch's own default
+// for an unresolved axis: the lens union asks for it precisely to pin a mount
+// to an axis that mount did not choose, so silently re-deriving one would undo
+// the correction it was built for. Normalising is the caller's job.
+func TestHighlights_NarrowCallUsesTheAxisItIsGiven(t *testing.T) {
+	const branch = "main"
+	svc := seedHighlightFixture(t, branch)
+	ctx := context.Background()
+
+	// The fixture's own recommendation, and an axis deliberately different from
+	// it — the narrow call must answer for the axis passed, not for the default.
+	full, err := svc.FactQuery().Stats(ctx, branch, "", "")
+	require.NoError(t, err)
+	other := AxisRecent
+	if full.DefaultAxis == AxisRecent {
+		other = AxisConfidence
+	}
+
+	pinned, _, err := svc.FactQuery().Highlights(ctx, branch, "", other)
+	require.NoError(t, err)
+	viaStats, err := svc.FactQuery().Stats(ctx, branch, "", other)
+	require.NoError(t, err)
+
+	require.Equal(t, viaStats.Highlights, pinned,
+		"the narrow call answered for some axis other than the one it was given")
+}
