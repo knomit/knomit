@@ -98,7 +98,7 @@ type toolReg struct {
 func toolRegistrations(embedders ...store.BatchEmbedder) []toolReg {
 	return []toolReg{
 		{learnTool(), LearnHandler(embedders...), true},
-		{queryTool(), QueryHandler(), false},
+		{queryTool(), QueryHandler(embedders...), false},
 		{explainTool(), ExplainHandler(), false},
 		{updateTool(), UpdateHandler(), true},
 		{retractTool(), RetractHandler(), true},

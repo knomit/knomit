@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
@@ -93,13 +95,47 @@ type lensFactsResponse struct {
 	Total int            `json:"total"`
 }
 
+// lensQueryVec embeds a lens fan-out's query text ONCE, for every mount to
+// share, and is the reason a lens text read is not N inferences of the same
+// string.
+//
+// Without it the cost is real and it is the whole request: the per-mount
+// searchProvider embeds whenever SearchOptions.QueryVec is empty
+// (handlers_search_hal.go), so a 5-mount lens ran the identical ~81 ms ONNX
+// inference five times — 88% of a 464 ms /lenses/{lens}/search, and the same
+// again on /lenses/{lens}/facts?q=. The repo-scoped twins never showed it
+// because they only ever have one mount to pay for. It is a fixed per-mount
+// cost, independent of corpus size: the same query against an EMPTY mount also
+// cost 81 ms, while the same mount answered a text-less filter in 0.4 ms.
+//
+// The hoist cannot change a result. Every mount is handed the SAME server-wide
+// embedder (repos.Manager installs one Embedder on every repo instance), so
+// the N vectors were already identical by construction — this computes one of
+// them instead of N.
+//
+// A nil vector is the caller's DEGRADED path, not an error: with no embedder,
+// no text, or a failed inference, each mount falls back to exactly what it
+// does today (its own embedder, else keyword-only search). Never fail a read
+// because a query could not be embedded.
+func lensQueryVec(ctx context.Context, emb store.Embedder, text string) []float32 {
+	if text == "" || emb == nil {
+		return nil
+	}
+	vec, err := emb.EmbedQuery(ctx, text)
+	if err != nil {
+		log.Warn().Err(err).Msg("lens search: embed query failed")
+		return nil
+	}
+	return vec
+}
+
 // handleHALLensFacts serves GET /lenses/{lens}/facts — the recency-ordered
 // union of a lens's write repo + N read mounts. It is the REST twin of the MCP
 // queryRecent fan-out (internal/mcp/query.go): select targets via
 // federate.ReadTargetsFor, fetch each mount's RecentFacts at its pinned branch,
 // dedupe by repo-relative path (the write mount's copy wins), merge by
 // committed_at across mounts, and qualify read-mount paths (kb://<id12>/…).
-func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider) http.HandlerFunc {
+func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider, emb store.Embedder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b := repos.BindingFromContext(r.Context())
 		qp := r.URL.Query()
@@ -193,6 +229,10 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 		// wrong order), diverging from both the repo and MCP twins.
 		base := store.SearchOptions{
 			Text: text,
+			// Embedded ONCE for the whole fan-out, not once per mount — see
+			// lensQueryVec. A text-less browse leaves this nil and never
+			// reaches an embedder at all.
+			QueryVec: lensQueryVec(r.Context(), emb, text),
 			// `entity` (singular) is the canonical name advertised by the HAL
 			// template and matches the data-model column; `entities` (plural) is a
 			// back-compat alias. Merge both, exactly as the repo facts collection
@@ -769,22 +809,35 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 			MinConfidence: minConfidence,
 			MinSimilarity: minSimilarity,
 			Limit:         maxLensSearchCandidates,
+			// Embedded ONCE for the whole fan-out, not once per mount — see
+			// lensQueryVec.
+			QueryVec: lensQueryVec(r.Context(), emb, qp.Get("q")),
 		}
 
 		// Fan out to every selected mount at its Binding-resolved branch. Any mount
 		// error fails the whole request — a lens must never silently shrink its read
 		// set (RFC §9.1). The embedder (possibly nil when embeddings are disabled)
 		// is forwarded exactly as the repo /search handler forwards it.
+		//
+		// Fanned out CONCURRENTLY: mounts are independent databases with nothing
+		// to serialise on, so a lens's search cost is the slowest mount rather
+		// than the sum of all of them. Each goroutine writes only lists[i], and
+		// the fusion below reads that slice in mount order — a mount's index IS
+		// its identity to FuseRRF and WriteFirstWinners, so results must never be
+		// appended from inside a goroutine.
 		lists := make([][]store.SearchResult, len(targets))
-		for i, t := range targets {
+		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
 			q := base
 			q.Path = t.Path
 			res, err := provider.Search(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
 			if err != nil {
-				writeStoreError(w, r, err, "Search failed", t.RT.Branch)
-				return
+				return "Search failed", err
 			}
 			lists[i] = res
+			return "", nil
+		}); f != nil {
+			writeStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+			return
 		}
 
 		// Fuse the per-mount ranked lists by reciprocal rank fusion — the SAME

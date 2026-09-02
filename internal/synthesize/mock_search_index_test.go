@@ -176,6 +176,22 @@ func (mr *MockSearchIndexMockRecorder) GetByPath(ctx, branch, path any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetByPath", reflect.TypeOf((*MockSearchIndex)(nil).GetByPath), ctx, branch, path)
 }
 
+// Highlights mocks base method.
+func (m *MockSearchIndex) Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]store.Highlight, bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Highlights", ctx, branch, pathPrefix, axis)
+	ret0, _ := ret[0].([]store.Highlight)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// Highlights indicates an expected call of Highlights.
+func (mr *MockSearchIndexMockRecorder) Highlights(ctx, branch, pathPrefix, axis any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Highlights", reflect.TypeOf((*MockSearchIndex)(nil).Highlights), ctx, branch, pathPrefix, axis)
+}
+
 // IncomingAtCommit mocks base method.
 func (m *MockSearchIndex) IncomingAtCommit(ctx context.Context, branch, path, commitHash string) ([]store.RefSummary, error) {
 	m.ctrl.T.Helper()

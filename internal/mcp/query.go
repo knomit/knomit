@@ -171,7 +171,17 @@ type pagedRowState struct {
 
 // QueryHandler returns the handler function for knomit_query.
 // The repo is resolved from the request context at call time via RepoMiddleware.
-func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+//
+// If an embedder is supplied it is used to embed a text query ONCE for the
+// whole fan-out (see fanoutQueryVec); without one, each mount falls back to
+// embedding the query itself, which is what this handler did before. Variadic
+// for the same reason LearnHandler is: the embedder is optional, and callers
+// that have none (tests, embeddings-disabled builds) pass nothing.
+func QueryHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	var emb store.Embedder
+	if len(embedders) > 0 && embedders[0] != nil {
+		emb = embedders[0]
+	}
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
@@ -208,9 +218,9 @@ func QueryHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToo
 		}
 
 		if sort == sortRecent {
-			return queryRecent(ctx, b, sWrite, req, pageSize, maxResults, includeBody)
+			return queryRecent(ctx, b, sWrite, emb, req, pageSize, maxResults, includeBody)
 		}
-		return queryFirstCall(ctx, b, sWrite, req, pageSize, maxResults, includeBody)
+		return queryFirstCall(ctx, b, sWrite, emb, req, pageSize, maxResults, includeBody)
 	}
 }
 
@@ -243,7 +253,7 @@ func mountLabel(rt repos.ReadTarget) string {
 // ordered candidate set from RecentFacts (already filtered + committed_at
 // DESC), snapshots it into a session, and serves the first page through the
 // shared resume path so body hydration and pagination match relevance mode.
-func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb store.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q, err := parseQueryFilters(req)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -260,6 +270,10 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcp
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
 	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+	// Embed the query ONCE for the whole fan-out rather than once per mount —
+	// see fanoutQueryVec. Nil (no embedder, no text, failed inference) leaves
+	// every mount on the path it took before: its own embedder, else keywords.
+	q.QueryVec = fanoutQueryVec(ctx, emb, q.Text)
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
 	// never silently shrink its read set (RFC §9.1).
@@ -450,7 +464,7 @@ func hasAnyFilter(q store.SearchOptions) bool {
 // parallel, fuses the per-mount ranked lists with reciprocal rank fusion,
 // returns the first page, and (only when the fused set exceeds one page)
 // snapshots the remainder into the write repo's session DB with WIRE paths.
-func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
+func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb store.Embedder, req mcpgo.CallToolRequest, pageSize, maxResults int, includeBody bool) (*mcpgo.CallToolResult, error) {
 	q, err := parseQueryFilters(req)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
@@ -472,6 +486,10 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, req 
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
 	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
+	// Embed the query ONCE for the whole fan-out rather than once per mount —
+	// see fanoutQueryVec. Nil (no embedder, no text, failed inference) leaves
+	// every mount on the path it took before: its own embedder, else keywords.
+	q.QueryVec = fanoutQueryVec(ctx, emb, q.Text)
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
 	// never silently shrink its read set (RFC §9.1).

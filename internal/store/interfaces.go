@@ -47,6 +47,10 @@ type FactQuery interface {
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
 	Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error)
+	// Highlights returns only the highlight rows Stats would have returned,
+	// under an explicit axis. For callers that need to re-cut a top-N by a
+	// different axis and already hold every aggregate Stats computes.
+	Highlights(ctx context.Context, branch, pathPrefix, axis string) ([]Highlight, bool, error)
 	Completions(ctx context.Context, branch, category, prefix string, limit int) ([]string, error)
 	RecentFacts(ctx context.Context, branch string, opts SearchOptions) ([]RecentFactEntry, int, error)
 	FactsIter(ctx context.Context, branch string) (*FactsIter, error)

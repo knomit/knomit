@@ -12,8 +12,15 @@ import (
 )
 
 // statsProvider is the narrow interface the stats handler depends on.
+//
+// Highlights is the lens union's axis-correction path: only that handler needs
+// to re-cut one mount's top-N by an axis the mount did not pick, and it needs
+// to do it without paying for the aggregates it already holds. It sits here
+// rather than in its own interface because it is the same store surface and
+// the same fake in tests.
 type statsProvider interface {
 	Stats(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) (store.StatsResult, error)
+	Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]store.Highlight, bool, error)
 }
 
 // defaultStatsProvider is the production statsProvider.
@@ -31,6 +38,21 @@ func (defaultStatsProvider) Stats(ctx context.Context, ri *repos.RepoInstance, b
 		result, err = svc.FactQuery().Stats(ctx, branch, pathPrefix, axis)
 	})
 	return result, err
+}
+
+func (defaultStatsProvider) Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]store.Highlight, bool, error) {
+	var (
+		out      []store.Highlight
+		fallback bool
+		err      error
+	)
+	ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		out, fallback, err = svc.FactQuery().Highlights(ctx, branch, pathPrefix, axis)
+	})
+	return out, fallback, err
 }
 
 // statsView is the HAL response body for the stats endpoint.

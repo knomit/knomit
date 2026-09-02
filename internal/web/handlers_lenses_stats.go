@@ -143,17 +143,37 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 		fallback := make([]bool, len(targets))
 		var topFacts, topEdges, obsFacts, obsEdges int // pooled AxisFromSeparation inputs
 		var confWeight float64                         // Σ(avg_i · total_i); divided by Σ(total_i) below
-		for i, t := range targets {
+
+		// FETCH in parallel, REDUCE in order. Mounts are independent databases
+		// with nothing to serialise on, and this fan-out was the lens's whole
+		// cost — the sum of its mounts rather than the slowest of them.
+		//
+		// The split matters as much as the parallelism. Every goroutine writes
+		// only its own slot; nothing accumulates into resp from inside one. The
+		// reduction below runs on the request goroutine in mount order, so
+		// resp.Repos keeps binding order and the response stays a function of
+		// the request, not of which mount happened to finish first.
+		sts := make([]store.StatsResult, len(targets))
+		acts := make([]store.ActivityResult, len(targets))
+		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
 			st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, axis)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to load stats", t.RT.Branch)
-				return
+				return "Failed to load stats", err
 			}
 			act, err := actP.Activity(r.Context(), t.RT.RI, t.RT.Branch, t.Path)
 			if err != nil {
-				writeStoreError(w, r, err, "Failed to load activity", t.RT.Branch)
-				return
+				return "Failed to load activity", err
 			}
+			sts[i], acts[i] = st, act
+			return "", nil
+		}); f != nil {
+			// Any mount error fails the whole request (RFC §9.1).
+			writeStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+			return
+		}
+
+		for i, t := range targets {
+			st, act := sts[i], acts[i]
 			// Mirror handleHALStats: JSON must carry {} for empty maps, never
 			// null — an empty StatsResult has nil Domains/Entities.
 			domains := st.Domains
@@ -245,15 +265,30 @@ func handleHALLensStats(statsP statsProvider, actP activityProvider) http.Handle
 				break
 			}
 		}
+		//
+		// It re-fetches the HIGHLIGHTS ONLY, not the whole StatsResult. Every
+		// other field this handler reads from a mount — the count, the average
+		// confidence, both histograms, the type counts, the separation
+		// counters — is axis-INDEPENDENT and already summed from the pass
+		// above; re-running Stats recomputed all of it to use none of it. On
+		// the 5-mount `all` lens that was 37.0 ms of an 84 ms request, against
+		// 10.6 ms for the highlights it actually wanted.
+		//
+		// This is not a second, parallel definition of a highlight: the narrow
+		// store call shares fq.highlights with Stats (one query, two callers),
+		// so the corrected rows and the fallback flag are the ones Stats would
+		// have returned for the same axis.
 		if store.NormalizeAxis(axis, "") == "" && mountsDisagreeWithResolved {
-			for i, t := range targets {
-				st, err := statsP.Stats(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
+			if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
+				hs, fb, err := statsP.Highlights(r.Context(), t.RT.RI, t.RT.Branch, t.Path, rankAxis)
 				if err != nil {
-					writeStoreError(w, r, err, "Failed to load stats", t.RT.Branch)
-					return
+					return "Failed to load stats", err
 				}
-				highlights[i] = st.Highlights
-				fallback[i] = st.HighlightsFallback
+				highlights[i], fallback[i] = hs, fb
+				return "", nil
+			}); f != nil {
+				writeStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+				return
 			}
 		}
 
