@@ -818,16 +818,26 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 		// error fails the whole request — a lens must never silently shrink its read
 		// set (RFC §9.1). The embedder (possibly nil when embeddings are disabled)
 		// is forwarded exactly as the repo /search handler forwards it.
+		//
+		// Fanned out CONCURRENTLY: mounts are independent databases with nothing
+		// to serialise on, so a lens's search cost is the slowest mount rather
+		// than the sum of all of them. Each goroutine writes only lists[i], and
+		// the fusion below reads that slice in mount order — a mount's index IS
+		// its identity to FuseRRF and WriteFirstWinners, so results must never be
+		// appended from inside a goroutine.
 		lists := make([][]store.SearchResult, len(targets))
-		for i, t := range targets {
+		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
 			q := base
 			q.Path = t.Path
 			res, err := provider.Search(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
 			if err != nil {
-				writeStoreError(w, r, err, "Search failed", t.RT.Branch)
-				return
+				return "Search failed", err
 			}
 			lists[i] = res
+			return "", nil
+		}); f != nil {
+			writeStoreError(w, r, f.Err, f.Title, targets[f.Mount].RT.Branch)
+			return
 		}
 
 		// Fuse the per-mount ranked lists by reciprocal rank fusion — the SAME

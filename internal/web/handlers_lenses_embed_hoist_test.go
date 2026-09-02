@@ -2,9 +2,12 @@ package web
 
 import (
 	"context"
+	"net/http"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"knomit/internal/embeddings/params"
 	"knomit/internal/store"
@@ -189,4 +192,70 @@ func float32SliceEqual(a, b []float32) bool {
 		}
 	}
 	return true
+}
+
+// ── concurrent search fan-out: fusion order and §9.1 ────────────────────────
+
+// A mount's INDEX is its identity to FuseRRF and WriteFirstWinners: rank fusion
+// orders by per-mount rank, and the dedupe resolves a shared path in favour of
+// the write mount and then binding order. Both read the per-mount lists as an
+// indexed slice, so a concurrent fan-out that collected results as they arrived
+// would silently re-map every row's mount — changing the fused order AND which
+// copy of a duplicated path wins.
+//
+// The write mount is made the SLOWEST so it finishes last, and it shares a path
+// with a read mount that finishes first. Correct behaviour: the write mount
+// still wins that path, and the fused order is unchanged.
+func TestLensSearch_FusionIsBindingOrderNotCompletionOrder(t *testing.T) {
+	stub := &lensSearchStub{
+		byRepo: map[string][]store.SearchResult{
+			"alpha": {sr("kb/shared.md", "write copy", 1), sr("kb/a.md", "alpha only", 2)},
+			"beta":  {sr("kb/shared.md", "read copy", 99), sr("kb/b.md", "beta only", 98)},
+		},
+		// alpha (the write mount, index 0) finishes last.
+		delayByRepo: map[string]time.Duration{"alpha": 50 * time.Millisecond},
+	}
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	body := decodeLensSearch(t, getLensFacts(t, r, "/lenses/eng/search?q=x"))
+
+	if len(body.Results) != 3 {
+		t.Fatalf("results: got %d, want 3 (one shared path deduped); body=%+v",
+			len(body.Results), body.Results)
+	}
+	for _, row := range body.Results {
+		if row.Path == "kb/shared.md" && row.Title != "write copy" {
+			t.Errorf("shared path resolved to %q, want the write mount's copy — the dedupe "+
+				"read a mount index that completion order had reshuffled", row.Title)
+		}
+	}
+	// The read mount's copy must not ALSO be present under a qualified path.
+	for _, row := range body.Results {
+		if strings.HasSuffix(row.Path, "/kb/shared.md") {
+			t.Errorf("shadowed copy survived as %q — both copies were emitted", row.Path)
+		}
+	}
+}
+
+// §9.1 under concurrency on the search fan-out: one failing mount fails the
+// whole request, even when the healthy mounts are still in flight.
+func TestLensSearch_MountErrorFailsWholeRequestUnderConcurrency(t *testing.T) {
+	stub := &lensSearchStub{
+		byRepo:      map[string][]store.SearchResult{"alpha": {sr("kb/a.md", "alpha", 1)}},
+		errRepo:     "beta",
+		delayByRepo: map[string]time.Duration{"alpha": 40 * time.Millisecond},
+	}
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	s := &Server{Manager: m, providers: storeProviders{search: stub}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"}]}`)
+
+	rec := getLensFacts(t, r, "/lenses/eng/search?q=x")
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500 — a lens must never silently shrink its read "+
+			"set (RFC §9.1); body=%s", rec.Code, rec.Body.String())
+	}
 }

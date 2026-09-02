@@ -3,13 +3,16 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/federate"
@@ -481,7 +484,19 @@ func TestLensFacts_EmptyMounts(t *testing.T) {
 // whole fan-out. It records the last SearchOptions and whether a non-nil
 // embedder was forwarded, per repo.
 type lensSearchStub struct {
-	byRepo   map[string][]store.SearchResult
+	byRepo map[string][]store.SearchResult
+	// delayByRepo staggers per-mount latency. Under a concurrent fan-out this
+	// decides completion order — which the fused response must NOT depend on,
+	// because a mount's INDEX is its identity to FuseRRF and WriteFirstWinners.
+	delayByRepo map[string]time.Duration
+	// errRepo makes that one mount fail.
+	errRepo string
+	// mu guards the recording maps. The lens fan-out calls this provider ONCE
+	// PER MOUNT CONCURRENTLY, so a stub that records what it saw is shared
+	// mutable state across goroutines — the production provider is stateless and
+	// needs no such thing. Without the lock the recording, not the code under
+	// test, is the race.
+	mu       sync.Mutex
 	lastOpts map[string]store.SearchOptions
 	embSeen  map[string]bool
 }
@@ -490,6 +505,7 @@ func (s *lensSearchStub) Search(
 	_ context.Context,
 	ri *repos.RepoInstance, emb store.Embedder, _ string, opts store.SearchOptions,
 ) ([]store.SearchResult, error) {
+	s.mu.Lock()
 	if s.lastOpts == nil {
 		s.lastOpts = map[string]store.SearchOptions{}
 	}
@@ -498,6 +514,13 @@ func (s *lensSearchStub) Search(
 	}
 	s.lastOpts[ri.Name()] = opts
 	s.embSeen[ri.Name()] = emb != nil
+	s.mu.Unlock()
+	if d := s.delayByRepo[ri.Name()]; d > 0 {
+		time.Sleep(d)
+	}
+	if s.errRepo != "" && ri.Name() == s.errRepo {
+		return nil, errors.New("db on fire: " + ri.Name())
+	}
 	return s.byRepo[ri.Name()], nil
 }
 
@@ -1637,7 +1660,9 @@ type motifResolvingLensStub struct {
 	// aliases[repo][term] is the set of spellings that mount resolves term to.
 	// A mount that judge-merged two spellings lists both; a mount that never
 	// did resolves a term to itself, which is the store's own degradation.
-	aliases  map[string]map[string][]string
+	aliases map[string]map[string][]string
+	// mu guards lastOpts — the search fan-out is concurrent per mount.
+	mu       sync.Mutex
 	lastOpts map[string]store.SearchOptions
 }
 
@@ -1658,10 +1683,14 @@ func (s *motifResolvingLensStub) resolve(repo string, terms []string) map[string
 }
 
 func (s *motifResolvingLensStub) carriers(repo string, opts store.SearchOptions) []store.RecentFactEntry {
+	// Recorded under the lock: the lens search fan-out calls this stub once per
+	// mount concurrently (see lensSearchStub's note).
+	s.mu.Lock()
 	if s.lastOpts == nil {
 		s.lastOpts = map[string]store.SearchOptions{}
 	}
 	s.lastOpts[repo] = opts
+	s.mu.Unlock()
 	corpus := s.facts[repo]
 	if len(opts.Motifs) == 0 {
 		return corpus

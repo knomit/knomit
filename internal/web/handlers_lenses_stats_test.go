@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"knomit/internal/federate"
 	"knomit/internal/repos"
@@ -30,8 +32,21 @@ type lensStatsStub struct {
 	byRepo     map[string]store.StatsResult
 	byRepoAxis map[string]map[string]store.StatsResult
 	errRepo    string
-	lastPath   map[string]string
-	lastAxis   map[string]string
+	// errRepos makes SEVERAL mounts fail at once, so a test can pin WHICH
+	// failure a concurrent fan-out reports.
+	errRepos map[string]bool
+	// delayByRepo staggers per-mount latency. Under a concurrent fan-out this
+	// is what decides completion order, which is exactly what the response must
+	// NOT depend on.
+	delayByRepo map[string]time.Duration
+	// mu guards every recording field below. Both stats fan-out passes call
+	// this provider ONCE PER MOUNT CONCURRENTLY, so the bookkeeping a test
+	// asserts on is shared across goroutines — the production provider is
+	// stateless and needs no lock. Without this, the recording would be the
+	// race, not the code under test.
+	mu       sync.Mutex
+	lastPath map[string]string
+	lastAxis map[string]string
 	// statsCalls / highlightCalls count the two fan-out passes separately, so a
 	// test can assert that the axis correction re-fetches HIGHLIGHTS rather
 	// than re-running the whole aggregate.
@@ -40,18 +55,23 @@ type lensStatsStub struct {
 }
 
 func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ string, pathPrefix, axis string) (store.StatsResult, error) {
+	name := ri.Name()
+	s.mu.Lock()
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
 	if s.lastAxis == nil {
 		s.lastAxis = map[string]string{}
 	}
-	name := ri.Name()
 	s.statsCalls++
 	s.lastPath[name] = pathPrefix
 	s.lastAxis[name] = axis
-	if s.errRepo != "" && name == s.errRepo {
-		return store.StatsResult{}, errors.New("db on fire")
+	s.mu.Unlock()
+	if d := s.delayByRepo[name]; d > 0 {
+		time.Sleep(d)
+	}
+	if (s.errRepo != "" && name == s.errRepo) || s.errRepos[name] {
+		return store.StatsResult{}, errors.New("db on fire: " + name)
 	}
 	if perAxis, ok := s.byRepoAxis[name]; ok {
 		if res, ok := perAxis[axis]; ok {
@@ -68,8 +88,10 @@ func (s *lensStatsStub) Stats(_ context.Context, ri *repos.RepoInstance, _ strin
 // assertion therefore keeps its exact meaning.
 func (s *lensStatsStub) Highlights(ctx context.Context, ri *repos.RepoInstance, branch, pathPrefix, axis string) ([]store.Highlight, bool, error) {
 	res, err := s.Stats(ctx, ri, branch, pathPrefix, axis)
+	s.mu.Lock()
 	s.statsCalls-- // the delegation above is bookkeeping, not a second aggregate fetch
 	s.highlightCalls++
+	s.mu.Unlock()
 	if err != nil {
 		return nil, false, err
 	}
@@ -78,16 +100,20 @@ func (s *lensStatsStub) Highlights(ctx context.Context, ri *repos.RepoInstance, 
 
 // lensActivityStub is the per-repo activityProvider twin of lensStatsStub.
 type lensActivityStub struct {
-	byRepo   map[string]store.ActivityResult
-	errRepo  string
+	byRepo  map[string]store.ActivityResult
+	errRepo string
+	// mu guards lastPath — same concurrent fan-out as lensStatsStub.
+	mu       sync.Mutex
 	lastPath map[string]string
 }
 
 func (s *lensActivityStub) Activity(_ context.Context, ri *repos.RepoInstance, _ string, path string) (store.ActivityResult, error) {
+	s.mu.Lock()
 	if s.lastPath == nil {
 		s.lastPath = map[string]string{}
 	}
 	s.lastPath[ri.Name()] = path
+	s.mu.Unlock()
 	if s.errRepo != "" && ri.Name() == s.errRepo {
 		return store.ActivityResult{}, errors.New("git on fire")
 	}
@@ -954,5 +980,137 @@ func TestLensStats_AgreeingMountsSkipTheHighlightsRefetch(t *testing.T) {
 	if stub.highlightCalls != 0 {
 		t.Errorf("Highlights called %d times, want 0 — nothing disagreed with the pooled axis",
 			stub.highlightCalls)
+	}
+}
+
+// ── concurrent fan-out: §9.1 and determinism ────────────────────────────────
+
+// The response must be a function of the REQUEST, not of which mount finished
+// first. The slowest mount is deliberately the FIRST in binding order, so a
+// handler that assembled results as they arrived — appending from inside a
+// goroutine — would emit the repos rows inverted, and the qualified paths and
+// per-mount attribution with them.
+func TestLensStats_ResponseOrderIsBindingOrderNotCompletionOrder(t *testing.T) {
+	byRepo := map[string]store.StatsResult{
+		"alpha": {Total: 1, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
+			Highlights: []store.Highlight{{Path: "kb/a.md", Title: "from alpha", Type: "synthesis", Impact: 5}}},
+		"beta": {Total: 2, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
+			Highlights: []store.Highlight{{Path: "kb/b.md", Title: "from beta", Type: "synthesis", Impact: 9}}},
+		"gamma": {Total: 3, DefaultAxis: "impact", TopLayerFacts: 1, TopLayerEdges: 1,
+			Highlights: []store.Highlight{{Path: "kb/g.md", Title: "from gamma", Type: "synthesis", Impact: 1}}},
+	}
+	// Completion order is forced to the exact reverse of binding order.
+	stub := &lensStatsStub{byRepo: byRepo, delayByRepo: map[string]time.Duration{
+		"alpha": 60 * time.Millisecond,
+		"beta":  30 * time.Millisecond,
+	}}
+	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    stub,
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+
+	body := decodeLensStats(t, getLensFacts(t, r, "/lenses/eng/stats"))
+
+	want := []string{"alpha", "beta", "gamma"}
+	got := make([]string, 0, len(body.Repos))
+	for _, row := range body.Repos {
+		got = append(got, row.Name)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("repos: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("repos order: got %v, want %v (binding order; the slowest mount is first, "+
+				"so this is completion order leaking into the response)", got, want)
+		}
+	}
+	// Highlights are ranked by the axis, never by arrival: beta (impact 9) tops
+	// the list despite finishing second.
+	if len(body.Highlights) != 3 || body.Highlights[0].Title != "from beta" {
+		t.Errorf("highlights: got %+v, want beta's row first (impact 9); note read-mount "+
+			"paths are kb://-qualified, so compare on title", body.Highlights)
+	}
+	// The sums are order-independent, but assert them anyway: a reduction that
+	// dropped a slow mount's contribution would still order correctly.
+	if body.Total != 6 {
+		t.Errorf("total: got %d, want 6 — a mount's result was lost", body.Total)
+	}
+}
+
+// §9.1 survives concurrency: one failing mount still fails the whole request,
+// wherever it sits in the fan-out and however fast it fails relative to the
+// others. The failing mount here finishes FIRST while two healthy mounts are
+// still running, so an implementation that returned early on the first error
+// would race the goroutines still writing their slots.
+func TestLensStats_MountErrorFailsWholeRequestUnderConcurrency(t *testing.T) {
+	for _, failing := range []string{"alpha", "beta", "gamma"} {
+		t.Run("failing="+failing, func(t *testing.T) {
+			stub := &lensStatsStub{
+				byRepo:  map[string]store.StatsResult{},
+				errRepo: failing,
+				delayByRepo: map[string]time.Duration{
+					"alpha": 40 * time.Millisecond,
+					"beta":  40 * time.Millisecond,
+					"gamma": 40 * time.Millisecond,
+				},
+			}
+			// The failing mount answers immediately; the others are still in flight.
+			delete(stub.delayByRepo, failing)
+
+			m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
+			s := &Server{Manager: m, providers: storeProviders{
+				stats:    stub,
+				activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+			}}
+			r := s.NewAPIRouter()
+			createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+
+			rec := getLensFacts(t, r, "/lenses/eng/stats")
+			if rec.Code != http.StatusInternalServerError {
+				t.Fatalf("status: got %d, want 500 — a lens must never silently shrink its "+
+					"read set (RFC §9.1); body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// When SEVERAL mounts fail, the reported error is deterministic: the
+// LOWEST-INDEXED failing mount, which is the one a serial loop would have hit
+// first. Otherwise the message a caller sees — and a lens error names the
+// offending mount — would be decided by goroutine scheduling, and the same
+// request would answer differently between runs.
+//
+// gamma is made to fail FAST and beta SLOWLY, so "first to fail" and "first in
+// binding order" disagree; the assertion is that binding order wins.
+func TestLensStats_ConcurrentFailuresReportTheLowestIndexedMount(t *testing.T) {
+	stub := &lensStatsStub{
+		byRepo:      map[string]store.StatsResult{},
+		errRepos:    map[string]bool{"beta": true, "gamma": true},
+		delayByRepo: map[string]time.Duration{"beta": 50 * time.Millisecond},
+	}
+	m, _ := newTestLensManager(t, "alpha", "beta", "gamma")
+	s := &Server{Manager: m, providers: storeProviders{
+		stats:    stub,
+		activity: &lensActivityStub{byRepo: map[string]store.ActivityResult{}},
+	}}
+	r := s.NewAPIRouter()
+	createLens(t, m, r, `{"name":"eng","write":"alpha","reads":[{"repo":"beta"},{"repo":"gamma"}]}`)
+
+	// Repeated, because a scheduling-dependent answer is exactly the failure
+	// mode and one run could get lucky.
+	for i := 0; i < 10; i++ {
+		rec := getLensFacts(t, r, "/lenses/eng/stats")
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("run %d status: got %d, want 500", i, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "db on fire: beta") {
+			t.Fatalf("run %d: got %s\nwant the error of beta (mount 1), the lowest-indexed "+
+				"failing mount — gamma fails sooner, so this is completion order deciding "+
+				"which error the caller sees", i, rec.Body.String())
+		}
 	}
 }
