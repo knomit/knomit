@@ -134,6 +134,29 @@ func TestOrigins_ModeRoundTripsThroughPresenceTable(t *testing.T) {
 	require.Equal(t, 0, n)
 }
 
+// An unknown Mode is refused, and because the check runs INSIDE Set's
+// transaction — after the repo_origins upsert has already executed — the whole
+// call rolls back rather than half-landing. That is a new contract worth
+// pinning: before subscriptions existed, Set always wrote the origin row.
+func TestOrigins_UnknownModeRollsBackTheWholeSet(t *testing.T) {
+	r, o := openTestOrigins(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+
+	// Record a subscription first, so the rollback has BOTH halves of the
+	// transaction to undo, not just the upsert.
+	require.NoError(t, o.Set("u1", Origin{URL: "https://first.test/kb.git", Branch: "main", Mode: OriginModeSubscribe}))
+
+	err := o.Set("u1", Origin{URL: "https://second.test/kb.git", Branch: "main", Mode: "bogus"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bogus", "the error must name the mode it refused")
+
+	got, gerr := o.Get("u1")
+	require.NoError(t, gerr)
+	require.NotNil(t, got)
+	require.Equal(t, "https://first.test/kb.git", got.URL, "the repo_origins upsert must have rolled back")
+	require.Equal(t, OriginModeSubscribe, got.Mode, "a refused Set must not disturb the subscription")
+}
+
 // Purging a repo destroys its stored credential with it.
 func TestOrigins_CascadesOnRepoDelete(t *testing.T) {
 	r, o := openTestOrigins(t, testCrypt(t))

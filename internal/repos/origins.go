@@ -98,6 +98,15 @@ func (o *Origins) Get(uid string) (*Origin, error) {
 // Set upserts the full origin record for uid, encrypting a non-empty
 // AuthToken. Without a Crypt it REFUSES to store a credential — credentials are
 // never written in plaintext.
+//
+// It writes Mode too, and an Origin with an EMPTY Mode DELETES any subscription
+// row for uid — empty means sync, and Set is a full replacement, not a patch.
+// So a read-modify-write caller must carry Mode through from Get: constructing
+// a fresh Origin{URL, Branch, AuthMethod, AuthToken} to change a credential or
+// a URL silently demotes a subscribed repo to sync. There is no error and no
+// log, because at this layer an explicit "sync" and an unset Mode are the same
+// request. The mode half and the repo_origins upsert share one transaction, so
+// a rejected Mode leaves neither behind.
 func (o *Origins) Set(uid string, org Origin) error {
 	if uid == "" {
 		return fmt.Errorf("origins set: uid required")
