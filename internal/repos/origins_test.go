@@ -35,6 +35,7 @@ func TestOrigins_SetAndGetRoundTrips(t *testing.T) {
 	got, err := o.Get("u1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
+	want.Mode = OriginModeSync // Get always fills Mode; an unset Mode on Set means sync.
 	require.Equal(t, want, *got, "token round-trips as plaintext")
 }
 
@@ -106,6 +107,31 @@ func TestOrigins_ActiveRepoWithURL(t *testing.T) {
 	name, err = o.ActiveRepoWithURL("https://x.test/kb.git")
 	require.NoError(t, err)
 	require.Empty(t, name, "an archived repo releases its origin claim")
+}
+
+// Mode round-trips through the repo_subscriptions presence table: Set writes a
+// row when Mode is subscribe, Get reads it back through the LEFT JOIN, and
+// re-Setting without a mode removes the row rather than leaving it stale.
+func TestOrigins_ModeRoundTripsThroughPresenceTable(t *testing.T) {
+	r, o := openTestOrigins(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "sub", State: StateActive, Profile: "code", CreatedAt: 1}))
+
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.com/kb.git", Branch: "main", Mode: OriginModeSubscribe}))
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, OriginModeSubscribe, got.Mode)
+
+	// Re-setting without a mode means sync: the presence row is removed.
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.com/kb.git", Branch: "main"}))
+	got, err = o.Get("u1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, OriginModeSync, got.Mode)
+
+	var n int
+	require.NoError(t, r.DB().QueryRow(`SELECT count(*) FROM repo_subscriptions WHERE repo_uid = ?`, "u1").Scan(&n))
+	require.Equal(t, 0, n)
 }
 
 // Purging a repo destroys its stored credential with it.

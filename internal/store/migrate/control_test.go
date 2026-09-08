@@ -40,34 +40,64 @@ func controlVersion(t *testing.T, db *sql.DB) (int, bool) {
 	return v, dirty
 }
 
-// ControlBaselineSQL returns migration 000001 alone, and migrate-registry
-// rebuilds the lens tables from it. That is correct only while 000001 IS the
-// whole control chain.
-//
-// Adding 000002 without touching migrate-registry silently breaks conversion of
-// any home already stamped past v1: applyControlDB recreates the lens tables at
-// the v1 shape, the post-commit migrate.Control sees the later version and
-// no-ops, and the home is left with a schema its stamp says it has outgrown —
-// permanently, since no migration will re-run.
-//
-// This test is the tripwire. When it fails, do not just bump the number: go to
-// applyControlDB (cmd/migrate_registry.go) and decide whether it should replay
-// the whole control/ chain inside its transaction.
-func TestControlHasExactlyOneMigration(t *testing.T) {
+// Every control up-migration must consist of CREATE ... IF NOT EXISTS
+// statements only. migrate-registry executes ControlSchemaSQL — the WHOLE
+// chain concatenated — inside its own transaction against a home that may
+// already hold some of these objects, so any statement that is not idempotent
+// (ALTER TABLE, INSERT, DROP) would fail or corrupt on replay.
+func TestControl_UpMigrationsAreIdempotentDDL(t *testing.T) {
 	ups, err := fs.Glob(controlFS, "control/*.up.sql")
 	require.NoError(t, err)
-	require.Equal(t, []string{"control/000001_control_baseline.up.sql"}, ups,
-		"a second control migration exists; ControlBaselineSQL and applyControlDB "+
-			"still assume 000001 is the whole chain — see this test's comment")
+	require.NotEmpty(t, ups)
+	for _, name := range ups {
+		body, rerr := controlFS.ReadFile(name)
+		require.NoError(t, rerr)
+		for _, stmt := range strings.Split(string(body), ";") {
+			s := strings.TrimSpace(stripSQLComments(stmt))
+			if s == "" {
+				continue
+			}
+			require.Regexp(t, `(?i)^CREATE (TABLE|UNIQUE INDEX|INDEX) IF NOT EXISTS `, s,
+				"%s: statement is not idempotent DDL: %q", name, s)
+		}
+	}
 }
 
-// Every object the baseline is responsible for: four tables and three indexes.
+func stripSQLComments(s string) string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		if i := strings.Index(line, "--"); i >= 0 {
+			line = line[:i]
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ControlSchemaSQL is the concatenation of every up-migration, in order, so a
+// database it is executed against ends up at the newest shape.
+func TestControlSchemaSQL_CreatesEveryObject(t *testing.T) {
+	db := controlDB(t)
+	body, err := ControlSchemaSQL()
+	require.NoError(t, err)
+	_, err = db.Exec(body)
+	require.NoError(t, err)
+	for _, name := range controlObjects {
+		require.True(t, objectExists(t, db, name), "expected %q to exist", name)
+	}
+}
+
+// Every object the control chain is responsible for: five tables and three
+// indexes. TestControl_FreshDatabase asserts the MIGRATOR creates each one and
+// TestControlSchemaSQL_CreatesEveryObject asserts the concatenated schema text
+// does — the two paths must not drift, so they share this list.
 var controlObjects = []string{
 	"repos", "repos_active_name", "repos_active_repo_id",
 	"repo_origins", "lenses", "lenses_name", "lens_reads",
+	"repo_subscriptions",
 }
 
-// A fresh home gets the whole control schema and lands on version 1.
+// A fresh home gets the whole control schema and lands on the newest version.
 func TestControl_FreshDatabase(t *testing.T) {
 	db := controlDB(t)
 	require.NoError(t, Control(db))
@@ -76,7 +106,7 @@ func TestControl_FreshDatabase(t *testing.T) {
 		require.True(t, objectExists(t, db, name), "expected %q to exist", name)
 	}
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 1, v)
+	require.Equal(t, 2, v)
 	require.False(t, dirty)
 }
 
@@ -120,7 +150,7 @@ CREATE TABLE lens_reads (
 	require.NoError(t, Control(db))
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 1, v)
+	require.Equal(t, 2, v)
 	require.False(t, dirty)
 
 	var name string
@@ -343,7 +373,7 @@ func TestControl_RecoversDirtyVersion(t *testing.T) {
 	require.NoError(t, Control(db), "a dirty control.db must self-heal")
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 1, v)
+	require.Equal(t, 2, v)
 	require.False(t, dirty)
 	require.True(t, objectExists(t, db, "repos"))
 }
