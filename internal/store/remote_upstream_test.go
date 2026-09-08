@@ -296,9 +296,32 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"}, cfg.Remotes["origin"].Fetch)
 
-	// The branches row and commit_log exist for main.
-	_, err = svc.Branches().HeadCommit(context.Background(), "main")
-	require.NoError(t, err)
+	// The branches row, the branch-to-commit mapping and commit_log are all
+	// populated for the followed branch.
+	//
+	// Asserted with SQL rather than through HeadCommit, which proves none of it:
+	// HeadCommit resolves the git ref and never reads these tables, so it only
+	// restates the ref check above. The gap matters because the failure is
+	// silent from both ends — populateCommitLog returns nil when the ref lookup
+	// fails, and InitSubscription logs and swallows its error — so a
+	// subscription whose commit log never populated would still look healthy.
+	ctx := context.Background()
+	var branchID int64
+	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+		`SELECT id FROM branches WHERE name = ?`, "main").Scan(&branchID))
+
+	seed := local.Hash().String()
+	var onBranch int
+	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
+		branchID, seed).Scan(&onBranch))
+	require.Equal(t, 1, onBranch, "the seed commit must be mapped onto the followed branch")
+
+	// commit_log is keyed (commit_hash, path), not by branch, so name the commit.
+	var logged int
+	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM commit_log WHERE commit_hash = ?`, seed).Scan(&logged))
+	require.Greater(t, logged, 0, "the seed commit must be in commit_log")
 }
 
 func TestInitSubscription_EmptyRemoteIsRefused(t *testing.T) {
