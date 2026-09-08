@@ -346,26 +346,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 		agentBranch = defaultAgentBranch()
 	}
 
-	// Resolve the upstream (consensus) branch when the caller didn't specify.
-	// PREFER "main": a remote whose symbolic HEAD points at an agent branch
-	// (e.g. its GitHub default branch was set to agent/<host>) must NOT make
-	// that agent branch our consensus upstream — by knomit convention "main"
-	// is consensus. Only fall back to the remote's HEAD branch (e.g. a
-	// "master"-convention repo without "main"), then to "main" as a last resort.
-	if upstreamMain == "" {
-		switch {
-		case remoteHasBranch(repo, "main"):
-			upstreamMain = "main"
-		default:
-			upstreamMain = detectRemoteUpstream(repo, auth, s.rh.netTimeout)
-			if upstreamMain == "" {
-				log.Warn().Msg("InitFromRemote: no \"main\" branch and could not detect remote HEAD; defaulting to \"main\"")
-				upstreamMain = "main"
-			} else {
-				log.Info().Str("upstream", upstreamMain).Msg("InitFromRemote: no \"main\"; using detected remote HEAD branch")
-			}
-		}
-	}
+	upstreamMain = s.resolveUpstream(repo, auth, upstreamMain)
 
 	// Publish the freshly-initialised repo on the handler BEFORE
 	// configureRemote — that helper reaches into rh.repo to read and rewrite
@@ -485,6 +466,99 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	}
 	// remoteWasEmpty=false: this is the CLONE path — the fetch above found refs.
 	return upstreamMain, false, nil
+}
+
+// resolveUpstream applies the consensus-branch rule shared by every remote
+// init path: honour a requested name; otherwise PREFER "main" — a remote whose
+// symbolic HEAD points at an agent branch must NOT make that our consensus —
+// then the remote's HEAD branch (e.g. a "master"-convention repo), then "main"
+// as a last resort. Must run AFTER the wildcard fetch so remoteHasBranch can
+// see the remote-tracking refs.
+func (s *Service) resolveUpstream(repo *gogit.Repository, auth transport.AuthMethod, requested string) string {
+	if requested != "" {
+		return requested
+	}
+	if remoteHasBranch(repo, "main") {
+		return "main"
+	}
+	detected := detectRemoteUpstream(repo, auth, s.rh.netTimeout)
+	if detected == "" {
+		log.Warn().Msg("resolveUpstream: no \"main\" branch and could not detect remote HEAD; defaulting to \"main\"")
+		return "main"
+	}
+	log.Info().Str("upstream", detected).Msg("resolveUpstream: no \"main\"; using detected remote HEAD branch")
+	return detected
+}
+
+// InitSubscription initialises a repo that FOLLOWS a remote branch read-only.
+//
+// It is InitFromRemote without the agent half: fetch, resolve the consensus
+// branch by the same rule (resolveUpstream), track that branch alone, and set
+// the local branch and HEAD to its tip. No agent branch is cut, no watermark
+// is written, and nothing here ever pushes. Sync for such a repo is
+// reconcileMain alone (remoteIndex.reconcileNow with an empty agent branch).
+//
+// The resolved upstream is RETURNED for the same reason InitFromRemote returns
+// it: the caller persists what was adopted, never what it asked for.
+//
+// A remote with no refs is refused with transport.ErrEmptyRemoteRepository:
+// there is no branch to follow, and unlike InitFromRemote there is no
+// seed-locally fallback because a subscription owns no content.
+func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, upstreamMain string) (string, error) {
+	repo, err := gogit.Init(s.rh.gits, memfs.New())
+	if err != nil {
+		return "", fmt.Errorf("InitSubscription: git init: %w", err)
+	}
+	if err := initRepoConfig(repo, "InitSubscription"); err != nil {
+		return "", err
+	}
+	if _, err := repo.CreateRemote(&gogitconfig.RemoteConfig{
+		Name:  "origin",
+		URLs:  []string{originURL},
+		Fetch: []gogitconfig.RefSpec{"+refs/heads/*:refs/remotes/origin/*"},
+	}); err != nil {
+		return "", fmt.Errorf("InitSubscription: create remote: %w", err)
+	}
+
+	fetchCtx, fetchCancel := s.rh.netCtx(context.Background())
+	err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{RemoteName: "origin", Auth: auth})
+	fetchCancel()
+	if err != nil {
+		return "", fmt.Errorf("InitSubscription: fetch: %w", err)
+	}
+
+	upstreamMain = s.resolveUpstream(repo, auth, upstreamMain)
+
+	// Publish before configureRemote, which reads and rewrites rh.repo's config.
+	s.rh.repo = repo
+	if err := s.rh.configureRemote(originURL, upstreamMain, ""); err != nil {
+		return "", fmt.Errorf("InitSubscription: configure remote: %w", err)
+	}
+	if err := fetchOrigin(context.Background(), repo, auth, upstreamMain, s.rh.netTimeout); err != nil {
+		return "", fmt.Errorf("InitSubscription: re-fetch: %w", err)
+	}
+
+	originRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
+	if err != nil {
+		return "", fmt.Errorf("InitSubscription: resolve origin/%s: %w", upstreamMain, err)
+	}
+	localName := plumbing.NewBranchReferenceName(upstreamMain)
+	if err := s.rh.gits.SetReference(plumbing.NewHashReference(localName, originRef.Hash())); err != nil {
+		return "", fmt.Errorf("InitSubscription: set local %s: %w", upstreamMain, err)
+	}
+	if err := s.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, localName)); err != nil {
+		return "", fmt.Errorf("InitSubscription: set HEAD: %w", err)
+	}
+
+	s.fi.auth = auth
+	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
+		return "", fmt.Errorf("InitSubscription: ensure upstream branch %q: %w", upstreamMain, err)
+	}
+	if err := s.rh.populateCommitLog(context.Background(), upstreamMain); err != nil {
+		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: subscription populate failed")
+	}
+	log.Info().Str("upstream", upstreamMain).Str("origin", originURL).Msg("git store initialized as a subscription")
+	return upstreamMain, nil
 }
 
 // detectRemoteUpstream queries origin's symbolic HEAD to determine the default
