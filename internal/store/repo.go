@@ -37,6 +37,11 @@ var ErrBranchNotFound = errors.New("branch not found")
 // name: a subscription has no agent branch and nothing of its own to push.
 var ErrNoAgentBranch = errors.New("repo has no agent branch to push")
 
+// ErrRepoReadOnly is returned by every authored-write door when the store has
+// been marked read-only (a subscription). Sync merges are not authored writes
+// and are not gated.
+var ErrRepoReadOnly = errors.New("repo is read-only")
+
 // ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read
 // path that needs to resolve a path's active commit via branch_facts) when
 // no row exists for (branch, path). This means the fact is not currently live

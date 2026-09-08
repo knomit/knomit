@@ -80,6 +80,8 @@ type repoHandler struct {
 	// don't exercise the index.
 	im IndexManager
 
+	readOnly bool // refuses authored commits; see Service.SetReadOnly
+
 	name string // repo name, derived from dbPath at Open time
 
 	// factRoot is the ontology root — the one directory facts live under, and

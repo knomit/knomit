@@ -342,6 +342,13 @@ func (s *Service) SetNetworkTimeout(d time.Duration) { s.rh.netTimeout = d }
 // tree under the new one.
 func (s *Service) SetOntologyRoot(root string) { s.rh.factRoot = strings.Trim(root, "/") }
 
+// SetReadOnly marks the store as accepting no AUTHORED commits on any branch.
+// Wired by the repos builder for subscriptions. The gate sits at the shared
+// write seam (writeFileExact / deleteFile / batchWrite) so every door —
+// facts, root files, batches — inherits it; the sync merges are deliberately
+// outside it, since a subscription must keep following its upstream.
+func (s *Service) SetReadOnly(ro bool) { s.rh.readOnly = ro }
+
 // Remote returns the RemoteIndex for git remote configuration and sync.
 func (s *Service) Remote() RemoteIndex { return s.ri }
 
