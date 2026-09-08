@@ -80,7 +80,14 @@ type repoHandler struct {
 	// don't exercise the index.
 	im IndexManager
 
-	readOnly bool // refuses authored commits; see Service.SetReadOnly
+	// readOnly refuses authored commits at the shared write seam — the
+	// structural half of a subscription (see Service.SetReadOnly). Set by
+	// Service.SetReadOnly at build/swap time before the store is published,
+	// never mutated afterwards, so no lock is needed. It does NOT survive
+	// store.Open, so it must be re-applied on SwapStore reopen exactly like
+	// SetOntologyRoot — a swap that forgets it silently makes a subscription
+	// writable again.
+	readOnly bool
 
 	name string // repo name, derived from dbPath at Open time
 

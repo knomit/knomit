@@ -347,6 +347,12 @@ func (s *Service) SetOntologyRoot(root string) { s.rh.factRoot = strings.Trim(ro
 // write seam (writeFileExact / deleteFile / batchWrite) so every door —
 // facts, root files, batches — inherits it; the sync merges are deliberately
 // outside it, since a subscription must keep following its upstream.
+//
+// Like SetOntologyRoot, the flag does not survive store.Open and must be
+// re-applied on SwapStore reopen: rewireStore rebuilds the Service from disk,
+// and a swap that omits this leaves a subscription writable with no error and
+// no log. It is set at build/swap time before the store is published and never
+// mutated afterwards, which is why the bool needs no lock.
 func (s *Service) SetReadOnly(ro bool) { s.rh.readOnly = ro }
 
 // Remote returns the RemoteIndex for git remote configuration and sync.
