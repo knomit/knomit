@@ -159,3 +159,14 @@ func TestSync_CallerDeadlineIsRecorded(t *testing.T) {
 	require.NotNil(t, rem.LastStatus)
 	require.Equal(t, "error", *rem.LastStatus, "a remote that ran out of time still failed, and the user must be told")
 }
+
+func TestPush_EmptyBranchIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	_, err = svc.ri.Push(context.Background(), "", nil)
+	require.ErrorIs(t, err, ErrNoAgentBranch)
+}

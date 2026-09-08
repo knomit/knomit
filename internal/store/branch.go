@@ -425,12 +425,18 @@ func (rh *repoHandler) SetAgentBranchOwner(ctx context.Context, branch string) e
 	return nil
 }
 
-// configureRemote ensures origin is registered with two fetch refspecs:
-// one for the upstream consensus branch (typically "main", configurable to
-// "master" or any other name via upstreamMain) and one for this machine's
+// configureRemote ensures origin is registered with a fetch refspec for the
+// upstream consensus branch (typically "main", configurable to "master" or any
+// other name via upstreamMain) and, when this machine has one, a second for its
 // agent branch. Idempotent. Both branch names are part of their respective
 // refspecs, so callers must pass the same upstreamMain and agentBranch on
 // every call for a given repo. Empty upstreamMain defaults to "main".
+//
+// An EMPTY agentBranch means a subscription: the repo follows the upstream
+// read-only and has no branch of its own, so exactly one refspec is written.
+// Interpolating an empty name would otherwise produce "+refs/heads/:refs/
+// remotes/origin/", which git accepts into the config and which then makes
+// every fetch fail.
 func (rh *repoHandler) configureRemote(url, upstreamMain, agentBranch string) error {
 	rh.configMu.Lock()
 	defer rh.configMu.Unlock()
@@ -445,36 +451,38 @@ func (rh *repoHandler) configureRemote(url, upstreamMain, agentBranch string) er
 	}
 
 	mainRefspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", upstreamMain, upstreamMain)
-	agentRefspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", agentBranch, agentBranch)
+	// A subscription has no agent branch and tracks the upstream alone.
+	want := []gogitconfig.RefSpec{gogitconfig.RefSpec(mainRefspec)}
+	if agentBranch != "" {
+		want = append(want, gogitconfig.RefSpec(fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", agentBranch, agentBranch)))
+	}
 
 	if rc, ok := cfg.Remotes["origin"]; ok && len(rc.URLs) > 0 && rc.URLs[0] == url {
-		want := map[string]bool{mainRefspec: true, agentRefspec: true}
-		got := make(map[string]bool, len(rc.Fetch))
-		for _, rs := range rc.Fetch {
-			got[string(rs)] = true
-		}
-		matches := len(got) == len(want)
-		for k := range want {
-			if !got[k] {
-				matches = false
-				break
-			}
-		}
-		if matches {
+		if sameRefspecs(rc.Fetch, want) {
 			return nil // already configured
 		}
 	}
 
 	_ = rh.repo.DeleteRemote("origin")
-	_, err = rh.repo.CreateRemote(&gogitconfig.RemoteConfig{
-		Name: "origin",
-		URLs: []string{url},
-		Fetch: []gogitconfig.RefSpec{
-			gogitconfig.RefSpec(mainRefspec),
-			gogitconfig.RefSpec(agentRefspec),
-		},
-	})
+	_, err = rh.repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{url}, Fetch: want})
 	return err
+}
+
+// sameRefspecs reports set equality of two refspec lists.
+func sameRefspecs(a, b []gogitconfig.RefSpec) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	got := make(map[gogitconfig.RefSpec]bool, len(a))
+	for _, rs := range a {
+		got[rs] = true
+	}
+	for _, rs := range b {
+		if !got[rs] {
+			return false
+		}
+	}
+	return true
 }
 
 // ── git read methods ──────────────────────────────────────────────────────────

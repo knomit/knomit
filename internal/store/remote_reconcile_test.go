@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
@@ -1073,4 +1074,56 @@ func TestReconcileMain_LogsMergeBaseErrorDistinctly(t *testing.T) {
 		"classification preserves MergeBase errors so reconcileMain can surface them distinctly")
 	require.False(t, withErr.Disjoint,
 		"a MergeBase error must NOT silently mean disjoint=false — reconcileMain logs the error explicitly instead")
+}
+
+// A subscription has no agent branch: its remote tracks the upstream alone.
+// The empty agent name must NOT produce the malformed "+refs/heads/:..." spec.
+func TestConfigureRemote_EmptyAgentBranchWritesOneRefspec(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", ""))
+
+	cfg, err := svc.rh.repo.Config()
+	require.NoError(t, err)
+	rc, ok := cfg.Remotes["origin"]
+	require.True(t, ok)
+	require.Equal(t, []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"}, rc.Fetch)
+
+	// Idempotent in the one-refspec shape too.
+	require.NoError(t, svc.rh.configureRemote("https://example.com/repo.git", "main", ""))
+	cfg, err = svc.rh.repo.Config()
+	require.NoError(t, err)
+	require.Len(t, cfg.Remotes["origin"].Fetch, 1)
+}
+
+// reconcileNow with no agent branch runs the main reconcile ALONE: the agent
+// half is skipped, not attempted against an empty name.
+func TestReconcileNow_NoAgentBranchReconcilesMainOnly(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// origin/main is one commit ahead of local main.
+	ahead := writeMergeFact(t, svc, "main", "kb/a.md", "A", "v1")
+	require.NoError(t, svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(ahead))))
+	// Rewind local main one commit behind so there is something to fast-forward.
+	c, err := svc.rh.repo.CommitObject(plumbing.NewHash(ahead))
+	require.NoError(t, err)
+	parent, err := c.Parent(0)
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), parent.Hash)))
+
+	res, err := svc.ri.reconcileNow(context.Background(), "", "main")
+	require.NoError(t, err)
+	require.Equal(t, ModeFF, res.Main.Mode)
+	require.Equal(t, ahead, res.Main.NewTip)
+	require.Equal(t, AgentReconcileResult{}, res.Agent, "no agent reconcile must run without an agent branch")
+	require.Equal(t, plumbing.NewHash(ahead), mustHeadHash(t, svc, "main"))
 }

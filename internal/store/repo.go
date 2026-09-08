@@ -33,6 +33,10 @@ var ErrEmptyRemote = errors.New("remote repository has no branches")
 // error chain for introspection.
 var ErrBranchNotFound = errors.New("branch not found")
 
+// ErrNoAgentBranch is returned by Push when asked to push an empty branch
+// name: a subscription has no agent branch and nothing of its own to push.
+var ErrNoAgentBranch = errors.New("repo has no agent branch to push")
+
 // ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read
 // path that needs to resolve a path's active commit via branch_facts) when
 // no row exists for (branch, path). This means the fact is not currently live
