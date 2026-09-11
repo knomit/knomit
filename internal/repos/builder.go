@@ -522,9 +522,14 @@ func (b *repoBuilder) build() *RepoInstance {
 	// Allocate ri first — the observer and closures capture the pointer so
 	// they follow SwapStore field replacements via the read lock.
 	ri := &RepoInstance{
-		uid:                           b.uid,
-		dbPath:                        b.dbPath,
-		agentBranch:                   b.agentBranch,
+		uid:         b.uid,
+		dbPath:      b.dbPath,
+		agentBranch: b.agentBranch,
+		// A writable repo reads its own agent branch. Task 6 refines this for
+		// subscriptions, which read the upstream they follow instead; until
+		// then this keeps ID() — which resolves the root commit on the READ
+		// branch — working for every repo the builder produces.
+		readBranch:                    b.agentBranch,
 		ontology:                      b.ontology,
 		ontologyErr:                   b.ontologyErr,
 		embedder:                      b.embedder,
