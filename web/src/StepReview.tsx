@@ -1,4 +1,5 @@
-import type { WizardState } from './wizardState';
+import type { Dispatch } from 'react';
+import type { WizardState, WizardAction } from './wizardState';
 import { cardLabel } from './manageStyles';
 
 // StepReview states CONSEQUENCES of the choices already made, not the inputs
@@ -14,7 +15,7 @@ import { cardLabel } from './manageStyles';
 // amber. Trade-offs — like the local-only case losing revision history —
 // are plain text: amber on every line would mean nobody reads it on the one
 // that matters.
-export function StepReview({ state }: { state: WizardState }) {
+export function StepReview({ state, dispatch }: { state: WizardState; dispatch: Dispatch<WizardAction> }) {
   // Same fallback createBodyFor uses, and for the same reason: this line must
   // name the ontology that will actually be sent, so reading 'default' off a
   // cleared state.preset here would make the review page confidently wrong
@@ -61,6 +62,25 @@ export function StepReview({ state }: { state: WizardState }) {
           made here: the remote's own governs, and the backend refuses one
           supplied alongside a clone rather than silently dropping it. */}
       {state.choice === 'remote' && state.initialized === 'yes' && (
+        <>
+        {/* The one create decision the wizard does not derive: both modes are
+            valid for a branch that already holds a knowledge base, and only the
+            user knows which they want. It renders HERE rather than on the
+            access step because the access step runs before the branch check —
+            this is the first step that knows the answer is "yes". */}
+        <div role="radiogroup" aria-label="How to attach" style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
+          <label><input type="radio" data-testid="access-join" name="access" checked={state.access === 'join'}
+            onChange={() => dispatch({ type: 'SET_ACCESS', access: 'join' })} /> Join — write to knomit's own branch and push it</label>
+          <label><input type="radio" data-testid="access-subscribe" name="access" checked={state.access === 'subscribe'}
+            onChange={() => dispatch({ type: 'SET_ACCESS', access: 'subscribe' })} /> Subscribe — follow {branch} read-only</label>
+        </div>
+        {state.access === 'subscribe' ? (
+        <ol style={list}>
+          <li>Repository "{state.name}" is created by fetching {state.url} and following branch {branch}.</li>
+          <li>It is read-only: no facts can be written here, and nothing is ever pushed.</li>
+          <li>It updates whenever {branch} changes on the remote.</li>
+        </ol>
+        ) : (
         <ol style={list}>
           <li>Repository "{state.name}" is created by cloning {state.url} (branch {branch}).</li>
           <li>Its ontology comes from the remote itself — not a choice made here.</li>
@@ -81,6 +101,8 @@ export function StepReview({ state }: { state: WizardState }) {
           </li>
           <li>Your work goes to knomit's own branch, and syncs there. {branch} is not changed.</li>
         </ol>
+        )}
+        </>
       )}
       {/* Every remote case above PUSHES — the agent branch, never the
           consensus branch. Saying so where write access was refused (or never

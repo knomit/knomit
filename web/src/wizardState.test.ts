@@ -317,6 +317,39 @@ describe('currentStep', () => {
   });
 });
 
+// Subscribe is the ONE create decision the wizard does not derive: both modes
+// are valid for a branch that is already a knowledge base, and only the user
+// knows which they want. It must never be derived for a branch that is NOT one
+// — there is nothing to follow yet.
+describe('createBodyFor — join vs subscribe', () => {
+  it("subscribe is the user's choice on a branch that is already a knowledge base", () => {
+    const s = wizardReducer(checked('yes'), { type: 'SET_ACCESS', access: 'subscribe' });
+    expect(createBodyFor(s).mode).toBe('subscribe');
+    expect(createBodyFor(checked('yes')).mode).toBe('clone');
+  });
+
+  it('subscribe is never derived for a branch that is not yet a knowledge base', () => {
+    const s = wizardReducer(checked('no'), { type: 'SET_ACCESS', access: 'subscribe' });
+    expect(createBodyFor(s).mode).toBe('initialize');
+  });
+
+  it('a write-denied probe preselects subscribe; a write-ok probe leaves join', () => {
+    expect(probed({ write_access: 'denied' }).access).toBe('subscribe');
+    expect(probed({ write_access: 'ok' }).access).toBe('join');
+  });
+
+  // The preselect is a HINT, not a verdict: write_access is advisory and a
+  // later probe must not silently undo a choice the user made deliberately.
+  it('a later write-ok probe does not flip an explicit subscribe back to join', () => {
+    const chosen = wizardReducer(probed({ write_access: 'denied' }), { type: 'SET_ACCESS', access: 'subscribe' });
+    const reprobed = wizardReducer(chosen, {
+      type: 'PROBE_DONE',
+      probe: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'], write_access: 'ok' },
+    });
+    expect(reprobed.access).toBe('subscribe');
+  });
+});
+
 describe('createBodyFor', () => {
   // remoteState walks the wizard the way a user does — URL, probe, branch
   // check — so the mode below is derived from the same state machine the app

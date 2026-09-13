@@ -321,7 +321,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
       )}
       {step === 'branch' && <StepBranch state={state} dispatch={dispatch} />}
       {step === 'ontology' && <StepOntology state={state} onDispatch={dispatch} onValidityChange={setOntologyValid} />}
-      {step === 'review' && <StepReview state={state} />}
+      {step === 'review' && <StepReview state={state} dispatch={dispatch} />}
 
       {/* A create that failed left NOTHING in the repo list: every failure path
           in Manager.Create calls cleanup(), which drops the local .db and the

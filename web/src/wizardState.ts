@@ -78,6 +78,14 @@ export interface WizardState {
   probeKey: string;
   initializedKey: string;
   stepIndex: number;
+  /**
+   * How to attach to a branch that is already a knowledge base: 'join' clones
+   * it and writes to knomit's own agent branch; 'subscribe' follows it
+   * read-only. The ONE create decision the user makes rather than the wizard
+   * deriving; preselected to 'subscribe' when the access probe reports that
+   * knomit cannot push. Ignored for a branch that is not yet a knowledge base.
+   */
+  access: 'join' | 'subscribe';
 }
 
 // choice starts at 'remote', which is a soft lead for the remote path and is
@@ -90,6 +98,7 @@ export const initialWizardState: WizardState = {
   preset: 'default', seedPreset: 'default', yaml: '',
   initialized: '', initializedDetail: '', initializedBranch: '',
   probeKey: '', initializedKey: '', stepIndex: 0,
+  access: 'join',
 };
 
 export type WizardAction =
@@ -99,6 +108,7 @@ export type WizardAction =
   | { type: 'PROBE_DONE'; probe: ProbeResult }
   | { type: 'SET_NAME'; name: string }
   | { type: 'SET_BRANCH'; branch: string }
+  | { type: 'SET_ACCESS'; access: 'join' | 'subscribe' }
   | { type: 'SET_AUTH_METHOD'; method: string }
   | { type: 'SET_AUTH_USER'; user: string }
   | { type: 'SET_TOKEN'; token: string }
@@ -184,8 +194,14 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
         ...uncheckedBranch,
         probeKey: remoteKey(s),
         stepIndex: a.probe.reachable ? 1 : s.stepIndex,
+        // A refused push PRESELECTS subscribe; it never resets to join. The
+        // signal is advisory (write_access is a hint, not a gate), so a later
+        // probe reporting 'ok' must not silently undo a choice the user made
+        // deliberately — one-way is the only direction that cannot lose intent.
+        access: a.probe.write_access === 'denied' ? 'subscribe' : s.access,
       };
     }
+    case 'SET_ACCESS':    return { ...s, access: a.access };
     case 'SET_NAME':      return { ...s, name: a.name };
     // Changing the branch un-answers the question, because the answer was
     // about the OTHER branch. A repo can carry .knomit/ontology.yaml on main
@@ -346,7 +362,8 @@ export function branchCheckBlocked(s: WizardState): boolean {
  *
  * The mode is DERIVED, never chosen by the user:
  *   local                → 'custom' when yaml was supplied, else 'preset'
- *   remote, initialized  → 'clone'      (carries NO ontology — the backend refuses one)
+ *   remote, initialized  → 'clone', or 'subscribe' when the user chose read-only
+ *                        (both carry NO ontology — the backend refuses one)
  *   remote, not yet      → 'initialize' (carries the chosen ontology)
  *
  * There is deliberately no arm for `initialized === ''`. stepsFor never puts a
@@ -373,7 +390,7 @@ export function createBodyFor(s: WizardState): CreateRepoBody {
       ? { name: s.name, mode: 'initialize', ontology_yaml: s.yaml, origin }
       : { name: s.name, mode: 'initialize', ontology_preset: s.preset || s.seedPreset, origin };
   }
-  return { name: s.name, mode: 'clone', origin };
+  return { name: s.name, mode: s.access === 'subscribe' ? 'subscribe' : 'clone', origin };
 }
 
 /**
