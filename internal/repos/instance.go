@@ -75,6 +75,13 @@ type RepoInstance struct {
 	// subscribed marks a subscription: follows its origin read-only, no agent
 	// branch, never pushes. Explicit rather than inferred from an empty
 	// agentBranch so the DTO and the lens gate have a name for it.
+	//
+	// It is only ever true together with an EMPTY agentBranch, and whoever sets
+	// one must set the other: WritableBranch keys on the branch while the DTO
+	// and the lens gate key on this flag, so a mismatch makes a repo
+	// simultaneously a subscription and writable on its agent branch, with
+	// nothing failing. NewTestInstanceWithDeps enforces the pairing; a
+	// production constructor has to uphold it itself.
 	subscribed bool
 	// uid is the registry identity: stable for the repo's whole life, minted at
 	// create, and unchanged by rename or by a store swap. Distinct from id (the
