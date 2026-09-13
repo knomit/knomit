@@ -360,11 +360,18 @@ export function branchCheckBlocked(s: WizardState): boolean {
 /**
  * createBodyFor maps wizard state onto the create wire format.
  *
- * The mode is DERIVED, never chosen by the user:
+ * The mode is DERIVED from the remote's shape, with ONE exception:
  *   local                → 'custom' when yaml was supplied, else 'preset'
- *   remote, initialized  → 'clone', or 'subscribe' when the user chose read-only
- *                        (both carry NO ontology — the backend refuses one)
+ *   remote, initialized  → 'clone', or 'subscribe' when the user chose to
+ *                          follow read-only (both carry NO ontology — the
+ *                          backend refuses one)
  *   remote, not yet      → 'initialize' (carries the chosen ontology)
+ *
+ * The exception is `access` (see its doc on WizardState): on a branch that is
+ * ALREADY a knowledge base both modes are valid and only the user knows which
+ * they want, so join-vs-subscribe is chosen rather than derived. It is ignored
+ * on every other arm — a branch that is not yet a knowledge base has nothing
+ * to follow, and the 'initialize' arm returns before the choice is read.
  *
  * There is deliberately no arm for `initialized === ''`. stepsFor never puts a
  * review step in front of an unestablished check, so this is unreachable from

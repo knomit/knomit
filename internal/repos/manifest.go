@@ -18,8 +18,16 @@ var (
 	// cap is a pure input check, enforced here rather than at the HTTP edge so
 	// every writer of README.md is bound by it.
 	ErrRepoDescriptionTooLong = errors.New("repo description too long")
-	// ErrAgentBranchUnset is returned when the repo has no agent branch yet, so
-	// there is no ref to read the manifest from or commit it to.
+	// ErrAgentBranchUnset is returned when there is no ref to read the manifest
+	// from or commit it to.
+	//
+	// The two halves guard DIFFERENT branches, which is why one sentinel still
+	// covers both: the readers (ReadReadme, ReadLicense) guard the READ branch —
+	// the agent branch, or the followed upstream for a subscription — which is
+	// empty only for an unregistered or bare instance; the writers (WriteReadme,
+	// WriteLicense) guard the agent branch, which a subscription never has. So
+	// for any REGISTERED repo the readers' guard is unreachable and this
+	// sentinel means exactly what its name says: the caller tried to write.
 	ErrAgentBranchUnset = errors.New("repo has no agent branch")
 	// ErrLicenseTooLargeToReplace is returned by WriteLicense when the LICENSE
 	// already on the agent branch exceeds MaxRepoDescriptionBytes. ReadFact has

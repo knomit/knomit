@@ -2398,7 +2398,7 @@ components:
 
     Repo:
       type: object
-      required: [name, uid, id, _links]
+      required: [name, uid, id, read_branch, _links]
       properties:
         name:         { type: string }
         uid:          { type: string, description: "Registry uid — the identifier lens membership is keyed by." }

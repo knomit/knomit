@@ -170,10 +170,12 @@ func (s CreateSpec) joinsRemoteOntology() bool { return s.Mode == "clone" || s.M
 // repos-side twin of that rule (see resolveUpstream in probe.go), computed from
 // a ref listing the preflight has already made.
 //
-// usable carries whether that listing established anything: an unreachable or
-// auth-gated remote yields "", and the create's own check stays authoritative
-// (an UNKNOWN refuses nothing). It is a separate argument because ProbeResult
-// alone cannot say — the failure paths still populate UpstreamBranch.
+// usable is passed in rather than re-derived here so CreatePreflight keeps ONE
+// definition of it: the same `probeUsable` it computes two lines above for the
+// empty-remote check. Re-deriving it would let the two drift, and it would tie
+// this helper to how probeOrigin happens to build its failure results. When the
+// listing established nothing the branch stays "" and the create's own check
+// remains authoritative — an UNKNOWN refuses nothing.
 //
 // Extracted so the preflight and the test that pins the two rules together call
 // the SAME code, rather than a test re-deriving the rule it is checking.
