@@ -246,8 +246,12 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 		// handshake — the one that dials without a usable context bound — on
 		// every create, while also exposing the create to a "denied" verdict it
 		// does not act on.
-		if probe, perr := m.ProbeOriginRefs(ctx, *spec.Origin); perr == nil &&
-			probe.Reachable && !probe.AuthRequired && probe.Empty {
+		// Hoisted out of the `if` below: subscribe reuses UpstreamBranch to
+		// resolve which branch its shape question is about, rather than paying
+		// for a second ref listing.
+		probe, perr := m.ProbeOriginRefs(ctx, *spec.Origin)
+		probeUsable := perr == nil && probe.Reachable && !probe.AuthRequired
+		if probeUsable && probe.Empty {
 			return ErrRemoteNoBranches
 		}
 		// And the SHAPE question: is the branch this create will read already a
@@ -270,7 +274,24 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 		var ierr error
 		if spec.Mode == "subscribe" {
 			// The consensus branch, never the adopted one: see ProbeInitializedOn.
-			init, ierr = m.ProbeInitializedOn(ctx, *spec.Origin, spec.Origin.Branch)
+			//
+			// With no branch requested this must resolve the SAME way the create
+			// will. InitSubscription runs store.resolveUpstream (prefer "main",
+			// else the remote's HEAD); passing "" here would instead inspect
+			// whatever HEAD points at, so a remote whose HEAD is not main but
+			// whose main IS a knowledge base would be refused with a confident
+			// wrong "no" — and the create right behind it would have succeeded.
+			// ProbeResult.UpstreamBranch is the repos-side twin of that rule
+			// (probe.go, resolveUpstream), computed from the listing already
+			// made above.
+			//
+			// If the probe yielded nothing usable, pass "" and let the create's
+			// own check stay authoritative: an UNKNOWN here refuses nothing.
+			inspect := spec.Origin.Branch
+			if inspect == "" && probeUsable {
+				inspect = probe.UpstreamBranch
+			}
+			init, ierr = m.ProbeInitializedOn(ctx, *spec.Origin, inspect)
 		} else {
 			init, ierr = m.ProbeInitialized(ctx, *spec.Origin)
 		}
@@ -748,68 +769,6 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 //   - A failed create is retryable. The consensus branch is untouched, so
 //     nothing about the remote has been made unusable.
 //
-// originModeFor maps a create mode onto the persisted origin mode.
-func originModeFor(createMode string) string {
-	if createMode == "subscribe" {
-		return OriginModeSubscribe
-	}
-	return OriginModeSync
-}
-
-// initSubscribe handles "subscribe" mode: FOLLOW a remote branch that already
-// is a knowledge base, read-only.
-//
-// It is initClone without the agent half. store.InitSubscription fetches and
-// tracks the consensus branch alone — no agent branch is cut, no watermark
-// written, and the repo never pushes. The ontology check runs against the
-// RESOLVED upstream, because that is the only branch this repo will ever read.
-// Like initClone this does NOT persist the origin; Create does, with
-// Mode=OriginModeSubscribe, once this returns the resolved upstream.
-func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
-	if cerr := ctx.Err(); cerr != nil {
-		return "", cerr
-	}
-	// The authoritative copy of the CreatePreflight check, for the same reason
-	// initClone keeps one: Create is also called directly.
-	if err := rejectOntologySpecForClone(spec); err != nil {
-		return "", err
-	}
-	emit(Event{Step: "subscribe", Message: "subscribing to " + spec.Origin.URL, Pct: 40})
-	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
-	if err != nil {
-		return "", fmt.Errorf("resolve auth: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		return "", err
-	}
-	svc, err := store.Open(dbPath)
-	if err != nil {
-		return "", fmt.Errorf("open store: %w", err)
-	}
-	defer svc.Close()
-	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
-	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
-
-	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch)
-	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
-		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)
-	}
-	if err != nil {
-		return "", fmt.Errorf("subscribe: %w", err)
-	}
-	if cerr := ctx.Err(); cerr != nil {
-		return "", cerr
-	}
-	hasOnt, oerr := branchHasOntology(ctx, svc, upstream)
-	if oerr != nil {
-		return "", fmt.Errorf("subscribe: check for an ontology: %w", oerr)
-	}
-	if !hasOnt {
-		return "", fmt.Errorf("subscribe %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
-	}
-	return upstream, nil
-}
-
 // Like initClone, this does NOT persist the origin anywhere — Create does that,
 // into control.db, once this returns the resolved upstream. Unlike initClone,
 // this DOES push before returning: store.InitFromRemote only ever writes
@@ -947,6 +906,68 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// its own explanation.
 	if cerr := ctx.Err(); cerr != nil {
 		return "", agentBranchAlreadyPushed(cerr, spec.Origin.URL, m.deps.AgentBranch, upstream)
+	}
+	return upstream, nil
+}
+
+// originModeFor maps a create mode onto the persisted origin mode.
+func originModeFor(createMode string) string {
+	if createMode == "subscribe" {
+		return OriginModeSubscribe
+	}
+	return OriginModeSync
+}
+
+// initSubscribe handles "subscribe" mode: FOLLOW a remote branch that already
+// is a knowledge base, read-only.
+//
+// It is initClone without the agent half. store.InitSubscription fetches and
+// tracks the consensus branch alone — no agent branch is cut, no watermark
+// written, and the repo never pushes. The ontology check runs against the
+// RESOLVED upstream, because that is the only branch this repo will ever read.
+// Like initClone this does NOT persist the origin; Create does, with
+// Mode=OriginModeSubscribe, once this returns the resolved upstream.
+func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+	if cerr := ctx.Err(); cerr != nil {
+		return "", cerr
+	}
+	// The authoritative copy of the CreatePreflight check, for the same reason
+	// initClone keeps one: Create is also called directly.
+	if err := rejectOntologySpecForClone(spec); err != nil {
+		return "", err
+	}
+	emit(Event{Step: "subscribe", Message: "subscribing to " + spec.Origin.URL, Pct: 40})
+	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	if err != nil {
+		return "", fmt.Errorf("resolve auth: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return "", err
+	}
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("open store: %w", err)
+	}
+	defer svc.Close()
+	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
+	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+
+	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch)
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)
+	}
+	if err != nil {
+		return "", fmt.Errorf("subscribe: %w", err)
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return "", cerr
+	}
+	hasOnt, oerr := branchHasOntology(ctx, svc, upstream)
+	if oerr != nil {
+		return "", fmt.Errorf("subscribe: check for an ontology: %w", oerr)
+	}
+	if !hasOnt {
+		return "", fmt.Errorf("subscribe %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
 	}
 	return upstream, nil
 }

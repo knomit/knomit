@@ -156,3 +156,67 @@ func gitRefs(t *testing.T, bare string) string {
 
 // plainPath strips the file:// scheme the seed helpers return.
 func plainPath(url string) string { return strings.TrimPrefix(url, "file://") }
+
+// seedBareRemoteHeadNotMain builds a remote whose HEAD is an ontology-LESS
+// "develop", alongside a "main" that IS a knowledge base. The two differ, which
+// is the only way to tell whether a caller resolves the branch by the
+// prefer-main rule or just follows HEAD.
+func seedBareRemoteHeadNotMain(t *testing.T, bare string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(bare, 0o755))
+	runGit(t, "", "init", "--bare", "--initial-branch=develop", bare)
+	work := t.TempDir()
+	runGit(t, "", "clone", bare, work)
+
+	// develop: an ordinary branch, no ontology.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-m", "develop seed")
+	runGit(t, work, "push", "origin", "develop")
+
+	// main: the knowledge base.
+	runGit(t, work, "checkout", "-b", "main")
+	ont, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath), ont, 0o644))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-m", "main kb")
+	runGit(t, work, "push", "origin", "main")
+
+	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/develop")
+	return "file://" + bare
+}
+
+// With no branch requested, the preflight must resolve the branch by the SAME
+// prefer-main rule the create uses (store.resolveUpstream), not by the remote's
+// HEAD. Otherwise a remote whose HEAD is not main but whose main is a knowledge
+// base gets a confident, wrong "not a knowledge base" — and the create that
+// follows would have succeeded.
+func TestCreate_SubscribeMode_PreflightResolvesByTheCreateRule(t *testing.T) {
+	root := t.TempDir()
+	m := newSubscribeTestManager(t, root)
+	url := seedBareRemoteHeadNotMain(t, filepath.Join(root, "headnotmain.git"))
+
+	require.NoError(t,
+		m.CreatePreflight(context.Background(), CreateSpec{
+			Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url},
+		}),
+		"main carries the ontology, so the preflight must not refuse")
+
+	// The inverse, checked BEFORE the create below: naming the ontology-less
+	// branch explicitly is still refused. (After the create it could not be
+	// checked at all — the origin-in-use gate fires first and would mask this.)
+	require.ErrorIs(t,
+		m.CreatePreflight(context.Background(), CreateSpec{
+			Name: "sub2", Mode: "subscribe", Origin: &OriginSpec{URL: url, Branch: "develop"},
+		}),
+		ErrRemoteNotInitialized,
+		"an explicitly named ontology-less branch is still refused")
+
+	ri, err := m.Create(context.Background(), CreateSpec{
+		Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "main", ri.ReadBranch(), "the create adopts main, not the remote's HEAD")
+}
