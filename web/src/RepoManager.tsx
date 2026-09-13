@@ -750,7 +750,13 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       tail: remote.origin ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: remote.err ? '#f88' : '#7c9', display: 'inline-block' }} /> : undefined,
       body: connected ? (
         <>
-          <RemoteCard repo={name} agentBranch={agentBranch} readOnly={readOnly}
+          {/* agentBranch here means "this machine's agent branch", which drives
+              the degenerate-upstream warning and the upstream chooser's filter
+              (RemoteStatus). A subscription has none — and its agentBranch has
+              fallen back to the READ branch, which equals the origin's branch,
+              so passing it through would claim the repo is push-only when it is
+              exactly the opposite. */}
+          <RemoteCard repo={name} agentBranch={subscribed ? '' : agentBranch} readOnly={readOnly}
             state={remote} onConnect={onConnect} onDisconnect={() => setConfirming('disconnect')}
             onChanged={onChanged} />
           {confirming === 'disconnect' && (

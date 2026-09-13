@@ -1496,6 +1496,29 @@ describe('RepoManager — a subscription', () => {
     onBrowse: () => {},
   };
 
+  // The degenerate-upstream warning means "the consensus branch IS this
+  // machine's agent branch, so pulls are disabled". A subscription has no agent
+  // branch and is pull-only, so the warning is wrong in both directions — and
+  // it fires purely because getAgentBranch now falls back to read_branch, which
+  // equals the origin's branch for every subscription.
+  it('does not show the push-only degenerate-upstream warning', async () => {
+    vi.mocked(api.getOrigin).mockResolvedValue({
+      url: 'https://example.com/kb.git', branch: 'main', auth_method: 'none',
+    } as unknown as Awaited<ReturnType<typeof api.getOrigin>>);
+
+    render(<RepoManager {...subProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+
+    // The read branch still renders — proving the page loaded and the mode was
+    // applied, so the absence below is not an empty render.
+    const row = await screen.findByTestId('repo-detail-branch');
+    await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
+    expect(row.textContent).toContain('main');
+
+    await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
+    expect(screen.queryByTestId('upstream-warning')).not.toBeInTheDocument();
+  });
+
   it('names the read branch and badges it read-only', async () => {
     render(<RepoManager {...subProps} />);
     fireEvent.click(await screen.findByTestId('repomgr-item-core'));
