@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -432,4 +433,40 @@ func TestWriteLicense_DoesNotEnterTheFactIndex(t *testing.T) {
 		}
 		require.True(t, sawControlFact, "a genuine kb/-rooted fact must be indexed, proving RecentFacts is not simply empty")
 	}))
+}
+
+// A subscription has no agent branch, so its manifest READERS must use the
+// read branch — the upstream it follows — while its WRITERS still refuse.
+func TestReadReadme_SubscriptionReadsUpstream(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test")) // seeds README.md on main and agent
+
+	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "sub", Svc: svc, Subscribed: true, ReadBranch: "main"})
+	got, err := ri.ReadReadme(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, got, "the README on the read branch is returned")
+
+	_, err = ri.WriteReadme(context.Background(), "nope")
+	require.ErrorIs(t, err, ErrAgentBranchUnset)
+}
+
+// The same split for LICENSE: readable on the read branch, unwritable.
+func TestReadLicense_SubscriptionUsesTheReadBranch(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{LicensePath: "MIT-ish terms"}, "agent/test"))
+
+	ri := NewTestInstanceWithDeps(TestInstanceConfig{Name: "sub", Svc: svc, Subscribed: true, ReadBranch: "main"})
+	content, oversize, err := ri.ReadLicense(context.Background())
+	require.NoError(t, err)
+	require.False(t, oversize)
+	require.Equal(t, "MIT-ish terms", content, "read from the followed upstream")
+
+	_, err = ri.WriteLicense(context.Background(), "nope")
+	require.ErrorIs(t, err, ErrAgentBranchUnset)
 }

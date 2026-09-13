@@ -55,10 +55,16 @@ const ReadmePath = "README.md"
 const readmeCommitMsg = "docs: update README.md"
 
 // ReadReadme returns the verbatim content of README.md at the tip of the
-// repo's agent branch. A missing manifest is not an error — it returns "" with
+// repo's READ branch. A missing manifest is not an error — it returns "" with
 // a nil error, because "this repo has no description" is an ordinary state.
+//
+// The read branch, not the agent branch: a subscription has no agent branch and
+// its README lives on the upstream it follows. Writers stay on the agent branch
+// — see WriteReadme.
 func (ri *RepoInstance) ReadReadme(ctx context.Context) (string, error) {
-	branch := ri.agentBranch
+	// readBranch is the agent branch or the followed upstream; never empty for
+	// a registered repo.
+	branch := ri.readBranch
 	if branch == "" {
 		return "", ErrAgentBranchUnset
 	}
@@ -220,7 +226,9 @@ const LicensePath = "LICENSE"
 // door, so an oversize LICENSE here only arrives some other way — a clone, or
 // a hand-edited working tree.
 func (ri *RepoInstance) ReadLicense(ctx context.Context) (content string, oversize bool, err error) {
-	branch := ri.agentBranch
+	// readBranch is the agent branch or the followed upstream; never empty for
+	// a registered repo. WriteLicense stays on the agent branch.
+	branch := ri.readBranch
 	if branch == "" {
 		return "", false, ErrAgentBranchUnset
 	}

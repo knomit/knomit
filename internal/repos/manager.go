@@ -235,8 +235,8 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, l.Name)
 	}
 	// Collapse to one entry per member uid; the write repo is implicitly a
-	// member. An explicit branch pin wins over the empty (agent) default so a
-	// duplicate row can't hide a bad pin.
+	// member. An explicit branch pin wins over the empty (read-branch) default
+	// so a duplicate row can't hide a bad pin.
 	branches := map[string]string{l.WriteUID: ""}
 	for _, lr := range l.Reads {
 		if b, ok := branches[lr.RepoUID]; !ok || b == "" {
@@ -271,7 +271,7 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 	}
 	for uid, branch := range branches {
 		if branch == "" {
-			continue // agent-branch default, always valid
+			continue // read-branch default, always valid
 		}
 		// Classify the lookup outcome: a genuinely-missing branch is the caller's
 		// bad lens spec (ErrLensBranchUnknown → 4xx), but a lookup that fails for

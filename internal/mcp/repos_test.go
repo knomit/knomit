@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -11,6 +12,7 @@ import (
 	"knomit/internal/fact"
 	"knomit/internal/federate"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 func TestReposHandler_ListsMounts(t *testing.T) {
@@ -123,4 +125,35 @@ func TestReposHandler_WriteBranchSurfacesAgentTarget(t *testing.T) {
 	r := byID[federate.ID12(readRepo.ID())]
 	require.Equal(t, "read", r.Role)
 	require.Empty(t, r.WriteBranch, "read mounts carry no write_branch")
+}
+
+// A subscription mount reports what a caller needs to know before trying to
+// write: it is a read-only follower, and the branch it is read at is the
+// upstream — which an EMPTY pin must resolve to, not the (absent) agent branch.
+func TestReposHandler_SubscriptionMountCarriesMode(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := store.Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	sub := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "sub", UID: nextTestRepoUID(), Svc: svc, Subscribed: true, ReadBranch: "main",
+		Ontology: fact.CodeOntology(), OntologyRoot: "kb",
+	})
+	ctx := repos.WithBinding(context.Background(), repos.NewBindingOfRepo(sub, ""))
+
+	var req mcpgo.CallToolRequest
+	result, err := ReposHandler()(ctx, req)
+	require.NoError(t, err)
+	var resp struct {
+		Mounts []struct {
+			Branch, Role, Mode, WriteBranch string
+		} `json:"mounts"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &resp))
+	require.Len(t, resp.Mounts, 1)
+	require.Equal(t, "main", resp.Mounts[0].Branch, "empty pin resolves to the READ branch")
+	require.Equal(t, "read", resp.Mounts[0].Role)
+	require.Equal(t, "subscribe", resp.Mounts[0].Mode)
+	require.Empty(t, resp.Mounts[0].WriteBranch)
 }
