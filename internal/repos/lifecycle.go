@@ -158,6 +158,35 @@ func (s CreateSpec) hasRemote() bool {
 // remote and therefore refuses one in the request.
 func (s CreateSpec) joinsRemoteOntology() bool { return s.Mode == "clone" || s.Mode == "subscribe" }
 
+// subscribeInspectBranch is the branch a subscribe preflight asks its shape
+// question about: the one the caller requested, else the one the CREATE will
+// actually adopt.
+//
+// Those must agree. InitSubscription resolves an unrequested branch through
+// store.resolveUpstream (prefer "main", else the remote's HEAD); answering the
+// shape question about HEAD instead would refuse a remote whose HEAD is not
+// main but whose main IS a knowledge base — a confident wrong "no" in front of
+// a create that would have succeeded. ProbeResult.UpstreamBranch is the
+// repos-side twin of that rule (see resolveUpstream in probe.go), computed from
+// a ref listing the preflight has already made.
+//
+// usable carries whether that listing established anything: an unreachable or
+// auth-gated remote yields "", and the create's own check stays authoritative
+// (an UNKNOWN refuses nothing). It is a separate argument because ProbeResult
+// alone cannot say — the failure paths still populate UpstreamBranch.
+//
+// Extracted so the preflight and the test that pins the two rules together call
+// the SAME code, rather than a test re-deriving the rule it is checking.
+func subscribeInspectBranch(spec CreateSpec, probe ProbeResult, usable bool) string {
+	if spec.Origin.Branch != "" {
+		return spec.Origin.Branch
+	}
+	if usable {
+		return probe.UpstreamBranch
+	}
+	return ""
+}
+
 // Event is a progress message emitted during Create.
 type Event struct {
 	Step    string `json:"step"`
@@ -287,11 +316,7 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 			//
 			// If the probe yielded nothing usable, pass "" and let the create's
 			// own check stay authoritative: an UNKNOWN here refuses nothing.
-			inspect := spec.Origin.Branch
-			if inspect == "" && probeUsable {
-				inspect = probe.UpstreamBranch
-			}
-			init, ierr = m.ProbeInitializedOn(ctx, *spec.Origin, inspect)
+			init, ierr = m.ProbeInitializedOn(ctx, *spec.Origin, subscribeInspectBranch(spec, probe, probeUsable))
 		} else {
 			init, ierr = m.ProbeInitialized(ctx, *spec.Origin)
 		}

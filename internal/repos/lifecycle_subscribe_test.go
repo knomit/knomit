@@ -220,3 +220,73 @@ func TestCreate_SubscribeMode_PreflightResolvesByTheCreateRule(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "main", ri.ReadBranch(), "the create adopts main, not the remote's HEAD")
 }
+
+// seedBareRemoteMasterOnly builds a knowledge base on "master" with no "main"
+// anywhere — the case where prefer-main has nothing to prefer and both rules
+// must fall through to the remote's HEAD.
+func seedBareRemoteMasterOnly(t *testing.T, bare string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(bare, 0o755))
+	runGit(t, "", "init", "--bare", "--initial-branch=master", bare)
+	work := t.TempDir()
+	runGit(t, "", "clone", bare, work)
+	runGit(t, work, "checkout", "-B", "master")
+	ont, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath), ont, 0o644))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-m", "master kb")
+	runGit(t, work, "push", "origin", "master")
+	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/master")
+	return "file://" + bare
+}
+
+// The preflight and the create resolve the branch through TWIN rules that live
+// in different packages and cannot share an implementation: the preflight uses
+// resolveUpstream in probe.go (from an ls-remote listing), the create uses
+// store.resolveUpstream in store/repo.go (from a fetched repo). Nothing else
+// pins them together, and Task 7 shipped a bug that existed precisely because
+// they disagreed.
+//
+// This asserts they agree on every shape that distinguishes them: the branch
+// the preflight INSPECTS is the branch the create ADOPTS. The inspected branch
+// comes from subscribeInspectBranch — the same function CreatePreflight calls —
+// so the test cannot pass by re-deriving the rule it is checking.
+func TestSubscribe_PreflightInspectsTheBranchTheCreateAdopts(t *testing.T) {
+	cases := []struct {
+		name     string
+		seed     func(*testing.T, string) string
+		branch   string // explicitly requested, empty for "let it resolve"
+		wantRead string
+	}{
+		{"head is main", seedBareRemote, "", "main"},
+		{"head is develop, main carries the ontology", seedBareRemoteHeadNotMain, "", "main"},
+		{"master-only remote", seedBareRemoteMasterOnly, "", "master"},
+		{"explicit master on a master-only remote", seedBareRemoteMasterOnly, "master", "master"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			m := newSubscribeTestManager(t, root)
+			url := tc.seed(t, filepath.Join(root, "remote.git"))
+			spec := CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url, Branch: tc.branch}}
+
+			// What the preflight will inspect, via the production helper.
+			probe, perr := m.ProbeOriginRefs(context.Background(), *spec.Origin)
+			require.NoError(t, perr)
+			usable := probe.Reachable && !probe.AuthRequired
+			require.True(t, usable, "fixture must be reachable for this test to mean anything")
+			inspect := subscribeInspectBranch(spec, probe, usable)
+			require.Equal(t, tc.wantRead, inspect, "preflight inspects the wrong branch")
+
+			// The preflight accepts it, and the create adopts the same branch.
+			require.NoError(t, m.CreatePreflight(context.Background(), spec))
+			ri, err := m.Create(context.Background(), spec, nil)
+			require.NoError(t, err)
+			require.Equal(t, inspect, ri.ReadBranch(),
+				"the create adopted a different branch than the preflight inspected")
+			require.Equal(t, tc.wantRead, ri.ReadBranch())
+		})
+	}
+}
