@@ -12,36 +12,44 @@ import (
 	"knomit/internal/store"
 )
 
-// buildSubscription opens a bare remote, initialises a subscription store the
-// way Task 7's initSubscribe will, and registers it through openOne with a
-// subscribe-mode origin. Returns the instance and the resolved upstream.
+// subscriptionStore opens a bare remote and initialises a subscription store
+// the way Task 7's initSubscribe will, stopping short of openOne so a caller
+// can choose the origin it registers.
+//
 // Deps are built inline rather than through newLifecycleManagerWithRoot because
-// this test needs BOTH a LocalOriginRoot (the file:// remote) and
+// these tests need BOTH a LocalOriginRoot (the file:// remote) and
 // DisableBackgroundSync (so the index heal and activation run inline and
 // IndexStatus is settled when openOne returns). Neither existing helper sets
 // both — newLifecycleManagerWithRoot sets only the first, newTestManager only
 // the second — and several tests in this package construct Deps this way.
-func buildSubscription(t *testing.T) (*Manager, *RepoInstance, string) {
+func subscriptionStore(t *testing.T, uid string) (m *Manager, url, dbPath, upstream string) {
 	t.Helper()
 	root := t.TempDir()
-	m := New(context.Background(), Deps{
+	m = New(context.Background(), Deps{
 		Cfg:                   config.Config{Home: t.TempDir(), LocalOriginRoot: root},
 		AgentBranch:           "machine/test",
 		DisableBackgroundSync: true,
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
-	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	url = seedBareRemote(t, filepath.Join(root, "remote.git"))
 
-	dbPath := m.RepoPath("uid-sub")
+	dbPath = m.RepoPath(uid)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	svc, err := store.Open(dbPath)
 	require.NoError(t, err)
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
-	upstream, err := svc.InitSubscription(url, nil, "")
+	upstream, err = svc.InitSubscription(url, nil, "")
 	require.NoError(t, err)
 	require.NoError(t, svc.Close())
+	return m, url, dbPath, upstream
+}
 
+// buildSubscription registers a subscription store through openOne with a
+// well-formed subscribe-mode origin. Returns the instance and the upstream.
+func buildSubscription(t *testing.T) (*Manager, *RepoInstance, string) {
+	t.Helper()
+	m, url, dbPath, upstream := subscriptionStore(t, "uid-sub")
 	ri, err := m.openOne("sub", "uid-sub", dbPath, &Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe})
 	require.NoError(t, err)
 	t.Cleanup(func() { ri.Close() })
@@ -100,4 +108,30 @@ func TestSwapStore_SubscriptionStaysReadOnly(t *testing.T) {
 		require.ErrorIs(t, werr, store.ErrRepoReadOnly,
 			"a reopened subscription store must still refuse authored writes")
 	}))
+}
+
+// A subscribe-mode origin with no recorded upstream is refused at open rather
+// than producing a repo with no read branch — and therefore no ontology, no
+// identity and no index. Create persists the RESOLVED upstream, so this state
+// means a corrupted or hand-edited origin row; the guard's message is what an
+// operator will see.
+func TestOpenOne_SubscriptionWithoutUpstreamIsRefused(t *testing.T) {
+	m, url, dbPath, upstream := subscriptionStore(t, "uid-sub2")
+
+	ri, err := m.openOne("sub2", "uid-sub2", dbPath, &Origin{URL: url, Branch: "", Mode: OriginModeSubscribe})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "no upstream branch recorded")
+	require.Nil(t, ri, "a refused open must not return an instance")
+
+	// The recovery an operator performs: fix the origin row, re-open the SAME
+	// database, get a working subscription.
+	//
+	// This does NOT prove the refused build closed its store. That was measured
+	// — deleting b.close() from the guard leaves this test green, because SQLite
+	// happily opens the same file twice — so there is no cheap leak detector
+	// here and this assertion should not be read as one.
+	fixed, err := m.openOne("sub2", "uid-sub2", dbPath, &Origin{URL: url, Branch: upstream, Mode: OriginModeSubscribe})
+	require.NoError(t, err, "re-opening after the refusal must work")
+	t.Cleanup(func() { fixed.Close() })
+	require.Equal(t, upstream, fixed.ReadBranch())
 }
