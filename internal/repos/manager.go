@@ -976,12 +976,34 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		checkOriginOntology: m.CheckOriginOntology,
 	}
 
+	if origin != nil && origin.Mode == OriginModeSubscribe {
+		// A subscription has no agent branch: every reader uses readBranch()
+		// (the upstream, rehydrated from the origin row) and the store is
+		// read-only. Set here, before openStore, so the flag reaches the
+		// service and nothing below cuts a branch.
+		//
+		// Both fields move together: RepoInstance.subscribed is only ever true
+		// alongside an empty agent branch, and this is the production
+		// constructor that upholds it.
+		b.subscribed = true
+		b.agentBranch = ""
+	}
+
 	if err := b.openStore(); err != nil {
 		return nil, err
 	}
 	if err := b.openGit(); err != nil {
 		b.close()
 		return nil, err
+	}
+	// readBranch() is only valid once openGit has rehydrated upstreamMain. A
+	// subscription with no upstream would read from "" — no ontology, no
+	// identity, no index — so refuse instead of building a repo that looks
+	// open and answers nothing. Create persists the RESOLVED upstream, so this
+	// means a corrupted or hand-edited origin row.
+	if b.subscribed && b.readBranch() == "" {
+		b.close()
+		return nil, fmt.Errorf("open %q: subscription has no upstream branch recorded in its origin", name)
 	}
 	// ensureBranch must run before loadOntology: on a restored/copied home the
 	// configured agent branch is absent until ensureBranch adopts it (issue

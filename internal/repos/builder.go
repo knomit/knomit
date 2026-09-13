@@ -22,13 +22,20 @@ import (
 // step and can clean up with close() on failure.
 type repoBuilder struct {
 	// inputs
-	name                  string
-	uid                   string
-	origin                *Origin // from control.db; nil when this repo has no remote
-	dbPath                string
-	cfg                   config.Config
-	signer                ssh.Signer
-	agentBranch           string
+	name        string
+	uid         string
+	origin      *Origin // from control.db; nil when this repo has no remote
+	dbPath      string
+	cfg         config.Config
+	signer      ssh.Signer
+	agentBranch string
+	// subscribed builds a subscription: no agent branch is cut, the store is
+	// read-only, and readBranch() resolves to the followed upstream. Set by
+	// openOne from the origin's Mode, in the SAME statement block that clears
+	// agentBranch — RepoInstance.subscribed is only ever true alongside an
+	// empty agent branch, and this builder is the production constructor that
+	// has to uphold it.
+	subscribed            bool
 	embedder              store.BatchEmbedder
 	keyPath               string
 	ctx                   context.Context
@@ -81,6 +88,16 @@ type repoBuilder struct {
 	upstreamMain string
 }
 
+// readBranch is the branch this repo's content is read from: the agent branch
+// when there is one, else the followed upstream. Valid only after openGit has
+// rehydrated upstreamMain.
+func (b *repoBuilder) readBranch() string {
+	if b.agentBranch != "" {
+		return b.agentBranch
+	}
+	return b.upstreamMain
+}
+
 // openStore opens the SQLite-backed store and injects the origin control.db
 // holds for this repo.
 func (b *repoBuilder) openStore() error {
@@ -96,6 +113,10 @@ func (b *repoBuilder) openStore() error {
 	// Same reason: the store decides index membership by location (only the
 	// ontology root holds facts) and has no way to learn the configured root.
 	svc.SetOntologyRoot(b.cfg.OntologyRoot)
+	// A subscription accepts no authored commits on any branch. Applied here so
+	// the flag is live before anything below can write, and mirrored in
+	// rewireStore — store.Open does not restore it.
+	svc.SetReadOnly(b.subscribed)
 	// The origin must be injected BEFORE openGit: rehydrateUpstreamMain and the
 	// fetch refspec both read it there. Credential decryption happened in
 	// control.db, so the store needs no Crypt of its own any more.
@@ -195,7 +216,7 @@ func (b *repoBuilder) loadOntology() {
 		content string
 	)
 	for _, p := range paths {
-		result, rerr := b.svc.Facts().ReadFact(context.Background(), b.agentBranch, p, nil)
+		result, rerr := b.svc.Facts().ReadFact(context.Background(), b.readBranch(), p, nil)
 		if rerr == nil && result.Content != "" {
 			srcPath, content = p, result.Content
 			break
@@ -206,9 +227,9 @@ func (b *repoBuilder) loadOntology() {
 		// ontology. One without is an ordinary git repository, and handing it
 		// the default taxonomy is what made "not a knowledge base" and "a
 		// knowledge base about people" indistinguishable from the outside.
-		log.Error().Str("repo", b.name).Str("branch", b.agentBranch).
+		log.Error().Str("repo", b.name).Str("branch", b.readBranch()).
 			Msgf("no ontology at %s: this repository is not a knowledge base and will not accept writes", strings.Join(paths, ", "))
-		b.ontologyErr = fmt.Errorf("no ontology at %s on %s", strings.Join(paths, ", "), b.agentBranch)
+		b.ontologyErr = fmt.Errorf("no ontology at %s on %s", strings.Join(paths, ", "), b.readBranch())
 		return
 	}
 	if srcPath != OntologyPath {
@@ -237,7 +258,9 @@ func (b *repoBuilder) loadOntology() {
 	// If the stored ontology has diverged (added own topics/rules), log a
 	// warning so an operator knows an upgrade is available, but leave their
 	// version alone — auto-overwriting custom content would lose work.
-	if preset := fact.EmbeddedPresetByID(ont.ID); preset != nil {
+	//
+	// A subscription never writes: the upstream's ontology is theirs to refresh.
+	if preset := fact.EmbeddedPresetByID(ont.ID); !b.subscribed && preset != nil {
 		if ont.IsSubsetOf(preset) {
 			storedY, sErr := ont.Serialize()
 			presetY, pErr := preset.Serialize()
@@ -249,7 +272,7 @@ func (b *repoBuilder) loadOntology() {
 					Msg("ontology refresh: stored is subset of embedded preset; upgrading to latest")
 				if _, werr := b.svc.Facts().WriteFact(
 					context.Background(),
-					b.agentBranch,
+					b.readBranch(),
 					srcPath,
 					string(presetY),
 					fmt.Sprintf("ontology: refresh to embedded %s preset", ont.ID),
@@ -279,6 +302,7 @@ func (b *repoBuilder) loadOntology() {
 // actually resolved against the remote. Re-seeding it on every open is how the
 // upstream used to get silently rewritten to "main".
 func (b *repoBuilder) ensureBranch() {
+	// A subscription has no agent branch to ensure.
 	if b.agentBranch == "" {
 		return
 	}
@@ -369,8 +393,14 @@ func (b *repoBuilder) setupIndex() {
 	// non-empty exactly when this repo has a stored origin (rehydrateUpstreamMain
 	// reads it back from the remotes row), so it doubles as the has-origin test —
 	// no config lookup, and no "main" guess for a master-convention repo.
-	names := []string{b.agentBranch}
-	if b.upstreamMain != "" {
+	//
+	// Slot 0 is the branch local reads depend on and the only one whose heal
+	// failure is fatal (healIndexBranches): the agent branch normally, the
+	// upstream for a subscription. The upstream is appended for a writable
+	// repo with an origin and is exactly the read branch for a subscription,
+	// so it is never listed twice.
+	names := []string{b.readBranch()}
+	if b.upstreamMain != "" && b.upstreamMain != names[0] {
 		names = append(names, b.upstreamMain)
 	}
 	names = b.dropUnresolvableBranches(names)
@@ -501,6 +531,11 @@ func healIndexBranches(ctx context.Context, im store.IndexManager, repo string, 
 // watermark for the current agent branch, so the first pipeline run only
 // processes facts written after this point.
 func (b *repoBuilder) seedWatermarks() {
+	// Pipelines never run on a subscription: they write, and it has no branch
+	// of its own to write to.
+	if b.agentBranch == "" {
+		return
+	}
 	for _, tool := range []string{"review", "hypothesize"} {
 		if wm, _ := b.svc.Pipeline().GetPipelineWatermark(context.Background(), tool, b.agentBranch); wm == "" {
 			if head, err := b.svc.Branches().HeadCommit(context.Background(), b.agentBranch); err == nil {
@@ -519,17 +554,18 @@ func (b *repoBuilder) seedWatermarks() {
 func (b *repoBuilder) build() *RepoInstance {
 	hub := NewTaskHub(b.ctx)
 
+	// Captured once: the observer closure below outlives the builder, and for a
+	// subscription this is the upstream rather than the (empty) agent branch.
+	readBranch := b.readBranch()
+
 	// Allocate ri first — the observer and closures capture the pointer so
 	// they follow SwapStore field replacements via the read lock.
 	ri := &RepoInstance{
-		uid:         b.uid,
-		dbPath:      b.dbPath,
-		agentBranch: b.agentBranch,
-		// A writable repo reads its own agent branch. Task 6 refines this for
-		// subscriptions, which read the upstream they follow instead; until
-		// then this keeps ID() — which resolves the root commit on the READ
-		// branch — working for every repo the builder produces.
-		readBranch:                    b.agentBranch,
+		uid:                           b.uid,
+		dbPath:                        b.dbPath,
+		agentBranch:                   b.agentBranch,
+		readBranch:                    readBranch,
+		subscribed:                    b.subscribed,
 		ontology:                      b.ontology,
 		ontologyErr:                   b.ontologyErr,
 		embedder:                      b.embedder,
@@ -569,7 +605,7 @@ func (b *repoBuilder) build() *RepoInstance {
 			return
 		}
 		defer release()
-		if err := currentSvc.IndexManager().SyncLocked(context.Background(), b.agentBranch); err != nil {
+		if err := currentSvc.IndexManager().SyncLocked(context.Background(), readBranch); err != nil {
 			log.Warn().Err(err).Str("repo", b.name).Msg("observer sync failed")
 		}
 		hub.broadcastStatus(hash)

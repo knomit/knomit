@@ -247,6 +247,10 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 //
 // Returns Pushed=false (no error) when there is nothing to push (local
 // agent ref already equals the last-known origin/agent ref).
+//
+// An empty branch is refused with ErrNoAgentBranch, but that is a BACKSTOP:
+// the reconcile loop gates on repos.pushAllowed and never calls this for a
+// subscription in the first place.
 func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
 	if branch == "" {
 		return PushResult{}, ErrNoAgentBranch
