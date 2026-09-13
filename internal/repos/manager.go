@@ -168,6 +168,11 @@ func New(ctx context.Context, deps Deps) *Manager {
 // (RFC decision 18).
 var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
 
+// ErrLensWriteSubscribed is returned when a lens names a subscription as its
+// write repo. A subscription has no agent branch and accepts no writes, so a
+// lens writing through it could never commit anything.
+var ErrLensWriteSubscribed = errors.New("lens write repo is a subscription (read-only)")
+
 // ErrLensBranchUnknown rejects a lens read pinned to a branch its member repo
 // does not have. Failing at create beats mysteriously empty federated reads.
 var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
@@ -253,6 +258,13 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		}
 		ids[uid] = id
 		ris[uid] = ri
+	}
+	// A subscription accepts no authored commits on any branch (Task 4's
+	// read-only store), so a lens writing through it could never commit. Refused
+	// here rather than at the first failed write, where the error would name a
+	// branch instead of the real cause.
+	if ris[l.WriteUID].Subscribed() {
+		return fmt.Errorf("%w: %q", ErrLensWriteSubscribed, l.WriteUID)
 	}
 	if err := checkMemberIDCollision(ids); err != nil {
 		return err

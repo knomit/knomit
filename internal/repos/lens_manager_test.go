@@ -455,3 +455,19 @@ func TestLens_SurvivesMemberRename(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"wide"}, refs)
 }
+
+func TestManager_ValidateLens_SubscriptionCannotBeWriteRepo(t *testing.T) {
+	root := t.TempDir()
+	m := newSubscribeTestManager(t, root)
+	url := seedBareRemote(t, filepath.Join(root, "remote.git"))
+	sub, err := m.Create(context.Background(), CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}}, nil)
+	require.NoError(t, err)
+	local := makeLensRepo(t, m, "local")
+
+	err = m.ValidateLens(context.Background(), Lens{Name: "bad", WriteUID: sub.UID(), Reads: []LensRead{{RepoUID: local.UID()}}})
+	require.ErrorIs(t, err, ErrLensWriteSubscribed)
+
+	// As a READ mount it is fine, pinned by default to its read branch.
+	err = m.ValidateLens(context.Background(), Lens{Name: "good", WriteUID: local.UID(), Reads: []LensRead{{RepoUID: sub.UID()}}})
+	require.NoError(t, err)
+}
