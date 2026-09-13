@@ -189,3 +189,47 @@ func TestHandleCreateSession_SubscriptionIs409(t *testing.T) {
 		t.Errorf("a session was created despite the refusal: %s", rec.Body.String())
 	}
 }
+
+// persistSessionOrigin writes the durable origin record, and Origins.Set is a
+// full replacement: an empty Mode DELETES the subscription row. A connect
+// session cannot reach a subscription today (handleCreateSession 409s first),
+// so this pins the rule at the WRITE rather than at that guard — the guard is
+// three calls away and a future caller need not go through it.
+func TestPersistSessionOrigin_PreservesSubscriptionMode(t *testing.T) {
+	originsRoot := t.TempDir()
+	_, m, _ := newControlDBTestServer(t, originsRoot)
+
+	url := seedBareRemoteKBForTest(t, filepath.Join(originsRoot, "kb.git"))
+	sub, err := m.Create(context.Background(), repos.CreateSpec{
+		Name: "sub", Mode: "subscribe", Origin: &repos.OriginSpec{URL: url},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	before, err := m.Origins().Get(sub.UID())
+	if err != nil || before == nil || before.Mode != repos.OriginModeSubscribe {
+		t.Fatalf("precondition: want a subscribe-mode origin, got %+v (err %v)", before, err)
+	}
+
+	var perr error
+	if werr := sub.WithRead(func(svc *store.Service) {
+		perr = persistSessionOrigin(m, sub, svc, url, "main", "", "token", "s3cret")
+	}); werr != nil {
+		t.Fatalf("WithRead: %v", werr)
+	}
+	if perr != nil {
+		t.Fatalf("persistSessionOrigin: %v", perr)
+	}
+
+	after, err := m.Origins().Get(sub.UID())
+	if err != nil || after == nil {
+		t.Fatalf("origin after: %v %+v", err, after)
+	}
+	if after.Mode != repos.OriginModeSubscribe {
+		t.Errorf("Mode: got %q, want %q — the session write demoted the subscription",
+			after.Mode, repos.OriginModeSubscribe)
+	}
+	if after.AuthToken != "s3cret" {
+		t.Errorf("AuthToken: got %q, want the value just written — the write did not land", after.AuthToken)
+	}
+}

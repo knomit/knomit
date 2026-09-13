@@ -2426,7 +2426,8 @@ components:
           type: string
           description: >
             Verbatim contents of LICENSE at the repository root, read at the
-            agent-branch tip. Omitted when the repository has no LICENSE, or
+            READ-branch tip (`read_branch`: the agent branch, or the followed
+            upstream for a subscription). Omitted when the repository has no LICENSE, or
             when one exists but exceeds 65536 bytes (see `license_oversize`
             below — that case is NOT "no LICENSE"). Editable via PATCH, with
             the same pointer semantics as `description`; PATCHing a license

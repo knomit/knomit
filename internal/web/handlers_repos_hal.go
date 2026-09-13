@@ -162,9 +162,10 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 	if ri.Subscribed() {
 		body["mode"] = "subscribe"
 	}
-	// description is the verbatim README.md root manifest read at HEAD (the
-	// repo's agent branch tip — HEAD points there). Omitted when the
-	// store is unreadable or README.md is absent, so the UI shows it only
+	// description is the verbatim README.md root manifest read at the repo's
+	// READ branch tip — the agent branch, or the followed upstream for a
+	// subscription, matching the read_branch this body advertises. Omitted when
+	// the store is unreadable or README.md is absent, so the UI shows it only
 	// when available.
 	if desc := readReadme(r, ri); desc != "" {
 		body["description"] = desc

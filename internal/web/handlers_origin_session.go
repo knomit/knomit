@@ -201,11 +201,27 @@ func persistSessionOrigin(rm *repos.Manager, ri *repos.RepoInstance, svc *store.
 	if origins == nil {
 		return fmt.Errorf("origin store unavailable")
 	}
+	// Carry the stored mode through, for the same reason SetOrigin does:
+	// Origins.Set is a full replacement and an EMPTY Mode DELETES the
+	// subscription row, so writing without it silently demotes a subscription
+	// to sync. handleCreateSession refuses a subscription before a session can
+	// exist, so this is unreachable for one today — it is here so the rule
+	// holds at the write itself rather than depending on a guard three calls
+	// away that a future caller might not go through.
+	stored, gerr := origins.Get(ri.UID())
+	if gerr != nil {
+		return gerr
+	}
+	mode := repos.OriginModeSync
+	if stored != nil {
+		mode = stored.Mode
+	}
 	if err := origins.Set(ri.UID(), repos.Origin{
 		URL:        url,
 		Branch:     upstreamMain,
 		AuthMethod: authMethod,
 		AuthToken:  authToken,
+		Mode:       mode,
 	}); err != nil {
 		return err
 	}
