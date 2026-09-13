@@ -24,7 +24,11 @@ import { PlusIcon, LayersIcon, RefreshIcon } from './icons';
 /** One repository's configuration, assembled from the per-repo fan-out. */
 interface FleetRow {
   repo: string;
+  /** The repo's agent branch, or its READ branch when it has no agent branch
+   *  (a subscription). The column answers "which branch is this repo about". */
   agentBranch: string;
+  /** 'subscribe' for a read-only follower of a remote branch; '' otherwise. */
+  mode: '' | 'subscribe';
   license: string;
   origin: OriginResponse | null;
   /** The origin request FAILED — distinct from "no origin configured". */
@@ -128,7 +132,8 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
           ...prev,
           [repo]: {
             repo,
-            agentBranch: detail?.agent_branch ?? '',
+            agentBranch: detail?.agent_branch ?? detail?.read_branch ?? '',
+            mode: detail?.mode ?? '',
             license: detail?.license ?? '',
             origin: origin === 'error' ? null : origin,
             originError: origin === 'error',
@@ -145,8 +150,8 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
   // It is marked loaded with the reason instead, and the cells render the state.
   const rows: FleetRow[] = repos.map(r =>
     repoAvailable(r)
-      ? loaded[r.name] ?? { repo: r.name, agentBranch: '', license: '', origin: null, originError: false, loaded: false }
-      : { repo: r.name, agentBranch: '', license: '', origin: null, originError: false, loaded: true, unavailable: r });
+      ? loaded[r.name] ?? { repo: r.name, agentBranch: '', mode: '', license: '', origin: null, originError: false, loaded: false }
+      : { repo: r.name, agentBranch: '', mode: '', license: '', origin: null, originError: false, loaded: true, unavailable: r });
 
   const attention = hideRemoteConfig ? [] : attentionFor(rows);
   const lensesFor = (repo: string) => lenses
@@ -261,6 +266,9 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                       <span style={{ fontFamily: 'var(--k-font-mono)', fontSize: 11, color: '#8af' }}>
                         {r.agentBranch || (r.loaded ? '—' : '…')}
                       </span>
+                      {r.mode === 'subscribe' && (
+                        <span data-testid={`fleet-readonly-${r.repo}`} style={{ marginLeft: 6, color: '#c9a' }}>read-only</span>
+                      )}
                     </CellButton>
                   </td>
                   {!hideRemoteConfig && (

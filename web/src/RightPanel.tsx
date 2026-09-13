@@ -4,7 +4,7 @@ import { useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
-import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, isLensContext, factHistoryAnchor, factTitleKey } from './state';
+import { currentPath, selectAnchorCommit, isReadOnly, isLive, READ_ONLY_TITLE, readOnlyTitle as readOnlyTitleFor, isLensContext, factHistoryAnchor, factTitleKey } from './state';
 import { relativeTime } from './utils';
 import { RetractIcon } from './icons';
 import { FactDiffView } from './FactDiffView';
@@ -915,9 +915,12 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
   // facts render fully read-only. Repo context keeps its prior gate (isReadOnly).
   const isWriteFact = !lensCtx || state.factSource?.repo === lensWrite;
   const factReadOnly = isReadOnly(state) || !isWriteFact;
+  // Most specific reason first: a lens read-mount names where edits DO go;
+  // otherwise readOnlyTitle distinguishes a subscription (live anchor, still
+  // unwritable) from a stale anchor, which the bare constant could not.
   const factReadOnlyTitle = (!isWriteFact && lensWrite)
     ? `Read-only mount — edits go to ${lensWrite}`
-    : READ_ONLY_TITLE;
+    : readOnlyTitleFor(state);
   const lensMeta = lensCtx && state.factSource
     ? { repo: state.factSource.repo, branch: state.factSource.branch }
     : undefined;

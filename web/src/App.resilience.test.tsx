@@ -100,7 +100,7 @@ vi.mock('./api', async (importOriginal) => {
     ...actual,
     fetchVersion: vi.fn().mockResolvedValue({ version: '0.0.0', commit: 'abc', full: '0.0.0.abc', readOnly: false }),
     api: {
-      repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
+      repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(), getRepo: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(),
@@ -115,6 +115,8 @@ async function primeApi() {
   m.listLenses.mockResolvedValue([]);
   m.listArchived.mockResolvedValue([]);
   m.getAgentBranch.mockResolvedValue('machine/test');
+  // App asks the browsed repo whether it is a subscription (per-repo read-only).
+  m.getRepo.mockResolvedValue({ name: 'alpha' });
   m.status.mockResolvedValue(STATUS);
   m.getOrigin.mockResolvedValue(null);
   m.browse.mockResolvedValue({ path: 'kb', children: [] });

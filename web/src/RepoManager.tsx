@@ -502,6 +502,9 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
+  // '' for an ordinary repo; 'subscribe' means it follows a remote branch
+  // read-only and has no agent branch of its own.
+  const [repoMode, setRepoMode] = useState<'subscribe' | ''>('');
   const [description, setDescription] = useState('');
   // Owned here, not in DescriptionBody: the controls that set it live in the
   // block heading and the editor they open lives in the block body.
@@ -567,6 +570,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     setRenameTo(''); setRenameConfirm('');
     api.getRepo(name).then(r => {
       if (cancelled) return;
+      setRepoMode(r.mode ?? '');
       setDescription(r.description ?? '');
       setLicense(r.license ?? '');
       setLicenseOversize(!!r.license_oversize);
@@ -706,17 +710,23 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // write-target's green treatment: green already means "writes land here" in
   // this UI (see writeReadTag), and a repo's agent branch is exactly the same
   // statement as a lens's write target.
+  const subscribed = repoMode === 'subscribe';
   sections.push({
     id: 'agent-branch',
-    title: 'Agent branch',
-    hint: 'where new facts are written',
+    // A subscription has no agent branch, so the heading has to name what it
+    // DOES have: the branch it reads. Same block, same place — the question
+    // "which branch is this repo about?" has an answer either way.
+    title: subscribed ? 'Read branch' : 'Agent branch',
+    hint: subscribed ? 'this repo follows a remote branch read-only' : 'where new facts are written',
     body: (
       <div style={writeCard}>
         <div data-testid="repo-detail-branch" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, flexWrap: 'wrap' }}>
           <RepoDot repo={name} />
           <b style={{ color: '#eee' }}>{name}</b>
           <BranchChip branch={agentBranch || '…'} />
-          <span style={{ color: '#777', fontSize: 12 }}>— server-authoritative</span>
+          {subscribed
+            ? <span data-testid="repo-readonly-badge" style={{ color: '#c9a', fontSize: 12 }}>read-only</span>
+            : <span style={{ color: '#777', fontSize: 12 }}>— server-authoritative</span>}
         </div>
       </div>
     ),
@@ -734,7 +744,9 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     sections.push({
       id: 'remote',
       title: 'Remote',
-      hint: 'pull and push against an origin',
+      // A subscription pulls and never pushes; saying otherwise here is the one
+      // place the UI would still claim it writes upstream.
+      hint: subscribed ? 'pulls from an origin; never pushes' : 'pull and push against an origin',
       tail: remote.origin ? <span style={{ width: 7, height: 7, borderRadius: '50%', background: remote.err ? '#f88' : '#7c9', display: 'inline-block' }} /> : undefined,
       body: connected ? (
         <>

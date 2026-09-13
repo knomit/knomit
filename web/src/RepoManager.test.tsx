@@ -1473,3 +1473,36 @@ describe('RepoManager', () => {
     expect(screen.queryByTestId('toc-remote')).toBeNull();
   });
 });
+
+// A subscription has no agent branch, so the block that normally names one has
+// to say something true instead: the branch it READS, marked read-only. The
+// server omits agent_branch for these (Task 9 DTO), so a UI that only knew
+// about agent_branch would render an empty chip and no explanation.
+describe('RepoManager — a subscription', () => {
+  beforeEach(() => {
+    vi.mocked(api.getRepo).mockResolvedValue({ name: 'core', mode: 'subscribe', read_branch: 'main' });
+    // The server's answer for a subscription: no agent branch, so getAgentBranch
+    // falls back to read_branch (api.ts).
+    vi.mocked(api.getAgentBranch).mockResolvedValue('main');
+  });
+
+  const subProps = {
+    open: true as const,
+    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
+    currentRepo: 'core',
+    readOnly: false,
+    hideRemoteConfig: false,
+    onChanged: () => {},
+    onBrowse: () => {},
+  };
+
+  it('names the read branch and badges it read-only', async () => {
+    render(<RepoManager {...subProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+
+    const row = await screen.findByTestId('repo-detail-branch');
+    await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
+    expect(row.textContent).toContain('main');
+    expect(row.textContent).toContain('read-only');
+  });
+});

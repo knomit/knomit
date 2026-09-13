@@ -99,6 +99,7 @@ export interface AppState {
   notice: string;
   searching: boolean;            // a relevance (free-text) search request is in flight
   serverReadOnly: boolean;       // instance-level read-only (demo mode)
+  repoReadOnly: boolean;         // the browsed repo is a subscription (read-only)
   // factTitles caches the human title of every fact the RightPanel has loaded,
   // keyed by factTitleKey(path, commit). The breadcrumb reads from it so it can
   // label a crumb with the title we ALREADY read when navigating there — rather
@@ -157,7 +158,8 @@ export type Action =
   | { type: 'SET_NOTICE'; text: string }
   | { type: 'CLEAR_NOTICE' }
   | { type: 'SET_SEARCHING'; value: boolean }
-  | { type: 'SET_SERVER_READONLY'; value: boolean };
+  | { type: 'SET_SERVER_READONLY'; value: boolean }
+  | { type: 'SET_REPO_READONLY'; value: boolean };
 
 export const init: AppState = {
   // No repo is selected until the server's repo list loads — the UI must never
@@ -192,6 +194,7 @@ export const init: AppState = {
   notice: '',
   searching: false,
   serverReadOnly: false,
+  repoReadOnly: false,
   factTitles: {},
 };
 
@@ -581,6 +584,8 @@ function applyAction(s: AppState, a: Action): AppState {
       return s.searching === a.value ? s : { ...s, searching: a.value };
     case 'SET_SERVER_READONLY':
       return { ...s, serverReadOnly: a.value };
+    case 'SET_REPO_READONLY':
+      return { ...s, repoReadOnly: a.value };
     case 'APPLY_NAV': {
       // Cycle-collapse: a subject hop (hop:true) to a fact already in the trail
       // unwinds to the existing crumb instead of pushing a duplicate. This is
@@ -730,10 +735,20 @@ export function remoteErrorText(s: AppState): string {
 }
 
 export function isReadOnly(s: AppState): boolean {
-  return s.serverReadOnly || !isLive(s);
+  return s.serverReadOnly || s.repoReadOnly || !isLive(s);
 }
 
 export const READ_ONLY_TITLE = 'Read-only — anchor is not live';
+export const SUBSCRIPTION_TITLE = 'Read-only — this repo follows a remote branch';
+
+// readOnlyTitle names WHY the surface is read-only, most specific reason first.
+// A subscription is read-only while the anchor is perfectly live, so the
+// temporal wording would be actively wrong there — and it is the one reason the
+// reader cannot fix by scrubbing back to live.
+export function readOnlyTitle(s: AppState): string {
+  if (s.repoReadOnly) return SUBSCRIPTION_TITLE;
+  return READ_ONLY_TITLE;
+}
 
 export interface TrailCrumb {
   factPath: string;
