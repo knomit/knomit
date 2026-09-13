@@ -24,7 +24,13 @@ func newTestManagerWithRepos(t *testing.T, names ...string) *repos.Manager {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{})
 	for _, name := range names {
-		m.Set(name, &repos.RepoInstance{})
+		// AgentBranch matters now that the REST fact writers consult
+		// WritableBranch: a bare RepoInstance has no agent branch, so NO branch
+		// would be writable and every write test would 403. "agent/test" is the
+		// branch these tests already name in their URLs (as "agent:test").
+		m.Set(name, repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+			Name: name, AgentBranch: "agent/test",
+		}))
 	}
 	return m
 }
@@ -1120,4 +1126,33 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatalf("marshal: %v", err)
 	}
 	return string(b)
+}
+
+func TestHandleHALRepo_SubscriptionReportsModeAndReadBranch(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "sub", Subscribed: true, ReadBranch: "main"}))
+	m.Set("rw", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "rw", AgentBranch: "agent/x"}))
+	s := &Server{Manager: m}
+	r := s.NewAPIRouter()
+
+	get := func(name string) map[string]any {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/"+name, nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		return body
+	}
+	sub := get("sub")
+	require.Equal(t, "subscribe", sub["mode"])
+	require.Equal(t, "main", sub["read_branch"])
+	_, hasAgent := sub["agent_branch"]
+	require.False(t, hasAgent, "a subscription advertises no agent branch")
+	require.Contains(t, sub["_links"].(map[string]any)["mcp"].(map[string]any)["href"], "/branches/main/mcp")
+
+	rw := get("rw")
+	_, hasMode := rw["mode"]
+	require.False(t, hasMode)
+	require.Equal(t, "agent/x", rw["agent_branch"])
+	require.Equal(t, "agent/x", rw["read_branch"])
 }

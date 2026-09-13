@@ -594,6 +594,13 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Fact" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403":
+          description: >
+            Read-only branch — facts may only be authored on the repo's own
+            agent branch. A subscription accepts none on any branch.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
@@ -640,6 +647,13 @@ paths:
             application/hal+json:
               schema: { $ref: "#/components/schemas/Fact" }
         "400": { $ref: "#/components/responses/Problem" }
+        "403":
+          description: >
+            Read-only branch — facts may only be authored on the repo's own
+            agent branch. A subscription accepts none on any branch.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "422": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
@@ -650,6 +664,13 @@ paths:
       responses:
         "204": { description: Deleted }
         "400": { $ref: "#/components/responses/Problem" }
+        "403":
+          description: >
+            Read-only branch — facts may only be authored on the repo's own
+            agent branch. A subscription accepts none on any branch.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
@@ -1264,6 +1285,13 @@ paths:
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Problem" }
+        "409":
+          description: >
+            Subscription requires its origin — a repo that follows its origin
+            read-only has no content of its own; archive it instead.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin/upstream:
@@ -1329,6 +1357,13 @@ paths:
                   _links:     { $ref: "#/components/schemas/LinkMap" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "409":
+          description: >
+            Subscription requires its origin — a subscription cannot be
+            re-pointed through a connect session; create a new one instead.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
   /repos/{repo}/origin-sessions/{sessionID}:
@@ -1570,8 +1605,9 @@ paths:
               schema: { $ref: "#/components/schemas/Problem" }
         "422":
           description: |
-            Unknown pinned branch, description too long, or a member repo that
-            passed the uid check and then went away (archived) before the
+            Unknown pinned branch, description too long, a write repo that is a
+            subscription (read-only, so it could never commit), or a member repo
+            that passed the uid check and then went away (archived) before the
             manager validated it.
           content:
             application/problem+json:
@@ -2367,7 +2403,20 @@ components:
         name:         { type: string }
         uid:          { type: string, description: "Registry uid — the identifier lens membership is keyed by." }
         id:           { type: string, description: Short repo ID }
-        agent_branch: { type: string }
+        agent_branch:
+          type: string
+          description: >
+            This machine's writable branch. Omitted for a subscription, which
+            has none.
+        read_branch:
+          type: string
+          description: >
+            The branch this repo reads by default — the agent branch, or the
+            followed upstream for a subscription. Always present.
+        mode:
+          type: string
+          enum: [subscribe]
+          description: "Present only for a subscription."
         description:
           type: string
           description: |
@@ -2963,7 +3012,7 @@ components:
           description: Unique repo name (slug).
         mode:
           type: string
-          enum: [preset, custom, clone, initialize]
+          enum: [preset, custom, clone, initialize, subscribe]
           description: |
             preset — use a built-in ontology preset (e.g. default, code).
                      Local only, no remote.
@@ -2987,6 +3036,12 @@ components:
                          from agent/<host> when the knowledge base should
                          become the project's consensus. 409 if the branch
                          already has an ontology.
+            subscribe  — follow a remote branch that already holds a knowledge
+                         base, READ-ONLY: no agent branch, no writes, never
+                         pushes. Refuses ontology_preset/ontology_yaml like
+                         clone. Unlike the other two remote modes this is the
+                         caller's choice, not derived from the remote's shape.
+                         409 if the branch has no ontology.
         ontology_preset:
           type: string
           description: "Preset identifier (e.g. default, code). Used when mode=preset or mode=initialize."

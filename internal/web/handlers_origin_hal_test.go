@@ -12,7 +12,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"knomit/internal/config"
+	"knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -979,4 +982,84 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 	if got := ri.Ontology().ID; got != "source-code" {
 		t.Fatalf("ontology id = %q, want source-code — attaching a remote replaced the repo's taxonomy", got)
 	}
+}
+
+func TestHandleHALDeleteOrigin_SubscriptionIs409(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "sub", Subscribed: true, ReadBranch: "main"}))
+	// If the provider were reached its error would surface as a 500, so a 409
+	// proves the refusal happened first.
+	op := &stubOriginProvider{deleteErr: errors.New("provider must not be reached")}
+	s := &Server{Manager: m, providers: storeProviders{origin: op}}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/sub/origin", nil))
+	require.Equal(t, http.StatusConflict, rec.Code, "body=%s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Subscription requires its origin")
+}
+
+// seedBareRemoteKBForTest is seedBareRemoteForTest plus an ontology, so the
+// remote is a knowledge base and subscribe mode will accept it.
+func seedBareRemoteKBForTest(t *testing.T, bare string) string {
+	t.Helper()
+	if err := os.MkdirAll(bare, 0o755); err != nil {
+		t.Fatalf("mkdir bare: %v", err)
+	}
+	runGitForTest(t, "", "init", "--bare", "--initial-branch=main", bare)
+	work := t.TempDir()
+	runGitForTest(t, "", "clone", bare, work)
+	ont, err := fact.DefaultOntology().Serialize()
+	if err != nil {
+		t.Fatalf("serialize ontology: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(work, filepath.Dir(repos.OntologyPath)), 0o755); err != nil {
+		t.Fatalf("mkdir ontology dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, repos.OntologyPath), ont, 0o644); err != nil {
+		t.Fatalf("write ontology: %v", err)
+	}
+	runGitForTest(t, work, "add", "-A")
+	runGitForTest(t, work, "commit", "-m", "seed kb")
+	runGitForTest(t, work, "push", "origin", "main")
+	runGitForTest(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
+	return "file://" + bare
+}
+
+// PUT /origin on a subscription must not DEMOTE it. Origins.Set with an empty
+// Mode deletes the subscription row, so SetOrigin has to carry the stored mode
+// through — and only a real provider against a real control.db can show that.
+func TestPutOrigin_OnASubscriptionPreservesItsMode(t *testing.T) {
+	originsRoot := t.TempDir()
+	s, m, _ := newControlDBTestServer(t, originsRoot)
+	r := s.NewAPIRouter()
+
+	url := seedBareRemoteKBForTest(t, filepath.Join(originsRoot, "kb.git"))
+	sub, err := m.Create(context.Background(), repos.CreateSpec{
+		Name: "sub", Mode: "subscribe", Origin: &repos.OriginSpec{URL: url},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	before, err := m.Origins().Get(sub.UID())
+	if err != nil || before == nil {
+		t.Fatalf("origin before: %v %+v", err, before)
+	}
+	require.Equal(t, repos.OriginModeSubscribe, before.Mode, "precondition: created as a subscription")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/repos/sub/origin",
+		strings.NewReader(`{"url":"`+url+`","auth_method":"token","token":"s3cret"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code < 200 || rec.Code >= 300 {
+		t.Fatalf("PUT status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	after, err := m.Origins().Get(sub.UID())
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.Equal(t, repos.OriginModeSubscribe, after.Mode,
+		"a credential update must not demote the subscription to sync")
+	require.Equal(t, "s3cret", after.AuthToken, "the write actually landed")
 }

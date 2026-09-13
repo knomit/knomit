@@ -136,20 +136,31 @@ func readLicense(r *http.Request, ri *repos.RepoInstance) (content string, overs
 // response is byte-identical to a subsequent read — the client never has to
 // reconcile two shapes for the same resource.
 func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInstance) map[string]any {
-	// Read the branch from the instance so the advertised agent_branch and
-	// the branch readReadme reads README.md from can never drift apart.
-	branch := ri.AgentBranch()
-	a := hal.Anchor{Branch: branch}
+	// Read the branch from the instance so the advertised branch and the one
+	// readReadme reads README.md from can never drift apart. The MCP link and
+	// the README use the READ branch: the agent branch for a writable repo, the
+	// followed upstream for a subscription.
+	read := ri.ReadBranch()
+	a := hal.Anchor{Branch: read}
 	body := map[string]any{
-		"name":         name,
-		"uid":          ri.UID(),
-		"id":           ri.ShortID(),
-		"agent_branch": branch,
+		"name":        name,
+		"uid":         ri.UID(),
+		"id":          ri.ShortID(),
+		"read_branch": read,
 		"_links": hal.LinkMap{
 			"self":     {Href: b.Repo(name)},
 			"branches": {Href: b.Branches(name)},
 			"mcp":      {Href: b.Branch(name, a) + "/mcp{?profile}", Templated: true},
 		},
+	}
+	// agent_branch is OMITTED rather than empty for a subscription: it has none,
+	// and an empty string would read as "unknown" to a client that has to decide
+	// whether to offer a write affordance.
+	if agent := ri.AgentBranch(); agent != "" {
+		body["agent_branch"] = agent
+	}
+	if ri.Subscribed() {
+		body["mode"] = "subscribe"
 	}
 	// description is the verbatim README.md root manifest read at HEAD (the
 	// repo's agent branch tip — HEAD points there). Omitted when the

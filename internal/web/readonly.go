@@ -1,9 +1,11 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 
+	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
 
@@ -48,4 +50,22 @@ func readOnlyGate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// refuseUnwritableBranch answers 403 when facts may not be authored on branch
+// through ri — the REST twin of the MCP write tools' WriteOK check. It
+// consults the same classification (RepoInstance.WritableBranch), so a
+// subscription, the consensus branch, and a foreign agent branch are all
+// refused here with a named reason rather than by the store's read-only flag.
+//
+// The store's flag is the structural guarantee and stays the backstop; this is
+// what turns "the store refused" into an answer a client can act on.
+func refuseUnwritableBranch(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch string) bool {
+	if ri.WritableBranch(branch) {
+		return false
+	}
+	hal.WriteProblem(w, http.StatusForbidden, "Read-only branch",
+		fmt.Sprintf("facts cannot be written to branch %q of repo %q; only the repo's own agent branch accepts writes", branch, ri.Name()),
+		r.URL.Path)
+	return true
 }

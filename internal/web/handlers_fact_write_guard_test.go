@@ -1,10 +1,15 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/repos"
 )
 
 // refusedByGuard drives PUT and DELETE at path and asserts BOTH are refused
@@ -119,4 +124,30 @@ func TestFactEndpoints_AllowOrdinaryFactsNearServerOwnedNames(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The REST fact writers must consult the branch write-eligibility
+// classification: a subscription's read branch (and any non-agent branch)
+// gets 403, and the writer is never reached.
+func TestFactWrite_RefusesNonWritableBranchWith403(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "sub", Subscribed: true, ReadBranch: "main"}))
+	writer := &stubFactWriter{writeHash: "abc123"}
+	s := &Server{Manager: m, providers: storeProviders{factWriter: writer}}
+	r := s.NewAPIRouter()
+
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodPut, "/repos/sub/branches/main/facts/kb/x.md", `{"content":"` + testFactContent + `"}`},
+		{http.MethodDelete, "/repos/sub/branches/main/facts/kb/x.md", ``},
+		{http.MethodPost, "/repos/sub/branches/main/facts", `{"title":"X","content":"` + testFactContent + `","topic":"gotchas","category":"a"}`},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code, "%s %s: body=%s", tc.method, tc.path, rec.Body.String())
+		require.Contains(t, rec.Body.String(), "Read-only branch")
+	}
+	require.Zero(t, writer.writeCalls, "the writer must never be reached")
+	require.Zero(t, writer.deleteCalls, "the writer must never be reached")
 }

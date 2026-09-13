@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,5 +152,40 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	}
 	if activateURL != remoteURL {
 		t.Errorf("ActivateSync URL: got %q, want %q", activateURL, remoteURL)
+	}
+}
+
+// A subscription cannot be re-pointed through a connect session: the flow ends
+// in a store swap, which for a repo that owns no content of its own would
+// replace the thing it follows rather than reconcile it.
+func TestHandleCreateSession_SubscriptionIs409(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "sub", UID: "sub-uid", Subscribed: true, ReadBranch: "main",
+	}))
+	sm := NewSessionManager()
+	s := &Server{Manager: m, SessionManager: sm, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/repos/sub/origin-sessions",
+		strings.NewReader(`{"url":"https://example.com/x.git"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Subscription requires its origin") {
+		t.Errorf("body does not name the refusal: %s", rec.Body.String())
+	}
+
+	// And nothing was created.
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/sub/origin-sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"id"`) {
+		t.Errorf("a session was created despite the refusal: %s", rec.Body.String())
 	}
 }

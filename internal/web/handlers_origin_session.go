@@ -52,6 +52,16 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 				"invalid url", r.URL.Path)
 			return
 		}
+		// A connect session ends in a store SWAP. For a subscription — which
+		// owns no content of its own — that would replace the thing it follows
+		// rather than reconcile with it. This route is inside RepoMiddleware,
+		// so the instance is in context.
+		if ri := repos.RepoFromContext(r.Context()); ri != nil && ri.Subscribed() {
+			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
+				"a subscription cannot be re-pointed through a connect session; create a new subscription instead",
+				r.URL.Path)
+			return
+		}
 		// Local-origin policy is enforced at the clone boundary (Manager.Resolve-
 		// Auth, invoked when the session is tested), so it isn't re-checked here.
 
