@@ -8,6 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Zero declines is a RENDERING path, not an early return, so it needs its own
+// case: joining an empty breakdown would otherwise print "0 of 9 items ()".
+func TestDistillDeclineHealthLine_NoneDeclined(t *testing.T) {
+	require.Equal(t, "distill declines: none of 9 items",
+		distillDeclineHealthLine(map[string]int{}, 9))
+}
+
 func TestDistillDeclineHealthLine(t *testing.T) {
 	line := distillDeclineHealthLine(map[string]int{"rest-bucket-incoherent": 3, "no-shared-mechanism": 2, "": 1}, 9)
 	require.Equal(t,
@@ -47,9 +54,17 @@ func TestDistillDeclines_SurfaceOnTheCompletionResult(t *testing.T) {
 			"declined_reason exists to surface")
 }
 
-// A session whose distill item produced a synthesis is not a decline, and a
-// session with no declines gets no line at all rather than a zero line.
-func TestDistillDeclines_NoLineWhenNothingDeclined(t *testing.T) {
+// A session with distill items that declined NOTHING still says so.
+//
+// This test previously pinned the opposite — no line when nothing declined —
+// and that is the rule being reversed, so it is rewritten rather than deleted.
+// The case it guards is still worth pinning; only the expected output changed.
+//
+// WHY THE REVERSAL: an absent line used to mean any of three different things —
+// the session ran no distill items, it ran some and declined none, or the read
+// of the durable record failed. One signal, three causes, and the failure was
+// the wire-invisible one. A session that declined nothing now states it.
+func TestDistillDeclines_ZeroIsStatedNotInferred(t *testing.T) {
 	r, svc := newPhaseTestReviewer(t)
 	ctx := context.Background()
 
@@ -60,6 +75,25 @@ func TestDistillDeclines_NoLineWhenNothingDeclined(t *testing.T) {
 	res, err := r.ContinueSession(ctx, sess.ID, distillResponseOneFact)
 	require.NoError(t, err)
 	require.True(t, res.Done)
+	require.Contains(t, strings.Join(res.Health, "\n"), "distill declines: none of 1 items",
+		"a session that synthesized and declined nothing must SAY zero, not go silent")
+}
+
+// The one remaining cause of an absent line: the session ran no distill items
+// at all. That keeps the line meaningful — it is reported per distill session,
+// not stamped on every session regardless of whether distill ran.
+func TestDistillDeclines_NoLineWhenNoDistillItems(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+
+	const prunePath = "kb/technology/a.md"
+	seedObservation(t, svc, "agent/test", prunePath)
+	sess := manualSession(t, svc, "agent/test")
+	insertManualPruneItem(t, svc, sess.ID, prunePath)
+
+	res, err := r.ContinueSession(ctx, sess.ID, `{"decisions": [], "merges": []}`)
+	require.NoError(t, err)
+	require.True(t, res.Done)
 	require.NotContains(t, strings.Join(res.Health, "\n"), "distill declines",
-		"a session that synthesized must not report a decline line")
+		"a prune-only session must not report a distill line; the line is about distill work that happened")
 }

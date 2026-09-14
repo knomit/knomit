@@ -17,6 +17,11 @@ import (
 // "unstated" is rendered last and named rather than omitted: an item that
 // declined without a reason is the case the reason field exists to surface, so
 // hiding it would reproduce the invisibility this is meant to fix.
+//
+// ZERO DECLINES STILL RENDERS, without the parenthesised breakdown — there is
+// none to show, and joining an empty list would print "0 of 9 items ()". A
+// session that declined nothing SAYS so: silence used to mean any of three
+// different things, and telling them apart is the point of this work.
 func distillDeclineHealthLine(counts map[string]int, total int) string {
 	declined := 0
 	var keys []string
@@ -25,6 +30,9 @@ func distillDeclineHealthLine(counts map[string]int, total int) string {
 		if k != "" {
 			keys = append(keys, k)
 		}
+	}
+	if declined == 0 {
+		return fmt.Sprintf("distill declines: none of %d items", total)
 	}
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys)+1)
@@ -67,7 +75,6 @@ func distillDeclineHealth(ctx context.Context, d Deps, sessionID string) string 
 		return ""
 	}
 	counts := map[string]int{}
-	declined := 0
 	for _, raw := range responses {
 		res, perr := parseDistillResponse(raw)
 		if perr != nil {
@@ -75,11 +82,10 @@ func distillDeclineHealth(ctx context.Context, d Deps, sessionID string) string 
 		}
 		if len(res.Synthesize) == 0 {
 			counts[res.DeclinedReason]++
-			declined++
 		}
 	}
-	if declined == 0 {
-		return ""
-	}
+	// Rendered whenever the session HAD distill items, declines or not. An
+	// absent line then means one thing — no distill work — instead of being
+	// ambiguous between that, a clean session, and a failed read.
 	return distillDeclineHealthLine(counts, len(responses))
 }

@@ -166,17 +166,24 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 	one := sizedFacts(1, 16)
 
+	// stepType is the item's PRODUCTION type and is deliberately separate from
+	// the subtest name. They were one field until review caught it: naming the
+	// subtests "distill-cluster"/"distill-remainder" also widened Item.Type,
+	// which is delivered on the page, so the envelope was measured 10 bytes
+	// larger than production ever produces. A fixture that measures a payload
+	// the system cannot emit reports a number about itself.
 	for _, tc := range []struct {
-		name    string
-		content func() (*WorkItemContent, error)
+		name     string
+		stepType string
+		content  func() (*WorkItemContent, error)
 	}{
-		{"distill-cluster", func() (*WorkItemContent, error) {
+		{"distill-cluster", "distill", func() (*WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), false)
 		}},
-		{"distill-remainder", func() (*WorkItemContent, error) {
+		{"distill-remainder", "distill", func() (*WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), true)
 		}},
-		{"prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }},
+		{"prune", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content, err := tc.content()
@@ -185,7 +192,7 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 			res := &PipelineResult{
 				SessionID: "00000000-0000-0000-0000-000000000000",
 				Item: &PipelineItem{
-					ID: 999999, Type: tc.name,
+					ID: 999999, Type: tc.stepType,
 					Prompt: content.Prompt, ResponseSchema: content.ResponseSchema,
 					Facts: content.Facts, FactsJSON: content.Facts,
 				},

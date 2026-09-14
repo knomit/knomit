@@ -222,12 +222,16 @@ const maxDeliveredItemBytes = 32 * 1024
 //
 // The rest-bucket and declined-reason work has since landed and was measured
 // rather than projected: the worst case is the distill REMAINDER branch at
-// 11,857 bytes, leaving 431. (The projection was 11,558; the difference is a
+// 11,847 bytes, leaving 441. (The projection was 11,558; the difference is a
 // description on the subgroups_considered schema property, kept deliberately —
 // it helps the model more than the headroom helps us.) Both distill branches
 // are measured by the test above, because the remainder ask is the larger of
-// the two. 431 bytes is thin: trim prose here before raising the reserve again,
+// the two. 441 bytes is thin: trim prose here before raising the reserve again,
 // and re-measure rather than assume.
+//
+// Measure with the item's PRODUCTION step type. An earlier reading said 11,857
+// because the test's subtest name had been reused as Item.Type, which is
+// delivered on the page — a fixture measuring a payload the system never emits.
 const pageEnvelopeReserveBytes = 12 * 1024
 
 // maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
