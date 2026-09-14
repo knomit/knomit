@@ -106,6 +106,41 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 	}
 }
 
+// Only a status mcp-go reaches AFTER resolving the session id may mint a row.
+// mcp-go rejects a bad Content-Type or unparseable body with 400 BEFORE it
+// validates the session id, so recording on "not 404" lets any caller mint a
+// row per request under an id of their choosing.
+func TestMCPDispatch_RecordsOnlyOnAcceptedStatuses(t *testing.T) {
+	cases := []struct {
+		status int
+		want   int
+	}{
+		{http.StatusOK, 1},                  // ordinary call
+		{http.StatusAccepted, 1},            // notification
+		{http.StatusBadRequest, 0},          // bad content type / unparseable body
+		{http.StatusNotFound, 0},            // mcp-go rejected the session id
+		{http.StatusMethodNotAllowed, 0},    // termination not allowed
+		{http.StatusInternalServerError, 0}, // anything else
+	}
+	for _, c := range cases {
+		t.Run(http.StatusText(c.status), func(t *testing.T) {
+			store := newClientSessionsStore(t)
+			s := &Server{Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(c.status)}
+			req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`))
+			req.Header.Set("Mcp-Session-Id", "mcp-session-attacker-chosen")
+			s.NewAPIRouter().ServeHTTP(httptest.NewRecorder(), req)
+
+			rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != c.want {
+				t.Fatalf("status %d: got %d rows, want %d", c.status, len(rows), c.want)
+			}
+		})
+	}
+}
+
 func TestMCPDispatch_404CreatesNothing_NilStoreSafe(t *testing.T) {
 	store := newClientSessionsStore(t)
 	s := &Server{Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(404)}

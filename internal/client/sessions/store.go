@@ -43,6 +43,10 @@ func (s *Store) Touch(ctx context.Context, o Observation) error {
 	if o.SessionID == "" {
 		return nil
 	}
+	// The session id is client-supplied and becomes the PRIMARY KEY, so it is
+	// capped like every other declared value — an unbounded header must not
+	// become an unbounded row key.
+	o.SessionID = Cap(o.SessionID)
 	now := o.Now.Unix()
 	if o.Client != nil {
 		c := o.Client
@@ -98,6 +102,7 @@ func (s *Store) SetClientInfo(ctx context.Context, sessionID, binding, name, ver
 	if sessionID == "" {
 		return nil
 	}
+	sessionID = Cap(sessionID)
 	name, version = Cap(name), Cap(version)
 	ts := now.Unix()
 	if _, err := s.db.ExecContext(ctx, `
@@ -130,6 +135,7 @@ func (s *Store) End(ctx context.Context, sessionID string, at time.Time) error {
 	if sessionID == "" {
 		return nil
 	}
+	sessionID = Cap(sessionID)
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE client_sessions SET ended_at = ?, last_seen_at = ? WHERE id = ? AND ended_at IS NULL`,
 		at.Unix(), at.Unix(), sessionID)

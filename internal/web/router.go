@@ -85,9 +85,15 @@ func (s *Server) NewAPIRouter() chi.Router {
 			Dur("elapsed", time.Since(start)).
 			Msg("mcp: request done")
 		// AFTER the response: recording is never in the request's critical
-		// path, and never a reason for it to fail. A 404 is mcp-go rejecting
-		// the session id, so it must not mint a row.
-		if mw.status != http.StatusNotFound {
+		// path, and never a reason for it to fail.
+		//
+		// ALLOWLIST, not "anything but 404". mcp-go rejects a bad
+		// Content-Type or an unparseable body with 400 BEFORE it resolves the
+		// session id at all, so a deny-list would let any caller mint a row
+		// per request under an id of their choosing. 200 (call or DELETE) and
+		// 202 (notification) are the only statuses reached past session
+		// resolution.
+		if mw.status == http.StatusOK || mw.status == http.StatusAccepted {
 			recordClientSession(req, s.ClientSessions)
 		}
 	})

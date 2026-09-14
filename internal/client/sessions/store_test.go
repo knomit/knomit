@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,5 +197,38 @@ func TestPurge_RetentionBoundaryAndDisabled(t *testing.T) {
 	n, err = s.Purge(ctx, now.Add(1000*time.Hour))
 	if err != nil || n != 0 {
 		t.Fatalf("disabled purge: n=%d err=%v", n, err)
+	}
+}
+
+// The session id is the one client-supplied value that becomes a PRIMARY KEY,
+// so it is capped like every other: an unbounded header must not become an
+// unbounded row key.
+func TestSessionIDIsCapped(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	long := strings.Repeat("x", 4000)
+
+	if err := s.Touch(ctx, bridgeObs(long, t0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetClientInfo(ctx, long, "repo:uid1", "n", "v", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.End(ctx, long, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.List(ctx, Filter{Now: t0.Add(time.Second), IncludeHidden: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("all three calls must address ONE capped row, got %d", len(rows))
+	}
+	if len(rows[0].ID) != MaxFieldLen+len(truncationSuffix) {
+		t.Fatalf("session id not capped: len=%d", len(rows[0].ID))
+	}
+	if rows[0].Ended == nil {
+		t.Fatal("End must reach the same capped row")
 	}
 }
