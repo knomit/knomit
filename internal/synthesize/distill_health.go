@@ -47,6 +47,12 @@ func distillDeclineHealthLine(counts map[string]int, total int) string {
 // completion. The response column is the only thing that outlives the turn
 // that produced it.
 //
+// parseDistillResponse applies to the stored strings unchanged because the
+// distill arm of Decode returns the agent's response as `normalized` verbatim —
+// the response column holds the RAW text, not a re-marshalled form. This tally's
+// correctness rests on that; if Decode ever normalises distill responses, this
+// must parse whatever it stores instead.
+//
 // A parse failure is skipped rather than failing the session: this line is
 // informational, the session's mutations are already committed, and a summary
 // that errors would be strictly worse than one that undercounts.
