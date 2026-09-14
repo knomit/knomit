@@ -173,8 +173,9 @@ func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	require.Contains(t, content.Prompt, "kb/meta/reasoning/lesson.md")
 	require.Contains(t, content.Prompt, "knomit_query",
 		"prompt must reference knomit_query as the fetch tool")
-	require.Contains(t, content.Prompt, "score ≥ 0.50",
-		"prompt must state the mandatory-fetch threshold")
+	require.NotContains(t, content.Prompt, "≥ 0.50",
+		"the prompt must not re-threshold a list retrieval already filtered at methodology_min_score")
+	require.Contains(t, content.Prompt, "Read EVERY candidate above")
 	require.Contains(t, content.Prompt, "EVERY candidate",
 		"prompt must use forcing language, not 'if useful'")
 
@@ -234,8 +235,9 @@ func TestRenderReflectWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	require.Contains(t, content.Prompt, "Existing methodology candidates")
 	require.Contains(t, content.Prompt, "Existing")
 	require.Contains(t, content.Prompt, "kb/meta/reasoning/existing.md")
-	require.Contains(t, content.Prompt, "score ≥ 0.50",
-		"prompt must state the mandatory-fetch threshold")
+	require.NotContains(t, content.Prompt, "≥ 0.50",
+		"the prompt must not re-threshold a list retrieval already filtered at methodology_min_score")
+	require.Contains(t, content.Prompt, "Read EVERY candidate above")
 	require.Contains(t, content.Prompt, "EVERY candidate",
 		"prompt must use forcing language, not 'if useful'")
 

@@ -34,8 +34,9 @@ system thinks these may overlap with the lesson):
 
 {{.ExistingMethodology}}
 
-For EVERY candidate above with score ≥ 0.50, call knomit_query on its path
-and read the body BEFORE deciding it doesn't fit. Titles alone are not
+Read EVERY candidate above: call knomit_query on its path and read the
+body BEFORE deciding it doesn't fit. The list is already filtered to what
+is worth reading and holds at most three entries; titles alone are not
 enough.
 
 {{end}}{{if .MotifVocabulary}}This corpus's motif vocabulary, for context:

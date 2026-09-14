@@ -414,7 +414,7 @@ func buildHypothesizeInstructions(ctx context.Context, ri *repos.RepoInstance, b
 WORKFLOW (do not skip steps):
 
 1. Call knomit_explain on the synthesis fact to trace its provenance.
-2. For EVERY methodology candidate above with score ≥ 0.50, call knomit_query on its path and read the body. Decide whether it applies to your reasoning here. Titles alone are not enough to judge applicability — do not skip candidates above the threshold.
+2. Read EVERY candidate above: call knomit_query on its path and read the body. Decide whether it applies to your reasoning here. Titles alone are not enough to judge applicability.
 3. Gather additional evidence as needed via knomit_query.
 4. Decide whether a hypothesis is warranted. Default to NO. Write one ONLY if ALL of these hold:
    (a) Forward-looking: the hypothesis predicts or causally claims something beyond what the synth fact already establishes. Restating the synth fact is not a hypothesis.
@@ -477,7 +477,7 @@ func hypothesizeMethodologySection(ctx context.Context, ri *repos.RepoInstance, 
 	if bullets == "" {
 		return ""
 	}
-	return "Applicable methodology candidates (ranked; you must process the ≥0.50 ones per workflow step 2):\n\n" + bullets
+	return "Applicable methodology candidates (ranked; read every one per workflow step 2):\n\n" + bullets
 }
 
 // compile-time assertion that the hypothesize strategy satisfies the engine seam.

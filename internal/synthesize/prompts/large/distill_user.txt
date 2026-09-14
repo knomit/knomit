@@ -6,7 +6,7 @@ The facts in scope are delivered beside this prompt as the work item's `facts` f
 
 {{.ApplicableMethodology}}
 
-For EVERY candidate above with score ≥ 0.50, call knomit_query on its path and read the body BEFORE producing the synthesis. Titles alone are not enough. If a methodology shapes how you weight, combine, or name the synthesis, include its path in the output's refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
+Read EVERY candidate above: call knomit_query on its path and read the body BEFORE producing the synthesis. The list is already filtered to what is worth reading and holds at most three entries; titles alone are not enough. If a methodology shapes how you weight, combine, or name the synthesis, include its path in the output's refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
 
 {{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns
