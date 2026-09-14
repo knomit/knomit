@@ -26,7 +26,7 @@ func TestHandleHALClientSessions(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetClientInfo(ctx, "s1", "repo:u-alpha", "claude-code", "2", now); err != nil {
+	if err := store.SetClientInfo(ctx, "s1", "repo:u-alpha", "claude-code", "2", "1.2.3.4", "ua", now); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Touch(ctx, sessions.Observation{SessionID: "old", Binding: "lens:gone", Now: now.Add(-4 * time.Hour)}); err != nil {
@@ -121,7 +121,7 @@ func TestHandleHALClientSessions_ReadOnlyRedactsOperatorDetail(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetClientInfo(ctx, "s1", "repo:u-alpha", "claude-code", "2.1", now); err != nil {
+	if err := store.SetClientInfo(ctx, "s1", "repo:u-alpha", "claude-code", "2.1", "203.0.113.7", "knomit-bridge/1.4", now); err != nil {
 		t.Fatal(err)
 	}
 

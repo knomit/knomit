@@ -71,7 +71,16 @@ func (s *Server) buildMCPHandler() {
 	} else {
 		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly)
 	}
-	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv)
+	// mcp-go does not put the *http.Request in the context it hands to hooks,
+	// so the initialize hook — the only place the declared clientInfo exists —
+	// would otherwise be unable to see the ip and User-Agent of the request
+	// carrying it, and would derive every direct-HTTP client's identity from
+	// two empty strings.
+	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv,
+		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			return sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
+		}),
+	)
 }
 
 // Handler returns the chi router with all routes mounted.

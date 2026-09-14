@@ -84,7 +84,11 @@ ON CONFLICT(id) DO UPDATE SET
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	inst := DeriveInstanceID(o.RemoteIP, o.UserAgent, name, version)
+	// Cap BEFORE deriving, and store the same capped values: SetClientInfo
+	// derives the identical id from the identical inputs, so the two writers
+	// can never disagree about one session's instance id.
+	ip, ua := Cap(o.RemoteIP), Cap(o.UserAgent)
+	inst := DeriveInstanceID(ip, ua, name, version)
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO client_sessions
   (id, instance_id, transport, binding, remote_addr, user_agent, first_seen_at, last_seen_at, request_count)
@@ -99,42 +103,43 @@ ON CONFLICT(id) DO UPDATE SET
   -- revives the row rather than leaving it reading "ended" while the session
   -- is demonstrably still calling.
   ended_at = NULL`,
-		o.SessionID, inst, o.Binding, Cap(o.RemoteIP), Cap(o.UserAgent), now, now)
+		o.SessionID, inst, o.Binding, ip, ua, now, now)
 	return err
 }
 
-// SetClientInfo records what `initialize` declared. The row may not exist
-// yet (initialize carries no session id in its request, so no Touch preceded
-// it); it is created with transport "http" and refined by the next Touch.
-// For an http row the derived instance id is recomputed here so it includes
-// the client name — after this it is stable.
-func (s *Store) SetClientInfo(ctx context.Context, sessionID, binding, name, version string, now time.Time) error {
+// SetClientInfo records what `initialize` declared, plus what the server
+// OBSERVED about the same request.
+//
+// It takes remoteIP and userAgent rather than reading them back off the row
+// because on a direct-HTTP session this is the FIRST write to that row:
+// initialize carries no session id in its request, so no Touch has run, and
+// the row it would read back still has ” for both. Deriving from ” would
+// collapse every client declaring the same clientInfo onto one instance id.
+//
+// The row may not exist yet; it is created with transport "http" and refined
+// by the next Touch. A row that already declares stdio keeps the identity the
+// bridge declared — the server-derived id is only ever used for http.
+func (s *Store) SetClientInfo(ctx context.Context, sessionID, binding, name, version, remoteIP, userAgent string, now time.Time) error {
 	if sessionID == "" {
 		return nil
 	}
 	sessionID = Cap(sessionID)
 	name, version = Cap(name), Cap(version)
+	ip, ua := Cap(remoteIP), Cap(userAgent)
 	ts := now.Unix()
-	if _, err := s.db.ExecContext(ctx, `
+	_, err := s.db.ExecContext(ctx, `
 INSERT INTO client_sessions
-  (id, instance_id, transport, binding, client_name, client_version, initialized, first_seen_at, last_seen_at, request_count)
-VALUES (?, '', 'http', ?, ?, ?, 1, ?, ?, 0)
+  (id, instance_id, transport, binding, remote_addr, user_agent, client_name, client_version, initialized, first_seen_at, last_seen_at, request_count)
+VALUES (?, ?, 'http', ?, ?, ?, ?, ?, 1, ?, ?, 0)
 ON CONFLICT(id) DO UPDATE SET
   binding = CASE WHEN excluded.binding = '' THEN binding ELSE excluded.binding END,
-  client_name = excluded.client_name, client_version = excluded.client_version, initialized = 1`,
-		sessionID, binding, name, version, ts, ts); err != nil {
-		return err
-	}
-	var transport, ip, ua string
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT transport, remote_addr, user_agent FROM client_sessions WHERE id = ?`, sessionID).Scan(&transport, &ip, &ua); err != nil {
-		return err
-	}
-	if transport != "http" {
-		return nil
-	}
-	_, err := s.db.ExecContext(ctx, `UPDATE client_sessions SET instance_id = ? WHERE id = ?`,
-		DeriveInstanceID(ip, ua, name, version), sessionID)
+  client_name = excluded.client_name, client_version = excluded.client_version, initialized = 1,
+  remote_addr = CASE WHEN excluded.remote_addr = '' THEN remote_addr ELSE excluded.remote_addr END,
+  user_agent = CASE WHEN excluded.user_agent = '' THEN user_agent ELSE excluded.user_agent END,
+  -- Only an http row carries a server-DERIVED id; a stdio row's id was
+  -- declared by the bridge and must survive.
+  instance_id = CASE WHEN client_sessions.transport = 'http' THEN excluded.instance_id ELSE instance_id END`,
+		sessionID, DeriveInstanceID(ip, ua, name, version), binding, ip, ua, name, version, ts, ts)
 	return err
 }
 

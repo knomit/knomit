@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"time"
 
@@ -42,7 +41,7 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	obs := sessions.Observation{
 		SessionID: sid,
 		Binding:   repos.BindingPinFromContext(r.Context()),
-		RemoteIP:  remoteIP(r.RemoteAddr),
+		RemoteIP:  sessions.RemoteIP(r.RemoteAddr),
 		UserAgent: r.Header.Get("User-Agent"),
 		Now:       now,
 	}
@@ -58,14 +57,4 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	if err := store.Touch(ctx, obs); err != nil {
 		log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: touch failed")
 	}
-}
-
-// remoteIP strips the port; a value with no port is returned as is. The port
-// is deliberately never recorded: it identifies nothing about the client and
-// changes on every connection.
-func remoteIP(addr string) string {
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		return host
-	}
-	return addr
 }

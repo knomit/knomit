@@ -86,7 +86,7 @@ func TestTouch_HTTPIdentityDerivedAndStableAfterClientInfo(t *testing.T) {
 	if rows[0].Transport != "http" || rows[0].InstanceID != DeriveInstanceID("10.0.0.5", "curl/8", "", "") {
 		t.Fatalf("%+v", rows[0])
 	}
-	if err := s.SetClientInfo(ctx, "sid", "lens:l1", "mcp-inspector", "0.9", t0); err != nil {
+	if err := s.SetClientInfo(ctx, "sid", "lens:l1", "mcp-inspector", "0.9", "10.0.0.5", "curl/8", t0); err != nil {
 		t.Fatal(err)
 	}
 	want := DeriveInstanceID("10.0.0.5", "curl/8", "mcp-inspector", "0.9")
@@ -108,7 +108,7 @@ func TestTouch_HTTPIdentityDerivedAndStableAfterClientInfo(t *testing.T) {
 func TestSetClientInfo_BeforeFirstTouchCreatesRow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	if err := s.SetClientInfo(ctx, "sid", "repo:uid1", "claude-code", "2.0", t0); err != nil {
+	if err := s.SetClientInfo(ctx, "sid", "repo:uid1", "claude-code", "2.0", "127.0.0.1", "knomit-bridge/1.0", t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Touch(ctx, bridgeObs("sid", t0.Add(time.Second))); err != nil {
@@ -211,7 +211,7 @@ func TestSessionIDIsCapped(t *testing.T) {
 	if err := s.Touch(ctx, bridgeObs(long, t0)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetClientInfo(ctx, long, "repo:uid1", "n", "v", t0); err != nil {
+	if err := s.SetClientInfo(ctx, long, "repo:uid1", "n", "v", "1.2.3.4", "ua", t0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.End(ctx, long, t0.Add(time.Second)); err != nil {
@@ -279,5 +279,71 @@ func TestTouch_AfterEndRevivesTheRow(t *testing.T) {
 				t.Fatalf("state=%s, want live", rows[0].State)
 			}
 		})
+	}
+}
+
+// The initialize hook is the FIRST thing to touch a direct-HTTP session's
+// row, before any Touch, so it must derive the identity from what the server
+// observed on THAT request. Re-reading the row it just created yields ” for
+// both ip and User-Agent, which collapses every client declaring the same
+// clientInfo onto one instance id.
+func TestSetClientInfo_DerivesHTTPIdentityFromTheRequest(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SetClientInfo(ctx, "s1", "repo:uid1", "mcp-inspector", "0.9", "198.51.100.1", "curl/8", t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetClientInfo(ctx, "s2", "repo:uid1", "mcp-inspector", "0.9", "203.0.113.2", "curl/8", t0); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := s.List(ctx, Filter{Now: t0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows=%d", len(rows))
+	}
+	byID := map[string]Session{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	if byID["s1"].InstanceID == byID["s2"].InstanceID {
+		t.Fatalf("same clientInfo from different IPs collapsed onto one instance id: %s", byID["s1"].InstanceID)
+	}
+	if byID["s1"].InstanceID != DeriveInstanceID("198.51.100.1", "curl/8", "mcp-inspector", "0.9") {
+		t.Fatalf("s1 instance id not derived from the request: %s", byID["s1"].InstanceID)
+	}
+	if byID["s1"].RemoteAddr != "198.51.100.1" || byID["s1"].UserAgent != "curl/8" {
+		t.Fatalf("observed fields not recorded: %+v", byID["s1"])
+	}
+	// And it must agree with what a later Touch derives, so the id is stable.
+	obs := Observation{SessionID: "s1", Binding: "repo:uid1", RemoteIP: "198.51.100.1", UserAgent: "curl/8", Now: t0.Add(time.Minute)}
+	if err := s.Touch(ctx, obs); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ = s.List(ctx, Filter{Now: t0.Add(time.Minute)})
+	for _, r := range rows {
+		if r.ID == "s1" && r.InstanceID != DeriveInstanceID("198.51.100.1", "curl/8", "mcp-inspector", "0.9") {
+			t.Fatalf("instance id drifted on the first Touch: %s", r.InstanceID)
+		}
+	}
+}
+
+// A declared (stdio) row must keep the identity the bridge declared — the
+// hook must not overwrite it with a server-derived one.
+func TestSetClientInfo_DoesNotClobberDeclaredIdentity(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.Touch(ctx, bridgeObs("sid", t0)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetClientInfo(ctx, "sid", "repo:uid1", "claude-code", "2.0", "198.51.100.1", "knomit-bridge/1", t0); err != nil {
+		t.Fatal(err)
+	}
+	rows, _ := s.List(ctx, Filter{Now: t0})
+	if rows[0].InstanceID != "inst1" || rows[0].Transport != "stdio" {
+		t.Fatalf("declared identity overwritten: %+v", rows[0])
 	}
 }
