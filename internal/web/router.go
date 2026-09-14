@@ -84,6 +84,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 			Str("response_content_type", mw.Header().Get("Content-Type")).
 			Dur("elapsed", time.Since(start)).
 			Msg("mcp: request done")
+		// AFTER the response: recording is never in the request's critical
+		// path, and never a reason for it to fail. A 404 is mcp-go rejecting
+		// the session id, so it must not mint a row.
+		if mw.status != http.StatusNotFound {
+			recordClientSession(req, s.ClientSessions)
+		}
 	})
 
 	r.Get("/", handleAPIRoot(b))

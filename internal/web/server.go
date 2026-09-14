@@ -9,6 +9,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/client/sessions"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/repos"
@@ -24,8 +25,12 @@ type Server struct {
 	OntologyRoot      string
 	AgentBranch       string
 	SessionManager    *SessionManager
-	LLMAdapter        llm.LLMAdapter      // nil if no LLM configured
-	Embedder          store.BatchEmbedder // nil if unavailable
+	// ClientSessions records every MCP request's session (control.db
+	// client_sessions). nil ⇒ recording is off (tests, degraded boot). Wired
+	// from Manager.ClientSessions() by cmd/serve.
+	ClientSessions *sessions.Store
+	LLMAdapter     llm.LLMAdapter      // nil if no LLM configured
+	Embedder       store.BatchEmbedder // nil if unavailable
 
 	// ReadOnly runs the instance as a read-only demo: /git is not mounted,
 	// MCP exposes only read tools, and the API router rejects mutations.
