@@ -907,9 +907,6 @@ async function purgeRepo(id: string): Promise<void> {
   if (!r.ok) throw new Error(`purge → ${r.status}`);
 }
 
-// listLenses GETs /api/v1/lenses and unwraps the HAL CollectionView
-// (_embedded.lenses), mirroring api.repos(). Falls back to [] when the shape
-// is missing so the UI never sees undefined.
 export type ClientSessionState = 'live' | 'idle' | 'dead';
 export interface ClientSessionBinding { kind: string; uid: string; name: string | null }
 /** One MCP client session the server has seen. Every `bridge` field and
@@ -941,6 +938,9 @@ async function listClientSessions(opts: { binding?: string; includeHidden?: bool
   return { sessions: data._embedded?.sessions ?? [], policy: data.policy };
 }
 
+// listLenses GETs /api/v1/lenses and unwraps the HAL CollectionView
+// (_embedded.lenses), mirroring api.repos(). Falls back to [] when the shape
+// is missing so the UI never sees undefined.
 async function listLenses(): Promise<Lens[]> {
   const data = await fetchJSON<{ _embedded?: { lenses?: Lens[] } }>(apiUrl('/api/v1/lenses'));
   return data._embedded?.lenses ?? [];

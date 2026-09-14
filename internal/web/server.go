@@ -27,7 +27,8 @@ type Server struct {
 	SessionManager    *SessionManager
 	// ClientSessions records every MCP request's session (control.db
 	// client_sessions). nil ⇒ recording is off (tests, degraded boot). Wired
-	// from Manager.ClientSessions() by cmd/serve.
+	// from Manager.ClientSessions() by internal/app, AFTER Manager.Start
+	// opens it.
 	ClientSessions *sessions.Store
 	LLMAdapter     llm.LLMAdapter      // nil if no LLM configured
 	Embedder       store.BatchEmbedder // nil if unavailable

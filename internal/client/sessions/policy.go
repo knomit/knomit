@@ -101,9 +101,3 @@ func (p Policy) StateAt(lastSeen time.Time, ended bool, now time.Time) State {
 		return StateDead
 	}
 }
-
-// HiddenAt reports whether a session silent since lastSeen is past the
-// presence window.
-func (p Policy) HiddenAt(lastSeen, now time.Time) bool {
-	return now.Sub(lastSeen) > p.HiddenAfter
-}

@@ -58,10 +58,4 @@ func TestPolicy_StateAt(t *testing.T) {
 			t.Errorf("ago=%v ended=%v: got %s want %s", c.ago, c.ended, got, c.want)
 		}
 	}
-	if p.HiddenAt(now.Add(-3*time.Hour), now) {
-		t.Error("exactly at threshold is not hidden")
-	}
-	if !p.HiddenAt(now.Add(-3*time.Hour-time.Second), now) {
-		t.Error("past threshold is hidden")
-	}
 }
