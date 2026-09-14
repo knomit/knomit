@@ -10,7 +10,13 @@ For EVERY candidate above with score ≥ 0.50, call knomit_query on its path and
 
 {{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns
-2. Which original facts are fully subsumed and can be forgotten
+2. Which original facts are strict restatements of a new fact and can be forgotten
+
+## The test a synthesis must pass
+
+Before writing a synthesis, state in one sentence the mechanism that ALL members instantiate — generically, describing the mechanism and not the subjects. If you cannot write that sentence, return no synthesis. Put that sentence first in the body; a later pass re-reads it to check whether it still covers the members.
+
+Declining is itself a verdict you are accountable for, not a free pass: an empty `synthesize` on a coherent cluster must be a decision you would defend after reading every member, not a default reached by not looking.
 
 {{if .SharedMotifs}}Motifs already shared by several of these facts: {{.SharedMotifs}}
 
