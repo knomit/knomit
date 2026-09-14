@@ -3,7 +3,10 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 
 vi.mock('./api', () => ({
-  api: { getOrigin: vi.fn() },
+  api: {
+    getOrigin: vi.fn(),
+    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
+  },
   createSession: vi.fn(),
   streamTest: vi.fn(),
   streamPreview: vi.fn(),

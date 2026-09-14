@@ -478,3 +478,37 @@ func TestLoad_MaxBatchTokensEnvOverride(t *testing.T) {
 		t.Errorf("env override MaxBatchTokens: want 8192, got %d", got)
 	}
 }
+
+func TestDefaults_ClientSessionThresholds(t *testing.T) {
+	cfg := Defaults()
+	if cfg.Session.ClientDeadAfter != "1h" {
+		t.Errorf("ClientDeadAfter = %q, want 1h", cfg.Session.ClientDeadAfter)
+	}
+	if cfg.Session.ClientHiddenAfter != "3h" {
+		t.Errorf("ClientHiddenAfter = %q, want 3h", cfg.Session.ClientHiddenAfter)
+	}
+	if cfg.Session.ClientRetention != "168h" {
+		t.Errorf("ClientRetention = %q, want 168h", cfg.Session.ClientRetention)
+	}
+}
+
+func TestLoad_ClientSessionEnvOverrides(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
+	t.Setenv("KNOMIT_SESSION_CLIENT_DEAD_AFTER", "30m")
+	t.Setenv("KNOMIT_SESSION_CLIENT_HIDDEN_AFTER", "2h")
+	t.Setenv("KNOMIT_SESSION_CLIENT_RETENTION", "0")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Session.ClientDeadAfter != "30m" {
+		t.Errorf("ClientDeadAfter = %q, want 30m", cfg.Session.ClientDeadAfter)
+	}
+	if cfg.Session.ClientHiddenAfter != "2h" {
+		t.Errorf("ClientHiddenAfter = %q, want 2h", cfg.Session.ClientHiddenAfter)
+	}
+	if cfg.Session.ClientRetention != "0" {
+		t.Errorf("ClientRetention = %q, want 0", cfg.Session.ClientRetention)
+	}
+}

@@ -35,6 +35,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -186,6 +187,9 @@ func main() {
 		log.Debug().Err(err).Msg("lockfile read failed, falling back to default")
 	}
 	var serverURL string
+	// branch is also what the bridge declares about itself; it stays empty in
+	// lens mode, where the branch is resolved per mount server-side.
+	var branch string
 	if *lens != "" {
 		// Lens mode: skip branch discovery entirely. A lens resolves each
 		// mount's branch server-side via LensMiddleware, so the bridge just
@@ -193,7 +197,8 @@ func main() {
 		serverURL = mcpURL(baseURL, "", *lens, "")
 		log.Info().Str("lens", *lens).Str("url", serverURL).Msg("bridge configured (lens)")
 	} else {
-		branch, err := discoverAgentBranch(baseURL, *repo)
+		var err error
+		branch, err = discoverAgentBranch(baseURL, *repo)
 		if err != nil {
 			log.Error().Err(err).Str("repo", *repo).Msg("failed to discover agent branch")
 			fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
@@ -203,14 +208,32 @@ func main() {
 		serverURL = mcpURL(baseURL, *repo, "", encodedBranch)
 		log.Info().Str("repo", *repo).Str("branch", branch).Str("url", serverURL).Msg("bridge configured")
 	}
+
+	// Identity is computed once and never re-read: this process is one
+	// instance for its whole life.
+	hdr := clientHeaders(buildIdentity(branch, time.Now()))
 	client := &http.Client{}
 
-	var (
-		sessionID string
-		mu        sync.Mutex // protects stdout writes
-	)
+	sessionID, err := runProxy(os.Stdin, os.Stdout, client, serverURL, hdr)
+	// stdin closed: the host is gone. Tell the server so the row is marked
+	// ended instead of going dead by silence. Fire-and-forget.
+	terminateSession(client, serverURL, sessionID, hdr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "stdin read error: %v\n", err)
+		os.Exit(1)
+	}
+}
 
-	scanner := bufio.NewScanner(os.Stdin)
+// runProxy is the stdio↔HTTP loop: one JSON-RPC line in, one POST out, the
+// response (JSON or SSE) written back as lines. hdr is copied onto every
+// request. Returns the Mcp-Session-Id captured from the initialize response
+// — the bridge sends it on every later request for its whole life — and the
+// scanner error, if any. There is NO reconnect, retry or recovery here by
+// design (kb/decisions/integrations/bridge/no-recovery).
+func runProxy(in io.Reader, out io.Writer, client *http.Client, serverURL string, hdr http.Header) (sessionID string, err error) {
+	var mu sync.Mutex // protects out writes
+
+	scanner := bufio.NewScanner(in)
 	// Allow large messages (16 MB).
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
@@ -234,24 +257,27 @@ func main() {
 			label = method + " " + toolName
 		}
 
-		req, err := http.NewRequest(http.MethodPost, serverURL, bytes.NewReader([]byte(line)))
-		if err != nil {
-			writeError(os.Stdout, &mu, nil, fmt.Sprintf("create request: %v", err))
+		req, rerr := http.NewRequest(http.MethodPost, serverURL, bytes.NewReader([]byte(line)))
+		if rerr != nil {
+			writeError(out, &mu, nil, fmt.Sprintf("create request: %v", rerr))
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
+		for k, v := range hdr {
+			req.Header[k] = v
+		}
 		if sessionID != "" {
 			req.Header.Set("Mcp-Session-Id", sessionID)
 		}
 
 		reqStart := time.Now()
 		log.Info().Str("label", label).Msg("→ http")
-		resp, err := client.Do(req)
+		resp, derr := client.Do(req)
 		elapsed := time.Since(reqStart)
-		if err != nil {
-			log.Warn().Err(err).Str("label", label).Dur("elapsed", elapsed).Msg("← http error")
-			writeError(os.Stdout, &mu, extractID(line), fmt.Sprintf("http request: %v", err))
+		if derr != nil {
+			log.Warn().Err(derr).Str("label", label).Dur("elapsed", elapsed).Msg("← http error")
+			writeError(out, &mu, extractID(line), fmt.Sprintf("http request: %v", derr))
 			continue
 		}
 
@@ -273,7 +299,7 @@ func main() {
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			writeError(os.Stdout, &mu, extractID(line), fmt.Sprintf("server error %d: %s", resp.StatusCode, body))
+			writeError(out, &mu, extractID(line), fmt.Sprintf("server error %d: %s", resp.StatusCode, body))
 			continue
 		}
 
@@ -283,26 +309,49 @@ func main() {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if len(body) > 0 && json.Valid(body) {
-				writeLine(os.Stdout, &mu, body)
+				writeLine(out, &mu, body)
 			} else {
 				log.Debug().Msg("empty or invalid JSON response body")
 			}
 
 		case "text/event-stream":
-			handleSSE(resp.Body, os.Stdout, &mu)
+			handleSSE(resp.Body, out, &mu)
 			resp.Body.Close()
 
 		default:
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			writeError(os.Stdout, &mu, extractID(line), fmt.Sprintf("unexpected content-type %q: %s", mediaType, body))
+			writeError(out, &mu, extractID(line), fmt.Sprintf("unexpected content-type %q: %s", mediaType, body))
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "stdin read error: %v\n", err)
-		os.Exit(1)
+	return sessionID, scanner.Err()
+}
+
+// terminateSession sends the MCP session-termination DELETE. Best effort with
+// a short deadline: a dead or relocated server (the self-update orphan case)
+// must not delay the exit, and the row then goes dead by silence instead.
+func terminateSession(client *http.Client, serverURL, sessionID string, hdr http.Header) {
+	if sessionID == "" {
+		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, serverURL, nil)
+	if err != nil {
+		return
+	}
+	for k, v := range hdr {
+		req.Header[k] = v
+	}
+	req.Header.Set("Mcp-Session-Id", sessionID)
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Debug().Err(err).Msg("session terminate: server unreachable (expected after a restart)")
+		return
+	}
+	resp.Body.Close()
+	log.Info().Int("status", resp.StatusCode).Msg("session terminated")
 }
 
 // writeLine writes a JSON line to stdout as a single atomic write,

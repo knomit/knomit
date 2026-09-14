@@ -9,8 +9,9 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
+import { ManageSessions } from './ManageSessions';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
@@ -45,6 +46,9 @@ interface Props {
 
 type Selection =
   | { kind: 'overview' }
+  // Sessions is the second non-entity rail row: MCP clients cut across every
+  // repo and lens, so it has no entity to hang off.
+  | { kind: 'sessions' }
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
@@ -110,6 +114,39 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     return () => { onBusyChange?.(false); };
   }, [connectBusy, onBusyChange]);
 
+  // Live-session count for the Sessions tab. Read ONCE when Manage opens and
+  // again on window focus — the header runs no polling loop of its own. While
+  // the Sessions page is open it piggybacks on that page's poll instead
+  // (onLiveCount below), so the two never both poll. null means "not known"
+  // (never arrived, or the call failed) and renders no badge.
+  //
+  // Declared up here with the other hooks, NOT beside the tab strip it feeds:
+  // everything below `if (!open) return null` is past an early return, and a
+  // hook there would run conditionally.
+  const [liveSessions, setLiveSessions] = useState<number | null>(null);
+  // The fallback selection is never 'sessions', so the explicit selection is
+  // the whole answer.
+  const sessionsOpen = sel?.kind === 'sessions';
+  // No repos means no tab strip, so there is nothing to badge — and the
+  // zero-repo screen is the create form, which should not be making calls
+  // about a server the reader has not populated yet.
+  const wantLiveCount = repos.length > 0;
+  useEffect(() => {
+    if (!wantLiveCount) return;
+    let cancelled = false;
+    const read = () => {
+      api.listClientSessions()
+        .then(r => { if (!cancelled) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
+        .catch(() => { if (!cancelled) setLiveSessions(null); });
+    };
+    read();
+    // Skipped while the Sessions page is mounted: it refreshes on focus too,
+    // and reports its own count back.
+    const onFocus = () => { if (!sessionsOpen) read(); };
+    window.addEventListener('focus', onFocus);
+    return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
+  }, [sessionsOpen, wantLiveCount]);
+
   if (!open) return null;
 
   // Manage lands on Overview: it is the only screen that answers "which of my
@@ -123,12 +160,55 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     : { kind: 'overview' as const };
   const view = sel ?? fallback;
 
+
   // No mode header. The rail names the sections, the detail pane names the
   // entity, and the top bar's step-out button is the way back — a fourth
   // statement of "you are in Manage" would be chrome saying nothing new.
   return (
     <div style={surface} data-testid="manage-surface" aria-label="Manage">
       {err && <div style={errBox}>{err}</div>}
+
+      {/* ── Server pages ──
+          The pane has two navigation axes and they are deliberately
+          perpendicular: PAGES about this server run across the top, the
+          entities you OWN run down the rail. Drawn as a strip spanning both
+          columns so the two never read as siblings — which is what the old
+          unlabelled rows at the top of the rail did. Hidden with zero repos,
+          the same rule the Overview row had: nothing to summarise, and the
+          create form owns that screen. */}
+      {repos.length > 0 && (
+        <div style={tabStrip} role="tablist" aria-label="Server pages">
+          <button
+            type="button"
+            role="tab"
+            data-testid="repomgr-overview"
+            aria-selected={view.kind === 'overview'}
+            onMouseDown={noMouseFocus}
+            style={tabBtn(view.kind === 'overview')}
+            disabled={connectBusy}
+            onClick={() => setSel({ kind: 'overview' })}
+          >
+            <HomeIcon color="currentColor" size={12} /> Overview
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-testid="repomgr-sessions"
+            aria-selected={view.kind === 'sessions'}
+            onMouseDown={noMouseFocus}
+            style={tabBtn(view.kind === 'sessions')}
+            disabled={connectBusy}
+            onClick={() => setSel({ kind: 'sessions' })}
+          >
+            <BroadcastIcon color="currentColor" size={12} /> Sessions
+            {/* Absent at zero AND when the call failed: a "0" we cannot vouch
+                for reads as "nobody is connected". */}
+            {liveSessions !== null && liveSessions > 0 && (
+              <span data-testid="repomgr-sessions-badge" style={tabBadge}>{liveSessions}</span>
+            )}
+          </button>
+        </div>
+      )}
 
       <div style={body}>
           {/* ── Master list ── */}
@@ -138,25 +218,6 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               stated where the reader is looking — the connect page's own rail
               note — not repeated here. */}
           <nav style={connectBusy ? { ...listCol, opacity: 0.4 } : listCol}>
-            {/* Overview is pinned above the lists it summarises, and is the only
-                rail row that is not an entity. Hidden with zero repos: there is
-                nothing to summarise, and the create form owns that screen. */}
-            {repos.length > 0 && (
-              <div style={railTop}>
-                <button
-                  type="button"
-                  data-testid="repomgr-overview"
-                  onMouseDown={noMouseFocus}
-                  style={listItem(view.kind === 'overview')}
-                  disabled={connectBusy}
-                  onClick={() => setSel({ kind: 'overview' })}
-                >
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <HomeIcon color="currentColor" size={13} /> Overview
-                  </span>
-                </button>
-              </div>
-            )}
             <div style={sectionHeader}>
               <BookIcon color="#7c9" size={13} />
               <span style={sectionTitle}>Repositories</span>
@@ -276,8 +337,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onSelectLens={name => setSel({ kind: 'lens', name })}
                 onNewRepo={() => setSel({ kind: 'new' })}
                 onNewLens={() => setSel({ kind: 'newLens' })}
+                onSelectSessions={() => setSel({ kind: 'sessions' })}
               />
             )}
+            {view.kind === 'sessions' && <ManageSessions onLiveCount={setLiveSessions} />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for
@@ -1809,11 +1872,25 @@ const sectionHeader: React.CSSProperties = { display: 'flex', alignItems: 'cente
 const sectionTitle: React.CSSProperties = { flex: 1, fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9a9a9a' };
 const viewingTag: React.CSSProperties = { fontSize: 10, color: '#7c9', letterSpacing: '0.04em' };
 
-// railTop fences the Overview row off from the entity lists below it: it is the
-// one row in this column that is not a thing you own, so it gets a rule rather
-// than sitting flush with the repositories.
-const railTop: React.CSSProperties = {
-  paddingBottom: 8, marginBottom: 4, borderBottom: '1px solid #242424',
+// tabStrip spans rail AND detail: the server pages are not a column, they are
+// the frame both columns sit inside.
+const tabStrip: React.CSSProperties = {
+  display: 'flex', gap: 2, padding: '8px 10px 0',
+  borderBottom: '1px solid #222', flexShrink: 0,
+};
+// Same lit background as a selected rail row, so "this is the current thing"
+// looks identical on both axes; the resting colour is the rail's own dim grey.
+const tabBtn = (active: boolean): React.CSSProperties => ({
+  display: 'flex', alignItems: 'center', gap: 7,
+  background: active ? '#22303a' : 'transparent',
+  color: active ? '#eee' : '#9a9a9a',
+  border: 'none', borderRadius: '4px 4px 0 0',
+  padding: '7px 12px', fontSize: 13, cursor: 'pointer',
+  marginBottom: -1,
+});
+const tabBadge: React.CSSProperties = {
+  fontSize: 10, padding: '0 5px', borderRadius: 8,
+  background: '#1d2a22', color: '#4ade80', fontVariantNumeric: 'tabular-nums',
 };
 const listItem = (active: boolean): React.CSSProperties => ({
   width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',

@@ -210,6 +210,11 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		return nil, fmt.Errorf("start manager: %w", err)
 	}
 
+	// Client-session recording. Set AFTER Start: the store is opened there,
+	// over the control.db handle the repo registry owns, so reading it into
+	// the server literal above would capture nil.
+	a.server.ClientSessions = a.manager.ClientSessions()
+
 	return a, nil
 }
 

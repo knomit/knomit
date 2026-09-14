@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/client/sessions"
 	"knomit/internal/config"
 	"knomit/internal/store"
 )
@@ -69,6 +70,11 @@ type Manager struct {
 	// handle). Opened by Start, closed with reg — Origins has no Close of its
 	// own, it borrows reg's *sql.DB; nil before Start.
 	origins *Origins
+
+	// clientSessions records every MCP client session (fourth control.db
+	// tenant, borrowing reg's handle). Opened by Start, nil before; nil-safe
+	// callers skip recording.
+	clientSessions *sessions.Store
 
 	// byUID indexes the same instances as repos, keyed by registry uid. Lens
 	// membership resolves through it: lenses reference uids, not names, so a
@@ -459,6 +465,21 @@ func (m *Manager) Repos() *Registry {
 	return m.reg
 }
 
+// ClientSessions returns the client-session store, or nil before Start.
+func (m *Manager) ClientSessions() *sessions.Store {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.clientSessions
+}
+
+// SetClientSessions installs the store. Start calls it; tests call it to
+// inject a store without a control.db home.
+func (m *Manager) SetClientSessions(s *sessions.Store) {
+	m.mu.Lock()
+	m.clientSessions = s
+	m.mu.Unlock()
+}
+
 // Get returns the RepoInstance for name, or nil if not found.
 func (m *Manager) Get(name string) *RepoInstance {
 	m.mu.RLock()
@@ -547,6 +568,8 @@ func (m *Manager) Close() error {
 	repoReg := m.reg
 	m.reg = nil
 	m.origins = nil
+	// Borrows repoReg's handle; dropping the pointer is the whole teardown.
+	m.clientSessions = nil
 	m.mu.Unlock()
 	if reg != nil {
 		// Non-owning: shares repoReg's handle, so this is a no-op.
@@ -670,6 +693,19 @@ func (m *Manager) Start() error {
 	m.mu.Lock()
 	m.origins = origins
 	m.mu.Unlock()
+
+	// Client-session registry: fourth tenant of control.db, borrowing the same
+	// handle. A malformed [session] client_* block surfaces at boot, like the
+	// reaper's.
+	policy, err := sessions.ParsePolicy(m.deps.Cfg.Session.ClientDeadAfter,
+		m.deps.Cfg.Session.ClientHiddenAfter, m.deps.Cfg.Session.ClientRetention)
+	if err != nil {
+		return fmt.Errorf("client session policy: %w", err)
+	}
+	if policy.Retention == 0 {
+		log.Warn().Msg("client sessions: retention is 0 — rows are never purged; control.db grows one row per client session")
+	}
+	m.SetClientSessions(sessions.New(repoReg.DB(), policy))
 
 	records, err := repoReg.List(StateActive)
 	if err != nil {

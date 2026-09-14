@@ -110,6 +110,10 @@ func (b URLBuilder) OriginSession(repo, sessionID string) string {
 	return b.OriginSessions(repo) + "/" + sessionID
 }
 
+// Sessions returns the client-session collection URL. Global, not repo- or
+// lens-scoped: sessions cut across both.
+func (b URLBuilder) Sessions() string { return b.Base + "/sessions" }
+
 // Archived returns the URL of the archived-repos collection.
 func (b URLBuilder) Archived() string { return b.Base + "/archived" }
 

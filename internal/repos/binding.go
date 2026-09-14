@@ -250,6 +250,29 @@ func BindingFromContext(ctx context.Context) *Binding {
 	return NewBindingOfRepo(ri, branch)
 }
 
+// BindingPinFromContext resolves the request's binding to a PinID
+// ("repo:<uid>" or "lens:<uid>"), or "" when the context carries neither a
+// Binding nor a RepoInstance.
+//
+// It exists because the two MCP mounts populate the context DIFFERENTLY and
+// neither plain accessor is safe on both: the lens mount sets an explicit
+// Binding (WithBinding, in LensMiddleware) while the repo mount sets only a
+// RepoInstance and a branch. So BindingFromContextOpt returns false on every
+// repo-scoped request — the common path — and BindingFromContext, which
+// synthesizes the lens-of-one from the RepoInstance, PANICS when the context
+// has neither. Every caller that wants a pin from an arbitrary request needs
+// this exact guarded order, so it lives here rather than being re-derived at
+// each call site.
+func BindingPinFromContext(ctx context.Context) string {
+	if b, ok := BindingFromContextOpt(ctx); ok {
+		return b.PinID()
+	}
+	if _, ok := RepoFromContextOpt(ctx); ok {
+		return BindingFromContext(ctx).PinID()
+	}
+	return ""
+}
+
 // repoLabel resolves a registry uid to the repo NAME for an error message,
 // falling back to the uid when nothing knows it. A member that has no live
 // instance still has a registry row, so the name is almost always available —

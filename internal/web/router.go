@@ -84,11 +84,24 @@ func (s *Server) NewAPIRouter() chi.Router {
 			Str("response_content_type", mw.Header().Get("Content-Type")).
 			Dur("elapsed", time.Since(start)).
 			Msg("mcp: request done")
+		// AFTER the response: recording is never in the request's critical
+		// path, and never a reason for it to fail.
+		//
+		// ALLOWLIST, not "anything but 404". mcp-go rejects a bad
+		// Content-Type or an unparseable body with 400 BEFORE it resolves the
+		// session id at all, so a deny-list would let any caller mint a row
+		// per request under an id of their choosing. 200 (call or DELETE) and
+		// 202 (notification) are the only statuses reached past session
+		// resolution.
+		if mw.status == http.StatusOK || mw.status == http.StatusAccepted {
+			recordClientSession(req, s.ClientSessions)
+		}
 	})
 
 	r.Get("/", handleAPIRoot(b))
 	r.Get("/version", handleVersion(b, s.ReadOnly))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
+	r.Get("/sessions", handleHALClientSessions(b, s.Manager, s.ClientSessions, s.ReadOnly))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))

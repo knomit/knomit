@@ -180,6 +180,14 @@ type SessionConfig struct {
 	ToolIdleTTL     string `toml:"tool_idle_ttl"`
 	PipelineIdleTTL string `toml:"pipeline_idle_ttl"`
 	SweepInterval   string `toml:"sweep_interval"`
+	// Client-session presence thresholds (client_sessions in control.db).
+	// Silent longer than ClientDeadAfter ⇒ shown as dead; longer than
+	// ClientHiddenAfter ⇒ excluded from the presence view; rows whose
+	// last_seen_at is older than ClientRetention are purged by the reaper.
+	// "0" retention disables purging (warned once at boot).
+	ClientDeadAfter   string `toml:"client_dead_after"`
+	ClientHiddenAfter string `toml:"client_hidden_after"`
+	ClientRetention   string `toml:"client_retention"`
 }
 
 // Config is the root configuration, composed of section structs.
@@ -234,9 +242,12 @@ func Defaults() Config {
 			MinCommunitySize: 2,
 		},
 		Session: SessionConfig{
-			ToolIdleTTL:     "15m",
-			PipelineIdleTTL: "60m",
-			SweepInterval:   "5m",
+			ToolIdleTTL:       "15m",
+			PipelineIdleTTL:   "60m",
+			SweepInterval:     "5m",
+			ClientDeadAfter:   "1h",
+			ClientHiddenAfter: "3h",
+			ClientRetention:   "168h",
 		},
 		Discovery: DiscoveryConfig{
 			EffortDefault:        "normal",
@@ -318,6 +329,9 @@ func Load() (Config, error) {
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
 	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
+	envOr("KNOMIT_SESSION_CLIENT_DEAD_AFTER", &cfg.Session.ClientDeadAfter)
+	envOr("KNOMIT_SESSION_CLIENT_HIDDEN_AFTER", &cfg.Session.ClientHiddenAfter)
+	envOr("KNOMIT_SESSION_CLIENT_RETENTION", &cfg.Session.ClientRetention)
 	envOr("KNOMIT_DISCOVERY_EFFORT_DEFAULT", &cfg.Discovery.EffortDefault)
 	envOr("KNOMIT_DISCOVERY_BRIDGE", &cfg.Discovery.Bridge)
 	envOr("KNOMIT_LOG_FORMAT", &cfg.Log.Format)

@@ -19,6 +19,7 @@ vi.mock('./api', async importOriginal => ({
   // bare vi.fn() fails inside a click handler rather than at an assertion.
   deleteSession: vi.fn().mockResolvedValue(undefined),
   api: {
+    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
@@ -1527,5 +1528,85 @@ describe('RepoManager — a subscription', () => {
     await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
     expect(row.textContent).toContain('main');
     expect(row.textContent).toContain('read-only');
+  });
+});
+
+// The tab strip is the second navigation axis: server-wide PAGES across the
+// top, the things you OWN down the rail. The two must never look like
+// siblings, which is the whole reason the split exists.
+describe('Manage tabs', () => {
+  const baseProps = {
+    open: true as const,
+    repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
+    currentRepo: 'core',
+    readOnly: false,
+    hideRemoteConfig: false,
+    onChanged: () => {},
+    onBrowse: () => {},
+  };
+  const ACTIVE = 'rgb(34, 48, 58)'; // #22303a, the same lit background the rail uses
+  const sess = (state: 'live' | 'idle' | 'dead') => ({
+    id: `s-${state}-${Math.random()}`, instance_id: 'i', state, transport: 'stdio' as const,
+    binding: { kind: 'repo', uid: 'uid-core', name: 'core' }, branch: 'agent/test',
+    client: { name: 'claude-code', version: '2', initialized: true },
+    bridge: { host: 'h', user: 'u', cwd: '/w', pid: 1, parent: 'claude', parent_pid: 2, version: '1' },
+    remote_addr: '127.0.0.1', user_agent: 'knomit-bridge/1',
+    first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:59:00Z',
+    ended_at: null, request_count: 3,
+  });
+  const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 };
+
+  it('badges the live count, and lights NEITHER tab once an entity is selected', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: POLICY,
+      sessions: [sess('live'), sess('live'), sess('dead'), sess('idle')],
+    });
+    render(<RepoManager {...baseProps} />);
+
+    const overview = await screen.findByTestId('repomgr-overview');
+    const sessions = screen.getByTestId('repomgr-sessions');
+
+    // Manage lands on Overview, so its tab is the lit one.
+    expect(overview).toHaveStyle({ background: ACTIVE });
+    expect(sessions).not.toHaveStyle({ background: ACTIVE });
+    // Only the live ones count — idle and dead are not "connected right now".
+    expect(await screen.findByTestId('repomgr-sessions-badge')).toHaveTextContent('2');
+
+    // Switching to Sessions moves the highlight across the strip.
+    fireEvent.click(sessions);
+    expect(await screen.findByTestId('manage-sessions')).toBeInTheDocument();
+    expect(sessions).toHaveStyle({ background: ACTIVE });
+    expect(overview).not.toHaveStyle({ background: ACTIVE });
+
+    // Selecting a repo is the OTHER axis: the rail row lights, and both tabs
+    // go dim. A lit tab here would claim the pane is still showing a
+    // server-wide page.
+    fireEvent.click(screen.getByTestId('repomgr-item-core'));
+    await screen.findByTestId('block-agent-branch');
+    expect(overview).not.toHaveStyle({ background: ACTIVE });
+    expect(sessions).not.toHaveStyle({ background: ACTIVE });
+    expect(screen.getByTestId('repomgr-item-core')).toHaveStyle({ background: ACTIVE });
+  });
+
+  it('renders no badge at zero, and none when the count cannot be read', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('dead')] });
+    const { unmount } = render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions');
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalled());
+    expect(screen.queryByTestId('repomgr-sessions-badge')).not.toBeInTheDocument();
+    unmount();
+
+    vi.mocked(api.listClientSessions).mockRejectedValue(new Error('503'));
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions');
+    // A badge we cannot vouch for would read as "nobody is connected".
+    expect(screen.queryByTestId('repomgr-sessions-badge')).not.toBeInTheDocument();
+  });
+
+  it('has no tab strip at all with zero repositories', async () => {
+    render(<RepoManager {...baseProps} repos={[]} currentRepo="" />);
+    await waitFor(() => expect(screen.getByTestId('step-source')).toBeInTheDocument());
+    expect(screen.queryByTestId('repomgr-overview')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repomgr-sessions')).not.toBeInTheDocument();
   });
 });

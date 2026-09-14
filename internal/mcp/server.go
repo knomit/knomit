@@ -37,6 +37,7 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 		reqinfo.FromContext(ctx).SetTool(req.Params.Name)
 	})
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
+		recordClientInfo(ctx, mgr, req)
 		_, ok := repos.RepoFromContextOpt(ctx)
 		if !ok {
 			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil)
