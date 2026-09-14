@@ -30,8 +30,8 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # integer (~1.78e9, well under 2^32 until ~2106) that grows with every commit,
 # is deterministic per commit, and survives shallow CI clones (unlike a commit
 # count). Commit IDENTITY is NOT encoded here — it lives in GIT_COMMIT (the SHA
-# in internal/platform/version), while CFBundleShortVersionString carries the display
-# version, $(VERSION), which differs per RELEASE_CHANNEL below.
+# in internal/platform/version), while CFBundleShortVersionString carries
+# the display version, $(VERSION), which differs per RELEASE_CHANNEL below.
 # Falls back to 0 outside a git checkout.
 BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
 
