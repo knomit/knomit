@@ -330,6 +330,21 @@ func (mr *MockSearchIndexMockRecorder) RevisionsBefore(ctx, branch, path, anchor
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevisionsBefore", reflect.TypeOf((*MockSearchIndex)(nil).RevisionsBefore), ctx, branch, path, anchorCommit, limit)
 }
 
+// LiveFactCount mocks base method.
+func (m *MockSearchIndex) LiveFactCount(ctx context.Context, branch string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LiveFactCount", ctx, branch)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LiveFactCount indicates an expected call of LiveFactCount.
+func (mr *MockSearchIndexMockRecorder) LiveFactCount(ctx, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LiveFactCount", reflect.TypeOf((*MockSearchIndex)(nil).LiveFactCount), ctx, branch)
+}
+
 // Search mocks base method.
 func (m *MockSearchIndex) Search(ctx context.Context, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	m.ctrl.T.Helper()

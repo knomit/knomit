@@ -46,29 +46,35 @@ func hit(path, title string, cosine float64, entities ...string) store.SearchRes
 }
 
 // thresholdSets is every model whose band this stage must behave identically
-// under: the nomic-era fallback returned by EmbedderThresholds(nil), and the
-// model actually shipped. A test pinned only to params.Defaults() is testing a
-// model knomit does not run — which is how the original (SimilarTo, Dedup)
-// band looked sane while being unusable in production.
+// under: the nomic-era fallback and the model actually shipped. A test pinned
+// only to params.Defaults() is testing a model knomit does not run — which is
+// how the original (SimilarTo, Dedup) band looked sane while being unusable in
+// production.
 //
-// The shipped geometry comes from params.ForModel, NOT from
-// embeddings.Lookup: internal/mcp stays free of the cgo parent, and reading the
-// real calibrated values means a re-sweep reaches these tests instead of
-// leaving a retyped copy to rot.
+// Each entry carries the model ID as well as the geometry, because the gate now
+// reads its band from params.ForModel keyed by the embedder's id: a test
+// embedder reporting an unregistered id turns the gate OFF rather than running
+// it at some default.
 func thresholdSets(t *testing.T) []struct {
-	name string
-	th   params.Thresholds
+	name  string
+	model string
+	th    params.Thresholds
 } {
 	t.Helper()
-	shipped, ok := params.ForModel(params.DefaultModelID)
-	require.True(t, ok, "shipped model %q must carry calibrated thresholds", params.DefaultModelID)
-	return []struct {
-		name string
-		th   params.Thresholds
+	out := []struct {
+		name  string
+		model string
+		th    params.Thresholds
 	}{
-		{"nomic-fallback", params.Defaults()},
-		{params.DefaultModelID + "-shipped", shipped},
+		{"nomic-fallback", params.NomicModelID, params.Thresholds{}},
+		{params.DefaultModelID + "-shipped", params.DefaultModelID, params.Thresholds{}},
 	}
+	for i := range out {
+		th, ok := params.ForModel(out[i].model)
+		require.Truef(t, ok, "model %q must carry calibrated thresholds", out[i].model)
+		out[i].th = th
+	}
+	return out
 }
 
 // inBand returns a cosine strictly inside (ReflectNovelty, Dedup) for the given
@@ -194,23 +200,41 @@ func TestFindSameSubjectCandidates_SearchesWholeBranchAtTheBandFloor(t *testing.
 	}
 }
 
-// Both "no anchor available" branches fail OPEN. With embeddings disabled
-// EmbedderThresholds(nil) hands back the NOMIC band while no model is running,
-// so evaluating candidates at all would be judging against a model that is not
-// there. Nothing is refused today only because an empty vector map makes the
-// store return no rows before scoring — an accident, not a guard.
-func TestFindSameSubjectCandidates_NoEmbedderNeverRefuses(t *testing.T) {
+// A fact with no anchor-worthy entity is never refused, however similar the
+// text. This is the unit-level half of the fail-open rule; the gate-off exits
+// (no embedder, no calibrated band for the model) live in
+// checkSameSubjectCollisions and are pinned by the handler tests.
+func TestFindSameSubjectCandidates_AllGenericNeverRefuses(t *testing.T) {
+	th := params.Defaults()
 	q := &fakeSearcher{results: []store.SearchResult{
-		hit("kb/a.md", "A", inBand(params.Defaults()), "Ramp"),
+		hit("kb/a.md", "A", inBand(th), "MCP"),
 	}}
 	got, err := findSameSubjectCandidates(
 		context.Background(), q, "agent/test",
-		fact.Fact{Title: "T", Body: "B", Entities: []string{"Ramp"}},
-		nil, params.Thresholds{}, map[string]int{"Ramp": specificDF}, testDFCeiling, defaultPageSize)
+		fact.Fact{Title: "T", Body: "B", Entities: []string{"MCP"}},
+		nil, th, map[string]int{"MCP": genericDF}, testDFCeiling, defaultPageSize)
 
 	require.NoError(t, err)
-	require.Empty(t, got, "a zero threshold set means no calibrated band; refuse nothing")
-	require.Zero(t, q.calls, "must not even search when there is no band to judge against")
+	require.Empty(t, got, "an all-generic fact has no anchor; refuse nothing")
+	require.Zero(t, q.calls, "with no anchor there is nothing to search for")
+}
+
+// A hypothesis in band is left to subsumeHypothesis, which settles it in the
+// same commit as the observation. Refusing would block the write that resolves
+// it, and the advice would be unactionable: knomit_update cannot change type.
+func TestFindSameSubjectCandidates_HypothesisLeftToSubsume(t *testing.T) {
+	th := params.Defaults()
+	h := hit("kb/a.md", "A", inBand(th), "Ramp")
+	h.Type = string(fact.Hypothesis)
+	q := &fakeSearcher{results: []store.SearchResult{h}}
+
+	got, err := findSameSubjectCandidates(
+		context.Background(), q, "agent/test",
+		fact.Fact{Title: "T", Body: "B", Entities: []string{"Ramp"}},
+		nil, th, map[string]int{"Ramp": specificDF}, testDFCeiling, defaultPageSize)
+
+	require.NoError(t, err)
+	require.Empty(t, got, "the subsume path owns hypotheses")
 }
 
 // dfCeiling is shared with the motif df band rather than re-derived, so a

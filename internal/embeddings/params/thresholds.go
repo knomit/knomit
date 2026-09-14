@@ -39,9 +39,11 @@ type Thresholds struct {
 	RerankLow  float64
 }
 
-// nomicModelID is the historical default, kept here because Defaults() is its
+// NomicModelID is the historical default, kept here because Defaults() is its
 // alias: the fallback IS a model's calibration, not a separate set of numbers.
-const nomicModelID = "nomic-v1.5"
+// Exported so a caller naming the fallback names it rather than retyping the
+// string, the same way DefaultModelID names the shipped model.
+const NomicModelID = "nomic-v1.5"
 
 // modelThresholds is every shipped model's calibrated set, as pure data.
 //
@@ -59,7 +61,7 @@ var modelThresholds = map[string]Thresholds{
 	// The historical nomic-era values, and the fallback when no embedder is
 	// configured (embeddings disabled) — behaviour identical to before
 	// thresholds became model-dependent.
-	nomicModelID: {
+	NomicModelID: {
 		Dedup:          0.92,
 		ReflectNovelty: 0.85,
 		SimilarTo:      0.60,
@@ -114,4 +116,4 @@ func ForModel(id string) (Thresholds, bool) {
 // Defaults returns the historical nomic-era values. They are the fallback when
 // no embedder is configured (embeddings disabled), keeping behaviour identical
 // to before thresholds became model-dependent.
-func Defaults() Thresholds { return modelThresholds[nomicModelID] }
+func Defaults() Thresholds { return modelThresholds[NomicModelID] }

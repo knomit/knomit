@@ -41,20 +41,20 @@ func TestForModelReportsAbsenceRatherThanDefaulting(t *testing.T) {
 // must be a map-key probe, exactly as requireResponseKey probes for key presence
 // rather than for a non-empty value.
 func TestForModelNomicIsPresentNotInferred(t *testing.T) {
-	th, ok := ForModel(nomicModelID)
+	th, ok := ForModel(NomicModelID)
 	if !ok {
-		t.Fatalf("ForModel(%q) not found; a model whose thresholds equal Defaults() is still a registered model", nomicModelID)
+		t.Fatalf("ForModel(%q) not found; a model whose thresholds equal Defaults() is still a registered model", NomicModelID)
 	}
 	if th != Defaults() {
-		t.Errorf("ForModel(%q) = %+v, want Defaults()", nomicModelID, th)
+		t.Errorf("ForModel(%q) = %+v, want Defaults()", NomicModelID, th)
 	}
 }
 
 // Defaults() must stay the nomic alias rather than a second copy of the same
 // numbers, so there is one place a re-sweep of nomic has to land.
 func TestDefaultsIsTheNomicEntry(t *testing.T) {
-	th, ok := ForModel(nomicModelID)
+	th, ok := ForModel(NomicModelID)
 	if !ok || th != Defaults() {
-		t.Errorf("Defaults() must be the %q entry, not an independent literal", nomicModelID)
+		t.Errorf("Defaults() must be the %q entry, not an independent literal", NomicModelID)
 	}
 }

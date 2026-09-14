@@ -99,15 +99,15 @@ func learnToolSchemaProperties() map[string]any {
 		// factschema.go so this schema, knomit_update's, and the
 		// server instructions cannot disagree. knomit_learn mints
 		// facts, so it declares the defaults it will assume.
-		"kind":       kindProperty(fact.DefaultKind),
-		"type":       typeProperty(fact.DefaultEpistemicType),
-		"origin":     originProperty(),
-		"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
-		"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
-		"sources":    map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
-		"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
+		"kind":          kindProperty(fact.DefaultKind),
+		"type":          typeProperty(fact.DefaultEpistemicType),
+		"origin":        originProperty(),
+		"domain":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
+		"confidence":    map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
+		"sources":       map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
+		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
 		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. Needed only after a call was refused: the refusal lists the candidates it found, and naming them here asserts the distinction and retries. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
-		"motifs":     motifsProperty(),
+		"motifs":        motifsProperty(),
 		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
 			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
 			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
@@ -146,8 +146,8 @@ type learnFactInput struct {
 	// inert, and an entry naming a path that does not exist is an error rather
 	// than a silently accepted bypass.
 	DistinctFrom []string `json:"distinct_from"`
-	Refs       []string `json:"refs"`
-	Origin     string   `json:"origin"`
+	Refs         []string `json:"refs"`
+	Origin       string   `json:"origin"`
 }
 
 // reserialize re-renders f and overwrites the entry at path in the
@@ -836,7 +836,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, agentBranch, factInputs, facts, topicCategories, touched, dedupVecs, store.EmbedderThresholds(batchEmb), embedderID(batchEmb)); err != nil {
+		if err := checkSameSubjectCollisions(ctx, s, agentBranch, factInputs, facts, topicCategories, touched, dedupVecs, batchEmb); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 

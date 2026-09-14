@@ -36,7 +36,7 @@ const (
 // pins params.Defaults() unconditionally, which would silently run every band
 // case at the NOMIC geometry — the exact blind spot that let the original
 // (SimilarTo, Dedup) band look correct.
-func newAngleEmbedder(t *testing.T, th params.Thresholds, angleByMarker map[string]float64) *MockBatchEmbedder {
+func newAngleEmbedder(t *testing.T, modelID string, th params.Thresholds, angleByMarker map[string]float64) *MockBatchEmbedder {
 	t.Helper()
 	emb := NewMockBatchEmbedder(gomock.NewController(t))
 
@@ -69,7 +69,9 @@ func newAngleEmbedder(t *testing.T, th params.Thresholds, angleByMarker map[stri
 			return out, nil
 		}).AnyTimes()
 	emb.EXPECT().Dim().Return(768).AnyTimes()
-	emb.EXPECT().ID().Return("angle-stub").AnyTimes()
+	// The gate reads its band from params.ForModel keyed by THIS id, so a stub
+	// id would turn the gate off rather than exercising it.
+	emb.EXPECT().ID().Return(modelID).AnyTimes()
 	emb.EXPECT().Thresholds().Return(th).AnyTimes()
 	return emb
 }
@@ -92,9 +94,9 @@ func angleFor(cosine float64) float64 { return math.Acos(cosine) }
 
 // newSameSubjectRepo wires a repo whose embedder reports th and places the seed
 // at cosine 1.0 with itself and `probeCosine` with the probe fact.
-func newSameSubjectRepo(t *testing.T, th params.Thresholds, probeCosine float64) (*store.Service, context.Context, store.BatchEmbedder) {
+func newSameSubjectRepo(t *testing.T, modelID string, th params.Thresholds, probeCosine float64) (*store.Service, context.Context, store.BatchEmbedder) {
 	t.Helper()
-	emb := newAngleEmbedder(t, th, map[string]float64{
+	emb := newAngleEmbedder(t, modelID, th, map[string]float64{
 		seedMarker:  0,
 		probeMarker: angleFor(probeCosine),
 	})
@@ -173,8 +175,9 @@ func liveFactCount(t *testing.T, svc *store.Service) int {
 // handlerThresholdSets mirrors thresholdSets but is used where the embedder
 // itself must report the geometry.
 func handlerThresholdSets(t *testing.T) []struct {
-	name string
-	th   params.Thresholds
+	name  string
+	model string
+	th    params.Thresholds
 } {
 	return thresholdSets(t)
 }
@@ -185,7 +188,7 @@ func handlerThresholdSets(t *testing.T) []struct {
 func TestLearnHandler_RefusesSameSubjectCollision(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
-			svc, ctx, emb := newSameSubjectRepo(t, ts.th, inBand(ts.th))
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
 			seeded := seedRampFact(t, ctx, emb)
 			before := liveFactCount(t, svc)
 
@@ -214,7 +217,7 @@ func TestLearnHandler_RefusesSameSubjectCollision(t *testing.T) {
 func TestLearnHandler_DistinctFromBypassesRefusal(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
-			svc, ctx, emb := newSameSubjectRepo(t, ts.th, inBand(ts.th))
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
 			seeded := seedRampFact(t, ctx, emb)
 			before := liveFactCount(t, svc)
 
@@ -236,7 +239,7 @@ func TestLearnHandler_DistinctFromBypassesRefusal(t *testing.T) {
 // a silently accepted bypass.
 func TestLearnHandler_DistinctFromUnknownPathRejected(t *testing.T) {
 	th := params.Defaults()
-	svc, ctx, emb := newSameSubjectRepo(t, th, inBand(th))
+	svc, ctx, emb := newSameSubjectRepo(t, params.NomicModelID, th, inBand(th))
 	seedRampFact(t, ctx, emb)
 	before := liveFactCount(t, svc)
 
@@ -260,7 +263,7 @@ func TestLearnHandler_AutoMergeStillWinsAboveDedup(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
 			justAbove := ts.th.Dedup + (1-ts.th.Dedup)*0.25
-			svc, ctx, emb := newSameSubjectRepo(t, ts.th, justAbove)
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, justAbove)
 			seedRampFact(t, ctx, emb)
 			before := liveFactCount(t, svc)
 
@@ -282,7 +285,7 @@ func TestLearnHandler_AutoMergeStillWinsAboveDedup(t *testing.T) {
 func TestLearnHandler_NoEntitiesNeverRefused(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
-			svc, ctx, emb := newSameSubjectRepo(t, ts.th, inBand(ts.th))
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
 			seedRampFact(t, ctx, emb)
 			before := liveFactCount(t, svc)
 
@@ -368,7 +371,7 @@ func sameSubjectFact(topic, category, title, body string, entities []any) map[st
 func TestLearnHandler_RefusalIsWholeCallNotPerFact(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
-			svc, ctx, emb := newSameSubjectRepo(t, ts.th, inBand(ts.th))
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
 			seeded := seedRampFact(t, ctx, emb)
 			before := liveFactCount(t, svc)
 
@@ -401,7 +404,7 @@ func TestLearnHandler_RefusalIsWholeCallNotPerFact(t *testing.T) {
 // exactly, the caller would be refused again and told to do what they just did.
 func TestLearnHandler_DistinctFromIsCaseInsensitive(t *testing.T) {
 	th := params.Defaults()
-	svc, ctx, emb := newSameSubjectRepo(t, th, inBand(th))
+	svc, ctx, emb := newSameSubjectRepo(t, params.NomicModelID, th, inBand(th))
 	seeded := seedRampFact(t, ctx, emb)
 	before := liveFactCount(t, svc)
 
@@ -418,4 +421,85 @@ func TestLearnHandler_DistinctFromIsCaseInsensitive(t *testing.T) {
 	require.False(t, r.IsError,
 		"a distinct_from path that PASSES validation must also satisfy the bypass: %s", resultText(t, r))
 	require.Equal(t, before+1, liveFactCount(t, svc))
+}
+
+// B1's gate-off exit, the one that replaces the old score accident: an
+// embedder whose model has no entry in params has no calibrated band, so the
+// gate turns OFF rather than judging against some other model's geometry.
+// Deleting the `!ok` exit in checkSameSubjectCollisions makes this go red.
+func TestLearnHandler_UnknownModelTurnsTheGateOff(t *testing.T) {
+	th := params.Defaults()
+	// A registered-looking embedder reporting an id params does not know.
+	emb := newAngleEmbedder(t, "no-such-model-v9", th, map[string]float64{
+		seedMarker: 0, probeMarker: angleFor(inBand(th)),
+	})
+	svc, ctx, _ := newRepoWithEmbedder(t, emb)
+	seedRampFact(t, ctx, emb)
+	before := liveFactCount(t, svc)
+
+	r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
+		"unknown-model", "gotchas", "tools/ai/spend",
+		"Enterprise AI spend is plateauing",
+		"A "+probeMarker+" note on Ramp's numbers for paid AI seats.",
+		[]any{"Ramp"}, nil))
+	require.NoError(t, err)
+
+	require.False(t, r.IsError,
+		"no calibrated band for this model means no gate, not a refusal: %s", resultText(t, r))
+	require.Equal(t, before+1, liveFactCount(t, svc))
+}
+
+// B2 limb (a), ALONE: refs cite the candidate and Origin is EMPTY. This is the
+// limb that actually carries pipeline output, because learn leaves Origin "" on
+// the struct unless the caller passed it. A test that set both origin and refs
+// would pass with this limb broken.
+func TestLearnHandler_RefsCitedCandidateSkippedWithEmptyOrigin(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
+			seeded := seedRampFact(t, ctx, emb)
+			before := liveFactCount(t, svc)
+
+			f := sameSubjectFact("gotchas", "tools/ai/spend",
+				"Enterprise AI spend is plateauing",
+				"A "+probeMarker+" note on Ramp's numbers for paid AI seats.",
+				[]any{"Ramp"})
+			f["refs"] = []any{seeded} // declared lineage
+			// origin deliberately unset: this must pass on refs alone.
+
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("cited", f))
+			require.NoError(t, err)
+			require.False(t, r.IsError,
+				"a candidate the fact already cites is declared lineage, not a collision: %s", resultText(t, r))
+			require.Equal(t, before+1, liveFactCount(t, svc))
+		})
+	}
+}
+
+// B2 limb (b), ALONE: origin is pipeline output and refs do NOT cite the
+// candidate. Proves the origin limb works without the refs limb covering for it.
+func TestLearnHandler_PipelineOriginExemptWithoutRefs(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, inBand(ts.th))
+			seedRampFact(t, ctx, emb)
+			before := liveFactCount(t, svc)
+
+			f := sameSubjectFact("gotchas", "tools/ai/spend",
+				"Enterprise AI spend is plateauing",
+				"A "+probeMarker+" note on Ramp's numbers for paid AI seats.",
+				[]any{"Ramp"})
+			// origin distilled is only valid on a synthesis fact; the
+			// serializer enforces the pairing.
+			f["origin"] = string(fact.Distilled)
+			f["type"] = "synthesis"
+			f["refs"] = []any{} // no lineage cited: the origin limb must carry it
+
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("pipeline", f))
+			require.NoError(t, err)
+			require.False(t, r.IsError,
+				"pipeline output is exempt; it collides with its sources by construction: %s", resultText(t, r))
+			require.Equal(t, before+1, liveFactCount(t, svc))
+		})
+	}
 }
