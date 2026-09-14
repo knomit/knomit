@@ -46,7 +46,12 @@ func distillDeclineHealthLine(counts map[string]int, total int) string {
 }
 
 // distillDeclineHealth reads the session's answered distill responses and
-// renders the decline line, or "" when the session had no distill items.
+// renders the decline line.
+//
+// It returns "" for EXACTLY ONE reason: the session had no distill items. A
+// session that declined nothing says "none of N", and a failed read says
+// "unavailable" — so an absent line carries one meaning rather than three, and
+// the prune-only case is what pins it.
 //
 // It recomputes from the DURABLE record rather than from a running tally,
 // because there is nowhere to keep one: sess.Health is in-memory and rides the
@@ -67,9 +72,13 @@ func distillDeclineHealthLine(counts map[string]int, total int) string {
 func distillDeclineHealth(ctx context.Context, d Deps, sessionID string) string {
 	responses, err := d.Pipeline.AnsweredDistillResponses(ctx, sessionID)
 	if err != nil {
+		// SAY the tally is unavailable rather than going quiet. A failed read
+		// used to look exactly like a clean session, which is the one confusion
+		// this line exists to prevent. Still fail-soft: the session's mutations
+		// are committed and a summary must not error over a descriptor.
 		log.Warn().Err(err).Str("session", sessionID).
-			Msg("distill declines: could not read answered items; omitting the health line")
-		return ""
+			Msg("distill declines: could not read answered items; reporting unavailable")
+		return "distill declines: unavailable (store read failed)"
 	}
 	if len(responses) == 0 {
 		return ""

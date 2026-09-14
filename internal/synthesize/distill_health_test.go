@@ -2,10 +2,13 @@ package synthesize
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"knomit/internal/store"
 )
 
 // Zero declines is a RENDERING path, not an early return, so it needs its own
@@ -96,4 +99,33 @@ func TestDistillDeclines_NoLineWhenNoDistillItems(t *testing.T) {
 	require.True(t, res.Done)
 	require.NotContains(t, strings.Join(res.Health, "\n"), "distill declines",
 		"a prune-only session must not report a distill line; the line is about distill work that happened")
+}
+
+// failingPipelineIndex faults only AnsweredDistillResponses. The rest of the
+// interface is embedded and never called; a nil-method panic would be a louder
+// failure than a wrong assertion, which is the behaviour we want from a stub.
+type failingPipelineIndex struct {
+	store.PipelineIndex
+}
+
+func (failingPipelineIndex) AnsweredDistillResponses(context.Context, string) ([]string, error) {
+	return nil, errors.New("session db unavailable")
+}
+
+// A failed read must SAY so. It used to return "" and look exactly like a clean
+// session — one signal for two opposite situations, and the silent one was the
+// failure. It stays fail-soft: the function returns no error at all, so a
+// completion cannot fail over a descriptor whose mutations are already
+// committed.
+//
+// This exercises distillDeclineHealth directly rather than through
+// ContinueSession, because the engine reaches its indices through a concrete
+// *store.Service and there is no seam to fault the real store mid-session —
+// the same limitation pipeline.go records for the answer-write path.
+func TestDistillDeclineHealth_StoreErrorSaysUnavailable(t *testing.T) {
+	line := distillDeclineHealth(context.Background(),
+		Deps{Pipeline: failingPipelineIndex{}}, "any-session")
+
+	require.Equal(t, "distill declines: unavailable (store read failed)", line,
+		"a failed read must be distinguishable from a session that declined nothing")
 }
