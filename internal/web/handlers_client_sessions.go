@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"knomit/internal/client/sessions"
@@ -92,9 +93,15 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to list client sessions", err.Error(), r.URL.Path)
 			return
 		}
+		// ONE name index for the whole response — three queries, fixed —
+		// rather than a lookup per row. control.db runs at
+		// SetMaxOpenConns(1) and the UI polls this endpoint every 30s with
+		// potentially hundreds of rows, so a per-row lookup would serialise
+		// the entire page behind a single connection.
+		names := newBindingNames(m)
 		items := make([]clientSessionView, 0, len(rows))
 		for _, s := range rows {
-			kind, uid, name := m.ResolveBindingName(s.Binding)
+			kind, uid, name := names.lookup(s.Binding)
 			var namePtr *string
 			if name != "" {
 				n := name
@@ -150,4 +157,64 @@ func redactForDemo(v *clientSessionView) {
 	v.Branch = ""
 	v.RemoteAddr = ""
 	v.UserAgent = ""
+}
+
+// bindingNames maps a binding uid to its current display name, for both
+// kinds, built once per response by newBindingNames.
+type bindingNames struct {
+	repos  map[string]string
+	lenses map[string]string
+}
+
+// newBindingNames snapshots every name a binding could resolve to. Repos come
+// from the live instances first and the registry second, so a repo that is
+// registered but not open — archived, or failed to open — still resolves;
+// lenses come from the lens registry. A uid missing from both is not an
+// error: the row outlives its repo or lens by design, and is rendered with
+// its uid and a null name.
+func newBindingNames(m *repos.Manager) bindingNames {
+	idx := bindingNames{repos: map[string]string{}, lenses: map[string]string{}}
+	if m == nil {
+		return idx
+	}
+	m.ForEach(func(name string, ri *repos.RepoInstance) {
+		if ri != nil && ri.UID() != "" {
+			idx.repos[ri.UID()] = name
+		}
+	})
+	if reg := m.Repos(); reg != nil {
+		for _, state := range []repos.RepoState{repos.StateActive, repos.StateArchived} {
+			recs, err := reg.List(state)
+			if err != nil {
+				continue // a name we cannot read renders as a uid, not as a failure
+			}
+			for _, rec := range recs {
+				if _, ok := idx.repos[rec.UID]; !ok {
+					idx.repos[rec.UID] = rec.Name
+				}
+			}
+		}
+	}
+	if lr := m.LensRegistry(); lr != nil {
+		if ls, err := lr.List(); err == nil {
+			for _, l := range ls {
+				idx.lenses[l.UID] = l.Name
+			}
+		}
+	}
+	return idx
+}
+
+// lookup splits a PinID ("repo:<uid>" | "lens:<uid>") and resolves the name.
+// kind is "" for a value that is not a PinID.
+func (b bindingNames) lookup(pin string) (kind, uid, name string) {
+	switch {
+	case strings.HasPrefix(pin, "repo:"):
+		uid = strings.TrimPrefix(pin, "repo:")
+		return "repo", uid, b.repos[uid]
+	case strings.HasPrefix(pin, "lens:"):
+		uid = strings.TrimPrefix(pin, "lens:")
+		return "lens", uid, b.lenses[uid]
+	}
+	return "", "", ""
 }

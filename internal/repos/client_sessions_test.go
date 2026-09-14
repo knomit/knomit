@@ -51,28 +51,3 @@ func TestManagerStart_RejectsMalformedClientThreshold(t *testing.T) {
 	m.deps.Cfg.Session.ClientDeadAfter = "nope"
 	require.Error(t, m.Start())
 }
-
-// ResolveBindingName turns a PinID into a display name, and keeps the uid
-// when the repo or lens no longer resolves.
-func TestManager_ResolveBindingName(t *testing.T) {
-	m := New(context.Background(), Deps{})
-	m.Set("alpha", NewTestInstanceWithDeps(TestInstanceConfig{Name: "alpha", UID: "u-alpha", AgentBranch: "agent/test"}))
-
-	kind, uid, name := m.ResolveBindingName("repo:u-alpha")
-	require.Equal(t, "repo", kind)
-	require.Equal(t, "u-alpha", uid)
-	require.Equal(t, "alpha", name)
-
-	kind, uid, name = m.ResolveBindingName("repo:nope")
-	require.Equal(t, "repo", kind)
-	require.Equal(t, "nope", uid)
-	require.Empty(t, name, "an unresolvable uid keeps the row, with no name")
-
-	kind, uid, name = m.ResolveBindingName("lens:l1")
-	require.Equal(t, "lens", kind)
-	require.Equal(t, "l1", uid)
-	require.Empty(t, name)
-
-	kind, _, _ = m.ResolveBindingName("garbage")
-	require.Empty(t, kind, "a value that is not a PinID has no kind")
-}

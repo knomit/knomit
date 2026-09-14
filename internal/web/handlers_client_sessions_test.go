@@ -3,12 +3,14 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"knomit/internal/client/sessions"
+	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
 
@@ -171,5 +173,54 @@ func TestHandleHALClientSessions_ReadOnlyRedactsOperatorDetail(t *testing.T) {
 	}
 	if ro["binding"].(map[string]any)["name"] != "alpha" || ro["request_count"].(float64) != 1 {
 		t.Errorf("binding/request_count must survive: %v", ro)
+	}
+}
+
+// The name lookup is built ONCE per response, not once per row: control.db
+// runs at SetMaxOpenConns(1) and the UI polls hundreds of rows every 30s, so
+// a per-row lookup would serialise the whole page behind one connection.
+// This pins the behaviour that index must preserve — every row resolved,
+// across both kinds and a uid that resolves to nothing.
+func TestHandleHALClientSessions_ResolvesEveryRow(t *testing.T) {
+	store := newClientSessionsStore(t)
+	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
+	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "beta", UID: "u-beta", AgentBranch: "agent/test"}))
+
+	now := time.Now()
+	ctx := context.Background()
+	seed := func(id, binding string) {
+		t.Helper()
+		if err := store.Touch(ctx, sessions.Observation{SessionID: id, Binding: binding, Now: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		seed(fmt.Sprintf("a%d", i), "repo:u-alpha")
+		seed(fmt.Sprintf("b%d", i), "repo:u-beta")
+		seed(fmt.Sprintf("g%d", i), "lens:gone")
+	}
+
+	s := &Server{Manager: m, ClientSessions: store}
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status=%d", rec.Code)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	items := body["_embedded"].(map[string]any)["sessions"].([]any)
+	if len(items) != 15 {
+		t.Fatalf("rows=%d", len(items))
+	}
+	want := map[string]any{"a": "alpha", "b": "beta", "g": nil}
+	for _, x := range items {
+		it := x.(map[string]any)
+		id := it["id"].(string)
+		b := it["binding"].(map[string]any)
+		if b["name"] != want[id[:1]] {
+			t.Errorf("%s: binding.name = %v, want %v", id, b["name"], want[id[:1]])
+		}
 	}
 }
