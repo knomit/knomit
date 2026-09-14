@@ -38,6 +38,32 @@ on a new port, restart the MCP client so the bridge re-resolves `server.json`.
 > app falls back to an ephemeral port when `:19278` is taken, which would leave
 > two servers running and `server.json` pointing at only one of them.
 
+## What the bridge tells the server
+
+Every outgoing request — not just the first — carries two identifying headers,
+so the server's Sessions page can say which clients are connected and a session
+that outlived a server restart is fully described on its next request:
+
+```
+User-Agent:      knomit-bridge/<version>
+X-Knomit-Client: id=<instance>;transport=stdio;pid=…;ppid=…;parent=…;host=…;user=…;cwd="…";branch=…;v=<version>
+```
+
+`id` is the first 16 hex of a SHA-256 over host, user, cwd, parent app name,
+pid and process start time. It is computed once at startup and never
+persisted: every bridge PROCESS is its own instance, so three windows on one
+project are three sessions. The value pairs are RFC 7239 `Forwarded` style —
+`key=value` separated by `;`, values quoted when they contain `;`, `=`, `"`
+or whitespace — and the server ignores keys it does not know.
+
+All of it is **self-declared and unverified**. It is there to correlate
+sessions, never to authenticate one.
+
+When stdin closes (the MCP client exited), the bridge sends one HTTP `DELETE`
+with its `Mcp-Session-Id` — the MCP session-termination request — with a 2s
+timeout, then exits. A server that is gone or has moved simply misses it, and
+the session goes dead by silence instead. There is no reconnect and no retry.
+
 ## Usage
 
 Without a command, `knomit-bridge` runs as the MCP stdio↔HTTP proxy:
