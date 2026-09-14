@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, createEvent } from '@testing-library/react';
 import { SegmentedChoice, type SegmentedOption } from './SegmentedChoice';
 
 // The control is a RADIOGROUP, and every test here pins a property that the
@@ -69,6 +69,29 @@ describe('SegmentedChoice', () => {
     const { onChange, b } = setup('b');
     b.focus();
     fireEvent.keyDown(b, { key: 'ArrowDown' });
+    expect(onChange).toHaveBeenCalledWith('a');
+  });
+
+  // preventDefault is a STATED behaviour — the component comment justifies it
+  // by the page scrolling underneath the wizard — and nothing pinned it: with
+  // the call deleted, every other test here still passed. Asserting the event
+  // itself is the only way to see it, since the consequence (no scroll) is not
+  // observable in jsdom.
+  it('consumes the arrow, so the page does not scroll underneath the wizard', () => {
+    const { a } = setup('a');
+    a.focus();
+    const ev = createEvent.keyDown(a, { key: 'ArrowRight' });
+    fireEvent(a, ev);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('jumps to the ends with Home and End', () => {
+    const { onChange, a } = setup('a');
+    a.focus();
+    fireEvent.keyDown(a, { key: 'End' });
+    expect(onChange).toHaveBeenCalledWith('b');
+    onChange.mockClear();
+    fireEvent.keyDown(screen.getByTestId('opt-b'), { key: 'Home' });
     expect(onChange).toHaveBeenCalledWith('a');
   });
 

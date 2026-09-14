@@ -18,9 +18,18 @@ import { segGroup, segment, segDot, segSub, type SegTone } from './manageStyles'
 // actually means.
 //
 // Arrow keys SELECT rather than merely moving focus. That is the native radio
-// behaviour a screen-reader user expects, and it is safe precisely because
-// this control is only ever used for a choice that is free to change: neither
-// wizard step commits anything until its own Next button.
+// behaviour a screen-reader user expects, and it means a single arrow keypress
+// fires onChange — including from a user who pressed it meaning to scroll,
+// since preventDefault below stops the scroll.
+//
+// So the condition this control depends on is that SELECTING IS CHEAP: every
+// onChange its call sites dispatch must be a pure field write that discards
+// nothing. Both are — SET_ACCESS sets a field, and CHOOSE_LOCAL/CHOOSE_REMOTE
+// now only set `choice` (CHOOSE_LOCAL used to null the probe as well, which
+// made one arrow keypress silently destroy an established remote). Do NOT
+// reuse this control for a lossy onChange: one that resets other state, fires
+// a request, or navigates. Such a choice wants focus-only arrows with an
+// explicit Space to commit, which is a different control.
 export type SegmentedOption<T extends string> = {
   value: T;
   tone: SegTone;
@@ -49,6 +58,13 @@ export function SegmentedChoice<T extends string>({ label, value, onChange, opti
   // control at all.
   const tabbable = selected < 0 ? 0 : selected;
 
+  // Moves relative to `tabbable` — the CHECKED option — not to whichever
+  // option happens to have focus. The two are the same thing here because
+  // focus follows selection below and every call site accepts the change, so
+  // the checked option is always the focused one. That assumption breaks if a
+  // parent ever refuses an onChange (focus would then sit on an unchecked
+  // option and the next arrow would move from the wrong place), and it is
+  // worth re-reading if this control ever carries more than two options.
   const moveTo = (i: number) => {
     const next = (i + options.length) % options.length;
     onChange(options[next].value);

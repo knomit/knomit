@@ -156,8 +156,22 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
     // footer's Next moves on. CHOOSE_LOCAL used to jump to stepIndex 1 because
     // the name lived on its own step; folding that step into the source step is
     // what this control replaces.
+    //
+    // Neither choice DISCARDS, either, and that is deliberate. CHOOSE_LOCAL
+    // used to null the probe and spread uncheckedBranch. What invalidates a
+    // probe is a change to the question it answered — the URL, the branch, or
+    // the credential — and SET_URL, SET_BRANCH and SET_AUTH_* each reset it for
+    // exactly that reason. Picking "keep it on this machine" changes none of
+    // the three, so the answer it discards is still true. Nothing reads the
+    // retained values while 'local' is chosen: stepsFor returns the local list
+    // on `choice` before it looks at `probe` at all, and establishedAnswer
+    // trusts `initialized` only while initializedKey still matches branchKey.
+    //
+    // It became worth fixing when the control grew arrow keys: one ArrowDown on
+    // the source step would silently throw away an established probe, and
+    // ArrowUp brought the appearance back without the establishment.
     case 'CHOOSE_REMOTE': return { ...s, choice: 'remote' };
-    case 'CHOOSE_LOCAL':  return { ...s, choice: 'local', probe: null, ...uncheckedBranch };
+    case 'CHOOSE_LOCAL':  return { ...s, choice: 'local' };
     // The branch goes with the remote. A branch chosen on the PREVIOUS remote
     // decides which ref the next check inspects and which the create clones, so
     // carrying it across a change of URL creates against something nobody
