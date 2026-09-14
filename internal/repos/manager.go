@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/client/sessions"
 	"knomit/internal/config"
 	"knomit/internal/store"
 )
@@ -69,6 +70,11 @@ type Manager struct {
 	// handle). Opened by Start, closed with reg — Origins has no Close of its
 	// own, it borrows reg's *sql.DB; nil before Start.
 	origins *Origins
+
+	// clientSessions records every MCP client session (fourth control.db
+	// tenant, borrowing reg's handle). Opened by Start, nil before; nil-safe
+	// callers skip recording.
+	clientSessions *sessions.Store
 
 	// byUID indexes the same instances as repos, keyed by registry uid. Lens
 	// membership resolves through it: lenses reference uids, not names, so a
@@ -459,6 +465,56 @@ func (m *Manager) Repos() *Registry {
 	return m.reg
 }
 
+// ClientSessions returns the client-session store, or nil before Start.
+func (m *Manager) ClientSessions() *sessions.Store {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.clientSessions
+}
+
+// SetClientSessions installs the store. Start calls it; tests call it to
+// inject a store without a control.db home.
+func (m *Manager) SetClientSessions(s *sessions.Store) {
+	m.mu.Lock()
+	m.clientSessions = s
+	m.mu.Unlock()
+}
+
+// ResolveBindingName splits a PinID ("repo:<uid>" | "lens:<uid>") and looks
+// up the current display name. name is "" when the uid no longer resolves
+// (archived or deleted) — the caller keeps the row and shows the uid. kind
+// is "" for a value that is not a PinID.
+func (m *Manager) ResolveBindingName(pin string) (kind, uid, name string) {
+	switch {
+	case strings.HasPrefix(pin, "repo:"):
+		uid = strings.TrimPrefix(pin, "repo:")
+		if ri := m.GetByUID(uid); ri != nil {
+			return "repo", uid, ri.Name()
+		}
+		// Archived or otherwise not-open: the registry row outlives the
+		// instance, so a name is still available for it.
+		if reg := m.Repos(); reg != nil {
+			if rec, ok, err := reg.Get(uid); err == nil && ok {
+				return "repo", uid, rec.Name
+			}
+		}
+		return "repo", uid, ""
+	case strings.HasPrefix(pin, "lens:"):
+		uid = strings.TrimPrefix(pin, "lens:")
+		if lr := m.LensRegistry(); lr != nil {
+			if ls, err := lr.List(); err == nil {
+				for _, l := range ls {
+					if l.UID == uid {
+						return "lens", uid, l.Name
+					}
+				}
+			}
+		}
+		return "lens", uid, ""
+	}
+	return "", "", ""
+}
+
 // Get returns the RepoInstance for name, or nil if not found.
 func (m *Manager) Get(name string) *RepoInstance {
 	m.mu.RLock()
@@ -547,6 +603,8 @@ func (m *Manager) Close() error {
 	repoReg := m.reg
 	m.reg = nil
 	m.origins = nil
+	// Borrows repoReg's handle; dropping the pointer is the whole teardown.
+	m.clientSessions = nil
 	m.mu.Unlock()
 	if reg != nil {
 		// Non-owning: shares repoReg's handle, so this is a no-op.
@@ -670,6 +728,19 @@ func (m *Manager) Start() error {
 	m.mu.Lock()
 	m.origins = origins
 	m.mu.Unlock()
+
+	// Client-session registry: fourth tenant of control.db, borrowing the same
+	// handle. A malformed [session] client_* block surfaces at boot, like the
+	// reaper's.
+	policy, err := sessions.ParsePolicy(m.deps.Cfg.Session.ClientDeadAfter,
+		m.deps.Cfg.Session.ClientHiddenAfter, m.deps.Cfg.Session.ClientRetention)
+	if err != nil {
+		return fmt.Errorf("client session policy: %w", err)
+	}
+	if policy.Retention == 0 {
+		log.Warn().Msg("client sessions: retention is 0 — rows are never purged; control.db grows one row per client session")
+	}
+	m.SetClientSessions(sessions.New(repoReg.DB(), policy))
 
 	records, err := repoReg.List(StateActive)
 	if err != nil {

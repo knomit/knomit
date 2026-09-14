@@ -131,4 +131,16 @@ func (m *Manager) tickSessionReaper(ctx context.Context, cfg sessionReaperConfig
 			log.Info().Str("repo", name).Int("reaped", n).Msg("session reaper: reaped idle sessions")
 		}
 	})
+
+	// The client-session registry rides the same tick rather than a loop of
+	// its own: it is one DELETE against control.db, bounded by
+	// session.client_retention (0 disables it inside Purge).
+	if cs := m.ClientSessions(); cs != nil {
+		n, err := cs.Purge(ctx, time.Now())
+		if err != nil {
+			log.Debug().Err(err).Msg("session reaper: client session purge failed")
+		} else if n > 0 {
+			log.Info().Int64("purged", n).Msg("session reaper: purged client sessions past retention")
+		}
+	}
 }
