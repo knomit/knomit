@@ -37,6 +37,17 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
 
+	// Bound the fetch. Open leaves netTimeout at 0, which netCtxWith reads as
+	// "no deadline", so the bogus-URL fetch below took however long the host's
+	// resolver needed to give up — 0.3s on a dev box, but over the 5s resume
+	// budget on a CI runner whose resolver does not fail .invalid fast. The
+	// timeout makes the second phase's wait a bound rather than a hope. It
+	// cannot weaken the first phase: netCtxWith runs INSIDE the closure, after
+	// the RLock, so no deadline is ticking while Sync is parked. Worst case
+	// fetchOrigin spends two of these (strict refspec, then the upstream-only
+	// fallback), still an order of magnitude inside the budget.
+	svc.SetNetworkTimeout(250 * time.Millisecond)
+
 	// A configured remote — the bogus URL is fine: the fetch fails, but only
 	// AFTER acquiring the read lock, which is the behaviour under test.
 	svc.SetOrigin(&Origin{URL: "https://example.invalid/repo.git", Branch: "main"})
