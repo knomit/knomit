@@ -27,7 +27,12 @@ function relativeTime(iso: string, now: Date): string {
 
 const STATE_COLOR: Record<ClientSession['state'], string> = { live: '#4ade80', idle: '#facc15', dead: '#555' };
 
-export function ManageSessions({ binding }: { binding?: string }) {
+export function ManageSessions({ binding, onLiveCount }: {
+  binding?: string;
+  /** Reports the live count after every poll, so the Manage tab badge can
+   *  ride this page's refresh instead of running a second loop. */
+  onLiveCount?: (n: number | null) => void;
+}) {
   const [rows, setRows] = useState<ClientSession[]>([]);
   const [policy, setPolicy] = useState<ClientSessionPolicy | null>(null);
   const [showHidden, setShowHidden] = useState(false);
@@ -36,8 +41,11 @@ export function ManageSessions({ binding }: { binding?: string }) {
 
   const load = useCallback(() => {
     api.listClientSessions({ binding, includeHidden: showHidden })
-      .then(r => { setRows(r.sessions); setPolicy(r.policy); setError(null); })
-      .catch(e => setError(String(e)))
+      .then(r => {
+        setRows(r.sessions); setPolicy(r.policy); setError(null);
+        onLiveCount?.(r.sessions.filter(s => s.state === 'live').length);
+      })
+      .catch(e => { setError(String(e)); onLiveCount?.(null); })
       // finally, so the clock advances on EVERY attempt, success or failure.
       // The rows on screen are the last good data either way, so their ages
       // must keep moving while the error banner is up — a frozen "2 min ago"
@@ -45,7 +53,7 @@ export function ManageSessions({ binding }: { binding?: string }) {
       // this off the synchronous path: a setState in the effect body would
       // cascade a render on every mount.
       .finally(() => setNow(new Date()));
-  }, [binding, showHidden]);
+  }, [binding, showHidden, onLiveCount]);
 
   useEffect(() => {
     load();
