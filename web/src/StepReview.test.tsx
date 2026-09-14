@@ -102,6 +102,18 @@ describe('StepReview push-access notes', () => {
     expect(screen.queryByTestId('review-write-unknown')).not.toBeInTheDocument();
   });
 
+  // Pinned separately, because the test above cannot pin it: a 'denied' probe
+  // already makes !write_access false, so its unknown-note assertion would
+  // hold with the subscribe guard deleted. The state this one describes is
+  // reachable — initialized 'yes', a probe that never established push access,
+  // Subscribe chosen — and it is the same contradiction the denied case is:
+  // "push access was not established" sitting under a list item that says
+  // nothing is ever pushed.
+  it('says nothing about an unestablished push either, when subscribing', () => {
+    render(<StepReview state={{ ...remote('yes'), access: 'subscribe' }} dispatch={vi.fn()} />);
+    expect(screen.queryByTestId('review-write-unknown')).not.toBeInTheDocument();
+  });
+
   it('still warns about a refused push when joining an existing knowledge base', () => {
     render(<StepReview state={{ ...remote('yes', { write_access: 'denied' }), access: 'join' }} dispatch={vi.fn()} />);
     expect(screen.getByTestId('review-write-denied')).toBeInTheDocument();
