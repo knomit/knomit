@@ -91,3 +91,41 @@ func TestAfterInitialize_NilManagerAndNilStoreAreSafe(t *testing.T) {
 		srv.Close()
 	}
 }
+
+// The repo-scoped route puts no explicit Binding in the context, only a
+// RepoInstance — so a hook reading BindingFromContextOpt alone records an
+// empty binding for the single-repo path, which is the common one.
+func TestAfterInitialize_RecordsBindingOnTheRepoRoute(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "alpha", UID: "u-alpha", AgentBranch: "agent/test",
+	}))
+	store := newSessionsStore(t)
+	m.SetClientSessions(store)
+
+	srv := httptest.NewServer(repoScopedMCP(t, m, "alpha", "agent/test"))
+	defer srv.Close()
+
+	resp := postInitialize(t, srv.URL)
+	resp.Body.Close()
+
+	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Binding != "repo:u-alpha" {
+		t.Fatalf("binding not recorded on the repo route: %+v", rows)
+	}
+}
+
+// repoScopedMCP wraps the MCP handler the way the repo-scoped web route does:
+// a RepoInstance and a branch in the context, and NO explicit Binding.
+func repoScopedMCP(t *testing.T, m *repos.Manager, repo, branch string) http.Handler {
+	t.Helper()
+	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := repos.WithRepoInstance(r.Context(), m.Get(repo))
+		ctx = repos.WithBranch(ctx, branch)
+		h.ServeHTTP(w, r.WithContext(ctx))
+	})
+}

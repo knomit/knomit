@@ -41,7 +41,7 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	}
 	obs := sessions.Observation{
 		SessionID: sid,
-		Binding:   bindingPin(r),
+		Binding:   repos.BindingPinFromContext(r.Context()),
 		RemoteIP:  remoteIP(r.RemoteAddr),
 		UserAgent: r.Header.Get("User-Agent"),
 		Now:       now,
@@ -58,22 +58,6 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	if err := store.Touch(ctx, obs); err != nil {
 		log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: touch failed")
 	}
-}
-
-// bindingPin resolves the request's binding to a PinID ("repo:<uid>" or
-// "lens:<uid>"). The lens mount sets an explicit binding; the repo mount sets
-// only a RepoInstance, and BindingFromContext synthesizes the lens-of-one
-// from it — but it PANICS when neither is present, so the RepoInstance is
-// checked first rather than trusted. "" when the route carries neither.
-func bindingPin(r *http.Request) string {
-	ctx := r.Context()
-	if b, ok := repos.BindingFromContextOpt(ctx); ok {
-		return b.PinID()
-	}
-	if _, ok := repos.RepoFromContextOpt(ctx); ok {
-		return repos.BindingFromContext(ctx).PinID()
-	}
-	return ""
 }
 
 // remoteIP strips the port; a value with no port is returned as is. The port

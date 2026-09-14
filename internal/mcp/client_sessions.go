@@ -28,12 +28,11 @@ func recordClientInfo(ctx context.Context, mgr *repos.Manager, req *mcpgo.Initia
 	if sess == nil || sess.SessionID() == "" {
 		return
 	}
-	binding := ""
-	if b, ok := repos.BindingFromContextOpt(ctx); ok {
-		binding = b.PinID()
-	}
+	// The repo-scoped route carries only a RepoInstance, so the plain Opt
+	// accessor would record an empty binding for the single-repo path — the
+	// common one. Shared with the HTTP dispatch recorder.
 	ci := req.Params.ClientInfo
-	if err := store.SetClientInfo(ctx, sess.SessionID(), binding, ci.Name, ci.Version, time.Now()); err != nil {
+	if err := store.SetClientInfo(ctx, sess.SessionID(), repos.BindingPinFromContext(ctx), ci.Name, ci.Version, time.Now()); err != nil {
 		log.Warn().Err(err).Str("mcp_session", sess.SessionID()).Msg("client sessions: record client info failed")
 	}
 }
