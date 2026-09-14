@@ -16,7 +16,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/updater"
 	"github.com/wailsapp/wails/v3/pkg/updater/providers/appcast"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 	"knomit/tools/desktop/internal/paths"
 	"knomit/tools/desktop/internal/updatestate"
 )

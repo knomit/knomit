@@ -459,7 +459,7 @@ func funcsMentioningMotifs(t *testing.T, rel string) []string {
 func TestMN2_NoLLMInMotifCode(t *testing.T) {
 	sources := goSources(t)
 	for _, rel := range []string{
-		"internal/fact/motif.go", "internal/textnorm/textnorm.go",
+		"internal/fact/motif.go", "internal/fact/textnorm/textnorm.go",
 		// Phase 3's enumeration and its gate. The detector stays mechanical:
 		// the connected agent is the only reasoner in the read path, and it
 		// already exists (cf455b8f).

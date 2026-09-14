@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
-	"knomit/internal/memlimit"
+	"knomit/internal/platform/memlimit"
 )
 
 func newEmbeddingsCmd() *cobra.Command {

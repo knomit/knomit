@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/obs/metrics"
+	"knomit/internal/platform/metrics"
 )
 
 func TestExpvarMirrorsMetrics(t *testing.T) {

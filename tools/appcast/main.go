@@ -24,7 +24,7 @@ import (
 	"os"
 	"strings"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 const usage = `knomit appcast — sign release artifacts and build the update feed

@@ -3,9 +3,9 @@
 // Version, Commit and UpdatePublicKey are injected at build time via the Go
 // linker:
 //
-//	go build -ldflags "-X knomit/internal/version.Version=0.5.0 \
-//	                   -X knomit/internal/version.Commit=$(git rev-parse --short HEAD) \
-//	                   -X knomit/internal/version.UpdatePublicKey=$UPDATE_PUBLIC_KEY"
+//	go build -ldflags "-X knomit/internal/platform/version.Version=0.5.0 \
+//	                   -X knomit/internal/platform/version.Commit=$(git rev-parse --short HEAD) \
+//	                   -X knomit/internal/platform/version.UpdatePublicKey=$UPDATE_PUBLIC_KEY"
 //
 // The Makefile is the single source of truth for all three values. The defaults
 // below keep a bare `go build` (and tests, and the IDE) compiling and

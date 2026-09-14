@@ -12,9 +12,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/obs/crashdump"
-	"knomit/internal/obs/metrics"
-	"knomit/internal/obs/reqinfo"
+	"knomit/internal/platform/crashdump"
+	"knomit/internal/platform/metrics"
+	"knomit/internal/platform/reqinfo"
 )
 
 const (

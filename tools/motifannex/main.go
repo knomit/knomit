@@ -42,7 +42,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/fact"
-	"knomit/internal/memlimit"
+	"knomit/internal/platform/memlimit"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/synthesize"

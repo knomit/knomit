@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 // runVersion handles the `knomit-bridge version` subcommand. It reports

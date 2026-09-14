@@ -17,9 +17,9 @@ import (
 
 	"knomit/internal/app"
 	"knomit/internal/config"
-	"knomit/internal/obs/crashdump"
-	"knomit/internal/obs/logging"
-	"knomit/internal/obs/diag"
+	"knomit/internal/platform/crashdump"
+	"knomit/internal/platform/diag"
+	"knomit/internal/platform/logging"
 )
 
 func serveCmd() *cobra.Command {
