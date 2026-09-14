@@ -60,7 +60,10 @@ func (b BridgeInfo) Encode() string {
 		}
 		sb.WriteString(p.k)
 		sb.WriteByte('=')
-		sb.WriteString(quoteIfNeeded(p.v))
+		// Cap on the ENCODE side too, not only on parse: it is what strips
+		// control characters, and a single one would make net/http reject
+		// every request this bridge sends with "invalid header field value".
+		sb.WriteString(quoteIfNeeded(Cap(p.v)))
 	}
 	return sb.String()
 }
@@ -90,6 +93,13 @@ func ParseClientHeader(s string) (BridgeInfo, error) {
 	}
 	i := 0
 	for i < len(s) {
+		// Skip empty segments: a doubled or trailing ';' must not make the
+		// separator part of the next KEY, which would silently drop that
+		// field and every field after it.
+		if s[i] == ';' {
+			i++
+			continue
+		}
 		// key
 		eq := strings.IndexByte(s[i:], '=')
 		if eq < 0 {
@@ -184,9 +194,17 @@ func (b *BridgeInfo) set(key, val string) error {
 	return nil
 }
 
-// Cap truncates a client-supplied value to MaxFieldLen bytes, backing off a
-// partial rune, and marks the cut.
+// Cap sanitizes a client-supplied value: it strips control characters, then
+// truncates to MaxFieldLen bytes, backing off a partial rune and marking the
+// cut.
+//
+// Stripping is not cosmetic. These values ride in an HTTP header, and net/http
+// rejects a header value containing a control character — so a working
+// directory with a newline in it would fail EVERY request the bridge makes,
+// not merely spoil one column. Stripping also keeps a newline out of the
+// server's log lines and out of the column it lands in.
 func Cap(s string) string {
+	s = stripControl(s)
 	if len(s) <= MaxFieldLen {
 		return s
 	}
@@ -199,6 +217,22 @@ func Cap(s string) string {
 	}
 	return cut + truncationSuffix
 }
+
+// stripControl removes every C0 control character and DEL, returning s
+// unchanged (and unallocated) when it has none — the overwhelming case.
+func stripControl(s string) string {
+	if strings.IndexFunc(s, isControl) < 0 {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if isControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
 
 // DeriveInstanceID hashes the parts with a NUL separator (so field
 // boundaries cannot collide) and returns the first 16 hex of SHA-256.

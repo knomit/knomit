@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -70,5 +71,50 @@ func TestDeriveInstanceID(t *testing.T) {
 	// Field boundaries matter: "ab","c" != "a","bc".
 	if DeriveInstanceID("ab", "c") == DeriveInstanceID("a", "bc") {
 		t.Fatal("separator must prevent boundary collisions")
+	}
+}
+
+// A control character in a declared value would make http.Header.Set panic or
+// the transport reject the request ("invalid header field value") — so a cwd
+// containing a newline would break EVERY request the bridge makes, not just
+// spoil one column. Cap strips them.
+func TestCap_StripsControlCharacters(t *testing.T) {
+	in := BridgeInfo{
+		InstanceID: "abc", Transport: "stdio", PID: 1, ParentPID: 2,
+		Host: "h", User: "u", Cwd: "/tmp/od\nd\rir\x00x\x7f", Branch: "agent/x", Version: "1",
+	}
+	encoded := in.Encode()
+	for _, r := range encoded {
+		if r < 0x20 || r == 0x7f {
+			t.Fatalf("encoded header still carries control char %q: %q", r, encoded)
+		}
+	}
+	// The transport must accept it.
+	h := http.Header{}
+	h.Set(ClientHeader, encoded)
+	if got := h.Get(ClientHeader); got != encoded {
+		t.Fatalf("header not round-tripped through http.Header: %q", got)
+	}
+	out, err := ParseClientHeader(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Cwd != "/tmp/oddirx" {
+		t.Fatalf("cwd = %q, want the control characters removed", out.Cwd)
+	}
+	if out.InstanceID != "abc" || out.PID != 1 || out.Branch != "agent/x" {
+		t.Fatalf("other fields disturbed: %+v", out)
+	}
+}
+
+// A doubled or trailing ';' must not swallow the rest of the header.
+func TestParseClientHeader_SkipsEmptySegments(t *testing.T) {
+	got, err := ParseClientHeader("id=abc;;transport=stdio;;;pid=7;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := BridgeInfo{InstanceID: "abc", Transport: "stdio", PID: 7}
+	if got != want {
+		t.Fatalf("got %+v want %+v", got, want)
 	}
 }
