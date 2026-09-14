@@ -70,10 +70,12 @@ export const linkBtn: React.CSSProperties = {
   cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline',
 };
 
-/** Segmented choice — the wizard's control for a binary that one question
- *  settles (StepSource: where the history lives; StepReview: how to attach to
- *  a branch that is already a knowledge base). One definition so the wizard
- *  asks both questions the same way.
+/** Segmented choice — the styles behind SegmentedChoice.tsx, the wizard's
+ *  control for a binary that one question settles (StepSource: where the
+ *  history lives; StepReview: how to attach to a branch that is already a
+ *  knowledge base). Render the COMPONENT, not these styles directly: it owns
+ *  the radiogroup semantics (role=radio, aria-checked, roving tabindex, arrow
+ *  keys) that a hand-rolled group of buttons silently loses.
  *
  *  The tone encodes STATE, not rank. 'remote' is #8af, the hue this UI already
  *  spends on branches and remote refs, for the side that has a remote to talk
