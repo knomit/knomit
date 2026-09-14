@@ -1029,12 +1029,20 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSess
 		Msg("pipeline: session complete")
 	p.onProgress(ProgressEvent{Phase: tool + "-done", Message: fmt.Sprintf("session %s complete", sess.ID)})
 
-	return &PipelineResult{
+	res := &PipelineResult{
 		SessionID: sess.ID,
 		Done:      true,
 		Summary:   summary,
 		Progress:  &ReviewProgress{Completed: completed, Remaining: 0},
-	}, nil
+	}
+	// Declines surface HERE, on the completion turn, and nowhere earlier: an
+	// item's decline does not exist until it is answered, so the first result —
+	// which carries every other health descriptor — is composed before any of
+	// this is knowable. APPENDED, never assigned, on the health-recorder rule.
+	if line := distillDeclineHealth(ctx, d, sess.ID); line != "" {
+		res.Health = append(res.Health, line)
+	}
+	return res, nil
 }
 
 // recordStats accumulates one applied item's counts onto the session row,

@@ -178,11 +178,11 @@ func TestMN1_AuthorizedTemplateCarriersAreConditional(t *testing.T) {
 	withShared, err := RenderDistillWorkItem([]factForLLM{
 		{File: "a", Motifs: []string{"silent-fallback"}},
 		{File: "b", Motifs: []string{"silent-fallback"}},
-	}, "kb", "")
+	}, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, withShared.Prompt, "silent-fallback")
 
-	without, err := RenderDistillWorkItem([]factForLLM{{File: "a"}}, "kb", "")
+	without, err := RenderDistillWorkItem([]factForLLM{{File: "a"}}, "kb", "", false)
 	require.NoError(t, err)
 	require.NotContains(t, without.Prompt, "Motifs already shared",
 		"a cluster sharing no motifs must see no motif section")
@@ -228,7 +228,7 @@ func TestMN1_OrdinaryItemsNeverCarryVocabulary(t *testing.T) {
 
 	// distill carries shared motifs by authorization, but only from its own
 	// input facts — never a wider vocabulary.
-	distill, err := RenderDistillWorkItem(marked, "kb", "")
+	distill, err := RenderDistillWorkItem(marked, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, distill.Prompt, marker,
 		"distill's authorized shared-motif line")
@@ -237,7 +237,7 @@ func TestMN1_OrdinaryItemsNeverCarryVocabulary(t *testing.T) {
 	// The distinction that makes distill's exposure safe: it is shown only what
 	// its OWN facts carry. A motif no input fact has must never appear.
 	unrelated := []factForLLM{{File: "kb/c.md", Title: "Charlie", Body: "body"}}
-	clean, err := RenderDistillWorkItem(unrelated, "kb", "")
+	clean, err := RenderDistillWorkItem(unrelated, "kb", "", false)
 	require.NoError(t, err)
 	require.NotContains(t, clean.Prompt, marker,
 		"distill must never see a motif none of its input facts carries — that would "+

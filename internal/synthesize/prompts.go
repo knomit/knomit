@@ -31,6 +31,13 @@ type PromptData struct {
 	// synthesized claim probably does too. Empty when the cluster shares none,
 	// and the template omits the line entirely then.
 	SharedMotifs string
+	// Remainder tells distill_user.txt that this item is the UNCLUSTERED
+	// leftover set rather than a cluster, which changes the ask: find coherent
+	// sub-groups and record the ones you rejected, instead of "identify
+	// patterns across these facts" over a set that has none. Derived at the
+	// render site from the work item's ClusterKey via isRemainderItem — there
+	// is no column for it, because the key already carries the fact.
+	Remainder bool
 }
 
 // RenderTemplate loads and renders a prompt template.

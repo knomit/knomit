@@ -227,6 +227,13 @@ type PipelineIndex interface {
 	// same session leaves every still-queued item describing a corpus that no
 	// longer exists.
 	PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]PipelineWorkItem, error)
+
+	// AnsweredDistillResponses returns the raw stored responses of this
+	// session's ANSWERED distill items — the complement of the method above,
+	// and the only read path back out of an answer. Used at session completion
+	// to tally declined_reason from the durable record rather than from state
+	// kept in memory, which does not survive the per-call engine rebuild.
+	AnsweredDistillResponses(ctx context.Context, sessionID string) ([]string, error)
 	// UpdatePipelineWorkItemFacts rewrites an unanswered item's payload. The
 	// response IS NULL guard is the same CAS the claim protocol uses: an item
 	// answered between the read and the rewrite must not be edited underneath

@@ -431,6 +431,43 @@ func (pi *pipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID
 	return out, nil
 }
 
+// AnsweredDistillResponses returns the raw stored responses of this session's
+// ANSWERED distill items, in queue order.
+//
+// It is the exact complement of PendingPipelineWorkItems, which returns only
+// items with response IS NULL — before this there was no read path back out of
+// an answer at all. Only the response text is returned because that is all the
+// one caller needs (tallying declined_reason at session completion), and a
+// method that hands back whole work items invites reads the claim protocol has
+// opinions about.
+//
+// The response is stored exactly as the agent sent it for distill, so
+// parseDistillResponse applies to these strings unchanged.
+func (pi *pipelineIndex) AnsweredDistillResponses(ctx context.Context, sessionID string) ([]string, error) {
+	rows, err := pi.sessionDB.QueryContext(ctx,
+		`SELECT response
+		 FROM pipeline_work_items
+		 WHERE session_id = ? AND step_type = 'distill' AND response IS NOT NULL
+		 ORDER BY priority DESC, id ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("AnsweredDistillResponses: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []string
+	for rows.Next() {
+		var resp string
+		if err := rows.Scan(&resp); err != nil {
+			return nil, fmt.Errorf("AnsweredDistillResponses scan: %w", err)
+		}
+		out = append(out, resp)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("AnsweredDistillResponses rows: %w", err)
+	}
+	return out, nil
+}
+
 // UpdatePipelineWorkItemFacts rewrites an unanswered item's payload.
 //
 // The `response IS NULL` guard is the claim protocol's CAS, used here in the

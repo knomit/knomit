@@ -584,6 +584,20 @@ type distillGroup struct {
 	Remainder bool
 }
 
+// isRemainderItem reports whether a distill work item is the unclustered
+// remainder, from its ClusterKey alone.
+//
+// The render site reads the item back from the store and has only the item, so
+// the flag has to be derivable from what the key already records. Remainder
+// chunks are enqueued as "<distillGroup.Key>-<chunk>" where the key is
+// "distill-rest"; every other distill item is either a promoted cluster
+// (promotedDistillKeyPrefix, "distill-promoted-") or a RAPTOR follow-up
+// ("raptor-d<depth>-c<i>-<chunk>"), so the prefix is unambiguous. A column
+// would duplicate state the key already carries and could disagree with it.
+func isRemainderItem(clusterKey string) bool {
+	return strings.HasPrefix(clusterKey, "distill-rest")
+}
+
 // distillGroups partitions the seed pool into the groups depth-0 distill
 // reasons over, using the clusters Plan already computed.
 //
@@ -1102,7 +1116,7 @@ func (reviewStrategy) Render(ctx context.Context, d Deps, sess *store.PipelineSe
 			return nil, wrapf(reviewTool, err, "unmarshal facts for prompt")
 		}
 		applicableMethodology := distillMethodologySection(ctx, d.RI, branch, facts)
-		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology)
+		content, err = RenderDistillWorkItem(facts, ontologyRoot, applicableMethodology, isRemainderItem(item.ClusterKey))
 	case "reflect":
 		existingMethodology := reflectMethodologySection(ctx, d.RI, branch, []byte(item.FactsJSON))
 		content, err = RenderReflectWorkItem([]byte(item.FactsJSON), ontologyRoot,

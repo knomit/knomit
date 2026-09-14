@@ -300,7 +300,7 @@ func TestRenderDiscoverPrompt_MandatesDiscoveredOrigin(t *testing.T) {
 func TestRenderDistillWorkItem_MandatesDistilledOrigin(t *testing.T) {
 	wic, err := RenderDistillWorkItem(
 		[]factForLLM{{File: "kb/a.md", Title: "A"}, {File: "kb/b.md", Title: "B"}},
-		"kb", "")
+		"kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, wic.Prompt, "origin: distilled",
 		"distill prompt must name the distilled origin at proposal time")
