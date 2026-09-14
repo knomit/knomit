@@ -211,9 +211,21 @@ const maxDeliveredItemBytes = 32 * 1024
 //
 // Measured, and pinned: TestDeliveredPage_EnvelopeFitsItsReserve renders every
 // paging step type with a full-size methodology section (the largest prompt the
-// distill path can produce) and fails if the envelope outgrows this. The
-// measured worst case at the time of writing is 5,893 bytes.
-const pageEnvelopeReserveBytes = 8 * 1024
+// distill path can produce) and fails if the envelope outgrows this.
+//
+// The measured worst case is 9,881 bytes (2026-09-14), against the 5,893 this
+// comment recorded when the reserve was 8 KiB. That drift is the reason the
+// reserve moved to 12 KiB: the distill prompt gained the positive mechanism
+// test, the load-bearing/provenance split and the retraction section, and at
+// 8 KiB the envelope had 103 bytes of headroom left — it was one prompt edit
+// from over-promising.
+//
+// The rest-bucket and declined-reason work is projected to cost 1,677 bytes
+// (1,027 prompt + 650 response schema, measured from its specified text), which
+// would land the envelope near 11,558 and leave about 730 bytes. It fits, but
+// that is the real remaining budget — do not read the round number as slack.
+// Re-measure rather than assume.
+const pageEnvelopeReserveBytes = 12 * 1024
 
 // maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
 // — after the indentation json.MarshalIndent applies in internal/mcp/review.go,

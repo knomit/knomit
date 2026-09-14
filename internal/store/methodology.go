@@ -82,8 +82,10 @@ func (mm *methodologyMatcher) RelevantMethodologyForFact(
 	// guidance for synthesizing that very fact. The score is genuine, because a
 	// fact matches itself perfectly, and that is exactly what makes it
 	// worthless: a perfect methodology score is a self-membership red flag, not
-	// a strong recommendation, and here it cleared the 0.50 mandatory-read
-	// threshold on nothing but its own identity.
+	// a strong recommendation, and it earned that rank on nothing but its own
+	// identity. PR #188 sharpened this rather than softening it: the prompts no
+	// longer gate reads on a 0.50 literal, they mandate reading the TOP-RANKED
+	// candidate unconditionally — and a self-match ranks first by construction.
 	//
 	// Excluded HERE, in the candidate set, rather than filtered from the
 	// results: this query is the single authoritative definition of what is

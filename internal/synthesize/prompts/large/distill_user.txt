@@ -6,11 +6,17 @@ The facts in scope are delivered beside this prompt as the work item's `facts` f
 
 {{.ApplicableMethodology}}
 
-For EVERY candidate above with score ≥ 0.50, call knomit_query on its path and read the body BEFORE producing the synthesis. Titles alone are not enough. If a methodology shapes how you weight, combine, or name the synthesis, include its path in the output's refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
+Read the top-ranked candidate above: call knomit_query on its path and read the body BEFORE producing the synthesis. Always — its title is not enough to judge whether it applies. For the remaining candidates, a title is enough to decide whether to OPEN one, never enough to decide whether it APPLIES: open any whose title suggests it bears on how you weight, combine, or name the synthesis, and judge only after reading. If a methodology shapes the synthesis, include its path in refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
 
 {{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns
-2. Which original facts are fully subsumed and can be forgotten
+2. Which original facts are strict restatements of a new fact and can be forgotten
+
+## The test a synthesis must pass
+
+Before writing a synthesis, state in one sentence the mechanism that ALL members instantiate — generically, describing the mechanism and not the subjects. If you cannot write that sentence, return no synthesis. Put that sentence first in the body; a later pass re-reads it to check whether it still covers the members.
+
+Declining is itself a verdict you are accountable for, not a free pass: an empty `synthesize` on a coherent cluster must be a decision you would defend after reading every member, not a default reached by not looking.
 
 {{if .SharedMotifs}}Motifs already shared by several of these facts: {{.SharedMotifs}}
 
@@ -39,11 +45,18 @@ Path and type are MANDATORY:
 
 ## Fidelity — synthesis must not broaden claims (mandatory)
 
-Consumers act on the summary they compress a fact into; synthesis is compression, so it is where true facts turn into false slogans. A higher-order fact must never claim more than the union of its sources:
+Consumers act on the summary they compress a fact into; synthesis is compression, so it is where true facts turn into false slogans. A higher-order fact must never claim more than the union of its sources. Its inputs carry two kinds of detail, and they are treated differently:
 
-- Preserve every component of compound conditions verbatim. A fact conditioned on two things must not be summarized by one of them ("approved under $50 for accounts older than 90 days" must not become "approved under $50").
-- Carry every scope qualifier ("only when…", "except…", "as of…") and every "WHAT THIS DOES NOT MEAN" clause from the inputs into the synthesis body. These clauses were added deliberately to block known misreadings — smoothing them away reopens the trap.
-- Only list an original fact in "retract" if the synthesis preserves ALL of its conditions and caveats. If preserving them would make the synthesis unwieldy, keep the original alongside the synthesis instead of subsuming it.
+- **Load-bearing conditions** — anything that changes what a consumer would conclude or do: every component of a compound precondition ("approved under $50 for accounts older than 90 days" must not become "approved under $50"), every scope qualifier ("only when…", "except…", "as of…"), and every "WHAT THIS DOES NOT MEAN" clause. These MUST be carried into the synthesis body verbatim. They were added deliberately to block known misreadings; smoothing them away reopens the trap.
+- **Provenance detail** — dates, version strings, CVE numbers, affected-product lists, source names, individual measurements. These stay in the members and MUST NOT be copied wholesale into the synthesis. Cite the member in `refs` instead; the synthesis is the claim, the members are its evidence.
+
+A synthesis that is longer than its members combined has copied provenance; a synthesis that is shorter than one member's conditions has dropped something load-bearing.
+
+## Retraction — when a member can be forgotten
+
+Retract a member only when the new synthesis restates its whole claim and the member's provenance is carried by its refs rather than its body — typically a prior synthesis or a digest. Carry that member's refs into the new synthesis's refs. A member whose body carries its own measurement, date, source, or affected list stays. Zero retractions is the normal outcome over a cluster of observations.
+
+The hypothesis rule below is separate and takes precedence: a hypothesis confirmed by the batch is retracted even though it is not a restatement, because that is a type transition, not subsumption.
 
 ## When NOT to distill
 
