@@ -42,6 +42,12 @@ tags:
   - name: origin
   - name: events
   - name: mcp
+  - name: sessions
+    description: |
+      MCP client sessions — every bridge or direct HTTP client this server has
+      seen, with last-seen liveness. Presence (live/idle/dead/hidden) is
+      derived at read time from the thresholds the envelope echoes; nothing
+      writes a status.
 
 paths:
   /:
@@ -1461,6 +1467,42 @@ paths:
               schema: { type: string }
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
+
+  /sessions:
+    get:
+      tags: [sessions]
+      summary: List MCP client sessions
+      description: |
+        Every MCP client session recorded by this server, newest activity
+        first. Global rather than repo-scoped: sessions cut across repos and
+        lenses, so filter with `binding`. Rows silent longer than
+        `policy.hidden_after_s` are omitted unless `include=hidden`; they are
+        deleted entirely once past the retention window.
+
+        Every declared field (`bridge`, and `branch`) is SELF-REPORTED by the
+        client and unverified — correlation, not identity. `binding.name` is
+        null when the repo or lens no longer resolves; the row is still
+        returned with its uid.
+      operationId: listClientSessions
+      parameters:
+        - name: binding
+          in: query
+          required: false
+          schema: { type: string }
+          description: Restrict to one binding, as `repo:<uid>` or `lens:<uid>`.
+        - name: include
+          in: query
+          required: false
+          schema: { type: string, enum: [hidden] }
+          description: '`hidden` also returns rows silent past `policy.hidden_after_s`.'
+      responses:
+        "200":
+          description: HAL collection of client sessions
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/ClientSessionsCollection" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
 
   /archived:
     get:
@@ -3257,6 +3299,99 @@ components:
             moves and is named for its uid, so this is the only place the disk a
             purge would reclaim is visible. 0 when the file could not be stat'd.
         _links: { $ref: "#/components/schemas/LinkMap" }
+
+    ClientSession:
+      type: object
+      required: [id, instance_id, state, transport, binding, client, bridge, first_seen_at, last_seen_at, request_count]
+      properties:
+        id:
+          type: string
+          description: The Mcp-Session-Id, which is also the run id.
+        instance_id:
+          type: string
+          description: |
+            Stable per client PROCESS — derived by the bridge from host, user,
+            cwd, parent app, pid and process start time, or by the server from
+            ip plus User-Agent plus clientInfo for a direct HTTP caller. Not an
+            authenticated identity.
+        state:
+          type: string
+          enum: [live, idle, dead]
+          description: Derived at read time from last_seen_at and ended_at.
+        transport:
+          type: string
+          enum: [stdio, http]
+        binding:
+          type: object
+          required: [kind, uid]
+          properties:
+            kind: { type: string, enum: [repo, lens, ""] }
+            uid: { type: string }
+            name:
+              type: string
+              nullable: true
+              description: Null when the repo or lens no longer resolves.
+        branch:
+          type: string
+          description: Agent branch the client declared; empty in lens mode.
+        client:
+          type: object
+          description: What `initialize` declared. Empty until a real initialize is seen.
+          properties:
+            name: { type: string }
+            version: { type: string }
+            initialized:
+              type: boolean
+              description: |
+                False for a session that outlived a server restart — the row
+                was recreated from request headers without an initialize.
+        bridge:
+          type: object
+          description: Self-reported by the client via X-Knomit-Client; unverified.
+          properties:
+            host: { type: string }
+            user: { type: string }
+            cwd: { type: string }
+            pid: { type: integer }
+            parent: { type: string }
+            parent_pid: { type: integer }
+            version: { type: string }
+        remote_addr:
+          type: string
+          description: IP only; the port is never recorded.
+        user_agent: { type: string }
+        first_seen_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set only by an explicit session termination (DELETE).
+        request_count: { type: integer }
+
+    ClientSessionsCollection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          properties:
+            policy:
+              type: object
+              description: The server's thresholds, echoed so clients never hardcode them.
+              properties:
+                dead_after_s: { type: integer }
+                hidden_after_s: { type: integer }
+                retention_s:
+                  type: integer
+                  description: 0 means purging is disabled.
+                live_window_s:
+                  type: integer
+                  description: Derived as dead_after_s/10; not a separate setting.
+            _embedded:
+              type: object
+              properties:
+                sessions:
+                  type: array
+                  items: { $ref: "#/components/schemas/ClientSession" }
 
     ArchivedReposCollection:
       allOf:
