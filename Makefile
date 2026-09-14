@@ -18,7 +18,7 @@ LIBDIR  := $(DIST)/lib
 # Build version. BASE_VERSION is the Major.Minor.Patch semver of the last
 # RELEASE and is the single source of truth — bump it here on release.
 # GIT_COMMIT is the short SHA of the build. Both are injected into the
-# internal/version package via -ldflags, so every binary (knomit,
+# internal/platform/version package via -ldflags, so every binary (knomit,
 # knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
 # A bare `go build` (no make) falls back to the package default "dev".
 BASE_VERSION := 0.5.3
@@ -30,8 +30,8 @@ GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # integer (~1.78e9, well under 2^32 until ~2106) that grows with every commit,
 # is deterministic per commit, and survives shallow CI clones (unlike a commit
 # count). Commit IDENTITY is NOT encoded here — it lives in GIT_COMMIT (the SHA
-# in internal/version), while CFBundleShortVersionString carries the display
-# version, $(VERSION), which differs per RELEASE_CHANNEL below.
+# in internal/platform/version), while CFBundleShortVersionString carries
+# the display version, $(VERSION), which differs per RELEASE_CHANNEL below.
 # Falls back to 0 outside a git checkout.
 BUILD_VERSION := $(shell git show -s --format=%ct HEAD 2>/dev/null || echo 0)
 
@@ -77,9 +77,9 @@ else
 endif
 
 # FULL_VERSION is the semver plus the short SHA (e.g. 0.5.0.2a7ae9d) — the same
-# string the binaries report via internal/version. Used as the Docker image tag.
+# string the binaries report via internal/platform/version. Used as the Docker image tag.
 FULL_VERSION := $(VERSION).$(GIT_COMMIT)
-VERSION_PKG := knomit/internal/version
+VERSION_PKG := knomit/internal/platform/version
 # UPDATE_PUBLIC_KEY is the base64 Ed25519 key that authenticates desktop update
 # artifacts. Empty for local builds and for the dev release, which is what
 # disables self-update in those binaries — see tools/desktop/update.go. The
@@ -258,7 +258,7 @@ e2e-report:
 	cd e2e && npx playwright show-report playwright-report
 
 # ---- knomit-desktop (Wails v3) ----------------------------------------------
-# Desktop shares the unified version scheme (VERSION.GIT_COMMIT via internal/version).
+# Desktop shares the unified version scheme (VERSION.GIT_COMMIT via internal/platform/version).
 DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "$(VERSION_LDFLAGS)"
 
 # Install the OS deps the desktop app (Wails v3, CGO) needs to BUILD. macOS and
@@ -471,7 +471,7 @@ endif
 # by its tag, so semver.sha here only made the published names disagree with
 # the ones the release notes and the appcast feed talk about. Commit identity
 # is NOT lost — it moved out of the filename, not out of the build. Every
-# binary still reports semver.sha from internal/version: `knomit version`,
+# binary still reports semver.sha from internal/platform/version: `knomit version`,
 # `knomit-bridge version`, `knomit-okf version`, `knomit-desktop --version`,
 # the desktop startup log line, and GET /api/v1/version (as `full`).
 #

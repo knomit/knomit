@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"knomit/internal/textnorm"
+	"knomit/internal/fact/textnorm"
 
 	"github.com/rs/zerolog/log"
 )

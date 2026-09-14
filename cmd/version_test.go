@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 func TestVersionCmd_PrintsVersionString(t *testing.T) {

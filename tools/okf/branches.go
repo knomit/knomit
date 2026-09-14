@@ -14,7 +14,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"gopkg.in/yaml.v3"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 const branchesUsage = "usage: knomit-okf branches [--source <url>] [--no-fetch]"

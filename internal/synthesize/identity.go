@@ -36,8 +36,8 @@ import (
 	"sort"
 	"strings"
 
+	"knomit/internal/fact/textnorm"
 	"knomit/internal/store"
-	"knomit/internal/textnorm"
 )
 
 // maxStructuralPairs is a RESOURCE BUDGET on one refresh's writes: the most

@@ -11,15 +11,13 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-
-	"knomit/internal/config"
 )
 
 func TestBuildLogger_JSONFormatWritesStructured(t *testing.T) {
 	var console, jsonOut bytes.Buffer
-	lc := config.LogConfig{Format: "json", Level: "info"}
+	opts := Options{Format: "json", Level: "info"}
 
-	lg, lvl, err := Build(lc, &console, &jsonOut, nil)
+	lg, lvl, err := Build(opts, &console, &jsonOut, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -42,9 +40,9 @@ func TestBuildLogger_JSONFormatWritesStructured(t *testing.T) {
 
 func TestBuildLogger_ConsoleFormatUsesConsoleSink(t *testing.T) {
 	var console, jsonOut bytes.Buffer
-	lc := config.LogConfig{Format: "console", Level: "info"}
+	opts := Options{Format: "console", Level: "info"}
 
-	lg, _, err := Build(lc, &console, &jsonOut, nil)
+	lg, _, err := Build(opts, &console, &jsonOut, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -61,9 +59,9 @@ func TestBuildLogger_ConsoleFormatUsesConsoleSink(t *testing.T) {
 func TestBuildLogger_FileSinkReceivesOutput(t *testing.T) {
 	var console, jsonOut bytes.Buffer
 	file := filepath.Join(t.TempDir(), "knomit.log")
-	lc := config.LogConfig{Format: "console", Level: "info", File: file, MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1}
+	opts := Options{Format: "console", Level: "info", File: file, MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1}
 
-	lg, _, err := Build(lc, &console, &jsonOut, nil)
+	lg, _, err := Build(opts, &console, &jsonOut, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -81,9 +79,9 @@ func TestBuildLogger_FileSinkReceivesOutput(t *testing.T) {
 func TestBuildLogger_RingIsTeed(t *testing.T) {
 	var console, jsonOut bytes.Buffer
 	var ring bytes.Buffer
-	lc := config.LogConfig{Format: "console", Level: "info"}
+	opts := Options{Format: "console", Level: "info"}
 
-	lg, _, err := Build(lc, &console, &jsonOut, &ring)
+	lg, _, err := Build(opts, &console, &jsonOut, &ring)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -96,8 +94,8 @@ func TestBuildLogger_RingIsTeed(t *testing.T) {
 
 func TestBuildLogger_RejectsBadLevel(t *testing.T) {
 	var console, jsonOut bytes.Buffer
-	lc := config.LogConfig{Format: "console", Level: "loud"}
-	if _, _, err := Build(lc, &console, &jsonOut, nil); err == nil {
+	opts := Options{Format: "console", Level: "loud"}
+	if _, _, err := Build(opts, &console, &jsonOut, nil); err == nil {
 		t.Fatal("Build must reject an unparseable level")
 	}
 }
@@ -108,12 +106,12 @@ func TestBuildLogger_RejectsBadLevel(t *testing.T) {
 // unconditionally.
 func TestBuildConsoleFormatWritesHumanReadableFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	lc := config.LogConfig{
+	opts := Options{
 		Format: "console", Level: "info", File: path,
 		MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1,
 	}
 
-	lg, _, err := Build(lc, io.Discard, io.Discard, nil)
+	lg, _, err := Build(opts, io.Discard, io.Discard, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -153,12 +151,12 @@ func TestBuildConsoleFormatWritesHumanReadableFile(t *testing.T) {
 // shown at every threshold, so the filter stops filtering rather than emptying.
 func TestFileSinkTimestampIsDatedAndSpaceFree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	lc := config.LogConfig{
+	opts := Options{
 		Format: "console", Level: "info", File: path,
 		MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1,
 	}
 
-	lg, _, err := Build(lc, io.Discard, io.Discard, nil)
+	lg, _, err := Build(opts, io.Discard, io.Discard, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -193,9 +191,9 @@ func TestFileSinkTimestampIsDatedAndSpaceFree(t *testing.T) {
 // being "fixed" onto both writers.
 func TestConsoleSinkKeepsTheShortClockTime(t *testing.T) {
 	var console bytes.Buffer
-	lc := config.LogConfig{Format: "console", Level: "info"}
+	opts := Options{Format: "console", Level: "info"}
 
-	lg, _, err := Build(lc, &console, io.Discard, nil)
+	lg, _, err := Build(opts, &console, io.Discard, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -229,9 +227,9 @@ func stripANSI(s string) string {
 // every time Settings is saved. Without a handle to close, each save leaks one.
 func TestBuildWriterReturnsTheFileRotatorToClose(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	lc := config.LogConfig{Format: "console", Level: "info", File: path, MaxSizeMB: 1}
+	opts := Options{Format: "console", Level: "info", File: path, MaxSizeMB: 1}
 
-	_, closer, _, err := BuildWriter(lc, io.Discard, io.Discard, nil)
+	_, closer, _, err := BuildWriter(opts, io.Discard, io.Discard, nil)
 	if err != nil {
 		t.Fatalf("BuildWriter: %v", err)
 	}
@@ -243,7 +241,7 @@ func TestBuildWriterReturnsTheFileRotatorToClose(t *testing.T) {
 	}
 
 	// No file, nothing to close — a nil closer, not a closer over nothing.
-	if _, c, _, berr := BuildWriter(config.LogConfig{Level: "info"}, io.Discard, io.Discard, nil); berr != nil || c != nil {
+	if _, c, _, berr := BuildWriter(Options{Level: "info"}, io.Discard, io.Discard, nil); berr != nil || c != nil {
 		t.Errorf("BuildWriter(no file) = closer %v, err %v; want nil, nil", c, berr)
 	}
 }
@@ -252,12 +250,12 @@ func TestBuildWriterReturnsTheFileRotatorToClose(t *testing.T) {
 // must not touch it.
 func TestBuildJSONFormatKeepsTheFileStructured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.log")
-	lc := config.LogConfig{
+	opts := Options{
 		Format: "json", Level: "info", File: path,
 		MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1,
 	}
 
-	lg, _, err := Build(lc, io.Discard, io.Discard, nil)
+	lg, _, err := Build(opts, io.Discard, io.Discard, nil)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

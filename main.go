@@ -13,7 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/cmd"
-	"knomit/internal/obs/crashdump"
+	"knomit/internal/platform/crashdump"
 )
 
 func main() {

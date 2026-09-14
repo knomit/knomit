@@ -8,7 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/obs/reqinfo"
+	"knomit/internal/platform/reqinfo"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )

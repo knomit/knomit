@@ -12,8 +12,9 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
-	"knomit/internal/obs/logging"
+	"knomit/internal/platform/logging"
 	"knomit/tools/desktop/internal/paths"
 )
 
@@ -39,8 +40,8 @@ func desktopLogConfig(lc config.LogConfig, defaultFile string) config.LogConfig 
 	if lc.Format == "" {
 		lc.Format = "console"
 	}
-	// Mirrors logging.Build's own "" → info (internal/obs/logging/logging.go:21-23),
-	// so this is a no-op for the logger. It exists because the Settings dialog
+	// Mirrors logging.BuildWriter's own empty-level-means-info default, so this
+	// is a no-op for the logger. It exists because the Settings dialog
 	// SHOWS this value: a knomit.toml carrying a literal level = "" would
 	// otherwise put an empty string in the form's level field, which
 	// validateSettings then refuses on Save — a dialog the user cannot get out
@@ -145,7 +146,7 @@ func init() {
 // Settings save, from a Wails IPC goroutine. Safe from any goroutine.
 func applyLogConfig(lc config.LogConfig, defaultFile string) error {
 	resolved := desktopLogConfig(lc, defaultFile)
-	w, closer, lvl, err := logging.BuildWriter(resolved, os.Stderr, os.Stderr, nil)
+	w, closer, lvl, err := logging.BuildWriter(knomitapp.LoggingOptions(resolved), os.Stderr, os.Stderr, nil)
 	if err != nil {
 		return fmt.Errorf("build logger: %w", err)
 	}

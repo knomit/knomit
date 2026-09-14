@@ -26,7 +26,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"knomit/internal/obs/metrics"
+	"knomit/internal/platform/metrics"
 )
 
 // Options configures the diagnostics server.

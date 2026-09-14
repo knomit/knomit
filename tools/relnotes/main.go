@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"os"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 const usage = `knomit relnotes — build release notes from a commit range

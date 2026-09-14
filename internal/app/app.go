@@ -15,7 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
-	"knomit/internal/memlimit"
+	"knomit/internal/platform/memlimit"
 	"knomit/internal/repos"
 	"knomit/internal/web"
 )

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"knomit/internal/textnorm"
+	"knomit/internal/fact/textnorm"
 )
 
 // Alias resolution, mechanical half (blueprint §3.1 step 1).

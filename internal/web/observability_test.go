@@ -14,8 +14,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/obs/metrics"
-	"knomit/internal/obs/reqinfo"
+	"knomit/internal/platform/metrics"
+	"knomit/internal/platform/reqinfo"
 )
 
 // captureLogs redirects the global zerolog logger into a buffer for the

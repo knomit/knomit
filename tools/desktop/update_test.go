@@ -15,7 +15,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/services/notifications"
 	"github.com/wailsapp/wails/v3/pkg/updater"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 	"knomit/tools/desktop/internal/paths"
 )
 
