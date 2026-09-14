@@ -225,11 +225,27 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 			err = cerr
 			return
 		}
+		// Carry the stored mode through. Origins.Set is a full replacement and
+		// an EMPTY Mode DELETES the subscription row (see Origins.Set), so a
+		// credential or URL update written without it would silently demote a
+		// subscription to sync. Read from control.db, never from `existing` —
+		// that is the store's own remotes row, which carries no mode.
+		stored, gerr := origins.Get(ri.UID())
+		if gerr != nil {
+			err = gerr
+			restoreRemoteConfig(svc, ri, existing, "SetOrigin")
+			return
+		}
+		mode := repos.OriginModeSync
+		if stored != nil {
+			mode = stored.Mode
+		}
 		if serr := origins.Set(ri.UID(), repos.Origin{
 			URL:        u,
 			Branch:     upstreamMain,
 			AuthMethod: authMethod,
 			AuthToken:  authToken,
+			Mode:       mode,
 		}); serr != nil {
 			err = serr
 			// The git remote now names a url control.db does not record. Put it
@@ -602,6 +618,16 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 func handleHALDeleteOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
+
+		// A subscription IS its origin: it has no content of its own, so
+		// detaching the origin would leave a repo that can neither sync nor be
+		// written to. Refused before the provider is reached.
+		if ri.Subscribed() {
+			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
+				"this repo follows its origin read-only and has no content of its own; archive it instead of detaching the origin",
+				r.URL.Path)
+			return
+		}
 
 		if err := op.DeleteOrigin(r.Context(), m, ri); err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to delete origin",

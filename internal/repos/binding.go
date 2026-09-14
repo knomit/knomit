@@ -141,8 +141,11 @@ func (b *Binding) ByID(id string) (ReadTarget, bool) {
 // branch: write = repo, reads = [repo@branch], writable iff branch is the
 // repo's own agent branch.
 func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
+	// An empty branch defaults to the repo's own READ branch — the agent
+	// branch, or the upstream for a subscription, which has no agent branch to
+	// fall back to.
 	if branch == "" {
-		branch = ri.AgentBranch()
+		branch = ri.ReadBranch()
 	}
 	return &Binding{
 		write:   ri,
@@ -185,9 +188,11 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 		if ri == nil {
 			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.repoLabel(lr.RepoUID))
 		}
+		// Empty read pins default to each member's own READ branch at resolve
+		// time — the agent branch, or the upstream for a subscription.
 		branch := lr.Branch
 		if branch == "" {
-			branch = ri.AgentBranch()
+			branch = ri.ReadBranch()
 		}
 		reads = append(reads, ReadTarget{RI: ri, Branch: branch, Source: lr.Source})
 	}

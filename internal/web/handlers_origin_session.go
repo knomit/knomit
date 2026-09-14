@@ -52,6 +52,16 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 				"invalid url", r.URL.Path)
 			return
 		}
+		// A connect session ends in a store SWAP. For a subscription — which
+		// owns no content of its own — that would replace the thing it follows
+		// rather than reconcile with it. This route is inside RepoMiddleware,
+		// so the instance is in context.
+		if ri := repos.RepoFromContext(r.Context()); ri != nil && ri.Subscribed() {
+			hal.WriteProblem(w, http.StatusConflict, "Subscription requires its origin",
+				"a subscription cannot be re-pointed through a connect session; create a new subscription instead",
+				r.URL.Path)
+			return
+		}
 		// Local-origin policy is enforced at the clone boundary (Manager.Resolve-
 		// Auth, invoked when the session is tested), so it isn't re-checked here.
 
@@ -191,11 +201,27 @@ func persistSessionOrigin(rm *repos.Manager, ri *repos.RepoInstance, svc *store.
 	if origins == nil {
 		return fmt.Errorf("origin store unavailable")
 	}
+	// Carry the stored mode through, for the same reason SetOrigin does:
+	// Origins.Set is a full replacement and an EMPTY Mode DELETES the
+	// subscription row, so writing without it silently demotes a subscription
+	// to sync. handleCreateSession refuses a subscription before a session can
+	// exist, so this is unreachable for one today — it is here so the rule
+	// holds at the write itself rather than depending on a guard three calls
+	// away that a future caller might not go through.
+	stored, gerr := origins.Get(ri.UID())
+	if gerr != nil {
+		return gerr
+	}
+	mode := repos.OriginModeSync
+	if stored != nil {
+		mode = stored.Mode
+	}
 	if err := origins.Set(ri.UID(), repos.Origin{
 		URL:        url,
 		Branch:     upstreamMain,
 		AuthMethod: authMethod,
 		AuthToken:  authToken,
+		Mode:       mode,
 	}); err != nil {
 		return err
 	}

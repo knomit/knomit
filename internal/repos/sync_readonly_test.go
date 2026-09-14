@@ -1,12 +1,13 @@
 package repos
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestPushAllowed(t *testing.T) {
-	if !pushAllowed(false) {
-		t.Fatal("push must be allowed when not read-only")
-	}
-	if pushAllowed(true) {
-		t.Fatal("push must be skipped in read-only mode")
-	}
+	require.True(t, pushAllowed(false, "agent/x"))
+	require.False(t, pushAllowed(true, "agent/x"), "instance read-only is pull-only")
+	require.False(t, pushAllowed(false, ""), "a repo with no agent branch has nothing to push")
 }

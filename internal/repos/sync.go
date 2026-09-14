@@ -53,9 +53,10 @@ func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remo
 const reconcileFailureEscalateThreshold = 5
 
 // pushAllowed reports whether the reconcile loop may push to origin. Read-only
-// (demo) instances are pull-only: they keep fetching/fast-forwarding from
-// origin but never push back.
-func pushAllowed(readOnly bool) bool { return !readOnly }
+// (demo) instances are pull-only, and a repo with no agent branch — a
+// subscription — has nothing of its own to push, by construction rather than
+// by policy.
+func pushAllowed(readOnly bool, agentBranch string) bool { return !readOnly && agentBranch != "" }
 
 // remoteStatusIsError reports whether a persisted remote status column
 // (last_status / last_push_status) holds a failure. The column is NULL until
@@ -225,8 +226,9 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			}
 		}
 
-		// Then push (skipped in read-only / pull-only mode).
-		if pushAllowed(readOnly) {
+		// Then push (skipped in read-only / pull-only mode, and for a
+		// subscription, which has no agent branch to push).
+		if pushAllowed(readOnly, agentBranch) {
 			pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
 			if tickAbandoned(ctx, err) {
 				lg.Debug().Err(err).Msg("reconcile: push abandoned; loop is stopping")

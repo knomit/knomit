@@ -14,10 +14,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/store"
+)
+
+// Origin modes. Sync is the default and what every clone/initialize repo has.
+// Subscribe means the repo follows its upstream read-only with no agent branch
+// and never pushes — see Manager.initSubscribe.
+const (
+	OriginModeSync      = "sync"
+	OriginModeSubscribe = "subscribe"
 )
 
 // Origin is a repo's remote connection: where it syncs from, which branch is
@@ -28,6 +37,8 @@ type Origin struct {
 	Branch     string
 	AuthMethod string
 	AuthToken  string
+	// Mode is OriginModeSync or OriginModeSubscribe. Empty is read as sync.
+	Mode string
 }
 
 // Origins persists per-repo remote connection config in control.db.
@@ -56,8 +67,12 @@ func OpenOrigins(db *sql.DB, crypt *store.Crypt) *Origins {
 func (o *Origins) Get(uid string) (*Origin, error) {
 	var org Origin
 	err := o.db.QueryRow(
-		`SELECT url, branch, auth_method, auth_token FROM repo_origins WHERE repo_uid = ?`, uid,
-	).Scan(&org.URL, &org.Branch, &org.AuthMethod, &org.AuthToken)
+		`SELECT o.url, o.branch, o.auth_method, o.auth_token,
+		        CASE WHEN s.repo_uid IS NULL THEN ? ELSE ? END
+		   FROM repo_origins o
+		   LEFT JOIN repo_subscriptions s ON s.repo_uid = o.repo_uid
+		  WHERE o.repo_uid = ?`, OriginModeSync, OriginModeSubscribe, uid,
+	).Scan(&org.URL, &org.Branch, &org.AuthMethod, &org.AuthToken, &org.Mode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -83,6 +98,15 @@ func (o *Origins) Get(uid string) (*Origin, error) {
 // Set upserts the full origin record for uid, encrypting a non-empty
 // AuthToken. Without a Crypt it REFUSES to store a credential — credentials are
 // never written in plaintext.
+//
+// It writes Mode too, and an Origin with an EMPTY Mode DELETES any subscription
+// row for uid — empty means sync, and Set is a full replacement, not a patch.
+// So a read-modify-write caller must carry Mode through from Get: constructing
+// a fresh Origin{URL, Branch, AuthMethod, AuthToken} to change a credential or
+// a URL silently demotes a subscribed repo to sync. There is no error and no
+// log, because at this layer an explicit "sync" and an unset Mode are the same
+// request. The mode half and the repo_origins upsert share one transaction, so
+// a rejected Mode leaves neither behind.
 func (o *Origins) Set(uid string, org Origin) error {
 	if uid == "" {
 		return fmt.Errorf("origins set: uid required")
@@ -101,7 +125,13 @@ func (o *Origins) Set(uid string, org Origin) error {
 		}
 		stored = enc
 	}
-	_, err := o.db.Exec(
+	tx, err := o.db.Begin()
+	if err != nil {
+		return fmt.Errorf("origins set: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
+
+	_, err = tx.Exec(
 		`INSERT INTO repo_origins (repo_uid, url, branch, auth_method, auth_token)
 		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(repo_uid) DO UPDATE SET
@@ -111,6 +141,23 @@ func (o *Origins) Set(uid string, org Origin) error {
 	)
 	if err != nil {
 		return fmt.Errorf("origins set: %w", err)
+	}
+
+	switch org.Mode {
+	case OriginModeSubscribe:
+		_, err = tx.Exec(`INSERT OR IGNORE INTO repo_subscriptions (repo_uid, created_at) VALUES (?, ?)`,
+			uid, time.Now().UTC().Unix())
+	case "", OriginModeSync:
+		_, err = tx.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid)
+	default:
+		return fmt.Errorf("origins set: unknown mode %q", org.Mode)
+	}
+	if err != nil {
+		return fmt.Errorf("origins set mode: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("origins set: commit: %w", err)
 	}
 	return nil
 }
@@ -141,6 +188,12 @@ func (o *Origins) SetBranch(uid, branch string) error {
 // Delete removes a repo's origin. Deleting an absent origin is not an error.
 func (o *Origins) Delete(uid string) error {
 	if _, err := o.db.Exec(`DELETE FROM repo_origins WHERE repo_uid = ?`, uid); err != nil {
+		return fmt.Errorf("origins delete: %w", err)
+	}
+	// repo_origins deletion alone would leave a stale subscriptions row for a
+	// repo that is refused origin deletion anyway (Task 9); delete it here too
+	// to keep the presence table honest rather than relying on that refusal.
+	if _, err := o.db.Exec(`DELETE FROM repo_subscriptions WHERE repo_uid = ?`, uid); err != nil {
 		return fmt.Errorf("origins delete: %w", err)
 	}
 	return nil

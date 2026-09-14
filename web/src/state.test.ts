@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
+import { reducer, init, currentPath, selectAnchorCommit, selectTrail, isLive, isReadOnly, readOnlyTitle, READ_ONLY_TITLE, isLensContext, lensResolutionPending, openFactSource, factHistoryAnchor, edgeAnchorCommit, remoteErrorText } from './state';
 import type { AppState, FilterChip } from './state';
 import type { Lens, LensSource } from './api';
 
@@ -1280,5 +1280,30 @@ describe('EXIT_SEARCH', () => {
     expect(after.navStack.length).toBe(searching.navStack.length + 1);
     const back = reducer(after, { type: 'NAV_BACK' });
     expect(back.freeText).toBe('context rot');
+  });
+});
+
+// A subscription is read-only for a reason the temporal gate cannot express:
+// the anchor is live, the server is writable, and authoring is still refused.
+// isReadOnly therefore ORs a third term, and readOnlyTitle has to name which
+// one fired or the UI explains the wrong thing.
+describe('per-repo read-only', () => {
+  it('a subscription is read-only even when live', () => {
+    const s = reducer(init, { type: 'SET_REPO_READONLY', value: true });
+    expect(isLive(s)).toBe(true);
+    expect(s.serverReadOnly).toBe(false);
+    expect(isReadOnly(s)).toBe(true);
+    expect(readOnlyTitle(s)).toMatch(/follows/);
+  });
+
+  it('clears when the flag is cleared and the anchor is live', () => {
+    const s = reducer(reducer(init, { type: 'SET_REPO_READONLY', value: true }), { type: 'SET_REPO_READONLY', value: false });
+    expect(isReadOnly(s)).toBe(false);
+  });
+
+  it('names the anchor, not the repo, when only the anchor is stale', () => {
+    const s = reducer(init, { type: 'SET_SERVER_READONLY', value: true });
+    expect(isReadOnly(s)).toBe(true);
+    expect(readOnlyTitle(s)).toBe(READ_ONLY_TITLE);
   });
 });

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,5 +152,84 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	}
 	if activateURL != remoteURL {
 		t.Errorf("ActivateSync URL: got %q, want %q", activateURL, remoteURL)
+	}
+}
+
+// A subscription cannot be re-pointed through a connect session: the flow ends
+// in a store swap, which for a repo that owns no content of its own would
+// replace the thing it follows rather than reconcile it.
+func TestHandleCreateSession_SubscriptionIs409(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "sub", UID: "sub-uid", Subscribed: true, ReadBranch: "main",
+	}))
+	sm := NewSessionManager()
+	s := &Server{Manager: m, SessionManager: sm, AgentBranch: "machine/test"}
+	r := s.NewAPIRouter()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/repos/sub/origin-sessions",
+		strings.NewReader(`{"url":"https://example.com/x.git"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Subscription requires its origin") {
+		t.Errorf("body does not name the refusal: %s", rec.Body.String())
+	}
+
+	// And nothing was created.
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/sub/origin-sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"id"`) {
+		t.Errorf("a session was created despite the refusal: %s", rec.Body.String())
+	}
+}
+
+// persistSessionOrigin writes the durable origin record, and Origins.Set is a
+// full replacement: an empty Mode DELETES the subscription row. A connect
+// session cannot reach a subscription today (handleCreateSession 409s first),
+// so this pins the rule at the WRITE rather than at that guard — the guard is
+// three calls away and a future caller need not go through it.
+func TestPersistSessionOrigin_PreservesSubscriptionMode(t *testing.T) {
+	originsRoot := t.TempDir()
+	_, m, _ := newControlDBTestServer(t, originsRoot)
+
+	url := seedBareRemoteKBForTest(t, filepath.Join(originsRoot, "kb.git"))
+	sub, err := m.Create(context.Background(), repos.CreateSpec{
+		Name: "sub", Mode: "subscribe", Origin: &repos.OriginSpec{URL: url},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create subscription: %v", err)
+	}
+	before, err := m.Origins().Get(sub.UID())
+	if err != nil || before == nil || before.Mode != repos.OriginModeSubscribe {
+		t.Fatalf("precondition: want a subscribe-mode origin, got %+v (err %v)", before, err)
+	}
+
+	var perr error
+	if werr := sub.WithRead(func(svc *store.Service) {
+		perr = persistSessionOrigin(m, sub, svc, url, "main", "", "token", "s3cret")
+	}); werr != nil {
+		t.Fatalf("WithRead: %v", werr)
+	}
+	if perr != nil {
+		t.Fatalf("persistSessionOrigin: %v", perr)
+	}
+
+	after, err := m.Origins().Get(sub.UID())
+	if err != nil || after == nil {
+		t.Fatalf("origin after: %v %+v", err, after)
+	}
+	if after.Mode != repos.OriginModeSubscribe {
+		t.Errorf("Mode: got %q, want %q — the session write demoted the subscription",
+			after.Mode, repos.OriginModeSubscribe)
+	}
+	if after.AuthToken != "s3cret" {
+		t.Errorf("AuthToken: got %q, want the value just written — the write did not land", after.AuthToken)
 	}
 }

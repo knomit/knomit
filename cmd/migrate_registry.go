@@ -1406,13 +1406,14 @@ func backupControlDB(controlPath string) (string, error) {
 // drop repo_settings once its profiles have been folded in. Either all of it
 // lands or none of it does.
 //
-// The schema comes from migrate.ControlBaselineSQL rather than from
-// migrate.Control, and that is what keeps the transaction whole. The migrator
-// cannot join a caller's transaction — sqlite3.WithInstance takes a *sql.DB and
-// against this SetMaxOpenConns(1) pool would deadlock waiting for a second
-// connection — but the DDL does not need it to. The baseline body is
-// IF NOT EXISTS throughout with no data statements, so running it here recreates
-// exactly the lens tables just dropped and no-ops on repos/repo_origins.
+// The schema comes from migrate.ControlSchemaSQL (the whole chain) rather than
+// from migrate.Control, and that is what keeps the transaction whole. The
+// migrator cannot join a caller's transaction — sqlite3.WithInstance takes a
+// *sql.DB and against this SetMaxOpenConns(1) pool would deadlock waiting for a
+// second connection — but the DDL does not need it to. Every migration's body
+// is IF NOT EXISTS throughout with no data statements, so running the chain
+// here recreates exactly the lens tables just dropped and no-ops on
+// repos/repo_origins.
 //
 // Doing it the other way round is not merely less tidy, it loses data. When the
 // legacy DROP commits outside the transaction, an abort leaves the lens tables
@@ -1431,10 +1432,10 @@ func applyControlDB(out io.Writer, plan *migrationPlan) error {
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 
-	// Read the baseline before opening the transaction: it is the schema this
+	// Read the schema before opening the transaction: it is the schema this
 	// function is about to install, and failing to find it must not abort a
 	// half-run migration.
-	baseline, err := migrate.ControlBaselineSQL()
+	schema, err := migrate.ControlSchemaSQL()
 	if err != nil {
 		return err
 	}
@@ -1446,11 +1447,11 @@ func applyControlDB(out io.Writer, plan *migrationPlan) error {
 	defer tx.Rollback() //nolint:errcheck // no-op after a successful Commit
 
 	// The legacy lens tables go first: their rows are already captured in the
-	// plan, they hold the OLD columns the baseline's IF NOT EXISTS would leave
+	// plan, they hold the OLD columns the schema's IF NOT EXISTS would leave
 	// in place, and lens_reads' foreign key into repos(uid) would otherwise
 	// block the row rewrite below. lens_reads before lenses so the child is
 	// gone before its parent. Dropping `lenses` takes its indexes with it, so
-	// the baseline below recreates lenses_name cleanly.
+	// the schema below recreates lenses_name cleanly.
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS lens_reads`,
 		`DROP TABLE IF EXISTS lenses`,
@@ -1461,10 +1462,10 @@ func applyControlDB(out io.Writer, plan *migrationPlan) error {
 	}
 
 	// Recreate them — and create repos/repo_origins if this home has neither —
-	// from the versioned baseline's own text. IF NOT EXISTS throughout, so the
+	// from the versioned schema's own text. IF NOT EXISTS throughout, so the
 	// tables that survived the drops above are left exactly as they are, rows
 	// included.
-	if _, err := tx.Exec(baseline); err != nil {
+	if _, err := tx.Exec(schema); err != nil {
 		return fmt.Errorf("create control.db schema: %w", err)
 	}
 

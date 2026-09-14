@@ -67,6 +67,22 @@ type RepoInstance struct {
 	name        atomic.Pointer[string]
 	dbPath      string
 	agentBranch string
+	// readBranch is the branch this repo's content is read from by default:
+	// the agent branch when the repo has one, else the upstream it follows.
+	// A subscription has no agent branch, so every reader that answers a
+	// question about CONTENT asks ReadBranch(), never AgentBranch().
+	readBranch string
+	// subscribed marks a subscription: follows its origin read-only, no agent
+	// branch, never pushes. Explicit rather than inferred from an empty
+	// agentBranch so the DTO and the lens gate have a name for it.
+	//
+	// It is only ever true together with an EMPTY agentBranch, and whoever sets
+	// one must set the other: WritableBranch keys on the branch while the DTO
+	// and the lens gate key on this flag, so a mismatch makes a repo
+	// simultaneously a subscription and writable on its agent branch, with
+	// nothing failing. NewTestInstanceWithDeps enforces the pairing; a
+	// production constructor has to uphold it itself.
+	subscribed bool
 	// uid is the registry identity: stable for the repo's whole life, minted at
 	// create, and unchanged by rename or by a store swap. Distinct from id (the
 	// root-commit hash), which is MUTABLE — a disjoint-history connect replaces
@@ -257,6 +273,13 @@ func (ri *RepoInstance) UID() string { return ri.uid }
 // AgentBranch returns the agent branch this repo writes to.
 func (ri *RepoInstance) AgentBranch() string { return ri.agentBranch }
 
+// ReadBranch returns the branch this repo reads by default — the agent branch
+// for a writable repo, the followed upstream for a subscription.
+func (ri *RepoInstance) ReadBranch() string { return ri.readBranch }
+
+// Subscribed reports whether this repo is a subscription (see readBranch).
+func (ri *RepoInstance) Subscribed() bool { return ri.subscribed }
+
 // ID returns the repo's stable identity — the root commit hash, identical in
 // every clone and unaffected by renames (lenses RFC decision 11). Caches only
 // successful resolution; failures are retried on the next call and return ""
@@ -275,7 +298,7 @@ func (ri *RepoInstance) ID() string {
 		if svc == nil {
 			return
 		}
-		root, err := svc.RootCommit(context.Background(), ri.agentBranch)
+		root, err := svc.RootCommit(context.Background(), ri.readBranch)
 		if err != nil {
 			log.Warn().Err(err).Str("repo", ri.Name()).Msg("repo id: root commit unresolved")
 			return
@@ -551,8 +574,13 @@ type TestInstanceConfig struct {
 	// differently needs distinct, non-empty uids to exercise that at all — set
 	// one whenever a test builds more than one instance and compares them as
 	// bindings.
-	UID                 string
-	AgentBranch         string
+	UID         string
+	AgentBranch string
+	// ReadBranch is the branch content is read from. Defaults to AgentBranch.
+	ReadBranch string
+	// Subscribed builds a subscription: AgentBranch is ignored (forced empty)
+	// and ReadBranch must be set.
+	Subscribed          bool
 	Svc                 *store.Service
 	Ontology            *fact.Ontology
 	Hub                 *TaskHub
@@ -584,9 +612,19 @@ type TestQualityConfig struct {
 // dependencies. Intended for handler/integration tests in sibling packages.
 // Production code must use Manager.openOne instead.
 func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
+	agent := cfg.AgentBranch
+	if cfg.Subscribed {
+		agent = ""
+	}
+	read := cfg.ReadBranch
+	if read == "" {
+		read = agent
+	}
 	ri := &RepoInstance{
 		uid:                 cfg.UID,
-		agentBranch:         cfg.AgentBranch,
+		agentBranch:         agent,
+		readBranch:          read,
+		subscribed:          cfg.Subscribed,
 		handle:              newStoreHandle(cfg.Svc),
 		ontology:            cfg.Ontology,
 		embedder:            cfg.Embedder,

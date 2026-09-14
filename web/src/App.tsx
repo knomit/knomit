@@ -433,6 +433,18 @@ export default function App() {
     return () => { alive = false; };
   }, []);
 
+  // The browsed repo's own read-only state (a subscription). Lens browsing
+  // writes to the lens's write repo, which can never be a subscription
+  // (validateLensLocked refuses one), so the flag is cleared there.
+  useEffect(() => {
+    if (state.context.kind !== 'repo' || !state.repo) { dispatch({ type: 'SET_REPO_READONLY', value: false }); return; }
+    let alive = true;
+    api.getRepo(state.repo)
+      .then(d => { if (alive) dispatch({ type: 'SET_REPO_READONLY', value: d.mode === 'subscribe' }); })
+      .catch(() => { /* best-effort: stay writable on failure */ });
+    return () => { alive = false; };
+  }, [state.context, state.repo]);
+
   // Remember the user's browse context (repo | lens) so reloads land on the
   // same surface.
   useEffect(() => {

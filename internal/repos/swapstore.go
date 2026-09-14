@@ -40,6 +40,10 @@ func (m *Manager) rewireStore(ri *RepoInstance, svc *store.Service) {
 	// swapped-in store bounds remote git ops identically to a freshly built one.
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+	// store.Open does not restore the read-only flag either. Omitting it would
+	// leave a swapped-in subscription accepting authored commits — no error and
+	// no log, exactly the silent shape this checklist exists to prevent.
+	svc.SetReadOnly(ri.subscribed)
 	m.reinjectOrigin(ri, svc)
 }
 

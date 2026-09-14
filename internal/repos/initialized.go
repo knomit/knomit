@@ -162,6 +162,40 @@ func (m *Manager) ProbeInitialized(ctx context.Context, o OriginSpec) (Initializ
 	// comment.
 	inspect := store.BranchACreateReads(hasAgentBranch, m.deps.AgentBranch, o.Branch)
 
+	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect)
+}
+
+// ProbeInitializedOn is ProbeInitialized for a caller that already knows
+// WHICH branch the question is about. Subscribe mode uses it with the
+// consensus branch: a subscription never adopts an agent branch, so the
+// create-reads rule ProbeInitialized applies would answer for the wrong ref —
+// a remote whose only knowledge base is this machine's own agent branch is
+// not subscribable.
+func (m *Manager) ProbeInitializedOn(ctx context.Context, o OriginSpec, inspect string) (InitializedResult, error) {
+	if err := m.ValidateLocalOrigin(o.URL); err != nil {
+		return InitializedResult{}, err
+	}
+	auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
+	if err != nil {
+		return InitializedResult{Branch: inspect, Detail: err.Error()}, nil
+	}
+	netCtx, cancel := probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
+	defer cancel()
+	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect)
+}
+
+// probeInitializedBranch is the shared body: shallow-clone `inspect` and look
+// for an ontology in its tip tree. The two callers differ only in how they
+// decide WHICH branch that is.
+//
+// It takes the network budget rather than deriving one, so ONE probeCtx spans
+// every network call a single probe makes. ProbeInitialized needs that: it has
+// already spent part of the budget on remoteHasBranch, and deriving a second
+// one here would let an unresponsive remote cost a caller twice the configured
+// timeout. parent is the CALLER's context, kept distinct from netCtx so
+// probeFailureDetail can still tell "the caller gave up" from "our deadline
+// expired".
+func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o OriginSpec, auth transport.AuthMethod, inspect string) (InitializedResult, error) {
 	opts := &gogit.CloneOptions{
 		URL:          o.URL,
 		Auth:         auth,
@@ -205,7 +239,7 @@ func (m *Manager) ProbeInitialized(ctx context.Context, o OriginSpec) (Initializ
 		}
 		return InitializedResult{
 			Branch: o.Branch,
-			Detail: probeFailureDetail(ctx, netCtx, cerr, m.deps.Cfg.Git.NetworkTimeout),
+			Detail: probeFailureDetail(parent, netCtx, cerr, m.deps.Cfg.Git.NetworkTimeout),
 		}, nil
 	}
 

@@ -168,6 +168,11 @@ func New(ctx context.Context, deps Deps) *Manager {
 // (RFC decision 18).
 var ErrReplicaInLens = errors.New("lens mounts two replicas of the same repo")
 
+// ErrLensWriteSubscribed is returned when a lens names a subscription as its
+// write repo. A subscription has no agent branch and accepts no writes, so a
+// lens writing through it could never commit anything.
+var ErrLensWriteSubscribed = errors.New("lens write repo is a subscription (read-only)")
+
 // ErrLensBranchUnknown rejects a lens read pinned to a branch its member repo
 // does not have. Failing at create beats mysteriously empty federated reads.
 var ErrLensBranchUnknown = errors.New("lens pins an unknown branch")
@@ -230,8 +235,8 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		return fmt.Errorf("%w: %q", ErrLensNameConflictsRepo, l.Name)
 	}
 	// Collapse to one entry per member uid; the write repo is implicitly a
-	// member. An explicit branch pin wins over the empty (agent) default so a
-	// duplicate row can't hide a bad pin.
+	// member. An explicit branch pin wins over the empty (read-branch) default
+	// so a duplicate row can't hide a bad pin.
 	branches := map[string]string{l.WriteUID: ""}
 	for _, lr := range l.Reads {
 		if b, ok := branches[lr.RepoUID]; !ok || b == "" {
@@ -254,12 +259,19 @@ func (m *Manager) validateLensLocked(ctx context.Context, l Lens) error {
 		ids[uid] = id
 		ris[uid] = ri
 	}
+	// A subscription accepts no authored commits on any branch (Task 4's
+	// read-only store), so a lens writing through it could never commit. Refused
+	// here rather than at the first failed write, where the error would name a
+	// branch instead of the real cause.
+	if ris[l.WriteUID].Subscribed() {
+		return fmt.Errorf("%w: %q", ErrLensWriteSubscribed, l.WriteUID)
+	}
 	if err := checkMemberIDCollision(ids); err != nil {
 		return err
 	}
 	for uid, branch := range branches {
 		if branch == "" {
-			continue // agent-branch default, always valid
+			continue // read-branch default, always valid
 		}
 		// Classify the lookup outcome: a genuinely-missing branch is the caller's
 		// bad lens spec (ErrLensBranchUnknown → 4xx), but a lookup that fails for
@@ -976,12 +988,34 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		checkOriginOntology: m.CheckOriginOntology,
 	}
 
+	if origin != nil && origin.Mode == OriginModeSubscribe {
+		// A subscription has no agent branch: every reader uses readBranch()
+		// (the upstream, rehydrated from the origin row) and the store is
+		// read-only. Set here, before openStore, so the flag reaches the
+		// service and nothing below cuts a branch.
+		//
+		// Both fields move together: RepoInstance.subscribed is only ever true
+		// alongside an empty agent branch, and this is the production
+		// constructor that upholds it.
+		b.subscribed = true
+		b.agentBranch = ""
+	}
+
 	if err := b.openStore(); err != nil {
 		return nil, err
 	}
 	if err := b.openGit(); err != nil {
 		b.close()
 		return nil, err
+	}
+	// readBranch() is only valid once openGit has rehydrated upstreamMain. A
+	// subscription with no upstream would read from "" — no ontology, no
+	// identity, no index — so refuse instead of building a repo that looks
+	// open and answers nothing. Create persists the RESOLVED upstream, so this
+	// means a corrupted or hand-edited origin row.
+	if b.subscribed && b.readBranch() == "" {
+		b.close()
+		return nil, fmt.Errorf("open %q: subscription has no upstream branch recorded in its origin", name)
 	}
 	// ensureBranch must run before loadOntology: on a restored/copied home the
 	// configured agent branch is absent until ensureBranch adopts it (issue

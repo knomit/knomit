@@ -145,7 +145,15 @@ export function lensAvailable(l: LensMembership, repos: RepoInfo[]): boolean {
 // destroy an oversize LICENSE (see WriteLicense's ErrLicenseTooLargeToReplace
 // guard, which now refuses that write server-side too). Only ever true when
 // license is absent; never sent as false.
-export interface RepoDetails { name: string; agent_branch?: string; description?: string; license?: string; license_oversize?: boolean }
+export interface RepoDetails {
+  name: string;
+  agent_branch?: string; // absent for a subscription, which has none
+  read_branch?: string; // the branch content is read from; always present
+  mode?: 'subscribe'; // present only for a subscription
+  description?: string;
+  license?: string;
+  license_oversize?: boolean;
+}
 
 // getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
 // README.md description when available.
@@ -658,6 +666,11 @@ async function getAgentBranch(repo: string): Promise<string> {
   try {
     const details = await getRepo(repo);
     if (details.agent_branch) return details.agent_branch;
+    // A subscription has no agent branch; its read branch is the only branch it
+    // has. Returning it keeps every caller that asks "which branch?" answering
+    // with a real one instead of falling into the heuristic below, which would
+    // guess a foreign agent/* branch.
+    if (details.read_branch) return details.read_branch;
   } catch {
     // fall through to the branch-list heuristic
   }
@@ -712,7 +725,7 @@ export interface CreateRepoBody {
    * remote other than its own agent branch, so a remote with no branches is a
    * blocked state the wizard reports rather than a case it handles.
    */
-  mode: 'preset' | 'custom' | 'clone' | 'initialize';
+  mode: 'preset' | 'custom' | 'clone' | 'initialize' | 'subscribe';
   ontology_preset?: string;
   ontology_yaml?: string;
   origin?: { url: string; branch?: string; auth_method?: string; auth_token?: string };

@@ -178,6 +178,10 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
+		if refuseUnwritableBranch(w, r, ri, branch) {
+			return
+		}
+
 		path := chi.URLParam(r, "*")
 		if path == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",
@@ -290,6 +294,10 @@ func handleFactDelete(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
+		if refuseUnwritableBranch(w, r, ri, branch) {
+			return
+		}
+
 		path := chi.URLParam(r, "*")
 		if path == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing fact path",

@@ -18,8 +18,16 @@ var (
 	// cap is a pure input check, enforced here rather than at the HTTP edge so
 	// every writer of README.md is bound by it.
 	ErrRepoDescriptionTooLong = errors.New("repo description too long")
-	// ErrAgentBranchUnset is returned when the repo has no agent branch yet, so
-	// there is no ref to read the manifest from or commit it to.
+	// ErrAgentBranchUnset is returned when there is no ref to read the manifest
+	// from or commit it to.
+	//
+	// The two halves guard DIFFERENT branches, which is why one sentinel still
+	// covers both: the readers (ReadReadme, ReadLicense) guard the READ branch —
+	// the agent branch, or the followed upstream for a subscription — which is
+	// empty only for an unregistered or bare instance; the writers (WriteReadme,
+	// WriteLicense) guard the agent branch, which a subscription never has. So
+	// for any REGISTERED repo the readers' guard is unreachable and this
+	// sentinel means exactly what its name says: the caller tried to write.
 	ErrAgentBranchUnset = errors.New("repo has no agent branch")
 	// ErrLicenseTooLargeToReplace is returned by WriteLicense when the LICENSE
 	// already on the agent branch exceeds MaxRepoDescriptionBytes. ReadFact has
@@ -55,10 +63,16 @@ const ReadmePath = "README.md"
 const readmeCommitMsg = "docs: update README.md"
 
 // ReadReadme returns the verbatim content of README.md at the tip of the
-// repo's agent branch. A missing manifest is not an error — it returns "" with
+// repo's READ branch. A missing manifest is not an error — it returns "" with
 // a nil error, because "this repo has no description" is an ordinary state.
+//
+// The read branch, not the agent branch: a subscription has no agent branch and
+// its README lives on the upstream it follows. Writers stay on the agent branch
+// — see WriteReadme.
 func (ri *RepoInstance) ReadReadme(ctx context.Context) (string, error) {
-	branch := ri.agentBranch
+	// readBranch is the agent branch or the followed upstream; never empty for
+	// a registered repo.
+	branch := ri.readBranch
 	if branch == "" {
 		return "", ErrAgentBranchUnset
 	}
@@ -220,7 +234,9 @@ const LicensePath = "LICENSE"
 // door, so an oversize LICENSE here only arrives some other way — a clone, or
 // a hand-edited working tree.
 func (ri *RepoInstance) ReadLicense(ctx context.Context) (content string, oversize bool, err error) {
-	branch := ri.agentBranch
+	// readBranch is the agent branch or the followed upstream; never empty for
+	// a registered repo. WriteLicense stays on the agent branch.
+	branch := ri.readBranch
 	if branch == "" {
 		return "", false, ErrAgentBranchUnset
 	}

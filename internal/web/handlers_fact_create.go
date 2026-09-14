@@ -44,6 +44,9 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
+		if refuseUnwritableBranch(w, r, ri, branch) {
+			return
+		}
 
 		var req factCreateRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

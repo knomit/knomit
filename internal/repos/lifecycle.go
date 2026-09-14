@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
 	"github.com/segmentio/ksuid"
 
@@ -127,22 +128,65 @@ type OriginSpec struct {
 // "clone" joins a branch that has one, "initialize" writes one onto knomit's
 // own agent branch cut from a branch that has not. Neither ever creates or
 // writes a branch on the remote other than agent/<host>.
+//
+// "subscribe" FOLLOWS a branch that has an ontology, read-only: no agent
+// branch, no writes, no push. Unlike the other two remote modes it is the
+// user's choice, not derived from the remote's shape.
 type CreateSpec struct {
 	Name           string
-	Mode           string // "preset" | "custom" | "clone" | "initialize"
+	Mode           string // "preset" | "custom" | "clone" | "initialize" | "subscribe"
 	OntologyPreset string
 	OntologyYAML   string
 	Origin         *OriginSpec
 }
 
-// hasRemote reports whether spec's mode attaches a remote origin. "clone" and
-// "initialize" are the two remote-bearing modes — everywhere one of them needs
-// the origin checked, reserved, persisted, or synced, the other needs it too.
-// Written once here rather than repeated as `|| spec.Mode == "initialize"` at
-// each of the five sites in this file, so a future sixth site can't be added
-// without the same check.
+// hasRemote reports whether spec's mode attaches a remote origin. "clone",
+// "initialize" and "subscribe" are the remote-bearing modes — everywhere one of
+// them needs the origin checked, reserved, persisted, or synced, the others need
+// it too. Written once here rather than repeated as a mode list at each of the
+// five sites in this file, so a future sixth site can't be added without the
+// same check.
+//
+// A subscription differs from the other two only in what it does with the
+// origin, never in whether it has one: it still reserves the URL, persists it
+// (with Mode=OriginModeSubscribe) and syncs from it — it just never pushes.
 func (s CreateSpec) hasRemote() bool {
-	return s.Mode == "clone" || s.Mode == "initialize"
+	return s.Mode == "clone" || s.Mode == "initialize" || s.Mode == "subscribe"
+}
+
+// joinsRemoteOntology reports whether the mode takes its ontology FROM the
+// remote and therefore refuses one in the request.
+func (s CreateSpec) joinsRemoteOntology() bool { return s.Mode == "clone" || s.Mode == "subscribe" }
+
+// subscribeInspectBranch is the branch a subscribe preflight asks its shape
+// question about: the one the caller requested, else the one the CREATE will
+// actually adopt.
+//
+// Those must agree. InitSubscription resolves an unrequested branch through
+// store.resolveUpstream (prefer "main", else the remote's HEAD); answering the
+// shape question about HEAD instead would refuse a remote whose HEAD is not
+// main but whose main IS a knowledge base — a confident wrong "no" in front of
+// a create that would have succeeded. ProbeResult.UpstreamBranch is the
+// repos-side twin of that rule (see resolveUpstream in probe.go), computed from
+// a ref listing the preflight has already made.
+//
+// usable is passed in rather than re-derived here so CreatePreflight keeps ONE
+// definition of it: the same `probeUsable` it computes two lines above for the
+// empty-remote check. Re-deriving it would let the two drift, and it would tie
+// this helper to how probeOrigin happens to build its failure results. When the
+// listing established nothing the branch stays "" and the create's own check
+// remains authoritative — an UNKNOWN refuses nothing.
+//
+// Extracted so the preflight and the test that pins the two rules together call
+// the SAME code, rather than a test re-deriving the rule it is checking.
+func subscribeInspectBranch(spec CreateSpec, probe ProbeResult, usable bool) string {
+	if spec.Origin.Branch != "" {
+		return spec.Origin.Branch
+	}
+	if usable {
+		return probe.UpstreamBranch
+	}
+	return ""
 }
 
 // Event is a progress message emitted during Create.
@@ -183,7 +227,7 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 			return fmt.Errorf("%w: %s mode requires origin.url", ErrInvalidName, spec.Mode)
 		}
 		origin = spec.Origin.URL
-		if spec.Mode == "clone" {
+		if spec.joinsRemoteOntology() {
 			if err := rejectOntologySpecForClone(spec); err != nil {
 				return err
 			}
@@ -233,8 +277,12 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 		// handshake — the one that dials without a usable context bound — on
 		// every create, while also exposing the create to a "denied" verdict it
 		// does not act on.
-		if probe, perr := m.ProbeOriginRefs(ctx, *spec.Origin); perr == nil &&
-			probe.Reachable && !probe.AuthRequired && probe.Empty {
+		// Hoisted out of the `if` below: subscribe reuses UpstreamBranch to
+		// resolve which branch its shape question is about, rather than paying
+		// for a second ref listing.
+		probe, perr := m.ProbeOriginRefs(ctx, *spec.Origin)
+		probeUsable := perr == nil && probe.Reachable && !probe.AuthRequired
+		if probeUsable && probe.Empty {
 			return ErrRemoteNoBranches
 		}
 		// And the SHAPE question: is the branch this create will read already a
@@ -253,9 +301,30 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 		// established nothing, and turning that into a refusal would block a
 		// create that is very likely fine; Create's own check will decide with
 		// the connection it actually opens.
-		if init, ierr := m.ProbeInitialized(ctx, *spec.Origin); ierr == nil {
+		var init InitializedResult
+		var ierr error
+		if spec.Mode == "subscribe" {
+			// The consensus branch, never the adopted one: see ProbeInitializedOn.
+			//
+			// With no branch requested this must resolve the SAME way the create
+			// will. InitSubscription runs store.resolveUpstream (prefer "main",
+			// else the remote's HEAD); passing "" here would instead inspect
+			// whatever HEAD points at, so a remote whose HEAD is not main but
+			// whose main IS a knowledge base would be refused with a confident
+			// wrong "no" — and the create right behind it would have succeeded.
+			// ProbeResult.UpstreamBranch is the repos-side twin of that rule
+			// (probe.go, resolveUpstream), computed from the listing already
+			// made above.
+			//
+			// If the probe yielded nothing usable, pass "" and let the create's
+			// own check stay authoritative: an UNKNOWN here refuses nothing.
+			init, ierr = m.ProbeInitializedOn(ctx, *spec.Origin, subscribeInspectBranch(spec, probe, probeUsable))
+		} else {
+			init, ierr = m.ProbeInitialized(ctx, *spec.Origin)
+		}
+		if ierr == nil {
 			switch {
-			case spec.Mode == "clone" && init.Initialized == InitializedNo:
+			case spec.joinsRemoteOntology() && init.Initialized == InitializedNo:
 				return ErrRemoteNotInitialized
 			case spec.Mode == "initialize" && init.Initialized == InitializedYes:
 				return ErrRemoteAlreadyInitialized
@@ -339,10 +408,10 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, err
 	}
 
-	// Determine the origin to reserve (clone/seed only) before reserving, so the
-	// reservation covers the whole clone/seed — including the network fetch —
-	// and a second clone/seed of the same origin is blocked for that entire
-	// window.
+	// Determine the origin to reserve (the remote-bearing modes only) before
+	// reserving, so the reservation covers the whole fetch — including the
+	// network round trip — and a second create against the same origin is
+	// blocked for that entire window.
 	var origin string
 	if spec.hasRemote() {
 		if spec.Origin == nil || spec.Origin.URL == "" {
@@ -426,6 +495,13 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			return nil, ierr
 		}
 		resolvedUpstream = upstream
+	case "subscribe":
+		upstream, ierr := m.initSubscribe(ctx, spec, dbPath, emit)
+		if ierr != nil {
+			cleanup()
+			return nil, ierr
+		}
+		resolvedUpstream = upstream
 	default:
 		cleanup()
 		return nil, fmt.Errorf("%w: unknown mode %q", ErrInvalidName, spec.Mode)
@@ -461,6 +537,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			Branch:     resolvedUpstream,
 			AuthMethod: spec.Origin.AuthMethod,
 			AuthToken:  spec.Origin.AuthToken,
+			Mode:       originModeFor(spec.Mode),
 		}
 		if oerr := origins.Set(uid, *originRec); oerr != nil {
 			cleanup()
@@ -585,7 +662,7 @@ func resolveOntology(spec CreateSpec) (*fact.Ontology, error) {
 // later.
 func rejectOntologySpecForClone(spec CreateSpec) error {
 	if spec.OntologyPreset != "" || spec.OntologyYAML != "" {
-		return fmt.Errorf("%w: clone mode takes its ontology from the origin; ontology_preset/ontology_yaml are not accepted", ErrInvalidName)
+		return fmt.Errorf("%w: %s mode takes its ontology from the remote; ontology_preset/ontology_yaml are not accepted", ErrInvalidName, spec.Mode)
 	}
 	return nil
 }
@@ -856,6 +933,68 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// its own explanation.
 	if cerr := ctx.Err(); cerr != nil {
 		return "", agentBranchAlreadyPushed(cerr, spec.Origin.URL, m.deps.AgentBranch, upstream)
+	}
+	return upstream, nil
+}
+
+// originModeFor maps a create mode onto the persisted origin mode.
+func originModeFor(createMode string) string {
+	if createMode == "subscribe" {
+		return OriginModeSubscribe
+	}
+	return OriginModeSync
+}
+
+// initSubscribe handles "subscribe" mode: FOLLOW a remote branch that already
+// is a knowledge base, read-only.
+//
+// It is initClone without the agent half. store.InitSubscription fetches and
+// tracks the consensus branch alone — no agent branch is cut, no watermark
+// written, and the repo never pushes. The ontology check runs against the
+// RESOLVED upstream, because that is the only branch this repo will ever read.
+// Like initClone this does NOT persist the origin; Create does, with
+// Mode=OriginModeSubscribe, once this returns the resolved upstream.
+func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+	if cerr := ctx.Err(); cerr != nil {
+		return "", cerr
+	}
+	// The authoritative copy of the CreatePreflight check, for the same reason
+	// initClone keeps one: Create is also called directly.
+	if err := rejectOntologySpecForClone(spec); err != nil {
+		return "", err
+	}
+	emit(Event{Step: "subscribe", Message: "subscribing to " + spec.Origin.URL, Pct: 40})
+	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
+	if err != nil {
+		return "", fmt.Errorf("resolve auth: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		return "", err
+	}
+	svc, err := store.Open(dbPath)
+	if err != nil {
+		return "", fmt.Errorf("open store: %w", err)
+	}
+	defer svc.Close()
+	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
+	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+
+	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch)
+	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
+		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)
+	}
+	if err != nil {
+		return "", fmt.Errorf("subscribe: %w", err)
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return "", cerr
+	}
+	hasOnt, oerr := branchHasOntology(ctx, svc, upstream)
+	if oerr != nil {
+		return "", fmt.Errorf("subscribe: check for an ontology: %w", oerr)
+	}
+	if !hasOnt {
+		return "", fmt.Errorf("subscribe %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
 	}
 	return upstream, nil
 }

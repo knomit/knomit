@@ -14,10 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +36,17 @@ func TestSync_FetchHoldsConfigReadLock(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+
+	// Bound the fetch. Open leaves netTimeout at 0, which netCtxWith reads as
+	// "no deadline", so the bogus-URL fetch below took however long the host's
+	// resolver needed to give up — 0.3s on a dev box, but over the 5s resume
+	// budget on a CI runner whose resolver does not fail .invalid fast. The
+	// timeout makes the second phase's wait a bound rather than a hope. It
+	// cannot weaken the first phase: netCtxWith runs INSIDE the closure, after
+	// the RLock, so no deadline is ticking while Sync is parked. Worst case
+	// fetchOrigin spends two of these (strict refspec, then the upstream-only
+	// fallback), still an order of magnitude inside the budget.
+	svc.SetNetworkTimeout(250 * time.Millisecond)
 
 	// A configured remote — the bogus URL is fine: the fetch fails, but only
 	// AFTER acquiring the read lock, which is the behaviour under test.
@@ -234,4 +248,129 @@ func mustRun(t *testing.T, dir, cmd string, args ...string) {
 	if err != nil {
 		t.Fatalf("%s %v failed: %v\n%s", cmd, args, err, out)
 	}
+}
+
+// seedBareRemoteOnMain builds a bare remote with one commit on main and returns
+// its path. Shared by the subscription tests below.
+func seedBareRemoteOnMain(t *testing.T) string {
+	t.Helper()
+	bareDir := t.TempDir()
+	mustRun(t, "", "git", "init", "--bare", "--initial-branch=main", bareDir)
+	work := t.TempDir()
+	mustRun(t, "", "git", "clone", bareDir, work)
+	mustRun(t, work, "git", "checkout", "-B", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
+	mustRun(t, work, "git", "config", "user.email", "t@t")
+	mustRun(t, work, "git", "config", "user.name", "t")
+	mustRun(t, work, "git", "add", "seed.txt")
+	mustRun(t, work, "git", "commit", "-m", "seed main")
+	mustRun(t, work, "git", "push", "origin", "main")
+	mustRun(t, bareDir, "git", "symbolic-ref", "HEAD", "refs/heads/main")
+	return bareDir
+}
+
+func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
+	bareDir := seedBareRemoteOnMain(t)
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	upstream, err := svc.InitSubscription("file://"+bareDir, nil, "")
+	require.NoError(t, err)
+	require.Equal(t, "main", upstream)
+
+	// Local main exists and equals origin/main.
+	local, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	require.NoError(t, err)
+	remote, err := svc.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", "main"))
+	require.NoError(t, err)
+	require.Equal(t, remote.Hash(), local.Hash())
+
+	// HEAD points at main.
+	head, err := svc.rh.gits.Reference(plumbing.HEAD)
+	require.NoError(t, err)
+	require.Equal(t, plumbing.NewBranchReferenceName("main"), head.Target())
+
+	// No agent ref and no watermark of any kind.
+	iter, err := svc.rh.gits.IterReferences()
+	require.NoError(t, err)
+	require.NoError(t, iter.ForEach(func(r *plumbing.Reference) error {
+		n := r.Name().String()
+		require.False(t, strings.HasPrefix(n, "refs/heads/agent/"), "unexpected agent ref %s", n)
+		require.False(t, strings.HasPrefix(n, "refs/knomit/"), "unexpected watermark ref %s", n)
+		return nil
+	}))
+
+	// One fetch refspec.
+	cfg, err := svc.rh.repo.Config()
+	require.NoError(t, err)
+	require.Equal(t, []gogitconfig.RefSpec{"+refs/heads/main:refs/remotes/origin/main"}, cfg.Remotes["origin"].Fetch)
+
+	// The branches row, the branch-to-commit mapping and commit_log are all
+	// populated for the followed branch.
+	//
+	// Asserted with SQL rather than through HeadCommit, which proves none of it:
+	// HeadCommit resolves the git ref and never reads these tables, so it only
+	// restates the ref check above. The gap matters because the failure is
+	// silent from both ends — populateCommitLog returns nil when the ref lookup
+	// fails, and InitSubscription logs and swallows its error — so a
+	// subscription whose commit log never populated would still look healthy.
+	ctx := context.Background()
+	var branchID int64
+	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+		`SELECT id FROM branches WHERE name = ?`, "main").Scan(&branchID))
+
+	seed := local.Hash().String()
+	var onBranch int
+	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
+		branchID, seed).Scan(&onBranch))
+	require.Equal(t, 1, onBranch, "the seed commit must be mapped onto the followed branch")
+
+	// commit_log is keyed (commit_hash, path), not by branch, so name the commit.
+	var logged int
+	require.NoError(t, svc.rh.db.QueryRowContext(ctx,
+		`SELECT count(*) FROM commit_log WHERE commit_hash = ?`, seed).Scan(&logged))
+	require.Greater(t, logged, 0, "the seed commit must be in commit_log")
+}
+
+func TestInitSubscription_EmptyRemoteIsRefused(t *testing.T) {
+	bareDir := t.TempDir()
+	mustRun(t, "", "git", "init", "--bare", "--initial-branch=main", bareDir)
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	_, err = svc.InitSubscription("file://"+bareDir, nil, "")
+	require.ErrorIs(t, err, transport.ErrEmptyRemoteRepository)
+}
+
+// Subscribing resolves the upstream by the same rule as a clone: prefer main,
+// else the remote HEAD. A master-only remote yields "master".
+func TestInitSubscription_ResolvesRemoteHEADWhenNoMain(t *testing.T) {
+	bareDir := t.TempDir()
+	mustRun(t, "", "git", "init", "--bare", "--initial-branch=master", bareDir)
+	work := t.TempDir()
+	mustRun(t, "", "git", "clone", bareDir, work)
+	mustRun(t, work, "git", "checkout", "-B", "master")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
+	mustRun(t, work, "git", "config", "user.email", "t@t")
+	mustRun(t, work, "git", "config", "user.name", "t")
+	mustRun(t, work, "git", "add", "seed.txt")
+	mustRun(t, work, "git", "commit", "-m", "seed master")
+	mustRun(t, work, "git", "push", "origin", "master")
+	mustRun(t, bareDir, "git", "symbolic-ref", "HEAD", "refs/heads/master")
+
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	upstream, err := svc.InitSubscription("file://"+bareDir, nil, "")
+	require.NoError(t, err)
+	require.Equal(t, "master", upstream)
+	_, mainErr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	require.ErrorIs(t, mainErr, plumbing.ErrReferenceNotFound)
 }

@@ -37,6 +37,9 @@ func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, messa
 // writeFileExact is writeFile without case normalization. Callers own the
 // exact bytes of the path they pass.
 func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
+	if fi.rh.readOnly {
+		return "", "", ErrRepoReadOnly
+	}
 	if err := validatePath(path); err != nil {
 		return "", "", fmt.Errorf("store: WriteFile: %w", err)
 	}
@@ -82,6 +85,9 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 // deleteFile removes path from branch and creates a commit.
 // Returns the commit hash of the new commit.
 func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, operation string) (commitHash string, err error) {
+	if fi.rh.readOnly {
+		return "", ErrRepoReadOnly
+	}
 	path = strings.ToLower(path)
 	if err := validatePath(path); err != nil {
 		return "", fmt.Errorf("store: DeleteFile: %w", err)
@@ -135,6 +141,9 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 // up deleted. Callers relying on write-then-delete of the same path are almost
 // certainly confused; keep the two sets disjoint.
 func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+	if fi.rh.readOnly {
+		return "", nil, ErrRepoReadOnly
+	}
 	if len(files) == 0 && len(deletes) == 0 {
 		return "", nil, nil
 	}

@@ -107,6 +107,7 @@ func abandonedByCaller(ctx context.Context, retErr error) bool {
 //  3. Reconcile the agent branch against local main, replaying any
 //     local-only commits (since the watermark) onto the new main tip.
 //     Main is reconciled FIRST so the agent sees the post-fetch tip.
+//     When agentBranch is empty (a subscription) step 3 is skipped.
 //
 // The agent's reconcile uses a per-branch watermark
 // (refs/knomit/agent-base/<branch>) as the base for unpushedCommits, so
@@ -217,6 +218,13 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 		return SyncResult{Main: mainRes}, fmt.Errorf("Sync: reconcileMain: %w", err)
 	}
 
+	// A subscription has no agent branch: the upstream IS what this repo reads,
+	// so the main reconcile is the whole sync. There is no local-only work to
+	// replay and nothing to merge into.
+	if agentBranch == "" {
+		return SyncResult{Main: mainRes}, nil
+	}
+
 	// reconcileAgent dispatches on mainRes.Mode:
 	//   - !ModeRewound → merge local upstream into agent (steady state, one merge commit at most).
 	//   - ModeRewound  → rebase fallback: replay agent's local-only commits onto the
@@ -239,7 +247,15 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 //
 // Returns Pushed=false (no error) when there is nothing to push (local
 // agent ref already equals the last-known origin/agent ref).
+//
+// An empty branch is refused with ErrNoAgentBranch, but that is a BACKSTOP:
+// the reconcile loop gates on repos.pushAllowed and never calls this for a
+// subscription in the first place.
 func (ri *remoteIndex) Push(ctx context.Context, branch string, auth transport.AuthMethod) (res PushResult, retErr error) {
+	if branch == "" {
+		return PushResult{}, ErrNoAgentBranch
+	}
+
 	unlock := ri.rh.lockBranch(branch)
 	defer unlock()
 

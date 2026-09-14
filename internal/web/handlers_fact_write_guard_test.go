@@ -1,10 +1,15 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"knomit/internal/repos"
 )
 
 // refusedByGuard drives PUT and DELETE at path and asserts BOTH are refused
@@ -119,4 +124,50 @@ func TestFactEndpoints_AllowOrdinaryFactsNearServerOwnedNames(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The REST fact writers must consult the branch write-eligibility
+// classification. Two cases, and they are not the same rule:
+//
+//   - a SUBSCRIPTION accepts no writes on any branch; and
+//   - an ORDINARY repo accepts them only on its own agent branch, so the
+//     consensus branch is refused too.
+//
+// The second is the one that makes this a behaviour change for every REST
+// client, and without a case for it the gate could be narrowed to
+// `ri.Subscribed() && …` with the whole suite still green.
+//
+// The refusal DETAIL is asserted per case, not just the status: telling a
+// subscription's client to use "the repo's own agent branch" would name a
+// branch that does not exist and that the DTO deliberately omits.
+func TestFactWrite_RefusesNonWritableBranchWith403(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	m.Set("sub", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "sub", Subscribed: true, ReadBranch: "main"}))
+	m.Set("rw", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "rw", AgentBranch: "agent/test"}))
+	writer := &stubFactWriter{writeHash: "abc123"}
+	s := &Server{Manager: m, providers: storeProviders{factWriter: writer}}
+	r := s.NewAPIRouter()
+
+	const subDetail = "is a subscription: it follows a remote branch read-only"
+	const rwDetail = "only the repo's own agent branch accepts writes"
+
+	for _, tc := range []struct{ name, method, path, body, wantDetail string }{
+		{"subscription PUT", http.MethodPut, "/repos/sub/branches/main/facts/kb/x.md", `{"content":"` + testFactContent + `"}`, subDetail},
+		{"subscription DELETE", http.MethodDelete, "/repos/sub/branches/main/facts/kb/x.md", ``, subDetail},
+		{"subscription POST", http.MethodPost, "/repos/sub/branches/main/facts", `{"title":"X","content":"` + testFactContent + `","topic":"gotchas","category":"a"}`, subDetail},
+		// An ORDINARY repo, refused on the consensus branch. This is the entry
+		// that pins the gate as a whole-surface rule rather than a subscription
+		// special case.
+		{"ordinary repo on the consensus branch", http.MethodPut, "/repos/rw/branches/main/facts/kb/x.md", `{"content":"` + testFactContent + `"}`, rwDetail},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusForbidden, rec.Code, "%s: %s %s: body=%s", tc.name, tc.method, tc.path, rec.Body.String())
+		require.Contains(t, rec.Body.String(), "Read-only branch", tc.name)
+		require.Contains(t, rec.Body.String(), tc.wantDetail, "%s: wrong advice in the refusal detail", tc.name)
+	}
+	require.Zero(t, writer.writeCalls, "the writer must never be reached")
+	require.Zero(t, writer.deleteCalls, "the writer must never be reached")
 }

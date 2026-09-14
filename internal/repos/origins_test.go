@@ -35,6 +35,7 @@ func TestOrigins_SetAndGetRoundTrips(t *testing.T) {
 	got, err := o.Get("u1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
+	want.Mode = OriginModeSync // Get always fills Mode; an unset Mode on Set means sync.
 	require.Equal(t, want, *got, "token round-trips as plaintext")
 }
 
@@ -106,6 +107,54 @@ func TestOrigins_ActiveRepoWithURL(t *testing.T) {
 	name, err = o.ActiveRepoWithURL("https://x.test/kb.git")
 	require.NoError(t, err)
 	require.Empty(t, name, "an archived repo releases its origin claim")
+}
+
+// Mode round-trips through the repo_subscriptions presence table: Set writes a
+// row when Mode is subscribe, Get reads it back through the LEFT JOIN, and
+// re-Setting without a mode removes the row rather than leaving it stale.
+func TestOrigins_ModeRoundTripsThroughPresenceTable(t *testing.T) {
+	r, o := openTestOrigins(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "sub", State: StateActive, Profile: "code", CreatedAt: 1}))
+
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.com/kb.git", Branch: "main", Mode: OriginModeSubscribe}))
+	got, err := o.Get("u1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, OriginModeSubscribe, got.Mode)
+
+	// Re-setting without a mode means sync: the presence row is removed.
+	require.NoError(t, o.Set("u1", Origin{URL: "https://example.com/kb.git", Branch: "main"}))
+	got, err = o.Get("u1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Equal(t, OriginModeSync, got.Mode)
+
+	var n int
+	require.NoError(t, r.DB().QueryRow(`SELECT count(*) FROM repo_subscriptions WHERE repo_uid = ?`, "u1").Scan(&n))
+	require.Equal(t, 0, n)
+}
+
+// An unknown Mode is refused, and because the check runs INSIDE Set's
+// transaction — after the repo_origins upsert has already executed — the whole
+// call rolls back rather than half-landing. That is a new contract worth
+// pinning: before subscriptions existed, Set always wrote the origin row.
+func TestOrigins_UnknownModeRollsBackTheWholeSet(t *testing.T) {
+	r, o := openTestOrigins(t, testCrypt(t))
+	require.NoError(t, r.Insert(RepoRecord{UID: "u1", Name: "alpha", State: StateActive, Profile: "code", CreatedAt: 1}))
+
+	// Record a subscription first, so the rollback has BOTH halves of the
+	// transaction to undo, not just the upsert.
+	require.NoError(t, o.Set("u1", Origin{URL: "https://first.test/kb.git", Branch: "main", Mode: OriginModeSubscribe}))
+
+	err := o.Set("u1", Origin{URL: "https://second.test/kb.git", Branch: "main", Mode: "bogus"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bogus", "the error must name the mode it refused")
+
+	got, gerr := o.Get("u1")
+	require.NoError(t, gerr)
+	require.NotNil(t, got)
+	require.Equal(t, "https://first.test/kb.git", got.URL, "the repo_origins upsert must have rolled back")
+	require.Equal(t, OriginModeSubscribe, got.Mode, "a refused Set must not disturb the subscription")
 }
 
 // Purging a repo destroys its stored credential with it.
