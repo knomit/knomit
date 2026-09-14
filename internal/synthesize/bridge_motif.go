@@ -57,6 +57,25 @@ const motifDFCeilingFloor = 12
 // that form.
 const motifDFCeilingPerCent = 2
 
+// DFCeiling is the df above which a label has gone generic on a corpus of n
+// live facts: max(motifDFCeilingFloor, motifDFCeilingPerCent% of n). Exported
+// so the learn-time same-subject gate anchors on the same rule instead of
+// deriving a second one — both answer "is this label too common to mean
+// anything?", and two answers to that would drift.
+//
+// It carries the MN13 classification of its two constants unchanged: a ratio of
+// the corpus's own size, floored where that ratio stops being an estimate. It
+// was swept on the MOTIF axis; a caller applying it to another axis (entities
+// are more numerous and longer-tailed) is reusing the SHAPE of the rule, not a
+// validated cutoff for that axis.
+func DFCeiling(n int) int {
+	ceiling := n * motifDFCeilingPerCent / 100
+	if ceiling < motifDFCeilingFloor {
+		return motifDFCeilingFloor
+	}
+	return ceiling
+}
+
 // motifResolver maps one authored motif spelling to its canonical cluster id.
 // An unresolved spelling resolves to ITSELF, so a corpus with no alias table
 // behaves as one where every motif is its own singleton cluster.
@@ -212,10 +231,7 @@ func enumerateMotifCandidates(
 	tier motifMatchTier,
 ) ([]enumeratedMotif, motifEnumHealth) {
 	point := resolveDisjointnessPoint(labels)
-	ceiling := labels.LiveFacts * motifDFCeilingPerCent / 100
-	if ceiling < motifDFCeilingFloor {
-		ceiling = motifDFCeilingFloor
-	}
+	ceiling := DFCeiling(labels.LiveFacts)
 	health := motifEnumHealth{Ceiling: ceiling, Point: point}
 
 	pathCom := bridgePathCommunities(seeds, clusters)
