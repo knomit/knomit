@@ -34,10 +34,12 @@ system thinks these may overlap with the lesson):
 
 {{.ExistingMethodology}}
 
-Read EVERY candidate above: call knomit_query on its path and read the
-body BEFORE deciding it doesn't fit. The list is already filtered to what
-is worth reading and holds at most three entries; titles alone are not
-enough.
+Read the top-ranked candidate above: call knomit_query on its path and
+read the body BEFORE deciding it doesn't fit. Always — its title is not
+enough to judge whether it applies. For the remaining candidates, a title
+is enough to decide whether to OPEN one, but it is
+never enough to decide whether it APPLIES: open any whose title suggests
+it may already capture the lesson, and judge only after reading.
 
 {{end}}{{if .MotifVocabulary}}This corpus's motif vocabulary, for context:
 

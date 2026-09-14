@@ -634,9 +634,11 @@ func TestRelevantMethodologyForFact_VectorCoverage_WithNoiseInIndex(t *testing.T
 // Live exhibit (core drain s213): the methodology retriever returned
 // kb/meta/reasoning/substrate-layer-dominance.md at 0.90 for a distill item
 // where that fact was itself one of the cluster's input facts — a self-match
-// pushing it past the 0.50 mandatory-read threshold. The score is genuine (a
-// fact matches itself perfectly) and meaningless: the prompt then tells the
-// judge to read, as guidance for synthesizing a fact, that very fact.
+// ranking first in the candidate list. The score is genuine (a fact matches
+// itself perfectly) and meaningless: the prompt then tells the judge to read,
+// as guidance for synthesizing a fact, that very fact. Since PR #188 the
+// top-ranked candidate is the one read unconditionally, so a self-match that
+// is not excluded is guaranteed to be read, not merely likely to be.
 //
 // A source fact can be a methodology fact — that is exactly the live case —
 // so the candidate query has to exclude the source path rather than relying on
@@ -692,8 +694,10 @@ func TestRelevantMethodologyForFact_ExcludesTheSourceFactItself(t *testing.T) {
 		"fixture is inert: %s must be retrievable as a candidate for another fact, "+
 			"or its absence below says nothing about self-exclusion", selfPath)
 	require.Greater(t, selfScore, 0.50,
-		"fixture is inert: %s must score above the 0.50 mandatory-read threshold "+
-			"as a candidate, or excluding it changes nothing that mattered", selfPath)
+		"fixture is inert: %s must score high enough as a candidate to occupy a top-k "+
+			"slot and be read, or excluding it changes nothing that mattered. The 0.50 "+
+			"here is a sentinel for 'genuinely high self-match', not a prompt threshold "+
+			"— the prompt-side 0.50 was removed in PR #188", selfPath)
 
 	// 2. THE PROPERTY — asking on behalf of self must not return self, even
 	//    though self is the highest-scoring candidate in the pool.

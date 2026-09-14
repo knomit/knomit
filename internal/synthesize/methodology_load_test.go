@@ -175,9 +175,16 @@ func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 		"prompt must reference knomit_query as the fetch tool")
 	require.NotContains(t, content.Prompt, "≥ 0.50",
 		"the prompt must not re-threshold a list retrieval already filtered at methodology_min_score")
-	require.Contains(t, content.Prompt, "Read EVERY candidate above")
-	require.Contains(t, content.Prompt, "EVERY candidate",
-		"prompt must use forcing language, not 'if useful'")
+	require.Contains(t, content.Prompt, "Read the top-ranked candidate",
+		"the top-ranked read keeps the forcing language this assertion has pinned since it was "+
+			"written: letting the model decide whether to read AT ALL was the failure mode. What "+
+			"changed on PR #188 is only its scope — the UNIVERSAL mandatory read forced up to "+
+			"methodologyTopK reads per item, and the measured value sat in the top-ranked candidate.")
+	require.Contains(t, content.Prompt, "Always",
+		"the top-ranked read is unconditional; 'read it if useful' is the shape this forbids")
+	require.Contains(t, content.Prompt, "never enough to decide whether it APPLIES",
+		"triage may use titles, judging applicability may not — without this pin the remaining "+
+			"candidates regress to title-only judgment, which is what the universal read prevented")
 
 	contentEmpty, err := RenderDistillWorkItem(facts, "kb", "")
 	require.NoError(t, err)
@@ -237,9 +244,16 @@ func TestRenderReflectWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	require.Contains(t, content.Prompt, "kb/meta/reasoning/existing.md")
 	require.NotContains(t, content.Prompt, "≥ 0.50",
 		"the prompt must not re-threshold a list retrieval already filtered at methodology_min_score")
-	require.Contains(t, content.Prompt, "Read EVERY candidate above")
-	require.Contains(t, content.Prompt, "EVERY candidate",
-		"prompt must use forcing language, not 'if useful'")
+	require.Contains(t, content.Prompt, "Read the top-ranked candidate",
+		"the top-ranked read keeps the forcing language this assertion has pinned since it was "+
+			"written: letting the model decide whether to read AT ALL was the failure mode. What "+
+			"changed on PR #188 is only its scope — the UNIVERSAL mandatory read forced up to "+
+			"methodologyTopK reads per item, and the measured value sat in the top-ranked candidate.")
+	require.Contains(t, content.Prompt, "Always",
+		"the top-ranked read is unconditional; 'read it if useful' is the shape this forbids")
+	require.Contains(t, content.Prompt, "never enough to decide whether it APPLIES",
+		"triage may use titles, judging applicability may not — without this pin the remaining "+
+			"candidates regress to title-only judgment, which is what the universal read prevented")
 
 	contentEmpty, err := RenderReflectWorkItem([]byte(`[{"path":"kb/hyp/a.md"}]`), "kb", "", "")
 	require.NoError(t, err)

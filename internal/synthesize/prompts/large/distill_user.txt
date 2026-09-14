@@ -6,7 +6,7 @@ The facts in scope are delivered beside this prompt as the work item's `facts` f
 
 {{.ApplicableMethodology}}
 
-Read EVERY candidate above: call knomit_query on its path and read the body BEFORE producing the synthesis. The list is already filtered to what is worth reading and holds at most three entries; titles alone are not enough. If a methodology shapes how you weight, combine, or name the synthesis, include its path in the output's refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
+Read the top-ranked candidate above: call knomit_query on its path and read the body BEFORE producing the synthesis. Always — its title is not enough to judge whether it applies. For the remaining candidates, a title is enough to decide whether to OPEN one, never enough to decide whether it APPLIES: open any whose title suggests it bears on how you weight, combine, or name the synthesis, and judge only after reading. If a methodology shapes the synthesis, include its path in refs. If you read a candidate and judge it does not apply, that is a valid outcome — proceed without citing it.
 
 {{end}}Identify patterns across these facts. Produce:
 1. New higher-order facts that capture patterns
@@ -54,7 +54,9 @@ A synthesis that is longer than its members combined has copied provenance; a sy
 
 ## Retraction — when a member can be forgotten
 
-Retract a member ONLY when it is a strict restatement of the synthesis with no unique provenance detail — nothing a reader would lose by following the synthesis's ref to it instead. A member that carries its own measurement, date, source, or affected list stays, because the synthesis deliberately did not copy those. Zero retractions is the normal and expected outcome of a distill; it is not a failure and it is not a signal to retract more.
+Retract a member only when the new synthesis restates its whole claim and the member's provenance is carried by its refs rather than its body — typically a prior synthesis or a digest. Carry that member's refs into the new synthesis's refs. A member whose body carries its own measurement, date, source, or affected list stays. Zero retractions is the normal outcome over a cluster of observations.
+
+The hypothesis rule below is separate and takes precedence: a hypothesis confirmed by the batch is retracted even though it is not a restatement, because that is a type transition, not subsumption.
 
 ## When NOT to distill
 
