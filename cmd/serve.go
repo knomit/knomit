@@ -64,7 +64,19 @@ func serveCmd() *cobra.Command {
 
 			// Reconfigure the logger from config (main set a console base);
 			// keep tee'ing through the crash ring so reports retain the log tail.
-			lg, lvl, err := logging.Build(cfg.Log, os.Stderr, os.Stdout, crashdump.Global)
+			//
+			// Every field is named rather than copied wholesale: logging.Options
+			// is logging's own struct, deliberately narrower than config.LogConfig
+			// (SlowRequestMS and CrashFile are read elsewhere), so adding a
+			// rotation key to the config means adding it here too.
+			lg, lvl, err := logging.Build(logging.Options{
+				Format:     cfg.Log.Format,
+				Level:      cfg.Log.Level,
+				File:       cfg.Log.File,
+				MaxSizeMB:  cfg.Log.MaxSizeMB,
+				MaxBackups: cfg.Log.MaxBackups,
+				MaxAgeDays: cfg.Log.MaxAgeDays,
+			}, os.Stderr, os.Stdout, crashdump.Global)
 			if err != nil {
 				return fmt.Errorf("configure logging: %w", err)
 			}

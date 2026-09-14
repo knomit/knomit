@@ -6,9 +6,40 @@ import (
 
 	"github.com/rs/zerolog"
 	"gopkg.in/natefinch/lumberjack.v2"
-
-	"knomit/internal/config"
 )
+
+// Options is everything the log sink needs, owned by logging itself.
+//
+// Build and BuildWriter used to take config.LogConfig directly, which was the
+// ONE edge from internal/platform out to a knomit package — and so the one
+// exception TestPlatformKnowsNothingAboutKnomit would have had to carry.
+// Exception lists are how a layering rule stops meaning anything, so the
+// dependency is inverted instead: logging declares what it needs, and the two
+// callers that hold a config translate (cmd/serve.go, tools/desktop/logging.go).
+//
+// The fields are deliberately a SUBSET of config.LogConfig. SlowRequestMS and
+// CrashFile live in that struct too and are read elsewhere — by the HTTP
+// middleware and by crashdump — never here, and listing them would invite a
+// future editor to wire them up in the wrong place.
+//
+// The reverse risk is real and unguarded: a rotation key added to
+// config.LogConfig and to Options but to only ONE of the two call sites takes
+// effect in one binary and is silently dropped in the other. Both call sites
+// build the struct with every field named for that reason.
+type Options struct {
+	// Format is "console" (human, stderr — default) or "json" (structured).
+	Format string
+	// Level is a zerolog level name (trace/debug/info/warn/error/...).
+	// Empty means "info"; an unparseable value is an error.
+	Level string
+	// File, when non-empty, adds a rotating file sink (lumberjack).
+	File string
+	// MaxSizeMB, MaxBackups and MaxAgeDays are lumberjack's rotation keys.
+	// They are read only when File is set.
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+}
 
 // fileTimeFormat is what the human-readable FILE sink stamps on each line.
 //
@@ -31,42 +62,42 @@ import (
 // cost the file its filter.
 const fileTimeFormat = time.RFC3339
 
-// Build assembles the process logger from log configuration. See BuildWriter
-// for how the sinks are chosen. It returns the logger and the parsed level; an
-// unparseable level is an error.
+// Build assembles the process logger from o. See BuildWriter for how the sinks
+// are chosen. It returns the logger and the parsed level; an unparseable level
+// is an error.
 //
 // The rotating file sink BuildWriter may open is not closeable through this
 // entry point — for a process that configures its logger once and keeps it for
 // its lifetime that is exactly right. A caller that reconfigures logging while
 // running must use BuildWriter and close what the previous configuration left
 // open, or it leaks a file descriptor per reconfiguration.
-func Build(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zerolog.Logger, zerolog.Level, error) {
-	w, _, lvl, err := BuildWriter(lc, consoleOut, jsonOut, ring)
+func Build(o Options, consoleOut, jsonOut, ring io.Writer) (zerolog.Logger, zerolog.Level, error) {
+	w, _, lvl, err := BuildWriter(o, consoleOut, jsonOut, ring)
 	if err != nil {
 		return zerolog.Logger{}, 0, err
 	}
 	return zerolog.New(w).With().Timestamp().Logger(), lvl, nil
 }
 
-// BuildWriter assembles the log SINK from log configuration, without binding it
-// to a logger. The base sink is chosen by format: "json" writes structured
-// records to jsonOut (stdout in production — the collector-friendly default for
+// BuildWriter assembles the log SINK from o, without binding it to a logger.
+// The base sink is chosen by format: "json" writes structured records to
+// jsonOut (stdout in production — the collector-friendly default for
 // containers), any other value writes human-readable output to consoleOut
-// (stderr). When lc.File is set, a rotating file sink is added (app-managed
+// (stderr). When o.File is set, a rotating file sink is added (app-managed
 // rotation, for non-container deployments), carrying the same shape as the base
 // — human-readable for "console", raw JSON for "json". ring, when non-nil, is
 // always tee'd in so crash reports retain the recent-log tail.
 //
 // It returns the sink, the rotator to close when this sink is replaced (nil
-// when lc.File is empty), and the parsed level; an unparseable level is an
+// when o.File is empty), and the parsed level; an unparseable level is an
 // error.
 //
 // Split out from Build for callers that install ONE logger over a swappable
 // writer and reconfigure by swapping the writer — the desktop app does this so
 // a Settings change can apply live without writing zerolog's global log.Logger
 // from an IPC goroutine while the rest of the process is logging through it.
-func BuildWriter(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zerolog.LevelWriter, io.Closer, zerolog.Level, error) {
-	level := lc.Level
+func BuildWriter(o Options, consoleOut, jsonOut, ring io.Writer) (zerolog.LevelWriter, io.Closer, zerolog.Level, error) {
+	level := o.Level
 	if level == "" {
 		level = "info"
 	}
@@ -76,7 +107,7 @@ func BuildWriter(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zero
 	}
 
 	var base io.Writer
-	if lc.Format == "json" {
+	if o.Format == "json" {
 		base = jsonOut
 	} else {
 		base = zerolog.ConsoleWriter{Out: consoleOut}
@@ -84,12 +115,12 @@ func BuildWriter(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zero
 
 	writers := []io.Writer{base}
 	var closer io.Closer
-	if lc.File != "" {
+	if o.File != "" {
 		rotator := &lumberjack.Logger{
-			Filename:   lc.File,
-			MaxSize:    lc.MaxSizeMB,
-			MaxBackups: lc.MaxBackups,
-			MaxAge:     lc.MaxAgeDays,
+			Filename:   o.File,
+			MaxSize:    o.MaxSizeMB,
+			MaxBackups: o.MaxBackups,
+			MaxAge:     o.MaxAgeDays,
 			Compress:   true,
 		}
 		closer = rotator
@@ -105,7 +136,7 @@ func BuildWriter(lc config.LogConfig, consoleOut, jsonOut, ring io.Writer) (zero
 		// ONLY — the stderr writer above keeps ConsoleWriter's short
 		// time.Kitchen default, which is what a developer watching a terminal
 		// wants and where the date is never in doubt anyway.
-		if lc.Format == "json" {
+		if o.Format == "json" {
 			writers = append(writers, rotator)
 		} else {
 			writers = append(writers, zerolog.ConsoleWriter{

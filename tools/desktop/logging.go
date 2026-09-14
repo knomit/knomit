@@ -145,7 +145,18 @@ func init() {
 // Settings save, from a Wails IPC goroutine. Safe from any goroutine.
 func applyLogConfig(lc config.LogConfig, defaultFile string) error {
 	resolved := desktopLogConfig(lc, defaultFile)
-	w, closer, lvl, err := logging.BuildWriter(resolved, os.Stderr, os.Stderr, nil)
+	// Named field by field: logging.Options is logging's own struct (it must not
+	// import internal/config), narrower than config.LogConfig, and the desktop
+	// is the second of the two call sites that translate — a rotation key added
+	// to only one of them takes effect in one binary and vanishes in the other.
+	w, closer, lvl, err := logging.BuildWriter(logging.Options{
+		Format:     resolved.Format,
+		Level:      resolved.Level,
+		File:       resolved.File,
+		MaxSizeMB:  resolved.MaxSizeMB,
+		MaxBackups: resolved.MaxBackups,
+		MaxAgeDays: resolved.MaxAgeDays,
+	}, os.Stderr, os.Stderr, nil)
 	if err != nil {
 		return fmt.Errorf("build logger: %w", err)
 	}
