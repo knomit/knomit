@@ -1,6 +1,6 @@
 import type { Dispatch } from 'react';
 import type { WizardState, WizardAction } from './wizardState';
-import { cardLabel } from './manageStyles';
+import { cardLabel, segGroup, segment, segDot, segSub, segDisclosure } from './manageStyles';
 
 // StepReview states CONSEQUENCES of the choices already made, not the inputs
 // themselves — the wizard's earlier steps already showed those. It never
@@ -11,10 +11,10 @@ import { cardLabel } from './manageStyles';
 // Warning styling here is reserved for things that FAIL (an ontology that
 // doesn't validate, a name already taken) — by the time a case reaches
 // review, its own failure mode (an unreachable remote) has already been
-// caught on an earlier step, so this component has nothing to render in
-// amber. Trade-offs — like the local-only case losing revision history —
-// are plain text: amber on every line would mean nobody reads it on the one
-// that matters.
+// caught on an earlier step, so the only amber this component has to render
+// is a push the access check already refused. Trade-offs — like the
+// local-only case losing revision history — are plain text: amber on every
+// line would mean nobody reads it on the one that matters.
 export function StepReview({ state, dispatch }: { state: WizardState; dispatch: Dispatch<WizardAction> }) {
   // Same fallback createBodyFor uses, and for the same reason: this line must
   // name the ontology that will actually be sent, so reading 'default' off a
@@ -22,107 +22,145 @@ export function StepReview({ state, dispatch }: { state: WizardState; dispatch: 
   // about the one choice that cannot be changed after creation.
   const presetLabel = state.yaml ? 'a custom' : `the "${state.preset || state.seedPreset}"`;
   const branch = state.branch || state.probe?.upstream_branch || 'main';
+  // The branch already holds a knowledge base, so there is a way to attach to
+  // it that never writes — and asking which one is what makes this case the
+  // only one on this step with a question on it rather than a summary alone.
+  const attaching = state.choice === 'remote' && state.initialized === 'yes';
+  const subscribing = attaching && state.access === 'subscribe';
 
   return (
     <div data-testid="step-review">
-      <div style={cardLabel}>What will happen</div>
-      {state.choice === 'local' && (
-        <ol style={list}>
-          <li>A new local-only repository named "{state.name}" is created on this machine, seeded with {presetLabel} ontology.</li>
-          {/* Verbatim, agreed copy — do not paraphrase. */}
-          <li>You can connect a remote whenever you like, and all your facts come across. The only thing that doesn't follow is each fact's earlier revisions — starting from a remote keeps that full timeline.</li>
-        </ol>
-      )}
-      {/* INITIALIZE. The two statements this case must make are that {branch}
-          is not changed, and that a merge request is the reader's next step —
-          both because they are true and because both correct an expectation
-          the old flow created. The deleted "seed" mode DID write the consensus
-          branch, which is what made it fail on protected branches; a reader who
-          remembers that needs to be told plainly that it no longer happens.
+      {/* The one create decision the wizard does not derive: both modes are
+          valid for a branch that already holds a knowledge base, and only the
+          user knows which they want. It renders HERE rather than on the
+          access step because the access step runs before the branch check —
+          this is the first step that knows the answer is "yes".
 
-          The merge request is listed as a step rather than buried in prose
-          because it is the only part of this the reader has to do themselves,
-          and nothing else in the product will remind them. */}
-      {state.choice === 'remote' && state.initialized === 'no' && (
-        <ol style={list}>
-          <li>A new repository named "{state.name}" is created and connected to {state.url}.</li>
-          <li>knomit takes its own branch from {branch}, and writes {presetLabel} ontology there as its first commit.</li>
-          <li>
-            That branch — and only that branch — is pushed. <b style={{ color: '#ddd' }}>{branch} is not changed</b>,
-            so you don't need push access to it.
-          </li>
-          <li>From here on, every change you make syncs to that branch.</li>
-          <li>
-            When you want the knowledge base to become the project's agreed state, open a
-            merge request from knomit's branch into {branch}.
-          </li>
-        </ol>
-      )}
-      {/* JOIN. No ontology line to write, because there is no choice being
-          made here: the remote's own governs, and the backend refuses one
-          supplied alongside a clone rather than silently dropping it. */}
-      {state.choice === 'remote' && state.initialized === 'yes' && (
+          It is the SAME segmented control StepSource uses for local-vs-remote,
+          from the same styles, because it is the same shape of question: one
+          binary, settled by one control, disclosing what the answer means
+          underneath. Two different widgets for two peer choices would make the
+          wizard look like two wizards. Join leads because ordering is how a
+          soft preference is carried here — never a badge, which would make the
+          other option read as the wrong answer (see
+          kb/conventions/ui/copy/warning-styling-reserved-for-failures). */}
+      {attaching && (
         <>
-        {/* The one create decision the wizard does not derive: both modes are
-            valid for a branch that already holds a knowledge base, and only the
-            user knows which they want. It renders HERE rather than on the
-            access step because the access step runs before the branch check —
-            this is the first step that knows the answer is "yes". */}
-        <div role="radiogroup" aria-label="How to attach" style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
-          <label><input type="radio" data-testid="access-join" name="access" checked={state.access === 'join'}
-            onChange={() => dispatch({ type: 'SET_ACCESS', access: 'join' })} /> Join — write to knomit's own branch and push it</label>
-          <label><input type="radio" data-testid="access-subscribe" name="access" checked={state.access === 'subscribe'}
-            onChange={() => dispatch({ type: 'SET_ACCESS', access: 'subscribe' })} /> Subscribe — follow {branch} read-only</label>
-        </div>
-        {state.access === 'subscribe' ? (
-        <ol style={list}>
-          <li>Repository "{state.name}" is created by fetching {state.url} and following branch {branch}.</li>
-          <li>It is read-only: no facts can be written here, and nothing is ever pushed.</li>
-          <li>It updates whenever {branch} changes on the remote.</li>
-        </ol>
-        ) : (
-        <ol style={list}>
-          <li>Repository "{state.name}" is created by cloning {state.url} (branch {branch}).</li>
-          <li>Its ontology comes from the remote itself — not a choice made here.</li>
-          {/* An auth_required probe returns branches: [] because it was
-              REFUSED, not because the remote has none. Saying "no other
-              branches were found" there states as fact something the probe
-              never established — exactly what design §3's "What the review may
-              claim" forbids. Under the current flow the access step re-probes
-              before letting you reach review, so this should be unreachable;
-              it is guarded anyway, because the cost of being wrong is a false
-              claim about the user's own data. */}
-          <li>
-            {state.probe?.auth_required
-              ? 'Its branches were not listed — the check ran without access to them.'
-              : (state.probe?.branches.length ?? 0) > 0
-                ? `Branches already there: ${state.probe?.branches.join(', ')}.`
-                : 'No other branches were found on the remote.'}
-          </li>
-          <li>Your work goes to knomit's own branch, and syncs there. {branch} is not changed.</li>
-        </ol>
-        )}
+          <div style={cardLabel}>How to attach</div>
+          <div style={segGroup} role="group" aria-label="How to attach">
+            <button type="button" data-testid="access-join" style={segment(!subscribing, 'remote')}
+              aria-pressed={!subscribing} onClick={() => dispatch({ type: 'SET_ACCESS', access: 'join' })}>
+              <span style={segDot(!subscribing, 'remote')} />
+              <span>
+                Join
+                <span style={segSub(!subscribing, 'remote')}>Write to knomit's own branch and push it</span>
+              </span>
+            </button>
+            <button type="button" data-testid="access-subscribe" style={segment(subscribing, 'neutral')}
+              aria-pressed={subscribing} onClick={() => dispatch({ type: 'SET_ACCESS', access: 'subscribe' })}>
+              <span style={segDot(subscribing, 'neutral')} />
+              <span>
+                Subscribe
+                <span style={segSub(subscribing, 'neutral')}>Follow {branch} read-only. Nothing is ever pushed</span>
+              </span>
+            </button>
+          </div>
         </>
       )}
-      {/* Every remote case above PUSHES — the agent branch, never the
-          consensus branch. Saying so where write access was refused (or never
-          established) is the difference between a create that fails at 70% as
-          a surprise and one that fails as a stated risk. Amber only for the
-          refusal — an unestablished check has not failed at anything.
+
+      <div style={attaching ? segDisclosure : undefined}>
+        <div style={cardLabel}>What will happen</div>
+        {state.choice === 'local' && (
+          <ol style={list}>
+            <li>A new local-only repository named "{state.name}" is created on this machine, seeded with {presetLabel} ontology.</li>
+            {/* Verbatim, agreed copy — do not paraphrase. */}
+            <li>You can connect a remote whenever you like, and all your facts come across. The only thing that doesn't follow is each fact's earlier revisions — starting from a remote keeps that full timeline.</li>
+          </ol>
+        )}
+        {/* INITIALIZE. The two statements this case must make are that {branch}
+            is not changed, and that a merge request is the reader's next step —
+            both because they are true and because both correct an expectation
+            the old flow created. The deleted "seed" mode DID write the consensus
+            branch, which is what made it fail on protected branches; a reader who
+            remembers that needs to be told plainly that it no longer happens.
+
+            The merge request is listed as a step rather than buried in prose
+            because it is the only part of this the reader has to do themselves,
+            and nothing else in the product will remind them. */}
+        {state.choice === 'remote' && state.initialized === 'no' && (
+          <ol style={list}>
+            <li>A new repository named "{state.name}" is created and connected to {state.url}.</li>
+            <li>knomit takes its own branch from {branch}, and writes {presetLabel} ontology there as its first commit.</li>
+            <li>
+              That branch — and only that branch — is pushed. <b style={{ color: '#ddd' }}>{branch} is not changed</b>,
+              so you don't need push access to it.
+            </li>
+            <li>From here on, every change you make syncs to that branch.</li>
+            <li>
+              When you want the knowledge base to become the project's agreed state, open a
+              merge request from knomit's branch into {branch}.
+            </li>
+          </ol>
+        )}
+        {subscribing && (
+          <ol style={list}>
+            <li>Repository "{state.name}" is created by fetching {state.url} and following branch {branch}.</li>
+            <li>It is read-only: no facts can be written here, and nothing is ever pushed.</li>
+            <li>It updates whenever {branch} changes on the remote.</li>
+          </ol>
+        )}
+        {/* JOIN. No ontology line to write, because there is no choice being
+            made here: the remote's own governs, and the backend refuses one
+            supplied alongside a clone rather than silently dropping it. */}
+        {attaching && !subscribing && (
+          <ol style={list}>
+            <li>Repository "{state.name}" is created by cloning {state.url} (branch {branch}).</li>
+            <li>Its ontology comes from the remote itself — not a choice made here.</li>
+            {/* An auth_required probe returns branches: [] because it was
+                REFUSED, not because the remote has none. Saying "no other
+                branches were found" there states as fact something the probe
+                never established — exactly what design §3's "What the review may
+                claim" forbids. Under the current flow the access step re-probes
+                before letting you reach review, so this should be unreachable;
+                it is guarded anyway, because the cost of being wrong is a false
+                claim about the user's own data. */}
+            <li>
+              {state.probe?.auth_required
+                ? 'Its branches were not listed — the check ran without access to them.'
+                : (state.probe?.branches.length ?? 0) > 0
+                  ? `Branches already there: ${state.probe?.branches.join(', ')}.`
+                  : 'No other branches were found on the remote.'}
+            </li>
+            <li>Your work goes to knomit's own branch, and syncs there. {branch} is not changed.</li>
+          </ol>
+        )}
+      </div>
+      {/* Both notes are about a PUSH, so they may only appear where one
+          happens. Initializing always pushes, and so does joining — the agent
+          branch, never the consensus branch. A SUBSCRIPTION never pushes
+          anything, which its own step 2 says out loud, so a push note under it
+          contradicts the line directly above it; and because the reducer
+          preselects 'subscribe' on a refused probe, that contradiction was the
+          DEFAULT rendering of exactly the case these notes exist for.
+
+          Where a push does happen, saying so when write access was refused (or
+          never established) is the difference between a create that fails at
+          70% as a surprise and one that fails as a stated risk. Amber only for
+          the refusal — an unestablished check has not failed at anything.
 
           Neither message may read as a GUARANTEE in the other direction. The
           access check is a receive-pack advertisement: it establishes that the
           host will talk to these credentials about pushing, and it cannot
           predict a pre-receive hook, which runs on the content of the push.
           That is why there is no green "push will succeed" card here at all. */}
-      {state.choice === 'remote' && state.probe?.write_access === 'denied' && (
+      {state.choice === 'remote' && !subscribing && state.probe?.write_access === 'denied' && (
         <div data-testid="review-write-denied" style={warn}>
           The access check could read this remote but was refused push access, and
           the steps above push knomit's own branch. Unless that has changed since,
           this will fail when knomit writes.
         </div>
       )}
-      {state.choice === 'remote' && !state.probe?.write_access && (
+      {state.choice === 'remote' && !subscribing && !state.probe?.write_access && (
         <div data-testid="review-write-unknown" style={note}>
           Push access to this remote was not established — knomit will find out
           when it writes.
@@ -133,5 +171,14 @@ export function StepReview({ state, dispatch }: { state: WizardState; dispatch: 
 }
 
 const list: React.CSSProperties = { margin: '8px 0 0', paddingLeft: 20, fontSize: 13, color: '#ccc', lineHeight: 1.7 };
-const warn: React.CSSProperties = { marginTop: 10, fontSize: 12.5, color: '#d2a24c', lineHeight: 1.55, maxWidth: '74ch' };
+// The refused-push note IS a failure the check already predicted, so it gets
+// the wizard's failure palette — the same box CreateRepoWizard's errText draws
+// for a create that came back with an error. The unknown-access note below it
+// stays plain grey: nothing has failed there, and a box around it would spend
+// the same alarm on the absence of a signal as on a refusal.
+const warn: React.CSSProperties = {
+  marginTop: 10, padding: '10px 12px', borderRadius: 6,
+  background: '#262013', border: '1px solid #4a3f22',
+  color: '#e2c07a', fontSize: 12.5, lineHeight: 1.55, maxWidth: '74ch',
+};
 const note: React.CSSProperties = { marginTop: 10, fontSize: 12.5, color: '#777', lineHeight: 1.55, maxWidth: '74ch' };
