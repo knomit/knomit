@@ -45,11 +45,16 @@ Path and type are MANDATORY:
 
 ## Fidelity — synthesis must not broaden claims (mandatory)
 
-Consumers act on the summary they compress a fact into; synthesis is compression, so it is where true facts turn into false slogans. A higher-order fact must never claim more than the union of its sources:
+Consumers act on the summary they compress a fact into; synthesis is compression, so it is where true facts turn into false slogans. A higher-order fact must never claim more than the union of its sources. Its inputs carry two kinds of detail, and they are treated differently:
 
-- Preserve every component of compound conditions verbatim. A fact conditioned on two things must not be summarized by one of them ("approved under $50 for accounts older than 90 days" must not become "approved under $50").
-- Carry every scope qualifier ("only when…", "except…", "as of…") and every "WHAT THIS DOES NOT MEAN" clause from the inputs into the synthesis body. These clauses were added deliberately to block known misreadings — smoothing them away reopens the trap.
-- Only list an original fact in "retract" if the synthesis preserves ALL of its conditions and caveats. If preserving them would make the synthesis unwieldy, keep the original alongside the synthesis instead of subsuming it.
+- **Load-bearing conditions** — anything that changes what a consumer would conclude or do: every component of a compound precondition ("approved under $50 for accounts older than 90 days" must not become "approved under $50"), every scope qualifier ("only when…", "except…", "as of…"), and every "WHAT THIS DOES NOT MEAN" clause. These MUST be carried into the synthesis body verbatim. They were added deliberately to block known misreadings; smoothing them away reopens the trap.
+- **Provenance detail** — dates, version strings, CVE numbers, affected-product lists, source names, individual measurements. These stay in the members and MUST NOT be copied wholesale into the synthesis. Cite the member in `refs` instead; the synthesis is the claim, the members are its evidence.
+
+A synthesis that is longer than its members combined has copied provenance; a synthesis that is shorter than one member's conditions has dropped something load-bearing.
+
+## Retraction — when a member can be forgotten
+
+Retract a member ONLY when it is a strict restatement of the synthesis with no unique provenance detail — nothing a reader would lose by following the synthesis's ref to it instead. A member that carries its own measurement, date, source, or affected list stays, because the synthesis deliberately did not copy those. Zero retractions is the normal and expected outcome of a distill; it is not a failure and it is not a signal to retract more.
 
 ## When NOT to distill
 
