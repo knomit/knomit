@@ -35,14 +35,16 @@ export function ManageSessions({ binding }: { binding?: string }) {
   const [now, setNow] = useState(() => new Date());
 
   const load = useCallback(() => {
-    // setNow on EVERY tick, success or failure. The rows on screen are the
-    // last good data either way, so their ages must keep advancing while the
-    // error banner is up — a frozen "2 min ago" under an error reads as a
-    // session that is still fresh.
-    setNow(new Date());
     api.listClientSessions({ binding, includeHidden: showHidden })
       .then(r => { setRows(r.sessions); setPolicy(r.policy); setError(null); })
-      .catch(e => setError(String(e)));
+      .catch(e => setError(String(e)))
+      // finally, so the clock advances on EVERY attempt, success or failure.
+      // The rows on screen are the last good data either way, so their ages
+      // must keep moving while the error banner is up — a frozen "2 min ago"
+      // under an error reads as a session that is still fresh. It also keeps
+      // this off the synchronous path: a setState in the effect body would
+      // cascade a render on every mount.
+      .finally(() => setNow(new Date()));
   }, [binding, showHidden]);
 
   useEffect(() => {
