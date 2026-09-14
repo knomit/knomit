@@ -78,6 +78,23 @@ type Model struct {
 
 const hfBase = "https://huggingface.co"
 
+// mustThresholds reads a model's calibrated set out of params at init time.
+//
+// It panics rather than defaulting because a descriptor naming a model params
+// has no calibration for is a build-time mistake in this file, not a runtime
+// condition — and the one thing worse than failing here would be silently
+// handing back some other model's geometry. That is the same reason
+// params.ForModel returns a bool instead of falling back to Defaults().
+// TestEveryDescriptorReadsItsThresholdsFromParams catches it before a build
+// ever runs.
+func mustThresholds(id string) params.Thresholds {
+	th, ok := params.ForModel(id)
+	if !ok {
+		panic("embeddings: no calibrated thresholds in params for model " + id)
+	}
+	return th
+}
+
 var registry = map[string]Model{
 	"embeddinggemma": {
 		ID:            "embeddinggemma",
@@ -93,21 +110,11 @@ var registry = map[string]Model{
 		DocTemplate:   "title: {title} | text: {content}",
 		// The title-hack — see the descriptor comment above.
 		ShortStringTemplate: "title: {content} | text: none",
-		// Calibrated against the real knomit corpus (712 facts, tools/calibrate).
-		// EmbeddingGemma's cosine distribution runs markedly cooler than nomic's
-		// (distinct same-category pairs: mean 0.48 vs 0.75), so every cutoff is
-		// ported DOWN by preserving the percentile it occupied on nomic. Dedup
-		// 0.82 sits in the validated safety gap (distinct p99 0.77 < 0.82 < true
-		// near-dup p05 0.96). SearchFloor's pure port was ~0, clamped to 0.05 to
-		// drop only anti-correlated noise.
-		Thresholds: params.Thresholds{
-			Dedup:          0.82,
-			ReflectNovelty: 0.69,
-			SimilarTo:      0.18,
-			SearchFloor:    0.05,
-			RerankHigh:     0.43,
-			RerankLow:      0.10,
-		},
+		// Calibration (and the comment describing how it was derived) lives in
+		// params, so a cgo-free caller can read this model's geometry without
+		// linking ONNX. Referenced the same way the nomic descriptor below
+		// references params.Defaults() — one source per model, no inline block.
+		Thresholds: mustThresholds(params.DefaultModelID),
 	},
 	"nomic-v1.5": {
 		ID:            "nomic-v1.5",

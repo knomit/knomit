@@ -222,6 +222,21 @@ func (mr *MockSearchIndexMockRecorder) LastCommitForPath(ctx, branch, path any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LastCommitForPath", reflect.TypeOf((*MockSearchIndex)(nil).LastCommitForPath), ctx, branch, path)
 }
 
+// LiveFactCount mocks base method.
+func (m *MockSearchIndex) LiveFactCount(ctx context.Context, branch string) (int, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LiveFactCount", ctx, branch)
+	ret0, _ := ret[0].(int)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LiveFactCount indicates an expected call of LiveFactCount.
+func (mr *MockSearchIndexMockRecorder) LiveFactCount(ctx, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LiveFactCount", reflect.TypeOf((*MockSearchIndex)(nil).LiveFactCount), ctx, branch)
+}
+
 // Log mocks base method.
 func (m *MockSearchIndex) Log(ctx context.Context, branch, path string) ([]store.LogEntry, error) {
 	m.ctrl.T.Helper()

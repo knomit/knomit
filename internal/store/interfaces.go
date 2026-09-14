@@ -44,6 +44,12 @@ type FactIndex interface {
 // FactQuery is the interface for fact read/search/existence queries.
 type FactQuery interface {
 	Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error)
+	// LiveFactCount is how many facts are live on branch at HEAD — the
+	// denominator for any corpus-size-relative rule. Stats().Total answers the
+	// same question but pays for three json_each GROUP BYs and the highlights
+	// CTE over the whole corpus to do it; callers that want only the integer
+	// should not buy the aggregate.
+	LiveFactCount(ctx context.Context, branch string) (int, error)
 	GetByPath(ctx context.Context, branch, path string) (*FactWithBody, error)
 	LastCommitForPath(ctx context.Context, branch, path string) (string, bool)
 	Stats(ctx context.Context, branch, pathPrefix, axis string) (StatsResult, error)

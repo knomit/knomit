@@ -705,6 +705,23 @@ func (fq *factQuery) filterByEpisodeOps(ctx context.Context, results []SearchRes
 //
 // If Text is empty, all facts matching the non-text filters are returned with
 // score 100.
+// LiveFactCount counts live facts on branch. Liveness and branch scoping come
+// from branch_facts (UNIQUE(branch_id, path) => one row per live path per
+// branch), exactly as TokenDF and SubjectLabelDF do, so this and the df values
+// a caller compares against it are counted over the same population.
+func (fq *factQuery) LiveFactCount(ctx context.Context, branch string) (int, error) {
+	branchID, err := fq.rh.branchID(ctx, branch)
+	if err != nil {
+		return 0, fmt.Errorf("LiveFactCount: %w", err)
+	}
+	var n int
+	if err := conn(ctx, fq.rh.db).QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM branch_facts WHERE branch_id = ?`, branchID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("LiveFactCount: %w", err)
+	}
+	return n, nil
+}
+
 func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := fq.rh.branchID(ctx, branch)
 	if err != nil {

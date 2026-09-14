@@ -255,7 +255,14 @@ var mechanicsPaths = map[string][]string{
 	"internal/synthesize/bridge_motif.go": {
 		"buildMotifBridges", "enumerateMotifCandidates", "sharedMotifSpecificity", "anyMotifs",
 		"motifResolverFor", "motifBridgeHealthLines", "verbatimGroups", "token2Families",
-		"rankAndCap", "rankAndCapRows",
+		"rankAndCap", "rankAndCapRows", "DFCeiling",
+		// DFCeiling names motifDFCeilingFloor/PerCent, which is why the
+		// identifier scan sees it — but it reads two CONSTANTS, never a fact's
+		// motifs, and returns a pure function of corpus size. No motif data
+		// reaches any decision through it. It is exported because the
+		// learn-time same-subject gate anchors its generic-entity cutoff on the
+		// same rule; a second derivation of "is this label too common to mean
+		// anything?" is what the sharing avoids.
 		// #125's qualify predicate. It is DECLARED here rather than beside
 		// BridgeKindFromString in bridge.go precisely so that file's nil entry
 		// above stays nil: a method whose body names BridgeMotif would have

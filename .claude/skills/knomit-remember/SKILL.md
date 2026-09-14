@@ -24,7 +24,7 @@ DON'T fire for:
 
 ## How
 
-1. Run `knomit_query` on the would-be title to surface similar or contradicting existing facts.
+1. Run `knomit_query` with `text` = the would-be title AND body, and NO `entities` filter, then read the hits for any that share an entity with the fact you are about to write. A title-only query misses facts whose title is phrased differently but whose subject and body are the same. Do not pass `entities`: that filter is AND, so asking for `[Ramp, AI Index]` hides an existing fact tagged only `[Ramp]` — which is exactly the overlap you are looking for. If a hit shares a subject, decide before writing: update, retract, merge, or assert distinctness with `distinct_from`.
 2. If a contradicting fact exists: ASK the user whether to `/knomit-update`, `/knomit-retract`, or merge — don't write a duplicate.
 3. Otherwise call `knomit_learn` with: `topic`, `category`, `title`, `body`, `kind` (default epistemic), `type` (default observation; use `hypothesis` for predictions), `entities`, `refs`, `confidence` 0.85.
 

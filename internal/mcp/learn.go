@@ -60,7 +60,7 @@ const (
 // learnTool returns the Tool definition for knomit_learn.
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
-		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit."),
+		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked."),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
 			mcpgo.Description("A short label for this learning moment."),
@@ -99,14 +99,15 @@ func learnToolSchemaProperties() map[string]any {
 		// factschema.go so this schema, knomit_update's, and the
 		// server instructions cannot disagree. knomit_learn mints
 		// facts, so it declares the defaults it will assume.
-		"kind":       kindProperty(fact.DefaultKind),
-		"type":       typeProperty(fact.DefaultEpistemicType),
-		"origin":     originProperty(),
-		"domain":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
-		"confidence": map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
-		"sources":    map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
-		"entities":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
-		"motifs":     motifsProperty(),
+		"kind":          kindProperty(fact.DefaultKind),
+		"type":          typeProperty(fact.DefaultEpistemicType),
+		"origin":        originProperty(),
+		"domain":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Cross-cutting domain tags."},
+		"confidence":    map[string]any{"type": "number", "description": "Certainty level 0.0–1.0.", "default": defaultConfidence},
+		"sources":       map[string]any{"type": "integer", "description": "Count of independent corroborations — how many independent agents or observations produced this fact.", "default": defaultSources},
+		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
+		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. Needed only after a call was refused: the refusal lists the candidates it found, and naming them here asserts the distinction and retries. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
+		"motifs":        motifsProperty(),
 		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
 			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
 			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
@@ -139,8 +140,14 @@ type learnFactInput struct {
 	Sources    *int     `json:"sources"`
 	Entities   []string `json:"entities"`
 	Motifs     []string `json:"motifs"`
-	Refs       []string `json:"refs"`
-	Origin     string   `json:"origin"`
+	// DistinctFrom names existing facts the caller has read and judged to be
+	// about a different subject. It is the escape from the same-subject
+	// refusal and nothing else reads it: an entry that names no candidate is
+	// inert, and an entry naming a path that does not exist is an error rather
+	// than a silently accepted bypass.
+	DistinctFrom []string `json:"distinct_from"`
+	Refs         []string `json:"refs"`
+	Origin       string   `json:"origin"`
 }
 
 // reserialize re-renders f and overwrites the entry at path in the
@@ -512,15 +519,27 @@ func applyDedupMerge(
 	agentBranch string,
 	ontology *fact.Ontology,
 	batchEmb store.BatchEmbedder,
+	dedupVecs [][]float32,
 	facts []fact.Fact,
 	topicCategories []string,
 	paths []string,
 	files map[string]string,
 	localRepoID string,
-) (map[string][]float32, []string, map[string][]string, error) {
+) (map[string][]float32, []string, map[string][]string, map[int]bool, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
 	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
-	dedupVecs := dedupEmbed(ctx, batchEmb, facts)
+	// dedupVecs is computed by the CALLER now, because the same-subject stage
+	// downstream needs the same vectors and re-embedding for it would be a
+	// second ONNX pass over the identical text. It is still the first thing
+	// that happens to this fact set, before any mutation here.
+
+	// touched[i] is an input this function rewrote: merged into an existing
+	// fact, or given a subsumed hypothesis's lineage. The same-subject stage
+	// skips them. It must, and not merely to avoid double-judging: mergeFacts
+	// inherits title and body from whichever fact WON, so for a merged index
+	// dedupVecs[i] — computed over the incoming title+body — no longer
+	// describes what will be written.
+	touched := make(map[int]bool)
 
 	// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to, or
 	// "" to suppress donation (used when the merge kept the EXISTING fact's
@@ -615,8 +634,9 @@ func applyDedupMerge(
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
-				return nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
 			}
+			touched[i] = true
 			continue
 		}
 
@@ -641,7 +661,7 @@ func applyDedupMerge(
 		// would surface later as an opaque serialize error.
 		if ontology != nil {
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
-				return nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
+				return nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
 		}
 
@@ -655,9 +675,10 @@ func applyDedupMerge(
 		paths[i] = match.Path
 		priorRefs[match.Path] = existingFact.Refs
 		if err := reserialize(files, match.Path, merged); err != nil {
-			return nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
 		facts[i] = merged
+		touched[i] = true
 	}
 
 	// Build the donation map keyed by final on-disk path. Empty/missing
@@ -672,7 +693,7 @@ func applyDedupMerge(
 		}
 		embByPath[donatePaths[i]] = dedupVecs[i]
 	}
-	return embByPath, retract, priorRefs, nil
+	return embByPath, retract, priorRefs, touched, nil
 }
 
 // computeEvidenceWeights stamps an evidence weight on machine-origin derived
@@ -801,8 +822,21 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// matches in its own category directory, if any. Mutates facts and
 		// files in place; hands back the embedding donations and the subsumed
 		// hypotheses to retract alongside the write.
-		embByPath, retract, priorRefs, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, facts, topicCategories, paths, files, gate.LocalRepoID())
+		//
+		// Embedding happens HERE, once, because two stages need the same
+		// vectors: the dedup merge below and the same-subject gate after it.
+		dedupVecs := dedupEmbed(ctx, batchEmb, facts)
+		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID())
 		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+
+		// 3c. The read-before-write knomit_learn never had. Placed AFTER the
+		// dedup merge so a fact the auto-merge already folded is not also
+		// refused, and BEFORE any write — including before evidence weighting,
+		// since a refused call should pay for nothing. Refusing here costs the
+		// caller one round trip and the corpus nothing.
+		if err := checkSameSubjectCollisions(ctx, s, agentBranch, factInputs, facts, topicCategories, touched, dedupVecs, batchEmb); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 

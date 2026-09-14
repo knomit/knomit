@@ -39,16 +39,81 @@ type Thresholds struct {
 	RerankLow  float64
 }
 
-// Defaults returns the historical nomic-era values. They are the fallback when
-// no embedder is configured (embeddings disabled), keeping behaviour identical
-// to before thresholds became model-dependent.
-func Defaults() Thresholds {
-	return Thresholds{
+// NomicModelID is the historical default, kept here because Defaults() is its
+// alias: the fallback IS a model's calibration, not a separate set of numbers.
+// Exported so a caller naming the fallback names it rather than retyping the
+// string, the same way DefaultModelID names the shipped model.
+const NomicModelID = "nomic-v1.5"
+
+// modelThresholds is every shipped model's calibrated set, as pure data.
+//
+// It lives HERE rather than beside each descriptor in the cgo parent so the
+// cgo-free half of the contract knows a model's GEOMETRY as well as its
+// identity. Before this, params held DefaultModelID but not the thresholds it
+// names, so any non-cgo caller wanting the shipped band had to either import
+// the ONNX-linked parent or retype the numbers — and a retyped copy goes stale
+// silently at the next re-sweep. The descriptors in internal/embeddings read
+// from this map, so there is exactly one place a calibration lands.
+//
+// This is data, not an import: TestParamsHasNoDependencies bans non-stdlib
+// imports, and a map of float64 adds none.
+var modelThresholds = map[string]Thresholds{
+	// The historical nomic-era values, and the fallback when no embedder is
+	// configured (embeddings disabled) — behaviour identical to before
+	// thresholds became model-dependent.
+	NomicModelID: {
 		Dedup:          0.92,
 		ReflectNovelty: 0.85,
 		SimilarTo:      0.60,
 		SearchFloor:    0.40,
 		RerankHigh:     0.70,
 		RerankLow:      0.50,
-	}
+	},
+	// Calibrated against the real knomit corpus (712 facts, tools/calibrate).
+	// EmbeddingGemma's cosine distribution runs markedly cooler than nomic's
+	// (distinct same-category pairs: mean 0.48 vs 0.75), so every cutoff is
+	// ported DOWN by preserving the percentile it occupied on nomic. Dedup
+	// 0.82 sits in the validated safety gap (distinct p99 0.77 < 0.82 < true
+	// near-dup p05 0.96). SearchFloor's pure port was ~0, clamped to 0.05 to
+	// drop only anti-correlated noise.
+	DefaultModelID: {
+		Dedup:          0.82,
+		ReflectNovelty: 0.69,
+		SimilarTo:      0.18,
+		SearchFloor:    0.05,
+		RerankHigh:     0.43,
+		RerankLow:      0.10,
+	},
 }
+
+// ForModel returns the calibrated thresholds for a model id, and whether that
+// id has an entry at all.
+//
+// THE BOOL IS LOAD-BEARING: never collapse this to "return the entry, or
+// Defaults()". A silent fallback would judge an unknown or typo'd model id
+// against NOMIC geometry with nothing red — the same defect as returning a
+// default for an unknown motif id (bridge_motif's "UNKNOWN, not defaulted",
+// review finding M-5), and the reason
+// kb/invariants/integrations/hooks/guards-fail-closed requires a guard to
+// distinguish absent from zero rather than proceed on a zero value.
+//
+// Presence is a MAP-KEY PROBE, deliberately, and must stay one. Implementing it
+// as `th == Defaults()` would report nomic-v1.5 — a real, registered model
+// whose calibration IS Defaults() — as missing. This mirrors requireResponseKey
+// probing for a key's presence rather than for a non-empty value, for the same
+// reason: a legitimate value that happens to equal the zero/default case is
+// still a value.
+//
+// Absence means "we have no calibration for this model", so a caller that
+// cannot evaluate must take the NON-aggressive branch. It does NOT license
+// validating ids: false is for a genuinely absent entry, never for an id that
+// merely looks unfamiliar.
+func ForModel(id string) (Thresholds, bool) {
+	th, ok := modelThresholds[id]
+	return th, ok
+}
+
+// Defaults returns the historical nomic-era values. They are the fallback when
+// no embedder is configured (embeddings disabled), keeping behaviour identical
+// to before thresholds became model-dependent.
+func Defaults() Thresholds { return modelThresholds[NomicModelID] }
