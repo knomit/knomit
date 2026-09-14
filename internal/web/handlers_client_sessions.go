@@ -70,8 +70,12 @@ type clientSessionsCollection struct {
 // ?binding=repo:<uid>|lens:<uid>. Rows silent past the hidden threshold are
 // omitted unless ?include=hidden.
 //
-// It is a read, so read-only mode changes nothing about it.
-func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions.Store) http.HandlerFunc {
+// READ-ONLY MODE REDACTS. The endpoint is a read, so read-only does not
+// refuse it — but read-only is the public DEMO mode, and these rows carry the
+// operator's hostname, username, working directory, pids, agent branch and
+// IP. Presence stays visible to a visitor; the operator's machine does not.
+// See redactForDemo.
+func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions.Store, readOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if store == nil {
 			hal.WriteProblem(w, http.StatusServiceUnavailable, "Client sessions unavailable",
@@ -101,7 +105,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 				e := s.Ended.UTC().Format(time.RFC3339)
 				ended = &e
 			}
-			items = append(items, clientSessionView{
+			view := clientSessionView{
 				ID: s.ID, InstanceID: s.InstanceID, State: s.State, Transport: s.Transport,
 				Binding: clientSessionBinding{Kind: kind, UID: uid, Name: namePtr},
 				Branch:  s.Branch,
@@ -112,7 +116,11 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 				FirstSeenAt: s.FirstSeen.UTC().Format(time.RFC3339),
 				LastSeenAt:  s.LastSeen.UTC().Format(time.RFC3339),
 				EndedAt:     ended, RequestCount: s.RequestCount,
-			})
+			}
+			if readOnly {
+				redactForDemo(&view)
+			}
+			items = append(items, view)
 		}
 		p := store.Policy()
 		hal.WriteHAL(w, http.StatusOK, clientSessionsCollection{
@@ -125,4 +133,21 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 			Embedded: map[string][]clientSessionView{"sessions": items},
 		})
 	}
+}
+
+// redactForDemo strips everything that describes the OPERATOR's machine,
+// leaving what presence is actually for: which clients are connected, to
+// what, how recently, and how busy.
+//
+// Kept: id, instance_id (a hash, and the handle the UI groups by), state,
+// transport, binding, the client's declared name/version, the timestamps and
+// the request count. Removed: every bridge field (host, user, cwd, pid,
+// parent, parent_pid, version), the agent branch — which embeds the hostname
+// by construction — the remote address and the User-Agent, which carries the
+// bridge version.
+func redactForDemo(v *clientSessionView) {
+	v.Bridge = clientSessionBridge{}
+	v.Branch = ""
+	v.RemoteAddr = ""
+	v.UserAgent = ""
 }

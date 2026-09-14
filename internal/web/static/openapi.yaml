@@ -1483,6 +1483,12 @@ paths:
         client and unverified — correlation, not identity. `binding.name` is
         null when the repo or lens no longer resolves; the row is still
         returned with its uid.
+
+        On a READ-ONLY (public demo) instance this response is REDACTED: every
+        `bridge` field, `branch`, `remote_addr` and `user_agent` come back
+        empty or zero, because they describe the operator's machine. Presence
+        itself — id, instance_id, state, transport, binding, client
+        name/version, timestamps, request_count — is unchanged.
       operationId: listClientSessions
       parameters:
         - name: binding
