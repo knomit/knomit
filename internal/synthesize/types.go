@@ -402,6 +402,13 @@ type DistillResult struct {
 	// an agent handed a leftover bin sub-clusters it silently and the system
 	// had no record of which groups were weighed or dropped.
 	SubgroupsConsidered []distillSubgroup `json:"subgroups_considered,omitempty"`
+
+	// DeclinedReason is set when Synthesize is empty. It is stored with the
+	// response and counted into the session health lines; nothing throttles on
+	// it. The enum lives in the schema, not here: an unknown value is kept as
+	// written so a future prompt can add one without a parser change.
+	DeclinedReason string `json:"declined_reason,omitempty"`
+	DeclinedNote   string `json:"declined_note,omitempty"`
 }
 
 // distillSubgroup is one sub-group an agent weighed inside a remainder item.

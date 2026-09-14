@@ -80,7 +80,9 @@ const distillResponseSchema = `{
       }
     },
     "retract": {"type": "array", "items": {"type": "string"}},
-    "subgroups_considered": {"type": "array", "items": {"type": "object", "properties": {"members": {"type": "array", "items": {"type": "string"}}, "mechanism": {"type": "string"}, "synthesized": {"type": "boolean"}}, "required": ["members"]}, "description": "Sub-groups weighed inside an unclustered remainder item, including the ones rejected. Records the choice a leftover set forces; nothing branches on it."}
+    "subgroups_considered": {"type": "array", "items": {"type": "object", "properties": {"members": {"type": "array", "items": {"type": "string"}}, "mechanism": {"type": "string"}, "synthesized": {"type": "boolean"}}, "required": ["members"]}, "description": "Sub-groups weighed inside an unclustered remainder item, including the ones rejected. Records the choice a leftover set forces; nothing branches on it."},
+    "declined_reason": {"type": "string", "enum": ["no-shared-mechanism", "members-conflict", "insufficient-instances", "already-covered-by-existing-fact", "rest-bucket-incoherent"], "description": "Required when synthesize is empty. Why no synthesis was written."},
+    "declined_note": {"type": "string", "description": "One sentence: what you considered and why it did not hold. Required when synthesize is empty."}
   },
   "required": ["synthesize"]
 }`

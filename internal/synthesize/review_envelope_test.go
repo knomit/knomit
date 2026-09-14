@@ -173,3 +173,27 @@ func TestReviewer_DiscoverWrites_CountedInSummary(t *testing.T) {
 	require.Equal(t, 1, res.Summary.Synthesized,
 		"a fact written by the discover path must be counted in the session summary")
 }
+
+// declined_reason and declined_note are OPTIONAL additions. A response written
+// before they existed — or by a model that omits them — must still parse, since
+// the envelope invariant is that a schema's `required` list is inert unless the
+// parser probes the raw object, and only "synthesize" is probed.
+func TestParseDistillResponse_DeclinedReasonOptional(t *testing.T) {
+	old, err := parseDistillResponse(`{"synthesize": [], "retract": []}`)
+	require.NoError(t, err)
+	require.Empty(t, old.DeclinedReason)
+
+	withReason, err := parseDistillResponse(`{"synthesize": [], "retract": [], "declined_reason": "rest-bucket-incoherent", "declined_note": "sixty facts, four domains"}`)
+	require.NoError(t, err)
+	require.Equal(t, "rest-bucket-incoherent", withReason.DeclinedReason)
+	require.Equal(t, "sixty facts, four domains", withReason.DeclinedNote)
+}
+
+// An unknown reason is kept as written rather than rejected or blanked: the
+// enum lives in the schema, so a future prompt can add a value without a
+// parser change, and a health line counting it will simply show the new key.
+func TestParseDistillResponse_UnknownDeclinedReasonKept(t *testing.T) {
+	res, err := parseDistillResponse(`{"synthesize": [], "declined_reason": "some-future-reason"}`)
+	require.NoError(t, err)
+	require.Equal(t, "some-future-reason", res.DeclinedReason)
+}

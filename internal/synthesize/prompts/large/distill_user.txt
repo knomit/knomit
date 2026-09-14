@@ -44,6 +44,8 @@ A motif names the general regularity a fact instantiates, independent of its sub
   ]
 }
 
+When `synthesize` is empty, set `declined_reason` to one of: `no-shared-mechanism`, `members-conflict`, `insufficient-instances`, `already-covered-by-existing-fact`, `rest-bucket-incoherent` — and put one sentence in `declined_note` saying what you weighed. An empty payload with no reason is indistinguishable from not having read the members.
+
 Path and type are MANDATORY:
 - Every output fact's path MUST start with `{{.OntologyRoot}}/`. Outputs with any other prefix are rejected.
 - Every output fact MUST set `type` to one of the listed values. Outputs with empty or missing type are rejected. Default to "synthesis" for higher-order facts derived from observations.
