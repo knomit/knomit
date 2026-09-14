@@ -220,11 +220,14 @@ const maxDeliveredItemBytes = 32 * 1024
 // 8 KiB the envelope had 103 bytes of headroom left — it was one prompt edit
 // from over-promising.
 //
-// The rest-bucket and declined-reason work is projected to cost 1,677 bytes
-// (1,027 prompt + 650 response schema, measured from its specified text), which
-// would land the envelope near 11,558 and leave about 730 bytes. It fits, but
-// that is the real remaining budget — do not read the round number as slack.
-// Re-measure rather than assume.
+// The rest-bucket and declined-reason work has since landed and was measured
+// rather than projected: the worst case is the distill REMAINDER branch at
+// 11,857 bytes, leaving 431. (The projection was 11,558; the difference is a
+// description on the subgroups_considered schema property, kept deliberately —
+// it helps the model more than the headroom helps us.) Both distill branches
+// are measured by the test above, because the remainder ask is the larger of
+// the two. 431 bytes is thin: trim prose here before raising the reserve again,
+// and re-measure rather than assume.
 const pageEnvelopeReserveBytes = 12 * 1024
 
 // maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
