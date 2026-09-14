@@ -91,6 +91,7 @@ const (
 )
 
 func TestFindSameSubjectCandidates(t *testing.T) {
+	const incomingDir = "kb/business/companies/ramp/ai-index"
 	incoming := fact.Fact{
 		Title:    "Ramp's AI index shows enterprise adoption plateauing",
 		Body:     "Ramp's spend data puts paid AI adoption flat quarter over quarter.",
@@ -112,6 +113,7 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 				results  []store.SearchResult
 				wantPath string
 				wantEnts []string
+				wantSim  float64 // 0 means "the in-band midpoint"
 			}{
 				{
 					name:    "(a) incoming fact has no entities is never refused",
@@ -119,9 +121,30 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 					results: []store.SearchResult{hit("kb/a.md", "A", band, "Ramp")},
 				},
 				{
-					name:    "(b) hit at the auto-merge floor belongs to applyDedupMerge",
+					// SAME category directory: applyDedupMerge searches exactly
+					// there, so it really has already folded this one.
+					name:    "(b) same-category hit at the auto-merge floor belongs to applyDedupMerge",
 					f:       incoming,
-					results: []store.SearchResult{hit("kb/a.md", "A", ts.th.Dedup, "Ramp")},
+					results: []store.SearchResult{hit(incomingDir+"/a.md", "A", ts.th.Dedup, "Ramp")},
+				},
+				{
+					// CROSS category: applyDedupMerge never looked here, so
+					// nothing has folded it and nothing else will. This is the
+					// shape of every measured collision pair.
+					name:     "(h) cross-category hit at the auto-merge floor is still a candidate",
+					f:        incoming,
+					results:  []store.SearchResult{hit("kb/technology/other/a.md", "A", ts.th.Dedup, "Ramp")},
+					wantPath: "kb/technology/other/a.md",
+					wantEnts: []string{"Ramp"},
+					wantSim:  ts.th.Dedup,
+				},
+				{
+					name:     "(i) cross-category hit far above Dedup is still a candidate",
+					f:        incoming,
+					results:  []store.SearchResult{hit("kb/technology/other/a.md", "A", 0.98, "Ramp")},
+					wantPath: "kb/technology/other/a.md",
+					wantEnts: []string{"Ramp"},
+					wantSim:  0.98,
 				},
 				{
 					name:     "(c) hit in band sharing one non-generic entity is a candidate",
@@ -158,7 +181,7 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					q := &fakeSearcher{results: tc.results}
 					got, err := findSameSubjectCandidates(
-						context.Background(), q, "agent/test", tc.f, nil, ts.th, entityDF, testDFCeiling, defaultPageSize)
+						context.Background(), q, "agent/test", tc.f, incomingDir, nil, ts.th, entityDF, testDFCeiling, defaultPageSize)
 					require.NoError(t, err)
 
 					if tc.wantPath == "" {
@@ -168,7 +191,11 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 					require.Len(t, got, 1)
 					require.Equal(t, tc.wantPath, got[0].Path)
 					require.Equal(t, tc.wantEnts, got[0].SharedEntities)
-					require.InDelta(t, band, got[0].Similarity, 1e-9,
+					wantSim := tc.wantSim
+					if wantSim == 0 {
+						wantSim = band
+					}
+					require.InDelta(t, wantSim, got[0].Similarity, 1e-9,
 						"Similarity must be reported as a cosine, not the store's cosine*100")
 				})
 			}
@@ -187,7 +214,7 @@ func TestFindSameSubjectCandidates_SearchesWholeBranchAtTheBandFloor(t *testing.
 			vec := []float32{0.1, 0.2}
 
 			_, err := findSameSubjectCandidates(
-				context.Background(), q, "agent/test", f, vec, ts.th,
+				context.Background(), q, "agent/test", f, "kb/gotchas/x", vec, ts.th,
 				map[string]int{"Ramp": specificDF}, testDFCeiling, defaultPageSize)
 			require.NoError(t, err)
 
@@ -212,7 +239,7 @@ func TestFindSameSubjectCandidates_AllGenericNeverRefuses(t *testing.T) {
 	got, err := findSameSubjectCandidates(
 		context.Background(), q, "agent/test",
 		fact.Fact{Title: "T", Body: "B", Entities: []string{"MCP"}},
-		nil, th, map[string]int{"MCP": genericDF}, testDFCeiling, defaultPageSize)
+		"kb/gotchas/x", nil, th, map[string]int{"MCP": genericDF}, testDFCeiling, defaultPageSize)
 
 	require.NoError(t, err)
 	require.Empty(t, got, "an all-generic fact has no anchor; refuse nothing")
@@ -231,7 +258,7 @@ func TestFindSameSubjectCandidates_HypothesisLeftToSubsume(t *testing.T) {
 	got, err := findSameSubjectCandidates(
 		context.Background(), q, "agent/test",
 		fact.Fact{Title: "T", Body: "B", Entities: []string{"Ramp"}},
-		nil, th, map[string]int{"Ramp": specificDF}, testDFCeiling, defaultPageSize)
+		"kb/gotchas/x", nil, th, map[string]int{"Ramp": specificDF}, testDFCeiling, defaultPageSize)
 
 	require.NoError(t, err)
 	require.Empty(t, got, "the subsume path owns hypotheses")

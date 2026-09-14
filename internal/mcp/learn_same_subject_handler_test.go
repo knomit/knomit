@@ -533,3 +533,110 @@ func TestLearnHandler_PipelineOriginExemptWithoutRefs(t *testing.T) {
 		})
 	}
 }
+
+// Decision 9d, at the handler. This is the shape of every measured collision
+// pair: two facts about one event, filed under DIFFERENT categories, similar
+// enough that applyDedupMerge would have folded them had they shared a
+// directory — and it never looked, because it searches only the incoming
+// fact's own category dir.
+//
+// Before 9d both gates passed it: the merge could not see it, and the band
+// excluded it for being at or above Dedup. Measured pairs that fell through:
+// Coursera Project Helix 0.8752, Forethought nightwatchman 0.8384,
+// TPUv7 Ironwood 0.9179 (band on the shipped model is (0.69, 0.82)).
+func TestLearnHandler_RefusesCrossCategoryCollisionAboveDedup(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			// Above the auto-merge floor, where the old contract stopped looking.
+			aboveDedup := ts.th.Dedup + (1-ts.th.Dedup)*0.5
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, aboveDedup)
+			seeded := seedRampFact(t, ctx, emb) // kb/decisions/accepted/ramp/ai-index/...
+			before := liveFactCount(t, svc)
+
+			// A DIFFERENT category directory: applyDedupMerge never searches here.
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
+				"cross-category-dup", "gotchas", "tools/ai/spend",
+				"Enterprise AI spend is plateauing",
+				"A "+probeMarker+" note on Ramp's numbers for paid AI seats.",
+				[]any{"Ramp"}, nil))
+			require.NoError(t, err)
+
+			require.True(t, r.IsError,
+				"a cross-category near-duplicate is folded by nothing, so it must be refused: %s", resultText(t, r))
+			require.Contains(t, resultText(t, r), seeded)
+			require.Equal(t, before, liveFactCount(t, svc),
+				"refused, and NOT auto-merged: merging cross-category would move a fact out of its author's category")
+		})
+	}
+}
+
+// The other half of 9d, and the reason the cap is conditional rather than gone:
+// inside the incoming fact's OWN category directory applyDedupMerge really has
+// already folded an at-or-above-Dedup match, so refusing there would reject the
+// write the merge just absorbed.
+func TestLearnHandler_SameCategoryAboveDedupStillMerges(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			aboveDedup := ts.th.Dedup + (1-ts.th.Dedup)*0.5
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, aboveDedup)
+			seedRampFact(t, ctx, emb)
+			before := liveFactCount(t, svc)
+
+			// SAME category directory as the seed.
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
+				"same-category-dup", "decisions", "accepted/ramp/ai-index",
+				"Ramp AI Index shows adoption flat",
+				"The "+probeMarker+" records Ramp's spend data on paid AI adoption.",
+				[]any{"Ramp", "AI Index"}, nil))
+			require.NoError(t, err)
+
+			require.False(t, r.IsError,
+				"the merge owns this one; refusing it would reject what was just absorbed: %s", resultText(t, r))
+			require.Equal(t, before, liveFactCount(t, svc), "merged into the existing fact, not added")
+		})
+	}
+}
+
+// The one path where the same-category cap and `touched` DIVERGE, and so the
+// only handler-level test the cap can fail on its own.
+//
+// TestLearnHandler_SameCategoryAboveDedupStillMerges does not pin the cap:
+// applyDedupMerge folds that fact, sets touched[i], and the gate skips it
+// before the cap is ever consulted — delete the cap and that test still passes.
+// What makes this case different is the merge's own Limit: 1 plus its
+// `consumed` set (learn.go): an existing fact absorbs at most ONE incoming fact
+// per call, and a second matcher is SKIPPED rather than chained. So the second
+// fact arrives at the gate NOT touched, matching the same existing fact above
+// Dedup, and the cap is the only thing standing between it and a refusal.
+//
+// Expected: the first merges, the second is written at its own path, and
+// NOTHING is refused — a redundant fact that a later prune collapses, which is
+// the outcome the merge's skip-don't-chain rule already chose.
+func TestLearnHandler_TwoSameCategoryDupsSecondIsWrittenNotRefused(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			aboveDedup := ts.th.Dedup + (1-ts.th.Dedup)*0.5
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, aboveDedup)
+			seedRampFact(t, ctx, emb)
+			before := liveFactCount(t, svc) // the seed alone
+
+			// Both in the SEED's category, both above Dedup. Only one can be
+			// absorbed; the other reaches the gate untouched.
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("two-dups",
+				sameSubjectFact("decisions", "accepted/ramp/ai-index",
+					"Ramp AI Index first restatement",
+					"A "+probeMarker+" note on Ramp spend, one.", []any{"Ramp"}),
+				sameSubjectFact("decisions", "accepted/ramp/ai-index",
+					"Ramp AI Index second restatement",
+					"A "+probeMarker+" note on Ramp spend, two.", []any{"Ramp"}),
+			))
+			require.NoError(t, err)
+
+			require.False(t, r.IsError,
+				"the second same-category duplicate must NOT be refused — the cap is what prevents it: %s",
+				resultText(t, r))
+			require.Equal(t, before+1, liveFactCount(t, svc),
+				"one fact merged into the seed, the other written at its own path")
+		})
+	}
+}

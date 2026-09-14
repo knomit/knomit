@@ -63,9 +63,27 @@ func dfCeilingForFacts(n int) int { return synthesize.DFCeiling(n) }
 // untrustworthy signal is worse than letting the write through — that is the
 // failure kb/decisions/lens/no-write-time-coherence-gate names.
 //
+// THE UPPER BOUND IS SCOPE-CONDITIONAL, and that is the whole of decision 9d.
+// "A hit at or above Dedup belongs to applyDedupMerge" is true only INSIDE the
+// incoming fact's own category directory, because that is the only place
+// applyDedupMerge looks (it searches with Path: categoryDir). Outside it, no
+// merge has folded anything and no other stage will, so a cross-category
+// candidate has NO upper bound: everything above ReflectNovelty is a candidate.
+//
+// The first version capped both cases at Dedup, and measurement against the
+// real corpus showed what that costs: of the four known collision pairs, three
+// sit ABOVE Dedup (Coursera Project Helix 0.8752, Forethought nightwatchman
+// 0.8384, TPUv7 Ironwood 0.9179) and every one is cross-category — which is why
+// they collided at all. They fell through both gates. Only Ramp AI Index
+// (0.7033) was in band. The premise was not wrong about applyDedupMerge; it was
+// wrong about applyDedupMerge's SCOPE.
+//
+// A cross-category near-duplicate is refused, never auto-merged: merging would
+// have to choose one of the two paths and would silently move a fact out of the
+// category its author filed it under. The caller decides.
+//
 // The band is open at the bottom because the store's MinSimilarity filter is
-// strict (cosine > min), and closed at the top because a hit at or above Dedup
-// belongs to applyDedupMerge, which has already folded it.
+// strict (cosine > min).
 //
 // SearchResult.Score is cosine*100 on the vector path (search_query.go, Score:
 // c.score * 100.0) while params.Thresholds are 0-1, so it is divided before
@@ -76,6 +94,7 @@ func findSameSubjectCandidates(
 	q factSearcher,
 	branch string,
 	f fact.Fact,
+	categoryDir string,
 	vec []float32,
 	th params.Thresholds,
 	entityDF map[string]int,
@@ -103,7 +122,11 @@ func findSameSubjectCandidates(
 	var out []sameSubjectCandidate
 	for _, r := range results {
 		cosine := r.Score / 100.0
-		if cosine <= th.ReflectNovelty || cosine >= th.Dedup {
+		if cosine <= th.ReflectNovelty {
+			continue
+		}
+		// Only a SAME-category candidate is capped at the auto-merge floor.
+		if cosine >= th.Dedup && sameCategoryDir(r.Path, categoryDir) {
 			continue
 		}
 		// A hypothesis belongs to subsumeHypothesis, which settles it in the
@@ -125,6 +148,36 @@ func findSameSubjectCandidates(
 		})
 	}
 	return out, nil
+}
+
+// categoryDirOf is the category directory of an on-disk fact path: the ONE
+// definition of "the scope applyDedupMerge searches".
+//
+// It is shared deliberately. applyDedupMerge uses it to SET its search scope,
+// and the same-subject gate uses it to decide whether a candidate falls inside
+// that scope — so the two must mean the same thing by construction. Two
+// derivations that drifted would put the gate's upper bound somewhere the merge
+// does not actually cover, which is decision 9d's defect all over again.
+//
+// Derived from the on-disk path rather than fact.Path() so the directory
+// carries the configured ontology root's real case.
+func categoryDirOf(path string) string {
+	i := strings.LastIndex(path, "/")
+	if i < 0 {
+		return ""
+	}
+	return path[:i]
+}
+
+// sameCategoryDir reports whether an existing fact sits in the directory
+// applyDedupMerge would have searched for the incoming fact — the ONLY scope in
+// which "the merge already folded this" is true. Compared case-insensitively
+// because fact paths are lowercase-canonical, the same reason namedIn folds.
+func sameCategoryDir(candidatePath, categoryDir string) bool {
+	if categoryDir == "" {
+		return false
+	}
+	return strings.EqualFold(categoryDirOf(candidatePath), categoryDir)
 }
 
 // nonGenericEntities keeps only the entities specific enough to anchor a
@@ -251,6 +304,7 @@ func checkSameSubjectCollisions(
 	inputs []learnFactInput,
 	facts []fact.Fact,
 	topicCategories []string,
+	paths []string,
 	touched map[int]bool,
 	vecs [][]float32,
 	emb store.BatchEmbedder,
@@ -350,7 +404,7 @@ func checkSameSubjectCollisions(
 			continue
 		}
 		candidates, err := findSameSubjectCandidates(
-			ctx, s.factQuery, branch, f, vecs[i], th, entityDF, ceiling, defaultPageSize)
+			ctx, s.factQuery, branch, f, categoryDirOf(paths[i]), vecs[i], th, entityDF, ceiling, defaultPageSize)
 		if err != nil {
 			log.Warn().Err(err).Int("fact", i).Msg("learn: same-subject gate skipped, search failed")
 			continue
