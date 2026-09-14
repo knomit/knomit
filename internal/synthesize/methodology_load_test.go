@@ -180,8 +180,11 @@ func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 			"written: letting the model decide whether to read AT ALL was the failure mode. What "+
 			"changed on PR #188 is only its scope — the UNIVERSAL mandatory read forced up to "+
 			"methodologyTopK reads per item, and the measured value sat in the top-ranked candidate.")
-	require.Contains(t, content.Prompt, "Always",
-		"the top-ranked read is unconditional; 'read it if useful' is the shape this forbids")
+	require.Contains(t, content.Prompt, "Always — its title is not enough",
+		"the top-ranked read is unconditional; 'read it if useful' is the shape this forbids. "+
+			"Pin the PHRASE, not the bare word: distill_user.txt also says \"Always use a path "+
+			"under .../meta/reasoning/\", so a bare \"Always\" passes whatever the methodology "+
+			"rule says")
 	require.Contains(t, content.Prompt, "never enough to decide whether it APPLIES",
 		"triage may use titles, judging applicability may not — without this pin the remaining "+
 			"candidates regress to title-only judgment, which is what the universal read prevented")
@@ -249,8 +252,11 @@ func TestRenderReflectWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 			"written: letting the model decide whether to read AT ALL was the failure mode. What "+
 			"changed on PR #188 is only its scope — the UNIVERSAL mandatory read forced up to "+
 			"methodologyTopK reads per item, and the measured value sat in the top-ranked candidate.")
-	require.Contains(t, content.Prompt, "Always",
-		"the top-ranked read is unconditional; 'read it if useful' is the shape this forbids")
+	require.Contains(t, content.Prompt, "Always — its title is not enough",
+		"the top-ranked read is unconditional; 'read it if useful' is the shape this forbids. "+
+			"Pin the PHRASE, not the bare word: distill_user.txt also says \"Always use a path "+
+			"under .../meta/reasoning/\", so a bare \"Always\" passes whatever the methodology "+
+			"rule says")
 	require.Contains(t, content.Prompt, "never enough to decide whether it APPLIES",
 		"triage may use titles, judging applicability may not — without this pin the remaining "+
 			"candidates regress to title-only judgment, which is what the universal read prevented")
