@@ -232,3 +232,52 @@ func TestSessionIDIsCapped(t *testing.T) {
 		t.Fatal("End must reach the same capped row")
 	}
 }
+
+// A DELETE is the client SAYING it is done, not proof that it is: with the
+// default mcp-go manager the same id keeps working afterwards. A later
+// request must bring the row back to life, or the row reads "ended" while
+// the session is demonstrably still making calls.
+func TestTouch_AfterEndRevivesTheRow(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		obs  func(now time.Time) Observation
+	}{
+		{"declared bridge", func(now time.Time) Observation { return bridgeObs("sid", now) }},
+		{"direct http", func(now time.Time) Observation {
+			return Observation{SessionID: "sid", Binding: "repo:uid1", RemoteIP: "10.0.0.5", UserAgent: "curl/8", Now: now}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := s
+			if tc.name == "direct http" {
+				s = newTestStore(t)
+			}
+			if err := s.Touch(ctx, tc.obs(t0)); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.End(ctx, "sid", t0.Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Touch(ctx, tc.obs(t0.Add(2*time.Second))); err != nil {
+				t.Fatal(err)
+			}
+
+			rows, err := s.List(ctx, Filter{Now: t0.Add(2 * time.Second)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 {
+				t.Fatalf("rows=%d", len(rows))
+			}
+			if rows[0].Ended != nil {
+				t.Fatalf("a request after the DELETE must clear ended_at: %+v", rows[0])
+			}
+			if rows[0].State != StateLive {
+				t.Fatalf("state=%s, want live", rows[0].State)
+			}
+		})
+	}
+}

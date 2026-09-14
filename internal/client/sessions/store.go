@@ -65,7 +65,12 @@ ON CONFLICT(id) DO UPDATE SET
   branch = excluded.branch, hostname = excluded.hostname, username = excluded.username,
   cwd = excluded.cwd, pid = excluded.pid, parent_app = excluded.parent_app, parent_pid = excluded.parent_pid,
   bridge_version = excluded.bridge_version, remote_addr = excluded.remote_addr, user_agent = excluded.user_agent,
-  last_seen_at = excluded.last_seen_at, request_count = request_count + 1`,
+  last_seen_at = excluded.last_seen_at, request_count = request_count + 1,
+  -- A DELETE is the client SAYING it is done, not proof that it is: the
+  -- default mcp-go manager keeps accepting the id afterwards. A later request
+  -- revives the row rather than leaving it reading "ended" while the session
+  -- is demonstrably still calling.
+  ended_at = NULL`,
 			o.SessionID, Cap(c.InstanceID), Cap(transport), o.Binding, Cap(c.Branch), Cap(c.Host), Cap(c.User), Cap(c.Cwd),
 			c.PID, Cap(c.ParentApp), c.ParentPID, Cap(c.Version), Cap(o.RemoteIP), Cap(o.UserAgent), now, now)
 		return err
@@ -88,7 +93,12 @@ ON CONFLICT(id) DO UPDATE SET
   instance_id = excluded.instance_id,
   binding = CASE WHEN excluded.binding = '' THEN binding ELSE excluded.binding END,
   remote_addr = excluded.remote_addr, user_agent = excluded.user_agent,
-  last_seen_at = excluded.last_seen_at, request_count = request_count + 1`,
+  last_seen_at = excluded.last_seen_at, request_count = request_count + 1,
+  -- A DELETE is the client SAYING it is done, not proof that it is: the
+  -- default mcp-go manager keeps accepting the id afterwards. A later request
+  -- revives the row rather than leaving it reading "ended" while the session
+  -- is demonstrably still calling.
+  ended_at = NULL`,
 		o.SessionID, inst, o.Binding, Cap(o.RemoteIP), Cap(o.UserAgent), now, now)
 	return err
 }
