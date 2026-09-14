@@ -163,3 +163,48 @@ func TestMCPDispatch_404CreatesNothing_NilStoreSafe(t *testing.T) {
 		t.Fatalf("nil store must be transparent: %d", rec.Code)
 	}
 }
+
+// The bridge's exit races the recording: it reads the DELETE response, exits,
+// the socket closes, and net/http cancels the request context — while the
+// store call is still running. Recording must outlive the request context, or
+// ended_at silently stays NULL for every clean shutdown.
+func TestRecordClientSession_SurvivesRequestCancellation(t *testing.T) {
+	store := newClientSessionsStore(t)
+	ctx := context.Background()
+	if err := store.Touch(ctx, sessions.Observation{SessionID: "sid", Binding: "repo:u-alpha", Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel() // the client is already gone
+
+	req := httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/agent:test/mcp", nil).WithContext(cancelled)
+	req.Header.Set("Mcp-Session-Id", "sid")
+	recordClientSession(req, store)
+
+	rows, err := store.List(ctx, sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Ended == nil {
+		t.Fatalf("End lost to a cancelled request context: %+v", rows)
+	}
+}
+
+func TestRecordClientSession_TouchSurvivesRequestCancellation(t *testing.T) {
+	store := newClientSessionsStore(t)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`)).WithContext(cancelled)
+	req.Header.Set("Mcp-Session-Id", "sid")
+	recordClientSession(req, store)
+
+	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("Touch lost to a cancelled request context: %+v", rows)
+	}
+}

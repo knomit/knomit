@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"time"
@@ -24,9 +25,16 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	if sid == "" {
 		return
 	}
+	// DETACHED from the request context, which net/http cancels the moment the
+	// client's socket closes. The bridge's clean exit is exactly that race: it
+	// reads the DELETE response, exits, the socket closes, and the cancellation
+	// lands while End is mid-statement — leaving ended_at NULL for every clean
+	// shutdown, the one case the DELETE exists to record. The call is one short
+	// statement against a local database, so it needs no deadline of its own.
+	ctx := context.WithoutCancel(r.Context())
 	now := time.Now()
 	if r.Method == http.MethodDelete {
-		if err := store.End(r.Context(), sid, now); err != nil {
+		if err := store.End(ctx, sid, now); err != nil {
 			log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: end failed")
 		}
 		return
@@ -47,7 +55,7 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 			obs.Client = &info
 		}
 	}
-	if err := store.Touch(r.Context(), obs); err != nil {
+	if err := store.Touch(ctx, obs); err != nil {
 		log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: touch failed")
 	}
 }
