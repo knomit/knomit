@@ -274,11 +274,32 @@ describe('choosing a source does not discard an established remote', () => {
   });
 
   // The complement, so the test above cannot pass by the reducer simply never
-  // resetting anything: the three actions that DO change the question the
-  // probe answered must still un-answer it.
-  it('but a new URL still does discard it', () => {
+  // invalidating anything. The three actions that DO change the question the
+  // probe answered each still invalidate it — by three different mechanisms,
+  // which is why one assertion shape does not cover them.
+  it('but a new URL still discards it outright', () => {
     const s = wizardReducer(established(), { type: 'SET_URL', url: 'https://h/other.git' });
     expect(s.probe).toBeNull();
+    expect(establishedAnswer(s)).toBe('');
+  });
+
+  // The probe is per-REMOTE, so a new branch leaves it true and un-answers
+  // only the branch check.
+  it('a new branch un-answers the branch check but keeps the probe', () => {
+    const s = wizardReducer(established(), { type: 'SET_BRANCH', branch: 'develop' });
+    expect(s.probe?.reachable).toBe(true);
+    expect(establishedAnswer(s)).toBe('');
+  });
+
+  // A credential change nulls NOTHING: remoteKey hashes the credential, so the
+  // probe simply stops being current. Discarding it here would rewind the
+  // reader past the access step — the only place a credential can be typed.
+  it('a new credential invalidates the probe by key, without discarding it', () => {
+    const before = established();
+    expect(probeIsCurrent(before)).toBe(true);
+    const s = wizardReducer(before, { type: 'SET_AUTH_METHOD', method: 'token' });
+    expect(s.probe).toEqual(before.probe);
+    expect(probeIsCurrent(s)).toBe(false);
     expect(establishedAnswer(s)).toBe('');
   });
 });
