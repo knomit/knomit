@@ -14,18 +14,20 @@ import (
 // ONE edge from internal/platform out to a knomit package — and so the one
 // exception TestPlatformKnowsNothingAboutKnomit would have had to carry.
 // Exception lists are how a layering rule stops meaning anything, so the
-// dependency is inverted instead: logging declares what it needs, and the two
-// callers that hold a config translate (cmd/serve.go, tools/desktop/logging.go).
+// dependency is inverted instead: logging declares what it needs, and knows
+// nothing about where the values came from.
+//
+// Exactly one function translates: app.LoggingOptions, in internal/app, which
+// both binaries that build a logger already import. Its doc explains why the
+// converter can live in neither of the packages it names. Keep it the only
+// one — a second converter reintroduces the failure this arrangement removes,
+// where a rotation key wired at one call site and not the other takes effect
+// in one binary and vanishes in the other.
 //
 // The fields are deliberately a SUBSET of config.LogConfig. SlowRequestMS and
 // CrashFile live in that struct too and are read elsewhere — by the HTTP
 // middleware and by crashdump — never here, and listing them would invite a
 // future editor to wire them up in the wrong place.
-//
-// The reverse risk is real and unguarded: a rotation key added to
-// config.LogConfig and to Options but to only ONE of the two call sites takes
-// effect in one binary and is silently dropped in the other. Both call sites
-// build the struct with every field named for that reason.
 type Options struct {
 	// Format is "console" (human, stderr — default) or "json" (structured).
 	Format string
