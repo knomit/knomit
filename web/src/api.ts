@@ -910,6 +910,37 @@ async function purgeRepo(id: string): Promise<void> {
 // listLenses GETs /api/v1/lenses and unwraps the HAL CollectionView
 // (_embedded.lenses), mirroring api.repos(). Falls back to [] when the shape
 // is missing so the UI never sees undefined.
+export type ClientSessionState = 'live' | 'idle' | 'dead';
+export interface ClientSessionBinding { kind: string; uid: string; name: string | null }
+/** One MCP client session the server has seen. Every `bridge` field and
+ *  `branch` are SELF-REPORTED by the client and unverified — correlation, not
+ *  identity. `state` is derived server-side from last-seen; nothing is a live
+ *  connection. */
+export interface ClientSession {
+  id: string; instance_id: string; state: ClientSessionState; transport: 'stdio' | 'http';
+  binding: ClientSessionBinding; branch: string;
+  client: { name: string; version: string; initialized: boolean };
+  bridge: { host: string; user: string; cwd: string; pid: number; parent: string; parent_pid: number; version: string };
+  remote_addr: string; user_agent: string;
+  first_seen_at: string; last_seen_at: string; ended_at: string | null; request_count: number;
+}
+export interface ClientSessionPolicy { dead_after_s: number; hidden_after_s: number; retention_s: number; live_window_s: number }
+export interface ClientSessionsResponse { sessions: ClientSession[]; policy: ClientSessionPolicy }
+
+// listClientSessions GETs /api/v1/sessions — every MCP client session the
+// server has seen recently (presence), or the whole retention window with
+// includeHidden. Unwraps the HAL collection like listLenses. The policy rides
+// along so the UI never hardcodes a threshold.
+async function listClientSessions(opts: { binding?: string; includeHidden?: boolean } = {}): Promise<ClientSessionsResponse> {
+  const q = new URLSearchParams();
+  if (opts.binding) q.set('binding', opts.binding);
+  if (opts.includeHidden) q.set('include', 'hidden');
+  const qs = q.toString();
+  const data = await fetchJSON<{ policy: ClientSessionPolicy; _embedded?: { sessions?: ClientSession[] } }>(
+    apiUrl('/api/v1/sessions' + (qs ? `?${qs}` : '')));
+  return { sessions: data._embedded?.sessions ?? [], policy: data.policy };
+}
+
 async function listLenses(): Promise<Lens[]> {
   const data = await fetchJSON<{ _embedded?: { lenses?: Lens[] } }>(apiUrl('/api/v1/lenses'));
   return data._embedded?.lenses ?? [];
@@ -1217,6 +1248,7 @@ async function deleteLens(name: string): Promise<void> {
 }
 
 export const api = {
+  listClientSessions,
   getAgentBranch,
   getRepo,
   updateRepo,

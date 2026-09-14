@@ -11,6 +11,7 @@ import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
 import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
+import { ManageSessions } from './ManageSessions';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
@@ -45,6 +46,9 @@ interface Props {
 
 type Selection =
   | { kind: 'overview' }
+  // Sessions is the second non-entity rail row: MCP clients cut across every
+  // repo and lens, so it has no entity to hang off.
+  | { kind: 'sessions' }
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
@@ -153,6 +157,18 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 >
                   <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <HomeIcon color="currentColor" size={13} /> Overview
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  data-testid="repomgr-sessions"
+                  onMouseDown={noMouseFocus}
+                  style={listItem(view.kind === 'sessions')}
+                  disabled={connectBusy}
+                  onClick={() => setSel({ kind: 'sessions' })}
+                >
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <LayersIcon color="currentColor" size={13} /> Sessions
                   </span>
                 </button>
               </div>
@@ -276,8 +292,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onSelectLens={name => setSel({ kind: 'lens', name })}
                 onNewRepo={() => setSel({ kind: 'new' })}
                 onNewLens={() => setSel({ kind: 'newLens' })}
+                onSelectSessions={() => setSel({ kind: 'sessions' })}
               />
             )}
+            {view.kind === 'sessions' && <ManageSessions />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for

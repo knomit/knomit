@@ -92,7 +92,7 @@ function attentionFor(rows: FleetRow[]): Attention[] {
   return out.sort((a, b) => Number(a.kind === 'no-remote') - Number(b.kind === 'no-remote'));
 }
 
-export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens }: {
+export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions }: {
   repos: RepoInfo[];
   lenses: Lens[];
   archivedCount: number;
@@ -107,12 +107,29 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
   onSelectLens: (name: string) => void;
   onNewRepo: () => void;
   onNewLens: () => void;
+  /** Opens the Sessions pane. Optional so the component still renders in
+   *  tests and callers that have no Manage rail to switch. */
+  onSelectSessions?: () => void;
 }) {
   // Only what has ARRIVED lives in state, keyed by repo. The rows the table
   // renders are derived below — seeding placeholders into state from the effect
   // body would be a synchronous setState and a cascading render, and the
   // placeholder is a pure function of `repos` anyway.
   const [loaded, setLoaded] = useState<Record<string, FleetRow>>({});
+
+  // Live MCP client count — one line, one number. Fetched ONCE on mount: the
+  // Sessions pane owns the polling, and an overview that re-fetched would be
+  // a second poller for a number that is already a link to the real one.
+  // null means "not known" (never arrived, or the call failed), and the line
+  // is then absent rather than showing a zero it cannot vouch for.
+  const [liveSessions, setLiveSessions] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.listClientSessions()
+      .then(r => { if (!cancelled) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
+      .catch(() => { if (!cancelled) setLiveSessions(null); });
+    return () => { cancelled = true; };
+  }, []);
 
   // The fan-out. Every OTHER screen reads one repo's config — the active one —
   // which is why "which of my repositories is broken" has had no answer until
@@ -185,6 +202,22 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
           </button>
         </div>
       </div>
+
+      {/* One line, above attention: who is connected right now. The number is
+          a link to the page that explains it, not a summary of it. */}
+      {liveSessions !== null && (
+        <div style={{ marginTop: 14 }}>
+          <button
+            type="button"
+            data-testid="overview-live-sessions"
+            style={btn(false)}
+            onClick={onSelectSessions}
+            disabled={!onSelectSessions}
+          >
+            {count(liveSessions, 'live session', 'live sessions')}
+          </button>
+        </div>
+      )}
 
       {/* Attention first, and absent entirely when there is nothing to do. An
           empty "Needs attention: 0" heading would be a screen element whose

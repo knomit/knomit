@@ -19,6 +19,7 @@ vi.mock('./api', async importOriginal => ({
   // bare vi.fn() fails inside a click handler rather than at an assertion.
   deleteSession: vi.fn().mockResolvedValue(undefined),
   api: {
+    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),

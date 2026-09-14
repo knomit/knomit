@@ -22,6 +22,7 @@ const ORIGIN_PUSH_REJECTED = {
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
   api: {
+    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
     listArchived: vi.fn().mockResolvedValue([]),
     listLenses: vi.fn().mockResolvedValue([]),
     getLens: vi.fn().mockResolvedValue({ name: 'all', write: { uid: 'uid-core', name: 'core' }, reads: [] }),
@@ -305,5 +306,41 @@ describe('Mounted in', () => {
     // "Mounted in nothing" is the default state of an install with no lenses;
     // heading it would be noise on every page.
     expect(screen.queryByTestId('block-mounted-in')).not.toBeInTheDocument();
+  });
+});
+
+// The live-session line is Overview's only number about MCP clients, and its
+// job is to be a door to the page that explains it.
+describe('live sessions line', () => {
+  const session = (state: 'live' | 'idle' | 'dead') => ({
+    id: `s-${state}-${Math.random()}`, instance_id: 'i', state, transport: 'stdio' as const,
+    binding: { kind: 'repo', uid: 'uid-core', name: 'core' }, branch: 'agent/test',
+    client: { name: 'claude-code', version: '2', initialized: true },
+    bridge: { host: 'h', user: 'u', cwd: '/w', pid: 1, parent: 'claude', parent_pid: 2, version: '1' },
+    remote_addr: '127.0.0.1', user_agent: 'knomit-bridge/1',
+    first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:59:00Z',
+    ended_at: null, request_count: 3,
+  });
+
+  it('counts only live sessions and opens the Sessions pane', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 },
+      sessions: [session('live'), session('live'), session('dead')],
+    });
+    render(<RepoManager {...baseProps} />);
+
+    const line = await screen.findByTestId('overview-live-sessions');
+    expect(line).toHaveTextContent('2 live sessions');
+
+    fireEvent.click(line);
+    expect(await screen.findByTestId('manage-sessions')).toBeInTheDocument();
+  });
+
+  it('shows nothing when the server cannot answer', async () => {
+    vi.mocked(api.listClientSessions).mockRejectedValue(new Error('503'));
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('manage-overview');
+    // A zero we cannot vouch for would read as "nobody is connected".
+    expect(screen.queryByTestId('overview-live-sessions')).not.toBeInTheDocument();
   });
 });
