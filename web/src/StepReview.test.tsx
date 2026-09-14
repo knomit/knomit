@@ -90,6 +90,35 @@ describe('StepReview push-access notes', () => {
     expect(screen.getByTestId('review-write-unknown')).toBeInTheDocument();
   });
 
+  // A subscription NEVER pushes — its own step 2 says so — so a push note
+  // under it contradicts the list directly above. This was the shipped
+  // behaviour: the write_access guard predates subscribe mode, and the state
+  // reducer preselects 'subscribe' on a refused probe, which made the
+  // contradiction the DEFAULT rendering of exactly the case the note exists
+  // for.
+  it('says nothing about pushing when subscribing, because nothing is pushed', () => {
+    render(<StepReview state={{ ...remote('yes', { write_access: 'denied' }), access: 'subscribe' }} dispatch={vi.fn()} />);
+    expect(screen.queryByTestId('review-write-denied')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('review-write-unknown')).not.toBeInTheDocument();
+  });
+
+  // Pinned separately, because the test above cannot pin it: a 'denied' probe
+  // already makes !write_access false, so its unknown-note assertion would
+  // hold with the subscribe guard deleted. The state this one describes is
+  // reachable — initialized 'yes', a probe that never established push access,
+  // Subscribe chosen — and it is the same contradiction the denied case is:
+  // "push access was not established" sitting under a list item that says
+  // nothing is ever pushed.
+  it('says nothing about an unestablished push either, when subscribing', () => {
+    render(<StepReview state={{ ...remote('yes'), access: 'subscribe' }} dispatch={vi.fn()} />);
+    expect(screen.queryByTestId('review-write-unknown')).not.toBeInTheDocument();
+  });
+
+  it('still warns about a refused push when joining an existing knowledge base', () => {
+    render(<StepReview state={{ ...remote('yes', { write_access: 'denied' }), access: 'join' }} dispatch={vi.fn()} />);
+    expect(screen.getByTestId('review-write-denied')).toBeInTheDocument();
+  });
+
   // And an 'ok' must not become a promise. The check is a receive-pack
   // advertisement: it establishes that the host will talk to these credentials
   // about pushing, and cannot predict a pre-receive hook, which runs on the
@@ -118,9 +147,22 @@ describe('StepReview — join or subscribe', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'SET_ACCESS', access: 'subscribe' });
   });
 
+  // The same control StepSource uses for its own binary, so the wizard asks
+  // its two questions the same way; aria-pressed is how that control says
+  // which side is on.
+  it('shows which way is chosen', () => {
+    render(<StepReview state={{ ...remote('yes'), access: 'subscribe' }} dispatch={vi.fn()} />);
+    expect(screen.getByTestId('access-subscribe')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('access-join')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  // Asserted against the step's own list, not the whole pane's text: the
+  // Subscribe segment's subtitle now says "read-only" too, so scanning
+  // textContent would pass on the label alone and stop noticing if the list
+  // that explains the consequences went missing.
   it('describes a subscription as read-only once it is chosen', () => {
     render(<StepReview state={{ ...remote('yes'), access: 'subscribe' }} dispatch={vi.fn()} />);
-    expect(screen.getByTestId('step-review').textContent).toContain('read-only');
+    expect(screen.getByText(/It is read-only: no facts can be written here, and nothing is ever pushed\./)).toBeInTheDocument();
   });
 
   // Not a knowledge base yet — there is nothing to follow, so the choice does

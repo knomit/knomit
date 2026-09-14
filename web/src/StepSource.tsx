@@ -1,7 +1,7 @@
 import type { WizardAction, WizardState } from './wizardState';
 import { isValidRepoName, hostOf } from './wizardState';
 import { OutcomeCard } from './OutcomeCard';
-import { btn } from './manageStyles';
+import { btn, segGroup, segment, segDot, segSub, segDisclosure } from './manageStyles';
 
 // StepSource asks ONE question — where this repository's history lives — with a
 // segmented control, and then discloses only the fields that answer needs.
@@ -46,17 +46,17 @@ export function StepSource({ state, dispatch, onProbe, onCancelProbe, probing, p
             <span style={segSub(!local, 'remote')}>Synced from the first commit</span>
           </span>
         </button>
-        <button type="button" data-testid="choose-local" style={segment(local, 'local')}
+        <button type="button" data-testid="choose-local" style={segment(local, 'neutral')}
           aria-pressed={local} onClick={() => dispatch({ type: 'CHOOSE_LOCAL' })}>
-          <span style={segDot(local, 'local')} />
+          <span style={segDot(local, 'neutral')} />
           <span>
             Keep it on this machine
-            <span style={segSub(local, 'local')}>Connect a remote later</span>
+            <span style={segSub(local, 'neutral')}>Connect a remote later</span>
           </span>
         </button>
       </div>
 
-      <div style={disclosure}>
+      <div style={segDisclosure}>
         {local ? <LocalPane state={state} dispatch={dispatch} /> : (
           <RemotePane state={state} dispatch={dispatch} onProbe={onProbe}
             onCancelProbe={onCancelProbe} probing={probing} probeError={probeError} />
@@ -161,44 +161,10 @@ function LocalPane({ state, dispatch }: { state: WizardState; dispatch: (a: Wiza
 
 // ── styles ──
 //
-// REMOTE_ACCENT is #8af, the hue this UI already spends on branches and remote
-// refs (CreateLensForm's branch label, RemoteStatus). LOCAL_ACCENT is a plain
-// slate: local-only has no remote to name, and inventing a hue for it would be
-// decoration. Neither is amber, green or purple — those mean failure, write
-// target and lens respectively, and none of the three is what this asks.
-const REMOTE_ACCENT = '#8af';
-const LOCAL_ACCENT = '#8b9199';
-
-const segGroup: React.CSSProperties = { display: 'flex', gap: 6, flexWrap: 'wrap' };
-
-const segment = (on: boolean, mode: 'remote' | 'local'): React.CSSProperties => ({
-  flex: '1 1 220px', display: 'flex', alignItems: 'flex-start', gap: 9,
-  padding: '10px 12px', borderRadius: 6, cursor: 'pointer', textAlign: 'left',
-  fontSize: 13, fontFamily: 'inherit',
-  background: on ? (mode === 'remote' ? '#10161f' : '#17181a') : '#0f0f0f',
-  border: '1px solid ' + (on ? (mode === 'remote' ? '#24405e' : '#3a3d42') : '#242424'),
-  color: on ? '#eee' : '#999',
-});
-
-const segDot = (on: boolean, mode: 'remote' | 'local'): React.CSSProperties => {
-  const accent = mode === 'remote' ? REMOTE_ACCENT : LOCAL_ACCENT;
-  return {
-    width: 9, height: 9, borderRadius: '50%', flexShrink: 0, marginTop: 5,
-    background: on ? accent : 'transparent',
-    border: '1.5px solid ' + (on ? accent : '#4a4a4a'),
-  };
-};
-
-const segSub = (on: boolean, mode: 'remote' | 'local'): React.CSSProperties => ({
-  display: 'block', fontSize: 11.5, marginTop: 1,
-  color: on ? (mode === 'remote' ? '#6a89ad' : '#7d838b') : '#555',
-});
-
-// A rule between the question and its answer: the fields below belong to the
-// segment above, and without it the pane reads as a second, unrelated section.
-const disclosure: React.CSSProperties = {
-  borderTop: '1px solid #242424', marginTop: 14, paddingTop: 2,
-};
+// The segmented control's styles live in manageStyles (segGroup, segment,
+// segDot, segSub, segDisclosure): StepReview asks its join-or-subscribe
+// question with the same control, and one definition is what keeps the two
+// questions looking like the same wizard.
 
 const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 12, display: 'block' };
 const hint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 8, lineHeight: 1.5 };

@@ -69,3 +69,51 @@ export const linkBtn: React.CSSProperties = {
   background: 'none', border: 'none', color: '#6ea8fe',
   cursor: 'pointer', fontSize: 12, padding: 0, textDecoration: 'underline',
 };
+
+/** Segmented choice — the wizard's control for a binary that one question
+ *  settles (StepSource: where the history lives; StepReview: how to attach to
+ *  a branch that is already a knowledge base). One definition so the wizard
+ *  asks both questions the same way.
+ *
+ *  The tone encodes STATE, not rank. 'remote' is #8af, the hue this UI already
+ *  spends on branches and remote refs, for the side that has a remote to talk
+ *  about — connect a repository, or join and push. 'neutral' is a plain slate
+ *  for the side that does not: keep it local, or subscribe and never write.
+ *  Neither is amber, green or purple — those mean failure, write target and
+ *  lens respectively. */
+export type SegTone = 'remote' | 'neutral';
+
+const REMOTE_ACCENT = '#8af';
+const NEUTRAL_ACCENT = '#8b9199';
+
+export const segGroup: React.CSSProperties = { display: 'flex', gap: 6, flexWrap: 'wrap' };
+
+export const segment = (on: boolean, tone: SegTone): React.CSSProperties => ({
+  flex: '1 1 220px', display: 'flex', alignItems: 'flex-start', gap: 9,
+  padding: '10px 12px', borderRadius: 6, cursor: 'pointer', textAlign: 'left',
+  fontSize: 13, fontFamily: 'inherit',
+  background: on ? (tone === 'remote' ? '#10161f' : '#17181a') : '#0f0f0f',
+  border: '1px solid ' + (on ? (tone === 'remote' ? '#24405e' : '#3a3d42') : '#242424'),
+  color: on ? '#eee' : '#999',
+});
+
+export const segDot = (on: boolean, tone: SegTone): React.CSSProperties => {
+  const accent = tone === 'remote' ? REMOTE_ACCENT : NEUTRAL_ACCENT;
+  return {
+    width: 9, height: 9, borderRadius: '50%', flexShrink: 0, marginTop: 5,
+    background: on ? accent : 'transparent',
+    border: '1.5px solid ' + (on ? accent : '#4a4a4a'),
+  };
+};
+
+export const segSub = (on: boolean, tone: SegTone): React.CSSProperties => ({
+  display: 'block', fontSize: 11.5, marginTop: 1,
+  color: on ? (tone === 'remote' ? '#6a89ad' : '#7d838b') : '#555',
+});
+
+/** segDisclosure is the rule between a segmented choice and what it discloses:
+ *  the content below belongs to the segment above, and without it the pane
+ *  reads as a second, unrelated section. */
+export const segDisclosure: React.CSSProperties = {
+  borderTop: '1px solid #242424', marginTop: 14, paddingTop: 2,
+};
