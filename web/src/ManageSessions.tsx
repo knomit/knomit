@@ -35,8 +35,13 @@ export function ManageSessions({ binding }: { binding?: string }) {
   const [now, setNow] = useState(() => new Date());
 
   const load = useCallback(() => {
+    // setNow on EVERY tick, success or failure. The rows on screen are the
+    // last good data either way, so their ages must keep advancing while the
+    // error banner is up — a frozen "2 min ago" under an error reads as a
+    // session that is still fresh.
+    setNow(new Date());
     api.listClientSessions({ binding, includeHidden: showHidden })
-      .then(r => { setRows(r.sessions); setPolicy(r.policy); setError(null); setNow(new Date()); })
+      .then(r => { setRows(r.sessions); setPolicy(r.policy); setError(null); })
       .catch(e => setError(String(e)));
   }, [binding, showHidden]);
 
@@ -63,12 +68,15 @@ export function ManageSessions({ binding }: { binding?: string }) {
       {/* The thresholds come from the server with the rows, so this line can
           never disagree with the states above it. */}
       {policy && (
-        <p style={{ color: '#666', fontSize: 11, margin: '6px 0 0' }}>
+        <p data-testid="session-policy" style={{ color: '#666', fontSize: 11, margin: '6px 0 0' }}>
           live within {Math.round(policy.live_window_s / 60)} min · dead after {Math.round(policy.dead_after_s / 60)} min of silence
-          · hidden after {Math.round(policy.hidden_after_s / 3600)} h · kept {Math.round(policy.retention_s / 86400)} d
+          · hidden after {Math.round(policy.hidden_after_s / 3600)} h
+          {/* Retention 0 disables the purge entirely — "kept 0 d" would say
+              the opposite of what it means. */}
+          · {policy.retention_s === 0 ? 'never purged' : `kept ${Math.round(policy.retention_s / 86400)} d`}
         </p>
       )}
-      {error && <p style={{ color: '#f87171' }}>{error}</p>}
+      {error && <p data-testid="session-error" style={{ color: '#f87171' }}>{error}</p>}
       <div style={{ ...card, overflowX: 'auto' }}>
         <div style={cardLabel}>MCP clients</div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>

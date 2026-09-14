@@ -66,4 +66,30 @@ describe('ManageSessions', () => {
     await act(async () => { window.dispatchEvent(new Event('focus')); });
     expect(api.listClientSessions).toHaveBeenCalledTimes(3);
   });
+
+  it('says "never purged" when retention is disabled, not "kept 0 d"', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: { ...POLICY, retention_s: 0 },
+      sessions: [sess({})],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    expect(screen.getByTestId('session-policy')).toHaveTextContent('never purged');
+    expect(screen.getByTestId('session-policy')).not.toHaveTextContent('kept 0 d');
+  });
+
+  it('keeps ages moving while an error banner is up', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(3));
+    expect(screen.getAllByTestId('session-row')[0]).toHaveTextContent('2 min ago');
+
+    // Every poll from here fails. The rows on screen are still the last good
+    // data, so their ages must keep advancing rather than freezing at the
+    // last success — ten minutes of failed polls must show as ten minutes.
+    vi.mocked(api.listClientSessions).mockRejectedValue(new Error('boom'));
+    await act(async () => { vi.advanceTimersByTime(600_000); });
+
+    await waitFor(() => expect(screen.getByTestId('session-error')).toBeInTheDocument());
+    expect(screen.getAllByTestId('session-row')[0]).toHaveTextContent('12 min ago');
+  });
 });
