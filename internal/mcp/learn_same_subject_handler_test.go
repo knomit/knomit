@@ -596,3 +596,47 @@ func TestLearnHandler_SameCategoryAboveDedupStillMerges(t *testing.T) {
 		})
 	}
 }
+
+// The one path where the same-category cap and `touched` DIVERGE, and so the
+// only handler-level test the cap can fail on its own.
+//
+// TestLearnHandler_SameCategoryAboveDedupStillMerges does not pin the cap:
+// applyDedupMerge folds that fact, sets touched[i], and the gate skips it
+// before the cap is ever consulted — delete the cap and that test still passes.
+// What makes this case different is the merge's own Limit: 1 plus its
+// `consumed` set (learn.go): an existing fact absorbs at most ONE incoming fact
+// per call, and a second matcher is SKIPPED rather than chained. So the second
+// fact arrives at the gate NOT touched, matching the same existing fact above
+// Dedup, and the cap is the only thing standing between it and a refusal.
+//
+// Expected: the first merges, the second is written at its own path, and
+// NOTHING is refused — a redundant fact that a later prune collapses, which is
+// the outcome the merge's skip-don't-chain rule already chose.
+func TestLearnHandler_TwoSameCategoryDupsSecondIsWrittenNotRefused(t *testing.T) {
+	for _, ts := range handlerThresholdSets(t) {
+		t.Run(ts.name, func(t *testing.T) {
+			aboveDedup := ts.th.Dedup + (1-ts.th.Dedup)*0.5
+			svc, ctx, emb := newSameSubjectRepo(t, ts.model, ts.th, aboveDedup)
+			seedRampFact(t, ctx, emb)
+			before := liveFactCount(t, svc) // the seed alone
+
+			// Both in the SEED's category, both above Dedup. Only one can be
+			// absorbed; the other reaches the gate untouched.
+			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReqMulti("two-dups",
+				sameSubjectFact("decisions", "accepted/ramp/ai-index",
+					"Ramp AI Index first restatement",
+					"A "+probeMarker+" note on Ramp spend, one.", []any{"Ramp"}),
+				sameSubjectFact("decisions", "accepted/ramp/ai-index",
+					"Ramp AI Index second restatement",
+					"A "+probeMarker+" note on Ramp spend, two.", []any{"Ramp"}),
+			))
+			require.NoError(t, err)
+
+			require.False(t, r.IsError,
+				"the second same-category duplicate must NOT be refused — the cap is what prevents it: %s",
+				resultText(t, r))
+			require.Equal(t, before+1, liveFactCount(t, svc),
+				"one fact merged into the seed, the other written at its own path")
+		})
+	}
+}
