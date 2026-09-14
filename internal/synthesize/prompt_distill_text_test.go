@@ -10,7 +10,7 @@ import (
 // to avoid failing. The mechanism sentence is the same test the alias prompt
 // uses ("state the mechanism or answer different"), mirrored here.
 func TestDistillPrompt_CarriesPositiveMechanismTest(t *testing.T) {
-	content, err := RenderDistillWorkItem(nil, "kb", "")
+	content, err := RenderDistillWorkItem(nil, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "state in one sentence the mechanism that ALL members instantiate")
 	require.Contains(t, content.Prompt, "If you cannot write that sentence, return no synthesis")
@@ -19,7 +19,7 @@ func TestDistillPrompt_CarriesPositiveMechanismTest(t *testing.T) {
 }
 
 func TestDistillPrompt_SplitsLoadBearingFromProvenance(t *testing.T) {
-	content, err := RenderDistillWorkItem(nil, "kb", "")
+	content, err := RenderDistillWorkItem(nil, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "Load-bearing conditions")
 	require.Contains(t, content.Prompt, "Provenance detail")
@@ -36,7 +36,7 @@ func TestDistillPrompt_SplitsLoadBearingFromProvenance(t *testing.T) {
 // prompt bars hypotheses from being distill inputs — so the contradiction did
 // not merely confuse, it made the fact permanently inert.
 func TestDistillPrompt_RetractionYieldsToTheHypothesisRule(t *testing.T) {
-	content, err := RenderDistillWorkItem(nil, "kb", "")
+	content, err := RenderDistillWorkItem(nil, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "The hypothesis rule below is separate and takes precedence",
 		"the retraction rule must yield, or it forbids the retraction the hypothesis section mandates")
@@ -49,11 +49,42 @@ func TestDistillPrompt_RetractionYieldsToTheHypothesisRule(t *testing.T) {
 // than its body — a prior synthesis or digest — whose whole claim the new
 // synthesis restates, with those refs carried forward so nothing is orphaned.
 func TestDistillPrompt_RetractLimbNamesItsLiveCase(t *testing.T) {
-	content, err := RenderDistillWorkItem(nil, "kb", "")
+	content, err := RenderDistillWorkItem(nil, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "provenance is carried by its refs rather than its body",
 		"without a named live case the limb is unreachable, which is the defect this replaced")
 	require.Contains(t, content.Prompt, "Carry that member's refs into the new synthesis's refs",
 		"retracting a member whose refs are its provenance must not orphan them")
 	require.Contains(t, content.Prompt, "whose body carries its own measurement, date, source, or affected list stays")
+}
+
+// isRemainderItem derives the remainder flag from the work item's ClusterKey,
+// because the render site reads the item back from the store and has nothing
+// else to go on. The negative cases use the REAL non-remainder key shapes —
+// promoted clusters (progression.go's promotedDistillKeyPrefix) and RAPTOR
+// follow-ups — so this fails if the prefix scheme changes, rather than passing
+// against a shape the code never produces.
+func TestIsRemainderItem(t *testing.T) {
+	require.True(t, isRemainderItem("distill-rest-0"))
+	require.True(t, isRemainderItem("distill-rest-12"))
+	require.False(t, isRemainderItem("distill-promoted-cluster-3-0"))
+	require.False(t, isRemainderItem("raptor-d1-c0-0"))
+	require.False(t, isRemainderItem("prune-c3"))
+}
+
+// A remainder item is a leftover set, not a group: asking "identify patterns
+// across these facts" over ~60 unrelated facts has no honest answer, and the
+// observed agent behaviour was to silently sub-cluster and ignore the rest.
+func TestDistillPrompt_RemainderSwapsTheAsk(t *testing.T) {
+	cluster, err := RenderDistillWorkItem(nil, "kb", "", false)
+	require.NoError(t, err)
+	require.Contains(t, cluster.Prompt, "Identify patterns across these facts")
+	require.NotContains(t, cluster.Prompt, "were NOT clustered")
+
+	rest, err := RenderDistillWorkItem(nil, "kb", "", true)
+	require.NoError(t, err)
+	require.Contains(t, rest.Prompt, "These facts were NOT clustered")
+	require.Contains(t, rest.Prompt, "it is expected that most members belong to none")
+	require.Contains(t, rest.Prompt, "subgroups_considered")
+	require.NotContains(t, rest.Prompt, "Identify patterns across these facts")
 }

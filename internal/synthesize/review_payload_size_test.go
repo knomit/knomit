@@ -107,7 +107,11 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 			require.Greater(t, len(chunks), 1,
 				"precondition: the corpus must be large enough that the chunker closes a full item")
 
-			content, err := RenderDistillWorkItem(chunks[0], "kb", maxMethodologySection())
+			// Remainder branch: page 1 carries the prompt, so the page that
+			// binds is the one carrying the LARGEST prompt the distill path can
+			// produce. Passing false here would measure the shorter cluster ask
+			// and under-test the cap by the difference between the two.
+			content, err := RenderDistillWorkItem(chunks[0], "kb", maxMethodologySection(), true)
 			require.NoError(t, err)
 
 			res := &PipelineResult{
@@ -153,6 +157,12 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 // the pager's control: distill's prompt grows with the methodology section, and
 // either prompt file can be edited. Without this test the reserve goes stale
 // silently and the page budget starts over-promising again.
+//
+// DISTILL HAS TWO BRANCHES and both are measured, because the reserve must hold
+// against the LARGER. The remainder variant is the larger ask — it replaces the
+// one-line cluster instruction with the leftover-set paragraph — so a blanket
+// `false` here would leave the worst case unmeasured while the test stayed
+// green, which is precisely the stale-reserve failure this exists to prevent.
 func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 	one := sizedFacts(1, 16)
 
@@ -160,8 +170,11 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 		name    string
 		content func() (*WorkItemContent, error)
 	}{
-		{"distill", func() (*WorkItemContent, error) {
-			return RenderDistillWorkItem(one, "kb", maxMethodologySection())
+		{"distill-cluster", func() (*WorkItemContent, error) {
+			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), false)
+		}},
+		{"distill-remainder", func() (*WorkItemContent, error) {
+			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), true)
 		}},
 		{"prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }},
 	} {
@@ -250,7 +263,7 @@ func TestRenderDistillWorkItem_FactsAreStructuralNotSerializedIntoThePrompt(t *t
 		Sources:    1,
 	}}
 
-	content, err := RenderDistillWorkItem(facts, "kb", "")
+	content, err := RenderDistillWorkItem(facts, "kb", "", false)
 	require.NoError(t, err)
 
 	require.NotContains(t, content.Prompt, "SENTINEL-BODY-must-not-appear-inside-the-prompt",

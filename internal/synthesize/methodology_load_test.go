@@ -166,7 +166,7 @@ func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 	facts := []factForLLM{{File: "kb/x.md", Title: "X", Body: "y", Type: "synthesis"}}
 	bullets := "• score=0.50  Lesson  (kb/meta/reasoning/lesson.md)\n"
 
-	content, err := RenderDistillWorkItem(facts, "kb", bullets)
+	content, err := RenderDistillWorkItem(facts, "kb", bullets, false)
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "Applicable methodology candidates")
 	require.Contains(t, content.Prompt, "Lesson")
@@ -189,7 +189,7 @@ func TestRenderDistillWorkItem_HeaderAppearsWhenSectionPresent(t *testing.T) {
 		"triage may use titles, judging applicability may not — without this pin the remaining "+
 			"candidates regress to title-only judgment, which is what the universal read prevented")
 
-	contentEmpty, err := RenderDistillWorkItem(facts, "kb", "")
+	contentEmpty, err := RenderDistillWorkItem(facts, "kb", "", false)
 	require.NoError(t, err)
 	require.NotContains(t, contentEmpty.Prompt, "Applicable methodology candidates",
 		"empty section must not render an orphan heading")

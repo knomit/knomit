@@ -79,7 +79,8 @@ const distillResponseSchema = `{
         "required": ["path", "title", "body"]
       }
     },
-    "retract": {"type": "array", "items": {"type": "string"}}
+    "retract": {"type": "array", "items": {"type": "string"}},
+    "subgroups_considered": {"type": "array", "items": {"type": "object", "properties": {"members": {"type": "array", "items": {"type": "string"}}, "mechanism": {"type": "string"}, "synthesized": {"type": "boolean"}}, "required": ["members"]}, "description": "Sub-groups weighed inside an unclustered remainder item, including the ones rejected. Records the choice a leftover set forces; nothing branches on it."}
   },
   "required": ["synthesize"]
 }`
@@ -186,7 +187,7 @@ func RenderReflectWorkItem(transitionsJSON []byte, ontologyRoot, existingMethodo
 // line-based reader can window it), and every quote inside it is escaped twice
 // on the wire. Compact, not indented: it ships as structural JSON now, and the
 // delivering envelope does its own formatting.
-func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string) (*WorkItemContent, error) {
+func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodology string, remainder bool) (*WorkItemContent, error) {
 	shared := sharedClusterMotifs(facts)
 	factsJSON, err := json.Marshal(facts)
 	if err != nil {
@@ -197,6 +198,7 @@ func RenderDistillWorkItem(facts []factForLLM, ontologyRoot, applicableMethodolo
 		OntologyRoot:          ontologyRoot,
 		ApplicableMethodology: applicableMethodology,
 		SharedMotifs:          shared,
+		Remainder:             remainder,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render distill work item: %w", err)

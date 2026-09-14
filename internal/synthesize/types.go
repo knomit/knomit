@@ -395,6 +395,23 @@ type ReviewProgress struct {
 type DistillResult struct {
 	Synthesize []distillFact `json:"synthesize"`
 	Retract    []string      `json:"retract"`
+
+	// SubgroupsConsidered records the sub-groups weighed inside an unclustered
+	// remainder item, including rejected ones. Nothing branches on it; it is
+	// durable evidence of a choice the pipeline previously could not see, since
+	// an agent handed a leftover bin sub-clusters it silently and the system
+	// had no record of which groups were weighed or dropped.
+	SubgroupsConsidered []distillSubgroup `json:"subgroups_considered,omitempty"`
+}
+
+// distillSubgroup is one sub-group an agent weighed inside a remainder item.
+// Synthesized false with a mechanism stated is the interesting row: it records
+// a group that was considered and rejected, which is exactly what was invisible
+// before.
+type distillSubgroup struct {
+	Members     []string `json:"members"`
+	Mechanism   string   `json:"mechanism"`
+	Synthesized bool     `json:"synthesized"`
 }
 
 // distillFact is a synthesized fact returned by the LLM in a distill step.

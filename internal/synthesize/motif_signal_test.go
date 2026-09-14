@@ -272,7 +272,7 @@ func TestDistillEnrichment_NoSharedMotifsMeansNoLine(t *testing.T) {
 		{File: "b", Motifs: []string{"config-drift"}},
 	}))
 
-	content, err := RenderDistillWorkItem([]factForLLM{{File: "a"}}, "kb", "")
+	content, err := RenderDistillWorkItem([]factForLLM{{File: "a"}}, "kb", "", false)
 	require.NoError(t, err)
 	require.NotContains(t, content.Prompt, "Motifs already shared",
 		"a motif-free cluster must see no motif line — free context that says "+
@@ -283,7 +283,7 @@ func TestDistillEnrichment_SharedMotifsReachThePrompt(t *testing.T) {
 	content, err := RenderDistillWorkItem([]factForLLM{
 		{File: "a", Motifs: []string{"silent-fallback"}},
 		{File: "b", Motifs: []string{"silent-fallback"}},
-	}, "kb", "")
+	}, "kb", "", false)
 	require.NoError(t, err)
 	require.Contains(t, content.Prompt, "Motifs already shared by several of these facts")
 	require.Contains(t, content.Prompt, "silent-fallback")
