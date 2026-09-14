@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"math"
@@ -14,6 +15,8 @@ import (
 	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
@@ -423,20 +426,41 @@ func TestLearnHandler_DistinctFromIsCaseInsensitive(t *testing.T) {
 	require.Equal(t, before+1, liveFactCount(t, svc))
 }
 
-// B1's gate-off exit, the one that replaces the old score accident: an
-// embedder whose model has no entry in params has no calibrated band, so the
-// gate turns OFF rather than judging against some other model's geometry.
-// Deleting the `!ok` exit in checkSameSubjectCollisions makes this go red.
+// captureLogs swaps the global logger for a buffer, the house pattern (see
+// internal/repos/manager_session_db_test.go).
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := log.Logger
+	log.Logger = zerolog.New(zerolog.SyncWriter(&buf))
+	t.Cleanup(func() { log.Logger = orig })
+	return &buf
+}
+
+// B1's second gate-off exit: an embedder whose model params does not know has
+// no calibrated band, so the gate turns OFF rather than judging against some
+// other model's geometry.
+//
+// This asserts the LOG EVENT, not just that the write landed, and the
+// distinction is the whole point. Deleting the `!ok` check while keeping the
+// lookup leaves `th` as the zero Thresholds, which makes `cosine >= th.Dedup`
+// true for every candidate — so the gate-off OUTCOME survives by numeric
+// accident, exactly the shape of the bug this exit was added to remove. What is
+// genuinely lost is the warning: a refactor could drop the guard, keep the
+// behaviour, keep this test green, and silently destroy the only signal that
+// the gate is off. Pinning the log pins the mechanism.
 func TestLearnHandler_UnknownModelTurnsTheGateOff(t *testing.T) {
 	th := params.Defaults()
-	// A registered-looking embedder reporting an id params does not know.
-	emb := newAngleEmbedder(t, "no-such-model-v9", th, map[string]float64{
+	// A working embedder reporting an id params has no calibration for.
+	const unknownModel = "no-such-model-v9"
+	emb := newAngleEmbedder(t, unknownModel, th, map[string]float64{
 		seedMarker: 0, probeMarker: angleFor(inBand(th)),
 	})
 	svc, ctx, _ := newRepoWithEmbedder(t, emb)
 	seedRampFact(t, ctx, emb)
 	before := liveFactCount(t, svc)
 
+	logs := captureLogs(t)
 	r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
 		"unknown-model", "gotchas", "tools/ai/spend",
 		"Enterprise AI spend is plateauing",
@@ -447,6 +471,12 @@ func TestLearnHandler_UnknownModelTurnsTheGateOff(t *testing.T) {
 	require.False(t, r.IsError,
 		"no calibrated band for this model means no gate, not a refusal: %s", resultText(t, r))
 	require.Equal(t, before+1, liveFactCount(t, svc))
+
+	out := logs.String()
+	require.Contains(t, out, "no calibrated thresholds for this embedding model",
+		"turning the gate off MUST be announced; without the warning a disabled gate is invisible")
+	require.Contains(t, out, unknownModel,
+		"the warning must name the model, or it cannot be acted on")
 }
 
 // B2 limb (a), ALONE: refs cite the candidate and Origin is EMPTY. This is the

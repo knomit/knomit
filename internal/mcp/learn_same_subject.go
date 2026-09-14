@@ -290,6 +290,17 @@ func checkSameSubjectCollisions(
 	// cannot answer, and would therefore judge one model's facts against
 	// another's cosine distribution with nothing to show for it. ForModel's
 	// bool is what makes "we have no geometry for this" reachable at all.
+	//
+	// This DOES leave two sources for Dedup: applyDedupMerge reads it from
+	// EmbedderThresholds, this gate from ForModel. They cannot diverge in
+	// production — descriptors read their thresholds from params, and
+	// TestEveryDescriptorReadsItsThresholdsFromParams enforces it — and where
+	// ForModel has no entry this gate is OFF, so no band comparison happens and
+	// there is nothing to disagree about. Only a test embedder declaring
+	// thresholds its model id does not carry can see the split. Do NOT
+	// "harmonise" this by moving applyDedupMerge onto ForModel: dedup must keep
+	// working for embedders params does not know, so it would need a fallback —
+	// reintroducing the silent nomic default this gate exists to avoid.
 	th, ok := params.ForModel(modelID)
 	if !ok {
 		log.Warn().Str("model", modelID).
