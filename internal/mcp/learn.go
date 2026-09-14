@@ -595,7 +595,7 @@ func applyDedupMerge(
 		}
 		// Search scope is derived from the on-disk path so the category
 		// directory carries the configured ontology root's real case.
-		categoryDir := paths[i][:strings.LastIndex(paths[i], "/")]
+		categoryDir := categoryDirOf(paths[i])
 		sq := store.SearchOptions{
 			Text:          f.Title + " " + f.Body,
 			Path:          categoryDir,
@@ -836,7 +836,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, agentBranch, factInputs, facts, topicCategories, touched, dedupVecs, batchEmb); err != nil {
+		if err := checkSameSubjectCollisions(ctx, s, agentBranch, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
