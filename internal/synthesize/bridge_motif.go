@@ -19,8 +19,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/fact/textnorm"
 	"knomit/internal/store"
-	"knomit/internal/textnorm"
 )
 
 // motifMatchTier is the §4 stage-1 matching tier, bound to the effort dial.

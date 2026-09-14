@@ -10,7 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"knomit/internal/obs/crashdump"
+	"knomit/internal/platform/crashdump"
 )
 
 func TestReportPanicMiddleware_WritesBundleAndStill500s(t *testing.T) {

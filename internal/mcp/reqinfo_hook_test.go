@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"knomit/internal/obs/reqinfo"
+	"knomit/internal/platform/reqinfo"
 )
 
 func callToolMessage(name string) json.RawMessage {

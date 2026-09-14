@@ -1,6 +1,6 @@
 package embeddings
 
-import "knomit/internal/memlimit"
+import "knomit/internal/platform/memlimit"
 
 // Fractions of the detected ceiling that knomit claims for one embedding batch.
 // These size the BUDGET only — since decision 11 the safety question (whether

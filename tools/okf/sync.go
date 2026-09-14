@@ -15,7 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 const syncUsage = "usage: knomit-okf sync [-b <branch>] [--source <url>] [--publish-source]"

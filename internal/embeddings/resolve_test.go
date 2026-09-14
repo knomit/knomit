@@ -3,7 +3,7 @@ package embeddings
 import (
 	"testing"
 
-	"knomit/internal/memlimit"
+	"knomit/internal/platform/memlimit"
 )
 
 const gib = int64(1) << 30

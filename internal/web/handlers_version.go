@@ -3,13 +3,13 @@ package web
 import (
 	"net/http"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 	"knomit/internal/web/hal"
 )
 
 // handleVersion serves GET /api/v1/version — the build version of the running
-// server. Reads directly from internal/version (global build metadata injected
-// at link time), so it needs nothing from the Server.
+// server. Reads directly from internal/platform/version (global build metadata
+// injected at link time), so it needs nothing from the Server.
 func handleVersion(b hal.URLBuilder, readOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body := map[string]any{

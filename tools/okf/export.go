@@ -11,7 +11,7 @@ import (
 
 	"knomit/internal/okf"
 	"knomit/internal/okf/source"
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 // exportRequest is one branch's export: read the source at head, render, and

@@ -4,7 +4,7 @@ import "testing"
 
 // The measurement behind Stem's memo. Run:
 //
-//	go test ./internal/textnorm/ -run XXX -bench 'Stem|Tokens' -benchtime 2000x
+//	go test ./internal/fact/textnorm/ -run XXX -bench 'Stem|Tokens' -benchtime 2000x
 //
 // On an Apple M4 (2026-09-01), rounded to the precision that reproduces —
 // the warm figures are tens of nanoseconds and move run to run, so read the

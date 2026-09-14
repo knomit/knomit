@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"knomit/internal/textnorm"
+	"knomit/internal/fact/textnorm"
 )
 
 // Domain-tag matching: a domain tag is canonicalised deterministically at the
@@ -15,11 +15,11 @@ import (
 // variants and makes matching word-order-independent, with no FTS5/embeddings.
 // Authored tags stay in git; this canonical/token form is derived index state.
 
-// The three normalizers below moved to internal/textnorm so internal/fact can
-// use the SAME definition of "the same token" for the motif subject-word strip
-// without inverting the store -> fact dependency (internal/fact imports no
-// internal package, by design). Two stemmers are two things that drift, and a
-// drifted stemmer lets a motif that renames its own fact's subject past the
+// The three normalizers below moved to internal/fact/textnorm so internal/fact
+// can use the SAME definition of "the same token" for the motif subject-word
+// strip without inverting the store -> fact dependency (internal/fact imports
+// no internal package, by design). Two stemmers are two things that drift, and
+// a drifted stemmer lets a motif that renames its own fact's subject past the
 // strip.
 //
 // They stay as unexported names here because every call site in this package

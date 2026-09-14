@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"knomit/internal/textnorm"
+	"knomit/internal/fact/textnorm"
 )
 
 // MaxMotifs is the per-fact cap from the field contract (blueprint §1).

@@ -22,7 +22,7 @@ import (
 
 	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 	webui "knomit/web"
 
 	desktopui "knomit/tools/desktop/ui"

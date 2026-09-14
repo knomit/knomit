@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"knomit/internal/client/sessions"
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 func TestRunProxy_HeadersOnEveryRequestAndDeleteOnEOF(t *testing.T) {

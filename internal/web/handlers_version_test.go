@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 	"knomit/internal/web/hal"
 )
 

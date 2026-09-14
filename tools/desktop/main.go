@@ -14,7 +14,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 // wantsVersion reports whether the CLI args request a version print

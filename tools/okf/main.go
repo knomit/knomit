@@ -27,7 +27,7 @@ import (
 	"io"
 	"os"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 const usage = `knomit-okf — publish a knomit knowledge base as an OKF repository

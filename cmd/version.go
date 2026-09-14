@@ -3,7 +3,7 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 // versionCmd builds the `knomit version` subcommand. It prints the full build

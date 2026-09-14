@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"knomit/internal/client/sessions"
-	"knomit/internal/version"
+	"knomit/internal/platform/version"
 )
 
 // buildIdentity describes THIS bridge process. Every process is its own
