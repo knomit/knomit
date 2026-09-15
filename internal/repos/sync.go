@@ -286,3 +286,64 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		}
 	}
 }
+
+// runLocalReconcileLoop is the origin-less twin of runReconcileLoop. A repo
+// with no remote has nothing to pull or push, but its consensus branch must
+// still follow its agent branch: main is what a peer subscribing to THIS
+// instance reads, and what every host means by "the knowledge base". Before
+// this loop existed, an origin-less repo's main sat on the root commit for the
+// life of the repo.
+//
+// Polled, not commit-driven. The store has ONE commit-observer slot and the
+// SSE broadcast owns it, so there is nothing to hang this off; a tick that
+// finds the two tips equal costs two ref reads and does nothing. It runs once
+// at start so a restarted instance converges without waiting an interval.
+//
+// It exits — rather than skipping — as soon as the repo has an origin, so the
+// two loops are mutually exclusive by the same fact. A subscription has no
+// agent branch and is excluded by the same guard.
+func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration) {
+	defer wg.Done()
+	if interval <= 0 || agentBranch == "" {
+		return
+	}
+	lg := log.With().Str("repo", repo).Logger()
+
+	// hasOrigin reports whether this repo is now origin-backed, in which case
+	// reconcileMain owns main and this loop must stand down.
+	hasOrigin := func() bool {
+		r, err := svc.Remote().GetRemote("origin")
+		if err != nil {
+			lg.Warn().Err(err).Msg("local reconcile: remote read failed; standing down")
+			return true
+		}
+		return r != nil
+	}
+	if hasOrigin() {
+		return
+	}
+	lg.Info().Dur("interval", interval).Msg("local reconcile loop started")
+
+	tick := func() {
+		if _, err := svc.AdvanceLocalUpstream(ctx, agentBranch, svc.UpstreamBranch()); err != nil && ctx.Err() == nil {
+			lg.Warn().Err(err).Msg("local reconcile: advance failed; will retry next tick")
+		}
+	}
+	tick()
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			lg.Info().Msg("local reconcile loop stopped")
+			return
+		case <-t.C:
+			if hasOrigin() {
+				lg.Info().Msg("local reconcile loop stopped: repo gained an origin")
+				return
+			}
+			tick()
+		}
+	}
+}
