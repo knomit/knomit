@@ -9,15 +9,6 @@ import (
 	"knomit/internal/repos"
 )
 
-// flusher wraps ResponseRecorder to satisfy the http.Flusher interface.
-// The SSE handler checks for this interface and will return 500 without it.
-type flusher struct {
-	*httptest.ResponseRecorder
-	flushed int
-}
-
-func (f *flusher) Flush() { f.flushed++ }
-
 func TestHandleHALEvents_SetsContentTypeAndStreams(t *testing.T) {
 	hub := repos.NewTaskHub(context.Background())
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
@@ -30,7 +21,11 @@ func TestHandleHALEvents_SetsContentTypeAndStreams(t *testing.T) {
 	s := &Server{Manager: m}
 	r := s.NewAPIRouter()
 
-	rec := &flusher{ResponseRecorder: httptest.NewRecorder()}
+	// The shared recorder, not a bare ResponseRecorder: an SSE handler here
+	// needs BOTH http.Flusher and SetWriteDeadline, and a double missing the
+	// latter sends the handler down its refuse-to-start path — which reads as
+	// an empty body rather than as "your test double is incomplete".
+	rec := newStreamRecorder()
 
 	// Cancel the request context immediately so the SSE loop exits.
 	ctx, cancel := context.WithCancel(context.Background())

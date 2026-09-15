@@ -2,7 +2,6 @@ package web
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -156,11 +155,6 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 	}
 }
 
-// sseWriteTimeout bounds a single SSE write. Generous: it is a guard against a
-// client that has stopped reading entirely, not a latency budget, and a
-// legitimately slow network must not be mistaken for a dead one.
-const sseWriteTimeout = 30 * time.Second
-
 // handleHALClientSessionEvents serves GET /api/v1/sessions/events — an SSE
 // stream of "row X changed" pings, so the Sessions page and the Manage badge
 // stop waiting for their next 30s poll to show a session that has already
@@ -184,53 +178,19 @@ func handleHALClientSessionEvents(store *sessions.Store) http.HandlerFunc {
 				"the client session registry is not open on this server", r.URL.Path)
 			return
 		}
-		flusher, ok := w.(http.Flusher)
+		stream, ok := startSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
 
 		// Subscribe BEFORE announcing ready: a change published between the
 		// two would otherwise fall in the gap that `ready` exists to close.
 		events := store.Subscribe(r.Context())
 
-		rc := http.NewResponseController(w)
-		// write bounds ONE write and reports whether the stream is still
-		// usable. Both halves are load-bearing.
-		//
-		// The deadline, because the server runs SSE with WriteTimeout 0 — it
-		// has to, or every stream would be cut at the timeout — and the hub
-		// never blocks on a slow subscriber. So a client that stops draining
-		// its socket wedges this write with no bound at all, holding the
-		// goroutine and the subscription while events accumulate behind it.
-		//
-		// The error check, because a deadline WITHOUT one inverts the failure
-		// rather than fixing it: the deadline fires, the write fails, and a
-		// loop that ignores the error spins on a dead connection at full event
-		// rate. Every write here is checked, and returning is what ends the
-		// subscription — net/http cancels the request context when the handler
-		// returns, which is what goob's Subscribe(ctx) is waiting on.
-		write := func(format string, args ...any) bool {
-			if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
-				// The chain cannot bound this write. Refusing to start is the
-				// safe direction, and the real-middleware-chain test is what
-				// keeps this from silently disabling the endpoint.
-				return false
-			}
-			if _, err := fmt.Fprintf(w, format, args...); err != nil {
-				return false
-			}
-			flusher.Flush()
-			return true
-		}
-
 		// One `ready` per connection. The client re-reads the list on a LATER
 		// one, because a reconnect's gap may have dropped changes — the same
 		// reason the branch stream replays its snapshot on connect.
-		if !write("event: ready\ndata: {}\n\n") {
+		if !stream.Write("event: ready\ndata: {}\n\n") {
 			return
 		}
 
@@ -252,13 +212,11 @@ func handleHALClientSessionEvents(store *sessions.Store) http.HandlerFunc {
 				if err != nil {
 					continue
 				}
-				if !write("event: session\ndata: %s\n\n", data) {
+				if !stream.Write("event: session\ndata: %s\n\n", data) {
 					return
 				}
 			case <-keepalive.C:
-				// The keepalive is bounded too: it is the write most likely to
-				// be the one that discovers a client is gone.
-				if !write(": keepalive\n\n") {
+				if !stream.Keepalive() {
 					return
 				}
 			}

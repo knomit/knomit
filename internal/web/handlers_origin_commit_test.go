@@ -103,9 +103,13 @@ func newRegisteredManager(t *testing.T, keyPath, name, uid string) *repos.Manage
 	return m
 }
 
-func postCommit(t *testing.T, s *Server, sessID string) *httptest.ResponseRecorder {
+// Returns the shared SSE recorder: /commit streams, and an SSE handler here
+// needs SetWriteDeadline as well as Flush — a bare ResponseRecorder has only
+// the latter, which sends the stream down its refuse-to-start path and reads
+// as an empty body rather than as an incomplete double.
+func postCommit(t *testing.T, s *Server, sessID string) *streamRecorder {
 	t.Helper()
-	rec := httptest.NewRecorder()
+	rec := newStreamRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions/"+sessID+"/commit", nil)
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	return rec

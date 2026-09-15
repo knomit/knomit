@@ -2,7 +2,6 @@ package web
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -64,37 +63,27 @@ func handleLogEvents(tap *logging.Tap, readOnly bool) http.HandlerFunc {
 				"this server was built without a log tap", r.URL.Path)
 			return
 		}
-		flusher, ok := w.(http.Flusher)
+		stream, ok := startSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
 
 		// Backlog and live channel together, under the tap's lock: a line
 		// published between the two would otherwise be missed by both or sent
 		// twice, and neither is distinguishable from a gap in the log.
 		sub, backlog := tap.Subscribe(r.Context())
 
-		rc := http.NewResponseController(w)
-		// Bounded writes with checked errors, for the reason the sessions
-		// stream documents — and more sharply here, because the log is the
-		// highest-rate stream this server has, so a client that stops draining
-		// backs up fastest. Reports whether the stream is still usable.
+		// send is the only thing this handler adds to sseStream.Write: the
+		// marshal, and the decision that a payload we cannot encode is skipped
+		// rather than fatal. The bound itself lives in sse.go — and it matters
+		// most here, because the log is the highest-rate stream this server
+		// has, so a client that stops draining backs up fastest.
 		send := func(event string, payload any) bool {
 			data, err := json.Marshal(payload)
 			if err != nil {
 				return true // a line we cannot encode is skipped, not fatal
 			}
-			if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
-				return false
-			}
-			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
-				return false
-			}
-			return true
+			return stream.Write("event: %s\ndata: %s\n\n", event, data)
 		}
 
 		for _, line := range backlog {
@@ -105,7 +94,6 @@ func handleLogEvents(tap *logging.Tap, readOnly bool) http.HandlerFunc {
 		if !send("ready", logReady{Retained: len(backlog), Max: tap.Max()}) {
 			return
 		}
-		flusher.Flush()
 
 		// Reported as a DELTA the client can add up, and tracked here rather
 		// than sent from the tap, because drops are a property of this one
@@ -137,22 +125,15 @@ func handleLogEvents(tap *logging.Tap, readOnly bool) http.HandlerFunc {
 				if !reportDrops() {
 					return
 				}
-				flusher.Flush()
 			case <-keepalive.C:
 				// An idle stream is also where a stalled client catches up, so
 				// this is the other place a gap can become reportable.
 				if !reportDrops() {
 					return
 				}
-				// The keepalive is bounded too: it is the write most likely to
-				// be the one that discovers a client is gone.
-				if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
+				if !stream.Keepalive() {
 					return
 				}
-				if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
-					return
-				}
-				flusher.Flush()
 			}
 		}
 	}

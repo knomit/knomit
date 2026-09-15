@@ -106,7 +106,9 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	s := &Server{Manager: m, SessionManager: sm, AgentBranch: "machine/test"}
 	r := s.NewAPIRouter()
 
-	rec := httptest.NewRecorder()
+	// Shared SSE recorder: /commit streams, so the double needs
+	// SetWriteDeadline as well as Flush.
+	rec := newStreamRecorder()
 	req := httptest.NewRequest(http.MethodPost,
 		"/repos/alpha/origin-sessions/"+sess.ID+"/commit", nil)
 	r.ServeHTTP(rec, req)
