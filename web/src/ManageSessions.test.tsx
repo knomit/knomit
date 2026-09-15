@@ -169,4 +169,79 @@ describe('ManageSessions', () => {
     await waitFor(() => expect(screen.getByTestId('session-error')).toBeInTheDocument());
     expect(screen.getAllByTestId('session-row')[0]).toHaveTextContent('12 min ago');
   });
+
+  // The tab strip already says "Sessions"; the heading that used to sit here
+  // said it a second time. Scoped to the page's own subtree.
+  it('renders no heading of its own — the tab strip already names the page', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId('manage-sessions').querySelector('h1, h2, h3')).toBeNull();
+  });
+
+  // Both payloads of the deleted heading row have to survive it.
+  it('keeps the live count and Show hidden in the card label row', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const labelRow = screen.getByLabelText('Show hidden').closest('div');
+    expect(labelRow).toHaveTextContent('MCP clients');
+    expect(labelRow).toHaveTextContent(/\d+ live · \d+ shown/);
+  });
+
+  // The policy line moved into the card as its pinned footer. It must still be
+  // rendered, and still inside the card rather than orphaned above it.
+  it('pins the policy line inside the card', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getByTestId('session-policy')).toBeInTheDocument());
+    const card = screen.getByTestId('manage-sessions').firstElementChild as HTMLDivElement;
+    expect(card.contains(screen.getByTestId('session-policy'))).toBe(true);
+  });
+
+  // Same mechanism as the Logs card. At the flex default (min-height:auto) the
+  // card floors at its MIN-CONTENT height, which propagates the table's full
+  // height up through the wrapper — the card grows to fit every row and the
+  // pane scrolls instead of the table. The floor lives on the root instead.
+  it('pins the card to the pane instead of to the table it contains', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const root = screen.getByTestId('manage-sessions');
+    const card = root.firstElementChild as HTMLDivElement;
+    expect(card.style.flex).toBe('1 1 0%');
+    expect(card.style.minHeight).toBe('0px');
+    expect(root.style.height).toBe('100%');
+    expect(parseInt(root.style.minHeight, 10)).toBeGreaterThan(200);
+  });
+
+  // An overflow on the card would absorb the overflow that is supposed to push
+  // the root past the pane, disabling the floor's degradation entirely, and
+  // nest a second scrollbar inside the table wrapper's. The card carried
+  // overflowX:'auto' before this change, so this is a regression guard.
+  it('leaves the card with no overflow of its own', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const card = screen.getByTestId('manage-sessions').firstElementChild as HTMLDivElement;
+    // Assert we are looking at the CARD and not whatever else happens to be
+    // first: without this the test passes vacuously against any structure
+    // whose first child is not the card, which is exactly the structure this
+    // change replaced.
+    expect(card.querySelector('table')).not.toBeNull();
+    expect(card.style.overflow).toBe('');
+    expect(card.style.overflowX).toBe('');
+    expect(card.style.overflowY).toBe('');
+  });
+
+  // Under borderCollapse:'separate' a border on a <tr> is not painted at all,
+  // which would silently delete every row separator. The header rule is an
+  // inset shadow precisely so 'collapse' can stay.
+  it('keeps collapsed borders so the row separators survive the sticky header', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const table = screen.getByTestId('manage-sessions').querySelector('table') as HTMLTableElement;
+    expect(table.style.borderCollapse).toBe('collapse');
+    const th = table.querySelector('thead th') as HTMLElement;
+    expect(th.style.position).toBe('sticky');
+    expect(th.style.top).toBe('0px');
+    const row = screen.getAllByTestId('session-row')[0];
+    // jsdom serialises the colour to rgb().
+    expect(row.style.borderTop).toBe('1px solid rgb(34, 34, 34)');
+  });
 });
