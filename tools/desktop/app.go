@@ -69,11 +69,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// The log file, resolved ONCE. Four things have to agree on it — the
-	// logger's own sink, the Logs window's tailer, "Reveal in Finder", and the
-	// path the Settings dialog shows — and resolving it separately per consumer
-	// is what let a configured `[log] file` produce a permanently blank Logs
-	// window. See resolveLogFile.
+	// The log file, resolved ONCE. Three things have to agree on it — the
+	// logger's own sink, "Reveal in Finder", and the path the Settings dialog
+	// shows — and resolving it separately per consumer is what let a configured
+	// `[log] file` send the log somewhere the rest of the app was not looking.
+	// See resolveLogFile.
 	logFile := resolveLogFile(cfg)
 
 	// Phase two of logging: now that knomit.toml has been read, rebuild the
@@ -86,12 +86,12 @@ func run(ctx context.Context) error {
 	// logs the BOOTSTRAP path, and the two differ whenever knomit.toml names a
 	// file — so without this line the log's own account of where it lives is the
 	// path it stopped using seconds earlier. It is also the only externally
-	// visible evidence that the Logs window and the logger resolved the same
-	// file, short of opening the window.
+	// visible evidence that Reveal and the Settings dialog will name the same
+	// file the logger is writing.
 	if logFile == "" {
-		log.Warn().Msg("no log file could be resolved; logging to stderr only, and the Logs window will have nothing to show")
+		log.Warn().Msg("no log file could be resolved; logging to stderr only, so there is no post-mortem record on disk")
 	} else {
-		log.Info().Str("log_file", logFile).Msg("logging to file; the Logs window follows this path")
+		log.Info().Str("log_file", logFile).Msg("logging to file")
 	}
 
 	uiFS, err := webui.FS()
@@ -208,12 +208,15 @@ func run(ctx context.Context) error {
 		window.Show()
 		window.Focus()
 	})
-	// The two desktop-only windows. Both are lazy — no webview is built until
-	// the user asks for one, and the log tailer only starts with the Logs
-	// window. ctx (not a window's lifetime) is what stops that tailer, since it
-	// deliberately keeps running while the window is hidden. See windows.go.
-	aux := newAuxWindows(ctx, wapp, logFile)
-	menu.Add("Logs…").OnClick(func(_ *application.Context) { aux.ShowLogs() })
+	// The desktop-only window. Lazy — no webview is built until the user asks
+	// for one. See windows.go.
+	//
+	// There is no "Logs…" item any more: the log lives in the main window, at
+	// Manage → Logs, streamed over the API. A tray item cannot deep link there
+	// because opening Manage is a click rather than URL state (App.tsx says so
+	// deliberately), and inventing a boot-time parameter to carry it would be a
+	// larger change than the two clicks it saves.
+	aux := newAuxWindows(wapp)
 	menu.Add("Settings…").OnClick(func(_ *application.Context) { aux.ShowSettings() })
 	// Only where self-update is live. On Linux (AppImage, no self-update) and
 	// in dev builds this would be a button that does nothing, which is worse

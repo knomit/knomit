@@ -145,7 +145,7 @@ func TestBuildConsoleFormatWritesHumanReadableFile(t *testing.T) {
 // Monday's, and the file is the only log surface a macOS bundle has.
 //
 // The second assertion is not cosmetic: the Logs window reads a console line as
-// `<stamp> <LVL> <message>` (ui/src/LogView.tsx parseLine), so a dated-but-
+// `<stamp> <LVL> <message>` (web/src/LogView.tsx parseLine), so a dated-but-
 // spaced format like "Jan 2 15:04:05" would fix the date and silently break the
 // window's level filter — an unparseable line is treated as unrankable and
 // shown at every threshold, so the filter stops filtering rather than emptying.

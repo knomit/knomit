@@ -1,7 +1,8 @@
 import type React from 'react';
 import { parseLine, visibleLines } from './logLines';
 
-// Ported from the desktop app's Logs window (tools/desktop/ui/src/LogView.tsx).
+// Ported from the desktop app's Logs window, which this replaced and which has
+// since been removed — so this is now the only copy.
 // The PARSING is copied deliberately unchanged — it carries several fixes that
 // each cost a real bug (json before console, the severity FLOOR, unrankable
 // lines always shown), and the comments explaining them are worth more here
@@ -11,8 +12,6 @@ import { parseLine, visibleLines } from './logLines';
 // The class names survive as semantic markers and test hooks — they carry no
 // stylesheet here — so the ported tests select the same rows the desktop ones
 // did.
-//
-// The desktop copy is untouched; retiring it is a separate change.
 interface Props {
   lines: string[]
   /** Case-insensitive substring, applied AFTER the severity filter. */

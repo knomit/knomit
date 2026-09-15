@@ -53,7 +53,7 @@ type Options struct {
 // so this is the timestamp most users will ever read.
 //
 // RFC3339 specifically, and not a "Jan 2 15:04:05" style: the Logs window reads
-// a console-formatted line as `<stamp> <LVL> <message>` (ui/src/LogView.tsx
+// a console-formatted line as `<stamp> <LVL> <message>` (web/src/LogView.tsx
 // parseLine), so a timestamp containing a space would shift the level out of
 // the second position and silently break the window's level filter. RFC3339 has
 // no spaces. TestFileSinkTimestampIsDatedAndSpaceFree pins that.

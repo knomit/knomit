@@ -38,12 +38,12 @@ export default defineConfig({
   base: './',
   build: {
     rollupOptions: {
-      // Two entry documents, one per window. Neither is named index.html on
-      // purpose: the desktop tree is only ever reached by explicit path, and an
-      // index.html here would invite the "just open /desktop/" habit.
+      // One entry document, for the one desktop-only window. Not named
+      // index.html on purpose: the desktop tree is only ever reached by
+      // explicit path, and an index.html here would invite the "just open
+      // /desktop/" habit.
       input: {
         settings: resolve(__dirname, 'settings.html'),
-        logs: resolve(__dirname, 'logs.html'),
       },
     },
   },

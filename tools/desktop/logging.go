@@ -216,16 +216,19 @@ func defaultLogPath() string {
 // configured [log] file when there is one, the desktop default otherwise.
 //
 // This must be the single source of that answer. Everything downstream of it —
-// the logger's own sink, the Logs window's tailer, "Reveal in Finder", and the
-// path the Settings dialog displays — has to agree, and it used to be resolved
-// three separate ways. The version that ignored lc.File meant that setting
-// `[log] file` (or exporting KNOMIT_LOG_FILE) left the Logs window tailing a
-// file nothing was writing to: permanently blank, with no error anywhere, while
-// the Settings dialog beside it named the correct path.
+// the logger's own sink, "Reveal in Finder", and the path the Settings dialog
+// displays — has to agree, and it used to be resolved three separate ways. The
+// version that ignored lc.File meant that setting `[log] file` (or exporting
+// KNOMIT_LOG_FILE) sent the log somewhere the rest of the app was not looking,
+// with no error anywhere, while the Settings dialog beside it named a different
+// path.
+//
+// The file is now the post-mortem record rather than anything's live source:
+// the log a user READS comes from the server over the API, at Manage → Logs.
+// Reveal and the Settings path are what still depend on this answer.
 //
 // It returns "" only when there is no log file at all — no configured path AND
-// no resolvable logs directory. See startLogStream for what the Logs window
-// does with that.
+// no resolvable logs directory.
 func resolveLogFile(cfg config.Config) string {
 	return desktopLogConfig(cfg.Log, defaultLogPath()).File
 }

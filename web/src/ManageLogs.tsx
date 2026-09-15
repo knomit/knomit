@@ -5,7 +5,8 @@ import { MAX_LINES, clearLines, connectLogStream, getLines, getReceived, subscri
 import { card, cardLabel } from './manageStyles';
 
 // ManageLogs is the server's log, live. Ported from the desktop app's Logs
-// window (tools/desktop/ui/src/LogsApp.tsx), with three changes:
+// window, which this replaced and which has since been removed, with three
+// changes:
 //
 //  - The source is GET /api/v1/logs/events instead of a Wails event, reached
 //    through the same API base every other call uses. That is the whole point
@@ -16,8 +17,6 @@ import { card, cardLabel } from './manageStyles';
 //    their place it reports what the STREAM can tell you: how deep the
 //    server's ring is, and whether anything has been dropped.
 //  - Appearance is inline style objects, like the other Manage pages.
-//
-// The desktop copy is untouched; retiring it is a separate change.
 
 // The console levels zerolog writes. Ordered loudest-last so the list reads the
 // way a severity filter is expected to.
