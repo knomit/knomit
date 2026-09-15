@@ -273,4 +273,94 @@ describe('Manage as a mode', () => {
     expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
     expect(screen.getByTestId('remote-connect-wizard')).toBeInTheDocument();
   });
+
+  // ...and it must hold from the moment the lock is VISIBLE, which is a
+  // separate claim and was broken.
+  //
+  // The busy flag is relayed upward by effects — wizard → RepoManager → App —
+  // and those were passive. React runs the DOM commit and the passive-effect
+  // flush in separate tasks for any update that did not come from a discrete
+  // event, and the commit that PAINTS the lock is the wizard's own, while the
+  // step reaches 'committing' in a promise continuation. So there was a window
+  // in which the reader could see that they were not allowed to leave, press
+  // Escape, and leave anyway — mid-write.
+  //
+  // The test above cannot see that window: `act()` drives React's scheduler
+  // itself and collapses the two tasks into one. So this one uses NATIVE events
+  // for both the click that starts the commit and the Escape, and fires the
+  // Escape from a MutationObserver the instant the lock paints.
+  it('refuses Escape pressed in the same task the commit lock paints in, and accepts it once the lock lifts', async () => {
+    const mod = await import('./api');
+    const m = mod as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    m.createSession.mockResolvedValue({ session_id: 'sess-paint' });
+    m.streamTest.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { branches: ['main'], agent_branches: [], default_branch: 'main', matched_agent: '', history: 'shared', remote_fact_count: 1, local_fact_count: 1 } }));
+      return () => {};
+    });
+    m.streamPreview.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) => {
+      queueMicrotask(() => onEvent({ phase: 'done', result: { local_only: 1, remote_only: 0, shared_path: 0, dead_refs_found: 0 } }));
+      return () => {};
+    });
+    m.streamApply.mockImplementation(async (_r: string, _s: string, _st: string, _b: string | undefined, onEvent: (e: unknown) => void) => {
+      onEvent({ phase: 'done', result: { total_facts: 0, from_local: 0, from_remote: 0, overwrites: 0 } });
+    });
+    // Held open, and the event sink kept, so the control arm below can end the
+    // commit and watch the lock lift.
+    let endCommit: ((e: unknown) => void) | undefined;
+    m.streamCommit.mockImplementation((_r: string, _s: string, onEvent: (e: unknown) => void) =>
+      new Promise(() => { endCommit = onEvent; }));
+
+    await mountApp();
+    await enterManage();
+    await act(async () => { fireEvent.click(screen.getByTestId('repomgr-item-alpha')); });
+    await act(async () => { fireEvent.click(await screen.findByTestId('remote-connect')); });
+    await act(async () => { fireEvent.change(await screen.findByTestId('wizard-url'), { target: { value: 'https://example.com/repo.git' } }); });
+    await act(async () => { fireEvent.click(screen.getByTestId('wizard-test')); });
+
+    const surfaces = () => document.querySelectorAll('[data-testid=manage-surface]').length;
+    const crumb = () => document.querySelector('[data-testid=wizard-crumb-back]') as HTMLButtonElement | null;
+    const locked = () => !!crumb()?.disabled;
+    let surfaceWhenLockPainted = -1;
+
+    let observer: MutationObserver | undefined;
+    const fired = new Promise<void>((done, fail) => {
+      // Without this the failure mode of "the lock never paints" is a bare 5s
+      // timeout on an await, which says nothing about why.
+      const timer = setTimeout(() => fail(new Error(
+        'the commit lock never painted: wizard-crumb-back was never disabled')), 4000);
+      observer = new MutationObserver(() => {
+        if (!locked()) return;
+        clearTimeout(timer);
+        surfaceWhenLockPainted = surfaces();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        done();
+      });
+      observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    });
+
+    try {
+      // NATIVE click, not fireEvent: the commit must start outside act().
+      (await screen.findByTestId('wizard-connect')).dispatchEvent(
+        new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await fired;
+    } finally {
+      observer?.disconnect();
+    }
+    await act(async () => { await Promise.resolve(); });
+
+    // Guards the guard: if the lock never painted, the Escape above would be
+    // testing nothing and the assertion below would pass for the wrong reason.
+    expect(surfaceWhenLockPainted).toBe(1);
+    expect(locked()).toBe(true);
+    expect(screen.getByTestId('manage-surface')).toBeInTheDocument();
+
+    // THE CONTROL ARM, and it is what stops this test passing merely because
+    // nothing was listening: end the commit so the lock lifts, then press the
+    // same key the same way. If App's keydown listener were gone, Manage would
+    // survive here too and the refusal above would have proved nothing.
+    await act(async () => { endCommit?.({ phase: 'error', message: 'remote hung up' }); });
+    await waitFor(() => expect(locked()).toBe(false));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
+  });
 });

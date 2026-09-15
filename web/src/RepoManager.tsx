@@ -109,7 +109,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // this pane goes away while the flag is up (the error boundary resetting, the
   // app deciding it has no repos left), the parent must not be left holding a
   // lock whose holder is gone.
-  useEffect(() => {
+  // Layout, not passive, for the same reason the wizard's own relay is: this is
+  // the middle hop, and a passive one here would reinstate exactly the window
+  // the wizard's change closes. Pinned by App.manage.test.tsx.
+  useLayoutEffect(() => {
     onBusyChange?.(connectBusy);
     return () => { onBusyChange?.(false); };
   }, [connectBusy, onBusyChange]);

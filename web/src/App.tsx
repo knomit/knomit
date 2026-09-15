@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
@@ -805,8 +805,32 @@ export default function App() {
     else openRepoMgr();
   }, [manageOpen, manageBusy, openRepoMgr, closeRepoMgr]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
+  // Keyboard shortcuts.
+  //
+  // A LAYOUT effect, not a passive one, because this handler closes over state
+  // that changes OUTSIDE discrete events. React runs the DOM commit and the
+  // passive-effect flush in separate tasks for any such update, so a passive
+  // registration leaves a window where the handler contradicts the screen.
+  //
+  // NOT for `manageOpen`: every route that opens Manage is a click, and React
+  // flushes passive effects before the next discrete event, so that flag is
+  // never stale. The path that IS reachable is `state.asOf`. returnToNow
+  // dispatches APPLY_NAV with asOf live only AFTER an await
+  // (useTimeTravel.ts), so the return to live lands in a promise continuation;
+  // in the window after it paints, a passive handler still reads
+  // !isLive(state) and answers Escape with a redundant returnToNow instead of
+  // the CLEAR_FILTERS the reader is now asking for. Same for `h`.
+  //
+  // The cost, stated because it is not free: `state` is in the dep array, so
+  // this now re-runs before paint on every dispatch — one removeEventListener
+  // plus one addEventListener per render that changes state. That is the price
+  // of the handler never describing a screen the user is not looking at.
+  //
+  // The commit-lock case is a sibling but is NOT what this hunk fixes: the
+  // busy flag is relayed up by effects from the wizard, and those relays are
+  // what had to become layout effects (see their comments). Pinned by
+  // App.manage.test.tsx.
+  useLayoutEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Manage owns the window, so it owns the keyboard too. Every shortcut
       // below drives the BROWSE surface — back, return-to-now, focus the filter
