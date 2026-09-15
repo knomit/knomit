@@ -73,8 +73,8 @@ const fileTimeFormat = time.RFC3339
 // its lifetime that is exactly right. A caller that reconfigures logging while
 // running must use BuildWriter and close what the previous configuration left
 // open, or it leaks a file descriptor per reconfiguration.
-func Build(o Options, consoleOut, jsonOut, ring io.Writer) (zerolog.Logger, zerolog.Level, error) {
-	w, _, lvl, err := BuildWriter(o, consoleOut, jsonOut, ring)
+func Build(o Options, consoleOut, jsonOut, ring io.Writer, tees ...io.Writer) (zerolog.Logger, zerolog.Level, error) {
+	w, _, lvl, err := BuildWriter(o, consoleOut, jsonOut, ring, tees...)
 	if err != nil {
 		return zerolog.Logger{}, 0, err
 	}
@@ -90,6 +90,16 @@ func Build(o Options, consoleOut, jsonOut, ring io.Writer) (zerolog.Logger, zero
 // — human-readable for "console", raw JSON for "json". ring, when non-nil, is
 // always tee'd in so crash reports retain the recent-log tail.
 //
+// tees are extra writers added to the sink, for a consumer that is neither a
+// sink of its own nor the crash ring — currently the log Tap that
+// GET /api/v1/logs/events streams from. They are SEPARATE from ring because
+// ring has one documented job (crash reports keep the recent tail) and
+// overloading it would make that doc a half-truth.
+//
+// A tee receives the same raw JSON event every writer here does, so a consumer
+// wanting human-readable output passes its own formatting wrapper — see
+// Tap.Writer, which is exactly that case and explains why.
+//
 // It returns the sink, the rotator to close when this sink is replaced (nil
 // when o.File is empty), and the parsed level; an unparseable level is an
 // error.
@@ -98,7 +108,7 @@ func Build(o Options, consoleOut, jsonOut, ring io.Writer) (zerolog.Logger, zero
 // writer and reconfigure by swapping the writer — the desktop app does this so
 // a Settings change can apply live without writing zerolog's global log.Logger
 // from an IPC goroutine while the rest of the process is logging through it.
-func BuildWriter(o Options, consoleOut, jsonOut, ring io.Writer) (zerolog.LevelWriter, io.Closer, zerolog.Level, error) {
+func BuildWriter(o Options, consoleOut, jsonOut, ring io.Writer, tees ...io.Writer) (zerolog.LevelWriter, io.Closer, zerolog.Level, error) {
 	level := o.Level
 	if level == "" {
 		level = "info"
@@ -148,6 +158,11 @@ func BuildWriter(o Options, consoleOut, jsonOut, ring io.Writer) (zerolog.LevelW
 	}
 	if ring != nil {
 		writers = append(writers, ring)
+	}
+	for _, tee := range tees {
+		if tee != nil {
+			writers = append(writers, tee)
+		}
 	}
 
 	return zerolog.MultiLevelWriter(writers...), closer, lvl, nil

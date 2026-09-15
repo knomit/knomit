@@ -98,11 +98,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 		}
 	})
 
-	r.Get("/", handleAPIRoot(b))
+	r.Get("/", handleAPIRoot(b, s.ReadOnly))
 	r.Get("/version", handleVersion(b, s.ReadOnly))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/sessions", handleHALClientSessions(b, s.Manager, s.ClientSessions, s.ReadOnly))
 	r.Get("/sessions/events", handleHALClientSessionEvents(s.ClientSessions))
+	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))

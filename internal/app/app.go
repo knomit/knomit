@@ -15,6 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
+	"knomit/internal/platform/logging"
 	"knomit/internal/platform/memlimit"
 	"knomit/internal/repos"
 	"knomit/internal/web"
@@ -44,6 +45,14 @@ type Options struct {
 	// CORSOrigins is the cross-origin allow-list passed to the web server (the
 	// Wails origin in the desktop build). Empty in the cloud server.
 	CORSOrigins []string
+	// LogTap is the tap the caller wired into its own logging chain, served by
+	// GET /api/v1/logs/events. Passed in rather than created here because the
+	// logger is built before the app is — and in the desktop's case rebuilt on
+	// every Settings save, over a tap that has to outlive each swap.
+	//
+	// nil is valid and means the endpoint answers 503: a binary that serves no
+	// UI has no reason to carry a log ring.
+	LogTap *logging.Tap
 }
 
 // New creates and boots the application from the given config and context.
@@ -200,6 +209,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		CORSOrigins:       opts.CORSOrigins,
 		ReadOnly:          cfg.ReadOnly,
 		SlowRequestMS:     cfg.Log.SlowRequestMS,
+		Logs:              opts.LogTap,
 	}
 
 	// Start the manager (opens repos, launches background cluster

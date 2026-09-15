@@ -1582,6 +1582,11 @@ describe('Manage tabs', () => {
     // Selecting a repo is the OTHER axis: the rail row lights, and both tabs
     // go dim. A lit tab here would claim the pane is still showing a
     // server-wide page.
+    //
+    // Back via Overview first: Sessions is a server page and carries no rail,
+    // so a repo is one tab click away from it rather than one rail click.
+    fireEvent.click(overview);
+    await screen.findByTestId('manage-overview');
     fireEvent.click(screen.getByTestId('repomgr-item-core'));
     await screen.findByTestId('block-agent-branch');
     expect(overview).not.toHaveStyle({ background: ACTIVE });
@@ -1695,6 +1700,64 @@ describe('Manage tabs', () => {
     rerender(<RepoManager {...baseProps} />);
     await act(async () => { await Promise.resolve(); });
     expect(vi.mocked(api.listClientSessions).mock.calls.length).toBe(afterOpen);
+  });
+
+  it('drops the entity rail on Sessions — a server page is not about your repos', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-sessions'));
+    expect(await screen.findByTestId('manage-sessions')).toBeInTheDocument();
+
+    // The tab strip is the OTHER axis and stays: hiding the rail is not
+    // "server pages have no navigation".
+    expect(screen.getByTestId('repomgr-sessions')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('repomgr-overview')).toBeInTheDocument();
+
+    // Every rail control is gone, not dimmed. Nothing in it is selected and
+    // nothing in it explains or filters a table about the server, so it would
+    // be a column of dead exits — and a dead control is worse than an absent
+    // one.
+    for (const id of ['repomgr-new', 'repomgr-item-core', 'repomgr-item-work', 'repomgr-new-lens', 'repomgr-archived']) {
+      expect(screen.queryByTestId(id)).not.toBeInTheDocument();
+    }
+    expect(within(screen.getByTestId('manage-detail')).getByTestId('manage-sessions')).toBeInTheDocument();
+  });
+
+  it('brings the rail back on Overview, whose content IS the entities', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    expect(screen.queryByTestId('repomgr-item-core')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('repomgr-overview'));
+    await screen.findByTestId('manage-overview');
+    // Overview is a TAB and keeps the rail: the rule is about what the pane
+    // shows, not about which axis you clicked last.
+    expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-item-work')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-archived')).toBeInTheDocument();
+  });
+
+  it('opens the Logs page full width, with no rail', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-logs'));
+    expect(await screen.findByTestId('manage-logs')).toBeInTheDocument();
+
+    // A server page, so the same rule Sessions established applies.
+    expect(screen.getByTestId('repomgr-logs')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('repomgr-item-core')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repomgr-archived')).not.toBeInTheDocument();
+    // The strip stays, and Sessions is still reachable from it.
+    expect(screen.getByTestId('repomgr-sessions')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-overview')).toBeInTheDocument();
+  });
+
+  // The read-only demo refuses the log with a 403, so a Logs tab there would be
+  // a control that cannot work — worse than an absent one, the same rule the
+  // rail follows.
+  it('renders no Logs tab at all on a read-only instance', async () => {
+    render(<RepoManager {...baseProps} readOnly />);
+    await screen.findByTestId('repomgr-sessions');
+    expect(screen.queryByTestId('repomgr-logs')).not.toBeInTheDocument();
   });
 
   it('renders no badge at zero, and none when the count cannot be read', async () => {

@@ -9,9 +9,10 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon, ScrollIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
+import { ManageLogs } from './ManageLogs';
 import { useClientSessionChanges } from './useClientSessionChanges';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
@@ -47,9 +48,13 @@ interface Props {
 
 type Selection =
   | { kind: 'overview' }
-  // Sessions is the second non-entity rail row: MCP clients cut across every
-  // repo and lens, so it has no entity to hang off.
+  // Sessions has no entity to hang off — MCP clients cut across every repo and
+  // lens — which is why it is a server PAGE in the tab strip and why the rail
+  // is absent while it is open. See isServerPage below.
   | { kind: 'sessions' }
+  // Logs is the server's own output: the same shape of page as Sessions, and
+  // the second member of isServerPage.
+  | { kind: 'logs' }
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
@@ -63,6 +68,19 @@ type Selection =
   | { kind: 'lens'; name: string }
   | { kind: 'newLens' }
   | null;
+
+// isServerPage answers "is this pane about the SERVER, or about the entities
+// you own?" — and that question, not which axis was clicked last, is what
+// decides whether the rail renders beside it.
+//
+// A future server-level tab (Audit/Logs, auth, jobs) adds its kind HERE and
+// nowhere else. Overview is deliberately NOT one: it is a tab, but its content
+// is the entity summary, so the rail is contextual there and both lead to the
+// same repo and lens pages.
+// See kb/decisions/web/manage/rail-only-for-entity-pages.
+function isServerPage(v: Selection): boolean {
+  return v?.kind === 'sessions' || v?.kind === 'logs';
+}
 
 export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse, onBusyChange }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
@@ -221,7 +239,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
           columns so the two never read as siblings — which is what the old
           unlabelled rows at the top of the rail did. Hidden with zero repos,
           the same rule the Overview row had: nothing to summarise, and the
-          create form owns that screen. */}
+          create form owns that screen.
+
+          The strip is on EVERY Manage page. The rail is not: it renders only
+          beside a pane whose content is entities (isServerPage above), so a
+          server page gets the full width. */}
       {repos.length > 0 && (
         <div style={tabStrip} role="tablist" aria-label="Server pages">
           <button
@@ -253,16 +275,41 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <span data-testid="repomgr-sessions-badge" style={tabBadge}>{liveSessions}</span>
             )}
           </button>
+          {/* Absent under read-only, not disabled: the endpoint answers 403
+              there — the server's own log is not part of the public demo, and
+              free text has no useful redaction — so a tab would be a control
+              that cannot work. Same rule as the rail on a server page. */}
+          {!readOnly && (
+            <button
+              type="button"
+              role="tab"
+              data-testid="repomgr-logs"
+              aria-selected={view.kind === 'logs'}
+              onMouseDown={noMouseFocus}
+              style={tabBtn(view.kind === 'logs')}
+              disabled={connectBusy}
+              onClick={() => setSel({ kind: 'logs' })}
+            >
+              <ScrollIcon color="currentColor" size={12} /> Logs
+            </button>
+          )}
         </div>
       )}
 
       <div style={body}>
           {/* ── Master list ── */}
-          {/* Dimmed as a whole while a connect commit runs: every row below is
+          {/* Absent, not dimmed, on a server page: nothing in it would be
+              selected and nothing in it explains or filters a table about the
+              server, so it would be a column of dead exits beside unrelated
+              content — and a dead control is worse than an absent one. The
+              detail section is flex:1, so it takes the freed width on its own.
+
+              Dimmed as a whole while a connect commit runs: every row below is
               disabled, and a rail that looked live but refused every click
               would read as a broken pane rather than a held one. The reason is
               stated where the reader is looking — the connect page's own rail
               note — not repeated here. */}
+          {!isServerPage(view) && (
           <nav style={connectBusy ? { ...listCol, opacity: 0.4 } : listCol}>
             <div style={sectionHeader}>
               <BookIcon color="#7c9" size={13} />
@@ -369,6 +416,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               </button>
             ))}
           </nav>
+          )}
 
           {/* ── Detail pane ── */}
           <section ref={detailRef} data-testid="manage-detail" style={detailCol}>
@@ -388,6 +436,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               />
             )}
             {view.kind === 'sessions' && <ManageSessions onLiveCount={handleLiveCount} />}
+            {view.kind === 'logs' && <ManageLogs />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for
