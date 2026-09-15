@@ -223,6 +223,12 @@ const page: React.CSSProperties = {
 // any explicit floor would have to fight flex:1 for the same axis. On the root
 // it simply stops the whole page getting shorter than the card can draw: the
 // root outgrows the pane, and detailCol (overflowY:auto) scrolls it.
+//
+// Which is why the card must never be given an `overflow` of its own. That
+// degradation works by letting the card overflow the root; a scroll container
+// here would absorb exactly that overflow, the root would never outgrow the
+// pane, and the floor would stop doing anything. It would also nest a second
+// scrollbar inside the scroller's.
 const logCard: React.CSSProperties = {
   ...card, marginTop: 0, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
 };
