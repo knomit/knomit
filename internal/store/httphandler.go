@@ -136,10 +136,35 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 		// bytes where it expects the next pkt-line.
 		common, haveCommon := firstCommonHave(sto, req.Haves)
 
-		objs, upd, err := packObjects(rh, req)
+		// The COMMIT-level negotiation is cheap (commit objects, no trees) and
+		// every round needs it, because every round carrying a depth must be
+		// answered with a shallow section.
+		neg, err := negotiateCommits(rh, req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		upd := neg.update
+
+		// The object set is the EXPENSIVE half, and only the FINAL round needs
+		// it. git fetches over stateless HTTP in rounds — wants plus a batch of
+		// haves each time — and discards everything until it says "done" or we
+		// acknowledge a common base. Building the object set on every round
+		// meant a full history walk plus a recursive tree walk per commit, all
+		// thrown away: measured at seven builds and six discards for one
+		// incremental pull against an 800-commit store, 1.1s where the code
+		// this replaced returned NAK before touching a single tree.
+		//
+		// It is built BEFORE anything is written, so a failure is still a clean
+		// 500 rather than an error appended to a half-written response.
+		settled := requestHasDone(raw) || haveCommon
+		var objs []plumbing.Hash
+		if settled {
+			objs, err = neg.objects(rh, req)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		// The shallow section precedes the ACK/NAK section, and is present on
@@ -168,7 +193,7 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 			return
 		}
 
-		if !requestHasDone(raw) && !haveCommon {
+		if !settled {
 			_ = enc.Encodef("%s\n", "NAK")
 			return
 		}

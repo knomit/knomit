@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -12,11 +13,41 @@ import (
 
 var errWantNotAdvertised = errors.New("want is not an advertised tip")
 
-// packObjects is the ONE object-set builder for upload-pack. A request without
-// a depth is an unlimited walk (what go-git's built-in server did); a request
-// with "deepen N" is the same walk cut at N commits from each want. go-git's
-// server has no shallow implementation at all and rejects the capability, so
-// the wizard's depth-1 probe used to come back as an HTTP 500.
+// objectBuilds counts completed object-set builds. It exists for
+// TestGitHandler_BuildsTheObjectSetOncePerFetch, which is the regression test
+// for a measured defect: the object set used to be built on EVERY negotiation
+// round and discarded on all but the last, so an incremental pull against an
+// 800-commit store did seven full history-plus-tree walks and threw six away.
+// Counting is the only way to see that from outside — the responses are
+// byte-identical either way.
+var objectBuilds atomic.Int64
+
+// negotiation is the COMMIT-LEVEL view of one upload-pack request: which
+// commits the client wants, where the walk stopped, and the shallow update
+// that follows. It is cheap — commit objects only, no trees — and it is all a
+// discarded negotiation round needs.
+//
+// git fetches over stateless HTTP in rounds, and every round but the last is
+// discarded. The shallow section has to be answered on each one; the packfile
+// does not. Keeping the two apart is what stops a poll from paying for the
+// whole pack walk once per round.
+type negotiation struct {
+	// wantCommits is every commit on the want side, already cut at depth.
+	wantCommits map[plumbing.Hash]struct{}
+	// clientShallow is what the client reported as its graft points.
+	clientShallow map[plumbing.Hash]struct{}
+	// update is the shallow/unshallow section for this request.
+	update packp.ShallowUpdate
+}
+
+// negotiateCommits does the commit walk and derives the shallow update. It is
+// the half of the old packObjects that a discarded round actually needs.
+//
+// A request without a depth is an unlimited walk (what go-git's built-in
+// server did); a request with "deepen N" is the same walk cut at N commits
+// from each want. go-git's server has no shallow implementation at all and
+// rejects the capability, so the wizard's depth-1 probe used to come back as
+// an HTTP 500.
 //
 // Client shallows (the "shallow <sha>" lines in the request) play two
 // different roles depending on whether the request also carries a depth:
@@ -27,10 +58,7 @@ var errWantNotAdvertised = errors.New("want is not an advertised tip")
 //     into a depth-1 clone drags the entire history across.
 //   - WITH a depth: the depth cut governs, and the shallows are only consulted
 //     to work out what changed. Grafting here would make deepening impossible.
-//
-// They always bound the HAVE walk: a shallow client holds nothing below its
-// own boundary, so nothing there may be assumed present.
-func packObjects(rh *repoHandler, req *packp.UploadPackRequest) ([]plumbing.Hash, packp.ShallowUpdate, error) {
+func negotiateCommits(rh *repoHandler, req *packp.UploadPackRequest) (*negotiation, error) {
 	depth := 0
 	if d, ok := req.Depth.(packp.DepthCommits); ok {
 		depth = int(d)
@@ -45,26 +73,56 @@ func packObjects(rh *repoHandler, req *packp.UploadPackRequest) ([]plumbing.Hash
 		wantStop = nil
 	}
 
-	// Commits the client wants, cut at depth.
 	wantCommits, boundary, err := walkCommits(rh, req.Wants, depth, wantStop)
 	if err != nil {
-		return nil, packp.ShallowUpdate{}, err
+		return nil, err
 	}
 
-	// Commits the client already has, never descending below its shallows.
-	haveCommits, _, err := walkCommits(rh, presentOnly(rh, req.Haves), 0, clientShallow)
+	// Shallow update, relative to what the client already reports: git's own
+	// upload-pack emits only CHANGES (send_shallow skips anything already
+	// flagged CLIENT_SHALLOW), which is what makes the stateless rounds
+	// idempotent — the client re-sends the same shallow lines every round.
+	n := &negotiation{wantCommits: wantCommits, clientShallow: clientShallow}
+	for h := range boundary {
+		if _, already := clientShallow[h]; !already {
+			n.update.Shallows = append(n.update.Shallows, h)
+		}
+	}
+	for h := range clientShallow {
+		if _, still := boundary[h]; still {
+			continue
+		}
+		// Unshallow means "you now hold this commit's parents". The commit
+		// being transferred is not enough — its PARENTS have to be in the
+		// set, or the client would drop a graft point it still needs.
+		if parentsTransferred(rh, h, wantCommits) {
+			n.update.Unshallows = append(n.update.Unshallows, h)
+		}
+	}
+	sortHashes(n.update.Shallows)
+	sortHashes(n.update.Unshallows)
+	return n, nil
+}
+
+// objects builds the packfile's object set: every want-side commit plus its
+// complete tree (a shallow clone has a complete checkout at every commit it
+// holds), minus everything reachable from the commits the client already has.
+//
+// This is the EXPENSIVE half — a full recursive tree walk per commit — and the
+// caller must run it only once negotiation is settled. A client's shallows
+// bound the have walk: a shallow client holds nothing below its own boundary,
+// so nothing there may be assumed present.
+func (n *negotiation) objects(rh *repoHandler, req *packp.UploadPackRequest) ([]plumbing.Hash, error) {
+	haveCommits, _, err := walkCommits(rh, presentOnly(rh, req.Haves), 0, n.clientShallow)
 	if err != nil {
-		return nil, packp.ShallowUpdate{}, err
+		return nil, err
 	}
 
-	// Objects: every want-side commit plus its complete tree (a shallow clone
-	// has a complete checkout at every commit it holds), minus everything
-	// reachable from the have-side commits.
 	haveObjs := map[plumbing.Hash]struct{}{}
 	for h := range haveCommits {
 		haveObjs[h] = struct{}{}
 		if err := addTreeObjects(rh, h, haveObjs); err != nil {
-			return nil, packp.ShallowUpdate{}, err
+			return nil, err
 		}
 	}
 	seen := map[plumbing.Hash]struct{}{}
@@ -79,41 +137,18 @@ func packObjects(rh *repoHandler, req *packp.UploadPackRequest) ([]plumbing.Hash
 		seen[h] = struct{}{}
 		objs = append(objs, h)
 	}
-	for h := range wantCommits {
+	for h := range n.wantCommits {
 		add(h)
 		treeObjs := map[plumbing.Hash]struct{}{}
 		if err := addTreeObjects(rh, h, treeObjs); err != nil {
-			return nil, packp.ShallowUpdate{}, err
+			return nil, err
 		}
 		for t := range treeObjs {
 			add(t)
 		}
 	}
-
-	// Shallow update, relative to what the client already reports: git's own
-	// upload-pack emits only CHANGES (send_shallow skips anything already
-	// flagged CLIENT_SHALLOW), which is what makes the stateless rounds
-	// idempotent — the client re-sends the same shallow lines every round.
-	var upd packp.ShallowUpdate
-	for h := range boundary {
-		if _, already := clientShallow[h]; !already {
-			upd.Shallows = append(upd.Shallows, h)
-		}
-	}
-	for h := range clientShallow {
-		if _, still := boundary[h]; still {
-			continue
-		}
-		// Unshallow means "you now hold this commit's parents". The commit
-		// being transferred is not enough — its PARENTS have to be in the
-		// set, or the client would drop a graft point it still needs.
-		if parentsTransferred(rh, h, wantCommits) {
-			upd.Unshallows = append(upd.Unshallows, h)
-		}
-	}
-	sortHashes(upd.Shallows)
-	sortHashes(upd.Unshallows)
-	return objs, upd, nil
+	objectBuilds.Add(1)
+	return objs, nil
 }
 
 // parentsTransferred reports whether every parent of commit h is in set.

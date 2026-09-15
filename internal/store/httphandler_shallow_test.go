@@ -163,6 +163,56 @@ func TestGitHandler_RealGitShallowCloneDeepenUnshallow(t *testing.T) {
 	require.FileExists(t, filepath.Join(work, "kb/f-00.md"))
 }
 
+// An incremental fetch negotiates over several rounds, and every round but the
+// last is discarded. The object set — a full history walk plus a recursive
+// tree walk per commit — must be built ONCE, on the round that actually sends
+// a pack.
+//
+// This regresses a measured defect: the object set used to be built before the
+// early NAK returns, so an incremental pull against an 800-commit store did
+// seven builds and threw six away (1.1s, against a code path that previously
+// returned NAK before touching a single tree). The responses are
+// byte-identical either way, so counting the builds is the only way to see it.
+func TestGitHandler_BuildsTheObjectSetOncePerFetch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	// Enough history that git needs more than one have-batch, which is what
+	// creates the discarded rounds in the first place.
+	svc, srv := servedStore(t, 60)
+	work := t.TempDir()
+
+	gitOut(t, "", "clone", "-q", srv.URL, work)
+	require.FileExists(t, filepath.Join(work, "kb/f-59.md"))
+
+	ctx := context.Background()
+	for i := 60; i < 100; i++ {
+		_, err := svc.Facts().WriteFact(ctx, "main", fmt.Sprintf("kb/f-%02d.md", i),
+			testFactBody(fmt.Sprintf("f %d", i), 0.9, nil), fmt.Sprintf("f %d", i), "")
+		require.NoError(t, err)
+	}
+
+	before := objectBuilds.Load()
+	gitOut(t, work, "pull", "-q", "--ff-only")
+	builds := objectBuilds.Load() - before
+
+	require.FileExists(t, filepath.Join(work, "kb/f-99.md"), "the pull must still deliver everything")
+	require.Equal(t, int64(1), builds,
+		"one incremental pull must build the object set exactly once, not once per negotiation round")
+}
+
+// The same guarantee for the shape that has no haves at all: a fresh clone is
+// one round, so it is one build.
+func TestGitHandler_FullCloneBuildsTheObjectSetOnce(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	_, srv := servedStore(t, 20)
+	before := objectBuilds.Load()
+	gitOut(t, "", "clone", "-q", srv.URL, t.TempDir())
+	require.Equal(t, int64(1), objectBuilds.Load()-before)
+}
+
 // uploadPackRaw POSTs a hand-built upload-pack request. A real git client
 // refuses an unadvertised want BEFORE sending anything (there is no
 // client-side override; uploadpack.allowAnySHA1InWant is a server setting),
