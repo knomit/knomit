@@ -1,6 +1,8 @@
 package web
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -136,9 +138,84 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 				DeadAfterS: int64(p.DeadAfter.Seconds()), HiddenAfterS: int64(p.HiddenAfter.Seconds()),
 				RetentionS: int64(p.Retention.Seconds()), LiveWindowS: int64(p.LiveWindow().Seconds()),
 			},
-			Links:    hal.LinkMap{"self": {Href: selfWithQuery(b.Sessions(), r)}},
+			Links: hal.LinkMap{
+				"self": {Href: selfWithQuery(b.Sessions(), r)},
+				// The change stream for this collection. A client that follows
+				// it re-reads THIS url; the stream itself carries no rows.
+				"events": {Href: b.Sessions() + "/events"},
+			},
 			Embedded: map[string][]clientSessionView{"sessions": items},
 		})
+	}
+}
+
+// handleHALClientSessionEvents serves GET /api/v1/sessions/events — an SSE
+// stream of "row X changed" pings, so the Sessions page and the Manage badge
+// stop waiting for their next 30s poll to show a session that has already
+// arrived.
+//
+// This stream is between the BROWSER and the server. It is NOT the held
+// stream that kb/decisions/mcp/client-sessions/liveness-last-seen rejects:
+// that decision is about the MCP client (bridge or direct HTTP caller), which
+// still holds nothing open, and presence is still derived from last_seen_at
+// at read time. Nothing here makes presence exact; it makes the UI's copy of
+// it prompt.
+//
+// The payload is an id and a kind, nothing else, so a consumer cannot render
+// from it and must re-read the list — which is the endpoint that applies the
+// ReadOnly redaction. That is what makes this stream safe to serve in
+// read-only mode.
+func handleHALClientSessionEvents(store *sessions.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Client sessions unavailable",
+				"the client session registry is not open on this server", r.URL.Path)
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Subscribe BEFORE announcing ready: a change published between the
+		// two would otherwise fall in the gap that `ready` exists to close.
+		events := store.Subscribe(r.Context())
+
+		// One `ready` per connection. The client re-reads the list on it,
+		// because a reconnect's gap may have dropped changes — the same
+		// reason the branch stream replays its snapshot on connect.
+		fmt.Fprint(w, "event: ready\ndata: {}\n\n")
+		flusher.Flush()
+
+		keepalive := time.NewTicker(30 * time.Second)
+		defer keepalive.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case e, ok := <-events:
+				if !ok {
+					return
+				}
+				c, ok := e.(sessions.Change)
+				if !ok {
+					continue
+				}
+				data, err := json.Marshal(c)
+				if err != nil {
+					continue
+				}
+				fmt.Fprintf(w, "event: session\ndata: %s\n\n", data)
+				flusher.Flush()
+			case <-keepalive.C:
+				fmt.Fprint(w, ": keepalive\n\n")
+				flusher.Flush()
+			}
+		}
 	}
 }
 

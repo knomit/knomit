@@ -12,6 +12,7 @@ import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } fr
 import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
+import { useClientSessionChanges } from './useClientSessionChanges';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
@@ -117,10 +118,14 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     return () => { onBusyChange?.(false); };
   }, [connectBusy, onBusyChange]);
 
-  // Live-session count for the Sessions tab. Read ONCE when Manage opens and
-  // again on window focus — the header runs no polling loop of its own. While
-  // the Sessions page is open it piggybacks on that page's poll instead
-  // (onLiveCount below), so the two never both poll. null means "not known"
+  // Live-session count for the Sessions tab AND for the Overview line, which
+  // takes it as a prop rather than fetching its own — one reader of this
+  // number per tab.
+  //
+  // Read when Manage opens, on window focus, and whenever the server pushes a
+  // change (the subscription below). While the Sessions page is open it
+  // piggybacks on that page instead (onLiveCount below), so exactly one
+  // sessions stream exists per tab in Manage mode. null means "not known"
   // (never arrived, or the call failed) and renders no badge.
   //
   // Declared up here with the other hooks, NOT beside the tab strip it feeds:
@@ -134,21 +139,26 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // zero-repo screen is the create form, which should not be making calls
   // about a server the reader has not populated yet.
   const wantLiveCount = repos.length > 0;
+  const readLiveCount = useCallback(() => {
+    api.listClientSessions()
+      .then(r => setLiveSessions(r.sessions.filter(s => s.state === 'live').length))
+      .catch(() => setLiveSessions(null));
+  }, []);
   useEffect(() => {
     if (!wantLiveCount) return;
     let cancelled = false;
-    const read = () => {
-      api.listClientSessions()
-        .then(r => { if (!cancelled) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
-        .catch(() => { if (!cancelled) setLiveSessions(null); });
-    };
+    const read = () => { if (!cancelled) readLiveCount(); };
     read();
     // Skipped while the Sessions page is mounted: it refreshes on focus too,
     // and reports its own count back.
     const onFocus = () => { if (!sessionsOpen) read(); };
     window.addEventListener('focus', onFocus);
     return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
-  }, [sessionsOpen, wantLiveCount]);
+  }, [sessionsOpen, wantLiveCount, readLiveCount]);
+  // Live, but only while this header is the one that owns the number: the
+  // Sessions page subscribes for itself and reports back through onLiveCount,
+  // and two streams for one badge would be one too many.
+  useClientSessionChanges(wantLiveCount && !sessionsOpen, readLiveCount);
 
   if (!open) return null;
 
@@ -341,6 +351,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onNewRepo={() => setSel({ kind: 'new' })}
                 onNewLens={() => setSel({ kind: 'newLens' })}
                 onSelectSessions={() => setSel({ kind: 'sessions' })}
+                liveSessions={liveSessions}
               />
             )}
             {view.kind === 'sessions' && <ManageSessions onLiveCount={setLiveSessions} />}

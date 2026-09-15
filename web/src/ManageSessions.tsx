@@ -2,13 +2,21 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import type { ClientSession, ClientSessionPolicy } from './api';
 import { card, cardLabel } from './manageStyles';
+import { useClientSessionChanges } from './useClientSessionChanges';
 
 // ManageSessions lists every MCP client session the server has seen.
-// Presence is LAST-SEEN based — the server records each request's time and
-// derives live/idle/dead at read time; nothing here is a live connection, and
-// nothing on this page holds one open. The page polls: the data's granularity
-// is minutes, so 30s is already finer than what it shows. No SSE by design
-// (kb/decisions/mcp/client-sessions/liveness-last-seen).
+//
+// Presence is LAST-SEEN derived — the server records each request's time and
+// computes live/idle/dead at read time. No MCP client holds a connection open
+// for presence, and kb/decisions/mcp/client-sessions/liveness-last-seen says
+// it must stay that way. That decision is about the MCP client; it says
+// nothing about the BROWSER, and this page does subscribe to a server-pushed
+// change stream, because a session that has already arrived should not wait
+// up to 30s to appear. The stream carries "row X changed" and nothing else:
+// every render still comes from the list endpoint.
+//
+// The 30s poll stays. It is the clock — the ages in the table advance with no
+// events at all — and it is the fallback while the stream is down.
 
 const POLL_MS = 30_000;
 
@@ -54,6 +62,10 @@ export function ManageSessions({ binding, onLiveCount }: {
       // cascade a render on every mount.
       .finally(() => setNow(new Date()));
   }, [binding, showHidden, onLiveCount]);
+
+  // Live: the server pings when a row changes, and the hook throttles the
+  // resulting re-reads.
+  useClientSessionChanges(true, load);
 
   useEffect(() => {
     load();

@@ -604,6 +604,35 @@ export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => vo
   for (const ev of parseSSELines(buf)) onEvent?.(ev);
 }
 
+// subscribeClientSessions opens the client-session change stream and calls
+// onChange every time the server says the list may have changed.
+//
+// The event PAYLOAD is deliberately ignored. The stream carries only an id
+// and a kind; the list endpoint is what carries the rows, the policy and the
+// read-only redaction, so the only correct reaction to any event here is to
+// re-read the list.
+//
+// `ready` counts as a change for the same reason: the first one arrives on a
+// fresh connection, and every later one is a RECONNECT whose gap may have
+// dropped events. Unlike streamTest/streamPreview this does NOT close on
+// error — an EventSource reconnects by itself, and that reconnect is exactly
+// what produces the next `ready`.
+//
+// Callers are responsible for coalescing: every MCP request from every
+// connected client produces an event, so a caller that re-reads on each one
+// would hammer the list endpoint. See useClientSessionChanges.
+export function subscribeClientSessions(onChange: () => void): () => void {
+  const es = new EventSource(apiUrl('/api/v1/sessions/events'));
+  const fire = () => onChange();
+  es.addEventListener('ready', fire);
+  es.addEventListener('session', fire);
+  return () => {
+    es.removeEventListener('ready', fire);
+    es.removeEventListener('session', fire);
+    es.close();
+  };
+}
+
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {
   return fetch(`${repoBase(repo)}/origin-sessions`, {
     method: 'POST',

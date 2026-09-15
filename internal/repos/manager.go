@@ -705,7 +705,11 @@ func (m *Manager) Start() error {
 	if policy.Retention == 0 {
 		log.Warn().Msg("client sessions: retention is 0 — rows are never purged; control.db grows one row per client session")
 	}
-	m.SetClientSessions(sessions.New(repoReg.DB(), policy))
+	// WithHub on m.ctx: the change hub broadcasts row changes to browsers
+	// subscribed to GET /api/v1/sessions/events, and its lifetime is the
+	// server's. A Store built without it still writes — that is what every
+	// test in the sessions package relies on.
+	m.SetClientSessions(sessions.New(repoReg.DB(), policy).WithHub(m.ctx))
 
 	records, err := repoReg.List(StateActive)
 	if err != nil {

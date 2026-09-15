@@ -1510,6 +1510,44 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /sessions/events:
+    get:
+      tags: [sessions]
+      summary: Server-Sent Events stream of client-session changes
+      description: |
+        Notifies a connected UI that the `/sessions` collection has changed, so
+        it can re-read instead of waiting for its next poll.
+
+        The stream carries NO session detail — only `{"id": "...", "kind":
+        "..."}` — and a consumer is expected to re-read `/sessions`, which is
+        the endpoint that applies the read-only redaction and carries the
+        policy. This is why the stream is served unredacted on a read-only
+        instance: there is nothing on it to redact.
+
+        Events:
+          * `ready` — sent once, immediately on connect, with `data: {}`. A
+            `ready` after the first is a reconnect: changes may have been
+            missed while disconnected, so re-read the list on every one.
+          * `session` — one row changed. `kind` is `touch` (a request bumped
+            the row, inserting it on first sight), `init` (the client's
+            `initialize` declared its identity), `end` (explicit termination)
+            or `purge` (retention deleted rows — `id` is then empty, because
+            no single row is meant).
+
+        A `: keepalive` comment every 30s keeps proxies from cutting an idle
+        stream. Presence itself is unaffected by this endpoint: it remains
+        derived from `last_seen_at` at read time, and no MCP client holds a
+        connection open.
+      operationId: streamClientSessionEvents
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /archived:
     get:
       tags: [archive]

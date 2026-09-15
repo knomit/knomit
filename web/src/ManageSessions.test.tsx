@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { ManageSessions } from './ManageSessions';
 import { api } from './api';
+import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
@@ -21,6 +22,7 @@ const sess = (over: Partial<import('./api').ClientSession>): import('./api').Cli
 });
 
 beforeEach(() => {
+  installFakeEventSource();
   vi.useFakeTimers({ now, shouldAdvanceTime: true }); // waitFor needs real progress
   vi.mocked(api.listClientSessions).mockResolvedValue({
     policy: POLICY,
@@ -32,9 +34,16 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  uninstallFakeEventSource();
   vi.useRealTimers();
   vi.clearAllMocks();
 });
+
+/** The page's change stream, once it exists. */
+async function stream(): Promise<FakeEventSource> {
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  return FakeEventSource.instances[0];
+}
 
 describe('ManageSessions', () => {
   it('renders one row per session with state, client, parent app, binding and relative last-seen', async () => {
@@ -76,6 +85,59 @@ describe('ManageSessions', () => {
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.getByTestId('session-policy')).toHaveTextContent('never purged');
     expect(screen.getByTestId('session-policy')).not.toHaveTextContent('kept 0 d');
+  });
+
+  it('re-reads the list when the server says a session changed', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const es = await stream();
+    expect(es.url).toContain('/api/v1/sessions/events');
+
+    await act(async () => { es.emit('session', { id: 'mcp-session-9', kind: 'touch' }); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it('collapses a burst of events into at most two reads a second', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const es = await stream();
+
+    // Three busy Claude sessions produce several events a second; the page
+    // must not turn each one into its own request.
+    await act(async () => {
+      for (let i = 0; i < 5; i++) { es.emit('session', { id: `s${i}`, kind: 'touch' }); vi.advanceTimersByTime(40); }
+    });
+    // Leading edge only so far: the trailing read is still pending.
+    expect(api.listClientSessions).toHaveBeenCalledTimes(2);
+
+    // ...and it is guaranteed, so the last event in a burst is never lost.
+    await act(async () => { vi.advanceTimersByTime(1_000); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(3);
+  });
+
+  it('re-reads on every ready, because a reconnect may have dropped events', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const es = await stream();
+
+    // The first ready lands on a list the page has just read, so the throttle
+    // is what keeps it from being a second identical request.
+    await act(async () => { es.emit('ready', {}); });
+    await act(async () => { vi.advanceTimersByTime(1_000); });
+    const afterFirst = vi.mocked(api.listClientSessions).mock.calls.length;
+
+    // A later ready is a RECONNECT: the gap may have dropped changes, so the
+    // list must be re-read rather than trusted.
+    await act(async () => { es.emit('ready', {}); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(afterFirst + 1);
+  });
+
+  it('closes the stream on unmount', async () => {
+    const { unmount } = render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const es = await stream();
+    unmount();
+    expect(es.closeCount).toBe(1);
   });
 
   it('keeps ages moving while an error banner is up', async () => {

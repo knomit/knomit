@@ -92,7 +92,7 @@ function attentionFor(rows: FleetRow[]): Attention[] {
   return out.sort((a, b) => Number(a.kind === 'no-remote') - Number(b.kind === 'no-remote'));
 }
 
-export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions }: {
+export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions, liveSessions }: {
   repos: RepoInfo[];
   lenses: Lens[];
   archivedCount: number;
@@ -110,6 +110,11 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
   /** Opens the Sessions pane. Optional so the component still renders in
    *  tests and callers that have no Manage rail to switch. */
   onSelectSessions?: () => void;
+  /** Live MCP client count, owned by RepoManager — which already reads it for
+   *  the Sessions tab badge and keeps it current from the change stream.
+   *  null means "not known" (never arrived, or the call failed), and the line
+   *  is then absent rather than showing a zero it cannot vouch for. */
+  liveSessions: number | null;
 }) {
   // Only what has ARRIVED lives in state, keyed by repo. The rows the table
   // renders are derived below — seeding placeholders into state from the effect
@@ -117,19 +122,11 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
   // placeholder is a pure function of `repos` anyway.
   const [loaded, setLoaded] = useState<Record<string, FleetRow>>({});
 
-  // Live MCP client count — one line, one number. Fetched ONCE on mount: the
-  // Sessions pane owns the polling, and an overview that re-fetched would be
-  // a second poller for a number that is already a link to the real one.
-  // null means "not known" (never arrived, or the call failed), and the line
-  // is then absent rather than showing a zero it cannot vouch for.
-  const [liveSessions, setLiveSessions] = useState<number | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    api.listClientSessions()
-      .then(r => { if (!cancelled) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
-      .catch(() => { if (!cancelled) setLiveSessions(null); });
-    return () => { cancelled = true; };
-  }, []);
+  // Live MCP client count — one line, one number, and it arrives as a PROP.
+  // Overview used to fetch it here on mount and never again, which is exactly
+  // how the line went stale. The header above already owns this number and
+  // keeps it current, so the fix removes a reader rather than adding a second
+  // subscriber.
 
   // The fan-out. Every OTHER screen reads one repo's config — the active one —
   // which is why "which of my repositories is broken" has had no answer until

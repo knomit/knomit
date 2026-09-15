@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
+import { FakeEventSource } from './testEventSource';
 
 // @testing-library/react v16's auto-registered afterEach(cleanup) only runs
 // when `afterEach` is a global function. This project's vitest config does
@@ -29,3 +30,11 @@ globalThis.IntersectionObserver = MockIntersectionObserver as unknown as typeof 
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = function () {};
 }
+
+// jsdom does not implement EventSource. Components that subscribe to a server
+// stream on mount (ManageSessions, RepoManager's session badge, App's branch
+// events) would throw on construction otherwise — in EVERY test that renders
+// them, not just the ones about streaming. Installed globally for the same
+// reason as IntersectionObserver above; a test that wants to drive events
+// imports FakeEventSource and reads its recorded instances.
+globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;

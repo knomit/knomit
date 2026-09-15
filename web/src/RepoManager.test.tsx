@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
 import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
+import { FakeEventSource, installFakeEventSource } from './testEventSource';
 
 // `api` and the origin-session streams are stubbed; the module's other exports
 // — the description byte caps — pass through from the real module, so a test
@@ -1586,6 +1587,38 @@ describe('Manage tabs', () => {
     expect(overview).not.toHaveStyle({ background: ACTIVE });
     expect(sessions).not.toHaveStyle({ background: ACTIVE });
     expect(screen.getByTestId('repomgr-item-core')).toHaveStyle({ background: ACTIVE });
+  });
+
+  it('updates the badge live while Manage is open on Overview', async () => {
+    installFakeEventSource();
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    render(<RepoManager {...baseProps} />);
+    expect(await screen.findByTestId('repomgr-sessions-badge')).toHaveTextContent('1');
+
+    // A second session initializes. Without the stream this badge would not
+    // move until the next window focus — the bug this fixes.
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => { FakeEventSource.instances[0].emit('session', { id: 's2', kind: 'init' }); });
+
+    await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
+  });
+
+  it('opens exactly one sessions stream per tab: the page owns it while it is up', async () => {
+    installFakeEventSource();
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions-badge');
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const headerStream = FakeEventSource.instances[0];
+
+    // Opening Sessions hands the stream over: the page reports its count back
+    // through onLiveCount, so a second stream would be two subscribers
+    // feeding one number.
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await waitFor(() => expect(headerStream.closeCount).toBe(1));
+    expect(FakeEventSource.instances.filter(es => es.closeCount === 0)).toHaveLength(1);
   });
 
   it('renders no badge at zero, and none when the count cannot be read', async () => {
