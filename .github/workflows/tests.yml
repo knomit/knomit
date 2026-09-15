@@ -27,6 +27,19 @@ name: Tests
 on:
   workflow_call:
 
+# THE SPLIT POINT, DEFINED ONCE. internal/synthesize is the long pole — 421s on
+# ubuntu-latest against 33s for the next-slowest package — so it runs as its own
+# job, in parallel with everything else, instead of making every other package
+# wait behind it.
+#
+# Both jobs read this same variable: build-test runs `go list ./...` MINUS this
+# package, the synthesize job runs exactly this package. That is what keeps the
+# two halves an exact partition of ./... — a coverage split that named its
+# packages in two places would drift apart silently, which is the failure this
+# workflow was just repaired for.
+env:
+  SPLIT_PKG: knomit/internal/synthesize
+
 jobs:
   build-test:
     strategy:
@@ -35,6 +48,10 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # Shallow checkout, deliberately. This job briefly carried fetch-depth: 0
+      # because ./... included the diff-based conformance test; that test moved
+      # to the synthesize job below, and the full history moved with it rather
+      # than being left behind as cargo.
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
@@ -60,24 +77,47 @@ jobs:
       - name: Build (CGo) — proves libtokenizers.a links + cloud is Wails-free
         run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...)
 
-      - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
-
-      # Guard: the test harness (test/testenv, test/storytests) must
-      # never be linked into a shipped binary. Pure `go list` graph check, no
-      # native libs / no compile.
-      - name: Test-harness isolation guard
-        run: go test ./test/archtest/
-
-      # Store needs the runtime native libs; internal/web links them transitively
-      # (it constructs a store in tests) and the desktop helper packages
-      # (lockfile/netutil/paths/autostart/singleinstance) are plain Go but run
-      # here too so the build-test job actually exercises them. The desktop
-      # `//go:build desktop` packages are covered by the `desktop` job below.
-      - name: Store, web + desktop-helper tests (runtime native libs)
+      # EVERY test-bearing package EXCEPT the one the synthesize job owns.
+      # Together the two jobs are an exact partition of ./... — this one runs
+      # `go list ./...` minus $SPLIT_PKG, that one runs exactly $SPLIT_PKG, and
+      # neither side carries a hand-written package list. That matters: the
+      # named 17-package list this step used to have covered 17 of the repo's 49
+      # test-bearing packages, so a green CI said nothing about
+      # internal/synthesize, internal/mcp, internal/repos, internal/refs, cmd or
+      # any of tools/ — and two real bugs (a teardown flake and a data race in
+      # internal/repos) sat on dev undetected because the only job that could
+      # see those packages was race.yml, which is post-merge and non-blocking.
+      # A list goes stale in silence; a derived set does not.
+      #
+      # `go list ./...` rather than the ./... wildcard because a package has to
+      # be REMOVED from the set. The two are not interchangeable for an explicit
+      # argument list — `go test ./tools/desktop` is a hard error ("build
+      # constraints exclude all Go files") for a package whose files are all
+      # behind //go:build desktop, where the wildcard skips it silently. go list
+      # applies the same constraints and never emits such a package, so the list
+      # it produces is safe to pass explicitly. Verified on both, not assumed.
+      #
+      # The guard below is the load-bearing part. If $SPLIT_PKG is ever renamed
+      # or moved, `grep -vx` quietly excludes nothing and the package runs in
+      # both jobs (waste), while the synthesize job fails outright — but a
+      # LOOSER pattern would quietly exclude MORE than one package and nothing
+      # would fail at all. That silent omission is the exact class of gap this
+      # workflow was repaired for, so the count is asserted rather than trusted.
+      # set -o pipefail matters for the same reason: a failed `go list` must not
+      # collapse into an empty list that tests nothing and exits 0.
+      # (step names are not env-interpolated by Actions, so the long pole is
+      # named in prose here and identified only by $SPLIT_PKG in the command.)
+      - name: Tests — every package except the long pole
         run: |
+          set -euo pipefail
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test ./internal/store/... ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
+          all=$(go list ./...)
+          n=$(printf '%s\n' "$all" | grep -cx "$SPLIT_PKG" || true)
+          if [ "$n" -ne 1 ]; then
+            echo "::error::$SPLIT_PKG must name exactly one package in ./..., found $n — the build-test/synthesize split is no longer a partition of the tree" >&2
+            exit 1
+          fi
+          CGO_ENABLED=1 go test $(printf '%s\n' "$all" | grep -vx "$SPLIT_PKG")
 
       # Origin-sync fault matrix: build-tagged contract cells drive the real
       # product clone/sync/push path over an in-process fault-injecting git
@@ -89,6 +129,91 @@ jobs:
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
           CGO_ENABLED=1 go test -tags contract ./test/storytests/ -count=1 -timeout 300s
+
+  # internal/synthesize on its own runner, in parallel with build-test.
+  #
+  # WHY IT IS SPLIT OUT, measured: inside a single ./... step the package times
+  # SUM to 600s on ubuntu but the step takes 441s, because `go test` already
+  # runs packages concurrently. synthesize alone is 421s of that — the other 47
+  # packages finish beside it and add ~20s. So synthesize was not merely the
+  # slowest package, it WAS the step, and everything serially after it in
+  # build-test (the 82s CGo build and the 59s contract cells on macOS) was
+  # queued behind work it did not depend on.
+  #
+  # WHAT THE SPLIT BUYS, and what it does not: it takes ~141s off the PR's
+  # critical path (~10m0s to ~7.7m). It cannot do better, because synthesize
+  # plus its own setup IS the critical path now — you cannot parallelise the
+  # long pole with itself. Going below ~7.7m means making synthesize's own
+  # suite faster, not moving it around. Duplicating the setup is cheap enough
+  # not to eat the gain: `make setup` measures 3-5s, not the minutes its
+  # payload size suggests.
+  #
+  # Both OSes, deliberately. Dropping this to one runner would halve the job's
+  # cost and reduce coverage on the other platform — build-test's set plus this
+  # job's set has to remain ./... on EVERY runner in the matrix, or the split
+  # reintroduces exactly the silent gap it was built alongside.
+  synthesize:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # fetch-depth: 0 lives HERE, with the test that needs it.
+      # TestConformance_BridgeFilesUntouched diffs the working tree against its
+      # merge base with dev, and its baseRefOrSkip helper skips when no base ref
+      # RESOLVES — which is not the same as "no diff". MEASURED: a default
+      # depth-1 pull_request checkout fetches only refs/pull/N/merge, so that
+      # tree's entire ref list is that one entry, no dev and no master, and the
+      # test SKIPS ITSELF while announcing it "is NOT being enforced". Full
+      # history is what makes origin/dev resolve and the check actually run.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Resolve native lib dir
+        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+
+      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
+        run: make setup
+
+      # -timeout 20m IS MEASURED ON THE RUNNERS, and the local figure is a
+      # FLOOR rather than a forecast: this package is 160s on an Apple-Silicon
+      # dev machine but 385s then 421s on ubuntu-latest across two runs, and
+      # 331s then 387s on macos — the runners are ~2.4x slower AND vary by
+      # ~10-17% run to run. Sizing a ceiling from one sample of a noisy
+      # quantity is the same error as sizing it from the wrong machine: the
+      # observed peak of 421s sits at only 1.42x under go test's 600s
+      # PER-PACKAGE default, so a single unlucky run panics with `test timed
+      # out after 10m0s` — a red that looks like a bug in the code under review
+      # and is not. 20m is ~3.1x the measured peak, the same discipline
+      # race.yml applies (its 30m is ~2.4x the 744s this package takes under
+      # -race). RE-MEASURE before moving it.
+      #
+      # -skip ON PUSH ONLY. The conformance test asserts a NON-EMPTY diff so it
+      # cannot pass vacuously. On a push to dev/master the checkout IS that
+      # branch (actions/checkout runs `-B dev refs/remotes/origin/dev`), the
+      # merge base is HEAD, the diff is empty by construction, and it fails for
+      # a reason that has nothing to do with the commit. On a pull_request it
+      # is exactly where the check means something, so it runs.
+      # `github.event_name` in a called workflow is the CALLER's event — the
+      # property embed-smoke below also depends on — so a release tag counts as
+      # a push and is skipped too, which is right: a tag is not a branch under
+      # review.
+      #
+      # $SPLIT_PKG is passed explicitly, so a rename fails this job loudly
+      # instead of leaving the package untested on both sides of the split.
+      - name: Tests — the long pole, parallel with build-test
+        env:
+          CONFORMANCE_SKIP: ${{ github.event_name == 'push' && '-skip=TestConformance_BridgeFilesUntouched' || '' }}
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test $CONFORMANCE_SKIP -timeout 20m "$SPLIT_PKG"
 
   # Build + test the Wails v3 desktop app. It lives behind `//go:build desktop`
   # and links the OS-native webview toolkit (Cocoa/WebKit on macOS), so the
