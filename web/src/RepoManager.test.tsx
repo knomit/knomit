@@ -1737,6 +1737,29 @@ describe('Manage tabs', () => {
     expect(screen.getByTestId('repomgr-archived')).toBeInTheDocument();
   });
 
+  it('opens the Logs page full width, with no rail', async () => {
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-logs'));
+    expect(await screen.findByTestId('manage-logs')).toBeInTheDocument();
+
+    // A server page, so the same rule Sessions established applies.
+    expect(screen.getByTestId('repomgr-logs')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('repomgr-item-core')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repomgr-archived')).not.toBeInTheDocument();
+    // The strip stays, and Sessions is still reachable from it.
+    expect(screen.getByTestId('repomgr-sessions')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-overview')).toBeInTheDocument();
+  });
+
+  // The read-only demo refuses the log with a 403, so a Logs tab there would be
+  // a control that cannot work — worse than an absent one, the same rule the
+  // rail follows.
+  it('renders no Logs tab at all on a read-only instance', async () => {
+    render(<RepoManager {...baseProps} readOnly />);
+    await screen.findByTestId('repomgr-sessions');
+    expect(screen.queryByTestId('repomgr-logs')).not.toBeInTheDocument();
+  });
+
   it('renders no badge at zero, and none when the count cannot be read', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('dead')] });
     const { unmount } = render(<RepoManager {...baseProps} />);

@@ -12,6 +12,7 @@ import (
 	"knomit/internal/client/sessions"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
+	"knomit/internal/platform/logging"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -32,6 +33,13 @@ type Server struct {
 	ClientSessions *sessions.Store
 	LLMAdapter     llm.LLMAdapter      // nil if no LLM configured
 	Embedder       store.BatchEmbedder // nil if unavailable
+
+	// Logs is the in-process log tap that GET /api/v1/logs/events streams
+	// from: a bounded ring of recent lines plus a live fan-out. Set by
+	// internal/app from the tap each binary wires into its logging chain, and
+	// nil for a server built without one — the endpoint then answers 503,
+	// exactly as the sessions endpoints do without their store.
+	Logs *logging.Tap
 
 	// ReadOnly runs the instance as a read-only demo: /git is not mounted,
 	// MCP exposes only read tools, and the API router rejects mutations.

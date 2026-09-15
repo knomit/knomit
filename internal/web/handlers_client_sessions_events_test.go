@@ -24,6 +24,9 @@ type streamRecorder struct {
 	flushed chan struct{}
 	// writeErr, when set, fails every Write — a client whose socket is gone.
 	writeErr error
+	// gate, when non-nil, holds Write until unblock closes it — a client that
+	// has stopped reading. Used to make a handler fall behind on purpose.
+	gate chan struct{}
 	// deadlines counts SetWriteDeadline calls. httptest.ResponseRecorder does
 	// not implement it, so without the method below the handler's deadline
 	// path would report ErrNotSupported in every test and never be exercised.
@@ -52,12 +55,40 @@ func newStreamRecorder() *streamRecorder {
 }
 
 func (s *streamRecorder) Write(b []byte) (int, error) {
+	// Read the gate and RELEASE the lock before waiting on it: body() takes
+	// the same lock, and a test that blocked writes still has to be able to
+	// read what was written before the block.
+	s.mu.Lock()
+	gate := s.gate
+	s.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.writeErr != nil {
 		return 0, s.writeErr
 	}
 	return s.ResponseRecorder.Write(b)
+}
+
+// block makes every subsequent Write wait, simulating a client that has
+// stopped reading its socket.
+func (s *streamRecorder) block() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.gate = make(chan struct{})
+}
+
+// unblock releases a block, letting the handler catch up.
+func (s *streamRecorder) unblock() {
+	s.mu.Lock()
+	gate := s.gate
+	s.gate = nil
+	s.mu.Unlock()
+	if gate != nil {
+		close(gate)
+	}
 }
 
 func (s *streamRecorder) Flush() {

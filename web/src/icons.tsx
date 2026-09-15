@@ -199,6 +199,17 @@ export const BroadcastIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// ScrollIcon marks the Manage Logs tab: ruled lines of output, deliberately
+// uneven so it reads as text rather than as a list or a table.
+export const ScrollIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="4" width="18" height="16" rx="2"/>
+    <path d="M7 9h6"/>
+    <path d="M7 13h10"/>
+    <path d="M7 16h4"/>
+  </svg>
+);
+
 // ---------- Fact type icons ----------
 
 export const ObservationIcon = ({ color, size = 14 }: IconProps) => (

@@ -1548,6 +1548,53 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /logs/events:
+    get:
+      tags: [logs]
+      summary: Server-Sent Events stream of the server log
+      description: |
+        The running server's log, as a stream: the retained backlog followed by
+        each new line. This is a tap on the LIVE process, not the log file — a
+        browser can only ever show a running server, and a bare `knomit serve`
+        may have no file sink at all.
+
+        Lines carry the human-readable file format,
+        `<RFC3339 timestamp> <LVL> <message>`, which is a contract rather than
+        an accident: the viewer parses the level as the second whitespace token,
+        so a timestamp containing a space would silently disable its level
+        filter.
+
+        Events:
+          * `line` — one log line, as `{"line": "..."}`. The payload is JSON so
+            that a log line containing a newline cannot forge a frame.
+          * `ready` — the backlog is complete: `{"retained": N, "max": M}`,
+            where N lines were replayed and M is the ring's capacity.
+          * `dropped` — `{"count": K}`: K lines were discarded because THIS
+            subscriber was not reading fast enough. Per-subscriber delivery is
+            bounded, so a stalled client costs the server a fixed amount of
+            memory rather than an unbounded one — and the gap is reported
+            rather than silently closed over.
+
+        A `: keepalive` comment every 30s keeps idle streams open through
+        proxies.
+      operationId: streamLogEvents
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "403":
+          description: >
+            Read-only (demo) instance. The server's own log is not part of the
+            demo, and free text has no useful redaction, so this read is
+            refused outright rather than filtered.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /archived:
     get:
       tags: [archive]

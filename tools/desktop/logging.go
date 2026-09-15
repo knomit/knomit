@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -122,6 +123,21 @@ func (s *logSink) swap(w zerolog.LevelWriter, closer io.Closer) {
 	}
 }
 
+// logTap is the Manage Logs tab's source, served by the in-process server at
+// GET /api/v1/logs/events — the same API mount the desktop reaches everything
+// else through, which is the point of the design: no Wails IPC, no second
+// port.
+//
+// Package-level and created ONCE, because applyLogConfig rebuilds the sink on
+// every Settings save and the ring has to survive those swaps. A tap created
+// per build would throw away the backlog each time the user touched Settings.
+//
+// context.Background(): the tap lives as long as the process, and its
+// subscriptions are bounded by each request's own context instead.
+//
+// 2000 lines for the reason cmd/serve.go's logTapLines gives.
+var logTap = logging.NewTap(context.Background(), 2000)
+
 // globalSink backs log.Logger for the whole process. It starts on plain stderr
 // so anything logged before bootstrapLogging runs still lands somewhere.
 var globalSink = newLogSink(zerolog.MultiLevelWriter(zerolog.ConsoleWriter{Out: os.Stderr}))
@@ -146,7 +162,10 @@ func init() {
 // Settings save, from a Wails IPC goroutine. Safe from any goroutine.
 func applyLogConfig(lc config.LogConfig, defaultFile string) error {
 	resolved := desktopLogConfig(lc, defaultFile)
-	w, closer, lvl, err := logging.BuildWriter(knomitapp.LoggingOptions(resolved), os.Stderr, os.Stderr, nil)
+	// logTap.Writer() and not logTap: a bare writer would receive zerolog's raw
+	// JSON, and the Logs viewer parses the console shape. Re-tee'd on every
+	// swap — the tap itself is package-level and outlives them.
+	w, closer, lvl, err := logging.BuildWriter(knomitapp.LoggingOptions(resolved), os.Stderr, os.Stderr, nil, logTap.Writer())
 	if err != nil {
 		return fmt.Errorf("build logger: %w", err)
 	}

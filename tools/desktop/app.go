@@ -418,6 +418,11 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string
 	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
 		APIOnly:     true,
 		CORSOrigins: wailsOrigins,
+		// The Logs tab streams from this, through the very API base
+		// configInjectingHandler injects below. Serving it from the in-process
+		// server is what keeps the log stream part of the API rather than a
+		// second, desktop-only transport.
+		LogTap: logTap,
 	})
 	if err != nil {
 		return "", nil, err

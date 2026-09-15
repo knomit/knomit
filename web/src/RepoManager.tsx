@@ -9,9 +9,10 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon, ScrollIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
+import { ManageLogs } from './ManageLogs';
 import { useClientSessionChanges } from './useClientSessionChanges';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
@@ -51,6 +52,9 @@ type Selection =
   // lens — which is why it is a server PAGE in the tab strip and why the rail
   // is absent while it is open. See isServerPage below.
   | { kind: 'sessions' }
+  // Logs is the server's own output: the same shape of page as Sessions, and
+  // the second member of isServerPage.
+  | { kind: 'logs' }
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
@@ -75,7 +79,7 @@ type Selection =
 // same repo and lens pages.
 // See kb/decisions/web/manage/rail-only-for-entity-pages.
 function isServerPage(v: Selection): boolean {
-  return v?.kind === 'sessions';
+  return v?.kind === 'sessions' || v?.kind === 'logs';
 }
 
 export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse, onBusyChange }: Props) {
@@ -271,6 +275,24 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <span data-testid="repomgr-sessions-badge" style={tabBadge}>{liveSessions}</span>
             )}
           </button>
+          {/* Absent under read-only, not disabled: the endpoint answers 403
+              there — the server's own log is not part of the public demo, and
+              free text has no useful redaction — so a tab would be a control
+              that cannot work. Same rule as the rail on a server page. */}
+          {!readOnly && (
+            <button
+              type="button"
+              role="tab"
+              data-testid="repomgr-logs"
+              aria-selected={view.kind === 'logs'}
+              onMouseDown={noMouseFocus}
+              style={tabBtn(view.kind === 'logs')}
+              disabled={connectBusy}
+              onClick={() => setSel({ kind: 'logs' })}
+            >
+              <ScrollIcon color="currentColor" size={12} /> Logs
+            </button>
+          )}
         </div>
       )}
 
@@ -414,6 +436,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               />
             )}
             {view.kind === 'sessions' && <ManageSessions onLiveCount={handleLiveCount} />}
+            {view.kind === 'logs' && <ManageLogs />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for

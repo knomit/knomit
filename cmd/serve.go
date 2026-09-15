@@ -22,6 +22,16 @@ import (
 	"knomit/internal/platform/logging"
 )
 
+// logTapLines is how many recent log lines the server keeps for the Manage
+// Logs tab to replay when a browser connects.
+//
+// 2000 is a few minutes of an ordinary server and comfortably under the
+// viewer's own 5000-line scrollback cap, so a fresh tab never receives more
+// backlog than it can show. It is memory the process holds for the whole run,
+// which is why it is a fixed modest number rather than a config key nobody
+// would tune.
+const logTapLines = 2000
+
 func serveCmd() *cobra.Command {
 	var (
 		portOverride  string
@@ -62,9 +72,17 @@ func serveCmd() *cobra.Command {
 				cfg.Log.MaxAgeDays = logMaxAgeDays
 			}
 
+			// The Logs tab's source. Created before the logger so every line
+			// this process writes from here on is in the ring a browser
+			// replays on connect; bounded, so it cannot grow. Its context is
+			// the command's, so subscriptions end when the server stops.
+			logTap := logging.NewTap(cmd.Context(), logTapLines)
+
 			// Reconfigure the logger from config (main set a console base);
 			// keep tee'ing through the crash ring so reports retain the log tail.
-			lg, lvl, err := logging.Build(app.LoggingOptions(cfg.Log), os.Stderr, os.Stdout, crashdump.Global)
+			// logTap.Writer() and not logTap: a bare writer here would receive
+			// zerolog's raw JSON, and the Logs viewer parses the console shape.
+			lg, lvl, err := logging.Build(app.LoggingOptions(cfg.Log), os.Stderr, os.Stdout, crashdump.Global, logTap.Writer())
 			if err != nil {
 				return fmt.Errorf("configure logging: %w", err)
 			}
@@ -111,7 +129,7 @@ func serveCmd() *cobra.Command {
 			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
 			defer stopDumps()
 
-			a, err := app.New(cmd.Context(), cfg, app.Options{})
+			a, err := app.New(cmd.Context(), cfg, app.Options{LogTap: logTap})
 			if err != nil {
 				return err
 			}
