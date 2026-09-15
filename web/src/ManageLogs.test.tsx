@@ -177,14 +177,28 @@ describe('ManageLogs', () => {
     expect(scroller.style.maxHeight).toBe('')
   })
 
-  // The card must keep the flex default min-height:auto. With minHeight:0 it is
-  // free to shrink past its own min-content height while the toolbar, the 140px
-  // scroller floor and the status line refuse to — and since the card sets no
-  // overflow, the log would draw straight through its bottom border.
-  it('lets the card floor at min-content so it always contains the log', () => {
+  // minHeight:0 on the card is what stops min-content propagating up from the
+  // log. Left at the flex default (auto), the card floors at its min-content
+  // height — which includes the scroller's WHOLE content, because the
+  // scroller's own minHeight:0 is a floor and not a ceiling — and the card
+  // grows to fit the entire scrollback: measured at 1570px inside a 1056px
+  // pane, with the status line pushed off screen. That is the runaway the old
+  // 58vh cap existed to prevent, so this assertion is load-bearing.
+  it('pins the card to the pane instead of to the log it contains', () => {
     render(<ManageLogs />)
     const card = screen.getByTestId('manage-logs').firstElementChild as HTMLDivElement
     expect(card.style.flex).toBe('1 1 0%')
-    expect(card.style.minHeight).toBe('')
+    expect(card.style.minHeight).toBe('0px')
+  })
+
+  // The card shrinking freely is what then needs containing at the small end.
+  // The floor lives on the ROOT: below it the root outgrows the pane and
+  // detailCol scrolls, rather than the card shrinking while the toolbar, the
+  // scroller floor and the status line refuse to and draw through its border.
+  it('floors the page so a short window scrolls the pane, not through the card', () => {
+    render(<ManageLogs />)
+    const root = screen.getByTestId('manage-logs')
+    expect(root.style.height).toBe('100%')
+    expect(parseInt(root.style.minHeight, 10)).toBeGreaterThan(200)
   })
 })
