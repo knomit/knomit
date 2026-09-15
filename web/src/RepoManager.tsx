@@ -160,9 +160,12 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   }, []);
   useEffect(() => {
     if (!wantLiveCount) return;
-    readLiveCount();
-    // Skipped while the Sessions page is mounted: it refreshes on focus too,
-    // and reports its own count back.
+    // Not while the Sessions page owns the number. The page reports its count
+    // back through onLiveCount, so a read here would be a second request for
+    // something already on its way — which is exactly what made opening
+    // Sessions cost two list reads instead of one.
+    if (!sessionsOpen) readLiveCount();
+    // Skipped while the Sessions page is mounted, for the same reason.
     const onFocus = () => { if (!sessionsOpen) readLiveCount(); };
     window.addEventListener('focus', onFocus);
     return () => {
@@ -176,6 +179,19 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // Sessions page subscribes for itself and reports back through onLiveCount,
   // and two streams for one badge would be one too many.
   useClientSessionChanges(wantLiveCount && !sessionsOpen, readLiveCount);
+  // STABLE identity, and that is the whole requirement. ManageSessions keeps
+  // onLiveCount in its load callback's deps and runs its poll effect on that
+  // callback, so an inline arrow here — a new function every render — re-runs
+  // the page's effect and buys an extra list read each time RepoManager
+  // renders. Opening Sessions cost two reads instead of one until this was a
+  // useCallback.
+  const handleLiveCount = useCallback((n: number | null) => {
+    // The page's count supersedes anything the header has in flight, so it
+    // takes a generation too — otherwise a read dispatched before the page
+    // opened could still land on top of it.
+    liveCountGen.current += 1;
+    setLiveSessions(n);
+  }, []);
 
   if (!open) return null;
 
@@ -371,10 +387,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 liveSessions={liveSessions}
               />
             )}
-            {/* The page's count supersedes anything the header has in flight,
-                so it takes a generation too — otherwise a read dispatched
-                before the page opened could still land on top of it. */}
-            {view.kind === 'sessions' && <ManageSessions onLiveCount={n => { liveCountGen.current += 1; setLiveSessions(n); }} />}
+            {view.kind === 'sessions' && <ManageSessions onLiveCount={handleLiveCount} />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for

@@ -1665,6 +1665,38 @@ describe('Manage tabs', () => {
     expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2');
   });
 
+  // Opening Sessions must cost exactly ONE list read: the page's own first
+  // load. The header stops reading (the page reports its count back through
+  // onLiveCount), so a second read means something re-ran that should not have.
+  //
+  // Asserted across the TRANSITION rather than on a standalone ManageSessions
+  // mount, because that is the only place the fault can appear: ManageSessions
+  // keeps onLiveCount in load's useCallback deps and runs its poll effect on
+  // [load], so an onLiveCount whose identity changes per render re-runs the
+  // effect and issues an extra read. A standalone render with a stable prop
+  // passes either way.
+  it('opening Sessions costs exactly one list read', async () => {
+    installFakeEventSource();
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    const { rerender } = render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions-badge');
+    const before = vi.mocked(api.listClientSessions).mock.calls.length;
+
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await act(async () => { await Promise.resolve(); });
+    expect(vi.mocked(api.listClientSessions).mock.calls.length - before).toBe(1);
+
+    // And a RepoManager re-render — which the page itself causes every time it
+    // reports a changed count — must cost nothing. This is the half an inline
+    // arrow fails: a new callback identity per render reaches the page's
+    // effect deps and re-runs its poll.
+    const afterOpen = vi.mocked(api.listClientSessions).mock.calls.length;
+    rerender(<RepoManager {...baseProps} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(vi.mocked(api.listClientSessions).mock.calls.length).toBe(afterOpen);
+  });
+
   it('renders no badge at zero, and none when the count cannot be read', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('dead')] });
     const { unmount } = render(<RepoManager {...baseProps} />);
