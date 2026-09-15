@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"knomit/internal/platform/logging"
 	"knomit/internal/repos"
 )
 
@@ -244,4 +246,98 @@ func TestBeginSSE_LatchesDeadAndStopsWriting(t *testing.T) {
 	if deadlinesAfter != deadlines+1 {
 		t.Errorf("deadline calls went %d → %d; after latching there should be none", deadlines, deadlinesAfter)
 	}
+}
+
+// Headers that keep a stream a STREAM across an intermediary.
+//
+// The bug: knomit is often reached through a proxy — the maintainer's setup is
+// Tailscale → code-server → its /proxy/<port>/ path proxy → knomit. code-server
+// wraps proxied responses in Express `compression`, which treats
+// text/event-stream as compressible, so with a browser's Accept-Encoding the
+// whole stream sits in the compressor's buffer: measured at 10 bytes delivered
+// in 20s (the gzip header) where curl without Accept-Encoding got 39 frames in
+// 6s. Every stream is affected; Sessions merely hid it behind its 30s poll,
+// and Logs, which has no poll, showed "Waiting for log output…" forever.
+//
+// `no-transform` is the standard way to say so (RFC 9111 §5.2.2.6) and is what
+// compression's shouldTransform checks; X-Accel-Buffering: no is the
+// nginx-family equivalent for proxies that buffer without compressing.
+func TestSSE_HeadersSurviveACompressingProxy(t *testing.T) {
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+
+	tapCtx, tapCancel := context.WithCancel(context.Background())
+	defer tapCancel()
+
+	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
+	hub := repos.NewTaskHub(context.Background())
+	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "beta", Hub: hub}))
+
+	s := &Server{
+		Manager:        m,
+		ClientSessions: newClientSessionsStore(t).WithHub(hubCtx),
+		Logs:           logging.NewTap(tapCtx, 10),
+	}
+	r := s.NewAPIRouter()
+
+	for _, path := range []string{
+		"/sessions/events",
+		"/logs/events",
+		"/repos/beta/branches/agent:test/events",
+	} {
+		t.Run(path, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			rec := newStreamRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx))
+			}()
+			rec.waitFor(t, "the first frame", func(b string) bool { return strings.Contains(b, "event: ") })
+
+			// no-transform must sit in a form the RFC regex actually matches:
+			// at a comma boundary, not glued onto another token.
+			if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-transform") {
+				t.Errorf("Cache-Control = %q, want it to carry no-transform — a compressing proxy will buffer this stream", got)
+			}
+			if got := rec.Header().Get("Cache-Control"); !strings.Contains(got, "no-cache") {
+				t.Errorf("Cache-Control = %q, lost no-cache", got)
+			}
+			if got := rec.Header().Get("X-Accel-Buffering"); got != "no" {
+				t.Errorf("X-Accel-Buffering = %q, want \"no\" — a buffering proxy will hold this stream", got)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+				t.Errorf("Content-Type = %q", got)
+			}
+			cancel()
+			<-done
+		})
+	}
+}
+
+// The header value has to satisfy compression's actual test, not merely
+// contain the word: its regex anchors no-transform to a comma boundary
+// (/(?:^|,)\s*?no-transform\s*?(?:,|$)/), so "no-cache,no-transform-ish" or a
+// value that glued the tokens together would pass a Contains check and still
+// be compressed.
+func TestSSE_CacheControlMatchesTheNoTransformGrammar(t *testing.T) {
+	tapCtx, tapCancel := context.WithCancel(context.Background())
+	defer tapCancel()
+	s := &Server{Manager: newTestManagerWithRepos(t), Logs: logging.NewTap(tapCtx, 4)}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rec := newStreamRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/events", nil).WithContext(ctx))
+	}()
+	rec.waitFor(t, "the ready frame", func(b string) bool { return strings.Contains(b, "event: ready") })
+
+	got := rec.Header().Get("Cache-Control")
+	if !regexp.MustCompile(`(?:^|,)\s*?no-transform\s*?(?:,|$)`).MatchString(got) {
+		t.Errorf("Cache-Control = %q does not match compression's no-transform grammar", got)
+	}
+	cancel()
+	<-done
 }

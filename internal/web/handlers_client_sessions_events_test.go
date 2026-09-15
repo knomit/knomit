@@ -36,8 +36,11 @@ func TestSessionEvents_ReadyThenChangePerWrite(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("Content-Type: got %q, want text/event-stream", ct)
 	}
-	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
-		t.Errorf("Cache-Control: got %q, want no-cache", cc)
+	// The full contract for these headers — including why no-transform is
+	// there — lives in TestSSE_HeadersSurviveACompressingProxy; this keeps the
+	// value honest at the one endpoint this file is about.
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache, no-transform" {
+		t.Errorf("Cache-Control: got %q, want \"no-cache, no-transform\"", cc)
 	}
 
 	if err := store.Touch(context.Background(), sessions.Observation{

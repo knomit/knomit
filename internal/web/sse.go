@@ -57,7 +57,34 @@ func startSSE(w http.ResponseWriter) (*sseStream, bool) {
 		return nil, false
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
+	// no-transform and X-Accel-Buffering are what keep a stream a STREAM once
+	// there is an intermediary, and neither is optional in practice.
+	//
+	// An SSE response is text/*, so a proxy that compresses by content type
+	// will happily gzip it — and a compressor buffers. The whole stream then
+	// sits in that buffer instead of arriving: measured through code-server's
+	// Express `compression` (the maintainer reaches knomit via Tailscale →
+	// code-server → /proxy/<port>/), a browser's Accept-Encoding got 10 bytes
+	// in 20s — the gzip header, nothing else — where the same URL without
+	// Accept-Encoding delivered 39 frames in 6s.
+	//
+	// `no-transform` is the standard way to forbid that (RFC 9111 §5.2.2.6),
+	// and it is exactly what compression's shouldTransform tests for. It must
+	// sit at a comma boundary to match, which is why it is a separate
+	// directive here rather than glued to no-cache.
+	//
+	// X-Accel-Buffering: no is the nginx-family equivalent, for proxies that
+	// buffer without compressing. Non-standard, ignored by everything that
+	// does not know it, and the one header that reaches the other big class of
+	// intermediary.
+	//
+	// The failure this prevents is silent and looks like the app: every frame
+	// is written, flushed and accepted, the connection stays open, and the
+	// browser simply never receives anything. A stream with a poll fallback
+	// (Sessions) degrades to the poll and hides it; one without (Logs) shows
+	// an empty pane forever.
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Connection", "keep-alive")
 	return &sseStream{w: w, rc: http.NewResponseController(w), flusher: flusher}, true
 }
