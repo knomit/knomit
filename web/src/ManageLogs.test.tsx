@@ -147,4 +147,44 @@ describe('ManageLogs', () => {
     act(() => appendLines(['10:00:01 INF a', '10:00:02 INF b']))
     expect(await screen.findByRole('button', { name: /2 new lines/i })).toBeInTheDocument()
   }, 30_000)
+
+  // The tab strip already says "Logs", so a heading that says it again is pure
+  // repetition. Scoped to the page's own subtree: the strip itself is not
+  // rendered here, but a future wrapper that reintroduced a heading would be.
+  it('renders no heading of its own — the tab strip already names the page', () => {
+    render(<ManageLogs />)
+    const page = screen.getByTestId('manage-logs')
+    expect(page.querySelector('h1, h2, h3')).toBeNull()
+  })
+
+  // The hint survives the heading's removal, because "live" is what says this is
+  // a stream rather than a dump of a file.
+  it('keeps the live hint, in the card label row', () => {
+    render(<ManageLogs />)
+    expect(screen.getByText('this server, live')).toBeInTheDocument()
+  })
+
+  // Asserts the POSITIVE, not just the absence of the old cap: a test that only
+  // checked maxHeight === '' would still pass if the viewport fraction came back
+  // via a CSS class. The pane, not the viewport, has to be what bounds the log.
+  it('sizes the log body from the pane, not a viewport fraction', () => {
+    render(<ManageLogs />)
+    const scroller = document.querySelector('.scroller') as HTMLDivElement
+    expect(scroller).not.toBeNull()
+    expect(scroller.style.flex).toBe('1 1 0%')
+    expect(scroller.style.minHeight).toBe('0px')
+    expect(scroller.style.overflowY).toBe('auto')
+    expect(scroller.style.maxHeight).toBe('')
+  })
+
+  // The card must keep the flex default min-height:auto. With minHeight:0 it is
+  // free to shrink past its own min-content height while the toolbar, the 140px
+  // scroller floor and the status line refuse to — and since the card sets no
+  // overflow, the log would draw straight through its bottom border.
+  it('lets the card floor at min-content so it always contains the log', () => {
+    render(<ManageLogs />)
+    const card = screen.getByTestId('manage-logs').firstElementChild as HTMLDivElement
+    expect(card.style.flex).toBe('1 1 0%')
+    expect(card.style.minHeight).toBe('')
+  })
 })

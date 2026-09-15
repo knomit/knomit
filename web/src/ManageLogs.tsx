@@ -96,14 +96,12 @@ export function ManageLogs() {
   const shown = visibleLines(lines, level, query).length;
 
   return (
-    <div data-testid="manage-logs">
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-        <h2 style={{ margin: 0, fontSize: 16 }}>Logs</h2>
-        <span style={{ color: '#888', fontSize: 12 }}>this server, live</span>
-      </div>
-
-      <div style={{ ...card, marginTop: 10 }}>
-        <div style={cardLabel}>Server log</div>
+    <div data-testid="manage-logs" style={page}>
+      <div style={logCard}>
+        <div style={labelRow}>
+          Server log
+          <span style={labelHint}>this server, live</span>
+        </div>
         <header style={toolbar}>
           <label style={toolLabel}>
             Level
@@ -163,7 +161,7 @@ export function ManageLogs() {
           </button>
         </header>
 
-        <div style={{ position: 'relative' }}>
+        <div style={scrollerWrap}>
           <div className="scroller" style={scroller} ref={scrollRef} onScroll={onScroll}>
             <LogView lines={lines} level={level} query={query} />
           </div>
@@ -190,6 +188,32 @@ export function ManageLogs() {
   );
 }
 
+// The page fills the detail pane rather than sizing to its content. detailCol
+// (RepoManager.tsx) is a stretched flex item, so its height is definite and this
+// percentage resolves against its CONTENT box — the pane's own padding stays
+// outside it, so nothing overflows.
+const page: React.CSSProperties = { height: '100%', display: 'flex', flexDirection: 'column' };
+// flex:1 to take the pane's height; column so the toolbar and the status line
+// stay pinned and only the body between them scrolls.
+//
+// Deliberately NO minHeight:0 here. The flex default min-height:auto floors the
+// card at its own min-content height, so a window too short for the toolbar plus
+// the scroller's 140px plus the status line overflows the pane — which scrolls,
+// because detailCol is overflowY:auto — instead of the card shrinking while its
+// contents refuse to, which would draw the log straight through its bottom
+// border. That floor is not a constant: `toolbar` wraps, so it rises as the
+// window narrows.
+const logCard: React.CSSProperties = {
+  ...card, marginTop: 0, flex: 1, display: 'flex', flexDirection: 'column',
+};
+const labelRow: React.CSSProperties = {
+  ...cardLabel, display: 'flex', alignItems: 'baseline', gap: 8,
+};
+// The hint rides the caption row instead of having a heading of its own. The tab
+// strip already says "Logs", so the <h2> that used to sit here said it a second
+// time; "live" is the part that still earns its place, being what distinguishes
+// a stream from a dump of a file.
+const labelHint: React.CSSProperties = { textTransform: 'none', letterSpacing: 0 };
 const toolbar: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
   padding: '4px 0 10px', borderBottom: '1px solid #222',
@@ -203,12 +227,25 @@ const toolBtn = (on: boolean): React.CSSProperties => ({
   background: on ? '#22303a' : 'transparent', color: on ? '#cfe' : '#9a9a9a',
   border: '1px solid #333', borderRadius: 4, padding: '3px 9px', fontSize: 12, cursor: 'pointer',
 });
-// A bounded scroller, not the page: the log is the one Manage pane whose
-// content is unbounded, and letting it grow the page would put the toolbar and
-// the status line off screen exactly when they are needed.
+// The scroller's frame. flex:1 so it absorbs every pixel the toolbar and the
+// status line leave, minHeight so a very short window still shows a few lines
+// instead of collapsing to a sliver. position:relative anchors the pill, which
+// is out of flow and so is unmoved by the column flex.
+const scrollerWrap: React.CSSProperties = {
+  position: 'relative', flex: 1, minHeight: 140,
+  display: 'flex', flexDirection: 'column', marginTop: 10,
+};
+// Bounded by its SHARE OF THE PANE, not by a fraction of the viewport. The
+// reason for bounding it at all is unchanged: the log is the one Manage pane
+// whose content is unbounded, and letting it grow the page would put the
+// toolbar and the status line off screen exactly when they are needed. But the
+// old `maxHeight: '58vh'` bought that by measuring the wrong box — the pane is
+// not the viewport, so the cap left dead space below the card and did not move
+// when the window was resized. flex:1 + minHeight:0 makes the PANE the bound,
+// which is the box the log actually sits in.
 const scroller: React.CSSProperties = {
-  maxHeight: '58vh', minHeight: 220, overflowY: 'auto', background: '#101010',
-  border: '1px solid #1c1c1c', borderRadius: 4, marginTop: 10,
+  flex: 1, minHeight: 0, overflowY: 'auto', background: '#101010',
+  border: '1px solid #1c1c1c', borderRadius: 4,
 };
 const pill: React.CSSProperties = {
   position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
