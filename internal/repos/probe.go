@@ -10,6 +10,8 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/storage/memory"
@@ -181,6 +183,44 @@ func (m *Manager) probeOrigin(ctx context.Context, o OriginSpec, withWrite bool)
 	res.Empty = len(res.Branches) == 0
 	res.UpstreamBranch = resolveUpstream(o.Branch, head, res.Branches)
 	return res, nil
+}
+
+// advertise fetches the remote's ref advertisement once, returning the refs
+// AND the capabilities the server offered.
+//
+// remote.ListContext discards the capabilities, and the probe needs them:
+// whether a shallow clone may be requested AT ALL is something only the
+// server's advertisement can say. Asking a server that did not advertise
+// `shallow` for a depth is not a degraded request — go-git's client adds the
+// capability to the upload-pack request, a server that did not advertise it
+// rejects the request outright, and knomit's own endpoint returned that as an
+// HTTP 500. That is the failure this helper exists to prevent.
+//
+// ProbeOrigin deliberately still uses ListContext: it never requests a depth,
+// so it has no use for capabilities, and its error classification is
+// load-bearing (an origin probe has four outcomes, not three).
+func advertise(ctx context.Context, url string, auth transport.AuthMethod) (*packp.AdvRefs, error) {
+	ep, err := transport.NewEndpoint(url)
+	if err != nil {
+		return nil, err
+	}
+	cl, err := transportclient.NewClient(ep)
+	if err != nil {
+		return nil, err
+	}
+	sess, err := cl.NewUploadPackSession(ep, auth)
+	if err != nil {
+		return nil, err
+	}
+	defer sess.Close()
+	return sess.AdvertisedReferencesContext(ctx)
+}
+
+// advertisesShallow reports whether the server offered the `shallow`
+// capability. A nil advertisement (an empty remote, or one we could not read)
+// is a "no": the safe request is the one that works against every server.
+func advertisesShallow(adv *packp.AdvRefs) bool {
+	return adv != nil && adv.Capabilities != nil && adv.Capabilities.Supports(capability.Shallow)
 }
 
 // probeWrite asks the remote whether these credentials may PUSH, without
