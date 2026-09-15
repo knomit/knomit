@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { Library } from './Library';
+import { api } from './api';
 import { init } from './state';
 import type { AppState } from './state';
 
@@ -71,12 +72,23 @@ describe('Library — the keyboard is live as soon as the rows are', () => {
       mo.observe(document.body, { childList: true, subtree: true });
     });
 
+    // `resolveBrowse` is assigned only if api.browse actually ran, which needs
+    // effectiveSort === 'path' — DERIVED state, not the librarySort the fixture
+    // sets. Asserting the call first means a future change to `init` that trips
+    // that reports "browse was never called" rather than a TypeError on the
+    // line below, which would look like a bug in this test.
+    expect(api.browse).toHaveBeenCalled();
     resolveBrowse(CHILDREN);
     await fired;
 
     // Guards the guard: if the observer ever stopped seeing rows, the assertion
     // below would pass or fail for a reason that has nothing to do with timing.
     expect(rowsWhenFiring).toBe(2);
-    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'NAVIGATE' }));
+    // The PATH matters, not just that some NAVIGATE fired: Library has three
+    // NAVIGATE producers (enterDir, activateSelected, jumpAncestor), so a
+    // regression that selects the wrong row or enters the wrong directory would
+    // satisfy a bare type check. 'kb/sub' is the first row — the dir — which is
+    // what ArrowDown then ArrowRight is supposed to reach.
+    expect(dispatch).toHaveBeenCalledWith({ type: 'NAVIGATE', path: 'kb/sub' });
   });
 });
