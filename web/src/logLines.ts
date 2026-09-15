@@ -26,10 +26,15 @@ function levelOf(line: string): string | undefined {
 // — meant choosing Warn hid every ERR, FTL and PNC, so a user filtering for
 // trouble saw strictly less of it than "All" did.
 //
-// A line with no rank (a wrapped continuation, the noLogFileNotice from
-// logstream.go) is never filtered out. Dropping a line we failed to parse is
-// worse than showing one the filter did not ask for: an absent line is
+// A line with no rank is never filtered out. Dropping a line we failed to parse
+// is worse than showing one the filter did not ask for: an absent line is
 // indistinguishable from nothing having happened.
+//
+// Two kinds of line land here. A wrapped continuation, which carries no level
+// of its own — and the store's dropped-lines marker, which is deliberately not
+// in the `<stamp> <LVL> <message>` shape precisely so that it cannot be ranked
+// and therefore cannot be filtered out of view. A gap the server has admitted
+// to must never be the thing a level filter hides.
 const RANK: Record<string, number> = {
   TRC: 0,
   DBG: 1,

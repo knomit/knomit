@@ -51,10 +51,14 @@ function splitTail(msg: string): { head: string; tail: string } {
 }
 
 // An empty view is ambiguous in a way that costs the user real time: it looks
-// identical whether the app is idle, the filter is too narrow, or the window is
-// wired to a file nothing is writing to. Naming which one it is turns a blank
-// rectangle into an answer. (The backend says its piece too, for the case where
-// there is no log file at all to tail — see noLogFileNotice in logstream.go.)
+// identical whether the server has simply logged nothing yet and whether the
+// filter on screen is too narrow to admit anything. Naming which one it is
+// turns a blank rectangle into an answer.
+//
+// There is no third case to name any more. The source is the server's
+// in-process tap, so "connected but there is nothing to show" and "nothing has
+// happened" are the same state — unlike the file tail this was ported from,
+// where the view could be pointed at a path nothing was writing to.
 function emptyMessage(hasLines: boolean, level?: string, query?: string): string {
   if (hasLines && query) return `No lines match “${query}”.`
   if (hasLines && level) return `No lines at ${level} or above yet.`
