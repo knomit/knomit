@@ -108,8 +108,15 @@ type Subscription struct {
 	dropped atomic.Uint64
 }
 
-// Lines is the live channel. It is closed only by the tap going away; a reader
-// should select on it together with its own context.
+// Lines is the live channel. It is NEVER closed, deliberately: deliver() sends
+// on it while holding the tap's lock, and closing a channel concurrently with a
+// send panics — so ending a subscription drops the sender instead (Subscribe's
+// goroutine deregisters it), and the channel is simply left to be collected.
+//
+// A consumer therefore cannot use receive-on-closed as its exit signal, and
+// must select on its own context alongside this channel. handleLogEvents is
+// the worked example: it selects on r.Context().Done(), this channel, and its
+// keepalive ticker, and returns on the first.
 func (s *Subscription) Lines() <-chan string { return s.ch }
 
 // Dropped is how many lines this subscription has missed because it was not

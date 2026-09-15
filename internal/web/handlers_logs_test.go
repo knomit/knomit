@@ -180,6 +180,31 @@ func TestLogEvents_ReportsDroppedLines(t *testing.T) {
 	}
 }
 
+// The read-only demo REFUSES the log stream (403), so advertising it from the
+// API root would be a link that is always a dead end — discovery promising
+// something the server will not do. Absent, not empty: a present-but-blank href
+// is a different lie.
+func TestAPIRoot_OmitsLogsLinkWhenReadOnly(t *testing.T) {
+	s := &Server{Manager: newTestManagerWithRepos(t), ReadOnly: true}
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	var body struct {
+		Links map[string]json.RawMessage `json:"_links"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := body.Links["logs"]; present {
+		t.Errorf("read-only root advertises a logs link that always 403s: %v", body.Links)
+	}
+	// The rest of discovery is unaffected — this is one link, not a mode.
+	for _, rel := range []string{"self", "repos", "version", "openapi"} {
+		if _, ok := body.Links[rel]; !ok {
+			t.Errorf("read-only root lost the %q link", rel)
+		}
+	}
+}
+
 func TestAPIRoot_LinksToLogs(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t)}
 	rec := httptest.NewRecorder()

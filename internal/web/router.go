@@ -98,7 +98,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		}
 	})
 
-	r.Get("/", handleAPIRoot(b))
+	r.Get("/", handleAPIRoot(b, s.ReadOnly))
 	r.Get("/version", handleVersion(b, s.ReadOnly))
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/sessions", handleHALClientSessions(b, s.Manager, s.ClientSessions, s.ReadOnly))
