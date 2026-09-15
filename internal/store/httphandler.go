@@ -8,12 +8,16 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	gogitserver "github.com/go-git/go-git/v5/plumbing/transport/server"
 )
+
+// packWindow is the delta-compression window the packfile encoder searches.
+// It is a bandwidth/CPU knob, the same value go-git's own server uses; it
+// describes nothing about the repository being served.
+const packWindow = 10
 
 // Handler returns an http.Handler implementing the read-only Smart HTTP git
 // protocol (https://git-scm.com/docs/http-protocol) for this store.
@@ -29,27 +33,20 @@ func (s *Service) Handler() http.Handler {
 	return s.handler
 }
 
-// repoLoader adapts a storer.Storer to go-git's server.Loader interface,
-// always returning the same storer regardless of endpoint.
-type repoLoader struct {
-	sto storer.Storer
-}
-
-func (l *repoLoader) Load(_ *transport.Endpoint) (storer.Storer, error) {
-	return l.sto, nil
-}
-
 // newGitHTTPHandler builds an http.Handler serving the read-only git smart
 // HTTP endpoints for a single repository. Push (receive-pack) is not exposed.
+//
+// Neither endpoint goes through go-git's built-in server any more: that server
+// advertises only agent and ofs-delta, rejects every capability it did not
+// advertise, and has no shallow implementation — so a depth-1 request (what
+// the create wizard's branch probe sends) came back as an HTTP 500. The
+// advertisement is built by buildAdvRefs and the packfile by packObjects.
 //
 // upstream is evaluated PER REQUEST, not captured once: a repo can gain an
 // origin (and with it a configured Remote.Branch) after the handler is built,
 // and the advertisement must follow.
 func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 	sto := rh.gits
-	// Pack generation still goes through go-git's built-in server; only the
-	// advertisement is ours so far.
-	srv := gogitserver.NewServer(&repoLoader{sto: sto})
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/info/refs", func(w http.ResponseWriter, r *http.Request) {
@@ -82,8 +79,6 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		ctx := r.Context()
-
 		body, err := gitRequestBody(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -106,9 +101,29 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 			return
 		}
 
+		// Wants must be tips of the CURATED advertisement (section 2): knowing
+		// the hash of a hidden ref must not be enough to fetch it. This is
+		// git's own uploadpack.allowAnySHA1InWant=false default; a real client
+		// refuses such a want before sending it, so this answers the ones that
+		// speak the protocol directly.
+		_, tips, err := buildAdvRefs(rh, upstream())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		w.Header().Set("Cache-Control", "no-cache")
 		enc := pktline.NewEncoder(w)
+
+		for _, want := range req.Wants {
+			if _, ok := tips[want]; !ok {
+				// A protocol-level refusal is an ERR pkt inside a 200, not an
+				// HTTP error: that is the only form a git client renders.
+				_ = enc.Encodef("ERR %s: %s\n", errWantNotAdvertised.Error(), want.String())
+				return
+			}
+		}
 
 		// Single-ack negotiation. git fetches over smart HTTP in rounds: each
 		// POST carries the wants plus a batch of "have" lines and, only on the
@@ -120,41 +135,59 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 		// "bad line length character: PACK" when the client reads the raw pack
 		// bytes where it expects the next pkt-line.
 		common, haveCommon := firstCommonHave(sto, req.Haves)
+
+		objs, upd, err := packObjects(rh, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// The shallow section precedes the ACK/NAK section, and is present on
+		// EVERY round of a request that carries a depth — git's
+		// consume_shallow_list reads one before each ACK/NAK batch whenever it
+		// sent a deepen, and go-git decodes one whenever req.Depth is set.
+		// A request carrying only "shallow" lines (an ordinary fetch by a
+		// shallow client) gets NO such section: neither client reads one, and
+		// sending it would desynchronise the stream.
+		if !req.Depth.IsZero() {
+			if err := upd.Encode(w); err != nil {
+				return
+			}
+		}
+
+		// The DEEPEN PROBE: git sends the want+deepen section and nothing else
+		// as its own round, reads the shallow list up to the flush, and then
+		// sends the haves on a fresh request. Its reader is one continuous
+		// stream across those rounds, so an ACK/NAK section appended here is
+		// still sitting in the buffer when the next round's shallow list is
+		// read — "fatal: git fetch-pack: expected shallow list". git's own
+		// upload-pack answers this shape with the shallow section alone (the
+		// request body is exhausted, so it never reaches the ACK/NAK code),
+		// and so must this one.
+		if !req.Depth.IsZero() && len(req.Haves) == 0 && !requestHasDone(raw) {
+			return
+		}
+
 		if !requestHasDone(raw) && !haveCommon {
 			_ = enc.Encodef("%s\n", "NAK")
 			return
 		}
 
 		// Negotiation is settled: emit the acknowledgement, then the packfile.
-		sess, err := srv.NewUploadPackSession(&transport.Endpoint{}, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer sess.Close()
-
-		// AdvertisedReferencesContext must run before UploadPack to initialise
-		// the session's capability list.
-		if _, err = sess.AdvertisedReferencesContext(ctx); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		resp, err := sess.UploadPack(ctx, req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer resp.Close()
-
 		if haveCommon {
 			_ = enc.Encodef("%s %s\n", "ACK", common.String())
 		} else {
 			_ = enc.Encodef("%s\n", "NAK")
 		}
-		// resp as an io.Reader yields the packfile only — its Encode method is
-		// what would prepend a NAK, which we have already written ourselves.
-		if _, err := io.Copy(w, resp); err != nil {
+
+		pr, pw := io.Pipe()
+		go func() {
+			e := packfile.NewEncoder(pw, sto, false)
+			_, err := e.Encode(objs, packWindow)
+			_ = pw.CloseWithError(err)
+		}()
+		defer pr.Close()
+		if _, err := io.Copy(w, pr); err != nil {
 			return
 		}
 	})
