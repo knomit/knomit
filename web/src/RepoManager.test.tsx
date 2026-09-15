@@ -1702,6 +1702,22 @@ describe('Manage tabs', () => {
     expect(vi.mocked(api.listClientSessions).mock.calls.length).toBe(afterOpen);
   });
 
+  // The landing tab shows only the knowledge bases — repositories and lenses —
+  // and is the one tab beside which the rail renders. "Overview" promised a
+  // summary of the whole server and delivered one kind of thing, which only
+  // became misleading once Sessions and Logs sat beside it.
+  //
+  // The label is the assertion; the test id stays repomgr-overview, because
+  // renaming identifiers would churn tests and facts for no user-visible gain.
+  it('names the landing tab Knowledge, not Overview', async () => {
+    render(<RepoManager {...baseProps} />);
+    const knowledge = await screen.findByRole('tab', { name: 'Knowledge' });
+    expect(knowledge).toHaveAttribute('data-testid', 'repomgr-overview');
+    // Manage lands here, so it is the lit one.
+    expect(knowledge).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: 'Overview' })).not.toBeInTheDocument();
+  });
+
   it('drops the entity rail on Sessions — a server page is not about your repos', async () => {
     render(<RepoManager {...baseProps} />);
     fireEvent.click(await screen.findByTestId('repomgr-sessions'));

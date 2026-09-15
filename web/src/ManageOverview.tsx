@@ -177,7 +177,7 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
     <div data-testid="manage-overview">
       <div style={head}>
         <div>
-          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Overview</h3>
+          <h3 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Knowledge</h3>
           <div style={{ fontSize: 11.5, color: '#777', marginTop: 2 }}>
             {count(repos.length, 'repository', 'repositories')} · {count(lenses.length, 'lens', 'lenses')}
             {archivedCount > 0 && ` · ${archivedCount} archived`}

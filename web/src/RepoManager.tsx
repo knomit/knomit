@@ -9,7 +9,7 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon, ScrollIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, TreeIcon, BroadcastIcon, ScrollIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
 import { ManageLogs } from './ManageLogs';
@@ -256,7 +256,12 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             disabled={connectBusy}
             onClick={() => setSel({ kind: 'overview' })}
           >
-            <HomeIcon color="currentColor" size={12} /> Overview
+            {/* TreeIcon, not Home (this tab is not a home), and not the
+                rail's own Book or Layers — the tab CONTAINS both repositories
+                and lenses, so borrowing either section's glyph would claim it
+                is one of them. Tree is otherwise only a sort-axis glyph in the
+                browse-mode Library header, never the Library's own mark. */}
+            <TreeIcon color="currentColor" size={12} /> Knowledge
           </button>
           <button
             type="button"

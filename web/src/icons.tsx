@@ -75,15 +75,6 @@ export const RefreshIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
-// HomeIcon marks the Manage rail's Overview entry — the one row that is not an
-// entity, pinned above the lists it summarises.
-export const HomeIcon = ({ color, size = 14 }: IconProps) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-    <polyline points="9 22 9 12 15 12 15 22"/>
-  </svg>
-);
-
 export const ArchiveIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect width="20" height="5" x="2" y="3" rx="1"/>
