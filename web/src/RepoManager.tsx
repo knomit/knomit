@@ -111,7 +111,7 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // lock whose holder is gone.
   // Layout, not passive, for the same reason the wizard's own relay is: this is
   // the middle hop, and a passive one here would reinstate exactly the window
-  // the wizard's change closes. Pinned by App.keyboard.timing.test.tsx.
+  // the wizard's change closes. Pinned by App.manage.test.tsx.
   useLayoutEffect(() => {
     onBusyChange?.(connectBusy);
     return () => { onBusyChange?.(false); };

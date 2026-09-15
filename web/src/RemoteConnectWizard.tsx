@@ -290,7 +290,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   // own render, disabling every visible exit — must not reach the screen before
   // the parent knows it is locked. Passive, the flag arrived a task later, and
   // App's Escape handler spent that window still believing it was free to close
-  // Manage. Pinned by App.keyboard.timing.test.tsx.
+  // Manage. Pinned by App.manage.test.tsx.
   useLayoutEffect(() => {
     onBusyChange?.(!leavable);
     return () => { onBusyChange?.(false); };
