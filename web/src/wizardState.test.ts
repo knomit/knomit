@@ -238,6 +238,72 @@ describe('name prefill on PROBE_DONE', () => {
   });
 });
 
+// Switching the source segment is not an answer to the probe's question, so it
+// must not un-answer it. This became reachable by KEYBOARD when the segmented
+// control grew arrow keys (PR #194): the roving tab stop puts focus on the
+// checked segment, and one ArrowDown there used to null the probe and clear
+// the branch answer — silently, with ArrowUp restoring the look of an
+// established remote but not the establishment.
+describe('choosing a source does not discard an established remote', () => {
+  const established = (): ReturnType<typeof wizardReducer> => {
+    let s = wizardReducer(initialWizardState, { type: 'SET_URL', url: 'https://h/r.git' });
+    s = wizardReducer(s, {
+      type: 'PROBE_DONE',
+      probe: { reachable: true, empty: false, auth_required: false, upstream_branch: 'main', branches: ['main'] },
+    });
+    return wizardReducer(s, { type: 'INITIALIZED_DONE', result: { initialized: 'yes', branch: 'main' } });
+  };
+
+  it('keeps the probe and the branch answer across a local/remote round trip', () => {
+    const before = established();
+    expect(before.probe?.reachable).toBe(true);
+    expect(establishedAnswer(before)).toBe('yes');
+    const full = stepsFor(before);
+
+    const local = wizardReducer(before, { type: 'CHOOSE_LOCAL' });
+    // Retained, not merely re-derivable: the local list is what the user sees
+    // meanwhile, and nothing on it consults either value.
+    expect(local.probe).toEqual(before.probe);
+    expect(local.initialized).toBe('yes');
+    expect(stepsFor(local)).toEqual(['source', 'ontology', 'review']);
+
+    const back = wizardReducer(local, { type: 'CHOOSE_REMOTE' });
+    expect(back.probe?.reachable).toBe(true);
+    expect(establishedAnswer(back)).toBe('yes');
+    expect(stepsFor(back)).toEqual(full);
+  });
+
+  // The complement, so the test above cannot pass by the reducer simply never
+  // invalidating anything. The three actions that DO change the question the
+  // probe answered each still invalidate it — by three different mechanisms,
+  // which is why one assertion shape does not cover them.
+  it('but a new URL still discards it outright', () => {
+    const s = wizardReducer(established(), { type: 'SET_URL', url: 'https://h/other.git' });
+    expect(s.probe).toBeNull();
+    expect(establishedAnswer(s)).toBe('');
+  });
+
+  // The probe is per-REMOTE, so a new branch leaves it true and un-answers
+  // only the branch check.
+  it('a new branch un-answers the branch check but keeps the probe', () => {
+    const s = wizardReducer(established(), { type: 'SET_BRANCH', branch: 'develop' });
+    expect(s.probe?.reachable).toBe(true);
+    expect(establishedAnswer(s)).toBe('');
+  });
+
+  // A credential change nulls NOTHING: remoteKey hashes the credential, so the
+  // probe simply stops being current. Discarding it here would rewind the
+  // reader past the access step — the only place a credential can be typed.
+  it('a new credential invalidates the probe by key, without discarding it', () => {
+    const before = established();
+    expect(probeIsCurrent(before)).toBe(true);
+    const s = wizardReducer(before, { type: 'SET_AUTH_METHOD', method: 'token' });
+    expect(s.probe).toEqual(before.probe);
+    expect(probeIsCurrent(s)).toBe(false);
+    expect(establishedAnswer(s)).toBe('');
+  });
+});
+
 // Review finding 1: any action that changes choice/probe can shrink the
 // derived step list out from under a stepIndex that used to be valid for the
 // old list — not just the two actions R2 named an explicit advance rule for.

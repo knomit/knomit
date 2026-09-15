@@ -1,7 +1,8 @@
 import type { WizardAction, WizardState } from './wizardState';
 import { isValidRepoName, hostOf } from './wizardState';
 import { OutcomeCard } from './OutcomeCard';
-import { btn, segGroup, segment, segDot, segSub, segDisclosure } from './manageStyles';
+import { btn, segDisclosure } from './manageStyles';
+import { SegmentedChoice } from './SegmentedChoice';
 
 // StepSource asks ONE question — where this repository's history lives — with a
 // segmented control, and then discloses only the fields that answer needs.
@@ -37,24 +38,17 @@ export function StepSource({ state, dispatch, onProbe, onCancelProbe, probing, p
   const local = state.choice === 'local';
   return (
     <div data-testid="step-source">
-      <div style={segGroup} role="group" aria-label="Repository source">
-        <button type="button" data-testid="choose-remote" style={segment(!local, 'remote')}
-          aria-pressed={!local} onClick={() => dispatch({ type: 'CHOOSE_REMOTE' })}>
-          <span style={segDot(!local, 'remote')} />
-          <span>
-            Connect a git repository
-            <span style={segSub(!local, 'remote')}>Synced from the first commit</span>
-          </span>
-        </button>
-        <button type="button" data-testid="choose-local" style={segment(local, 'neutral')}
-          aria-pressed={local} onClick={() => dispatch({ type: 'CHOOSE_LOCAL' })}>
-          <span style={segDot(local, 'neutral')} />
-          <span>
-            Keep it on this machine
-            <span style={segSub(local, 'neutral')}>Connect a remote later</span>
-          </span>
-        </button>
-      </div>
+      <SegmentedChoice
+        label="Repository source"
+        value={local ? 'local' : 'remote'}
+        onChange={v => dispatch({ type: v === 'local' ? 'CHOOSE_LOCAL' : 'CHOOSE_REMOTE' })}
+        options={[
+          { value: 'remote', tone: 'remote', testid: 'choose-remote',
+            title: 'Connect a git repository', sub: 'Synced from the first commit' },
+          { value: 'local', tone: 'neutral', testid: 'choose-local',
+            title: 'Keep it on this machine', sub: 'Connect a remote later' },
+        ]}
+      />
 
       <div style={segDisclosure}>
         {local ? <LocalPane state={state} dispatch={dispatch} /> : (
@@ -161,10 +155,12 @@ function LocalPane({ state, dispatch }: { state: WizardState; dispatch: (a: Wiza
 
 // ── styles ──
 //
-// The segmented control's styles live in manageStyles (segGroup, segment,
-// segDot, segSub, segDisclosure): StepReview asks its join-or-subscribe
-// question with the same control, and one definition is what keeps the two
-// questions looking like the same wizard.
+// The segmented control itself is SegmentedChoice, and its styles live in
+// manageStyles (segGroup, segment, segDot, segSub, segDisclosure): StepReview
+// asks its join-or-subscribe question with the same component, and one
+// definition is what keeps the two questions looking — and behaving — like the
+// same wizard. Sharing only the styles is what let the two drift apart on
+// keyboard and screen-reader semantics once already.
 
 const label: React.CSSProperties = { fontSize: 12, color: '#888', marginBottom: 4, marginTop: 12, display: 'block' };
 const hint: React.CSSProperties = { fontSize: 12, color: '#666', marginTop: 8, lineHeight: 1.5 };

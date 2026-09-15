@@ -1,6 +1,7 @@
 import type { Dispatch } from 'react';
 import type { WizardState, WizardAction } from './wizardState';
-import { cardLabel, segGroup, segment, segDot, segSub, segDisclosure } from './manageStyles';
+import { cardLabel, segDisclosure } from './manageStyles';
+import { SegmentedChoice } from './SegmentedChoice';
 
 // StepReview states CONSEQUENCES of the choices already made, not the inputs
 // themselves — the wizard's earlier steps already showed those. It never
@@ -36,35 +37,30 @@ export function StepReview({ state, dispatch }: { state: WizardState; dispatch: 
           access step because the access step runs before the branch check —
           this is the first step that knows the answer is "yes".
 
-          It is the SAME segmented control StepSource uses for local-vs-remote,
-          from the same styles, because it is the same shape of question: one
-          binary, settled by one control, disclosing what the answer means
-          underneath. Two different widgets for two peer choices would make the
-          wizard look like two wizards. Join leads because ordering is how a
-          soft preference is carried here — never a badge, which would make the
-          other option read as the wrong answer (see
+          It is the SAME control StepSource uses for local-vs-remote —
+          SegmentedChoice, not merely the same styles — because it is the same
+          shape of question: one binary, settled by one control, disclosing
+          what the answer means underneath. Two different widgets for two peer
+          choices would make the wizard look like two wizards, and sharing only
+          the styles let the two drift apart on keyboard semantics once
+          already. Join leads because ordering is how a soft preference is
+          carried here — never a badge, which would make the other option read
+          as the wrong answer (see
           kb/conventions/ui/copy/warning-styling-reserved-for-failures). */}
       {attaching && (
         <>
           <div style={cardLabel}>How to attach</div>
-          <div style={segGroup} role="group" aria-label="How to attach">
-            <button type="button" data-testid="access-join" style={segment(!subscribing, 'remote')}
-              aria-pressed={!subscribing} onClick={() => dispatch({ type: 'SET_ACCESS', access: 'join' })}>
-              <span style={segDot(!subscribing, 'remote')} />
-              <span>
-                Join
-                <span style={segSub(!subscribing, 'remote')}>Write to knomit's own branch and push it</span>
-              </span>
-            </button>
-            <button type="button" data-testid="access-subscribe" style={segment(subscribing, 'neutral')}
-              aria-pressed={subscribing} onClick={() => dispatch({ type: 'SET_ACCESS', access: 'subscribe' })}>
-              <span style={segDot(subscribing, 'neutral')} />
-              <span>
-                Subscribe
-                <span style={segSub(subscribing, 'neutral')}>Follow {branch} read-only. Nothing is ever pushed</span>
-              </span>
-            </button>
-          </div>
+          <SegmentedChoice
+            label="How to attach"
+            value={state.access}
+            onChange={access => dispatch({ type: 'SET_ACCESS', access })}
+            options={[
+              { value: 'join', tone: 'remote', testid: 'access-join',
+                title: 'Join', sub: "Write to knomit's own branch and push it" },
+              { value: 'subscribe', tone: 'neutral', testid: 'access-subscribe',
+                title: 'Subscribe', sub: `Follow ${branch} read-only. Nothing is ever pushed` },
+            ]}
+          />
         </>
       )}
 

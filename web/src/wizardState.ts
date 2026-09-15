@@ -156,8 +156,35 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
     // footer's Next moves on. CHOOSE_LOCAL used to jump to stepIndex 1 because
     // the name lived on its own step; folding that step into the source step is
     // what this control replaces.
+    //
+    // Neither choice DISCARDS, either, and that is deliberate. CHOOSE_LOCAL
+    // used to null the probe and spread uncheckedBranch. What invalidates a
+    // probe is a change to the question it answered — the URL, the branch, or
+    // the credential — and each of those is already handled, by three
+    // different mechanisms: SET_URL nulls the probe outright (the remote is a
+    // different remote); SET_BRANCH un-answers only the branch check, since
+    // the probe is per-remote and still true; and SET_AUTH_* nulls nothing at
+    // all, invalidating BY KEY, because remoteKey hashes the credential and
+    // probeIsCurrent then reads false. Picking "keep it on this machine"
+    // changes none of the three, so the answer it would have discarded is
+    // still true.
+    //
+    // That third mechanism is the house rule, and it is stated on
+    // probeIsCurrent: a stale probe is not thrown away, it just stops being
+    // quotable, because discarding one collapses the step list and rewinds the
+    // reader past the only step where a credential can be typed. Destructive
+    // CHOOSE_LOCAL was the outlier against that rule, not an instance of it.
+    //
+    // Nothing reads the retained values while 'local' is chosen anyway:
+    // stepsFor returns the local list on `choice` before it looks at `probe`
+    // at all, and establishedAnswer trusts `initialized` only while
+    // initializedKey still matches branchKey.
+    //
+    // It became worth fixing when the control grew arrow keys: one ArrowDown on
+    // the source step would silently throw away an established probe, and
+    // ArrowUp brought the appearance back without the establishment.
     case 'CHOOSE_REMOTE': return { ...s, choice: 'remote' };
-    case 'CHOOSE_LOCAL':  return { ...s, choice: 'local', probe: null, ...uncheckedBranch };
+    case 'CHOOSE_LOCAL':  return { ...s, choice: 'local' };
     // The branch goes with the remote. A branch chosen on the PREVIOUS remote
     // decides which ref the next check inspects and which the create clones, so
     // carrying it across a change of URL creates against something nobody

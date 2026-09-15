@@ -148,12 +148,14 @@ describe('StepReview — join or subscribe', () => {
   });
 
   // The same control StepSource uses for its own binary, so the wizard asks
-  // its two questions the same way; aria-pressed is how that control says
-  // which side is on.
+  // its two questions the same way; aria-checked is how that control says
+  // which side is on, and the two options are radios in one radiogroup rather
+  // than independent toggles (SegmentedChoice.test.tsx pins the semantics
+  // themselves).
   it('shows which way is chosen', () => {
     render(<StepReview state={{ ...remote('yes'), access: 'subscribe' }} dispatch={vi.fn()} />);
-    expect(screen.getByTestId('access-subscribe')).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByTestId('access-join')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('access-subscribe')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('access-join')).toHaveAttribute('aria-checked', 'false');
   });
 
   // Asserted against the step's own list, not the whole pane's text: the

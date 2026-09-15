@@ -261,7 +261,7 @@ describe('CreateRepoWizard', () => {
 
   it('shows the agreed local-only trade-off copy, verbatim and unstyled as a warning', async () => {
     render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /keep it on this machine/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /keep it on this machine/i }));
     fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'scratch' } });
     fireEvent.click(screen.getByRole('button', { name: /next|ontology/i }));
     fireEvent.click(screen.getByRole('button', { name: /next|review/i }));
@@ -407,7 +407,7 @@ describe('CreateRepoWizard', () => {
   it('calls onDone with the created repo name for a local-only repo using the default preset', async () => {
     const onDone = vi.fn();
     render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /keep it on this machine/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /keep it on this machine/i }));
     fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'scratch' } });
     fireEvent.click(screen.getByRole('button', { name: /next|ontology/i }));
     await waitFor(() => expect(screen.getByTestId('step-ontology')).toBeInTheDocument());
@@ -628,8 +628,8 @@ describe('CreateRepoWizard', () => {
       expect(screen.getByTestId('create-url')).toBeInTheDocument();
       expect(screen.queryByTestId('source-pane-local')).not.toBeInTheDocument();
       expect(screen.queryByTestId('create-name')).not.toBeInTheDocument();
-      expect(screen.getByTestId('choose-remote')).toHaveAttribute('aria-pressed', 'true');
-      expect(screen.getByTestId('choose-local')).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.getByTestId('choose-remote')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByTestId('choose-local')).toHaveAttribute('aria-checked', 'false');
     });
 
     // Choosing a segment must not navigate — that is what made the old
@@ -644,7 +644,7 @@ describe('CreateRepoWizard', () => {
       expect(screen.getByTestId('create-name')).toBeInTheDocument();
       expect(screen.queryByTestId('source-pane-remote')).not.toBeInTheDocument();
       expect(screen.queryByTestId('create-url')).not.toBeInTheDocument();
-      expect(screen.getByTestId('choose-local')).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByTestId('choose-local')).toHaveAttribute('aria-checked', 'true');
     });
 
     // Switching back must restore the remote pane AND keep the URL already
@@ -676,7 +676,7 @@ describe('CreateRepoWizard', () => {
   // /repos — the exact 400 the deleted form's own comment called confusing.
   it('refuses a name the backend would reject, where it was typed', async () => {
     render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: /keep it on this machine/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /keep it on this machine/i }));
 
     fireEvent.change(screen.getByTestId('create-name'), { target: { value: 'My KB' } });
     expect(screen.getByTestId('name-invalid')).toBeInTheDocument();
