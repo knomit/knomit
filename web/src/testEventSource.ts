@@ -17,9 +17,32 @@ export class FakeEventSource {
   closedByClient = false;
   private listeners = new Map<string, Set<(e: unknown) => void>>();
 
+  /**
+   * Whether a new stream announces itself the way the real server does:
+   * `open`, then `ready`, as soon as listeners are attached.
+   *
+   * Defaults to TRUE because that is what the server actually does, and a fake
+   * that stayed silent on connect hid a real bug — the client-sessions hook
+   * treated the connect-time `ready` as a change and every mount paid for two
+   * list reads, invisibly, because no test ever delivered one.
+   *
+   * Tests that drive the connect sequence by hand (the log stream's, which
+   * assert on backlog/ready ordering) set this false and say so.
+   */
+  static emitReadyOnConnect = true;
+
   constructor(url: string) {
     this.url = url;
     FakeEventSource.instances.push(this);
+    if (FakeEventSource.emitReadyOnConnect) {
+      // A microtask, not synchronous: the caller has not attached its
+      // listeners yet at construction time, exactly as a real connection has
+      // not completed yet.
+      queueMicrotask(() => {
+        this.emit('open');
+        this.emit('ready', {});
+      });
+    }
   }
 
   addEventListener(type: string, fn: (e: unknown) => void) {
@@ -49,6 +72,7 @@ export class FakeEventSource {
 /** Install the fake as the global EventSource and clear recorded instances. */
 export function installFakeEventSource() {
   FakeEventSource.instances = [];
+  FakeEventSource.emitReadyOnConnect = true;
   (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
 }
 

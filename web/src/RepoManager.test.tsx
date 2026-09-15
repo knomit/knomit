@@ -1621,6 +1621,50 @@ describe('Manage tabs', () => {
     expect(FakeEventSource.instances.filter(es => es.closeCount === 0)).toHaveLength(1);
   });
 
+  // The regression this pins: the header's own read is async, and the Sessions
+  // page reports a FRESHER count through onLiveCount the moment it opens. A
+  // read dispatched before that must not land after it and overwrite it.
+  it('does not let a stale header read overwrite the count the Sessions page reported', async () => {
+    installFakeEventSource();
+    let settleStale: (v: { policy: typeof POLICY; sessions: ReturnType<typeof sess>[] }) => void = () => {};
+    vi.mocked(api.listClientSessions).mockReturnValueOnce(
+      new Promise(resolve => { settleStale = resolve; }),
+    );
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions');
+
+    // The Sessions page opens and reports 2 while the header's read is still
+    // in flight.
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
+
+    // ...and only now does the older read come back, with the older number.
+    await act(async () => { settleStale({ policy: POLICY, sessions: [sess('live')] }); });
+    expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2');
+  });
+
+  // Same shape, failure variant: a rejection from a superseded read must not
+  // blank a badge that a newer, successful reader has already filled in.
+  it('does not blank the badge when a superseded header read fails', async () => {
+    installFakeEventSource();
+    let failStale: (e: Error) => void = () => {};
+    vi.mocked(api.listClientSessions).mockReturnValueOnce(
+      new Promise((_, reject) => { failStale = reject; }),
+    );
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions');
+
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
+
+    await act(async () => { failStale(new Error('503')); });
+    expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2');
+  });
+
   it('renders no badge at zero, and none when the count cannot be read', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('dead')] });
     const { unmount } = render(<RepoManager {...baseProps} />);

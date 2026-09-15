@@ -139,21 +139,38 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // zero-repo screen is the create form, which should not be making calls
   // about a server the reader has not populated yet.
   const wantLiveCount = repos.length > 0;
+  // Generation guard, and it has to be a GENERATION rather than the effect's
+  // `cancelled` flag. This read is dispatched from three places — mount, window
+  // focus, and the change stream — and the Sessions page writes the same state
+  // through onLiveCount whenever it is open. A boolean captured by one effect
+  // run cannot speak for a request dispatched by another, so a read issued
+  // before the page opened could settle after it and overwrite a FRESHER count
+  // with an older one (or, on a transient failure, blank a badge the page had
+  // just filled in).
+  //
+  // Every read takes the next generation; only the latest generation's
+  // resolution OR rejection is allowed to write. Bumping it is also how the
+  // effect cleanup retires reads that are still in flight.
+  const liveCountGen = useRef(0);
   const readLiveCount = useCallback(() => {
+    const gen = ++liveCountGen.current;
     api.listClientSessions()
-      .then(r => setLiveSessions(r.sessions.filter(s => s.state === 'live').length))
-      .catch(() => setLiveSessions(null));
+      .then(r => { if (gen === liveCountGen.current) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
+      .catch(() => { if (gen === liveCountGen.current) setLiveSessions(null); });
   }, []);
   useEffect(() => {
     if (!wantLiveCount) return;
-    let cancelled = false;
-    const read = () => { if (!cancelled) readLiveCount(); };
-    read();
+    readLiveCount();
     // Skipped while the Sessions page is mounted: it refreshes on focus too,
     // and reports its own count back.
-    const onFocus = () => { if (!sessionsOpen) read(); };
+    const onFocus = () => { if (!sessionsOpen) readLiveCount(); };
     window.addEventListener('focus', onFocus);
-    return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
+    return () => {
+      // Retires anything still in flight from this run — the same mechanism,
+      // so there is only one rule about which read may write.
+      liveCountGen.current += 1;
+      window.removeEventListener('focus', onFocus);
+    };
   }, [sessionsOpen, wantLiveCount, readLiveCount]);
   // Live, but only while this header is the one that owns the number: the
   // Sessions page subscribes for itself and reports back through onLiveCount,
@@ -354,7 +371,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 liveSessions={liveSessions}
               />
             )}
-            {view.kind === 'sessions' && <ManageSessions onLiveCount={setLiveSessions} />}
+            {/* The page's count supersedes anything the header has in flight,
+                so it takes a generation too — otherwise a read dispatched
+                before the page opened could still land on top of it. */}
+            {view.kind === 'sessions' && <ManageSessions onLiveCount={n => { liveCountGen.current += 1; setLiveSessions(n); }} />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for
