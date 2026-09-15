@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"sync/atomic"
 
@@ -217,6 +218,17 @@ func walkCommits(rh *repoHandler, starts []plumbing.Hash, depth int, stop map[pl
 }
 
 // addTreeObjects adds the commit's tree, every subtree and every blob to out.
+//
+// Only io.EOF ends the walk. Any other error is returned, so the handler
+// answers with a 500 instead of encoding a well-formed packfile that is
+// missing objects and letting the CLIENT discover the gap — the
+// failure-presents-as-success shape.
+//
+// Narrow by construction, and worth saying so: go-git's TreeWalker converts a
+// subtree it cannot fetch into io.EOF inside Next(), so a genuinely missing
+// object still reads as end-of-tree here and this check cannot catch it. What
+// it does catch is ErrMaxTreeDepth and the invalid-tree-path errors, which
+// arrive distinguishable.
 func addTreeObjects(rh *repoHandler, commit plumbing.Hash, out map[plumbing.Hash]struct{}) error {
 	c, err := rh.repo.CommitObject(commit)
 	if err != nil {
@@ -231,12 +243,14 @@ func addTreeObjects(rh *repoHandler, commit plumbing.Hash, out map[plumbing.Hash
 	defer w.Close()
 	for {
 		_, entry, err := w.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
 		if err != nil {
-			break // io.EOF
+			return fmt.Errorf("walk tree of commit %s: %w", commit, err)
 		}
 		out[entry.Hash] = struct{}{}
 	}
-	return nil
 }
 
 // presentOnly keeps the haves this store actually holds; git clients may
