@@ -796,8 +796,32 @@ func (b *repoBuilder) build() *RepoInstance {
 // is wired earlier in build() but is race-safe via SyncLocked; only the remote
 // reconcile/push loops are deferred here.)
 func (b *repoBuilder) activate() {
+	b.ensureLocalUpstream()
 	b.recoverFromOrigin()
 	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
+}
+
+// ensureLocalUpstream repairs a store that holds refs/remotes/origin/<upstream>
+// but no local <upstream> — a home moved between machines, or one written
+// before local init bootstrapped it. A live instance was found in exactly that
+// state, which is why it matters: the served advertisement takes HEAD from the
+// LOCAL upstream ref, so without this a peer cloning that repo before the
+// first successful fetch gets an advertisement with no HEAD at all.
+//
+// Runs BEFORE recoverFromOrigin so an unreachable origin at boot does not
+// leave the endpoint headless for the whole outage. reconcileMain remains the
+// authoritative repair; a failure here is logged and the loop retries.
+func (b *repoBuilder) ensureLocalUpstream() {
+	created, err := b.svc.EnsureLocalUpstream(b.ctx, b.upstreamMain)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).
+			Msg("ensureLocalUpstream: bootstrap failed; the reconcile loop will repair it")
+		return
+	}
+	if created {
+		log.Info().Str("repo", b.name).Str("upstream", b.upstreamMain).
+			Msg("ensureLocalUpstream: bootstrapped local upstream from origin")
+	}
 }
 
 // recoverFromOriginTimeout bounds the startup reconcile so a slow or
@@ -858,10 +882,19 @@ func (b *repoBuilder) recoverFromOrigin() {
 	}
 }
 
-// startSyncLoops launches the background pull and push goroutines if a remote
-// named "origin" is configured. Skipped entirely when Deps.DisableBackgroundSync
-// is set — test harnesses use that flag to prevent the first-tick immediate
-// doSync/doPush call from racing with test assertions.
+// startSyncLoops launches the background reconcile goroutine for this repo:
+// runReconcileLoop when a remote named "origin" is configured, and otherwise
+// runLocalReconcileLoop, which advances the consensus branch from this repo's
+// own agent branch so main means the same thing on an origin-less host.
+// Exactly one of the two runs, chosen by the same fact both read.
+//
+// Skipped entirely when Deps.DisableBackgroundSync is set — test harnesses use
+// that flag to prevent the first-tick immediate doSync/doPush call from racing
+// with test assertions, and the local loop's own first tick is no different.
+//
+// ActivateSync cancels this ctx and waits on wg before starting its own
+// reconcile loop, so a repo that gains an origin later drops its local loop on
+// that path rather than running both.
 func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hub *TaskHub) {
 	if b.disableBackgroundSync {
 		return
@@ -873,6 +906,10 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		return
 	}
 	if remote == nil {
+		b.syncLoopMu.Lock()
+		wg.Add(1)
+		b.syncLoopMu.Unlock()
+		go runLocalReconcileLoop(ctx, wg, b.svc, b.name, b.agentBranch, b.cfg.Git.LocalReconcileInterval)
 		return
 	}
 

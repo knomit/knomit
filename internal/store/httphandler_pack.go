@@ -1,0 +1,266 @@
+package store
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"sync/atomic"
+
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+)
+
+var errWantNotAdvertised = errors.New("want is not an advertised tip")
+
+// objectBuilds counts completed object-set builds. It exists for
+// TestGitHandler_BuildsTheObjectSetOncePerFetch, which is the regression test
+// for a measured defect: the object set used to be built on EVERY negotiation
+// round and discarded on all but the last, so an incremental pull against an
+// 800-commit store did seven full history-plus-tree walks and threw six away.
+// Counting is the only way to see that from outside — the responses are
+// byte-identical either way.
+var objectBuilds atomic.Int64
+
+// negotiation is the COMMIT-LEVEL view of one upload-pack request: which
+// commits the client wants, where the walk stopped, and the shallow update
+// that follows. It is cheap — commit objects only, no trees — and it is all a
+// discarded negotiation round needs.
+//
+// git fetches over stateless HTTP in rounds, and every round but the last is
+// discarded. The shallow section has to be answered on each one; the packfile
+// does not. Keeping the two apart is what stops a poll from paying for the
+// whole pack walk once per round.
+type negotiation struct {
+	// wantCommits is every commit on the want side, already cut at depth.
+	wantCommits map[plumbing.Hash]struct{}
+	// clientShallow is what the client reported as its graft points.
+	clientShallow map[plumbing.Hash]struct{}
+	// update is the shallow/unshallow section for this request.
+	update packp.ShallowUpdate
+}
+
+// negotiateCommits does the commit walk and derives the shallow update. It is
+// the half of the old packObjects that a discarded round actually needs.
+//
+// A request without a depth is an unlimited walk (what go-git's built-in
+// server did); a request with "deepen N" is the same walk cut at N commits
+// from each want. go-git's server has no shallow implementation at all and
+// rejects the capability, so the wizard's depth-1 probe used to come back as
+// an HTTP 500.
+//
+// Client shallows (the "shallow <sha>" lines in the request) play two
+// different roles depending on whether the request also carries a depth:
+//
+//   - NO depth (an ordinary fetch by an already-shallow client): they are
+//     GRAFT POINTS. The client does not hold their parents and is not asking
+//     for them, so the walk stops there — without this a routine `git pull`
+//     into a depth-1 clone drags the entire history across.
+//   - WITH a depth: the depth cut governs, and the shallows are only consulted
+//     to work out what changed. Grafting here would make deepening impossible.
+func negotiateCommits(rh *repoHandler, req *packp.UploadPackRequest) (*negotiation, error) {
+	depth := 0
+	if d, ok := req.Depth.(packp.DepthCommits); ok {
+		depth = int(d)
+	}
+	clientShallow := map[plumbing.Hash]struct{}{}
+	for _, h := range req.Shallows {
+		clientShallow[h] = struct{}{}
+	}
+
+	wantStop := clientShallow
+	if depth > 0 {
+		wantStop = nil
+	}
+
+	wantCommits, boundary, err := walkCommits(rh, req.Wants, depth, wantStop)
+	if err != nil {
+		return nil, err
+	}
+
+	// Shallow update, relative to what the client already reports: git's own
+	// upload-pack emits only CHANGES (send_shallow skips anything already
+	// flagged CLIENT_SHALLOW), which is what makes the stateless rounds
+	// idempotent — the client re-sends the same shallow lines every round.
+	n := &negotiation{wantCommits: wantCommits, clientShallow: clientShallow}
+	for h := range boundary {
+		if _, already := clientShallow[h]; !already {
+			n.update.Shallows = append(n.update.Shallows, h)
+		}
+	}
+	for h := range clientShallow {
+		if _, still := boundary[h]; still {
+			continue
+		}
+		// Unshallow means "you now hold this commit's parents". The commit
+		// being transferred is not enough — its PARENTS have to be in the
+		// set, or the client would drop a graft point it still needs.
+		if parentsTransferred(rh, h, wantCommits) {
+			n.update.Unshallows = append(n.update.Unshallows, h)
+		}
+	}
+	sortHashes(n.update.Shallows)
+	sortHashes(n.update.Unshallows)
+	return n, nil
+}
+
+// objects builds the packfile's object set: every want-side commit plus its
+// complete tree (a shallow clone has a complete checkout at every commit it
+// holds), minus everything reachable from the commits the client already has.
+//
+// This is the EXPENSIVE half — a full recursive tree walk per commit — and the
+// caller must run it only once negotiation is settled. A client's shallows
+// bound the have walk: a shallow client holds nothing below its own boundary,
+// so nothing there may be assumed present.
+func (n *negotiation) objects(rh *repoHandler, req *packp.UploadPackRequest) ([]plumbing.Hash, error) {
+	haveCommits, _, err := walkCommits(rh, presentOnly(rh, req.Haves), 0, n.clientShallow)
+	if err != nil {
+		return nil, err
+	}
+
+	haveObjs := map[plumbing.Hash]struct{}{}
+	for h := range haveCommits {
+		haveObjs[h] = struct{}{}
+		if err := addTreeObjects(rh, h, haveObjs); err != nil {
+			return nil, err
+		}
+	}
+	seen := map[plumbing.Hash]struct{}{}
+	var objs []plumbing.Hash
+	add := func(h plumbing.Hash) {
+		if _, dup := seen[h]; dup {
+			return
+		}
+		if _, has := haveObjs[h]; has {
+			return
+		}
+		seen[h] = struct{}{}
+		objs = append(objs, h)
+	}
+	for h := range n.wantCommits {
+		add(h)
+		treeObjs := map[plumbing.Hash]struct{}{}
+		if err := addTreeObjects(rh, h, treeObjs); err != nil {
+			return nil, err
+		}
+		for t := range treeObjs {
+			add(t)
+		}
+	}
+	objectBuilds.Add(1)
+	return objs, nil
+}
+
+// parentsTransferred reports whether every parent of commit h is in set.
+// A commit absent from set (not walked at all) is not transferred, so it
+// cannot be unshallowed.
+func parentsTransferred(rh *repoHandler, h plumbing.Hash, set map[plumbing.Hash]struct{}) bool {
+	if _, ok := set[h]; !ok {
+		return false
+	}
+	c, err := rh.repo.CommitObject(h)
+	if err != nil {
+		return false
+	}
+	for _, p := range c.ParentHashes {
+		if _, ok := set[p]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func sortHashes(hs []plumbing.Hash) {
+	sort.Slice(hs, func(i, j int) bool { return hs[i].String() < hs[j].String() })
+}
+
+// walkCommits walks parents breadth-first from starts. depth 0 means
+// unlimited. stop commits are visited but not descended below. It returns the
+// visited set and the boundary: commits reached at exactly depth that still
+// have parents — the ones a shallow client records as its new graft points.
+func walkCommits(rh *repoHandler, starts []plumbing.Hash, depth int, stop map[plumbing.Hash]struct{}) (visited, boundary map[plumbing.Hash]struct{}, err error) {
+	visited = map[plumbing.Hash]struct{}{}
+	boundary = map[plumbing.Hash]struct{}{}
+	type item struct {
+		h plumbing.Hash
+		d int
+	}
+	queue := make([]item, 0, len(starts))
+	for _, s := range starts {
+		queue = append(queue, item{s, 1})
+	}
+	for len(queue) > 0 {
+		it := queue[0]
+		queue = queue[1:]
+		if _, done := visited[it.h]; done {
+			continue
+		}
+		c, err := rh.repo.CommitObject(it.h)
+		if err != nil {
+			return nil, nil, fmt.Errorf("walk: commit %s: %w", it.h, err)
+		}
+		visited[it.h] = struct{}{}
+		if _, isStop := stop[it.h]; isStop {
+			continue
+		}
+		if depth > 0 && it.d >= depth {
+			if c.NumParents() > 0 {
+				boundary[it.h] = struct{}{}
+			}
+			continue
+		}
+		for _, p := range c.ParentHashes {
+			queue = append(queue, item{p, it.d + 1})
+		}
+	}
+	return visited, boundary, nil
+}
+
+// addTreeObjects adds the commit's tree, every subtree and every blob to out.
+//
+// Only io.EOF ends the walk. Any other error is returned, so the handler
+// answers with a 500 instead of encoding a well-formed packfile that is
+// missing objects and letting the CLIENT discover the gap — the
+// failure-presents-as-success shape.
+//
+// Narrow by construction, and worth saying so: go-git's TreeWalker converts a
+// subtree it cannot fetch into io.EOF inside Next(), so a genuinely missing
+// object still reads as end-of-tree here and this check cannot catch it. What
+// it does catch is ErrMaxTreeDepth and the invalid-tree-path errors, which
+// arrive distinguishable.
+func addTreeObjects(rh *repoHandler, commit plumbing.Hash, out map[plumbing.Hash]struct{}) error {
+	c, err := rh.repo.CommitObject(commit)
+	if err != nil {
+		return err
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return err
+	}
+	out[tree.Hash] = struct{}{}
+	w := object.NewTreeWalker(tree, true, nil)
+	defer w.Close()
+	for {
+		_, entry, err := w.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("walk tree of commit %s: %w", commit, err)
+		}
+		out[entry.Hash] = struct{}{}
+	}
+}
+
+// presentOnly keeps the haves this store actually holds; git clients may
+// offer haves from other remotes.
+func presentOnly(rh *repoHandler, haves []plumbing.Hash) []plumbing.Hash {
+	var out []plumbing.Hash
+	for _, h := range haves {
+		if rh.gits.HasEncodedObject(h) == nil {
+			out = append(out, h)
+		}
+	}
+	return out
+}

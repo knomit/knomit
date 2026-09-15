@@ -3,19 +3,22 @@ package store
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/storer"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	gogitserver "github.com/go-git/go-git/v5/plumbing/transport/server"
-
-	storegit "knomit/internal/store/git"
 )
+
+// packWindow is the delta-compression window the packfile encoder searches.
+// It is a bandwidth/CPU knob, the same value go-git's own server uses; it
+// describes nothing about the repository being served.
+const packWindow = 10
 
 // Handler returns an http.Handler implementing the read-only Smart HTTP git
 // protocol (https://git-scm.com/docs/http-protocol) for this store.
@@ -26,27 +29,25 @@ import (
 //   - POST /git-upload-pack                   — serve a fetch
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = newGitHTTPHandler(s.rh.gits)
+		s.handler = newGitHTTPHandler(s.rh, s.UpstreamBranch)
 	})
 	return s.handler
 }
 
-// repoLoader adapts a storer.Storer to go-git's server.Loader interface,
-// always returning the same storer regardless of endpoint.
-type repoLoader struct {
-	sto storer.Storer
-}
-
-func (l *repoLoader) Load(_ *transport.Endpoint) (storer.Storer, error) {
-	return l.sto, nil
-}
-
 // newGitHTTPHandler builds an http.Handler serving the read-only git smart
 // HTTP endpoints for a single repository. Push (receive-pack) is not exposed.
-func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
-	loader := &repoLoader{sto: sto}
-	srv := gogitserver.NewServer(loader)
-
+//
+// Neither endpoint goes through go-git's built-in server any more: that server
+// advertises only agent and ofs-delta, rejects every capability it did not
+// advertise, and has no shallow implementation — so a depth-1 request (what
+// the create wizard's branch probe sends) came back as an HTTP 500. The
+// advertisement is built by buildAdvRefs and the packfile by packObjects.
+//
+// upstream is evaluated PER REQUEST, not captured once: a repo can gain an
+// origin (and with it a configured Remote.Branch) after the handler is built,
+// and the advertisement must follow.
+func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
+	sto := rh.gits
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/info/refs", func(w http.ResponseWriter, r *http.Request) {
@@ -56,15 +57,30 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 			return
 		}
 
-		ep := &transport.Endpoint{}
-		sess, err := srv.NewUploadPackSession(ep, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		advRefs, _, err := buildAdvRefs(rh, upstream())
+		if errors.Is(err, errUpstreamMissing) {
+			// An unservable repo is refused HERE, in the advertisement, so no
+			// client ever gets far enough to "succeed" against it.
+			//
+			// The ERR pkt-line goes AFTER the service header and its flush.
+			// Where it sits relative to those decides whether the message
+			// reaches a human, and both clients that matter were measured
+			// rather than assumed (knomit's own subscriber is a go-git
+			// client, so real git rendering it proves nothing on its own):
+			//
+			//   real git  fatal: remote error: knomit: consensus branch does
+			//             not exist in this store: "master"   (exit 128)
+			//   go-git    the same text, verbatim, as the returned error
+			//
+			// TestGitHandler_MissingUpstreamRefusesBothClients pins both.
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			w.Header().Set("Cache-Control", "no-cache")
+			e := pktline.NewEncoder(w)
+			_ = e.Encodef("# service=git-upload-pack\n")
+			_ = e.Flush()
+			_ = e.Encodef("ERR %s\n", err.Error())
 			return
 		}
-		defer sess.Close()
-
-		advRefs, err := sess.AdvertisedReferencesContext(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -87,8 +103,6 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		ctx := r.Context()
-
 		body, err := gitRequestBody(r)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -111,9 +125,38 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 			return
 		}
 
+		// Wants must be tips of the CURATED advertisement (section 2): knowing
+		// the hash of a hidden ref must not be enough to fetch it. This is
+		// git's own uploadpack.allowAnySHA1InWant=false default; a real client
+		// refuses such a want before sending it, so this answers the ones that
+		// speak the protocol directly.
+		_, tips, err := buildAdvRefs(rh, upstream())
+		if err != nil && !errors.Is(err, errUpstreamMissing) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		w.Header().Set("Cache-Control", "no-cache")
 		enc := pktline.NewEncoder(w)
+
+		// The same refusal as /info/refs, through the ERR mechanism that the
+		// want-refusal already proves renders. A client that cached an older
+		// advertisement, or one that skipped it, still cannot fetch from a
+		// repo with no consensus branch.
+		if errors.Is(err, errUpstreamMissing) {
+			_ = enc.Encodef("ERR %s\n", err.Error())
+			return
+		}
+
+		for _, want := range req.Wants {
+			if _, ok := tips[want]; !ok {
+				// A protocol-level refusal is an ERR pkt inside a 200, not an
+				// HTTP error: that is the only form a git client renders.
+				_ = enc.Encodef("ERR %s: %s\n", errWantNotAdvertised.Error(), want.String())
+				return
+			}
+		}
 
 		// Single-ack negotiation. git fetches over smart HTTP in rounds: each
 		// POST carries the wants plus a batch of "have" lines and, only on the
@@ -125,41 +168,84 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 		// "bad line length character: PACK" when the client reads the raw pack
 		// bytes where it expects the next pkt-line.
 		common, haveCommon := firstCommonHave(sto, req.Haves)
-		if !requestHasDone(raw) && !haveCommon {
+
+		// The COMMIT-level negotiation is cheap (commit objects, no trees) and
+		// every round needs it, because every round carrying a depth must be
+		// answered with a shallow section.
+		neg, err := negotiateCommits(rh, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		upd := neg.update
+
+		// The object set is the EXPENSIVE half, and only the FINAL round needs
+		// it. git fetches over stateless HTTP in rounds — wants plus a batch of
+		// haves each time — and discards everything until it says "done" or we
+		// acknowledge a common base. Building the object set on every round
+		// meant a full history walk plus a recursive tree walk per commit, all
+		// thrown away: measured at seven builds and six discards for one
+		// incremental pull against an 800-commit store, 1.1s where the code
+		// this replaced returned NAK before touching a single tree.
+		//
+		// It is built BEFORE anything is written, so a failure is still a clean
+		// 500 rather than an error appended to a half-written response.
+		settled := requestHasDone(raw) || haveCommon
+		var objs []plumbing.Hash
+		if settled {
+			objs, err = neg.objects(rh, req)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		// The shallow section precedes the ACK/NAK section, and is present on
+		// EVERY round of a request that carries a depth — git's
+		// consume_shallow_list reads one before each ACK/NAK batch whenever it
+		// sent a deepen, and go-git decodes one whenever req.Depth is set.
+		// A request carrying only "shallow" lines (an ordinary fetch by a
+		// shallow client) gets NO such section: neither client reads one, and
+		// sending it would desynchronise the stream.
+		if !req.Depth.IsZero() {
+			if err := upd.Encode(w); err != nil {
+				return
+			}
+		}
+
+		// The DEEPEN PROBE: git sends the want+deepen section and nothing else
+		// as its own round, reads the shallow list up to the flush, and then
+		// sends the haves on a fresh request. Its reader is one continuous
+		// stream across those rounds, so an ACK/NAK section appended here is
+		// still sitting in the buffer when the next round's shallow list is
+		// read — "fatal: git fetch-pack: expected shallow list". git's own
+		// upload-pack answers this shape with the shallow section alone (the
+		// request body is exhausted, so it never reaches the ACK/NAK code),
+		// and so must this one.
+		if !req.Depth.IsZero() && len(req.Haves) == 0 && !requestHasDone(raw) {
+			return
+		}
+
+		if !settled {
 			_ = enc.Encodef("%s\n", "NAK")
 			return
 		}
 
 		// Negotiation is settled: emit the acknowledgement, then the packfile.
-		sess, err := srv.NewUploadPackSession(&transport.Endpoint{}, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer sess.Close()
-
-		// AdvertisedReferencesContext must run before UploadPack to initialise
-		// the session's capability list.
-		if _, err = sess.AdvertisedReferencesContext(ctx); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		resp, err := sess.UploadPack(ctx, req)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer resp.Close()
-
 		if haveCommon {
 			_ = enc.Encodef("%s %s\n", "ACK", common.String())
 		} else {
 			_ = enc.Encodef("%s\n", "NAK")
 		}
-		// resp as an io.Reader yields the packfile only — its Encode method is
-		// what would prepend a NAK, which we have already written ourselves.
-		if _, err := io.Copy(w, resp); err != nil {
+
+		pr, pw := io.Pipe()
+		go func() {
+			e := packfile.NewEncoder(pw, sto, false)
+			_, err := e.Encode(objs, packWindow)
+			_ = pw.CloseWithError(err)
+		}()
+		defer pr.Close()
+		if _, err := io.Copy(w, pr); err != nil {
 			return
 		}
 	})

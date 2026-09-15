@@ -286,3 +286,110 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		}
 	}
 }
+
+// runLocalReconcileLoop is the origin-less twin of runReconcileLoop. A repo
+// with no remote has nothing to pull or push, but its consensus branch must
+// still follow its agent branch: main is what a peer subscribing to THIS
+// instance reads, and what every host means by "the knowledge base". Before
+// this loop existed, an origin-less repo's main sat on the root commit for the
+// life of the repo.
+//
+// Polled, not commit-driven. The store has ONE commit-observer slot and the
+// SSE broadcast owns it, so there is nothing to hang this off; a tick that
+// finds the two tips equal costs two ref reads and does nothing. It runs once
+// at start so a restarted instance converges without waiting an interval.
+//
+// It exits — rather than skipping — as soon as the repo has an origin, so the
+// two loops are mutually exclusive by the same fact. A subscription has no
+// agent branch and is excluded by the same guard.
+func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration) {
+	defer wg.Done()
+	runLocalReconcile(ctx, repo, agentBranch, interval,
+		func() (bool, error) {
+			r, err := svc.Remote().GetRemote("origin")
+			return r != nil, err
+		},
+		func() error {
+			_, err := svc.AdvanceLocalUpstream(ctx, agentBranch, svc.UpstreamBranch())
+			return err
+		})
+}
+
+// runLocalReconcile is the loop itself, parameterised on its two store reads.
+// The parameterisation exists to make the ERROR paths testable: the case that
+// matters — a transient failure of the origin read must not stop the loop —
+// cannot be produced from a real store on demand.
+//
+// hasOrigin answers "is this repo origin-backed?", and its error is a THIRD
+// state, not a third way of saying yes. GetRemote returns (nil, nil) for the
+// absent case, so an error there is a real failure of the status query —
+// SQLITE_BUSY under concurrent writes is the plausible one in this store. An
+// earlier version treated that as "has an origin" and exited: one transient
+// error then stopped main advancing for the life of the process, and a
+// subscribing peer silently stopped seeing facts, indistinguishable from a
+// quiet repo. Skipping a tick costs one interval of staleness; exiting costs
+// permanent staleness. This matches the sibling loop, which re-reads its
+// config fresh every tick and never exits on a read failure
+// (kb/architecture/repos/reconcile-loop-fresh-config-per-tick).
+func runLocalReconcile(
+	ctx context.Context,
+	repo, agentBranch string,
+	interval time.Duration,
+	hasOrigin func() (bool, error),
+	advance func() error,
+) {
+	if interval <= 0 || agentBranch == "" {
+		return
+	}
+	lg := log.With().Str("repo", repo).Logger()
+
+	// ownsMain is true only on a DEFINITE "no origin". An unreadable answer
+	// decides nothing: skip the work and let the next tick ask again.
+	ownsMain := func() (owns, definite bool) {
+		origin, err := hasOrigin()
+		if err != nil {
+			lg.Warn().Err(err).Msg("local reconcile: origin read failed; skipping this tick")
+			return false, false
+		}
+		if origin {
+			return false, true
+		}
+		return true, true
+	}
+
+	tick := func() {
+		if err := advance(); err != nil && ctx.Err() == nil {
+			lg.Warn().Err(err).Msg("local reconcile: advance failed; will retry next tick")
+		}
+	}
+
+	// Exit at start only on a definite "this repo has an origin" — then
+	// reconcileMain owns main and the two loops stay mutually exclusive by the
+	// same fact. An unreadable answer enters the loop without ticking, rather
+	// than either advancing main behind reconcileMain's back or never starting.
+	if owns, definite := ownsMain(); definite && !owns {
+		return
+	} else if owns {
+		lg.Info().Dur("interval", interval).Msg("local reconcile loop started")
+		tick()
+	}
+
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			lg.Info().Msg("local reconcile loop stopped")
+			return
+		case <-t.C:
+			owns, definite := ownsMain()
+			if definite && !owns {
+				lg.Info().Msg("local reconcile loop stopped: repo gained an origin")
+				return
+			}
+			if owns {
+				tick()
+			}
+		}
+	}
+}

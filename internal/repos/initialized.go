@@ -7,9 +7,9 @@ import (
 	"io"
 
 	gogit "github.com/go-git/go-git/v5"
-	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/storage/memory"
 
@@ -93,13 +93,21 @@ type InitializedResult struct {
 // ProbeInitialized reports whether the given branch of a remote already holds a
 // knomit ontology, WITHOUT creating anything locally.
 //
-// The whole transfer is a `Depth: 1` + `SingleBranch` + `NoTags` clone into
-// memory.NewStorage(): one commit's tree, no history, no other branches, no
-// tags, discarded when this returns. Measured 2026-08-17 against live GitHub
-// and GitLab remotes, shallow is honoured by both — the worst case in that
-// measurement was a 1,409-blob tip at 16.5 MB in 822 ms, and the case this
-// endpoint actually serves (a repo with one commit) is a few hundred bytes and
-// one round trip.
+// The whole transfer is a `SingleBranch` + `NoTags` clone into a budgeted
+// in-memory store: one branch, no tags, discarded when this returns. It is
+// `Depth: 1` — one commit's tree, no history — ONLY when the server advertised
+// the `shallow` capability. Measured 2026-08-17 against live GitHub and GitLab
+// remotes, shallow is honoured by both — the worst case in that measurement
+// was a 1,409-blob tip at 16.5 MB in 822 ms, and the case this endpoint
+// actually serves (a repo with one commit) is a few hundred bytes and one
+// round trip.
+//
+// A server that did not advertise shallow gets a FULL single-branch clone
+// instead. Sending a depth to one is not a degraded request: go-git's client
+// adds the `shallow` capability whenever a depth is set, and a server that did
+// not advertise it rejects the request whole — knomit's own endpoint answered
+// that with an HTTP 500, and real git refuses up front with "Server does not
+// support shallow clients". budgetedStorage bounds the fallback.
 //
 // filter=blob:none would make even that near-free and is deliberately NOT used:
 // go-git has packp.FilterBlobNone() and UploadRequest.Filter, but neither is
@@ -149,20 +157,29 @@ func (m *Manager) ProbeInitialized(ctx context.Context, o OriginSpec) (Initializ
 	// Only THIS machine's agent branch counts. Another machine's is neither
 	// adopted nor inspected: we would cut our own agent branch from the
 	// consensus branch, so the consensus branch is what the question is about.
-	hasAgentBranch, aerr := remoteHasBranch(netCtx, o.URL, auth, m.deps.AgentBranch)
-	if aerr != nil {
+	// ONE advertisement answers two questions: which branch a create would
+	// adopt, and whether this server can serve a shallow clone at all. Reading
+	// it through the transport session rather than remote.ListContext is what
+	// makes the second answer available — ListContext drops the capabilities.
+	// It stays inside the SAME netCtx budget, so an unresponsive remote cannot
+	// cost a caller more than the configured timeout.
+	adv, aerr := advertise(netCtx, o.URL, auth)
+	if aerr != nil && !errors.Is(aerr, transport.ErrEmptyRemoteRepository) {
 		// The adoption target could not be established, so neither can the
 		// answer. The third state, for the same reason as everywhere else here:
 		// guessing either way is unrecoverable.
 		return InitializedResult{Branch: o.Branch, Detail: aerr.Error()}, nil
 	}
+	// A remote with no refs at all has no agent branch either, and it is the
+	// caller's own ErrRemoteNoBranches case — not a failure to look.
+	hasAgentBranch := advHasBranch(adv, m.deps.AgentBranch)
 	// store.BranchACreateReads is the rule ITSELF, the same function
 	// InitFromRemote applies to decide what to adopt. This call is what makes
 	// the prediction and the act one thing rather than two that agree by
 	// comment.
 	inspect := store.BranchACreateReads(hasAgentBranch, m.deps.AgentBranch, o.Branch)
 
-	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect)
+	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect, advertisesShallow(adv))
 }
 
 // ProbeInitializedOn is ProbeInitialized for a caller that already knows
@@ -181,7 +198,17 @@ func (m *Manager) ProbeInitializedOn(ctx context.Context, o OriginSpec, inspect 
 	}
 	netCtx, cancel := probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
 	defer cancel()
-	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect)
+	// This entry point has no listing of its own to piggyback on, so it pays
+	// for the advertisement itself — inside the same netCtx budget. A round
+	// trip is the price of not sending a depth to a server that cannot answer
+	// it; the alternative, trying a shallow clone and retrying on failure,
+	// guesses at which failures mean "no shallow" and spends the same trip
+	// anyway when it guesses wrong.
+	adv, aerr := advertise(netCtx, o.URL, auth)
+	if aerr != nil && !errors.Is(aerr, transport.ErrEmptyRemoteRepository) {
+		return InitializedResult{Branch: inspect, Detail: aerr.Error()}, nil
+	}
+	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect, advertisesShallow(adv))
 }
 
 // probeInitializedBranch is the shared body: shallow-clone `inspect` and look
@@ -195,13 +222,22 @@ func (m *Manager) ProbeInitializedOn(ctx context.Context, o OriginSpec, inspect 
 // timeout. parent is the CALLER's context, kept distinct from netCtx so
 // probeFailureDetail can still tell "the caller gave up" from "our deadline
 // expired".
-func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o OriginSpec, auth transport.AuthMethod, inspect string) (InitializedResult, error) {
+// shallowOK says whether the server advertised the `shallow` capability. Only
+// then is a depth requested: go-git's client adds the capability to the
+// upload-pack request whenever a depth is set, and a server that did not
+// advertise it rejects the whole request — which is how this probe used to
+// come back as an HTTP 500 against knomit's own endpoint, and as "Server does
+// not support shallow clients" from real git. Without shallow the clone is a
+// full single-branch one, still bounded by budgetedStorage.
+func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o OriginSpec, auth transport.AuthMethod, inspect string, shallowOK bool) (InitializedResult, error) {
 	opts := &gogit.CloneOptions{
 		URL:          o.URL,
 		Auth:         auth,
 		SingleBranch: true,
-		Depth:        1,
 		Tags:         gogit.NoTags,
+	}
+	if shallowOK {
+		opts.Depth = 1
 	}
 	// An empty Branch means "whatever the remote's HEAD points at" — go-git
 	// resolves that itself when ReferenceName is unset. Naming a branch the
@@ -278,7 +314,7 @@ func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o Origi
 	return InitializedResult{Initialized: InitializedNo, Branch: branch}, nil
 }
 
-// remoteHasBranch reports whether the remote carries refs/heads/<branch>.
+// advHasBranch reports whether the advertisement carries refs/heads/<branch>.
 //
 // Refs only — no objects transfer — which is the same listing ProbeOrigin makes
 // one step earlier in the wizard. It is repeated here rather than threaded
@@ -286,34 +322,14 @@ func (m *Manager) probeInitializedBranch(parent, netCtx context.Context, o Origi
 // must be about the remote as it is NOW: the branch it asks about is one knomit
 // itself pushes, so a listing taken before an earlier create finished would be
 // stale in exactly the case that matters.
-func remoteHasBranch(ctx context.Context, url string, auth transport.AuthMethod, branch string) (bool, error) {
-	if branch == "" {
-		return false, nil
+//
+// A nil advertisement is an empty remote: no refs, so no agent branch.
+func advHasBranch(adv *packp.AdvRefs, branch string) bool {
+	if adv == nil || branch == "" {
+		return false
 	}
-	repo, err := gogit.Init(memory.NewStorage(), nil)
-	if err != nil {
-		return false, err
-	}
-	rem, err := repo.CreateRemote(&gogitconfig.RemoteConfig{Name: "origin", URLs: []string{url}})
-	if err != nil {
-		return false, err
-	}
-	refs, err := rem.ListContext(ctx, &gogit.ListOptions{Auth: auth})
-	if err != nil {
-		// A remote with no refs at all has no agent branch either, and it is
-		// the caller's own ErrRemoteNoBranches case — not a failure to look.
-		if errors.Is(err, transport.ErrEmptyRemoteRepository) {
-			return false, nil
-		}
-		return false, err
-	}
-	want := plumbing.NewBranchReferenceName(branch)
-	for _, r := range refs {
-		if r.Name() == want {
-			return true, nil
-		}
-	}
-	return false, nil
+	_, ok := adv.References[plumbing.NewBranchReferenceName(branch).String()]
+	return ok
 }
 
 // ontologyIDFromTree reads the ontology blob already located in this tip tree

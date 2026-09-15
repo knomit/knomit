@@ -43,6 +43,15 @@ type GitConfig struct {
 	// than answered, because an answer nobody could obtain must not route a
 	// create. Default 64 MiB (set in Defaults); 0 disables the bound.
 	MaxProbeBytes int64 `toml:"max_probe_bytes"`
+	// LocalReconcileInterval is how often a repo with NO origin fast-forwards
+	// its consensus branch (main) from its own agent branch, so that branch
+	// means the same thing here as on an origin-backed host and a peer
+	// subscribing to this instance sees the facts.
+	//
+	// A tick that finds the two tips equal does nothing, so a quiet repo costs
+	// two ref reads; a burst of writes costs one advance. Default 30s (set in
+	// Defaults). 0 disables the local reconcile entirely.
+	LocalReconcileInterval time.Duration `toml:"local_reconcile_interval"`
 }
 
 // RemoteAuthConfig holds git remote authentication settings.
@@ -266,7 +275,12 @@ func Defaults() Config {
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
 		},
-		Git: GitConfig{Serve: true, NetworkTimeout: 120 * time.Second, MaxProbeBytes: 64 << 20},
+		Git: GitConfig{
+			Serve:                  true,
+			NetworkTimeout:         120 * time.Second,
+			MaxProbeBytes:          64 << 20,
+			LocalReconcileInterval: 30 * time.Second,
+		},
 		Log: LogConfig{
 			Format:        "console",
 			Level:         "info",
@@ -315,6 +329,9 @@ func Load() (Config, error) {
 	envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve)
 	envOr("KNOMIT_GIT_PORT", &cfg.Git.Port)
 	if err := envDurationOr("KNOMIT_GIT_NETWORK_TIMEOUT", &cfg.Git.NetworkTimeout); err != nil {
+		return Config{}, err
+	}
+	if err := envDurationOr("KNOMIT_GIT_LOCAL_RECONCILE_INTERVAL", &cfg.Git.LocalReconcileInterval); err != nil {
 		return Config{}, err
 	}
 	envOr("KNOMIT_REMOTE_TOKEN", &cfg.Remote.Token)
