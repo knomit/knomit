@@ -147,4 +147,58 @@ describe('ManageLogs', () => {
     act(() => appendLines(['10:00:01 INF a', '10:00:02 INF b']))
     expect(await screen.findByRole('button', { name: /2 new lines/i })).toBeInTheDocument()
   }, 30_000)
+
+  // The tab strip already says "Logs", so a heading that says it again is pure
+  // repetition. Scoped to the page's own subtree: the strip itself is not
+  // rendered here, but a future wrapper that reintroduced a heading would be.
+  it('renders no heading of its own — the tab strip already names the page', () => {
+    render(<ManageLogs />)
+    const page = screen.getByTestId('manage-logs')
+    expect(page.querySelector('h1, h2, h3')).toBeNull()
+  })
+
+  // The hint survives the heading's removal, because "live" is what says this is
+  // a stream rather than a dump of a file.
+  it('keeps the live hint, in the card label row', () => {
+    render(<ManageLogs />)
+    expect(screen.getByText('this server, live')).toBeInTheDocument()
+  })
+
+  // Asserts the POSITIVE, not just the absence of the old cap: a test that only
+  // checked maxHeight === '' would still pass if the viewport fraction came back
+  // via a CSS class. The pane, not the viewport, has to be what bounds the log.
+  it('sizes the log body from the pane, not a viewport fraction', () => {
+    render(<ManageLogs />)
+    const scroller = document.querySelector('.scroller') as HTMLDivElement
+    expect(scroller).not.toBeNull()
+    expect(scroller.style.flex).toBe('1 1 0%')
+    expect(scroller.style.minHeight).toBe('0px')
+    expect(scroller.style.overflowY).toBe('auto')
+    expect(scroller.style.maxHeight).toBe('')
+  })
+
+  // minHeight:0 on the card is what stops min-content propagating up from the
+  // log. Left at the flex default (auto), the card floors at its min-content
+  // height — which includes the scroller's WHOLE content, because the
+  // scroller's own minHeight:0 is a floor and not a ceiling — and the card
+  // grows to fit the entire scrollback: measured at 1570px inside a 1056px
+  // pane, with the status line pushed off screen. That is the runaway the old
+  // 58vh cap existed to prevent, so this assertion is load-bearing.
+  it('pins the card to the pane instead of to the log it contains', () => {
+    render(<ManageLogs />)
+    const card = screen.getByTestId('manage-logs').firstElementChild as HTMLDivElement
+    expect(card.style.flex).toBe('1 1 0%')
+    expect(card.style.minHeight).toBe('0px')
+  })
+
+  // The card shrinking freely is what then needs containing at the small end.
+  // The floor lives on the ROOT: below it the root outgrows the pane and
+  // detailCol scrolls, rather than the card shrinking while the toolbar, the
+  // scroller floor and the status line refuse to and draw through its border.
+  it('floors the page so a short window scrolls the pane, not through the card', () => {
+    render(<ManageLogs />)
+    const root = screen.getByTestId('manage-logs')
+    expect(root.style.height).toBe('100%')
+    expect(parseInt(root.style.minHeight, 10)).toBeGreaterThan(200)
+  })
 })

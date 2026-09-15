@@ -96,14 +96,12 @@ export function ManageLogs() {
   const shown = visibleLines(lines, level, query).length;
 
   return (
-    <div data-testid="manage-logs">
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-        <h2 style={{ margin: 0, fontSize: 16 }}>Logs</h2>
-        <span style={{ color: '#888', fontSize: 12 }}>this server, live</span>
-      </div>
-
-      <div style={{ ...card, marginTop: 10 }}>
-        <div style={cardLabel}>Server log</div>
+    <div data-testid="manage-logs" style={page}>
+      <div style={logCard}>
+        <div style={labelRow}>
+          Server log
+          <span style={labelHint}>this server, live</span>
+        </div>
         <header style={toolbar}>
           <label style={toolLabel}>
             Level
@@ -163,7 +161,7 @@ export function ManageLogs() {
           </button>
         </header>
 
-        <div style={{ position: 'relative' }}>
+        <div style={scrollerWrap}>
           <div className="scroller" style={scroller} ref={scrollRef} onScroll={onScroll}>
             <LogView lines={lines} level={level} query={query} />
           </div>
@@ -190,6 +188,58 @@ export function ManageLogs() {
   );
 }
 
+// CARD_FLOOR is the card's own chrome (label, toolbar, status line, padding)
+// plus SCROLLER_FLOOR — roughly the shortest the card can be drawn without its
+// contents sticking out of it. It is a floor on the ROOT, not on the card, for
+// the reason spelled out on logCard below. Approximate on purpose: `toolbar`
+// wraps, so the true figure rises as the window narrows, and the cost of being
+// a little low is a few pixels of overlap in a window nobody works in.
+const SCROLLER_FLOOR = 140;
+const CARD_FLOOR = SCROLLER_FLOOR + 120;
+// The page fills the detail pane rather than sizing to its content. detailCol
+// (RepoManager.tsx) is a stretched flex item, so its height is definite and this
+// percentage resolves against its CONTENT box — the pane's own padding stays
+// outside it, so nothing overflows.
+const page: React.CSSProperties = {
+  height: '100%', minHeight: CARD_FLOOR, display: 'flex', flexDirection: 'column',
+};
+// flex:1 to take the pane's height; column so the toolbar and the status line
+// stay pinned and only the body between them scrolls.
+//
+// minHeight:0 is LOAD-BEARING, and not for the usual reason. The familiar one
+// is that a flex item's default min-height:auto stops it shrinking. The one
+// that bites here is that min-height:auto floors this card at its MIN-CONTENT
+// height — and min-content propagates up from the log: the scroller's own
+// minHeight:0 sets a floor, not a ceiling, so it does not stop its content's
+// full height travelling up through the wrapper. Left at auto, the card grows
+// to fit the entire scrollback (measured: a 1570px card in a 1056px pane, with
+// the status line pushed off screen), which is exactly the runaway the old
+// `maxHeight: '58vh'` was there to prevent. Verified in the browser, not
+// reasoned about: see the PR.
+//
+// Letting the card shrink freely is what then needs containing at the small
+// end, and the floor for that goes on the ROOT (above), not here. On the card a
+// floor would be self-defeating — min-height:auto is what we are escaping, and
+// any explicit floor would have to fight flex:1 for the same axis. On the root
+// it simply stops the whole page getting shorter than the card can draw: the
+// root outgrows the pane, and detailCol (overflowY:auto) scrolls it.
+//
+// Which is why the card must never be given an `overflow` of its own. That
+// degradation works by letting the card overflow the root; a scroll container
+// here would absorb exactly that overflow, the root would never outgrow the
+// pane, and the floor would stop doing anything. It would also nest a second
+// scrollbar inside the scroller's.
+const logCard: React.CSSProperties = {
+  ...card, marginTop: 0, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+};
+const labelRow: React.CSSProperties = {
+  ...cardLabel, display: 'flex', alignItems: 'baseline', gap: 8,
+};
+// The hint rides the caption row instead of having a heading of its own. The tab
+// strip already says "Logs", so the <h2> that used to sit here said it a second
+// time; "live" is the part that still earns its place, being what distinguishes
+// a stream from a dump of a file.
+const labelHint: React.CSSProperties = { textTransform: 'none', letterSpacing: 0 };
 const toolbar: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
   padding: '4px 0 10px', borderBottom: '1px solid #222',
@@ -203,12 +253,25 @@ const toolBtn = (on: boolean): React.CSSProperties => ({
   background: on ? '#22303a' : 'transparent', color: on ? '#cfe' : '#9a9a9a',
   border: '1px solid #333', borderRadius: 4, padding: '3px 9px', fontSize: 12, cursor: 'pointer',
 });
-// A bounded scroller, not the page: the log is the one Manage pane whose
-// content is unbounded, and letting it grow the page would put the toolbar and
-// the status line off screen exactly when they are needed.
+// The scroller's frame. flex:1 so it absorbs every pixel the toolbar and the
+// status line leave, minHeight so a very short window still shows a few lines
+// instead of collapsing to a sliver. position:relative anchors the pill, which
+// is out of flow and so is unmoved by the column flex.
+const scrollerWrap: React.CSSProperties = {
+  position: 'relative', flex: 1, minHeight: SCROLLER_FLOOR,
+  display: 'flex', flexDirection: 'column', marginTop: 10,
+};
+// Bounded by its SHARE OF THE PANE, not by a fraction of the viewport. The
+// reason for bounding it at all is unchanged: the log is the one Manage pane
+// whose content is unbounded, and letting it grow the page would put the
+// toolbar and the status line off screen exactly when they are needed. But the
+// old `maxHeight: '58vh'` bought that by measuring the wrong box — the pane is
+// not the viewport, so the cap left dead space below the card and did not move
+// when the window was resized. flex:1 + minHeight:0 makes the PANE the bound,
+// which is the box the log actually sits in.
 const scroller: React.CSSProperties = {
-  maxHeight: '58vh', minHeight: 220, overflowY: 'auto', background: '#101010',
-  border: '1px solid #1c1c1c', borderRadius: 4, marginTop: 10,
+  flex: 1, minHeight: 0, overflowY: 'auto', background: '#101010',
+  border: '1px solid #1c1c1c', borderRadius: 4,
 };
 const pill: React.CSSProperties = {
   position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
