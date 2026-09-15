@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useAsync } from './hooks';
 import { EmptyState, LoadingSpinner } from './ui';
 import type { Dispatch } from 'react';
@@ -824,7 +824,16 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
   }, [activeList, selectedIdx, path, dispatch, openFact]);
 
-  useEffect(() => {
+  // A LAYOUT effect, not a passive one, and that is load-bearing. This handler
+  // closes over `activeList` and `selectedIdx`; React runs the DOM commit and
+  // the passive-effect flush in SEPARATE tasks, so a passive registration left
+  // a window in which the rows were already painted while the live handler
+  // still described the empty list it was built with. Arrows in that window hit
+  // `activeList.length === 0` and were swallowed — no selection, no navigation,
+  // no error. A layout effect runs synchronously in the commit task, so the
+  // handler can never describe a list older than the one on screen.
+  // Pinned by Library.keyboard.timing.test.tsx.
+  useLayoutEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (document.activeElement as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
