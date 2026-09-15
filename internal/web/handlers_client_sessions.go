@@ -1,6 +1,8 @@
 package web
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -95,9 +97,16 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 		}
 		// ONE name index for the whole response — three queries, fixed —
 		// rather than a lookup per row. control.db runs at
-		// SetMaxOpenConns(1) and the UI polls this endpoint every 30s with
-		// potentially hundreds of rows, so a per-row lookup would serialise
-		// the entire page behind a single connection.
+		// SetMaxOpenConns(1) with potentially hundreds of rows, so a per-row
+		// lookup would serialise the entire page behind a single connection.
+		//
+		// The read rate is no longer just the 30s poll. Since the change
+		// stream landed, an open Manage tab ALSO re-reads on a push, and the
+		// binding sets that bound deliberately (see useClientSessionChanges):
+		// a `touch` — the one kind that arrives at MCP request rate — is
+		// trailing-only on a 5s window, while `init`/`end`/`purge` read at
+		// once. So the worst case per open tab is roughly one read per 5s
+		// plus one per arrival or departure, not one per MCP request.
 		names := newBindingNames(m)
 		items := make([]clientSessionView, 0, len(rows))
 		for _, s := range rows {
@@ -136,9 +145,124 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 				DeadAfterS: int64(p.DeadAfter.Seconds()), HiddenAfterS: int64(p.HiddenAfter.Seconds()),
 				RetentionS: int64(p.Retention.Seconds()), LiveWindowS: int64(p.LiveWindow().Seconds()),
 			},
-			Links:    hal.LinkMap{"self": {Href: selfWithQuery(b.Sessions(), r)}},
+			Links: hal.LinkMap{
+				"self": {Href: selfWithQuery(b.Sessions(), r)},
+				// The change stream for this collection. A client that follows
+				// it re-reads THIS url; the stream itself carries no rows.
+				"events": {Href: b.Sessions() + "/events"},
+			},
 			Embedded: map[string][]clientSessionView{"sessions": items},
 		})
+	}
+}
+
+// sseWriteTimeout bounds a single SSE write. Generous: it is a guard against a
+// client that has stopped reading entirely, not a latency budget, and a
+// legitimately slow network must not be mistaken for a dead one.
+const sseWriteTimeout = 30 * time.Second
+
+// handleHALClientSessionEvents serves GET /api/v1/sessions/events — an SSE
+// stream of "row X changed" pings, so the Sessions page and the Manage badge
+// stop waiting for their next 30s poll to show a session that has already
+// arrived.
+//
+// This stream is between the BROWSER and the server. It is NOT the held
+// stream that kb/decisions/mcp/client-sessions/liveness-last-seen rejects:
+// that decision is about the MCP client (bridge or direct HTTP caller), which
+// still holds nothing open, and presence is still derived from last_seen_at
+// at read time. Nothing here makes presence exact; it makes the UI's copy of
+// it prompt.
+//
+// The payload is an id and a kind, nothing else, so a consumer cannot render
+// from it and must re-read the list — which is the endpoint that applies the
+// ReadOnly redaction. That is what makes this stream safe to serve in
+// read-only mode.
+func handleHALClientSessionEvents(store *sessions.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if store == nil {
+			hal.WriteProblem(w, http.StatusServiceUnavailable, "Client sessions unavailable",
+				"the client session registry is not open on this server", r.URL.Path)
+			return
+		}
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		// Subscribe BEFORE announcing ready: a change published between the
+		// two would otherwise fall in the gap that `ready` exists to close.
+		events := store.Subscribe(r.Context())
+
+		rc := http.NewResponseController(w)
+		// write bounds ONE write and reports whether the stream is still
+		// usable. Both halves are load-bearing.
+		//
+		// The deadline, because the server runs SSE with WriteTimeout 0 — it
+		// has to, or every stream would be cut at the timeout — and the hub
+		// never blocks on a slow subscriber. So a client that stops draining
+		// its socket wedges this write with no bound at all, holding the
+		// goroutine and the subscription while events accumulate behind it.
+		//
+		// The error check, because a deadline WITHOUT one inverts the failure
+		// rather than fixing it: the deadline fires, the write fails, and a
+		// loop that ignores the error spins on a dead connection at full event
+		// rate. Every write here is checked, and returning is what ends the
+		// subscription — net/http cancels the request context when the handler
+		// returns, which is what goob's Subscribe(ctx) is waiting on.
+		write := func(format string, args ...any) bool {
+			if err := rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
+				// The chain cannot bound this write. Refusing to start is the
+				// safe direction, and the real-middleware-chain test is what
+				// keeps this from silently disabling the endpoint.
+				return false
+			}
+			if _, err := fmt.Fprintf(w, format, args...); err != nil {
+				return false
+			}
+			flusher.Flush()
+			return true
+		}
+
+		// One `ready` per connection. The client re-reads the list on a LATER
+		// one, because a reconnect's gap may have dropped changes — the same
+		// reason the branch stream replays its snapshot on connect.
+		if !write("event: ready\ndata: {}\n\n") {
+			return
+		}
+
+		keepalive := time.NewTicker(30 * time.Second)
+		defer keepalive.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case e, ok := <-events:
+				if !ok {
+					return
+				}
+				c, ok := e.(sessions.Change)
+				if !ok {
+					continue
+				}
+				data, err := json.Marshal(c)
+				if err != nil {
+					continue
+				}
+				if !write("event: session\ndata: %s\n\n", data) {
+					return
+				}
+			case <-keepalive.C:
+				// The keepalive is bounded too: it is the write most likely to
+				// be the one that discovers a client is gone.
+				if !write(": keepalive\n\n") {
+					return
+				}
+			}
+		}
 	}
 }
 

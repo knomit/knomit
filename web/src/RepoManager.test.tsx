@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { RepoManager } from './RepoManager';
 import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES } from './api';
+import { FakeEventSource, installFakeEventSource } from './testEventSource';
 
 // `api` and the origin-session streams are stubbed; the module's other exports
 // — the description byte caps — pass through from the real module, so a test
@@ -1586,6 +1587,114 @@ describe('Manage tabs', () => {
     expect(overview).not.toHaveStyle({ background: ACTIVE });
     expect(sessions).not.toHaveStyle({ background: ACTIVE });
     expect(screen.getByTestId('repomgr-item-core')).toHaveStyle({ background: ACTIVE });
+  });
+
+  it('updates the badge live while Manage is open on Overview', async () => {
+    installFakeEventSource();
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    render(<RepoManager {...baseProps} />);
+    expect(await screen.findByTestId('repomgr-sessions-badge')).toHaveTextContent('1');
+
+    // A second session initializes. Without the stream this badge would not
+    // move until the next window focus — the bug this fixes.
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    await act(async () => { FakeEventSource.instances[0].emit('session', { id: 's2', kind: 'init' }); });
+
+    await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
+  });
+
+  it('opens exactly one sessions stream per tab: the page owns it while it is up', async () => {
+    installFakeEventSource();
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions-badge');
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const headerStream = FakeEventSource.instances[0];
+
+    // Opening Sessions hands the stream over: the page reports its count back
+    // through onLiveCount, so a second stream would be two subscribers
+    // feeding one number.
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await waitFor(() => expect(headerStream.closeCount).toBe(1));
+    expect(FakeEventSource.instances.filter(es => es.closeCount === 0)).toHaveLength(1);
+  });
+
+  // The regression this pins: the header's own read is async, and the Sessions
+  // page reports a FRESHER count through onLiveCount the moment it opens. A
+  // read dispatched before that must not land after it and overwrite it.
+  it('does not let a stale header read overwrite the count the Sessions page reported', async () => {
+    installFakeEventSource();
+    let settleStale: (v: { policy: typeof POLICY; sessions: ReturnType<typeof sess>[] }) => void = () => {};
+    vi.mocked(api.listClientSessions).mockReturnValueOnce(
+      new Promise(resolve => { settleStale = resolve; }),
+    );
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions');
+
+    // The Sessions page opens and reports 2 while the header's read is still
+    // in flight.
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
+
+    // ...and only now does the older read come back, with the older number.
+    await act(async () => { settleStale({ policy: POLICY, sessions: [sess('live')] }); });
+    expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2');
+  });
+
+  // Same shape, failure variant: a rejection from a superseded read must not
+  // blank a badge that a newer, successful reader has already filled in.
+  it('does not blank the badge when a superseded header read fails', async () => {
+    installFakeEventSource();
+    let failStale: (e: Error) => void = () => {};
+    vi.mocked(api.listClientSessions).mockReturnValueOnce(
+      new Promise((_, reject) => { failStale = reject; }),
+    );
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions');
+
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
+
+    await act(async () => { failStale(new Error('503')); });
+    expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2');
+  });
+
+  // Opening Sessions must cost exactly ONE list read: the page's own first
+  // load. The header stops reading (the page reports its count back through
+  // onLiveCount), so a second read means something re-ran that should not have.
+  //
+  // Asserted across the TRANSITION rather than on a standalone ManageSessions
+  // mount, because that is the only place the fault can appear: ManageSessions
+  // keeps onLiveCount in load's useCallback deps and runs its poll effect on
+  // [load], so an onLiveCount whose identity changes per render re-runs the
+  // effect and issues an extra read. A standalone render with a stable prop
+  // passes either way.
+  it('opening Sessions costs exactly one list read', async () => {
+    installFakeEventSource();
+    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    const { rerender } = render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions-badge');
+    const before = vi.mocked(api.listClientSessions).mock.calls.length;
+
+    fireEvent.click(screen.getByTestId('repomgr-sessions'));
+    await screen.findByTestId('manage-sessions');
+    await act(async () => { await Promise.resolve(); });
+    expect(vi.mocked(api.listClientSessions).mock.calls.length - before).toBe(1);
+
+    // And a RepoManager re-render — which the page itself causes every time it
+    // reports a changed count — must cost nothing. This is the half an inline
+    // arrow fails: a new callback identity per render reaches the page's
+    // effect deps and re-runs its poll.
+    const afterOpen = vi.mocked(api.listClientSessions).mock.calls.length;
+    rerender(<RepoManager {...baseProps} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(vi.mocked(api.listClientSessions).mock.calls.length).toBe(afterOpen);
   });
 
   it('renders no badge at zero, and none when the count cannot be read', async () => {

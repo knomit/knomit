@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App, { HEAD_POLL_MS } from './App';
+import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 
 // Characterization tests for the SSE wiring in App (the effect keyed on
 // [state.repo, state.branch]). These pin CURRENT behavior — the diagnostics the
@@ -16,51 +17,6 @@ import App, { HEAD_POLL_MS } from './App';
 // off console.error/console.info spies instead — the assertions about WHICH
 // lines are emitted, how often, and at what level are unchanged, because that
 // behavior is unchanged.
-
-// ---------------------------------------------------------------------------
-// Fake EventSource. jsdom has none, and App constructs one directly, so we
-// install a global that records instances and lets a test emit events by hand.
-// ---------------------------------------------------------------------------
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSED = 2;
-
-  url: string;
-  readyState = FakeEventSource.OPEN;
-  closeCount = 0;
-  closedByClient = false;
-  private listeners = new Map<string, Set<(e: unknown) => void>>();
-
-  constructor(url: string) {
-    this.url = url;
-    FakeEventSource.instances.push(this);
-  }
-
-  addEventListener(type: string, fn: (e: unknown) => void) {
-    let set = this.listeners.get(type);
-    if (!set) { set = new Set(); this.listeners.set(type, set); }
-    set.add(fn);
-  }
-
-  removeEventListener(type: string, fn: (e: unknown) => void) {
-    this.listeners.get(type)?.delete(fn);
-  }
-
-  close() { this.closeCount += 1; this.closedByClient = true; this.readyState = FakeEventSource.CLOSED; }
-
-  /**
-   * Deliver an event to every listener registered for `type`. A stream the
-   * client closed delivers nothing more, mirroring the real EventSource — this
-   * is what makes "the old subscription is really torn down" observable.
-   */
-  emit(type: string, data?: unknown) {
-    if (this.closedByClient) return;
-    const payload = { type, data: data === undefined ? '' : JSON.stringify(data) };
-    for (const fn of [...(this.listeners.get(type) ?? [])]) fn(payload);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // api mock. Only the network surface (`api`, `fetchVersion`) is stubbed; the
@@ -166,12 +122,11 @@ async function mountApp(): Promise<FakeEventSource> {
 }
 
 beforeEach(async () => {
-  FakeEventSource.instances = [];
+  installFakeEventSource();
   // NOTE: this jsdom environment provides no localStorage at all (the app's
   // reads are try/catch-wrapped), so there is no persisted context to clear —
   // App always bootstraps onto the first repo from api.repos().
   vi.clearAllMocks();
-  (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
   // Silenced, not passed through: these tests deliberately provoke the error
   // paths, and an un-mocked console.error would bury the real output.
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -180,7 +135,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  uninstallFakeEventSource();
   errorSpy.mockRestore();
   infoSpy.mockRestore();
 });

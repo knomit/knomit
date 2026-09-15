@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { ManageSessions } from './ManageSessions';
 import { api } from './api';
+import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
@@ -21,6 +22,7 @@ const sess = (over: Partial<import('./api').ClientSession>): import('./api').Cli
 });
 
 beforeEach(() => {
+  installFakeEventSource();
   vi.useFakeTimers({ now, shouldAdvanceTime: true }); // waitFor needs real progress
   vi.mocked(api.listClientSessions).mockResolvedValue({
     policy: POLICY,
@@ -32,9 +34,16 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  uninstallFakeEventSource();
   vi.useRealTimers();
   vi.clearAllMocks();
 });
+
+/** The page's change stream, once it exists. */
+async function stream(): Promise<FakeEventSource> {
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  return FakeEventSource.instances[0];
+}
 
 describe('ManageSessions', () => {
   it('renders one row per session with state, client, parent app, binding and relative last-seen', async () => {
@@ -76,6 +85,74 @@ describe('ManageSessions', () => {
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
     expect(screen.getByTestId('session-policy')).toHaveTextContent('never purged');
     expect(screen.getByTestId('session-policy')).not.toHaveTextContent('kept 0 d');
+  });
+
+  // The connect-time `ready` must cost NOTHING. The page has just read the
+  // list; the server announces itself the moment the stream opens; treating
+  // that as a change made every mount pay for two identical GETs, and no test
+  // saw it because the fake never announced a connection.
+  it('does not re-read for the ready the server sends on connect', async () => {
+    render(<ManageSessions />);
+    const es = await stream();
+    expect(es.url).toContain('/api/v1/sessions/events');
+    await act(async () => { vi.advanceTimersByTime(6_000); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(1);
+  });
+
+  // A session appearing or going away is what the reader is watching for, so
+  // it is not worth throttling behind a window.
+  it('re-reads immediately when a session initializes or ends', async () => {
+    render(<ManageSessions />);
+    const es = await stream();
+    await act(async () => { vi.advanceTimersByTime(2_000); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(1);
+
+    await act(async () => { es.emit('session', { id: 'mcp-session-9', kind: 'init' }); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(2);
+
+    await act(async () => { vi.advanceTimersByTime(2_000); });
+    await act(async () => { es.emit('session', { id: 'mcp-session-9', kind: 'end' }); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(3);
+  });
+
+  // THE load-amplification bound. Every MCP request from every connected
+  // client publishes a `touch`, and a touch only moves last-seen, the request
+  // count and idle→live. A Manage tab left open must not turn a busy agent's
+  // traffic into a list read per request.
+  it('collapses a storm of touches into one read per 5s window', async () => {
+    render(<ManageSessions />);
+    const es = await stream();
+    await act(async () => { vi.advanceTimersByTime(2_000); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      for (let i = 0; i < 20; i++) { es.emit('session', { id: `s${i}`, kind: 'touch' }); vi.advanceTimersByTime(250); }
+    });
+    // Trailing edge only — no leading read for a touch.
+    expect(api.listClientSessions).toHaveBeenCalledTimes(2);
+
+    await act(async () => { vi.advanceTimersByTime(5_000); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(2);
+  });
+
+  // A LATER ready is a reconnect, and the gap may have dropped events, so it
+  // is the one ready that does cost a read.
+  it('re-reads on a reconnect, which is any ready after the first', async () => {
+    render(<ManageSessions />);
+    const es = await stream();
+    await act(async () => { vi.advanceTimersByTime(2_000); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(1);
+
+    await act(async () => { es.emit('open'); es.emit('ready', {}); });
+    expect(api.listClientSessions).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes the stream on unmount', async () => {
+    const { unmount } = render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const es = await stream();
+    unmount();
+    expect(es.closeCount).toBe(1);
   });
 
   it('keeps ages moving while an error banner is up', async () => {

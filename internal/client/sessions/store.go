@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/ysmood/goob"
 )
 
 // Store is the sole owner of the client_sessions table. It borrows the
@@ -15,6 +17,8 @@ import (
 type Store struct {
 	db     *sql.DB
 	policy Policy
+	// ob is the change hub, nil unless WithHub attached one. See hub.go.
+	ob *goob.Observable
 }
 
 // New returns a Store over an already-migrated control.db handle.
@@ -73,7 +77,11 @@ ON CONFLICT(id) DO UPDATE SET
   ended_at = NULL`,
 			o.SessionID, Cap(c.InstanceID), Cap(transport), o.Binding, Cap(c.Branch), Cap(c.Host), Cap(c.User), Cap(c.Cwd),
 			c.PID, Cap(c.ParentApp), c.ParentPID, Cap(c.Version), Cap(o.RemoteIP), Cap(o.UserAgent), now, now)
-		return err
+		if err != nil {
+			return err
+		}
+		s.publish(o.SessionID, "touch")
+		return nil
 	}
 
 	// Direct HTTP caller: identity from what we can observe plus whatever
@@ -104,7 +112,11 @@ ON CONFLICT(id) DO UPDATE SET
   -- is demonstrably still calling.
   ended_at = NULL`,
 		o.SessionID, inst, o.Binding, ip, ua, now, now)
-	return err
+	if err != nil {
+		return err
+	}
+	s.publish(o.SessionID, "touch")
+	return nil
 }
 
 // SetClientInfo records what `initialize` declared, plus what the server
@@ -140,7 +152,11 @@ ON CONFLICT(id) DO UPDATE SET
   -- declared by the bridge and must survive.
   instance_id = CASE WHEN client_sessions.transport = 'http' THEN excluded.instance_id ELSE instance_id END`,
 		sessionID, DeriveInstanceID(ip, ua, name, version), binding, ip, ua, name, version, ts, ts)
-	return err
+	if err != nil {
+		return err
+	}
+	s.publish(sessionID, "init")
+	return nil
 }
 
 // End records an explicit session termination (HTTP DELETE). Unknown ids
@@ -151,10 +167,18 @@ func (s *Store) End(ctx context.Context, sessionID string, at time.Time) error {
 		return nil
 	}
 	sessionID = Cap(sessionID)
-	_, err := s.db.ExecContext(ctx,
+	res, err := s.db.ExecContext(ctx,
 		`UPDATE client_sessions SET ended_at = ?, last_seen_at = ? WHERE id = ? AND ended_at IS NULL`,
 		at.Unix(), at.Unix(), sessionID)
-	return err
+	if err != nil {
+		return err
+	}
+	// The no-op cases this guard catches are exactly the ones the doc comment
+	// above names: an id this server never recorded, and an id already ended.
+	if n, _ := res.RowsAffected(); n > 0 {
+		s.publish(sessionID, "end")
+	}
+	return nil
 }
 
 // Filter selects rows for List.
@@ -234,5 +258,11 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("purge client_sessions: %w", err)
 	}
-	return res.RowsAffected()
+	n, err := res.RowsAffected()
+	// No id: a purge is not about one row, and the consumer re-reads the
+	// whole list anyway.
+	if err == nil && n > 0 {
+		s.publish("", "purge")
+	}
+	return n, err
 }

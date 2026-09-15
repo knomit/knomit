@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App from './App';
+import { installFakeEventSource } from './testEventSource';
 
 // Manage is a MODE, not a dialog. These pin the three claims that distinguish
 // the two, because each was a deliberate design call and each is easy to undo
@@ -13,16 +14,6 @@ import App from './App';
 //
 // The zero-repo variant of the mode (locked, no way out) lives in
 // App.norepos.test.tsx, which owns the empty-repo-list fixture.
-
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  url: string;
-  readyState = 1;
-  constructor(url: string) { this.url = url; FakeEventSource.instances.push(this); }
-  addEventListener() {}
-  removeEventListener() {}
-  close() {}
-}
 
 const STATUS = {
   head: 'aaaaaaa1111',
@@ -91,9 +82,8 @@ const enterManage = async () => {
 };
 
 beforeEach(async () => {
-  FakeEventSource.instances = [];
+  installFakeEventSource();
   vi.clearAllMocks();
-  (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'info').mockImplementation(() => {});
   await primeApi();

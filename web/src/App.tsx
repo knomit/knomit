@@ -18,6 +18,7 @@ import { LeftPanel } from './LeftPanel';
 import { RightPanel } from './RightPanel';
 import { StatusFooter } from './StatusFooter';
 import { useVersion } from './hooks';
+import { createOutageLog } from './streamOutage';
 import './App.css';
 
 // Library | RightPanel splitter sizing. Persisted to localStorage so the
@@ -30,12 +31,6 @@ const LIBRARY_NARROW_PX = 240;
 const LEFT_PANEL_MAX_FRACTION = 0.6;       // never let the left panel exceed 60% of the viewport
 const LEFT_PANEL_DEFAULT_FRACTION = 0.35;  // matches the previous fixed 35% width
 const LEFT_PANEL_STORAGE_KEY = 'knomit.leftPanelWidth';
-
-// SSE outage-log rate limiting. See the events effect for why the re-arm needs
-// a ceiling: at EventSource's ~3s retry an unbounded flap fills the console's
-// 500-entry ring in minutes.
-const FLAP_WINDOW_MS = 60_000;
-const FLAP_LIMIT = 3;
 
 // How long a FINISHED task keeps the footer's task line before it retires. Long
 // enough to read the outcome of something you just triggered, short enough that
@@ -623,60 +618,22 @@ export default function App() {
     const es = new EventSource(apiUrl(`/api/v1/repos/${state.repo}/branches/${state.branch.replaceAll('/', ':')}/events`));
     // EventSource silently auto-reconnects on disconnect. Without the error
     // handler below, a backend that 500s the stream produces a stale
-    // LIVE/HISTORY pill (no SET_HEAD updates arrive) with no signal to the user.
-    //
-    // Logged once per OUTAGE, and 'open' re-arms it — without the re-arm "once
-    // per outage" was really once per SUBSCRIPTION LIFETIME, so a second outage
-    // on a long-lived stream logged nothing and the user saw a stale head pill
-    // with no explanation.
-    //
-    // The re-arm needs a companion, though: a backend that accepts and then
-    // immediately drops re-arms on every EventSource retry (~3s), and logging
-    // the disconnect + reconnect pair each cycle is ~40 lines/min — enough to
-    // flush the 500-entry ring of the task/remote lines the console exists for
-    // in about 12 minutes. So outages are counted over a rolling window: the
-    // first few are reported normally, and past FLAP_LIMIT the pair goes quiet
-    // behind ONE summary line until the stream has been calm for a full window.
-    let loggedDisconnect = false;
-    let windowStart = 0;   // start of the current flap-counting window
-    let outages = 0;       // outages reported inside it
-    let suppressed = false;
-    const logOutage = (message: string) => {
-      const now = Date.now();
-      if (now - windowStart > FLAP_WINDOW_MS) { windowStart = now; outages = 0; suppressed = false; }
-      outages += 1;
-      if (outages > FLAP_LIMIT) {
-        if (!suppressed) {
-          suppressed = true;
-          diag('error', '[events] stream flapping — suppressing further connection lines');
-        }
-        return;
-      }
-      diag('error', message);
-    };
+    // LIVE/HISTORY pill (no SET_HEAD updates arrive) with no signal to the
+    // user. See streamOutage.ts for why the reporting is flap-limited, and why
+    // that reasoning now lives in one place rather than in each stream.
+    const outage = createOutageLog(diag);
     es.addEventListener('open', () => {
-      // Only report a recovery for an outage that was actually REPORTED. The
-      // very first open has nothing to recover from, and a reconnect during a
-      // suppressed flap storm must stay as quiet as the disconnect that paired
-      // with it — otherwise suppression would halve the noise instead of
-      // stopping it.
-      if (loggedDisconnect && !suppressed) {
-        diag('info', '[events] reconnected');
-        // A gap in the stream is a gap in the remote events, and the one that
-        // clears the banner (sync_ok / push_ok) is broadcast once, never
-        // replayed — so a failure that healed while we were disconnected would
-        // otherwise leave the banner standing. Re-read the stored status.
-        // Riding on the same condition as the log line keeps this off the hot
-        // path of a flapping stream, which must not also become a request storm
-        // against the origin endpoint.
-        syncRemoteError(state.repo);
-      }
-      loggedDisconnect = false;
+      // A gap in the stream is a gap in the remote events, and the one that
+      // clears the banner (sync_ok / push_ok) is broadcast once, never
+      // replayed — so a failure that healed while we were disconnected would
+      // otherwise leave the banner standing. Re-read the stored status.
+      // Riding on the same condition as the log line keeps this off the hot
+      // path of a flapping stream, which must not also become a request storm
+      // against the origin endpoint.
+      if (outage.recovered('[events] reconnected')) syncRemoteError(state.repo);
     });
     es.addEventListener('error', () => {
-      if (loggedDisconnect) return;
-      loggedDisconnect = true;
-      logOutage(es.readyState === EventSource.CLOSED
+      outage.lost(es.readyState === EventSource.CLOSED
         ? '[events] stream closed — head pill may be stale'
         : '[events] connection lost — retrying');
     });

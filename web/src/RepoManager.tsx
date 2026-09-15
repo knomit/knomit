@@ -12,6 +12,7 @@ import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } fr
 import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, HomeIcon, BroadcastIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
+import { useClientSessionChanges } from './useClientSessionChanges';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
@@ -117,10 +118,14 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
     return () => { onBusyChange?.(false); };
   }, [connectBusy, onBusyChange]);
 
-  // Live-session count for the Sessions tab. Read ONCE when Manage opens and
-  // again on window focus — the header runs no polling loop of its own. While
-  // the Sessions page is open it piggybacks on that page's poll instead
-  // (onLiveCount below), so the two never both poll. null means "not known"
+  // Live-session count for the Sessions tab AND for the Overview line, which
+  // takes it as a prop rather than fetching its own — one reader of this
+  // number per tab.
+  //
+  // Read when Manage opens, on window focus, and whenever the server pushes a
+  // change (the subscription below). While the Sessions page is open it
+  // piggybacks on that page instead (onLiveCount below), so exactly one
+  // sessions stream exists per tab in Manage mode. null means "not known"
   // (never arrived, or the call failed) and renders no badge.
   //
   // Declared up here with the other hooks, NOT beside the tab strip it feeds:
@@ -134,21 +139,59 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // zero-repo screen is the create form, which should not be making calls
   // about a server the reader has not populated yet.
   const wantLiveCount = repos.length > 0;
+  // Generation guard, and it has to be a GENERATION rather than the effect's
+  // `cancelled` flag. This read is dispatched from three places — mount, window
+  // focus, and the change stream — and the Sessions page writes the same state
+  // through onLiveCount whenever it is open. A boolean captured by one effect
+  // run cannot speak for a request dispatched by another, so a read issued
+  // before the page opened could settle after it and overwrite a FRESHER count
+  // with an older one (or, on a transient failure, blank a badge the page had
+  // just filled in).
+  //
+  // Every read takes the next generation; only the latest generation's
+  // resolution OR rejection is allowed to write. Bumping it is also how the
+  // effect cleanup retires reads that are still in flight.
+  const liveCountGen = useRef(0);
+  const readLiveCount = useCallback(() => {
+    const gen = ++liveCountGen.current;
+    api.listClientSessions()
+      .then(r => { if (gen === liveCountGen.current) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
+      .catch(() => { if (gen === liveCountGen.current) setLiveSessions(null); });
+  }, []);
   useEffect(() => {
     if (!wantLiveCount) return;
-    let cancelled = false;
-    const read = () => {
-      api.listClientSessions()
-        .then(r => { if (!cancelled) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
-        .catch(() => { if (!cancelled) setLiveSessions(null); });
-    };
-    read();
-    // Skipped while the Sessions page is mounted: it refreshes on focus too,
-    // and reports its own count back.
-    const onFocus = () => { if (!sessionsOpen) read(); };
+    // Not while the Sessions page owns the number. The page reports its count
+    // back through onLiveCount, so a read here would be a second request for
+    // something already on its way — which is exactly what made opening
+    // Sessions cost two list reads instead of one.
+    if (!sessionsOpen) readLiveCount();
+    // Skipped while the Sessions page is mounted, for the same reason.
+    const onFocus = () => { if (!sessionsOpen) readLiveCount(); };
     window.addEventListener('focus', onFocus);
-    return () => { cancelled = true; window.removeEventListener('focus', onFocus); };
-  }, [sessionsOpen, wantLiveCount]);
+    return () => {
+      // Retires anything still in flight from this run — the same mechanism,
+      // so there is only one rule about which read may write.
+      liveCountGen.current += 1;
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [sessionsOpen, wantLiveCount, readLiveCount]);
+  // Live, but only while this header is the one that owns the number: the
+  // Sessions page subscribes for itself and reports back through onLiveCount,
+  // and two streams for one badge would be one too many.
+  useClientSessionChanges(wantLiveCount && !sessionsOpen, readLiveCount);
+  // STABLE identity, and that is the whole requirement. ManageSessions keeps
+  // onLiveCount in its load callback's deps and runs its poll effect on that
+  // callback, so an inline arrow here — a new function every render — re-runs
+  // the page's effect and buys an extra list read each time RepoManager
+  // renders. Opening Sessions cost two reads instead of one until this was a
+  // useCallback.
+  const handleLiveCount = useCallback((n: number | null) => {
+    // The page's count supersedes anything the header has in flight, so it
+    // takes a generation too — otherwise a read dispatched before the page
+    // opened could still land on top of it.
+    liveCountGen.current += 1;
+    setLiveSessions(n);
+  }, []);
 
   if (!open) return null;
 
@@ -341,9 +384,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onNewRepo={() => setSel({ kind: 'new' })}
                 onNewLens={() => setSel({ kind: 'newLens' })}
                 onSelectSessions={() => setSel({ kind: 'sessions' })}
+                liveSessions={liveSessions}
               />
             )}
-            {view.kind === 'sessions' && <ManageSessions onLiveCount={setLiveSessions} />}
+            {view.kind === 'sessions' && <ManageSessions onLiveCount={handleLiveCount} />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for

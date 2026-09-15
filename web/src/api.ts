@@ -1,3 +1,4 @@
+import { createOutageLog } from './streamOutage';
 // API_BASE is the origin the REST/SSE API is served from. Empty in the cloud
 // build (UI and API are same-origin, so URLs stay relative). The desktop build
 // serves the UI in-process via Wails from a different origin and sets
@@ -602,6 +603,90 @@ export async function readSSEStream(res: Response, onEvent?: (e: SSEEvent) => vo
   }
   // Flush a trailing complete line that lacked a final newline.
   for (const ev of parseSSELines(buf)) onEvent?.(ev);
+}
+
+/**
+ * What the client-session stream reports. The consumer reacts to the KIND, not
+ * to the row: `init` and `end` mean a row appeared or went away, `purge` means
+ * several did, and `touch` only moves last-seen, the request count and
+ * idle→live. They earn very different urgencies — see useClientSessionChanges.
+ *
+ * `reconnect` is not a server event: it is a second `ready`, which can only
+ * happen after EventSource re-established a connection, and therefore after a
+ * gap that may have swallowed events.
+ */
+export type ClientSessionChange =
+  | { type: 'session'; kind: string }
+  | { type: 'reconnect' };
+
+// subscribeClientSessions opens the client-session change stream and reports
+// every change to onChange.
+//
+// Only `kind` is read off the payload; the id stays unused. The stream carries
+// an id and a kind and nothing else, and the list endpoint is what carries the
+// rows, the policy and the read-only redaction — so the only correct reaction
+// to an event here is to re-read the list, and the kind exists solely to say
+// how soon.
+//
+// The FIRST `ready` is deliberately not a change. The server sends it the
+// moment the stream opens, and a caller has invariably just read the list;
+// treating it as news made every mount pay for two identical GETs. Every LATER
+// ready is a reconnect, where the gap may have dropped events, so that one is
+// reported.
+//
+// Callers are responsible for coalescing: every MCP request from every
+// connected client produces an event. See useClientSessionChanges.
+export function subscribeClientSessions(onChange: (change: ClientSessionChange) => void): () => void {
+  const es = new EventSource(apiUrl('/api/v1/sessions/events'));
+  // Flap-limited, and shared with App's branch stream rather than copied —
+  // without it a backend that 500s this stream leaves the badge and the
+  // Sessions table quietly stale, and with it unbounded it would flood the
+  // console at EventSource's ~3s retry.
+  const outage = createOutageLog(diagStream);
+  let seenReady = false;
+
+  const onReady = () => {
+    if (seenReady) onChange({ type: 'reconnect' });
+    seenReady = true;
+  };
+  const onSession = (e: unknown) => {
+    const data = (e as { data?: unknown } | undefined)?.data;
+    let kind = '';
+    if (typeof data === 'string' && data !== '') {
+      try {
+        kind = String((JSON.parse(data) as { kind?: unknown }).kind ?? '');
+      } catch {
+        // An unreadable frame is still evidence something changed; fall
+        // through with an empty kind, which the consumer treats as urgent.
+      }
+    }
+    onChange({ type: 'session', kind });
+  };
+  const onOpen = () => { outage.recovered('[sessions] reconnected'); };
+  const onError = () => {
+    outage.lost(es.readyState === EventSource.CLOSED
+      ? '[sessions] stream closed — the live count may be stale'
+      : '[sessions] connection lost — retrying');
+  };
+
+  es.addEventListener('ready', onReady);
+  es.addEventListener('session', onSession);
+  es.addEventListener('open', onOpen);
+  es.addEventListener('error', onError);
+  return () => {
+    es.removeEventListener('ready', onReady);
+    es.removeEventListener('session', onSession);
+    es.removeEventListener('open', onOpen);
+    es.removeEventListener('error', onError);
+    es.close();
+  };
+}
+
+// diagStream is the console reporter the outage log writes through, matching
+// App's `diag`: errors to console.error, everything else to console.info.
+function diagStream(level: 'info' | 'error', message: string): void {
+  if (level === 'error') console.error(message);
+  else console.info(message);
 }
 
 export function createSession(repo: string, opts: { url: string; auth_method?: string; token?: string; user?: string; password?: string }): Promise<SessionCreateResponse> {

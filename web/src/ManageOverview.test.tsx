@@ -336,6 +336,20 @@ describe('live sessions line', () => {
     expect(await screen.findByTestId('manage-sessions')).toBeInTheDocument();
   });
 
+  it('renders the live line from the count RepoManager already owns, without a fetch of its own', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 },
+      sessions: [session('live'), session('dead')],
+    });
+    render(<RepoManager {...baseProps} />);
+
+    expect(await screen.findByTestId('overview-live-sessions')).toHaveTextContent('1 live session');
+    // ONE reader of this number per tab. Overview reading it again would be a
+    // second caller for a number the header already has — and the one that
+    // never refreshed, which is why the line went stale.
+    expect(vi.mocked(api.listClientSessions).mock.calls).toHaveLength(1);
+  });
+
   it('shows nothing when the server cannot answer', async () => {
     vi.mocked(api.listClientSessions).mockRejectedValue(new Error('503'));
     render(<RepoManager {...baseProps} />);
