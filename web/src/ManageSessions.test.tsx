@@ -244,4 +244,26 @@ describe('ManageSessions', () => {
     // jsdom serialises the colour to rgb().
     expect(row.style.borderTop).toBe('1px solid rgb(34, 34, 34)');
   });
+
+  // jsdom does not lay out, so this pins the PROPERTY that produces the
+  // spacing, not the rendered gap itself. The defect it guards: the label was
+  // plain inline text where `{' '}` rendered as a real space, and turning it
+  // into a flex container silently dropped that space, leaving the checkbox
+  // flush against the "S" of "Show hidden" (overlapping it in WebKit).
+  it('spaces the Show hidden checkbox from its words with a gap, not whitespace', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const input = screen.getByLabelText('Show hidden') as HTMLInputElement;
+    const label = input.closest('label') as HTMLLabelElement;
+    expect(label.style.display).toBe('flex');
+    expect(label.style.gap).toBe('6px');
+    // The dead whitespace node is gone rather than left to mislead. Asserting
+    // the exact string also catches a `{' '}` being put back: that would make
+    // textContent ' Show hidden' without restoring any visible space.
+    expect(label.textContent).toBe('Show hidden');
+    // No margin fallback exists — App.css resets `*` to margin:0 — so the gap
+    // above is the only spacing mechanism. Named here so a later reader does
+    // not assume a second one is holding it up.
+    expect(input.style.margin).toBe('');
+  });
 });

@@ -91,7 +91,7 @@ export function ManageSessions({ binding, onLiveCount }: {
           <span style={labelCount}>{live} live · {rows.length} shown</span>
           <label style={showHiddenLabel}>
             <input type="checkbox" aria-label="Show hidden" checked={showHidden} onChange={e => setShowHidden(e.target.checked)} />
-            {' '}Show hidden
+            Show hidden
           </label>
         </div>
         {error && <p data-testid="session-error" style={errorLine}>{error}</p>}
@@ -218,9 +218,17 @@ const labelRow: React.CSSProperties = {
 // Not uppercase or letter-spaced: it reads as prose beside the caption, and at
 // cardLabel's 10px the count would be unreadable tracked out.
 const labelCount: React.CSSProperties = { textTransform: 'none', letterSpacing: 0 };
+// The gap is load-bearing, not tidiness, and it is the ONLY thing separating
+// the box from its words. This label used to be plain inline text, where the
+// `{' '}` between them rendered as a real space. Making it a flex container to
+// centre the box against the words took that space away — whitespace between
+// flex children is not rendered — and the checkbox has no margin of its own to
+// fall back on, because App.css resets `*` to margin:0. So the two collapsed
+// together and, in the desktop WebKit view, the native control's box overlapped
+// the "S". Removing this gap re-breaks it; there is no second mechanism.
 const showHiddenLabel: React.CSSProperties = {
   marginLeft: 'auto', textTransform: 'none', letterSpacing: 0,
-  display: 'flex', alignItems: 'center', color: '#aaa',
+  display: 'flex', alignItems: 'center', gap: 6, color: '#aaa',
 };
 const errorLine: React.CSSProperties = {
   color: '#f87171', fontSize: 12, margin: '6px 0 0', flexShrink: 0,
