@@ -101,47 +101,47 @@ export function ManageSessions({ binding, onLiveCount }: {
             do not stretch to fill the pane. Both axes scroll — the table is
             wider than the pane on a narrow window. */}
         <div style={tableWrap}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-          <thead>
-            {/* Sticky on the CELLS, not on <thead>: cell-level sticky is the
-                broadly supported form, and this also renders in WKWebView via
-                the desktop shell, not only in Chrome. borderCollapse stays
-                'collapse' — under 'separate' a border on a <tr> is not painted
-                at all, which would silently delete every row separator below.
-                So the header's rule is an inset shadow, which travels with the
-                cell the way a collapsed border would not. */}
-            <tr style={{ color: '#777', textAlign: 'left' }}>
-              <th style={th}></th><th style={th}>Client</th><th style={th}>Parent</th><th style={th}>Host · cwd</th><th style={th}>Binding</th><th style={th}>Branch</th><th style={th}>Last seen</th><th style={th}>Requests</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(r => {
-              const dead = r.state === 'dead';
-              return (
-                <tr key={r.id} data-testid="session-row" style={{ color: dead ? '#666' : '#ddd', borderTop: '1px solid #222' }}>
-                  <td title={r.state}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATE_COLOR[r.state] }} /></td>
-                  <td>
-                    {r.client.name ? `${r.client.name} ${r.client.version}` : <span style={{ color: '#777' }}>unknown</span>}
-                    {/* A row the server never saw initialize: it outlived a
-                        restart and was rebuilt from request headers. */}
-                    {!r.client.initialized && <span style={{ marginLeft: 6, color: '#a78bfa' }}>resumed</span>}
-                    {r.ended_at && <span style={{ marginLeft: 6, color: '#777' }}>ended</span>}
-                    <div style={{ color: '#666', fontSize: 11 }}>{r.transport} · {r.user_agent}</div>
-                  </td>
-                  <td>{r.bridge.parent || '—'}{r.bridge.pid ? <span style={{ color: '#666' }}> #{r.bridge.pid}</span> : null}</td>
-                  <td><div>{r.bridge.host || r.remote_addr}</div><div style={{ color: '#666', fontSize: 11 }}>{r.bridge.cwd}</div></td>
-                  <td>{r.binding.name ?? <span style={{ color: '#777' }}>{r.binding.kind}:{r.binding.uid}</span>}</td>
-                  <td style={{ color: '#888' }}>{r.branch || '—'}</td>
-                  <td title={r.last_seen_at}>{relativeTime(r.last_seen_at, now)}</td>
-                  <td>{r.request_count}</td>
-                </tr>
-              );
-            })}
-            {rows.length === 0 && !error && (
-              <tr><td colSpan={8} style={{ color: '#666', padding: 12 }}>No client sessions in the presence window.</td></tr>
-            )}
-          </tbody>
-        </table>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              {/* Sticky on the CELLS, not on <thead>: cell-level sticky is the
+                  broadly supported form, and this also renders in WKWebView via
+                  the desktop shell, not only in Chrome. borderCollapse stays
+                  'collapse' — under 'separate' a border on a <tr> is not painted
+                  at all, which would silently delete every row separator below.
+                  So the header's rule is an inset shadow, which travels with the
+                  cell the way a collapsed border would not. */}
+              <tr style={{ color: '#777', textAlign: 'left' }}>
+                <th style={th}></th><th style={th}>Client</th><th style={th}>Parent</th><th style={th}>Host · cwd</th><th style={th}>Binding</th><th style={th}>Branch</th><th style={th}>Last seen</th><th style={th}>Requests</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => {
+                const dead = r.state === 'dead';
+                return (
+                  <tr key={r.id} data-testid="session-row" style={{ color: dead ? '#666' : '#ddd', borderTop: '1px solid #222' }}>
+                    <td title={r.state}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATE_COLOR[r.state] }} /></td>
+                    <td>
+                      {r.client.name ? `${r.client.name} ${r.client.version}` : <span style={{ color: '#777' }}>unknown</span>}
+                      {/* A row the server never saw initialize: it outlived a
+                          restart and was rebuilt from request headers. */}
+                      {!r.client.initialized && <span style={{ marginLeft: 6, color: '#a78bfa' }}>resumed</span>}
+                      {r.ended_at && <span style={{ marginLeft: 6, color: '#777' }}>ended</span>}
+                      <div style={{ color: '#666', fontSize: 11 }}>{r.transport} · {r.user_agent}</div>
+                    </td>
+                    <td>{r.bridge.parent || '—'}{r.bridge.pid ? <span style={{ color: '#666' }}> #{r.bridge.pid}</span> : null}</td>
+                    <td><div>{r.bridge.host || r.remote_addr}</div><div style={{ color: '#666', fontSize: 11 }}>{r.bridge.cwd}</div></td>
+                    <td>{r.binding.name ?? <span style={{ color: '#777' }}>{r.binding.kind}:{r.binding.uid}</span>}</td>
+                    <td style={{ color: '#888' }}>{r.branch || '—'}</td>
+                    <td title={r.last_seen_at}>{relativeTime(r.last_seen_at, now)}</td>
+                    <td>{r.request_count}</td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && !error && (
+                <tr><td colSpan={8} style={{ color: '#666', padding: 12 }}>No client sessions in the presence window.</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
         {/* The thresholds come from the server with the rows, so this line can
             never disagree with the states above it. Pinned at the card's foot,
@@ -176,8 +176,15 @@ export function ManageSessions({ binding, onLiveCount }: {
 // being free: this floor does pay a few unused pixels, and pays them only below
 // ~280px of pane height, in a window nobody works in.
 //
-// Roughly, not exactly: the label row wraps at narrow widths, so the true
-// figure rises as the window narrows.
+// The +150 is NOT just the measured chrome, and should not be trimmed to it.
+// Measured at 1400px wide, this card's chrome is 73px (card 270 - table area
+// 197), or roughly 97 with the error line present. The remaining ~53 is
+// deliberate slack: the caption row wraps at narrow widths — the count and Show
+// hidden drop below "MCP clients" — and the toolbar-equivalent grows with it,
+// so the true chrome rises as the window narrows and a floor cut to 73 would
+// stop containing the card exactly there. Logs' own addend (120 against a
+// measured 116) is close to its chrome because its caption cannot wrap the same
+// way; the two files look like one rule and are not.
 const TABLE_FLOOR = 120;
 const CARD_FLOOR = TABLE_FLOOR + 150;
 // Fills the detail pane rather than sizing to the rows. detailCol is a
