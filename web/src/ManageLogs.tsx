@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { LogView, visibleLines } from './LogView';
+import { LogView } from './LogView';
+import { visibleLines } from './logLines';
 import { MAX_LINES, clearLines, connectLogStream, getLines, getReceived, subscribe } from './logStore';
 import { card, cardLabel } from './manageStyles';
 
@@ -49,7 +50,14 @@ export function ManageLogs() {
   // received counter rather than lines.length, which stops rising once the
   // scrollback hits MAX_LINES and would peg the pill at zero from then on,
   // exactly when a log is busy enough for it to matter.
-  const releasedAt = useRef(0);
+  //
+  // STATE, not a ref, because the render below reads it to size the pill. As a
+  // ref it happened to work only because the one writer also called
+  // setFollow(false) in the same handler and that re-rendered — so the pill was
+  // correct by coincidence, and a future write without a paired state change
+  // would have left it stale with nothing to catch it. Both setStates sit in an
+  // event handler, where React batches them into one render.
+  const [releasedAt, setReleasedAt] = useState(0);
 
   // One stream per mounted page, closed on unmount. Opened here rather than at
   // module scope (as the desktop store does) because nothing can arrive before
@@ -78,12 +86,12 @@ export function ManageLogs() {
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     if (!atBottom && follow) {
-      releasedAt.current = received;
+      setReleasedAt(received);
       setFollow(false);
     }
   }
 
-  const behind = follow ? 0 : Math.max(0, received - releasedAt.current);
+  const behind = follow ? 0 : Math.max(0, received - releasedAt);
   // Same function the body renders through, so the count cannot disagree with
   // what is on screen.
   const shown = visibleLines(lines, level, query).length;
@@ -148,7 +156,7 @@ export function ManageLogs() {
               // clear made while scrolled up leaves releasedAt above the
               // store's fresh zero and the pill reads nothing until it climbs
               // back.
-              releasedAt.current = 0;
+              setReleasedAt(0);
               clearLines();
             }}
           >
