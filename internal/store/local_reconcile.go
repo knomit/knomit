@@ -29,6 +29,51 @@ func (s *Service) UpstreamBranch() string {
 	return "main"
 }
 
+// EnsureLocalUpstream creates refs/heads/<upstream> from
+// refs/remotes/origin/<upstream> when the local ref is missing — a store moved
+// between machines, or one written before local init bootstrapped it. This is
+// reconcileMain's "create" branch, callable at open without a fetch, so the
+// served advertisement has a HEAD to point at from the first request. A live
+// instance was found in exactly this state: no refs/heads/main at all, only
+// refs/remotes/origin/main.
+//
+// It never MOVES an existing upstream: advancing one is reconcileMain's
+// decision and needs the ancestry check this function does not make.
+// Nothing to bootstrap from is not an error — the reconcile loop's first
+// fetch creates it.
+func (s *Service) EnsureLocalUpstream(ctx context.Context, upstream string) (bool, error) {
+	if upstream == "" {
+		return false, nil
+	}
+	rh := s.rh
+	unlock := rh.lockBranch(upstream)
+	defer unlock()
+
+	local := plumbing.NewBranchReferenceName(upstream)
+	if _, err := rh.gits.Reference(local); err == nil {
+		return false, nil
+	}
+	originRef, err := rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstream))
+	if err != nil {
+		return false, nil
+	}
+	if err := rh.gits.SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
+		return false, fmt.Errorf("EnsureLocalUpstream: create %s: %w", upstream, err)
+	}
+	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
+		return false, fmt.Errorf("EnsureLocalUpstream: ensure %s: %w", upstream, err)
+	}
+	if err := rh.populateCommitLog(ctx, upstream); err != nil {
+		return false, fmt.Errorf("EnsureLocalUpstream: populate commit_log: %w", err)
+	}
+	if err := rh.notifyCommit(ctx, upstream, originRef.Hash()); err != nil {
+		return false, fmt.Errorf("EnsureLocalUpstream: notify: %w", err)
+	}
+	log.Info().Str("upstream", upstream).Str("at", originRef.Hash().String()[:8]).
+		Msg("EnsureLocalUpstream: bootstrapped local upstream from origin")
+	return true, nil
+}
+
 // AdvanceLocalUpstream fast-forwards refs/heads/<upstream> to the agent tip on
 // a repo that has NO origin, so main is a real consensus branch there too.
 // Same shape as reconcileMain's fast-forward — SetReference, populateCommitLog,

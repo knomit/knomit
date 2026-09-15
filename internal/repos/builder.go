@@ -796,8 +796,32 @@ func (b *repoBuilder) build() *RepoInstance {
 // is wired earlier in build() but is race-safe via SyncLocked; only the remote
 // reconcile/push loops are deferred here.)
 func (b *repoBuilder) activate() {
+	b.ensureLocalUpstream()
 	b.recoverFromOrigin()
 	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
+}
+
+// ensureLocalUpstream repairs a store that holds refs/remotes/origin/<upstream>
+// but no local <upstream> — a home moved between machines, or one written
+// before local init bootstrapped it. A live instance was found in exactly that
+// state, which is why it matters: the served advertisement takes HEAD from the
+// LOCAL upstream ref, so without this a peer cloning that repo before the
+// first successful fetch gets an advertisement with no HEAD at all.
+//
+// Runs BEFORE recoverFromOrigin so an unreachable origin at boot does not
+// leave the endpoint headless for the whole outage. reconcileMain remains the
+// authoritative repair; a failure here is logged and the loop retries.
+func (b *repoBuilder) ensureLocalUpstream() {
+	created, err := b.svc.EnsureLocalUpstream(b.ctx, b.upstreamMain)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", b.name).
+			Msg("ensureLocalUpstream: bootstrap failed; the reconcile loop will repair it")
+		return
+	}
+	if created {
+		log.Info().Str("repo", b.name).Str("upstream", b.upstreamMain).
+			Msg("ensureLocalUpstream: bootstrapped local upstream from origin")
+	}
 }
 
 // recoverFromOriginTimeout bounds the startup reconcile so a slow or

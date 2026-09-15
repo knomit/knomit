@@ -5,8 +5,87 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEnsureLocalUpstream_CreatesMissingMainFromOrigin(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "main", "agent/a"))
+	ctx := context.Background()
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/x.md", testFactBody("x", 0.9, nil), "x", "")
+	require.NoError(t, err)
+	tip, err := svc.Branches().HeadCommit(ctx, "agent/a")
+	require.NoError(t, err)
+
+	// A moved/legacy store: origin/main exists, local main does not. This is
+	// the shape a live instance was found in.
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+		plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(tip))))
+	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("main")))
+
+	created, err := svc.EnsureLocalUpstream(ctx, "main")
+	require.NoError(t, err)
+	require.True(t, created)
+	got, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, tip, got)
+	// Indexed, not just referenced.
+	fact, err := svc.Facts().ReadFact(ctx, "main", "kb/x.md", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, fact.Content)
+
+	created, err = svc.EnsureLocalUpstream(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, created, "idempotent")
+}
+
+// Nothing to bootstrap FROM is not an error: a repo whose origin has not been
+// fetched yet gets its local upstream from reconcileMain on the first sync.
+func TestEnsureLocalUpstream_NoopWithoutAnOriginRef(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "main", "agent/a"))
+	ctx := context.Background()
+	require.NoError(t, svc.rh.gits.RemoveReference(plumbing.NewBranchReferenceName("main")))
+
+	created, err := svc.EnsureLocalUpstream(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, created)
+	_, err = svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))
+	require.Error(t, err, "no ref invented")
+}
+
+// An existing local upstream is never moved, even when origin/<upstream>
+// points somewhere else: advancing it is reconcileMain's decision, made with
+// an ancestry check this function does not perform.
+func TestEnsureLocalUpstream_LeavesAnExistingUpstreamAlone(t *testing.T) {
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "main", "agent/a"))
+	ctx := context.Background()
+	_, err = svc.Facts().WriteFact(ctx, "agent/a", "kb/x.md", testFactBody("x", 0.9, nil), "x", "")
+	require.NoError(t, err)
+	agentTip, err := svc.Branches().HeadCommit(ctx, "agent/a")
+	require.NoError(t, err)
+	mainBefore, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.NotEqual(t, mainBefore, agentTip)
+
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(
+		plumbing.NewRemoteReferenceName("origin", "main"), plumbing.NewHash(agentTip))))
+
+	created, err := svc.EnsureLocalUpstream(ctx, "main")
+	require.NoError(t, err)
+	require.False(t, created)
+	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, mainBefore, mainAfter)
+}
 
 func TestAdvanceLocalUpstream_FastForwardsMainFromAgent(t *testing.T) {
 	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))

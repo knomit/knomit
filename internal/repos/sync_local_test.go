@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -150,6 +151,55 @@ func TestStartSyncLoops_StartsTheLocalLoopForAnOriginlessRepo(t *testing.T) {
 		u, err := svc.Branches().HeadCommit(ctx, "main")
 		return err == nil && u == agentTip
 	}, 5*time.Second, 20*time.Millisecond, "nobody started the local reconcile loop")
+}
+
+// A store can hold refs/remotes/origin/main with no local main — a home moved
+// between machines, or one written before local init bootstrapped it. A live
+// instance was found that way, and the served advertisement takes HEAD from
+// the LOCAL ref, so until this is repaired a peer cloning that repo gets an
+// advertisement with no HEAD. The repair runs at open, before the startup
+// reconcile, so an unreachable origin does not leave the endpoint headless for
+// the length of the outage.
+func TestOpen_BootstrapsAMissingLocalUpstreamFromOrigin(t *testing.T) {
+	dir := t.TempDir()
+	url := seedBareRemote(t, filepath.Join(dir, "remote.git"))
+
+	m := newRemoteModeManager(t, dir)
+	ri, err := m.Create(context.Background(), CreateSpec{
+		Name: "kb", Mode: "clone", Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	var originTip string
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		tip, herr := svc.Branches().HeadCommit(ctx, "main")
+		require.NoError(t, herr)
+		originTip = tip
+		// Lose the local upstream while origin/main stays behind.
+		require.NoError(t, svc.Branches().DropBranch(ctx, "main"))
+		_, herr = svc.Branches().HeadCommit(ctx, "main")
+		require.Error(t, herr, "the fixture must actually have removed main")
+	}))
+	m.Close()
+
+	// Take the origin away. Without this the startup reconcile would fetch and
+	// reconcileMain would recreate main by itself, and the test would pass
+	// whether or not the open-time repair exists. An unreachable origin is
+	// also the case the repair is FOR: it is what leaves the endpoint headless
+	// for the length of the outage.
+	require.NoError(t, os.RemoveAll(filepath.Join(dir, "remote.git")))
+
+	// Reopen the same home: the registry re-opens "kb" through the same
+	// builder path a server restart uses.
+	m2 := newRemoteModeManager(t, dir)
+	ri2 := m2.Get("kb")
+	require.NotNil(t, ri2)
+	require.NoError(t, ri2.WithRead(func(svc *store.Service) {
+		got, herr := svc.Branches().HeadCommit(ctx, "main")
+		require.NoError(t, herr, "local main was not bootstrapped from origin/main")
+		require.Equal(t, originTip, got)
+	}))
 }
 
 // A subscription is read-only and has no agent branch; there is nothing to
