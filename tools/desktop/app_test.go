@@ -130,13 +130,11 @@ func TestConfigInjectingHandler_ServesAssetsWhileBooting(t *testing.T) {
 func TestConfigInjectingHandler_ServesDesktopUIUnderPrefix(t *testing.T) {
 	desktopFS := fstest.MapFS{
 		"settings.html": {Data: []byte("<html>settings</html>")},
-		"logs.html":     {Data: []byte("<html>logs</html>")},
 	}
 	h := configInjectingHandler(testUIFS(), desktopFS, staticBase("http://127.0.0.1:19278"))
 
 	for _, tc := range []struct{ path, want string }{
 		{"/desktop/settings.html", "settings"},
-		{"/desktop/logs.html", "logs"},
 		{"/", "<html></html>"},
 	} {
 		rec := httptest.NewRecorder()

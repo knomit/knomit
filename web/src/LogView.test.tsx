@@ -105,10 +105,10 @@ describe('LogView', () => {
     expect(shown[0]).toContain('parse failed at ( char 3')
   })
 
-  // A blank window is the one state that cannot explain itself. It looks the
-  // same whether nothing has been logged yet or the window is tailing a file
-  // nothing writes to, which is exactly the confusion a Logs window exists to
-  // remove.
+  // A blank pane is the one state that cannot explain itself. It looks the same
+  // whether the server has logged nothing yet or the filter on screen is too
+  // narrow to admit anything, and telling those apart is most of what a log
+  // view is for.
   it('explains an empty view instead of rendering nothing', () => {
     render(<LogView lines={[]} />)
     expect(screen.getByText(/Waiting for log output/)).toBeInTheDocument()

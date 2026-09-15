@@ -115,8 +115,8 @@ jobs:
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
           CGO_ENABLED=1 go test -tags desktop ./tools/desktop/...
 
-  # Build + test the desktop-only UI bundle (the Settings dialog and the Logs
-  # window), which lives in tools/desktop/ui as its own npm project.
+  # Build + test the desktop-only UI bundle (the Settings dialog), which lives
+  # in tools/desktop/ui as its own npm project.
   #
   # It needs a job of its own because nothing else here runs Node at all: the
   # `desktop` job above compiles the Go side against tools/desktop/ui/dist, the

@@ -350,6 +350,14 @@ describe('live sessions line', () => {
     expect(vi.mocked(api.listClientSessions).mock.calls).toHaveLength(1);
   });
 
+  // The heading follows the tab: this page is the knowledge bases, not a
+  // summary of the server.
+  it('heads the page Knowledge', async () => {
+    render(<RepoManager {...baseProps} />);
+    expect(await screen.findByRole('heading', { name: 'Knowledge' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Overview' })).not.toBeInTheDocument();
+  });
+
   it('shows nothing when the server cannot answer', async () => {
     vi.mocked(api.listClientSessions).mockRejectedValue(new Error('503'));
     render(<RepoManager {...baseProps} />);

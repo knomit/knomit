@@ -269,7 +269,8 @@ func (n *NativeService) RestartApp() error {
 }
 
 // RevealLogFile opens the log file's containing directory in the OS file
-// manager, for the history the Logs window's bounded tail does not show.
+// manager, for the history no live view shows: Manage → Logs replays a bounded
+// ring of recent lines, and rotated files are not on it at all.
 func (n *NativeService) RevealLogFile() error {
 	return n.revealInFileManager(n.logPath)
 }

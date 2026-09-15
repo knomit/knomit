@@ -63,16 +63,16 @@ func restoreGlobalLogger(t *testing.T) {
 	})
 }
 
-// The log file the Logs window tails, the one "Reveal in Finder" opens, and the
-// one the Settings dialog NAMES all come from here. They used to be resolved
-// separately, and the version behind the window ignored `[log] file` entirely:
-// configure one and the Logs window tails a path nothing writes to — blank
-// forever, no error anywhere — while the dialog beside it shows the correct
-// path. One resolver is the fix, and this is what says it honours the config.
+// The file the logger writes, the one "Reveal in Finder" opens, and the one the
+// Settings dialog NAMES all come from here. They used to be resolved
+// separately, and one of those resolvers ignored `[log] file` entirely: set it
+// and the log went somewhere the rest of the app was not looking, with no error
+// anywhere, while the dialog beside it showed a different path. One resolver is
+// the fix, and this is what says it honours the config.
 func TestResolveLogFileHonoursTheConfiguredFile(t *testing.T) {
 	cfg := config.Config{Log: config.LogConfig{File: "/custom/knomit.log"}}
 	if got := resolveLogFile(cfg); got != "/custom/knomit.log" {
-		t.Errorf("resolveLogFile = %q, want the CONFIGURED file; the Logs window would tail the wrong path", got)
+		t.Errorf("resolveLogFile = %q, want the CONFIGURED file; Reveal would open the wrong one", got)
 	}
 }
 

@@ -323,8 +323,9 @@ describe('SettingsForm', () => {
     expect(screen.getByRole('button', { name: /restart now/i })).toBeEnabled()
   })
 
-  // The Logs window tails a bounded window of the file; the history lives on
-  // disk, so the path has to be reachable, not just printed.
+  // Manage → Logs shows a bounded ring of recent lines; the history, and every
+  // rotated file, lives on disk — so the path has to be reachable, not just
+  // printed.
   it('reveals the log file', async () => {
     const { onRevealLog } = renderForm()
     fireEvent.click(screen.getByRole('button', { name: /reveal/i }))
