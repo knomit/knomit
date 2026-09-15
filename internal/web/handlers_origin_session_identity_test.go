@@ -168,7 +168,8 @@ func startOriginSession(t *testing.T, s *Server, repo, url string) string {
 // stream body.
 func sseCall(t *testing.T, s *Server, method, path, body string) string {
 	t.Helper()
-	rec := httptest.NewRecorder()
+	// Shared SSE recorder: see the note on postCommit.
+	rec := newStreamRecorder()
 	var req *http.Request
 	if body == "" {
 		req = httptest.NewRequest(method, path, nil)
@@ -335,7 +336,7 @@ func TestConnect_AlreadyRegisteredRemoteRejectedAtTest(t *testing.T) {
 	}
 
 	// /apply must refuse outright — the refusal at /test is not advisory.
-	rec := httptest.NewRecorder()
+	rec := newStreamRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/repos/beta/origin-sessions/"+sessID+"/apply",
 		strings.NewReader(`{"conflict_strategy":"local_wins"}`))
 	req.Header.Set("Content-Type", "application/json")

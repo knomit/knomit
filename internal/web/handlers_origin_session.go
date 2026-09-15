@@ -810,19 +810,28 @@ func extractRefsFromFrontmatter(content string) []string {
 
 // beginSSE sets SSE headers on w and returns a sendEvent function.
 // Returns nil, false if streaming is not supported.
+//
+// Backed by sseStream, so all four flows that use it — test, preview, apply
+// and commit — get the bounded, error-checked write described in sse.go.
+//
+// sendEvent stays `func(v any)` with no result, deliberately. These handlers
+// thread it through long procedures (commitSharedHistory and friends) whose
+// work is not abortable half-way: a clone that has swapped a store must finish
+// swapping it whether or not a browser is still listening. The `dead` latch in
+// sseStream is what makes ignoring the result safe — after the first failure
+// every later send is a cheap no-op rather than another blocked write, so a
+// vanished client costs the handler nothing and cannot wedge it.
+//
+// That is the ONE place in this package where a write result is not turned
+// into a return; everywhere else, `if !s.Write(...) { return }`.
 func beginSSE(w http.ResponseWriter) (func(v any), bool) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, ok := w.(http.Flusher)
+	stream, ok := startSSE(w)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return nil, false
 	}
 	return func(v any) {
 		data, _ := json.Marshal(v)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+		stream.Write("data: %s\n\n", data)
 	}, true
 }
 

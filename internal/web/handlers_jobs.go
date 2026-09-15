@@ -255,12 +255,8 @@ func handleJobEvents(jr *JobRegistry) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
+		stream, ok := startSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
 		}
 
@@ -270,10 +266,11 @@ func handleJobEvents(jr *JobRegistry) http.HandlerFunc {
 		for _, ev := range snapshot {
 			if ev.ID == id {
 				data, _ := json.Marshal(ev)
-				fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
+				if !stream.Write("event: task\ndata: %s\n\n", data) {
+					return
+				}
 			}
 		}
-		flusher.Flush()
 
 		for {
 			select {
@@ -285,8 +282,11 @@ func handleJobEvents(jr *JobRegistry) http.HandlerFunc {
 				}
 				if ev, isTask := e.(repos.TaskEvent); isTask && ev.ID == id {
 					data, _ := json.Marshal(ev)
-					fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
-					flusher.Flush()
+					if !stream.Write("event: task\ndata: %s\n\n", data) {
+						return
+					}
+					// Unchanged: this stream is for ONE job, so its terminal
+					// event is the end of the stream, not just of the event.
 					if ev.Status == "done" || ev.Status == "error" {
 						return
 					}

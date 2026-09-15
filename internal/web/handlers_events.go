@@ -4,7 +4,6 @@ package web
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -19,12 +18,8 @@ func handleHALEvents() http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 		branch := BranchFromContext(r.Context())
 
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		flusher, ok := w.(http.Flusher)
+		stream, ok := startSSE(w)
 		if !ok {
-			http.Error(w, "streaming not supported", http.StatusInternalServerError)
 			return
 		}
 
@@ -38,19 +33,21 @@ func handleHALEvents() http.HandlerFunc {
 				branches = svc.Branches()
 			}
 		})
+		head := ""
 		if branches != nil {
-			head, _ := branches.HeadCommit(r.Context(), branch)
-			fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", head)
-		} else {
-			fmt.Fprintf(w, "event: status\ndata: {\"head\":\"\"}\n\n")
+			head, _ = branches.HeadCommit(r.Context(), branch)
+		}
+		if !stream.Write("event: status\ndata: {\"head\":\"%s\"}\n\n", head) {
+			return
 		}
 
 		// Replay snapshot (reconnect recovery).
 		for _, ev := range snapshot {
 			data, _ := json.Marshal(ev)
-			fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
+			if !stream.Write("event: task\ndata: %s\n\n", data) {
+				return
+			}
 		}
-		flusher.Flush()
 
 		// Keepalive to prevent proxy/browser timeouts.
 		keepalive := time.NewTicker(30 * time.Second)
@@ -63,25 +60,29 @@ func handleHALEvents() http.HandlerFunc {
 				if !ok {
 					return
 				}
+				sent := true
 				switch ev := e.(type) {
 				case repos.TaskEvent:
 					data, _ := json.Marshal(ev)
-					fmt.Fprintf(w, "event: task\ndata: %s\n\n", data)
+					sent = stream.Write("event: task\ndata: %s\n\n", data)
 				case repos.StatusEvent:
-					fmt.Fprintf(w, "event: status\ndata: {\"head\":\"%s\"}\n\n", ev.Head)
+					sent = stream.Write("event: status\ndata: {\"head\":\"%s\"}\n\n", ev.Head)
 				case repos.SyncEvent:
 					data, _ := json.Marshal(ev)
-					fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Status, data)
+					sent = stream.Write("event: %s\ndata: %s\n\n", ev.Status, data)
 				case repos.PushEvent:
 					data, _ := json.Marshal(ev)
-					fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Status, data)
+					sent = stream.Write("event: %s\ndata: %s\n\n", ev.Status, data)
 				default:
 					continue
 				}
-				flusher.Flush()
+				if !sent {
+					return
+				}
 			case <-keepalive.C:
-				fmt.Fprintf(w, ": keepalive\n\n")
-				flusher.Flush()
+				if !stream.Keepalive() {
+					return
+				}
 			}
 		}
 	}
