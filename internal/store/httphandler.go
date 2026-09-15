@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -57,6 +58,29 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 		}
 
 		advRefs, _, err := buildAdvRefs(rh, upstream())
+		if errors.Is(err, errUpstreamMissing) {
+			// An unservable repo is refused HERE, in the advertisement, so no
+			// client ever gets far enough to "succeed" against it.
+			//
+			// The ERR pkt-line goes AFTER the service header and its flush.
+			// Where it sits relative to those decides whether the message
+			// reaches a human, and both clients that matter were measured
+			// rather than assumed (knomit's own subscriber is a go-git
+			// client, so real git rendering it proves nothing on its own):
+			//
+			//   real git  fatal: remote error: knomit: consensus branch does
+			//             not exist in this store: "master"   (exit 128)
+			//   go-git    the same text, verbatim, as the returned error
+			//
+			// TestGitHandler_MissingUpstreamRefusesBothClients pins both.
+			w.Header().Set("Content-Type", "application/x-git-upload-pack-advertisement")
+			w.Header().Set("Cache-Control", "no-cache")
+			e := pktline.NewEncoder(w)
+			_ = e.Encodef("# service=git-upload-pack\n")
+			_ = e.Flush()
+			_ = e.Encodef("ERR %s\n", err.Error())
+			return
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -107,7 +131,7 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 		// refuses such a want before sending it, so this answers the ones that
 		// speak the protocol directly.
 		_, tips, err := buildAdvRefs(rh, upstream())
-		if err != nil {
+		if err != nil && !errors.Is(err, errUpstreamMissing) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -115,6 +139,15 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 		w.Header().Set("Content-Type", "application/x-git-upload-pack-result")
 		w.Header().Set("Cache-Control", "no-cache")
 		enc := pktline.NewEncoder(w)
+
+		// The same refusal as /info/refs, through the ERR mechanism that the
+		// want-refusal already proves renders. A client that cached an older
+		// advertisement, or one that skipped it, still cannot fetch from a
+		// repo with no consensus branch.
+		if errors.Is(err, errUpstreamMissing) {
+			_ = enc.Encodef("ERR %s\n", err.Error())
+			return
+		}
 
 		for _, want := range req.Wants {
 			if _, ok := tips[want]; !ok {

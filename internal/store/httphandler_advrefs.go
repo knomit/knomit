@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,6 +12,11 @@ import (
 
 	"knomit/internal/platform/version"
 )
+
+// errUpstreamMissing is returned when refs/heads/<upstream> does not exist.
+// The repo is unservable: there is no consensus branch to put HEAD on, and a
+// clone that "succeeds" against it comes away with nothing.
+var errUpstreamMissing = errors.New("knomit: consensus branch does not exist in this store")
 
 // buildAdvRefs is the served VIEW of the store's refs: HEAD is a symref to
 // refs/heads/<upstream>; only refs/heads/<upstream> and refs/heads/agent/*
@@ -35,20 +41,29 @@ func buildAdvRefs(rh *repoHandler, upstream string) (*packp.AdvRefs, map[plumbin
 	_ = caps.Set(capability.Shallow)
 
 	upstreamRef := plumbing.NewBranchReferenceName(upstream)
-	if ref, err := rh.gits.Reference(upstreamRef); err == nil {
-		h := ref.Hash()
-		ar.Head = &h
-		ar.References[upstreamRef.String()] = h
-		tips[h] = struct{}{}
-		_ = caps.Set(capability.SymRef, "HEAD:"+upstreamRef.String())
-	} else {
-		// Never invent a ref. A store whose local upstream has not been
-		// bootstrapped yet advertises its agent branches only; the client
-		// gets a truthful (if less useful) advertisement rather than a
-		// dangling HEAD.
-		log.Warn().Str("upstream", upstream).
-			Msg("git advertise: local upstream ref missing; HEAD not advertised")
+	ref, err := rh.gits.Reference(upstreamRef)
+	if err != nil {
+		// REFUSE, rather than serve a headless advertisement. Omitting HEAD
+		// and logging at warn made `git clone` print
+		// "warning: remote HEAD refers to nonexistent ref" and then exit 0
+		// with an empty working tree — a subscriber would take that repo as
+		// valid and hold nothing. A protocol error is the only outcome the
+		// client cannot mistake for success.
+		//
+		// The reachable case is a configured Remote.Branch naming a branch
+		// this store does not have (upstream "master", store holds "main").
+		// EnsureLocalUpstream cannot repair it — it bootstraps only from
+		// refs/remotes/origin/<upstream>, equally absent — and should not
+		// try: inventing the branch would be guessing at consensus.
+		log.Error().Str("upstream", upstream).
+			Msg("git advertise: consensus branch missing; refusing to serve this repo")
+		return nil, nil, fmt.Errorf("%w: %q", errUpstreamMissing, upstream)
 	}
+	h := ref.Hash()
+	ar.Head = &h
+	ar.References[upstreamRef.String()] = h
+	tips[h] = struct{}{}
+	_ = caps.Set(capability.SymRef, "HEAD:"+upstreamRef.String())
 
 	iter, err := rh.gits.IterReferences()
 	if err != nil {
