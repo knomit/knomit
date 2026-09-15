@@ -13,8 +13,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gogitserver "github.com/go-git/go-git/v5/plumbing/transport/server"
-
-	storegit "knomit/internal/store/git"
 )
 
 // Handler returns an http.Handler implementing the read-only Smart HTTP git
@@ -26,7 +24,7 @@ import (
 //   - POST /git-upload-pack                   — serve a fetch
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
-		s.handler = newGitHTTPHandler(s.rh.gits)
+		s.handler = newGitHTTPHandler(s.rh, s.UpstreamBranch)
 	})
 	return s.handler
 }
@@ -43,10 +41,15 @@ func (l *repoLoader) Load(_ *transport.Endpoint) (storer.Storer, error) {
 
 // newGitHTTPHandler builds an http.Handler serving the read-only git smart
 // HTTP endpoints for a single repository. Push (receive-pack) is not exposed.
-func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
-	loader := &repoLoader{sto: sto}
-	srv := gogitserver.NewServer(loader)
-
+//
+// upstream is evaluated PER REQUEST, not captured once: a repo can gain an
+// origin (and with it a configured Remote.Branch) after the handler is built,
+// and the advertisement must follow.
+func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
+	sto := rh.gits
+	// Pack generation still goes through go-git's built-in server; only the
+	// advertisement is ours so far.
+	srv := gogitserver.NewServer(&repoLoader{sto: sto})
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/info/refs", func(w http.ResponseWriter, r *http.Request) {
@@ -56,15 +59,7 @@ func newGitHTTPHandler(sto *storegit.Storer) http.Handler {
 			return
 		}
 
-		ep := &transport.Endpoint{}
-		sess, err := srv.NewUploadPackSession(ep, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer sess.Close()
-
-		advRefs, err := sess.AdvertisedReferencesContext(r.Context())
+		advRefs, _, err := buildAdvRefs(rh, upstream())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
