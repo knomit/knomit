@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
@@ -805,8 +805,19 @@ export default function App() {
     else openRepoMgr();
   }, [manageOpen, manageBusy, openRepoMgr, closeRepoMgr]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
+  // Keyboard shortcuts.
+  //
+  // A LAYOUT effect, not a passive one. This handler closes over `manageOpen`,
+  // `manageBusy` and `state`, and React runs the DOM commit and the
+  // passive-effect flush in SEPARATE tasks whenever the update did not come
+  // from a discrete event. A passive registration therefore left a window in
+  // which the commit lock was already PAINTED — every visible exit disabled —
+  // while the live handler still had `manageBusy === false` and answered
+  // Escape by closing Manage, which is the one thing the guard below exists to
+  // prevent. Layout effects run synchronously in the commit task, so the
+  // handler can never disagree with what the user is looking at.
+  // Pinned by App.keyboard.timing.test.tsx.
+  useLayoutEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Manage owns the window, so it owns the keyboard too. Every shortcut
       // below drives the BROWSE surface — back, return-to-now, focus the filter

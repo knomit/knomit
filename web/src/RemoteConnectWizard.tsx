@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import { api, createSession, streamTest, streamPreview, streamApply, streamCommit, deleteSession } from './api';
 import type { SSEEvent, TestResult, PreviewResult, ApplyResult } from './api';
 import { GlobeIcon } from './icons';
@@ -285,7 +285,13 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   // cleanupRef, so unmounting does not stop it — it strands a store swap whose
   // completion the UI never hears, and leaves its temp dir open to being deleted
   // by the next session the user starts.
-  useEffect(() => {
+  //
+  // A LAYOUT effect, because the commit that paints the lock — this component's
+  // own render, disabling every visible exit — must not reach the screen before
+  // the parent knows it is locked. Passive, the flag arrived a task later, and
+  // App's Escape handler spent that window still believing it was free to close
+  // Manage. Pinned by App.keyboard.timing.test.tsx.
+  useLayoutEffect(() => {
     onBusyChange?.(!leavable);
     return () => { onBusyChange?.(false); };
   }, [leavable, onBusyChange]);
