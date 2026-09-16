@@ -324,9 +324,15 @@ func Load() (Config, error) {
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
 	envOr("KNOMIT_API_KEY", &cfg.LLM.APIKey)
-	envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache)
-	envBoolOr("KNOMIT_LLM_BATCH", &cfg.LLM.Batch)
-	envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve)
+	if err := envBoolOr("KNOMIT_LLM_CACHE", &cfg.LLM.Cache); err != nil {
+		return Config{}, err
+	}
+	if err := envBoolOr("KNOMIT_LLM_BATCH", &cfg.LLM.Batch); err != nil {
+		return Config{}, err
+	}
+	if err := envBoolOr("KNOMIT_GIT_SERVE", &cfg.Git.Serve); err != nil {
+		return Config{}, err
+	}
 	envOr("KNOMIT_GIT_PORT", &cfg.Git.Port)
 	if err := envDurationOr("KNOMIT_GIT_NETWORK_TIMEOUT", &cfg.Git.NetworkTimeout); err != nil {
 		return Config{}, err
@@ -341,7 +347,9 @@ func Load() (Config, error) {
 	envOr("KNOMIT_REMOTE_AUTH", &cfg.Remote.AuthMethod)
 	envOr("KNOMIT_REMOTE_KNOWN_HOSTS", &cfg.Remote.KnownHosts)
 	envOr("KNOMIT_LOCAL_ORIGIN_ROOT", &cfg.LocalOriginRoot)
-	envBoolOr("KNOMIT_READ_ONLY", &cfg.ReadOnly)
+	if err := envBoolOr("KNOMIT_READ_ONLY", &cfg.ReadOnly); err != nil {
+		return Config{}, err
+	}
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
@@ -503,10 +511,22 @@ func envOr(key string, target *string) {
 	}
 }
 
-func envBoolOr(key string, target *bool) {
-	if v := os.Getenv(key); v != "" {
-		*target = v == "true"
+// envBoolOr overlays a bool env var. Only the spellings strconv.ParseBool
+// accepts (1/t/T/TRUE/true/True and 0/f/F/FALSE/false/False) are an override;
+// anything else is an error surfaced at boot like envIntOr/envDurationOr.
+// Treating an unrecognised value as false is what made KNOMIT_GIT_SERVE=1
+// turn OFF a feature that defaults to on, with no signal that it had.
+func envBoolOr(key string, target *bool) error {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return nil
 	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fmt.Errorf("config: %s must be a boolean (1, t, true, 0, f, false), got %q", key, v)
+	}
+	*target = b
+	return nil
 }
 
 // envIntOr overlays an int env var. A set-but-malformed value is an error
