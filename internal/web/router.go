@@ -244,6 +244,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 		})
 	})
 
+	// Unscoped MCP mount: the session picks its repo/lens through knomit_bind.
+	r.Group(func(r chi.Router) {
+		r.Use(SessionBindingMiddleware(s.Manager))
+		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+	})
+
 	// Lens collection: no {lens} segment, so unwrapped.
 	r.Get("/lenses", handleHALLenses(b, s.Manager))
 	r.Post("/lenses", handleHALLensesCreate(b, s.Manager))

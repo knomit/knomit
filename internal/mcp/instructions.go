@@ -325,3 +325,8 @@ var profileAddenda = map[string]string{
 
 	"generic": `You are a general-purpose knowledge assistant. Store and retrieve knowledge across any domain. Use descriptive domain and entity tags. Maintain clear, self-contained fact bodies that can be understood without additional context.`,
 }
+
+// unboundAddendum is appended on the unscoped /api/v1/mcp mount, where a fresh
+// session has no repo or lens yet. MCP cannot re-send instructions later, so
+// the ontology of whatever gets bound rides back in the knomit_bind result.
+const unboundAddendum = "\n\n## No repo bound yet\n\nThis session is connected to the unscoped endpoint and is NOT bound to any repo or lens. Every other knomit tool will fail until you call `knomit_bind` with either `repo` or `lens` (one name). The response carries that knowledge base's ontology and mount table — read it as if it were these instructions. You may call `knomit_bind` again later to switch; you cannot unbind."

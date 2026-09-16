@@ -179,7 +179,10 @@ func ExplainHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		// snapshots always live in the WRITE repo's session DB (sWrite); explain
 		// never fans out — the input fact fixes the mount, and the ENTIRE
 		// provenance walk lives inside that mount at its pinned branch (RFC §6.2).
-		b := repos.BindingFromContext(ctx)
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		sWrite, releaseWrite, err := storeIndices(b.Write())
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil

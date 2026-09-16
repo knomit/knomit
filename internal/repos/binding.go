@@ -7,6 +7,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -237,7 +238,7 @@ func BindingFromContextOpt(ctx context.Context) (*Binding, bool) {
 // RepoInstance and bound branch — so the single-repo path needs no middleware
 // change and stays behavior-identical. Panics when neither a binding nor a
 // RepoInstance is in the context: that is a programming error, mirroring
-// RepoFromContext.
+// RepoFromContext. MCP tool handlers use RequireBinding, which never panics.
 func BindingFromContext(ctx context.Context) *Binding {
 	if b, ok := BindingFromContextOpt(ctx); ok {
 		return b
@@ -248,6 +249,34 @@ func BindingFromContext(ctx context.Context) *Binding {
 	}
 	branch, _ := BranchFromContextOpt(ctx)
 	return NewBindingOfRepo(ri, branch)
+}
+
+// ErrUnbound is what every tool returns on a session-bound mount that has not
+// chosen a repo or lens yet. The text is the tool error the agent reads, so it
+// names the tool it must call.
+var ErrUnbound = errors.New("no repo or lens is bound to this session — call knomit_bind with a repo or lens name first")
+
+// RequireBinding is BindingFromContext for callers that must FAIL rather than
+// panic: the MCP tool handlers, which on the unscoped mount can legitimately
+// run with nothing bound.
+//
+// Order matters. An explicit Binding wins. Failing that, a RepoInstance in the
+// context means a URL-scoped mount (or a direct handler call in a test), and
+// the lens-of-one is synthesized exactly as BindingFromContext does. Only then
+// do the session-bound cases apply: a stored pin that would not resolve
+// surfaces its own reason, and anything else is simply unbound.
+func RequireBinding(ctx context.Context) (*Binding, error) {
+	if b, ok := BindingFromContextOpt(ctx); ok {
+		return b, nil
+	}
+	if ri, ok := RepoFromContextOpt(ctx); ok {
+		branch, _ := BranchFromContextOpt(ctx)
+		return NewBindingOfRepo(ri, branch), nil
+	}
+	if err, ok := BindingErrorFromContext(ctx); ok {
+		return nil, err
+	}
+	return nil, ErrUnbound
 }
 
 // BindingPinFromContext resolves the request's binding to a PinID

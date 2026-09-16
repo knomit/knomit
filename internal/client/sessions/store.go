@@ -247,8 +247,14 @@ FROM client_sessions WHERE 1=1`
 	return out, rows.Err()
 }
 
-// Purge deletes rows whose last_seen_at is older than the retention window.
-// Returns the number deleted. Retention 0 disables purging.
+// Purge deletes rows whose last_seen_at is older than the retention window,
+// then drops session_bindings rows whose session has aged out with them — that
+// table carries no foreign key, so its orphans are collected here. A binding is
+// therefore durable across restarts but not beyond the retention window
+// (session.client_retention, default 168h — configurable, not a constant): a
+// session idle that long loses its selection and must call knomit_bind again.
+// Returns the number of client_sessions rows deleted. Retention 0 disables
+// purging.
 func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 	if s.policy.Retention <= 0 {
 		return 0, nil
@@ -259,10 +265,17 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 		return 0, fmt.Errorf("purge client_sessions: %w", err)
 	}
 	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM session_bindings WHERE session_id NOT IN (SELECT id FROM client_sessions)`); err != nil {
+		return n, fmt.Errorf("purge session_bindings: %w", err)
+	}
 	// No id: a purge is not about one row, and the consumer re-reads the
 	// whole list anyway.
-	if err == nil && n > 0 {
+	if n > 0 {
 		s.publish("", "purge")
 	}
-	return n, err
+	return n, nil
 }

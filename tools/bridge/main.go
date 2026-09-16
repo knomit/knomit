@@ -8,6 +8,10 @@
 //
 //	/api/v1/repos/{repo}/branches/{branch}/mcp
 //
+// or, with neither --repo nor --lens, the session-bound mount:
+//
+//	/api/v1/mcp
+//
 // knomit-bridge discovers the agent branch automatically by querying
 // GET /api/v1/repos/{repo} and reading the agent_branch field.
 //
@@ -15,9 +19,12 @@
 //
 //	knomit-bridge --repo <name> [base-url]
 //	knomit-bridge --lens <name> [base-url]
+//	knomit-bridge [base-url]
 //	knomit-bridge --repo work http://myhost:8080
 //
-// Exactly one of --repo / --lens is required — knomit has no default repo.
+// --repo and --lens are mutually exclusive. With neither, the bridge connects
+// to the unscoped mount /api/v1/mcp and the agent binds a repo or lens by
+// calling knomit_bind; knomit has no default repo either way.
 // The base-url defaults to http://localhost:19278.
 //
 // Claude Desktop config:
@@ -42,6 +49,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -95,6 +103,65 @@ func lensConflict(lens string, repoSet bool) string {
 	return ""
 }
 
+// bridgeMode is which endpoint the proxy connects to.
+type bridgeMode int
+
+const (
+	modeRepo bridgeMode = iota
+	modeLens
+	modeSessionBound
+	modeInvalid
+)
+
+// selectMode decides the proxy mode from the flag VALUES plus whether each flag
+// was explicitly given (flag.Visit), which are different questions.
+//
+// Session-bound mode is the absence of BOTH flags — never two empty strings. An
+// explicit `--repo ""` is a misconfigured wrapper (an unset variable that
+// expanded to nothing), and silently proxying it to the session-bound mount
+// would turn that mistake into a working-but-wrong session bound to whatever
+// the agent later picks. It stays a hard exit, as it was before the mount
+// existed. lensConflict cannot catch it: it short-circuits on lens == "".
+func selectMode(repo, lens string, repoSet, lensSet bool) bridgeMode {
+	switch {
+	case !repoSet && !lensSet:
+		return modeSessionBound
+	case lens != "":
+		return modeLens
+	case repo != "":
+		return modeRepo
+	default:
+		// A flag was given but empty.
+		return modeInvalid
+	}
+}
+
+// baseURLArg validates the optional leading positional argument as the server
+// base URL, returning "" when there is none.
+//
+// This guard exists because session-bound mode made no-flags legal. Before it,
+// a mistyped subcommand still failed loudly: `knomit-bridge clade init` parsed
+// no --repo and the required-flag check exited. Now the same typo would be
+// accepted as a base URL and the proxy would dial http://clade/... forever.
+//
+// Go's flag package stops parsing at the FIRST non-flag argument, so
+// `clade init -repo x` never parses -repo at all: "clade", "init", "-repo" and
+// "x" all land in flag.Args(), flag.Visit reports neither flag as set, and the
+// mode selector picks session-bound. Rejecting a first positional that is not
+// an http/https URL is what turns that silent misconfiguration back into an
+// exit.
+func baseURLArg(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	raw := args[0]
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("unknown command or base-url %q (expected http:// or https://)", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
+
 func main() {
 	logPath, args := peelLogFlag(os.Args[1:])
 	bridgelog.Init(logPath)
@@ -122,8 +189,9 @@ func main() {
 	os.Args = append([]string{os.Args[0]}, args...)
 
 	// No default: knomit serves no privileged repo, so the bridge cannot guess
-	// which one to proxy. Exactly one of --repo / --lens must be given.
-	repo := flag.String("repo", "", "repository name (required unless --lens)")
+	// which one to proxy. Give --repo, or --lens, or neither — with neither the
+	// bridge connects to the unscoped mount and the agent binds per session.
+	repo := flag.String("repo", "", "repository name (omit both --repo and --lens to bind per session via knomit_bind)")
 	lens := flag.String("lens", "", "lens name; connects to /api/v1/lenses/<lens>/mcp (mutually exclusive with --repo)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
@@ -144,6 +212,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -lens eng\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge                            (session-bound: the agent calls knomit_bind)\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work http://myhost:8080\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook post-edit\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
@@ -155,21 +224,26 @@ func main() {
 	}
 	flag.Parse()
 
-	// --lens is mutually exclusive with --repo, and with neither there is nothing
-	// to proxy — no default repo exists to fall back on. flag.Visit (rather than
-	// *repo != "") keeps an explicit `--repo ""` a conflict rather than a silent
-	// lens-mode fallthrough.
-	repoSet := false
+	// --lens is mutually exclusive with --repo. Omitting BOTH selects the
+	// session-bound mount; giving one but leaving it empty is a
+	// misconfiguration, not a request for that mount. flag.Visit (rather than
+	// *repo != "") is what distinguishes "not given" from "given empty".
+	repoSet, lensSet := false, false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "repo" {
+		switch f.Name {
+		case "repo":
 			repoSet = true
+		case "lens":
+			lensSet = true
 		}
 	})
 	if msg := lensConflict(*lens, repoSet); msg != "" {
 		log.Fatal().Msg(msg)
 	}
-	if *lens == "" && *repo == "" {
-		fmt.Fprintf(os.Stderr, "knomit-bridge: one of --repo or --lens is required\n")
+	mode := selectMode(*repo, *lens, repoSet, lensSet)
+	if mode == modeInvalid {
+		fmt.Fprintf(os.Stderr,
+			"knomit-bridge: --repo/--lens given but empty; omit both to bind per session via knomit_bind\n")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -178,10 +252,16 @@ func main() {
 	log.Info().Str("repo", *repo).Msg("bridge starting")
 
 	baseURL := "http://localhost:19278"
-	if flag.NArg() >= 1 {
-		baseURL = strings.TrimRight(flag.Arg(0), "/")
-	} else if url, err := readLockfileBaseURL(); err == nil && url != "" {
-		baseURL = url
+	arg, argErr := baseURLArg(flag.Args())
+	if argErr != nil {
+		fmt.Fprintf(os.Stderr, "knomit-bridge: %v\n", argErr)
+		flag.Usage()
+		os.Exit(2)
+	}
+	if arg != "" {
+		baseURL = arg
+	} else if lockURL, err := readLockfileBaseURL(); err == nil && lockURL != "" {
+		baseURL = lockURL
 		log.Debug().Str("base_url", baseURL).Msg("discovered base-url from lockfile")
 	} else if err != nil {
 		log.Debug().Err(err).Msg("lockfile read failed, falling back to default")
@@ -190,7 +270,13 @@ func main() {
 	// branch is also what the bridge declares about itself; it stays empty in
 	// lens mode, where the branch is resolved per mount server-side.
 	var branch string
-	if *lens != "" {
+	if mode == modeSessionBound {
+		// Session-bound mode: nothing to discover. The mount is unscoped and
+		// the agent binds a repo or lens by calling knomit_bind; until it
+		// does, every other tool fails.
+		serverURL = mcpURL(baseURL, "", "", "")
+		log.Info().Str("url", serverURL).Msg("bridge configured (session-bound; call knomit_bind)")
+	} else if mode == modeLens {
 		// Lens mode: skip branch discovery entirely. A lens resolves each
 		// mount's branch server-side via LensMiddleware, so the bridge just
 		// connects to the lens endpoint (no branch).
@@ -470,6 +556,11 @@ func truncate(s string, n int) string {
 // A lens has no branch segment — LensMiddleware resolves each mount's branch
 // server-side.
 func mcpURL(baseURL, repo, lens, encodedBranch string) string {
+	// Neither set: the session-bound mount. The agent chooses its repo or lens
+	// with knomit_bind, so the URL names none.
+	if repo == "" && lens == "" {
+		return baseURL + "/api/v1/mcp"
+	}
 	if lens != "" {
 		return fmt.Sprintf("%s/api/v1/lenses/%s/mcp", baseURL, lens)
 	}
@@ -481,16 +572,16 @@ func mcpURL(baseURL, repo, lens, encodedBranch string) string {
 // Bounded by a short timeout so a missing/dead server fails fast at startup
 // instead of hanging Claude Desktop.
 func discoverAgentBranch(baseURL, repo string) (string, error) {
-	url := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
+	repoURL := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
 	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get(url) //nolint:noctx
+	resp, err := c.Get(repoURL) //nolint:noctx
 	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", url, err)
+		return "", fmt.Errorf("GET %s: %w", repoURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("GET %s: status %d: %s", url, resp.StatusCode, body)
+		return "", fmt.Errorf("GET %s: status %d: %s", repoURL, resp.StatusCode, body)
 	}
 	var body struct {
 		AgentBranch string `json:"agent_branch"`

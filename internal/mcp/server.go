@@ -38,6 +38,22 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 	})
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
 		recordClientInfo(ctx, mgr, req)
+		// The session-bound mount answers initialize with the UNBOUND
+		// instructions unconditionally. web.SessionBindingMiddleware is the
+		// primary guard — it skips resolution for initialize entirely — and
+		// this keeps the hook correct on its own, independent of it.
+		//
+		// mcp-go mints a fresh session id on every initialize and ignores the
+		// inbound header (v0.45 server/streamable_http.go: isInitializeRequest
+		// ⇒ sessionIdManager.Generate()). The bridge keeps sending its old id
+		// once it has one, so a re-initialize resolves the PREVIOUS session's
+		// pin while the response carries a NEW id that has no session_bindings
+		// row. Describing that binding here would tell the agent it is bound to
+		// repo X and then fail its very next tool call with "nothing bound".
+		if repos.SessionScoped(ctx) {
+			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil) + unboundAddendum
+			return
+		}
 		_, ok := repos.RepoFromContextOpt(ctx)
 		if !ok {
 			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil)
@@ -55,7 +71,7 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 		server.WithTaskCapabilities(true, true, true),
 	)
 
-	for _, t := range enabledTools(toolRegistrations(embedders...), readOnly) {
+	for _, t := range enabledTools(toolRegistrations(mgr, embedders...), readOnly) {
 		s.AddTool(t.tool, t.handler)
 	}
 
@@ -96,7 +112,7 @@ type toolReg struct {
 }
 
 // toolRegistrations is the full catalog in registration order.
-func toolRegistrations(embedders ...store.BatchEmbedder) []toolReg {
+func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []toolReg {
 	return []toolReg{
 		{learnTool(), LearnHandler(embedders...), true},
 		{queryTool(), QueryHandler(embedders...), false},
@@ -106,6 +122,9 @@ func toolRegistrations(embedders ...store.BatchEmbedder) []toolReg {
 		{hypothesizeTool(), HypothesizeHandler(), true},
 		{reviewTool(), ReviewHandler(), true},
 		{reposTool(), ReposHandler(), false},
+		// Not a write tool: a read-only server still needs knomit_bind on
+		// the unscoped mount, or nothing there could ever be read either.
+		{bindTool(), BindHandler(mgr), false},
 	}
 }
 

@@ -3,6 +3,8 @@ package mcp
 import (
 	"sort"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func toolNames(regs []toolReg) []string {
@@ -15,15 +17,15 @@ func toolNames(regs []toolReg) []string {
 }
 
 func TestEnabledTools_ReadOnly_OmitsWriteTools(t *testing.T) {
-	got := toolNames(enabledTools(toolRegistrations(), true))
-	want := []string{"knomit_explain", "knomit_query", "knomit_repos"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Fatalf("read-only tools = %v, want %v", got, want)
-	}
+	got := toolNames(enabledTools(toolRegistrations(nil), true))
+	// knomit_bind is NOT a write tool: a read-only server still needs it on the
+	// unscoped mount, or nothing there could be read either.
+	want := []string{"knomit_bind", "knomit_explain", "knomit_query", "knomit_repos"}
+	require.Equal(t, want, got)
 }
 
-func TestEnabledTools_Writable_IncludesAllEight(t *testing.T) {
-	if n := len(enabledTools(toolRegistrations(), false)); n != 8 {
-		t.Fatalf("writable tool count = %d, want 8", n)
+func TestEnabledTools_Writable_IncludesAllNine(t *testing.T) {
+	if n := len(enabledTools(toolRegistrations(nil), false)); n != 9 {
+		t.Fatalf("writable tool count = %d, want 9", n)
 	}
 }

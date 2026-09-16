@@ -84,7 +84,10 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
-		b := repos.BindingFromContext(ctx)
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		if !b.WriteOK() {
 			return mcpgo.NewToolResultError(fmt.Sprintf(
 				"read-only view: branch %q is not writable; facts are authored on %q",

@@ -329,6 +329,28 @@ func (r *LensRegistry) Get(name string) (Lens, bool, error) {
 	return l, true, nil
 }
 
+// GetByUID returns the lens by registry uid; ok is false when it does not
+// exist. Same shape as Get, keyed by the identity that survives a rename —
+// what a session binding (`lens:<uid>`) and a tool cursor both pin on.
+func (r *LensRegistry) GetByUID(uid string) (Lens, bool, error) {
+	var l Lens
+	err := r.db.QueryRow(
+		`SELECT uid, name, write_uid, description, created_at, updated_at FROM lenses WHERE uid = ?`, uid,
+	).Scan(&l.UID, &l.Name, &l.WriteUID, &l.Description, &l.CreatedAt, &l.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Lens{}, false, nil
+	}
+	if err != nil {
+		return Lens{}, false, fmt.Errorf("get lens by uid: %w", err)
+	}
+	reads, err := r.readsOf(l.UID)
+	if err != nil {
+		return Lens{}, false, fmt.Errorf("get lens by uid: %w", err)
+	}
+	l.Reads = reads
+	return l, true, nil
+}
+
 // Delete removes a lens; deleting an absent lens is not an error. The
 // lens_reads rows cascade via the foreign key.
 func (r *LensRegistry) Delete(name string) error {

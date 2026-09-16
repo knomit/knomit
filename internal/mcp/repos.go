@@ -43,34 +43,45 @@ type reposResponse struct {
 // the binding's mounts and never touches a store.
 func ReposHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		b := repos.BindingFromContext(ctx)
-		resp := reposResponse{Binding: b.Name(), Mounts: []reposMount{}}
-		for _, rt := range b.Reads() {
-			role := "read"
-			var writeBranch string
-			if rt.RI == b.Write() && b.WriteOK() {
-				role = "read+write"
-				// Writes commit here, not to rt.Branch (RFC decision 19 / M-4).
-				writeBranch = b.Write().AgentBranch()
-			}
-			mode := ""
-			if rt.RI.Subscribed() {
-				mode = "subscribe"
-			}
-			resp.Mounts = append(resp.Mounts, reposMount{
-				Name:        rt.RI.Name(),
-				ID:          federate.ID12(rt.RI.ID()),
-				Branch:      rt.Branch,
-				Role:        role,
-				Source:      rt.Source,
-				WriteBranch: writeBranch,
-				Mode:        mode,
-			})
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		out, err := json.MarshalIndent(resp, "", "  ")
+		out, err := json.MarshalIndent(reposResponseFor(b), "", "  ")
 		if err != nil {
 			return mcpgo.NewToolResultError("marshal error: " + err.Error()), nil
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
+}
+
+// reposResponseFor builds the knomit_repos envelope for a binding. It is split
+// out of ReposHandler because knomit_bind returns the SAME envelope for the
+// binding it just made — the agent should not have to call knomit_repos to
+// learn what it just bound, and two copies of this loop would drift.
+func reposResponseFor(b *repos.Binding) reposResponse {
+	resp := reposResponse{Binding: b.Name(), Mounts: []reposMount{}}
+	for _, rt := range b.Reads() {
+		role := "read"
+		var writeBranch string
+		if rt.RI == b.Write() && b.WriteOK() {
+			role = "read+write"
+			// Writes commit here, not to rt.Branch (RFC decision 19 / M-4).
+			writeBranch = b.Write().AgentBranch()
+		}
+		mode := ""
+		if rt.RI.Subscribed() {
+			mode = "subscribe"
+		}
+		resp.Mounts = append(resp.Mounts, reposMount{
+			Name:        rt.RI.Name(),
+			ID:          federate.ID12(rt.RI.ID()),
+			Branch:      rt.Branch,
+			Role:        role,
+			Source:      rt.Source,
+			WriteBranch: writeBranch,
+			Mode:        mode,
+		})
+	}
+	return resp
 }
