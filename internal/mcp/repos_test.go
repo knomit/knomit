@@ -460,7 +460,7 @@ func TestRepos_ForEachCallbackTouchesNoManager(t *testing.T) {
 	require.NoError(t, err)
 	body := string(src)
 	start := strings.Index(body, "mgr.ForEach(func(")
-	require.Positive(t, start, "ForEach call not found — did catalogRepos change shape?")
+	require.Positive(t, start, "ForEach call not found — did listRepos change shape?")
 	end := strings.Index(body[start:], "\n\t})")
 	require.Positive(t, end, "could not find the end of the ForEach callback")
 	callback := body[start+len("mgr.ForEach(func(") : start+end]
@@ -521,19 +521,55 @@ func TestRepos_LensMemberWithoutInstanceUsesRegistryName(t *testing.T) {
 // agent would read that as "this server has no lenses" and bind to a bare repo
 // instead of the lens it needed, with nothing recording why.
 //
+// It must also not abort the whole tool. Before the catalogue was folded in,
+// this call could not fail at all, so a bound agent would lose its own mount
+// table to an unrelated control-plane error. The key is OMITTED and the failure
+// named, and everything that did resolve is still returned.
+//
 // This exercises the not-started path (a Manager that was never Start()ed).
 // The sibling path — List() itself failing — takes the same branch, but cannot
 // be induced from here: the Manager-owned LensRegistry shares the control.db
 // handle, so its Close() is a no-op (owns == false) and the query keeps working.
-func TestRepos_LensRegistryUnavailableIsAnError(t *testing.T) {
+func TestRepos_LensRegistryUnavailableDegrades(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{})
 	t.Cleanup(func() { _ = m.Close() })
 	require.Nil(t, m.LensRegistry(), "an unstarted manager has no lens registry")
 
-	res, err := ReposHandler(m)(context.Background(), mcpgo.CallToolRequest{})
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "alpha", UID: "u-alpha", AgentBranch: "agent/test", OntologyRoot: "kb",
+	})
+	ctx := repos.WithBinding(context.Background(), repos.NewBindingOfRepo(ri, ""))
+
+	res, err := ReposHandler(m)(ctx, mcpgo.CallToolRequest{})
 	require.NoError(t, err)
-	require.True(t, res.IsError, "an unavailable registry must not look like an empty one")
-	require.Contains(t, resultText(t, res), "lens registry")
+	require.False(t, res.IsError, "a lens failure must not abort the tool: %s", resultText(t, res))
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &out))
+
+	require.NotContains(t, out, "lenses", "an empty list would read as 'no lenses exist'")
+	require.Contains(t, out["lenses_error"], "lens registry")
+	// The bound section survives — that is the point of degrading.
+	bound, ok := out["bound"].(map[string]any)
+	require.True(t, ok, "the binding's own mount table must survive: %v", out)
+	require.Equal(t, "alpha", bound["binding"])
+}
+
+// The empty case stays distinguishable from the failed one: a server with no
+// lenses returns an empty LIST, not an omitted key.
+func TestRepos_NoLensesIsAnEmptyList(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{
+		Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	out := catalogOf(t, m, context.Background())
+
+	lenses, ok := out["lenses"].([]any)
+	require.True(t, ok, "a working registry with no lenses returns []: %v", out)
+	require.Empty(t, lenses)
+	require.NotContains(t, out, "lenses_error")
 }
 
 // A session whose STORED pin no longer resolves must be distinguishable from

@@ -32,9 +32,9 @@ const (
 type SessionBindingError struct {
 	Kind SessionBindingKind
 	// Pin is the stored value that failed to resolve, kept so a consumer can
-	// say WHICH binding died rather than only that one did. knomit_catalog
-	// reads it to report the kind and, when the registry still knows it, the
-	// name. Empty when the failure was not about a specific pin.
+	// say WHICH binding died rather than only that one did. knomit_repos reads
+	// it to report the kind and, when the registry still knows it, the name.
+	// Empty when the failure was not about a specific pin.
 	Pin string
 	Err error
 }

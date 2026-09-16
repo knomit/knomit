@@ -307,8 +307,8 @@ func BindingPinFromContext(ctx context.Context) string {
 // still has a registry row, so the name is almost always available — and a bare
 // ksuid names nothing the reader has ever been shown.
 //
-// Exported because internal/mcp needs the same resolution when listing a lens
-// member that has no live instance (knomit_catalog), and a second copy of five
+// Exported because internal/mcp needs the same resolution when knomit_repos
+// lists a lens member that has no live instance, and a second copy of five
 // lines in another package would be free to drift from this one.
 //
 // LOCKING: takes m.mu (via Repos). NEVER call it from inside a ForEach callback

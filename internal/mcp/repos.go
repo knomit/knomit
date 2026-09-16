@@ -18,8 +18,13 @@ import (
 // It answers both "what does this server serve" and "what is behind my
 // binding", because the second is a nested section of the first rather than a
 // second tool — which is why the separately built knomit_catalog was folded in
-// here before it ever shipped. The shape never varies with session state; only
-// whether `bound` is present does, so the name never means two things.
+// here before it ever shipped.
+//
+// The shape is fixed PER STATE, not per session, which is what keeps one name
+// from meaning two things: `repos` is always present, `bound` appears only when
+// the session points at something, and `lenses` is replaced by `lenses_error`
+// when the registry lookup fails. Each key's presence reports a fact about the
+// world rather than a mode the tool is in.
 func reposTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_repos",
 		mcpgo.WithDescription("List every repo and lens this server serves, and what this session is bound to. Needs no binding — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
@@ -61,11 +66,19 @@ type boundSection struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// reposResponse is the knomit_repos envelope: one constant shape.
+// reposResponse is the knomit_repos envelope.
+//
+// Lenses is a POINTER so the three states stay distinct on the wire: a real
+// list, an empty list (`"lenses": []` — this server has none), and a failed
+// lookup, which omits the key entirely and sets LensesError. A plain slice
+// with omitempty could not tell the last two apart, since Go omits an empty
+// slice and an agent reading `[]` would conclude no lens exists and bind to a
+// bare repo instead of the lens it needed.
 type reposResponse struct {
-	Repos  []reposRepo   `json:"repos"`
-	Lenses []reposLens   `json:"lenses"`
-	Bound  *boundSection `json:"bound,omitempty"`
+	Repos       []reposRepo   `json:"repos"`
+	Lenses      *[]reposLens  `json:"lenses,omitempty"`
+	LensesError string        `json:"lenses_error,omitempty"`
+	Bound       *boundSection `json:"bound,omitempty"`
 }
 
 // ReposHandler returns the handler for knomit_repos.
@@ -93,16 +106,22 @@ func ReposHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolReques
 		if mgr == nil {
 			return mcpgo.NewToolResultError(errStoreUnavailable.Error()), nil
 		}
-		lenses := listLenses(mgr)
-		if lenses == nil {
-			return mcpgo.NewToolResultError(
-				"the lens registry is unavailable, so this listing would wrongly show no lenses — retry shortly"), nil
+		// A lens lookup failure DEGRADES rather than aborting. Before the fold
+		// this call could not fail at all, so failing the whole tool would cost
+		// a bound agent its own mount table over an unrelated control-plane
+		// error. Omitting the key and naming the failure keeps both guarantees:
+		// the agent never reads "no lenses" from a broken lookup, and it still
+		// gets everything that did resolve.
+		resp := reposResponse{
+			Repos: listRepos(mgr),
+			Bound: boundOf(ctx, mgr),
 		}
-		out, err := json.MarshalIndent(reposResponse{
-			Repos:  listRepos(mgr),
-			Lenses: lenses,
-			Bound:  boundOf(ctx, mgr),
-		}, "", "  ")
+		if lenses := listLenses(mgr); lenses != nil {
+			resp.Lenses = &lenses
+		} else {
+			resp.LensesError = "the lens registry is unavailable, so lenses could not be listed — retry shortly; the repos above are unaffected"
+		}
+		out, err := json.MarshalIndent(resp, "", "  ")
 		if err != nil {
 			return mcpgo.NewToolResultError("marshal error: " + err.Error()), nil
 		}
