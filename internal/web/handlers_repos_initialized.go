@@ -46,6 +46,9 @@ func handleReposProbeInitialized(m *repos.Manager) http.HandlerFunc {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", err.Error(), r.URL.Path)
 			return
 		}
+		// Before the emptiness check, so a url of only spaces is "required",
+		// not a probe of a whitespace URL.
+		req.URL = trimOriginURL(req.URL)
 		if req.URL == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", "url is required", r.URL.Path)
 			return

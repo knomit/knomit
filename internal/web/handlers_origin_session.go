@@ -41,6 +41,9 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 				"invalid JSON body", r.URL.Path)
 			return
 		}
+		// Before isGitURL below, which a padded URL fails, and before the URL
+		// is carried on the session into the origin it eventually persists.
+		req.URL = trimOriginURL(req.URL)
 
 		if req.URL == "" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
