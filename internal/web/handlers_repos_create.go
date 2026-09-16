@@ -143,6 +143,51 @@ func handleHALRepoCreateStatus(b hal.URLBuilder, m *repos.Manager) http.HandlerF
 	}
 }
 
+// handleHALRepoCreates serves GET /api/v1/repo-creates — every job the manager
+// still holds, running and finished-within-TTL, newest first.
+//
+// The collection is what makes a detached create RECOVERABLE. The 202 hands
+// back one id; a client that loses it (closed tab, navigated to Logs,
+// restarted the app) had no route back to a running or failed create, because
+// the single-job endpoint needs the id and the repo list cannot show a repo
+// that does not exist yet. That is the "no trace of the create anywhere" half
+// of the incident.
+func handleHALRepoCreates(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobs := m.CreateJobs()
+		items := make([]map[string]any, 0, len(jobs))
+		for _, st := range jobs {
+			items = append(items, createStatusBody(b, st))
+		}
+		hal.WriteHAL(w, http.StatusOK, hal.CollectionView[map[string]any]{
+			Count:    len(items),
+			Links:    hal.LinkMap{"self": {Href: b.RepoCreates()}},
+			Embedded: map[string][]map[string]any{"creates": items},
+		})
+	}
+}
+
+// handleHALRepoCreateDismiss serves DELETE /api/v1/repo-creates/{id}: forget a
+// FINISHED job so its row leaves the list without waiting out CreateJobTTL.
+//
+// A RUNNING job answers 409, not 204 and not a cancel. Dismissing a row is a
+// list operation; cancelling a create is a different act with a half-clone to
+// roll back, and no client asked for that by clicking a dismiss control.
+func handleHALRepoCreateDismiss(m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch err := m.DismissCreateJob(chi.URLParam(r, "id")); {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, repos.ErrCreateRunning):
+			hal.WriteProblem(w, http.StatusConflict, "Create is still running",
+				"a running create cannot be dismissed; it will finish or reach its deadline", r.URL.Path)
+		default:
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+				"no create job with that id (it may have expired)", r.URL.Path)
+		}
+	}
+}
+
 // createStatusBody renders one create job for the wire. Both the 202 and the
 // poll use it, so a client parses ONE shape and the initial response is
 // literally the first poll result.
@@ -155,7 +200,18 @@ func createStatusBody(b hal.URLBuilder, st repos.CreateStatus) map[string]any {
 		"step":      st.Step,
 		"message":   st.Message,
 		"pct":       st.Pct,
-		"_links":    hal.LinkMap{"self": {Href: b.RepoCreate(st.ID)}},
+		// phase says what KIND of work is happening; indeterminate says pct is
+		// NOT a percent for this status and must not be drawn as one. A client
+		// that ignores both still sees exactly what it saw before.
+		"phase":         st.Phase,
+		"indeterminate": st.Indeterminate,
+		"_links":        hal.LinkMap{"self": {Href: b.RepoCreate(st.ID)}},
+	}
+	if st.IndexState != "" {
+		// Present on a DONE job too, and that is the point: "done" now means
+		// indexed, and an index that ended in error rides on a create that
+		// succeeded — the repo is there, and its row shows the chip.
+		body["index_state"] = st.IndexState
 	}
 	switch st.State {
 	case repos.CreateDone:

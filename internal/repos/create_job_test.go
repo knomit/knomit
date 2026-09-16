@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -134,12 +135,27 @@ func TestStartCreate_DoesNotUseTheCallersContext(t *testing.T) {
 //
 // PRESET MODE IS LOAD-BEARING HERE, and clone mode is not interchangeable with
 // it. In clone mode ActivateSync's synchronous reconcile blocks on the branch
-// lock the heal holds, so Create returns only after the index is ALREADY
-// 'ready' (measured: 5/5 runs) — the cancel would then land on finished work
-// and the test would pass under the very sabotage it exists to catch. Preset
-// mode has no ActivateSync, so Create returns while the heal is still in
-// flight (measured: 50/50 runs), which is the only arrangement in which the
-// cancellation can do damage.
+// lock the heal holds, so Create would return only after the index is ALREADY
+// 'ready' — the cancel would then land on finished work and the test would
+// pass under the very sabotage it exists to catch. Preset mode has no
+// ActivateSync, so the heal is still in flight when the mirror first reads it.
+//
+// HOW THIS TEST DISCRIMINATES, and why the arrangement changed. It used to
+// call StartCreate and assert, right after Result(), that IndexStatus was
+// still 'indexing' — relying on Create returning while the heal ran (measured
+// 50/50 runs on preset). The index mirror ended that: Create now WAITS for the
+// heal before reporting done, so that window is gone by construction and the
+// old anti-vacuity assertion could never hold again.
+//
+// The property is unchanged and the new arrangement pins it DETERMINISTICALLY
+// rather than by timing. The mirror emits an index event only while the heal
+// is in the 'indexing' state, so cancelling the create's context from inside
+// that emit cancels it at a moment when the heal is PROVABLY in flight — no
+// measurement, no flake. Then the same question is asked: did the heal
+// survive? If the create context were ever threaded into openOne, it would
+// parent indexCtx, the cancel would land on a running heal, and the heal would
+// return without markIndexReady/markIndexFailed — pinned at 'indexing', the
+// incident reproducing itself through a new context.
 func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: t.TempDir()},
@@ -149,23 +165,36 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	job := m.StartCreate(CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"})
-	ri, err := job.Result()
+	// Create is called directly rather than through StartCreate so the test
+	// OWNS the create's context — which is what StartCreate's own deadline is,
+	// and what its defer cancel() ends the instant Create returns.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var sawIndexing atomic.Bool
+	ri, err := m.Create(ctx, CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"},
+		func(e Event) {
+			if e.Phase != PhaseIndex {
+				return
+			}
+			// The mirror only emits this while IndexStatus reads 'indexing', so
+			// the heal is in flight right now. Cancel here.
+			sawIndexing.Store(true)
+			cancel()
+		})
 	require.NoError(t, err)
 	require.NotNil(t, ri)
 
-	// ANTI-VACUITY — asserted, not assumed. The create context is cancelled
-	// the instant Create returns, so this test discriminates only while the
-	// heal is still running at that instant. If a future change made the heal
-	// finish first, this test would quietly stop catching the regression it
-	// exists for; failing here says so out loud instead.
-	state, _, _ := ri.IndexStatus()
-	require.Equal(t, "indexing", state,
-		"the index heal must still be in flight when the create context is cancelled, "+
-			"or this test cannot detect the create deadline killing it")
+	// ANTI-VACUITY — asserted, not assumed. Without an index event the cancel
+	// never happened at a discriminating moment and this test proves nothing;
+	// failing here says so out loud instead of passing quietly.
+	require.True(t, sawIndexing.Load(),
+		"the create reported no index phase, so the context was never cancelled "+
+			"while the heal was running and this test cannot detect the regression")
+	require.Error(t, ctx.Err(), "the create context must be cancelled by now")
 
 	// The property: that cancellation is harmless. Pinned at 'indexing' is the
-	// incident reproducing itself through the new deadline.
+	// incident reproducing itself through the create's own context.
 	require.Eventually(t, func() bool {
 		s, _, _ := ri.IndexStatus()
 		return s == "ready"

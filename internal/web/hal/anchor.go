@@ -55,6 +55,9 @@ func (b URLBuilder) Repo(repo string) string { return b.Base + "/repos/" + repo 
 // repo actually called that.
 func (b URLBuilder) RepoCreate(id string) string { return b.Base + "/repo-creates/" + id }
 
+// RepoCreates returns the collection URL for detached repo-create jobs.
+func (b URLBuilder) RepoCreates() string { return b.Base + "/repo-creates" }
+
 // Branches returns the branch collection URL for a repo.
 func (b URLBuilder) Branches(repo string) string {
 	return b.Repo(repo) + "/branches"
