@@ -465,8 +465,31 @@ export function authFor(s: WizardState): { auth_method: string; auth_token: stri
   return { auth_method: method, auth_token: token };
 }
 
+/**
+ * originURL is the URL a wizard USES, as opposed to the one the field holds.
+ *
+ * The create wizard already trimmed for every decision it made — transportFor,
+ * hostOf, repoNameFromURL and the probe key all call .trim() — and then sent
+ * state.url raw. So a URL pasted with a trailing space was classified as one
+ * address and requested as another: the spaces survive url.Parse on the server
+ * and arrive percent-encoded in the path, which came back as "repository not
+ * found: 404 page not found" against a URL the user could see was right.
+ *
+ * It takes the STRING rather than the wizard state because the same asymmetry
+ * exists in RemoteConnectWizard, which holds its URL in a plain useState and
+ * classifies on it to decide whether SSH auth fits the address. Both wizards
+ * route through here so that what they classify and what they send are one
+ * value.
+ *
+ * The server trims too and is the durable fix; this is the client no longer
+ * asking the wrong question in the first place.
+ */
+export function originURL(url: string): string {
+  return url.trim();
+}
+
 function originFor(s: WizardState): NonNullable<CreateRepoBody['origin']> {
-  return { url: s.url, branch: s.branch, ...authFor(s) };
+  return { url: originURL(s.url), branch: s.branch, ...authFor(s) };
 }
 
 /**

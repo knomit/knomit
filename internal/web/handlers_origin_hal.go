@@ -455,6 +455,12 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 				err.Error(), r.URL.Path)
 			return
 		}
+		// Before every read of req.URL below — the local-origin gate, the
+		// ontology check and op.SetOrigin must all see the same string, or a
+		// URL could clear the gate in one form and be stored in another. A url
+		// of only spaces stays the partial-update case (reuse what is stored),
+		// which is what an empty url has always meant here.
+		req.URL = trimOriginURL(req.URL)
 
 		// Enforce the local-origin policy here, at the write edge, where the real
 		// Manager is in hand. PUT /origin defers the clone to the sync loop, so

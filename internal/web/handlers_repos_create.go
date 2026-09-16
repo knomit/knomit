@@ -91,7 +91,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		if req.Origin != nil {
 			spec.Origin = &repos.OriginSpec{
-				URL:        req.Origin.URL,
+				URL:        trimOriginURL(req.Origin.URL),
 				Branch:     req.Origin.Branch,
 				AuthMethod: req.Origin.AuthMethod,
 				AuthToken:  req.Origin.AuthToken,

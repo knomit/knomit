@@ -1,6 +1,6 @@
 import { useReducer, useRef, useState } from 'react';
 import { api, type RepoCreateStatus, type ProbeResult } from './api';
-import { wizardReducer, initialWizardState, currentStep, stepsFor, branchCheckBlocked, probeIsCurrent, createBodyFor, authFor, isValidRepoName, type WizardAction } from './wizardState';
+import { wizardReducer, initialWizardState, currentStep, stepsFor, branchCheckBlocked, probeIsCurrent, createBodyFor, authFor, originURL, isValidRepoName, type WizardAction } from './wizardState';
 import { WizardStepRail } from './WizardStepRail';
 import { StepSource } from './StepSource';
 import { StepAccess } from './StepAccess';
@@ -119,7 +119,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     setProbeError(''); setProbeFailure(''); setProbing(true);
     try {
       const probe = await api.probeOrigin(
-        { url: state.url, branch: state.branch || undefined, ...authFor(state) }, ctl.signal);
+        { url: originURL(state.url), branch: state.branch || undefined, ...authFor(state) }, ctl.signal);
       dispatch({ type: 'PROBE_DONE', probe });
       // A probe that came back but couldn't reach the remote is not an
       // exception — it's a normal 200 with reachable: false — so the error
@@ -161,7 +161,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     setCheckingBranch(true);
     try {
       const result = await api.probeInitialized(
-        { url: state.url, branch: state.branch || undefined, ...authFor(state) }, ctl.signal);
+        { url: originURL(state.url), branch: state.branch || undefined, ...authFor(state) }, ctl.signal);
       dispatch({ type: 'INITIALIZED_DONE', result });
       return result.initialized ?? '';
     } catch (e) {
