@@ -572,16 +572,16 @@ func mcpURL(baseURL, repo, lens, encodedBranch string) string {
 // Bounded by a short timeout so a missing/dead server fails fast at startup
 // instead of hanging Claude Desktop.
 func discoverAgentBranch(baseURL, repo string) (string, error) {
-	url := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
+	repoURL := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
 	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get(url) //nolint:noctx
+	resp, err := c.Get(repoURL) //nolint:noctx
 	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", url, err)
+		return "", fmt.Errorf("GET %s: %w", repoURL, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("GET %s: status %d: %s", url, resp.StatusCode, body)
+		return "", fmt.Errorf("GET %s: status %d: %s", repoURL, resp.StatusCode, body)
 	}
 	var body struct {
 		AgentBranch string `json:"agent_branch"`
