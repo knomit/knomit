@@ -4,6 +4,7 @@ import type { SSEEvent, TestResult, PreviewResult, ApplyResult } from './api';
 import { GlobeIcon } from './icons';
 import { btn, card } from './manageStyles';
 import { repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
+import { originURL } from './wizardState';
 
 type Step =
   | 'idle' | 'creating' | 'testing' | 'tested'
@@ -55,6 +56,18 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState<{ section: Step; message: string } | null>(null);
+
+  // The URL this wizard CLASSIFIES and SENDS, as opposed to the raw field.
+  // With a leading space isSSHURL and isHTTPURL below were both false, so
+  // authMismatch computed as empty, the inline "SSH auth cannot be used with
+  // HTTP/HTTPS URLs" guard was silently skipped and Test stayed enabled. The
+  // server trims, so the request itself still worked — what was lost was the
+  // guidance that exists for exactly this case, replaced by the same refusal
+  // arriving a round trip later with no advice attached.
+  //
+  // Declared here rather than beside the derived values below because
+  // handleTest closes over it.
+  const sendURL = originURL(url);
 
   const cleanupRef = useRef<(() => void) | null>(null);
   // The success pause before handing back to the parent. It has to be cancelled
@@ -114,7 +127,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
     let created = false;
     try {
       const sess = await createSession(repo, {
-        url,
+        url: sendURL,
         auth_method: authMethod || undefined,
         token: authMethod === 'token' ? token : undefined,
         user: authMethod === 'basic' ? user : undefined,
@@ -250,8 +263,8 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
     if (sessionId) { deleteSession(repo, sessionId).catch(() => {}); setSessionId(null); }
   };
 
-  const isSSHURL = url.startsWith('git@') || url.startsWith('ssh://');
-  const isHTTPURL = url.startsWith('http://') || url.startsWith('https://');
+  const isSSHURL = sendURL.startsWith('git@') || sendURL.startsWith('ssh://');
+  const isHTTPURL = sendURL.startsWith('http://') || sendURL.startsWith('https://');
   const authMismatch = (isHTTPURL && authMethod === 'ssh') ? 'SSH auth cannot be used with HTTP/HTTPS URLs'
     : (isSSHURL && (authMethod === 'token' || authMethod === 'basic')) ? 'Token/basic auth cannot be used with SSH URLs' : '';
   // Non-blocking advisory: 'none' on an SSH-style URL is a deliberate override

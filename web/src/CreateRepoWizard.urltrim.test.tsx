@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { api, type ProbeResult } from './api';
-import { originURL, initialWizardState } from './wizardState';
+import { originURL } from './wizardState';
 
 // A URL pasted with surrounding whitespace must be SENT as the URL the wizard
 // classified, not as the raw field.
@@ -49,11 +49,11 @@ describe('originURL', () => {
     ['newline', `${CLEAN}\n`],
     ['all of them', ` \t\n${CLEAN} \t\n`],
   ])('strips %s', (_name, padded) => {
-    expect(originURL({ ...initialWizardState, url: padded })).toBe(CLEAN);
+    expect(originURL(padded)).toBe(CLEAN);
   });
 
   it('leaves a clean URL alone', () => {
-    expect(originURL({ ...initialWizardState, url: CLEAN })).toBe(CLEAN);
+    expect(originURL(CLEAN)).toBe(CLEAN);
   });
 });
 
