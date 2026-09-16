@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -131,6 +132,147 @@ func TestOriginURL_PaddedURLReachesTheSameRemotePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// whitespaceForms are the five paddings, JSON-escaped because they go into a
+// request body verbatim. Fed separately everywhere, never as one mixed string:
+// the forms behave DIFFERENTLY without the trim, so a mixed string can pass on
+// the strength of whichever one happens to work.
+var whitespaceForms = map[string]func(string) string{
+	"trailing space": func(u string) string { return u + " " },
+	"leading space":  func(u string) string { return " " + u },
+	"tab":            func(u string) string { return `\t` + u + `\t` },
+	"newline":        func(u string) string { return u + `\n` },
+	"all of them":    func(u string) string { return ` \t\n` + u + ` \t\n` },
+}
+
+// THE WIRING, not the helper. The three entry points below carry the trim but
+// had no assertion: the reviewer removed the call from all three at once and
+// internal/web stayed green. Neutering trimOriginURL fails loudly and proves
+// nothing about its callers, and "one helper applied at every entry point"
+// makes the CALLERS the invariant — they are what a future refactor of any one
+// handler would drop.
+//
+// Each row observes the URL that actually left the handler: the paths a
+// recording remote was asked for, the row that landed in control.db, or the
+// URL the session stored.
+func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
+	// POST /repos. CreatePreflight's last check touches the network
+	// (ProbeOriginRefs), synchronously, before the 202 — so a recording remote
+	// sees the URL the Manager was given.
+	//
+	// Each form gets its OWN remote and its own repo name: preflight refuses a
+	// second create against an origin already in use, so reusing one remote
+	// would make every row after the first fail for the wrong reason.
+	t.Run("POST /repos (create preflight)", func(t *testing.T) {
+		probePaths := func(t *testing.T, name string, pad func(string) string) []string {
+			t.Helper()
+			clean, paths, _ := recordingRemote(t)
+			s := &Server{Manager: newRealManager(t)}
+			rec := httptest.NewRecorder()
+			s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
+				strings.NewReader(`{"name":"`+name+`","mode":"clone","origin":{"url":"`+pad(clean)+`"}}`)))
+			return paths()
+		}
+
+		want := probePaths(t, "cleanrepo", func(u string) string { return u })
+		require.NotEmpty(t, want, "the clean URL must actually have reached the remote")
+
+		for name, pad := range whitespaceForms {
+			t.Run(name, func(t *testing.T) {
+				require.Equal(t, want, probePaths(t, "padrepo", pad),
+					"a URL padded with %s must be probed at the same paths as the clean one", name)
+			})
+		}
+	})
+
+	// PUT /repos/{repo}/origin PERSISTS the URL without a network round trip
+	// first — the handler's own comment says the origin row is kept even when
+	// the following ActivateSync fails. An untrimmed URL here is STORED, and
+	// becomes the identity key ActiveRepoWithOrigin matches on, so this is the
+	// entry point whose trim most needs pinning.
+	//
+	// Adapted from the reviewer's own fixture, which is better than what this
+	// table had first: the assertion is on what lands in control.db, NOT on
+	// the response status. This endpoint answers 502 either way — the
+	// example.invalid host never resolves, so ActivateSync fails regardless —
+	// so a status assertion would pin nothing at all.
+	t.Run("PUT /repos/{repo}/origin", func(t *testing.T) {
+		const clean = "https://example.invalid/kb.git"
+		for name, pad := range whitespaceForms {
+			t.Run(name, func(t *testing.T) {
+				s, m, ri := newControlDBTestServer(t, t.TempDir())
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPut, "/repos/alpha/origin",
+					strings.NewReader(`{"url":"`+pad(clean)+`","branch":"main","auth_method":"token","token":"tok"}`))
+				req.Header.Set("Content-Type", "application/json")
+				s.NewAPIRouter().ServeHTTP(rec, req)
+
+				origin, err := m.Origins().Get(ri.UID())
+				require.NoError(t, err)
+
+				// Without the trim these forms fail in TWO different ways, and
+				// the message has to say which or a reader debugs the wrong
+				// thing. A bare "expected not nil" across four rows reads like
+				// a broken fixture rather than a result:
+				//   trailing space       isGitURL ACCEPTS it (url.Parse does),
+				//                        so the padded URL is PERSISTED — the
+				//                        originally reported bug.
+				//   leading space/tab/\n isGitURL REJECTS them, so the handler
+				//                        400s and NOTHING is persisted.
+				require.NotNil(t, origin,
+					"a URL padded with %s was REJECTED before persisting (status %d, %s) — "+
+						"the trim must make it acceptable, not merely clean",
+					name, rec.Code, strings.TrimSpace(rec.Body.String()))
+				require.Equal(t, clean, origin.URL,
+					"a URL padded with %s was PERSISTED with its padding intact", name)
+			})
+		}
+	})
+
+	// POST /repos/{repo}/origin-sessions opens without touching the network —
+	// the fetch is the later /test step — so the observable is the URL the
+	// session STORED, which every later step of the flow uses. The list
+	// endpoint reports it. isGitURL guards this endpoint too, so the same
+	// two-way split applies without the trim.
+	t.Run("POST /repos/{repo}/origin-sessions", func(t *testing.T) {
+		const clean = "https://example.invalid/kb.git"
+		for name, pad := range whitespaceForms {
+			t.Run(name, func(t *testing.T) {
+				s := &Server{
+					Manager:        newTestManagerWithRepos(t, "alpha"),
+					SessionManager: NewSessionManager(),
+					providers:      storeProviders{origin: &stubOriginProvider{}},
+				}
+				t.Cleanup(s.SessionManager.Shutdown)
+				r := s.NewAPIRouter()
+
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+					strings.NewReader(`{"url":"`+pad(clean)+`","auth_method":"none"}`)))
+				require.Equal(t, http.StatusOK, rec.Code,
+					"a URL padded with %s was REJECTED before a session opened (%s) — "+
+						"the trim must make it acceptable, not merely clean",
+					name, strings.TrimSpace(rec.Body.String()))
+
+				list := httptest.NewRecorder()
+				r.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin-sessions", nil))
+				require.Equal(t, http.StatusOK, list.Code, list.Body.String())
+
+				var got struct {
+					Embedded struct {
+						Sessions []struct {
+							URL string `json:"url"`
+						} `json:"sessions"`
+					} `json:"_embedded"`
+				}
+				require.NoError(t, json.Unmarshal(list.Body.Bytes(), &got))
+				require.Len(t, got.Embedded.Sessions, 1)
+				require.Equal(t, clean, got.Embedded.Sessions[0].URL,
+					"a session opened with a URL padded with %s STORED the padding", name)
+			})
+		}
+	})
 }
 
 // A url of nothing but whitespace is the same as no url at all: "required",
