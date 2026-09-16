@@ -313,6 +313,33 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 		// established nothing, and turning that into a refusal would block a
 		// create that is very likely fine; Create's own check will decide with
 		// the connection it actually opens.
+		// ONE advertisement answers BOTH remaining questions — which knowledge
+		// base this remote holds, and whether the branch this create will read
+		// is one — so the identity layers below are free in round trips, and a
+		// refusal costs strictly less than passing.
+		rp, rerr := m.beginRemoteProbe(ctx, *spec.Origin)
+		if rerr != nil {
+			return rerr
+		}
+		defer rp.close()
+
+		// LAYERS 1 AND 2, before anything is transferred. A duplicate knowledge
+		// base is refused here, having sent nothing but /info/refs — instead of
+		// after the clone, the store open, the commit-graph backfill and the
+		// registration, which is where the same verdict used to arrive.
+		//
+		// Both are SUFFICIENT-ONLY. Passing them means no cheap proof of a
+		// duplicate was found, never "not a duplicate": layer 1 is silent for
+		// any non-knomit remote and layer 2 is silent whenever the local copy
+		// is behind. Layer 3 (Create, post-clone, pre-registration) is the
+		// authoritative one and runs regardless, with RecordRepoID behind it.
+		//
+		// The uid is empty because a create has no repo yet: there is nothing
+		// to excuse from the comparison, and every active repo counts.
+		if derr := refuseIfKnowledgeBaseIsLocal(m, "", rp.identity()); derr != nil {
+			return derr
+		}
+
 		var init InitializedResult
 		var ierr error
 		if spec.Mode == "subscribe" {
@@ -330,9 +357,9 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 			//
 			// If the probe yielded nothing usable, pass "" and let the create's
 			// own check stay authoritative: an UNKNOWN here refuses nothing.
-			init, ierr = m.ProbeInitializedOn(ctx, *spec.Origin, subscribeInspectBranch(spec, probe, probeUsable))
+			init, ierr = rp.initializedOn(ctx, subscribeInspectBranch(spec, probe, probeUsable))
 		} else {
-			init, ierr = m.ProbeInitialized(ctx, *spec.Origin)
+			init, ierr = rp.initialized(ctx)
 		}
 		if ierr == nil {
 			switch {
@@ -492,7 +519,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	case "clone":
 		// Name/origin presence and uniqueness were validated and reserved up
 		// front via reserveNameAndOrigin; just clone.
-		upstream, ierr := m.initClone(ctx, spec, dbPath, emit)
+		upstream, ierr := m.initClone(ctx, spec, uid, dbPath, emit)
 		if ierr != nil {
 			cleanup()
 			return nil, ierr
@@ -501,14 +528,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	case "initialize":
 		// Name/origin presence and uniqueness were validated and reserved up
 		// front via reserveNameAndOrigin; just initialize.
-		upstream, ierr := m.initInitialize(ctx, spec, dbPath, emit)
+		upstream, ierr := m.initInitialize(ctx, spec, uid, dbPath, emit)
 		if ierr != nil {
 			cleanup()
 			return nil, ierr
 		}
 		resolvedUpstream = upstream
 	case "subscribe":
-		upstream, ierr := m.initSubscribe(ctx, spec, dbPath, emit)
+		upstream, ierr := m.initSubscribe(ctx, spec, uid, dbPath, emit)
 		if ierr != nil {
 			cleanup()
 			return nil, ierr
@@ -712,6 +739,51 @@ func transferProgress(emit func(Event), step string) func(string) {
 	}
 }
 
+// refuseIfClonedKnowledgeBaseIsLocal is LAYER 3 — the AUTHORITATIVE duplicate
+// check, run on the freshly cloned store's OWN root commit, after the transfer
+// and strictly before registration.
+//
+// This is the one that cannot be fooled. Layers 1 and 2 read a remote's
+// advertisement and are sufficient-only; this one reads the history we
+// actually have, so it catches every case they miss — most importantly a local
+// copy that is BEHIND the remote, where no advertised tip is local and only
+// the shared root gives the duplicate away. That was the reported incident.
+//
+// WHERE IT SITS IS THE POINT. Every init path returns into Create's mode
+// switch, whose failure arm calls cleanup() — removing the partial .db and the
+// registry row — and that arm is still available here. One statement later,
+// m.Add opens the store, backfills the commit graph and starts the background
+// index heal; the same refusal there costs all of that and rolls it back, and
+// the cancelled heal is the "context canceled" the incident's log ends with.
+//
+// It does NOT replace Registry.RecordRepoID after Add.
+// kb/invariants/repos/one-local-copy-per-knowledge-base names that as the real
+// structural guard, and it stays exactly as it is: this check should make it
+// unreachable in practice, which is not the same as making it unnecessary.
+//
+// A root commit that cannot be resolved refuses NOTHING and is not an error.
+// The store is there and the clone succeeded; establishing nothing about
+// identity is a reason to fall through to the backstop, not a reason to
+// destroy a completed clone.
+func refuseIfClonedKnowledgeBaseIsLocal(ctx context.Context, m *Manager, svc *store.Service, uid, upstream string) error {
+	root, err := svc.RootCommit(ctx, upstream)
+	if err != nil || root == "" {
+		log.Warn().Err(err).Str("branch", upstream).
+			Msg("create: root commit unresolved; leaving the duplicate check to RecordRepoID")
+		return nil
+	}
+	holder, herr := HeldByAnotherActiveRepo(m, uid, root)
+	if herr != nil {
+		return fmt.Errorf("%w: %v", ErrRegistryUnavailable, herr)
+	}
+	if holder != "" {
+		log.Warn().Str("holder", holder).Str("root", root).
+			Msg("create: refused before registration — this knowledge base is already local")
+		return alreadyLocal(holder)
+	}
+	return nil
+}
+
 // initLocal handles preset/custom modes: resolve ontology bytes, seed a fresh repo.
 func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
 	emit(Event{Step: "ontology", Phase: PhaseValidate, Message: "resolving ontology", Pct: 20})
@@ -811,7 +883,7 @@ func rejectOntologySpecForClone(spec CreateSpec) error {
 // A remote that turns out NOT to be a knowledge base is REFUSED here, and that
 // refusal is the whole reason this function ends with a check rather than a
 // return — see the comment on it below.
-func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
@@ -888,6 +960,13 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	if !hasOnt {
 		return "", fmt.Errorf("clone %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
 	}
+	// The branch a CLONE reads is the one it adopted, which is the agent branch
+	// — but identity is the ROOT commit, and every branch of a repository
+	// shares it. Asking about the upstream keeps the question the same one
+	// layer 1 asks of a knomit origin.
+	if derr := refuseIfClonedKnowledgeBaseIsLocal(ctx, m, svc, uid, upstream); derr != nil {
+		return "", derr
+	}
 	return upstream, nil
 }
 
@@ -932,7 +1011,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 // locally, so without it the ontology would sit on a local branch the remote has
 // never heard of, and the "backed up from the first write" promise would be
 // false.
-func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
@@ -1001,6 +1080,18 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// machine shares — the split-brain seed mode used to accept. Refuse it.
 	if remoteWasEmpty {
 		return "", fmt.Errorf("initialize: %w (it had no refs at fetch time)", ErrRemoteNoBranches)
+	}
+
+	// LAYER 3 here too, and BEFORE the ontology write and the push. Initialize
+	// cuts its agent branch from the remote's EXISTING root commit, so it
+	// inherits that repository's identity exactly as a clone does — two
+	// machines initializing the same remote agree on the repo id, which is the
+	// property this mode was designed for and also the reason a second local
+	// copy of one is a duplicate. Refusing above the push keeps the remote
+	// untouched, which is strictly better than refusing after it and explaining
+	// the branch we left behind.
+	if derr := refuseIfClonedKnowledgeBaseIsLocal(ctx, m, svc, uid, upstream); derr != nil {
+		return "", derr
 	}
 
 	// Refuse a branch that is ALREADY a knowledge base rather than writing a
@@ -1085,7 +1176,7 @@ func originModeFor(createMode string) string {
 // RESOLVED upstream, because that is the only branch this repo will ever read.
 // Like initClone this does NOT persist the origin; Create does, with
 // Mode=OriginModeSubscribe, once this returns the resolved upstream.
-func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
@@ -1127,6 +1218,9 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath str
 	}
 	if !hasOnt {
 		return "", fmt.Errorf("subscribe %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
+	}
+	if derr := refuseIfClonedKnowledgeBaseIsLocal(ctx, m, svc, uid, upstream); derr != nil {
+		return "", derr
 	}
 	return upstream, nil
 }

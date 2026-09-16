@@ -254,6 +254,18 @@ func createErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Remote is not a knowledge base"
 	case errors.Is(err, repos.ErrRemoteAlreadyInitialized):
 		return http.StatusConflict, "Remote is already a knowledge base"
+	// The duplicate-knowledge-base refusal, from any of the three layers. 409
+	// for the same reason as the shape refusals above: the request is
+	// well-formed and understood, and the conflict is with local state — the
+	// error text names the repo that already holds it, which is the only thing
+	// the reader can act on.
+	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
+		return http.StatusConflict, "Knowledge base already registered"
+	// NOT a refusal: the check could not be RUN. Reported as unavailable so it
+	// can never be mistaken for a create that was examined and rejected, nor
+	// for one that was examined and passed.
+	case errors.Is(err, repos.ErrRegistryUnavailable):
+		return http.StatusServiceUnavailable, "Registry unavailable"
 	default:
 		return http.StatusInternalServerError, "Create failed"
 	}
