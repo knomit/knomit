@@ -96,12 +96,23 @@ host, not by hand):
 knomit-bridge claude init [-repo <name>]
                                   # scaffold Claude Code integration files here
 knomit-bridge claude hook <event>       # event ∈ session-start, post-edit,
-                                        #         post-ask, pre-compact
+                                        #         post-ask, pre-compact,
+                                        #         memory-guard
 
 knomit-bridge antigravity init [-repo <name>|-lens <name>]
                                   # scaffold the Antigravity plugin here
 knomit-bridge antigravity hook <event>  # event ∈ pre-invocation
 ```
+
+`memory-guard` is a PreToolUse hook (matcher `Write|Edit|MultiEdit|Bash`). It
+denies a tool call that would write a team-relevant note into Claude Code's
+private auto-memory directory (`~/.claude/projects/<cwd>/memory/`), pointing at
+`/knomit-remember` instead — that directory belongs to one session on one
+machine, so a note left there is invisible to every other agent. `MEMORY.md` and
+`type: user` memories are allowed through. It fails OPEN on anything it does not
+positively recognise: a malformed payload, an unreadable file, a Bash command
+that only READS the directory. A guard on those four tools sees nearly every
+action an agent takes, so a false deny would block real work and get it removed.
 
 `agy` is accepted as an alias for `antigravity`. Global flags such as `--log`
 are accepted before any subcommand.

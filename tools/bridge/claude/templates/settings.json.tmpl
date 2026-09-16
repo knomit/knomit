@@ -7,6 +7,9 @@
       { "matcher": "Edit|Write|MultiEdit", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-edit" }] },
       { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-ask" }] }
     ],
+    "PreToolUse": [
+      { "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook memory-guard" }] }
+    ],
     "PreCompact": [
       { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook pre-compact" }] }
     ]
