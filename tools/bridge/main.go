@@ -260,8 +260,8 @@ func main() {
 	}
 	if arg != "" {
 		baseURL = arg
-	} else if url, err := readLockfileBaseURL(); err == nil && url != "" {
-		baseURL = url
+	} else if lockURL, err := readLockfileBaseURL(); err == nil && lockURL != "" {
+		baseURL = lockURL
 		log.Debug().Str("base_url", baseURL).Msg("discovered base-url from lockfile")
 	} else if err != nil {
 		log.Debug().Err(err).Msg("lockfile read failed, falling back to default")
