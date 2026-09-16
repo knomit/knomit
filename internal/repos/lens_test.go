@@ -301,3 +301,37 @@ func TestLensRegistry_DeleteIdempotentAndCascades(t *testing.T) {
 	_, err = r.Create(Lens{Name: "gone", WriteUID: other})
 	require.NoError(t, err)
 }
+
+// GetByUID is Get keyed by the stable identity instead of the name — the
+// session binding stores `lens:<uid>`, so a rename must not break lookup.
+func TestLensRegistry_GetByUID(t *testing.T) {
+	r, repoReg := openTestRegistry(t)
+	write := seedMember(t, repoReg, "writer")
+	read := seedMember(t, repoReg, "reader")
+
+	created, err := r.Create(Lens{
+		Name: "eng", WriteUID: write,
+		Reads:     []LensRead{{RepoUID: read}},
+		CreatedAt: 1, UpdatedAt: 2,
+	})
+	require.NoError(t, err)
+
+	got, ok, err := r.GetByUID(created.UID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "eng", got.Name)
+	require.Equal(t, created.UID, got.UID)
+	require.Len(t, got.Reads, 2) // write repo + read mount, as Get returns
+
+	// A rename leaves the uid answering.
+	_, err = r.Rename(created.UID, "eng", "engineering")
+	require.NoError(t, err)
+	got, ok, err = r.GetByUID(created.UID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "engineering", got.Name)
+
+	_, ok, err = r.GetByUID("nope")
+	require.NoError(t, err)
+	require.False(t, ok)
+}
