@@ -222,13 +222,26 @@ type Event struct {
 // away stops it.
 //
 // Only the definitive "the remote has NO refs" verdict fails here. An
-// unreachable remote, an auth-required one, or a probe the origin gate
-// refused all fall through to Create, which reports them through the stream
-// exactly as before — a pre-stream failure is worth having only where the
-// answer is certain, and a probe that could not see the remote has not
-// established anything. Create re-asserts this regardless (initInitialize runs
-// its own probe): this one is advisory, and a remote can gain or lose refs
-// between the two.
+// unreachable remote and an auth-required one fall through to Create, which
+// reports them exactly as before — a pre-stream failure is worth having only
+// where the answer is certain, and a probe that could not see the remote has
+// not established anything. Create re-asserts this regardless (initInitialize
+// runs its own probe): this one is advisory, and a remote can gain or lose
+// refs between the two.
+//
+// THE ORIGIN GATE IS THE EXCEPTION, and it changed here deliberately. A
+// filesystem origin outside Cfg.LocalOriginRoot used to fall through too —
+// ProbeInitialized's error, which is only ever ValidateLocalOrigin's, was
+// discarded by an `if ierr == nil` — and surfaced only once the create was
+// already running. It is now returned, so the create is refused before it
+// starts.
+//
+// That is the RIGHT side of the distinction above rather than an exception to
+// it. The gate is a LOCAL POLICY decision about a path this process can read
+// directly; nothing about it is uncertain, nothing about it can change between
+// the probe and the create, and no amount of retrying makes a refused path
+// allowed. It is exactly the shape of verdict this function exists to turn
+// into a status. Pinned by TestCreatePreflight_RefusesAnOriginOutsideTheGate.
 func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	if !isValidRepoName(spec.Name) {
 		return ErrInvalidName

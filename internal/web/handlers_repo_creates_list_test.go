@@ -202,6 +202,37 @@ func TestCreateStatusBody_OmitsPctWhenIndeterminate(t *testing.T) {
 	}
 }
 
+// The local-origin policy answers 400 "Origin not allowed" at POST /repos —
+// the SAME status and title PUT /origin has always answered for the same
+// refusal. One policy, one status, whichever door the request came through.
+//
+// Without the sentinel arm in createErrStatus this falls to the default and
+// answers 500: a server error for a request the server understood perfectly
+// and declined on policy, which tells a client to retry something that will
+// never be allowed.
+func TestPostRepos_LocalOriginOutsideTheRootIs400(t *testing.T) {
+	// newRealManager deliberately configures NO LocalOriginRoot, which disables
+	// filesystem origins entirely — the stricter half of the same gate.
+	s := &Server{Manager: newRealManager(t)}
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"sneaky","mode":"subscribe","origin":{"url":"file:///etc/definitely-not-allowed.git"}}`)))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Origin not allowed") {
+		t.Fatalf("want the same title PUT /origin uses: %s", rec.Body.String())
+	}
+	// And no job was started: a refused preflight must not leave a create
+	// running behind the 4xx.
+	list := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/repo-creates", nil))
+	if got := embeddedCreates(t, list.Body.Bytes()); len(got) != 0 {
+		t.Fatalf("a refused preflight started a create anyway: %v", got)
+	}
+}
+
 func TestDeleteRepoCreate_UnknownIDIs404(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	rec := httptest.NewRecorder()

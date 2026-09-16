@@ -177,3 +177,45 @@ func summarize(seen []Event) string {
 	}
 	return b.String()
 }
+
+// A filesystem origin outside the local-origin root is refused AT PREFLIGHT,
+// and the refusal is the policy sentinel rather than an opaque error.
+//
+// This behaviour CHANGED with the identity layers. ProbeInitialized's error —
+// which is only ever ValidateLocalOrigin's — used to be discarded by an
+// `if ierr == nil`, so the gate spoke only once the create was already
+// running. It is returned now, which is the better side of the line
+// CreatePreflight draws: the gate is a LOCAL POLICY decision about a path this
+// process can read directly, so nothing about it is uncertain, nothing can
+// change between the probe and the create, and no retry makes a refused path
+// allowed. Unreachable and auth-required remotes still fall through, because
+// those ARE uncertain.
+func TestCreatePreflight_RefusesAnOriginOutsideTheGate(t *testing.T) {
+	home := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg: config.Config{
+			Home: home, OntologyRoot: "kb",
+			// A root that exists but does NOT contain the origin below.
+			LocalOriginRoot: filepath.Join(home, "allowed"),
+		},
+		AgentBranch:           "agent/test",
+		DisableBackgroundSync: true,
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	outside := filepath.Join(t.TempDir(), "elsewhere.git")
+	err := m.CreatePreflight(context.Background(), CreateSpec{
+		Name: "sneaky", Mode: "subscribe", Origin: &OriginSpec{URL: "file://" + outside},
+	})
+	require.ErrorIs(t, err, ErrLocalOriginDenied)
+	require.Contains(t, err.Error(), "outside the allowed root")
+
+	// And the create itself refuses too — the preflight is an affordance, not
+	// the enforcement point, and the gate must hold on the path that clones.
+	_, cerr := m.Create(context.Background(), CreateSpec{
+		Name: "sneaky", Mode: "subscribe", Origin: &OriginSpec{URL: "file://" + outside},
+	}, nil)
+	require.Error(t, cerr)
+	require.Nil(t, m.Get("sneaky"))
+}

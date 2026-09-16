@@ -283,6 +283,14 @@ func createErrStatus(err error) (int, string) {
 	// for one that was examined and passed.
 	case errors.Is(err, repos.ErrRegistryUnavailable):
 		return http.StatusServiceUnavailable, "Registry unavailable"
+	// The local-origin policy, reached at preflight since the identity layers
+	// moved the gate ahead of the create. 400 and this title match what
+	// PUT /origin has always answered for the same refusal — one policy, one
+	// status, whichever door the request came through. Without this arm it
+	// fell to the default and answered 500: a server error for a request the
+	// server understood perfectly and declined on policy.
+	case errors.Is(err, repos.ErrLocalOriginDenied):
+		return http.StatusBadRequest, "Origin not allowed"
 	default:
 		return http.StatusInternalServerError, "Create failed"
 	}
