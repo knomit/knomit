@@ -190,10 +190,22 @@ func subscribeInspectBranch(spec CreateSpec, probe ProbeResult, usable bool) str
 }
 
 // Event is a progress message emitted during Create.
+//
+// Step is the fine-grained name of what is happening; Phase is the coarse
+// stage it belongs to (the Phase* constants in create_job.go) and is what a
+// client draws from. Indeterminate says Pct is NOT a percent for this event —
+// see PhaseTransfer.
+//
+// IndexState is empty on every event except those the index mirror emits, and
+// it is STICKY on the job (CreateJob.record): the terminal "done" event says
+// nothing about the index, and the final status still has to.
 type Event struct {
-	Step    string `json:"step"`
-	Message string `json:"message"`
-	Pct     int    `json:"pct"`
+	Step          string `json:"step"`
+	Message       string `json:"message"`
+	Pct           int    `json:"pct"`
+	Phase         string `json:"phase,omitempty"`
+	Indeterminate bool   `json:"indeterminate,omitempty"`
+	IndexState    string `json:"index_state,omitempty"`
 }
 
 // CreatePreflight runs the checks that must surface as an HTTP status BEFORE
@@ -210,13 +222,26 @@ type Event struct {
 // away stops it.
 //
 // Only the definitive "the remote has NO refs" verdict fails here. An
-// unreachable remote, an auth-required one, or a probe the origin gate
-// refused all fall through to Create, which reports them through the stream
-// exactly as before — a pre-stream failure is worth having only where the
-// answer is certain, and a probe that could not see the remote has not
-// established anything. Create re-asserts this regardless (initInitialize runs
-// its own probe): this one is advisory, and a remote can gain or lose refs
-// between the two.
+// unreachable remote and an auth-required one fall through to Create, which
+// reports them exactly as before — a pre-stream failure is worth having only
+// where the answer is certain, and a probe that could not see the remote has
+// not established anything. Create re-asserts this regardless (initInitialize
+// runs its own probe): this one is advisory, and a remote can gain or lose
+// refs between the two.
+//
+// THE ORIGIN GATE IS THE EXCEPTION, and it changed here deliberately. A
+// filesystem origin outside Cfg.LocalOriginRoot used to fall through too —
+// ProbeInitialized's error, which is only ever ValidateLocalOrigin's, was
+// discarded by an `if ierr == nil` — and surfaced only once the create was
+// already running. It is now returned, so the create is refused before it
+// starts.
+//
+// That is the RIGHT side of the distinction above rather than an exception to
+// it. The gate is a LOCAL POLICY decision about a path this process can read
+// directly; nothing about it is uncertain, nothing about it can change between
+// the probe and the create, and no amount of retrying makes a refused path
+// allowed. It is exactly the shape of verdict this function exists to turn
+// into a status. Pinned by TestCreatePreflight_RefusesAnOriginOutsideTheGate.
 func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 	if !isValidRepoName(spec.Name) {
 		return ErrInvalidName
@@ -301,6 +326,33 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 		// established nothing, and turning that into a refusal would block a
 		// create that is very likely fine; Create's own check will decide with
 		// the connection it actually opens.
+		// ONE advertisement answers BOTH remaining questions — which knowledge
+		// base this remote holds, and whether the branch this create will read
+		// is one — so the identity layers below are free in round trips, and a
+		// refusal costs strictly less than passing.
+		rp, rerr := m.beginRemoteProbe(ctx, *spec.Origin)
+		if rerr != nil {
+			return rerr
+		}
+		defer rp.close()
+
+		// LAYERS 1 AND 2, before anything is transferred. A duplicate knowledge
+		// base is refused here, having sent nothing but /info/refs — instead of
+		// after the clone, the store open, the commit-graph backfill and the
+		// registration, which is where the same verdict used to arrive.
+		//
+		// Both are SUFFICIENT-ONLY. Passing them means no cheap proof of a
+		// duplicate was found, never "not a duplicate": layer 1 is silent for
+		// any non-knomit remote and layer 2 is silent whenever the local copy
+		// is behind. Layer 3 (Create, post-clone, pre-registration) is the
+		// authoritative one and runs regardless, with RecordRepoID behind it.
+		//
+		// The uid is empty because a create has no repo yet: there is nothing
+		// to excuse from the comparison, and every active repo counts.
+		if derr := refuseIfKnowledgeBaseIsLocal(m, "", rp.identity()); derr != nil {
+			return derr
+		}
+
 		var init InitializedResult
 		var ierr error
 		if spec.Mode == "subscribe" {
@@ -318,9 +370,9 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 			//
 			// If the probe yielded nothing usable, pass "" and let the create's
 			// own check stay authoritative: an UNKNOWN here refuses nothing.
-			init, ierr = m.ProbeInitializedOn(ctx, *spec.Origin, subscribeInspectBranch(spec, probe, probeUsable))
+			init, ierr = rp.initializedOn(ctx, subscribeInspectBranch(spec, probe, probeUsable))
 		} else {
-			init, ierr = m.ProbeInitialized(ctx, *spec.Origin)
+			init, ierr = rp.initialized(ctx)
 		}
 		if ierr == nil {
 			switch {
@@ -438,7 +490,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		return nil, err
 	}
 
-	emit(Event{Step: "validate", Message: "validated request", Pct: 5})
+	emit(Event{Step: "validate", Phase: PhaseValidate, Message: "validated request", Pct: 5})
 
 	// Mint the identity and claim the name in one INSERT. The uid is new, so
 	// the file path below is fresh BY CONSTRUCTION — the old "leftover .db file"
@@ -480,7 +532,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	case "clone":
 		// Name/origin presence and uniqueness were validated and reserved up
 		// front via reserveNameAndOrigin; just clone.
-		upstream, ierr := m.initClone(ctx, spec, dbPath, emit)
+		upstream, ierr := m.initClone(ctx, spec, uid, dbPath, emit)
 		if ierr != nil {
 			cleanup()
 			return nil, ierr
@@ -489,14 +541,14 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	case "initialize":
 		// Name/origin presence and uniqueness were validated and reserved up
 		// front via reserveNameAndOrigin; just initialize.
-		upstream, ierr := m.initInitialize(ctx, spec, dbPath, emit)
+		upstream, ierr := m.initInitialize(ctx, spec, uid, dbPath, emit)
 		if ierr != nil {
 			cleanup()
 			return nil, ierr
 		}
 		resolvedUpstream = upstream
 	case "subscribe":
-		upstream, ierr := m.initSubscribe(ctx, spec, dbPath, emit)
+		upstream, ierr := m.initSubscribe(ctx, spec, uid, dbPath, emit)
 		if ierr != nil {
 			cleanup()
 			return nil, ierr
@@ -529,7 +581,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 
 	var originRec *Origin
 	if spec.hasRemote() {
-		emit(Event{Step: "persist-origin", Message: "saving remote config", Pct: 70})
+		emit(Event{Step: "persist-origin", Phase: PhaseRegister, Message: "saving remote config", Pct: 70})
 		// The upstream InitFromRemote RESOLVED, never the one requested — see
 		// initClone/initInitialize, both of which return it for exactly this reason.
 		originRec = &Origin{
@@ -545,7 +597,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 	}
 
-	emit(Event{Step: "register", Message: "registering repo", Pct: 85})
+	emit(Event{Step: "register", Phase: PhaseRegister, Message: "registering repo", Pct: 85})
 
 	if aerr := m.Add(spec.Name, uid, dbPath, originRec); aerr != nil {
 		cleanup()
@@ -573,19 +625,181 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	}
 
 	if spec.hasRemote() && ri != nil {
-		emit(Event{Step: "sync", Message: "activating sync", Pct: 95})
+		emit(Event{Step: "sync", Phase: PhaseRegister, Message: "activating sync", Pct: 95})
 		if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
 			log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
 		}
 	}
 
-	emit(Event{Step: "done", Message: "repo ready", Pct: 100})
+	// DONE MEANS INDEXED, not "registered". The repo exists from m.Add onwards,
+	// but a knowledge base whose search index is still being built is not a
+	// knowledge base anyone can use — and reporting 100% while a 3254-commit
+	// backfill ran in silence is the other half of the incident this work comes
+	// from.
+	indexState := IndexStateReady
+	message := "repo ready"
+	if ri != nil {
+		indexState = mirrorIndexing(ctx, ri, emit)
+		if indexState == IndexStateError {
+			message = "repo ready; index needs attention"
+		}
+	}
+	emit(Event{Step: "done", Phase: PhaseDone, Message: message, Pct: 100, IndexState: indexState})
 	return ri, nil
+}
+
+// indexMirrorInterval is how often the create job re-reads the repo's index
+// state while narrating it.
+//
+// CLASSIFICATION (MN13): a POLL RATE, not a corpus property. It measures
+// nothing about any repository; it trades how promptly the UI's bar moves
+// against how often a finished create's goroutine wakes up. Four times a
+// second is well under the interval at which a human perceives a bar as stuck
+// and well above the cost of an atomic load.
+const indexMirrorInterval = 250 * time.Millisecond
+
+// The percent band the index phase occupies. Everything before it has already
+// spent 0–95 (validate, transfer, register, sync), so indexing narrates the
+// tail — and never reaches 100, because 100 is what the terminal event means.
+const (
+	indexPctFloor = 95
+	indexPctCeil  = 99
+)
+
+// mirrorIndexing narrates the background index heal on the create job until
+// the heal leaves the "indexing" state, and returns the state it left in.
+//
+// WHAT THIS MUST NOT DO: fail the create. By the time it runs the repo exists,
+// is registered and is in m.repos, and Create has no rollback left that would
+// be honest. So EVERY way out — ready, error, the job's deadline, shutdown —
+// ends with the create succeeding, and only the reported IndexState varies. A
+// heal that ends in error is a repo that is there and needs attention, not a
+// repo that failed to be created.
+//
+// It only OBSERVES. The heal runs on indexCtx, derived from the MANAGER's
+// context in repoBuilder.build precisely so a create's deadline cannot cancel
+// it (kb/incidents/repos/clone-create-index-stuck-indexing). This loop
+// returning early changes nothing about whether the heal completes; it stops
+// narrating, nothing more.
+//
+// Race-free by placement rather than by locking: ri.markIndexing() runs
+// SYNCHRONOUSLY inside openOne before m.Add returns (manager.go), so the first
+// IndexStatus() read here cannot land in a window before the heal has claimed
+// the state. A "ready" on the first read therefore means a heal that is
+// genuinely finished — which is the ordinary answer under
+// DisableBackgroundSync, where openOne heals inline.
+func mirrorIndexing(ctx context.Context, ri *RepoInstance, emit func(Event)) string {
+	for {
+		state, done, total := ri.IndexStatus()
+		if state != IndexStateIndexing {
+			return state
+		}
+		emit(Event{
+			Step:       "index",
+			Phase:      PhaseIndex,
+			Message:    fmt.Sprintf("indexing %d/%d", done, total),
+			Pct:        scaleIndexPct(done, total),
+			IndexState: IndexStateIndexing,
+		})
+		select {
+		case <-ctx.Done():
+			// The job's deadline, or shutdown. The heal keeps going; we stop
+			// watching, and the job reports the last thing we saw.
+			return IndexStateIndexing
+		case <-time.After(indexMirrorInterval):
+		}
+	}
+}
+
+// scaleIndexPct maps the heal's own done/total onto the index phase's band.
+// A total of zero means the heal has not counted its work yet — the floor is
+// the honest answer, never an invented fraction.
+func scaleIndexPct(done, total int) int {
+	if total <= 0 || done <= 0 {
+		return indexPctFloor
+	}
+	if done >= total {
+		return indexPctCeil
+	}
+	return indexPctFloor + (indexPctCeil-indexPctFloor)*done/total
+}
+
+// transferProgress turns a store progress line into a job Event on step.
+//
+// Progress lines are MESSAGES, never parsed for a percent — a remote can say
+// anything on band 2, and the only honest rendering of it is the text. The
+// transfer phase is indeterminate for exactly that reason.
+//
+// A line arrives as whatever the remote wrote: git-style progress overwrites
+// itself with carriage returns, so one write can carry several updates and the
+// last one is the live value. Blank writes are dropped rather than emitted as
+// an empty message that would blank the UI's line.
+func transferProgress(emit func(Event), step string) func(string) {
+	return func(line string) {
+		// Trailing terminators FIRST. A git progress write ends with the
+		// carriage return that will overwrite it, so taking the text after the
+		// last \r would take the empty string after it and drop every real
+		// update — which is how this looked silent in the first place.
+		line = strings.TrimRight(line, "\r\n")
+		if i := strings.LastIndexByte(line, '\r'); i >= 0 {
+			line = line[i+1:]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return
+		}
+		emit(Event{Step: step, Phase: PhaseTransfer, Indeterminate: true, Message: line, Pct: 40})
+	}
+}
+
+// refuseIfClonedKnowledgeBaseIsLocal is LAYER 3 — the AUTHORITATIVE duplicate
+// check, run on the freshly cloned store's OWN root commit, after the transfer
+// and strictly before registration.
+//
+// This is the one that cannot be fooled. Layers 1 and 2 read a remote's
+// advertisement and are sufficient-only; this one reads the history we
+// actually have, so it catches every case they miss — most importantly a local
+// copy that is BEHIND the remote, where no advertised tip is local and only
+// the shared root gives the duplicate away. That was the reported incident.
+//
+// WHERE IT SITS IS THE POINT. Every init path returns into Create's mode
+// switch, whose failure arm calls cleanup() — removing the partial .db and the
+// registry row — and that arm is still available here. One statement later,
+// m.Add opens the store, backfills the commit graph and starts the background
+// index heal; the same refusal there costs all of that and rolls it back, and
+// the cancelled heal is the "context canceled" the incident's log ends with.
+//
+// It does NOT replace Registry.RecordRepoID after Add.
+// kb/invariants/repos/one-local-copy-per-knowledge-base names that as the real
+// structural guard, and it stays exactly as it is: this check should make it
+// unreachable in practice, which is not the same as making it unnecessary.
+//
+// A root commit that cannot be resolved refuses NOTHING and is not an error.
+// The store is there and the clone succeeded; establishing nothing about
+// identity is a reason to fall through to the backstop, not a reason to
+// destroy a completed clone.
+func refuseIfClonedKnowledgeBaseIsLocal(ctx context.Context, m *Manager, svc *store.Service, uid, upstream string) error {
+	root, err := svc.RootCommit(ctx, upstream)
+	if err != nil || root == "" {
+		log.Warn().Err(err).Str("branch", upstream).
+			Msg("create: root commit unresolved; leaving the duplicate check to RecordRepoID")
+		return nil
+	}
+	holder, herr := HeldByAnotherActiveRepo(m, uid, root)
+	if herr != nil {
+		return fmt.Errorf("%w: %v", ErrRegistryUnavailable, herr)
+	}
+	if holder != "" {
+		log.Warn().Str("holder", holder).Str("root", root).
+			Msg("create: refused before registration — this knowledge base is already local")
+		return alreadyLocal(holder)
+	}
+	return nil
 }
 
 // initLocal handles preset/custom modes: resolve ontology bytes, seed a fresh repo.
 func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) error {
-	emit(Event{Step: "ontology", Message: "resolving ontology", Pct: 20})
+	emit(Event{Step: "ontology", Phase: PhaseValidate, Message: "resolving ontology", Pct: 20})
 	ont, err := resolveOntology(spec)
 	if err != nil {
 		return err
@@ -594,7 +808,7 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 	if err != nil {
 		return fmt.Errorf("serialize ontology: %w", err)
 	}
-	emit(Event{Step: "init-git", Message: "initialising git store", Pct: 50})
+	emit(Event{Step: "init-git", Phase: PhaseTransfer, Indeterminate: true, Message: "initialising git store", Pct: 50})
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
 	}
@@ -682,7 +896,7 @@ func rejectOntologySpecForClone(spec CreateSpec) error {
 // A remote that turns out NOT to be a knowledge base is REFUSED here, and that
 // refusal is the whole reason this function ends with a check rather than a
 // return — see the comment on it below.
-func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
@@ -692,7 +906,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	if err := rejectOntologySpecForClone(spec); err != nil {
 		return "", err
 	}
-	emit(Event{Step: "clone", Message: "cloning from " + spec.Origin.URL, Pct: 40})
+	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "cloning from " + spec.Origin.URL, Pct: 40})
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
@@ -724,7 +938,8 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// InitFromRemote found at the moment it actually fetched, and a remote that
 	// lost its refs in between must not be silently turned into a fresh local
 	// knowledge base with a minted identity nobody else shares.
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil)
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+		transferProgress(emit, "clone"))
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
 	}
@@ -757,6 +972,13 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	}
 	if !hasOnt {
 		return "", fmt.Errorf("clone %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
+	}
+	// The branch a CLONE reads is the one it adopted, which is the agent branch
+	// — but identity is the ROOT commit, and every branch of a repository
+	// shares it. Asking about the upstream keeps the question the same one
+	// layer 1 asks of a knomit origin.
+	if derr := refuseIfClonedKnowledgeBaseIsLocal(ctx, m, svc, uid, upstream); derr != nil {
+		return "", derr
 	}
 	return upstream, nil
 }
@@ -802,7 +1024,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 // locally, so without it the ontology would sit on a local branch the remote has
 // never heard of, and the "backed up from the first write" promise would be
 // false.
-func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
@@ -814,7 +1036,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	if spec.OntologyPreset == "" && spec.OntologyYAML == "" {
 		return "", fmt.Errorf("%w: initialize mode requires ontology_preset or ontology_yaml", ErrInvalidName)
 	}
-	emit(Event{Step: "probe", Message: "checking " + spec.Origin.URL, Pct: 10})
+	emit(Event{Step: "probe", Phase: PhaseValidate, Message: "checking " + spec.Origin.URL, Pct: 10})
 	// Refs only, for the same reason as CreatePreflight: this reads Empty and
 	// Branches, never WriteAccess.
 	probe, err := m.ProbeOriginRefs(ctx, *spec.Origin)
@@ -825,7 +1047,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 		return "", serr
 	}
 
-	emit(Event{Step: "ontology", Message: "resolving ontology", Pct: 20})
+	emit(Event{Step: "ontology", Phase: PhaseValidate, Message: "resolving ontology", Pct: 20})
 	ont, err := resolveOntology(spec)
 	if err != nil {
 		return "", err
@@ -857,8 +1079,9 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// only on the EMPTY-remote path, which is the path this mode refuses. The
 	// ontology is written below instead — as an ordinary commit on the agent
 	// branch, through the same fact machinery every later write uses.
-	emit(Event{Step: "clone", Message: "reading " + spec.Origin.URL, Pct: 40})
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil)
+	emit(Event{Step: "clone", Phase: PhaseTransfer, Indeterminate: true, Message: "reading " + spec.Origin.URL, Pct: 40})
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil,
+		transferProgress(emit, "clone"))
 	if err != nil {
 		return "", fmt.Errorf("initialize: %w", err)
 	}
@@ -870,6 +1093,18 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// machine shares — the split-brain seed mode used to accept. Refuse it.
 	if remoteWasEmpty {
 		return "", fmt.Errorf("initialize: %w (it had no refs at fetch time)", ErrRemoteNoBranches)
+	}
+
+	// LAYER 3 here too, and BEFORE the ontology write and the push. Initialize
+	// cuts its agent branch from the remote's EXISTING root commit, so it
+	// inherits that repository's identity exactly as a clone does — two
+	// machines initializing the same remote agree on the repo id, which is the
+	// property this mode was designed for and also the reason a second local
+	// copy of one is a duplicate. Refusing above the push keeps the remote
+	// untouched, which is strictly better than refusing after it and explaining
+	// the branch we left behind.
+	if derr := refuseIfClonedKnowledgeBaseIsLocal(ctx, m, svc, uid, upstream); derr != nil {
+		return "", derr
 	}
 
 	// Refuse a branch that is ALREADY a knowledge base rather than writing a
@@ -896,7 +1131,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// THE ACT that makes this a knowledge base. One ordinary commit on the agent
 	// branch, through the same fact machinery every later write uses — not a
 	// special-cased root commit, which is what let seed's identity diverge.
-	emit(Event{Step: "ontology-write", Message: "writing " + OntologyPath, Pct: 55})
+	emit(Event{Step: "ontology-write", Phase: PhaseRegister, Message: "writing " + OntologyPath, Pct: 55})
 	if _, werr := svc.Facts().WriteFact(ctx, m.deps.AgentBranch, OntologyPath, string(y),
 		"init: create knowledge base", "created"); werr != nil {
 		return "", fmt.Errorf("initialize: write %s: %w", OntologyPath, werr)
@@ -906,7 +1141,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// other (repos/sync.go), and this bootstrap deliberately does not become the
 	// exception — pushing the consensus branch here would reintroduce the
 	// protected-branch failure this mode was built to remove.
-	emit(Event{Step: "push", Message: "pushing " + m.deps.AgentBranch + " to " + spec.Origin.URL, Pct: 70})
+	emit(Event{Step: "push", Phase: PhaseTransfer, Indeterminate: true, Message: "pushing " + m.deps.AgentBranch + " to " + spec.Origin.URL, Pct: 70})
 	// The PushResult is inspected rather than discarded: Push reports
 	// Pushed:false for "nothing to push", which right after a commit this
 	// function just made is a silent no-op, not a success. Left unchecked it is
@@ -954,7 +1189,7 @@ func originModeFor(createMode string) string {
 // RESOLVED upstream, because that is the only branch this repo will ever read.
 // Like initClone this does NOT persist the origin; Create does, with
 // Mode=OriginModeSubscribe, once this returns the resolved upstream.
-func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath string, emit func(Event)) (string, error) {
+func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPath string, emit func(Event)) (string, error) {
 	if cerr := ctx.Err(); cerr != nil {
 		return "", cerr
 	}
@@ -963,7 +1198,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath str
 	if err := rejectOntologySpecForClone(spec); err != nil {
 		return "", err
 	}
-	emit(Event{Step: "subscribe", Message: "subscribing to " + spec.Origin.URL, Pct: 40})
+	emit(Event{Step: "subscribe", Phase: PhaseTransfer, Indeterminate: true, Message: "subscribing to " + spec.Origin.URL, Pct: 40})
 	auth, err := m.ResolveAuth(authConfigFromSpec(spec.Origin), spec.Origin.URL)
 	if err != nil {
 		return "", fmt.Errorf("resolve auth: %w", err)
@@ -979,7 +1214,8 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath str
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 
-	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch)
+	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch,
+		transferProgress(emit, "subscribe"))
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)
 	}
@@ -995,6 +1231,9 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath str
 	}
 	if !hasOnt {
 		return "", fmt.Errorf("subscribe %s (branch %s): %w", spec.Origin.URL, upstream, ErrRemoteNotInitialized)
+	}
+	if derr := refuseIfClonedKnowledgeBaseIsLocal(ctx, m, svc, uid, upstream); derr != nil {
+		return "", derr
 	}
 	return upstream, nil
 }

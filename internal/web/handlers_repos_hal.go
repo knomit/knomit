@@ -32,12 +32,29 @@ import (
 // show it, not drop the repo. detail is the human-readable amplification, and is
 // omitted for an active repo, which has nothing to explain.
 type repoSummary struct {
-	Name   string      `json:"name"`
-	UID    string      `json:"uid"`
-	ID     string      `json:"id"`
-	State  string      `json:"state"`
-	Detail string      `json:"detail,omitempty"`
-	Links  hal.LinkMap `json:"_links"`
+	Name   string `json:"name"`
+	UID    string `json:"uid"`
+	ID     string `json:"id"`
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+
+	// IndexState mirrors RepoInstance.IndexStatus for an ACTIVE row:
+	// ready | indexing | error. Absent on an unavailable row, where there is
+	// no store to ask.
+	//
+	// On EVERY row, not just the one repo page that already rendered it. A
+	// repo whose search index is still building answers queries partially, and
+	// a user looking at a list of repos had no way to see that about any repo
+	// but the open one — so partial results looked like missing knowledge.
+	IndexState string `json:"index_state,omitempty"`
+	// IndexDone/IndexTotal are the heal's own counts, populated while
+	// indexing and 0/0 when it has not counted its work yet. omitempty, so a
+	// ready row carries neither: a "0/0" on a ready repo would read as a
+	// claim about it rather than as an absence.
+	IndexDone  int `json:"index_done,omitempty"`
+	IndexTotal int `json:"index_total,omitempty"`
+
+	Links hal.LinkMap `json:"_links"`
 }
 
 // repoStateActive is the state of a repo that has a live store. Every other
@@ -68,12 +85,16 @@ func handleHALRepos(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 
 		items := make([]repoSummary, 0, len(names))
 		for _, name := range names {
+			indexState, indexDone, indexTotal := instances[name].IndexStatus()
 			items = append(items, repoSummary{
-				Name:  name,
-				UID:   instances[name].UID(),
-				ID:    instances[name].ShortID(),
-				State: repoStateActive,
-				Links: hal.LinkMap{"self": {Href: b.Repo(name)}},
+				Name:       name,
+				UID:        instances[name].UID(),
+				ID:         instances[name].ShortID(),
+				State:      repoStateActive,
+				IndexState: indexState,
+				IndexDone:  indexDone,
+				IndexTotal: indexTotal,
+				Links:      hal.LinkMap{"self": {Href: b.Repo(name)}},
 			})
 		}
 		for _, u := range m.Unavailable() {

@@ -6,6 +6,8 @@ import { isLensContext, remoteErrorText } from './state';
 import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens } from './api';
 import { RepoStateChip } from './RepoStateChip';
+import { RepoIndexChip } from './RepoIndexChip';
+import { CreateIndicator } from './CreateIndicator';
 import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { LENS, repoHue, shortBranch, noMouseFocus } from './utils';
@@ -291,6 +293,14 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
         {manageOpen || !search
           ? <div style={{ flex: 1 }} />
           : <div data-testid="toknomitr-search" data-nodrag style={{ flex: 1, minWidth: 0, ...noDrag }}>{search}</div>}
+        {/* The global create light, immediately left of the gear it sends you
+            to. A detached create is invisible from every view but the wizard
+            that started it, and the wizard is the first thing a user closes —
+            so a subscribe could run for minutes with nothing anywhere on
+            screen saying so. It renders nothing when nothing is running. */}
+        <div data-nodrag style={{ ...noDrag, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+          <CreateIndicator onOpen={manageOpen ? undefined : onManageRepos} />
+        </div>
         {/* One control, one anchor. In browse it is the gear that opens Manage;
             in Manage it is the step-out that leaves. Same handler, same pixel —
             an exit that appears on the other side of the window would make the
@@ -374,6 +384,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                 }} />
                 <span>{r.name}</span>
                 {!available && <RepoStateChip repo={r} />}
+                {available && <RepoIndexChip repo={r} />}
               </div>
             );
           })}

@@ -103,6 +103,39 @@ export function StepBranch({ state, dispatch }: {
         )}
       </section>
 
+      {/* ALREADY LOCAL — an advisory, shown BEFORE the two answers below,
+          because it changes what the reader should do rather than describing
+          the branch they picked.
+
+          It is ORTHOGONAL to `initialized` and deliberately does not touch it:
+          a remote can be a knowledge base AND already local, and the routing
+          (stepsFor, modeFor) is unchanged. The step still offers Create — this
+          is not a gate, and the wizard does not have the authority to be one.
+          The create's preflight refuses with a 409 naming the same repo; what
+          this buys the reader is learning it HERE, before they press the
+          button and wait, which is the whole complaint behind this work.
+
+          Tone 'bad' — which in this palette is AMBER, not red (OutcomeCard:
+          "the thing is intact, this attempt failed"). That is the right
+          reading: nothing is broken and nothing is lost, there is simply
+          already a copy, and what the reader most likely meant was to open
+          it. */}
+      {state.alreadyLocal && (
+        <div style={{ marginTop: 12 }}>
+          <OutcomeCard
+            testid="branch-already-local"
+            tone="bad"
+            headline="You already have this knowledge base"
+            body={<>
+              The repository <span style={mono}>{state.alreadyLocal}</span> on this machine
+              already holds it. knomit keeps one local copy of a knowledge base — two would
+              both write to the same branch and clobber each other on push — so creating a
+              second one here will be refused. Open <span style={mono}>{state.alreadyLocal}</span> instead.
+            </>}
+          />
+        </div>
+      )}
+
       {/* THE THIRD STATE, rendered as itself. Not "this branch has no
           knowledge base" — that is an answer, and we do not have one. Both
           guesses are unrecoverable: the ontology is fixed at create time, so

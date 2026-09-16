@@ -167,6 +167,46 @@ describe('INITIALIZED_DONE', () => {
     expect(stepsFor(s)).toEqual(['source', 'access', 'branch']);
   });
 
+  // already_local rides on BOTH arms, and does NOT disturb the routing.
+  //
+  // It is a second question about the same remote — "do you already have this
+  // knowledge base?" — answered from the same response. Folding it into
+  // `initialized` would change every route the wizard derives from that field;
+  // carrying it beside is what keeps the advisory free.
+  it('records already_local alongside a definite answer, without changing the route', () => {
+    const base = wizardReducer(probed(), { type: 'INITIALIZED_DONE', result: { initialized: 'yes', branch: 'main' } });
+    const withHolder = wizardReducer(probed(), {
+      type: 'INITIALIZED_DONE',
+      result: { initialized: 'yes', branch: 'main', already_local: 'cyberai-kb' },
+    });
+    expect(withHolder.alreadyLocal).toBe('cyberai-kb');
+    expect(withHolder.initialized).toBe('yes');
+    expect(stepsFor(withHolder)).toEqual(stepsFor(base));
+  });
+
+  // Also on the UNESTABLISHED arm: a probe that could not read the branch may
+  // still have read the remote's identity from the advertisement, and
+  // suppressing the advisory there would hide the one thing it DID establish.
+  it('records already_local even when the branch answer is unestablished', () => {
+    const s = wizardReducer(probed(), {
+      type: 'INITIALIZED_DONE',
+      result: { detail: 'timed out', already_local: 'cyberai-kb' },
+    });
+    expect(s.initialized).toBe('');
+    expect(s.alreadyLocal).toBe('cyberai-kb');
+  });
+
+  // Invalidated by the same changes as the answer beside it: an advisory about
+  // one remote is not an advisory about another.
+  it('clears already_local when the branch selection changes', () => {
+    const s = wizardReducer(probed(), {
+      type: 'INITIALIZED_DONE',
+      result: { initialized: 'yes', branch: 'main', already_local: 'cyberai-kb' },
+    });
+    expect(wizardReducer(s, { type: 'SET_BRANCH', branch: 'develop' }).alreadyLocal).toBe('');
+    expect(wizardReducer(s, { type: 'SET_URL', url: 'https://other/kb.git' }).alreadyLocal).toBe('');
+  });
+
   // A failed re-check must not leave a previous definite answer standing:
   // whatever it was about may no longer be true, and the wizard would route on
   // it while showing the reader a failure.

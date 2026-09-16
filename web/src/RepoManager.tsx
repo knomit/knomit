@@ -2,7 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import ReactMarkdown from 'react-markdown';
 import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
 import { RepoStateChip } from './RepoStateChip';
+import { RepoIndexChip } from './RepoIndexChip';
+import { PendingCreateRow } from './PendingCreateRow';
+import { useRepoCreates, refreshRepoCreates, pendingCreates } from './useRepoCreates';
 import { CreateRepoWizard } from './CreateRepoWizard';
+import { CreateProgress } from './CreateProgress';
 import { markdownPlugins, markdownComponents } from './markdown';
 import { CreateLensForm } from './CreateLensForm';
 import { RemoteCard } from './RemoteStatus';
@@ -58,6 +62,11 @@ type Selection =
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
+  // A create in flight, opened from a pending row. It is a SELECTION and not
+  // the wizard: the wizard is a form for describing a create that has not
+  // started, and re-entering it to watch one that has would ask the user to
+  // re-answer questions already answered. This page only observes.
+  | { kind: 'create'; id: string }
   // A repo's connect flow is a SELECTION, not a surface. It used to be a piece
   // of component state that made this whole pane return early, taking the rail
   // and the repo with it; as a selection it is a sub-page of the repo, the rail
@@ -87,6 +96,16 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
   const [err, setErr] = useState('');
+
+  // Creates in flight, shown in the rail as rows of their own.
+  //
+  // A create whose repo has ALREADY landed is dropped: the real row is below
+  // it by then, and two rows for one name would read as two repositories. The
+  // job record outlives the create by design (a client that lost the id must
+  // still be able to find the outcome), so this list has to end each entry's
+  // rail life itself rather than wait for the server to forget it.
+  const creates = useRepoCreates();
+  const railCreates = pendingCreates(creates, repos.map(r => r.name));
 
   // Set by the connect sub-page while its commit is in flight. Selecting
   // anything unmounts that page, and the commit stream has no abort and no
@@ -330,6 +349,19 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onClick={() => setSel({ kind: 'new' })}
               ><PlusIcon color="currentColor" size={14} /></button>
             </div>
+            {/* Creates in flight sit in the rail WHERE THEIR NAME SORTS, with
+                a chip — the same rule an unavailable repo follows, and for the
+                same reason: a reader scanning for a name must find it in the
+                place a name goes, whatever state the thing behind it is in.
+                Hiding a create until it succeeds is what made one vanish. */}
+            {railCreates.map(c => (
+              <PendingCreateRow key={c.create_id} status={c} surface="rail"
+                onOpen={id => setSel({ kind: 'create', id })}
+                onDismiss={async id => {
+                  try { await api.dismissRepoCreate(id); } catch { /* the refresh tells the truth */ }
+                  await refreshRepoCreates();
+                }} />
+            ))}
             {repos.map(r => (
               <button
                 key={r.name}
@@ -360,7 +392,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                     repo the browse surface refuses to open. */}
                 {!repoAvailable(r)
                   ? <RepoStateChip repo={r} />
-                  : r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
+                  : <>
+                      <RepoIndexChip repo={r} />
+                      {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
+                    </>}
               </button>
             ))}
 
@@ -438,6 +473,8 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onNewLens={() => setSel({ kind: 'newLens' })}
                 onSelectSessions={() => setSel({ kind: 'sessions' })}
                 liveSessions={liveSessions}
+                onOpenCreate={id => setSel({ kind: 'create', id })}
+                createSurface="overview"
               />
             )}
             {view.kind === 'sessions' && <ManageSessions onLiveCount={handleLiveCount} />}
@@ -504,6 +541,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 // here — one left means none after.
                 onPurged={() => { refresh(); if (archived.length <= 1) setSel(null); }}
                 onError={setErr}
+              />
+            )}
+            {view.kind === 'create' && (
+              <CreateWatch
+                createId={view.id}
+                onClose={() => setSel({ kind: 'overview' })}
+                onOpenRepo={name => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
               />
             )}
             {view.kind === 'new' && readOnly && <CreateBlocked what="repository" />}
@@ -1433,6 +1477,55 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
 // CreateLensForm (checkbox rows, LENS tokens) rather than importing its row
 // component: that form's rows are tightly coupled to its own reads/branchData
 // state, so extraction would force a risky refactor for no shared behavior.
+// CreateWatch is the page a pending row opens: one create, observed.
+//
+// It reads the SHARED list rather than polling the single-job endpoint, so it
+// cannot disagree with the rail and the indicator about the same job, and
+// costs no extra requests. A job the list no longer has — dismissed elsewhere,
+// or aged out of the server's retention window — says so rather than spinning
+// on a resource that is gone.
+function CreateWatch({ createId, onClose, onOpenRepo }: {
+  createId: string;
+  onClose: () => void;
+  onOpenRepo: (name: string) => void;
+}) {
+  const creates = useRepoCreates();
+  const status = creates.find(c => c.create_id === createId) ?? null;
+
+  return (
+    <div data-testid="create-watch">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
+          {status ? `Creating ${status.name}` : 'Create'}
+        </h3>
+        <button type="button" className="k-bare" data-testid="create-watch-close"
+          style={{ marginLeft: 'auto', color: '#7a9ab5', fontSize: 12, background: 'none', border: 'none', cursor: 'pointer' }}
+          onClick={onClose}>Back to overview</button>
+      </div>
+      {!status ? (
+        <div data-testid="create-watch-gone" style={{ color: '#888', fontSize: 12 }}>
+          This create is no longer listed — it was dismissed, or it finished long enough ago
+          that the server has forgotten it. The repository list is the authoritative answer
+          to whether it exists.
+        </div>
+      ) : (
+        <>
+          <CreateProgress status={status} />
+          {status.state === 'done' && status.repo && (
+            <button type="button" data-testid="create-watch-open-repo" style={{ ...btnLink, marginTop: 10 }}
+              onClick={() => onOpenRepo(status.repo!.name)}>Open {status.repo.name}</button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+const btnLink: React.CSSProperties = {
+  color: '#7a9ab5', fontSize: 12, background: 'none', border: 'none',
+  cursor: 'pointer', padding: 0,
+};
+
 function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, onRenamed, onBrowse, onError }: {
   lens?: Lens; name: string; repos: RepoInfo[]; readOnly: boolean;
   onDeleted: () => void; onSaved: () => void;
@@ -1829,6 +1922,7 @@ function LensDetail({ lens: initial, name, repos, readOnly, onDeleted, onSaved, 
                 <RepoDot repo={r.name} />
                 <span style={{ fontSize: 13, color: on ? '#eee' : '#aaa', minWidth: 76 }}>{r.name}</span>
                 {!mountable && <RepoStateChip repo={r} />}
+                {mountable && <RepoIndexChip repo={r} />}
                 <div style={{ flex: 1 }} />
                 {on && (
                   <select data-testid={`lens-branch-${r.name}`}

@@ -88,6 +88,24 @@ type InitializedResult struct {
 	// and guessing one would make a conflict check answer confidently about
 	// nothing.
 	OntologyID string `json:"ontology_id,omitempty"`
+
+	// AlreadyLocal names an ACTIVE repo that already holds this knowledge
+	// base, or is empty when the cheap identity layers found no such proof.
+	//
+	// ORTHOGONAL to Initialized, and deliberately not another value of it. The
+	// three-state contract above answers ONE question — is this branch a
+	// knowledge base — and collapsing a second question into it would make
+	// every client that switches on `initialized` silently wrong. A remote can
+	// be a knowledge base AND already local, which is precisely the case worth
+	// showing.
+	//
+	// SUFFICIENT-ONLY, like the layers behind it: a name here is proof, an
+	// empty string proves nothing. The wizard shows it at the branch step, so
+	// the user learns "this is already here, as <name>" before pressing Create
+	// rather than from the POST's 409 — but CreatePreflight stays the
+	// authoritative refusal, and the post-clone root-commit check stays
+	// authoritative over that.
+	AlreadyLocal string `json:"already_local,omitempty"`
 }
 
 // ProbeInitialized reports whether the given branch of a remote already holds a
@@ -124,18 +142,12 @@ func (m *Manager) ProbeInitialized(ctx context.Context, o OriginSpec) (Initializ
 	if err := m.ValidateLocalOrigin(o.URL); err != nil {
 		return InitializedResult{}, err
 	}
-	auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
-	if err != nil {
-		// A credential that cannot even be assembled never reached the remote,
-		// so nothing about the branch was established. Same reading ProbeOrigin
-		// gives this case, just landing in the third state instead of an
-		// auth-required one.
-		return InitializedResult{Branch: o.Branch, Detail: err.Error()}, nil
-	}
-
-	netCtx, cancel := probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
-	defer cancel()
-
+	// A credential that cannot even be assembled never reached the remote, so
+	// nothing about the branch was established; so does a remote that could
+	// not be read. Both are carried on the probe and answered in the third
+	// state by initialized() below — the same reading ProbeOrigin gives them,
+	// landing in the third state rather than an auth-required one.
+	//
 	// WHICH BRANCH is this question about? Not always the one the caller named.
 	//
 	// A create does not read the consensus branch — it reads whatever
@@ -157,29 +169,30 @@ func (m *Manager) ProbeInitialized(ctx context.Context, o OriginSpec) (Initializ
 	// Only THIS machine's agent branch counts. Another machine's is neither
 	// adopted nor inspected: we would cut our own agent branch from the
 	// consensus branch, so the consensus branch is what the question is about.
-	// ONE advertisement answers two questions: which branch a create would
-	// adopt, and whether this server can serve a shallow clone at all. Reading
-	// it through the transport session rather than remote.ListContext is what
-	// makes the second answer available — ListContext drops the capabilities.
-	// It stays inside the SAME netCtx budget, so an unresponsive remote cannot
-	// cost a caller more than the configured timeout.
-	adv, aerr := advertise(netCtx, o.URL, auth)
-	if aerr != nil && !errors.Is(aerr, transport.ErrEmptyRemoteRepository) {
-		// The adoption target could not be established, so neither can the
-		// answer. The third state, for the same reason as everywhere else here:
-		// guessing either way is unrecoverable.
-		return InitializedResult{Branch: o.Branch, Detail: aerr.Error()}, nil
+	// ONE advertisement answers three questions: which branch a create would
+	// adopt, whether this server can serve a shallow clone at all, and which
+	// knowledge base it holds. Reading it through the transport session rather
+	// than remote.ListContext is what makes the last two available —
+	// ListContext drops the capabilities. It stays inside ONE netCtx budget,
+	// so an unresponsive remote cannot cost a caller more than the configured
+	// timeout however many questions are asked of it.
+	rp, err := m.beginRemoteProbe(ctx, o)
+	if err != nil {
+		return InitializedResult{}, err
 	}
-	// A remote with no refs at all has no agent branch either, and it is the
-	// caller's own ErrRemoteNoBranches case — not a failure to look.
-	hasAgentBranch := advHasBranch(adv, m.deps.AgentBranch)
-	// store.BranchACreateReads is the rule ITSELF, the same function
-	// InitFromRemote applies to decide what to adopt. This call is what makes
-	// the prediction and the act one thing rather than two that agree by
-	// comment.
-	inspect := store.BranchACreateReads(hasAgentBranch, m.deps.AgentBranch, o.Branch)
+	defer rp.close()
+	return rp.initialized(ctx)
+}
 
-	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect, advertisesShallow(adv))
+// createReadsBranch names the branch a create against this remote will
+// actually READ — which is not always the one the caller asked about.
+//
+// store.BranchACreateReads is the rule ITSELF, the same function InitFromRemote
+// applies to decide what to adopt, so the prediction and the act cannot drift.
+// A remote with no refs at all has no agent branch either, and that is the
+// caller's own ErrRemoteNoBranches case, not a failure to look.
+func createReadsBranch(adv *packp.AdvRefs, agentBranch, requested string) string {
+	return store.BranchACreateReads(advHasBranch(adv, agentBranch), agentBranch, requested)
 }
 
 // ProbeInitializedOn is ProbeInitialized for a caller that already knows
@@ -192,23 +205,129 @@ func (m *Manager) ProbeInitializedOn(ctx context.Context, o OriginSpec, inspect 
 	if err := m.ValidateLocalOrigin(o.URL); err != nil {
 		return InitializedResult{}, err
 	}
-	auth, err := m.ResolveAuth(authConfigFromSpec(&o), o.URL)
-	if err != nil {
-		return InitializedResult{Branch: inspect, Detail: err.Error()}, nil
-	}
-	netCtx, cancel := probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
-	defer cancel()
 	// This entry point has no listing of its own to piggyback on, so it pays
-	// for the advertisement itself — inside the same netCtx budget. A round
-	// trip is the price of not sending a depth to a server that cannot answer
-	// it; the alternative, trying a shallow clone and retrying on failure,
-	// guesses at which failures mean "no shallow" and spends the same trip
-	// anyway when it guesses wrong.
-	adv, aerr := advertise(netCtx, o.URL, auth)
-	if aerr != nil && !errors.Is(aerr, transport.ErrEmptyRemoteRepository) {
-		return InitializedResult{Branch: inspect, Detail: aerr.Error()}, nil
+	// for the advertisement itself — inside one netCtx budget. A round trip is
+	// the price of not sending a depth to a server that cannot answer it; the
+	// alternative, trying a shallow clone and retrying on failure, guesses at
+	// which failures mean "no shallow" and spends the same trip anyway when it
+	// guesses wrong. That same advertisement also answers the identity
+	// question, which is why the branch step can report already_local for free.
+	rp, err := m.beginRemoteProbe(ctx, o)
+	if err != nil {
+		return InitializedResult{}, err
 	}
-	return m.probeInitializedBranch(ctx, netCtx, o, auth, inspect, advertisesShallow(adv))
+	defer rp.close()
+	return rp.initializedOn(ctx, inspect)
+}
+
+// remoteProbe is ONE ref advertisement, plus the network budget it was read
+// under, held open so a caller can ask SEVERAL questions of a remote for one
+// round trip instead of one each.
+//
+// It exists for CreatePreflight, which asks two: WHICH KNOWLEDGE BASE is this
+// (the duplicate layers) and IS THE BRANCH THIS CREATE WILL READ A KNOWLEDGE
+// BASE (the shape check). Both answers come out of the same advertisement, and
+// asking them separately would pay for it twice — on the path where the first
+// answer is a refusal, the second is not even wanted.
+//
+// The ORDER is the point. identity() reads the advertisement alone, so a
+// duplicate is refused having sent nothing but /info/refs; initializedOn()
+// clones a branch, which is the first thing on this path that transfers
+// objects. A preflight that asks them the other way round would refuse just as
+// correctly and would have done the transfer anyway.
+type remoteProbe struct {
+	m       *Manager
+	o       OriginSpec
+	auth    transport.AuthMethod
+	authErr error
+	adv     *packp.AdvRefs
+	advErr  error
+	netCtx  context.Context
+	cancel  context.CancelFunc
+}
+
+// beginRemoteProbe resolves credentials and makes the one advertisement. The
+// caller MUST close the result.
+//
+// An unresolvable credential and an unreadable remote are both RESULTS carried
+// on the struct, not errors: every question asked of the probe answers them in
+// its own third state, exactly as the standalone entry points do. A non-nil
+// error means the request itself was refused — today only the local-origin
+// gate.
+func (m *Manager) beginRemoteProbe(ctx context.Context, o OriginSpec) (*remoteProbe, error) {
+	if err := m.ValidateLocalOrigin(o.URL); err != nil {
+		return nil, err
+	}
+	p := &remoteProbe{m: m, o: o}
+	p.netCtx, p.cancel = probeCtx(ctx, m.deps.Cfg.Git.NetworkTimeout)
+	p.auth, p.authErr = m.ResolveAuth(authConfigFromSpec(&o), o.URL)
+	if p.authErr != nil {
+		return p, nil
+	}
+	p.adv, p.advErr = advertise(p.netCtx, o.URL, p.auth)
+	if p.advErr != nil && errors.Is(p.advErr, transport.ErrEmptyRemoteRepository) {
+		// A remote with no refs is not a failure to look: it is a remote with
+		// no refs, which every caller here already has an answer for.
+		p.advErr = nil
+	}
+	return p, nil
+}
+
+func (p *remoteProbe) close() {
+	if p != nil && p.cancel != nil {
+		p.cancel()
+	}
+}
+
+// identity reports what the advertisement says about which knowledge base this
+// remote holds. An advertisement we never got yields the zero value, which
+// refuses nothing.
+func (p *remoteProbe) identity() RemoteIdentity {
+	if p == nil || p.authErr != nil || p.advErr != nil {
+		return RemoteIdentity{}
+	}
+	return identityFromAdv(p.adv)
+}
+
+// initializedOn answers the ontology question for a named branch, reusing this
+// probe's advertisement for the shallow-capability decision.
+func (p *remoteProbe) initializedOn(parent context.Context, inspect string) (InitializedResult, error) {
+	if p.authErr != nil {
+		return InitializedResult{Branch: inspect, Detail: p.authErr.Error()}, nil
+	}
+	if p.advErr != nil {
+		return InitializedResult{Branch: inspect, Detail: p.advErr.Error()}, nil
+	}
+	res, err := p.m.probeInitializedBranch(parent, p.netCtx, p.o, p.auth, inspect, advertisesShallow(p.adv))
+	if err != nil {
+		return res, err
+	}
+	res.AlreadyLocal = p.alreadyLocalHolder()
+	return res, nil
+}
+
+// alreadyLocalHolder runs the two cheap identity layers off this probe's own
+// advertisement and returns the holder's name, or "".
+//
+// A registry that cannot be READ reports nothing here rather than a wrong
+// "no". This is an advisory field on a 200; CreatePreflight is where an
+// unreadable registry becomes a visible refusal (ErrRegistryUnavailable),
+// which is the place a user can act on it.
+func (p *remoteProbe) alreadyLocalHolder() string {
+	id := p.identity()
+	if holder, err := HeldByAnotherActiveRepo(p.m, "", id.RepoID); err == nil && holder != "" {
+		return holder
+	}
+	return tipHeldLocally(p.m, id.Tips)
+}
+
+// initialized answers it for the branch a create would ADOPT, derived from
+// this probe's own advertisement.
+func (p *remoteProbe) initialized(parent context.Context) (InitializedResult, error) {
+	if p.authErr != nil || p.advErr != nil {
+		return p.initializedOn(parent, p.o.Branch)
+	}
+	return p.initializedOn(parent, createReadsBranch(p.adv, p.m.deps.AgentBranch, p.o.Branch))
 }
 
 // probeInitializedBranch is the shared body: shallow-clone `inspect` and look
