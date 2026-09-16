@@ -105,7 +105,9 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		// asked to start.
 		if err := m.CreatePreflight(r.Context(), spec); err != nil {
 			status, title := createErrStatus(err)
-			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
+			// The title already names the kind of refusal, so the detail must
+			// not repeat it — see detailWithoutTitlePrefix.
+			hal.WriteProblem(w, status, title, detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
 			return
 		}
 

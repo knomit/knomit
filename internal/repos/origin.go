@@ -36,20 +36,6 @@ func localOriginPath(s string) (string, bool) {
 	return "", false
 }
 
-// validateLocalOrigin enforces the local-origin policy. Network origins pass
-// through untouched. Local-filesystem origins (bare absolute paths, relative
-// paths, and file:// URLs — anything go-git would clone via the local file
-// transport) are permitted only when localOriginRoot is configured AND the
-// origin resolves to a path within that root — otherwise the server could be
-// steered to clone arbitrary repos off its own disk. An empty localOriginRoot
-// disables local origins entirely.
-//
-// Containment is checked against the symlink-resolved real paths, not the
-// lexical ones: go-git follows symlinks when cloning a local path, so a symlink
-// living inside the root that points outside it would otherwise escape the gate
-// (TestValidateLocalOrigin_SymlinkEscape). A residual TOCTOU window remains —
-// the path could be re-pointed between this check and the clone — but resolving
-// here closes the static-symlink hole.
 // ErrLocalOriginDenied is the local-origin policy refusing a filesystem
 // origin.
 //
@@ -65,6 +51,20 @@ func localOriginPath(s string) (string, bool) {
 // part the reader can act on.
 var ErrLocalOriginDenied = errors.New("origin not allowed")
 
+// validateLocalOrigin enforces the local-origin policy. Network origins pass
+// through untouched. Local-filesystem origins (bare absolute paths, relative
+// paths, and file:// URLs — anything go-git would clone via the local file
+// transport) are permitted only when localOriginRoot is configured AND the
+// origin resolves to a path within that root — otherwise the server could be
+// steered to clone arbitrary repos off its own disk. An empty localOriginRoot
+// disables local origins entirely.
+//
+// Containment is checked against the symlink-resolved real paths, not the
+// lexical ones: go-git follows symlinks when cloning a local path, so a symlink
+// living inside the root that points outside it would otherwise escape the gate
+// (TestValidateLocalOrigin_SymlinkEscape). A residual TOCTOU window remains —
+// the path could be re-pointed between this check and the clone — but resolving
+// here closes the static-symlink hole.
 func validateLocalOrigin(s, localOriginRoot string) error {
 	path, ok := localOriginPath(s)
 	if !ok {

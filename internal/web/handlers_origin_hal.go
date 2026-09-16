@@ -469,7 +469,7 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 		if req.URL != "" {
 			if err := m.ValidateLocalOrigin(req.URL); err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Origin not allowed",
-					err.Error(), r.URL.Path)
+					detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
 				return
 			}
 		}

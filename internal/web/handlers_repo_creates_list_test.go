@@ -221,8 +221,20 @@ func TestPostRepos_LocalOriginOutsideTheRootIs400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "Origin not allowed") {
+	if !strings.Contains(rec.Body.String(), `"title":"Origin not allowed"`) {
 		t.Fatalf("want the same title PUT /origin uses: %s", rec.Body.String())
+	}
+	// The DETAIL must not repeat the title. A wrapped sentinel reads well in a
+	// log and badly in a problem document, where the reader would get "Origin
+	// not allowed" and then "origin not allowed: …" before reaching the part
+	// that says which path and which root.
+	detail := problemDetail(t, rec)
+	if strings.HasPrefix(strings.ToLower(detail), "origin not allowed") {
+		t.Fatalf("detail repeats the title: %q", detail)
+	}
+	// …and it still says the thing the reader can act on.
+	if !strings.Contains(detail, "local_origin_root") {
+		t.Fatalf("detail lost the actionable part: %q", detail)
 	}
 	// And no job was started: a refused preflight must not leave a create
 	// running behind the 4xx.
