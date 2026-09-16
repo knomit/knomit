@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -65,7 +65,7 @@ Body for fact %d, long enough to be worth indexing.
 // path that heals SYNCHRONOUSLY and marks the index ready before m.Add
 // returns, so every assertion about the index phase would pass vacuously with
 // no mirror in the code at all.
-func TestStartCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
+func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	url := servedKnomitOrigin(t, 40)
 
 	home := t.TempDir()
@@ -80,56 +80,71 @@ func TestStartCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	// origin goes away.
 	t.Cleanup(func() { _ = m.Close() })
 
-	job := m.StartCreate(CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}})
-
-	// Poll the way a client does — a latest-value snapshot, fast enough to see
-	// the phases go by.
-	var seen []CreateStatus
+	// EVERY event, not a sample of them.
+	//
+	// This used to poll job.Status() every 25 ms. That reads a LATEST-VALUE
+	// snapshot, so an index phase shorter than one poll interval is invisible
+	// and `require.NotNil(t, index, …)` fails — which is the reviewer's
+	// diagnosis of a single unreproducible failure of this test (F4). The
+	// window is real: mirrorIndexing emits once immediately and then sleeps
+	// 250 ms, so a heal that finishes in under 25 ms produces exactly one index
+	// status that a poller can step over.
+	//
+	// Collecting from the emit callback removes the window by construction
+	// rather than making it less likely — every event is seen, and the test no
+	// longer has a timing assumption to violate. Create is called directly for
+	// that reason; StartCreate's own job/poll path is covered by
+	// TestStartCreate_* in create_job_test.go and by the web list tests.
+	var mu sync.Mutex
+	var seen []Event
 	var indexAtDone string
-	deadline := time.Now().Add(90 * time.Second)
-	for {
-		st := job.Status()
-		if len(seen) == 0 || seen[len(seen)-1] != st {
-			seen = append(seen, st)
-		}
-		if st.State != CreateRunning {
-			// Read the repo's ACTUAL index state at the moment the job first
-			// reported terminal. This is the independent check on "done means
-			// indexed": the job's own IndexState field cannot be the evidence
-			// for it, because the mirror writes both.
-			if ri := m.Get("sub"); ri != nil {
-				indexAtDone, _, _ = ri.IndexStatus()
+	ri, err := m.Create(context.Background(),
+		CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}},
+		func(e Event) {
+			mu.Lock()
+			seen = append(seen, e)
+			mu.Unlock()
+			if e.Step == "done" {
+				// The repo's ACTUAL index state at the moment the create says
+				// done — read from the manager, not from the event. The job's
+				// own IndexState cannot be the evidence for "done means
+				// indexed", because the mirror writes both.
+				if inst := m.Get("sub"); inst != nil {
+					indexAtDone, _, _ = inst.IndexStatus()
+				}
 			}
-			break
-		}
-		require.True(t, time.Now().Before(deadline), "create never finished")
-		time.Sleep(25 * time.Millisecond)
-	}
+		})
+	require.NoError(t, err)
+	require.NotNil(t, ri)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, seen)
 
 	final := seen[len(seen)-1]
-	require.Equal(t, CreateDone, final.State, "err=%v", final.Err)
+	require.Equal(t, "done", final.Step)
 	require.Equal(t, PhaseDone, final.Phase)
 	require.Equal(t, 100, final.Pct)
 	require.Equal(t, IndexStateReady, final.IndexState)
 	require.NotEqual(t, IndexStateIndexing, indexAtDone,
-		"the job reported done while the repo was still indexing")
+		"the create reported done while the repo was still indexing")
 
-	// TRANSFER: at least one status carrying the remote's own sideband line,
-	// indeterminate, with no invented percent behind it.
-	var transfer *CreateStatus
-	for i, st := range seen {
-		if st.Phase == PhaseTransfer && strings.Contains(st.Message, "knomit:") {
+	// TRANSFER: at least one event carrying the remote's own sideband line,
+	// indeterminate, with no percent behind it at all.
+	var transfer *Event
+	for i, e := range seen {
+		if e.Phase == PhaseTransfer && strings.Contains(e.Message, "knomit:") {
 			transfer = &seen[i]
 			break
 		}
 	}
-	require.NotNil(t, transfer, "no transfer status carried a sideband line; saw %s", summarize(seen))
-	require.True(t, transfer.Indeterminate, "a transfer status must not claim a percent")
+	require.NotNil(t, transfer, "no transfer event carried a sideband line; saw %s", summarize(seen))
+	require.True(t, transfer.Indeterminate, "a transfer event must not claim a percent")
 
-	// INDEX: at least one status from the mirror, carrying the heal's counts.
-	var index *CreateStatus
-	for i, st := range seen {
-		if st.Phase == PhaseIndex {
+	// INDEX: at least one event from the mirror, carrying the heal's counts.
+	var index *Event
+	for i, e := range seen {
+		if e.Phase == PhaseIndex {
 			index = &seen[i]
 			break
 		}
@@ -145,20 +160,20 @@ func TestStartCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	require.Less(t, indexOfPhase(seen, PhaseIndex), indexOfPhase(seen, PhaseDone))
 }
 
-func indexOfPhase(seen []CreateStatus, phase string) int {
-	for i, st := range seen {
-		if st.Phase == phase {
+func indexOfPhase(seen []Event, phase string) int {
+	for i, e := range seen {
+		if e.Phase == phase {
 			return i
 		}
 	}
 	return -1
 }
 
-func summarize(seen []CreateStatus) string {
+func summarize(seen []Event) string {
 	var b strings.Builder
-	for _, st := range seen {
+	for _, e := range seen {
 		fmt.Fprintf(&b, "\n  [%s/%s] pct=%d indet=%v index=%q %q",
-			st.Phase, st.Step, st.Pct, st.Indeterminate, st.IndexState, st.Message)
+			e.Phase, e.Step, e.Pct, e.Indeterminate, e.IndexState, e.Message)
 	}
 	return b.String()
 }
