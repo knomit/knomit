@@ -15,6 +15,7 @@ import (
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -219,6 +220,26 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// progressSink adapts an optional progress callback to the sideband.Progress
+// (io.Writer) that go-git's FetchOptions wants.
+//
+// A nil callback must yield a nil WRITER, never a writer wrapping nil: go-git
+// treats a non-nil Progress as "this caller wants progress", and on the PUSH
+// path that decides whether side-band is requested at all. Returning a
+// non-nil-but-useless writer would therefore change the protocol for every
+// caller that passes nil, which is most of them.
+//
+// (On the FETCH path go-git asks for side-band whenever the server advertises
+// it, Progress or not — remote.go's NewUploadRequestFromCapabilities. A nil
+// Progress there means the demuxer drops band 2 on the floor, which is exactly
+// right for a caller that did not ask.)
+func progressSink(fn func(string)) sideband.Progress {
+	if fn == nil {
+		return nil
+	}
+	return &progressWriter{fn: fn}
+}
+
 // CloneFrom clones a remote URL into the Service's storer.
 // Returns ErrEmptyRemote when the remote exists but has no branches yet —
 // knomit's sync model requires at least one branch on the remote.
@@ -312,7 +333,7 @@ func BranchACreateReads(remoteHasAgentBranch bool, agentBranch, consensusBranch 
 	return consensusBranch
 }
 
-func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string) (upstream string, remoteWasEmpty bool, err error) {
+func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string, progress func(string)) (upstream string, remoteWasEmpty bool, err error) {
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: git init: %w", err)
@@ -337,6 +358,7 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{
 		RemoteName: "origin",
 		Auth:       auth,
+		Progress:   progressSink(progress),
 	})
 	fetchCancel()
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
@@ -509,7 +531,7 @@ func (s *Service) resolveUpstream(repo *gogit.Repository, auth transport.AuthMet
 // A remote with no refs is refused with transport.ErrEmptyRemoteRepository:
 // there is no branch to follow, and unlike InitFromRemote there is no
 // seed-locally fallback because a subscription owns no content.
-func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, upstreamMain string) (string, error) {
+func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, upstreamMain string, progress func(string)) (string, error) {
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
 		return "", fmt.Errorf("InitSubscription: git init: %w", err)
@@ -526,7 +548,11 @@ func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, 
 	}
 
 	fetchCtx, fetchCancel := s.rh.netCtx(context.Background())
-	err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{RemoteName: "origin", Auth: auth})
+	err = repo.FetchContext(fetchCtx, &gogit.FetchOptions{
+		RemoteName: "origin",
+		Auth:       auth,
+		Progress:   progressSink(progress),
+	})
 	fetchCancel()
 	if err != nil {
 		return "", fmt.Errorf("InitSubscription: fetch: %w", err)

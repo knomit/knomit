@@ -724,7 +724,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, dbPath string,
 	// InitFromRemote found at the moment it actually fetched, and a remote that
 	// lost its refs in between must not be silently turned into a fresh local
 	// knowledge base with a minted identity nobody else shares.
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil)
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("clone: %w", err)
 	}
@@ -858,7 +858,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, dbPath st
 	// ontology is written below instead — as an ordinary commit on the agent
 	// branch, through the same fact machinery every later write uses.
 	emit(Event{Step: "clone", Message: "reading " + spec.Origin.URL, Pct: 40})
-	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil)
+	upstream, remoteWasEmpty, err := svc.InitFromRemote(spec.Origin.URL, auth, spec.Origin.Branch, m.deps.AgentBranch, nil, nil)
 	if err != nil {
 		return "", fmt.Errorf("initialize: %w", err)
 	}
@@ -979,7 +979,7 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, dbPath str
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 
-	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch)
+	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch, nil)
 	if errors.Is(err, transport.ErrEmptyRemoteRepository) {
 		return "", fmt.Errorf("subscribe: %w", ErrRemoteNoBranches)
 	}

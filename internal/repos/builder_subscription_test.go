@@ -39,7 +39,7 @@ func subscriptionStore(t *testing.T, uid string) (m *Manager, url, dbPath, upstr
 	svc, err := store.Open(dbPath)
 	require.NoError(t, err)
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
-	upstream, err = svc.InitSubscription(url, nil, "")
+	upstream, err = svc.InitSubscription(url, nil, "", nil)
 	require.NoError(t, err)
 	require.NoError(t, svc.Close())
 	return m, url, dbPath, upstream

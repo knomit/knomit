@@ -519,3 +519,24 @@ func canonicalizePath(path string) string {
 	}
 	return path
 }
+
+// HasObject reports whether this store already holds the object named by hash.
+//
+// A HIT is proof, a MISS is not. Commits are unique to a history, so a store
+// that holds a remote's advertised tip is holding the same knowledge base —
+// which is what makes this a cheap sufficient check for a duplicate
+// subscription (internal/repos, layer 2). A store that does NOT hold it has
+// established nothing: the local copy may simply be behind the remote, which
+// is the ordinary case. Callers must never read a miss as "not a duplicate".
+//
+// An unparseable hash is a miss rather than an error: the value comes from a
+// remote's advertisement, and the honest answer to "do we hold <garbage>" is
+// no. No guard is needed for that — plumbing.NewHash zero-fills whatever it
+// cannot decode, and no store holds the zero hash or a zero-padded prefix — so
+// there is deliberately no validity check here to go stale or untested.
+// TestHasObject pins the behaviour regardless of how it is reached.
+//
+// Local read only; never touches the network.
+func (s *Service) HasObject(hash string) bool {
+	return s.rh.gits.HasEncodedObject(plumbing.NewHash(hash)) == nil
+}
