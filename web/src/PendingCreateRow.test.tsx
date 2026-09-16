@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { PendingCreateRow } from './PendingCreateRow';
 import { RepoIndexChip } from './RepoIndexChip';
+import { CreateProgress } from './CreateProgress';
 import type { RepoCreateStatus } from './api';
 
 function job(over: Partial<RepoCreateStatus> = {}): RepoCreateStatus {
@@ -59,6 +60,33 @@ describe('PendingCreateRow', () => {
     expect(bar).toHaveAttribute('aria-busy', 'true');
     expect(bar).not.toHaveAttribute('aria-valuenow');
     expect(screen.queryByTestId('create-bar-kb')).toBeNull();
+  });
+
+  // THE WIRE CONTRACT, from the client side: the server sends indeterminate
+  // WITHOUT a pct key at all, and nothing here may turn that absence into a
+  // zero it then draws. The server half is
+  // TestCreateStatusBody_OmitsPctWhenIndeterminate; these two fail
+  // independently if the body and the components stop agreeing.
+  it('draws no number at all for an indeterminate status that carries no pct', () => {
+    // Exactly what the server now sends during transfer: no `pct` key.
+    const status: RepoCreateStatus = {
+      create_id: 'c1', name: 'kb', mode: 'subscribe', state: 'running',
+      step: 'subscribe', phase: 'transfer', indeterminate: true,
+      message: 'knomit: sent 3 MiB',
+    };
+    expect(status.pct).toBeUndefined();
+
+    const { container } = render(<PendingCreateRow status={status} />);
+    expect(screen.getByTestId('create-bar-indeterminate-kb')).toBeInTheDocument();
+    expect(screen.queryByTestId('create-bar-kb')).toBeNull();
+    // No percentage anywhere in the row — not '0%', not '40%'.
+    expect(container.textContent).not.toMatch(/\d+\s*%/);
+
+    // And the same in the wizard's own progress view, which has its own
+    // headline and could disagree with the row.
+    const progress = render(<CreateProgress status={status} />);
+    expect(progress.getByTestId('create-progress-headline').textContent).toBe('knomit: sent 3 MiB');
+    expect(progress.container.textContent).not.toMatch(/\d+\s*%/);
   });
 
   it('draws a real percentage during indexing, which HAS one', () => {

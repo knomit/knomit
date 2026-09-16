@@ -199,13 +199,30 @@ func createStatusBody(b hal.URLBuilder, st repos.CreateStatus) map[string]any {
 		"state":     string(st.State),
 		"step":      st.Step,
 		"message":   st.Message,
-		"pct":       st.Pct,
-		// phase says what KIND of work is happening; indeterminate says pct is
-		// NOT a percent for this status and must not be drawn as one. A client
-		// that ignores both still sees exactly what it saw before.
+		// phase says what KIND of work is happening and is what a client draws
+		// from; the step set is ours to change.
 		"phase":         st.Phase,
 		"indeterminate": st.Indeterminate,
 		"_links":        hal.LinkMap{"self": {Href: b.RepoCreate(st.ID)}},
+	}
+	// THE WIRE CONTRACT: indeterminate true → NO pct key at all; otherwise pct
+	// is present. A client sees no number rather than a false one.
+	//
+	// Omitted rather than zeroed. The job's Pct is a latest value, so writing 0
+	// here would run 5 → 0 → 70 across a create and send a monotonic client's
+	// bar BACKWARDS mid-transfer — a different wrong picture from the frozen
+	// 40%, not a fix for it. Absence is the only honest encoding of "there is
+	// no percentage for this", and it is the one a client cannot accidentally
+	// render: `pct ?? 0` produces a number, but only if something reads it, and
+	// a client that respects `indeterminate` never does.
+	//
+	// knomit's own UI honours the flag (CreateProgress prints no percent,
+	// PendingCreateRow draws an indeterminate bar), but this collection is now
+	// listable by anyone, and a consumer that ignored `indeterminate` would
+	// otherwise draw exactly the incident's frozen bar from a number the server
+	// invented. Now there is no number to draw.
+	if !st.Indeterminate {
+		body["pct"] = st.Pct
 	}
 	if st.IndexState != "" {
 		// Present on a DONE job too, and that is the point: "done" now means
