@@ -47,6 +47,19 @@ export interface WizardState {
   /** Why `initialized` is '' — the server's own words. Shown on the branch step. */
   initializedDetail: string;
   /**
+   * The name of a local repo that already holds this knowledge base, or ''.
+   *
+   * Kept beside `initialized` rather than folded into it, for the same reason
+   * the server keeps them apart: this is a SECOND question about the same
+   * remote, and the wizard's routing (stepsFor, modeFor) must not change
+   * because of it. It is an advisory the branch step renders; the create's
+   * preflight is what actually refuses.
+   *
+   * Cleared by the same invalidation as `initialized` — an answer about one
+   * remote, one credential and one branch is not an answer about another.
+   */
+  alreadyLocal: string;
+  /**
    * The branch the server actually INSPECTED, which is not always the one the
    * user picked.
    *
@@ -96,7 +109,7 @@ export const initialWizardState: WizardState = {
   choice: 'remote', url: '', probe: null, name: '', branch: '',
   authMethod: '', authUser: '', authToken: '',
   preset: 'default', seedPreset: 'default', yaml: '',
-  initialized: '', initializedDetail: '', initializedBranch: '',
+  initialized: '', initializedDetail: '', initializedBranch: '', alreadyLocal: '',
   probeKey: '', initializedKey: '', stepIndex: 0,
   access: 'join',
 };
@@ -146,7 +159,7 @@ function clampStepIndex(s: WizardState): WizardState {
 // question nobody asked. '' is also the only safe direction to fail: stepsFor
 // blocks there, where 'no' would silently route to `initialize` and write an
 // ontology over whatever is actually on the new branch.
-const uncheckedBranch = { initialized: '' as const, initializedDetail: '', initializedBranch: '' };
+const uncheckedBranch = { initialized: '' as const, initializedDetail: '', initializedBranch: '', alreadyLocal: '' };
 
 function applyAction(s: WizardState, a: WizardAction): WizardState {
   switch (a.type) {
@@ -248,9 +261,15 @@ function applyAction(s: WizardState, a: WizardAction): WizardState {
     // `initialize`.
     case 'INITIALIZED_DONE': {
       const v = a.result.initialized;
+      // already_local rides on BOTH arms, including the unestablished one: the
+      // two answers come from different halves of the same response, and a
+      // probe that could not read the branch may still have read the remote's
+      // identity from the advertisement. Suppressing the advisory there would
+      // hide the one thing the check DID establish.
+      const alreadyLocal = a.result.already_local || '';
       return v === 'yes' || v === 'no'
-        ? { ...s, initialized: v, initializedDetail: '', initializedBranch: a.result.branch || '', initializedKey: branchKey(s) }
-        : { ...s, initialized: '', initializedDetail: a.result.detail || '', initializedBranch: '', initializedKey: '' };
+        ? { ...s, initialized: v, initializedDetail: '', initializedBranch: a.result.branch || '', alreadyLocal, initializedKey: branchKey(s) }
+        : { ...s, initialized: '', initializedDetail: a.result.detail || '', initializedBranch: '', alreadyLocal, initializedKey: '' };
     }
     // Preset and yaml are mutually exclusive: selecting one clears the other so
     // createBodyFor never has to guess which the user meant. seedPreset is the

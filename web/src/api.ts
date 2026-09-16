@@ -885,6 +885,22 @@ export interface InitializedResult {
   ontology_id?: string;
   /** Why the answer is absent. Only present for the unestablished case. */
   detail?: string;
+  /**
+   * The name of an ACTIVE local repo that ALREADY holds this knowledge base,
+   * or absent when no cheap proof of one was found.
+   *
+   * ORTHOGONAL to `initialized`, and never another value of it: a remote can
+   * be a knowledge base AND already local — which is precisely the case worth
+   * showing — so a client that switches on `initialized` is unaffected by
+   * this field and must keep doing exactly what it did.
+   *
+   * SUFFICIENT-ONLY. A name is proof; ABSENCE PROVES NOTHING, because the two
+   * cheap layers behind it are silent for a non-knomit remote and for a local
+   * copy that is behind. So this is an ADVISORY shown early, never a gate:
+   * the create's own preflight is the authoritative refusal, and the
+   * post-clone root-commit check is authoritative over that.
+   */
+  already_local?: string;
 }
 
 // ProbeResult is the response of POST /api/v1/repos:probe-origin — the wizard's
