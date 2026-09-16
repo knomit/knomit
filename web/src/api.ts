@@ -82,6 +82,16 @@ export interface RepoInfo {
   state?: string;
   /** Human-readable amplification of a non-'active' state. */
   detail?: string;
+  /**
+   * Background search-index readiness: 'ready' | 'indexing' | 'error'.
+   * Absent on a row with no live store, and on a server that predates the
+   * field — both mean "nothing to say", never "ready".
+   */
+  index_state?: string;
+  /** The heal's own counts, present only while indexing and only once it has
+   *  counted its work. A ready repo carries neither. */
+  index_done?: number;
+  index_total?: number;
 }
 
 // repoAvailable reports whether a repo can be read at all.
@@ -789,6 +799,25 @@ export interface RepoCreateStatus {
   error?: string;
   /** Present only when state is 'failed': the create's own deadline expired. */
   timed_out?: boolean;
+  /**
+   * The coarse stage `step` belongs to: validate | transfer | register |
+   * index | done. Draw from THIS, not from the step name — the step set is the
+   * server's to change.
+   */
+  phase?: string;
+  /**
+   * True when `pct` is NOT a percentage for this status and must not be drawn
+   * as one. Set during transfer, where nothing on the wire knows how many
+   * bytes a clone will move and `message` carries the remote's own line
+   * instead.
+   */
+  indeterminate?: boolean;
+  /**
+   * The created repo's index state once the job reaches indexing. An 'error'
+   * here rides on a job whose state is 'done': the repo EXISTS, and its row
+   * shows the chip.
+   */
+  index_state?: string;
 }
 
 export interface CreateRepoBody {
@@ -968,6 +997,28 @@ async function createRepo(
     } catch { /* transient; poll again */ }
   }
   return status;
+}
+
+// listRepoCreates returns every create job the server still holds — running
+// ones and those that finished within its retention window — newest first.
+//
+// This is how a create stays findable after the id from the 202 is gone: a
+// closed tab, a navigation to Logs, a restarted app. Without it a create in
+// flight was invisible from every view but the one that started it.
+async function listRepoCreates(): Promise<RepoCreateStatus[]> {
+  const data = await fetchJSON<{ _embedded?: { creates?: RepoCreateStatus[] } }>(
+    apiUrl('/api/v1/repo-creates'));
+  return data._embedded?.creates ?? [];
+}
+
+// dismissRepoCreate forgets a FINISHED job, so a failed row leaves the list
+// without waiting out the server's retention window.
+//
+// It does NOT cancel a running create — the server answers 409 for one — and
+// it never touches the repo a successful create made.
+async function dismissRepoCreate(id: string): Promise<void> {
+  const r = await fetch(apiUrl(`/api/v1/repo-creates/${id}`), { method: 'DELETE' });
+  if (!r.ok) throw new Error(`dismiss create → ${r.status}`);
 }
 
 async function archiveRepo(repo: string): Promise<ArchivedRepo> {
@@ -1350,6 +1401,8 @@ export const api = {
     }),
 
   createRepo,
+  listRepoCreates,
+  dismissRepoCreate,
   archiveRepo,
   listArchived,
   restoreRepo,

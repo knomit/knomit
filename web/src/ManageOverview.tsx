@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react';
 import { api, repoAvailable } from './api';
 import type { Lens, OriginResponse, RepoInfo } from './api';
 import { RepoStateChip } from './RepoStateChip';
+import { PendingCreateRow } from './PendingCreateRow';
+import { useRepoCreates, refreshRepoCreates, pendingCreates } from './useRepoCreates';
+import { RepoIndexChip } from './RepoIndexChip';
 import { LENS, repoHue } from './utils';
 import { btn, cardLabel } from './manageStyles';
 import { PlusIcon, LayersIcon, RefreshIcon } from './icons';
@@ -37,6 +40,50 @@ interface FleetRow {
   /** The repo has no live store; every per-repo cell is unknowable, not empty.
    *  Carries the listing's reason so the row can name it. */
   unavailable?: RepoInfo;
+  /** The listing row this repo came from, for the fields that live on the
+   *  LISTING rather than in the store — index state is one, and asking the
+   *  repo's own endpoints for it would be a second request for something the
+   *  collection already said. */
+  info?: RepoInfo;
+}
+
+// PendingCreates is the block of creates in flight or recently finished.
+//
+// It sits ABOVE the wiring table and not inside it, because a create is not a
+// repository: it has no branch, no remote and no lens membership, so every
+// column of that table would be a blank cell claiming we looked. A create is
+// work, and work gets its own list — which empties itself as each job's repo
+// appears in the table below.
+function PendingCreates({ repos, onOpenCreate, surface }: {
+  repos: RepoInfo[];
+  onOpenCreate?: (createId: string) => void;
+  surface?: string;
+}) {
+  const creates = pendingCreates(useRepoCreates(), repos.map(r => r.name));
+  if (creates.length === 0) return null;
+  return (
+    <div data-testid="pending-creates" style={{ marginTop: 18 }}>
+      <div style={cardLabel}>Being created</div>
+      <div style={{ border: '1px solid #222', borderRadius: 4, overflow: 'hidden' }}>
+        {creates.map(c => (
+          <PendingCreateRow
+            key={c.create_id}
+            status={c}
+            surface={surface}
+            onOpen={onOpenCreate}
+            onDismiss={async id => {
+              // Optimism is wrong here: the server refuses to dismiss a
+              // RUNNING job (409), and a row that vanished and came back would
+              // be worse than one that waits a moment. Refresh from the server
+              // and let the list say what happened.
+              try { await api.dismissRepoCreate(id); } catch { /* the refresh below tells the truth */ }
+              await refreshRepoCreates();
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export interface Attention {
@@ -92,7 +139,7 @@ function attentionFor(rows: FleetRow[]): Attention[] {
   return out.sort((a, b) => Number(a.kind === 'no-remote') - Number(b.kind === 'no-remote'));
 }
 
-export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions, liveSessions }: {
+export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions, liveSessions, onOpenCreate, createSurface }: {
   repos: RepoInfo[];
   lenses: Lens[];
   archivedCount: number;
@@ -115,6 +162,12 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
    *  null means "not known" (never arrived, or the call failed), and the line
    *  is then absent rather than showing a zero it cannot vouch for. */
   liveSessions: number | null;
+  /** Opens the progress view for a running create. Optional: a caller with
+   *  nowhere to send the user simply renders the row without the control,
+   *  which is better than a button that goes nowhere. */
+  onOpenCreate?: (createId: string) => void;
+  /** Scopes this list's test ids — see PendingCreateRow's `surface`. */
+  createSurface?: string;
 }) {
   // Only what has ARRIVED lives in state, keyed by repo. The rows the table
   // renders are derived below — seeding placeholders into state from the effect
@@ -164,7 +217,7 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
   // It is marked loaded with the reason instead, and the cells render the state.
   const rows: FleetRow[] = repos.map(r =>
     repoAvailable(r)
-      ? loaded[r.name] ?? { repo: r.name, agentBranch: '', mode: '', license: '', origin: null, originError: false, loaded: false }
+      ? { ...(loaded[r.name] ?? { repo: r.name, agentBranch: '', mode: '' as const, license: '', origin: null, originError: false, loaded: false }), info: r }
       : { repo: r.name, agentBranch: '', mode: '', license: '', origin: null, originError: false, loaded: true, unavailable: r });
 
   const attention = hideRemoteConfig ? [] : attentionFor(rows);
@@ -250,6 +303,8 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
         </div>
       )}
 
+      <PendingCreates repos={repos} onOpenCreate={onOpenCreate} surface={createSurface} />
+
       <div style={{ marginTop: 18 }}>
         <div style={cardLabel}>How things are wired</div>
         <table style={table}>
@@ -279,7 +334,9 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
                         display: 'inline-block', marginRight: 8, opacity: r.unavailable ? 0.4 : 1,
                       }} />
                       {r.repo}
-                      {r.unavailable && <span style={{ marginLeft: 8 }}><RepoStateChip repo={r.unavailable} /></span>}
+                      {r.unavailable
+                        ? <span style={{ marginLeft: 8 }}><RepoStateChip repo={r.unavailable} /></span>
+                        : <span style={{ marginLeft: 8 }}><RepoIndexChip repo={r.info ?? {}} /></span>}
                     </button>
                   </td>
                   {/* Branch, remote and licence all live INSIDE the store this
