@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,12 +16,19 @@ func TestMirrorIndexing_NarratesProgressAndEndsReady(t *testing.T) {
 	ri.markIndexing()
 	ri.setIndexProgress(3, 12)
 
+	// The emit callback runs on the MIRROR's goroutine (in production, the
+	// create's), so the collector is locked: reading it from the test
+	// goroutine without one is a genuine race, not a testing formality.
+	var mu sync.Mutex
 	var got []Event
+	collect := func(e Event) { mu.Lock(); got = append(got, e); mu.Unlock() }
+	seen := func() int { mu.Lock(); defer mu.Unlock(); return len(got) }
+
 	done := make(chan string, 1)
-	go func() { done <- mirrorIndexing(context.Background(), ri, func(e Event) { got = append(got, e) }) }()
+	go func() { done <- mirrorIndexing(context.Background(), ri, collect) }()
 
 	// Let the mirror emit at least once at 3/12, then finish the heal.
-	require.Eventually(t, func() bool { return len(got) > 0 }, 5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return seen() > 0 }, 5*time.Second, 5*time.Millisecond)
 	ri.setIndexProgress(12, 12)
 	ri.markIndexReady()
 
@@ -31,6 +39,8 @@ func TestMirrorIndexing_NarratesProgressAndEndsReady(t *testing.T) {
 		t.Fatal("mirrorIndexing did not return after the heal reported ready")
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
 	require.NotEmpty(t, got)
 	first := got[0]
 	require.Equal(t, PhaseIndex, first.Phase)
