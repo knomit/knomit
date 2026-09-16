@@ -31,7 +31,12 @@ const (
 // ends by saying what to do about it.
 type SessionBindingError struct {
 	Kind SessionBindingKind
-	Err  error
+	// Pin is the stored value that failed to resolve, kept so a consumer can
+	// say WHICH binding died rather than only that one did. knomit_catalog
+	// reads it to report the kind and, when the registry still knows it, the
+	// name. Empty when the failure was not about a specific pin.
+	Pin string
+	Err error
 }
 
 func (e *SessionBindingError) Error() string { return e.Err.Error() }
@@ -70,8 +75,8 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 	kind, uid, err := ParsePin(pin)
 	if err != nil {
 		return nil, &SessionBindingError{
-			Kind: BindingMalformed,
-			Err:  fmt.Errorf("stored binding %q is malformed — call knomit_bind again", pin),
+			Kind: BindingMalformed, Pin: pin,
+			Err: fmt.Errorf("stored binding %q is malformed — call knomit_bind again", pin),
 		}
 	}
 
@@ -81,7 +86,7 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 		ri := m.GetByUID(uid)
 		if ri == nil {
 			return nil, &SessionBindingError{
-				Kind: BindingRepoUnavailable,
+				Kind: BindingRepoUnavailable, Pin: pin,
 				Err: fmt.Errorf("bound repo %q is not available (deleted, archived or failed to open) — call knomit_bind again",
 					m.RepoLabel(uid)),
 			}
@@ -91,14 +96,14 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 		reg := m.LensRegistry()
 		if reg == nil {
 			return nil, &SessionBindingError{
-				Kind: BindingLensUnavailable,
-				Err:  fmt.Errorf("lens registry not started — call knomit_bind again"),
+				Kind: BindingLensUnavailable, Pin: pin,
+				Err: fmt.Errorf("lens registry not started — call knomit_bind again"),
 			}
 		}
 		l, ok, lerr := reg.GetByUID(uid)
 		if lerr != nil || !ok {
 			return nil, &SessionBindingError{
-				Kind: BindingLensUnavailable,
+				Kind: BindingLensUnavailable, Pin: pin,
 				Err: fmt.Errorf("bound lens %q is not available — call knomit_bind again",
 					lensLabel(reg, uid)),
 			}
@@ -106,8 +111,8 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 		lb, berr := NewBindingOfLens(m, l)
 		if berr != nil {
 			return nil, &SessionBindingError{
-				Kind: BindingLensUnavailable,
-				Err:  fmt.Errorf("%w — call knomit_bind again", berr),
+				Kind: BindingLensUnavailable, Pin: pin,
+				Err: fmt.Errorf("%w — call knomit_bind again", berr),
 			}
 		}
 		b = lb

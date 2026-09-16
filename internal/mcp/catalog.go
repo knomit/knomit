@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -61,9 +62,18 @@ type catalogLens struct {
 }
 
 // catalogBound is where this session currently points, omitted when unbound.
+//
+// A session whose STORED pin no longer resolves is a third state, distinct from
+// both "bound" and "never bound": Status "unresolved" carries the reason. Every
+// other tool is already telling that agent "bound repo X is not available —
+// call knomit_bind again", and knomit_catalog is the tool it reaches for to
+// diagnose exactly that, so staying silent here would be the one place the loop
+// does not close.
 type catalogBound struct {
-	Kind string `json:"kind"` // repo | lens
-	Name string `json:"name"`
+	Kind   string `json:"kind,omitempty"` // repo | lens
+	Name   string `json:"name,omitempty"`
+	Status string `json:"status,omitempty"` // "unresolvable" when the stored pin is dead
+	Error  string `json:"error,omitempty"`
 }
 
 type catalogResponse struct {
@@ -102,7 +112,7 @@ func CatalogHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequ
 				"the lens registry is unavailable, so this listing would wrongly show no lenses — retry shortly"), nil
 		}
 		resp := catalogResponse{
-			Bound:  boundOf(ctx),
+			Bound:  boundOf(ctx, mgr),
 			Repos:  catalogRepos(mgr),
 			Lenses: lenses,
 		}
@@ -116,9 +126,14 @@ func CatalogHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequ
 
 // boundOf reports the session's current binding as kind+name, or nil when
 // unbound. On a URL-scoped mount this is whatever the URL named.
-func boundOf(ctx context.Context) *catalogBound {
+func boundOf(ctx context.Context, mgr *repos.Manager) *catalogBound {
 	pin := repos.BindingPinFromContext(ctx)
 	if pin == "" {
+		// The middleware could not resolve the session's stored pin. Report
+		// WHY rather than looking identical to a session that never bound.
+		if err, ok := repos.BindingErrorFromContext(ctx); ok {
+			return unresolvableBound(mgr, err)
+		}
 		return nil
 	}
 	kind, _, err := repos.ParsePin(pin)
@@ -252,5 +267,44 @@ func catalogLenses(mgr *repos.Manager) []catalogLens {
 		out = append(out, cl)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// unresolvableBound describes a stored binding that no longer resolves.
+//
+// The kind comes from the pin the resolver failed on, which *SessionBindingError
+// carries for exactly this purpose — the context holds only the error, so
+// without that field neither kind nor name would be recoverable here.
+//
+// The NAME is set only when the registry still has a real one. A dead pin's uid
+// must never be shown: it is not a name anyone types and knomit_bind would not
+// accept it, so an absent name is the honest answer.
+func unresolvableBound(mgr *repos.Manager, err error) *catalogBound {
+	out := &catalogBound{Status: "unresolvable", Error: err.Error()}
+
+	var sbe *repos.SessionBindingError
+	if !errors.As(err, &sbe) || sbe.Pin == "" {
+		return out // e.g. the store-lookup failure, which is about no pin
+	}
+	kind, uid, perr := repos.ParsePin(sbe.Pin)
+	if perr != nil {
+		return out // a malformed pin names no kind
+	}
+	out.Kind = kind
+
+	switch kind {
+	case "repo":
+		if reg := mgr.Repos(); reg != nil {
+			if rec, ok, gerr := reg.Get(uid); gerr == nil && ok && rec.Name != "" {
+				out.Name = rec.Name
+			}
+		}
+	case "lens":
+		if reg := mgr.LensRegistry(); reg != nil {
+			if l, ok, gerr := reg.GetByUID(uid); gerr == nil && ok && l.Name != "" {
+				out.Name = l.Name
+			}
+		}
+	}
 	return out
 }

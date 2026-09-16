@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -244,18 +245,29 @@ func TestCatalog_NoDeadlockUnderConcurrentWriter(t *testing.T) {
 	}()
 	t.Cleanup(func() { close(stop) })
 
-	done := make(chan struct{})
+	// Assertions belong on the TEST goroutine: require.* calls t.FailNow, which
+	// is unsupported off it, so a failure here would still close(done) and the
+	// select below would take the done branch as though the run had succeeded.
+	// Collect the outcome on a channel and assert after.
+	done := make(chan error, 1)
 	go func() {
-		defer close(done)
 		for i := 0; i < 50; i++ {
 			res, err := CatalogHandler(m)(context.Background(), mcpgo.CallToolRequest{})
-			require.NoError(t, err)
-			require.NotNil(t, res)
+			if err != nil {
+				done <- err
+				return
+			}
+			if res == nil {
+				done <- errors.New("nil result from knomit_catalog")
+				return
+			}
 		}
+		done <- nil
 	}()
 
 	select {
-	case <-done:
+	case err := <-done:
+		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
 		t.Fatal("knomit_catalog deadlocked against a concurrent manager writer")
 	}
@@ -343,4 +355,76 @@ func TestCatalog_LensRegistryUnavailableIsAnError(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, res.IsError, "an unavailable registry must not look like an empty one")
 	require.Contains(t, resultText(t, res), "lens registry")
+}
+
+// A session whose STORED pin no longer resolves must be distinguishable from
+// one that never bound. Every other tool is already telling this agent "bound
+// repo X is not available — call knomit_bind again"; knomit_catalog is the tool
+// it calls to work out what happened, so it reports the reason rather than
+// looking identical to a fresh session.
+//
+// The kind and name come from the pin carried on *SessionBindingError: the
+// context holds only the error, so without that field neither is recoverable.
+func TestCatalog_ReportsUnresolvableBinding(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	// A repo the registry still knows, but with no live instance: resolution
+	// fails, yet the name is real and worth showing.
+	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
+		UID: "uid-departed", Name: "departed", State: repos.StateActive,
+		Profile: "code", CreatedAt: 1,
+	}))
+	_, resolveErr := repos.ResolveSessionBinding(context.Background(), m, "repo:uid-departed")
+	require.Error(t, resolveErr)
+
+	ctx := repos.WithBindingError(repos.WithSessionScoped(context.Background()), resolveErr)
+	out := catalogOf(t, m, ctx)
+
+	bound, ok := out["bound"].(map[string]any)
+	require.True(t, ok, "an unresolvable pin must still produce a bound key: %v", out)
+	require.Equal(t, "unresolvable", bound["status"])
+	require.Equal(t, "repo", bound["kind"], "the kind survives on the pin")
+	require.Equal(t, "departed", bound["name"], "the registry still has a real name")
+	require.NotEmpty(t, bound["error"])
+
+	// And it stays distinct from the never-bound case.
+	plain := catalogOf(t, m, repos.WithSessionScoped(context.Background()))
+	require.NotContains(t, plain, "bound")
+}
+
+// With NO registry row the uid is all that is left — and a uid is not a name
+// knomit_bind would accept, so the name key is omitted rather than filled with
+// one. The kind still survives, because it comes from the pin's prefix.
+func TestCatalog_UnresolvableBindingWithoutRegistryRow(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	_, resolveErr := repos.ResolveSessionBinding(context.Background(), m, "repo:uid-never-existed")
+	require.Error(t, resolveErr)
+
+	out := catalogOf(t, m, repos.WithBindingError(context.Background(), resolveErr))
+
+	bound, _ := out["bound"].(map[string]any)
+	require.Equal(t, "unresolvable", bound["status"])
+	require.Equal(t, "repo", bound["kind"])
+	require.NotContains(t, bound, "name", "a uid is not a name; omit rather than show one")
+	// The contract is about the NAME field, not the error prose: the error text
+	// legitimately names what failed, and with no registry row the uid is all
+	// there is to name it by (ResolveSessionBinding → RepoLabel's fallback).
+	// What must never happen is that uid appearing as `name`, which knomit_bind
+	// would then be offered and would reject.
+	require.NotEqual(t, "uid-never-existed", bound["name"])
+}
+
+// A failure that is not about a specific pin (the store lookup itself breaking)
+// carries no pin, so it reports the reason with no kind and no name.
+func TestCatalog_UnresolvableBindingWithoutPin(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	ctx := repos.WithBindingError(context.Background(),
+		errors.New("session binding lookup failed — retry, or call knomit_bind again"))
+
+	out := catalogOf(t, m, ctx)
+
+	bound, _ := out["bound"].(map[string]any)
+	require.Equal(t, "unresolvable", bound["status"])
+	require.NotContains(t, bound, "kind")
+	require.NotContains(t, bound, "name")
+	require.Contains(t, bound["error"], "lookup failed")
 }
