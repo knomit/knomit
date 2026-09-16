@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"knomit/internal/repos"
 )
 
 // GET /repo-creates lists every job the manager holds, newest first, in the
@@ -103,6 +105,60 @@ func TestDeleteRepoCreate_DismissesAFinishedJob(t *testing.T) {
 	// the thing the job made.
 	if s.Manager.Get("gamma") == nil {
 		t.Fatal("dismissing a create must not remove the repo it created")
+	}
+}
+
+// Dismissing a RUNNING create is 409, not 204 and not a cancel.
+//
+// The manager-level refusal is covered by TestDismissCreateJob; what this pins
+// is the HTTP MAPPING, which is the part a client actually sees and the part
+// that can silently regress on its own — deleting the ErrCreateRunning arm in
+// createErrStatus' sibling switch drops a running job into the default 404 and
+// every other test in this package stays green.
+//
+// A create that cannot be dismissed must not read as a create that does not
+// exist: 404 tells a client the work is gone, and it is still running.
+func TestDeleteRepoCreate_RunningIs409(t *testing.T) {
+	m := newRealManager(t)
+	s := &Server{Manager: m}
+	r := s.NewAPIRouter()
+
+	// A create that will NOT finish while the assertion runs. A subscribe to a
+	// URL nothing answers sits in its network timeout, which is far longer than
+	// this test — no sleep, no poll, no race against a fast local create.
+	job := m.StartCreate(repos.CreateSpec{
+		Name: "slow", Mode: "subscribe",
+		Origin: &repos.OriginSpec{URL: "http://127.0.0.1:1/never"},
+	})
+	t.Cleanup(func() { <-job.Done() })
+
+	// Assert the precondition rather than assume it: if this create had already
+	// finished, the 409 below would be testing the 404 path under another name.
+	if st := job.Status(); st.State != repos.CreateRunning {
+		t.Fatalf("fixture create is not running (state=%s err=%v); this test cannot pin 409", st.State, st.Err)
+	}
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repo-creates/"+job.ID(), nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "still running") {
+		t.Fatalf("the refusal must say why: %s", rec.Body.String())
+	}
+
+	// The refused dismiss changed nothing: the job is still listed and still
+	// pollable, which is the whole reason 409 rather than 404 is the answer.
+	list := httptest.NewRecorder()
+	r.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/repo-creates", nil))
+	found := false
+	for _, c := range embeddedCreates(t, list.Body.Bytes()) {
+		if c["create_id"] == job.ID() {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a refused dismiss must leave the job listed: %s", list.Body.String())
 	}
 }
 
