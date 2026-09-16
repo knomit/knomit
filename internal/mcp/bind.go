@@ -8,6 +8,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	"github.com/rs/zerolog/log"
 
 	"knomit/internal/repos"
 )
@@ -80,8 +81,13 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if err := store.BindSession(ctx, sess.SessionID(), pin, time.Now()); err != nil {
+			// Worth a log line: the likely cause is a control.db that never got
+			// migration 000004, and without server-side evidence that presents
+			// to the agent as an unexplained refusal it would retry forever.
+			log.Warn().Err(err).Str("mcp_session", sess.SessionID()).Str("pin", pin).
+				Msg("knomit_bind: recording the session binding failed")
 			return mcpgo.NewToolResultError(
-				"could not record the binding for this session — retry shortly"), nil
+				"the binding could not be recorded for this session, so nothing was bound; ask the operator to check the server log"), nil
 		}
 
 		out, err := json.MarshalIndent(reposResponseFor(b), "", "  ")

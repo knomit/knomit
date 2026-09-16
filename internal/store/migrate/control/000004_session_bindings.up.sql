@@ -7,8 +7,11 @@
 -- (`repo:<uid>` / `lens:<uid>`), never a name, so a rename leaves a live
 -- session bound. Rows are durable across restarts on purpose: the stateless
 -- session-id manager accepts ids across a restart, so a bridge that outlives
--- one keeps its selection. No foreign key: purge removes rows whose session
--- has aged out of client_sessions.
+-- one keeps its selection. Durable across restarts is the whole claim, not
+-- durable forever: no foreign key, and a row is purged together with its
+-- client_sessions row once that session passes the retention window
+-- (session.client_retention, default 168h — a SETTING, not a constant), so a
+-- session idle longer than that must call knomit_bind again.
 CREATE TABLE IF NOT EXISTS session_bindings (
     session_id TEXT PRIMARY KEY,
     binding    TEXT NOT NULL,

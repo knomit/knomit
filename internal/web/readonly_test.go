@@ -25,6 +25,16 @@ func TestIsMutatingRequest(t *testing.T) {
 		// bypass the method gate (regression: lens MCP was 403'd on read-only).
 		{"POST", "/api/v1/lenses/myview/mcp", false},
 		{"POST", "/api/v1/lenses/myview/mcp/messages", false},
+		// The session-bound (unscoped) MCP mount is the same POST-for-reads shape.
+		// Gating it would 403 initialize and knomit_bind themselves, so a
+		// read-only instance could never be read through the no-flag bridge.
+		{"POST", "/api/v1/mcp", false},
+		{"POST", "/api/v1/mcp/messages", false},
+		{"DELETE", "/api/v1/mcp", false},
+		// ...but the bare-/mcp alternative must be anchored just like the others:
+		// a path that merely CONTAINS /mcp, or starts with "mcp", stays gated.
+		{"POST", "/api/v1/mcpfoo", true},
+		{"POST", "/api/v1/repos/core/facts/mcp", true},
 		// Lens REST CRUD must stay gated — only the /mcp subtree bypasses.
 		{"POST", "/api/v1/lenses", true},
 		{"PATCH", "/api/v1/lenses/myview", true},

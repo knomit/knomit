@@ -102,6 +102,39 @@ func lensConflict(lens string, repoSet bool) string {
 	return ""
 }
 
+// bridgeMode is which endpoint the proxy connects to.
+type bridgeMode int
+
+const (
+	modeRepo bridgeMode = iota
+	modeLens
+	modeSessionBound
+	modeInvalid
+)
+
+// selectMode decides the proxy mode from the flag VALUES plus whether each flag
+// was explicitly given (flag.Visit), which are different questions.
+//
+// Session-bound mode is the absence of BOTH flags — never two empty strings. An
+// explicit `--repo ""` is a misconfigured wrapper (an unset variable that
+// expanded to nothing), and silently proxying it to the session-bound mount
+// would turn that mistake into a working-but-wrong session bound to whatever
+// the agent later picks. It stays a hard exit, as it was before the mount
+// existed. lensConflict cannot catch it: it short-circuits on lens == "".
+func selectMode(repo, lens string, repoSet, lensSet bool) bridgeMode {
+	switch {
+	case !repoSet && !lensSet:
+		return modeSessionBound
+	case lens != "":
+		return modeLens
+	case repo != "":
+		return modeRepo
+	default:
+		// A flag was given but empty.
+		return modeInvalid
+	}
+}
+
 func main() {
 	logPath, args := peelLogFlag(os.Args[1:])
 	bridgelog.Init(logPath)
@@ -164,19 +197,30 @@ func main() {
 	}
 	flag.Parse()
 
-	// --lens is mutually exclusive with --repo, and with neither there is nothing
-	// to proxy — no default repo exists to fall back on. flag.Visit (rather than
-	// *repo != "") keeps an explicit `--repo ""` a conflict rather than a silent
-	// lens-mode fallthrough.
-	repoSet := false
+	// --lens is mutually exclusive with --repo. Omitting BOTH selects the
+	// session-bound mount; giving one but leaving it empty is a
+	// misconfiguration, not a request for that mount. flag.Visit (rather than
+	// *repo != "") is what distinguishes "not given" from "given empty".
+	repoSet, lensSet := false, false
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "repo" {
+		switch f.Name {
+		case "repo":
 			repoSet = true
+		case "lens":
+			lensSet = true
 		}
 	})
 	if msg := lensConflict(*lens, repoSet); msg != "" {
 		log.Fatal().Msg(msg)
 	}
+	mode := selectMode(*repo, *lens, repoSet, lensSet)
+	if mode == modeInvalid {
+		fmt.Fprintf(os.Stderr,
+			"knomit-bridge: --repo/--lens given but empty; omit both to bind per session via knomit_bind\n")
+		flag.Usage()
+		os.Exit(2)
+	}
+
 	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: %s (pid=%d)\n", logPath, os.Getpid())
 	log.Info().Str("repo", *repo).Msg("bridge starting")
 
@@ -193,13 +237,13 @@ func main() {
 	// branch is also what the bridge declares about itself; it stays empty in
 	// lens mode, where the branch is resolved per mount server-side.
 	var branch string
-	if *lens == "" && *repo == "" {
+	if mode == modeSessionBound {
 		// Session-bound mode: nothing to discover. The mount is unscoped and
 		// the agent binds a repo or lens by calling knomit_bind; until it
 		// does, every other tool fails.
 		serverURL = mcpURL(baseURL, "", "", "")
 		log.Info().Str("url", serverURL).Msg("bridge configured (session-bound; call knomit_bind)")
-	} else if *lens != "" {
+	} else if mode == modeLens {
 		// Lens mode: skip branch discovery entirely. A lens resolves each
 		// mount's branch server-side via LensMiddleware, so the bridge just
 		// connects to the lens endpoint (no branch).

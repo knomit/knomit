@@ -75,3 +75,42 @@ func TestAfterInitialize_UnscopedAddendumOnlyWhenSessionScoped(t *testing.T) {
 	instr := initializeInstructions(t, srv, context.Background())
 	require.NotContains(t, instr, "knomit_bind")
 }
+
+// mcp-go mints a FRESH session id on every initialize and ignores the inbound
+// Mcp-Session-Id (v0.45 server/streamable_http.go, handlePost: isInitialize ⇒
+// sessionIdManager.Generate()). The bridge keeps sending its old id once it
+// has one, so on a re-initialize the middleware resolves the PREVIOUS
+// session's pin — but the id in the RESPONSE has no session_bindings row.
+// Instructions describing that stale binding would tell the agent it is bound
+// to repo X while its very next tool call reports nothing bound.
+//
+// So on the session-scoped mount the unbound instructions are ALWAYS correct
+// for initialize, whatever the middleware resolved.
+//
+// WHY THIS TEST SEEDS A BINDING, and why it must keep doing so: the middleware
+// normally skips resolution for initialize, so the ordinary path reaches this
+// hook with an EMPTY context — and against an empty context the current
+// always-unbound shape and the older `RepoFromContextOpt; if !ok` shape behave
+// identically. Only a context that already carries a Binding tells them apart.
+// This hook is the second barrier behind the middleware, and it is what keeps
+// the residual case cosmetic: a client that orders a large params object before
+// "method" defeats the bounded peek, so a stale Binding CAN still reach here.
+// Simplifying this back to a RepoFromContextOpt check would reopen a
+// user-visible bug — the agent told it is bound to a repo whose very next tool
+// call reports nothing bound — and without this seeding the suite would stay
+// green while it happened.
+func TestAfterInitialize_SessionScopedIgnoresResolvedBinding(t *testing.T) {
+	srv := NewServer("kb", nil, false)
+
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "alpha", UID: "u-alpha", AgentBranch: "agent/test", OntologyRoot: "kb",
+	})
+	ctx := repos.WithSessionScoped(context.Background())
+	ctx = repos.WithBinding(ctx, repos.NewBindingOfRepo(ri, ""))
+	ctx = repos.WithRepoInstance(ctx, ri)
+
+	instr := initializeInstructions(t, srv, ctx)
+	require.Contains(t, instr, "knomit_bind")
+	require.Contains(t, instr, "No repo bound yet")
+	require.NotContains(t, instr, "### Mounts")
+}

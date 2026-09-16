@@ -26,8 +26,10 @@ ON CONFLICT(session_id) DO UPDATE SET binding = excluded.binding, set_at = exclu
 	if err != nil {
 		return fmt.Errorf("bind session: %w", err)
 	}
-	// The Sessions UI re-reads the row's binding column on its next Touch; a
-	// bind is worth a nudge too.
+	// Nudge the Sessions UI's change stream so it re-reads the list now. Note
+	// the client_sessions row still shows the PREVIOUS pin at this instant: its
+	// binding column is written by Touch, from a context built before this
+	// bind, so the new pin appears on the session's next request.
 	s.publish(sid, "touch")
 	return nil
 }

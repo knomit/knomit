@@ -99,7 +99,8 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 		if lerr != nil || !ok {
 			return nil, &SessionBindingError{
 				Kind: BindingLensUnavailable,
-				Err:  fmt.Errorf("bound lens %q is not available — call knomit_bind again", uid),
+				Err: fmt.Errorf("bound lens %q is not available — call knomit_bind again",
+					lensLabel(reg, uid)),
 			}
 		}
 		lb, berr := NewBindingOfLens(m, l)
@@ -115,4 +116,28 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 	ctx = WithBinding(ctx, b)
 	ctx = WithRepoInstance(ctx, b.Write())
 	return ctx, nil
+}
+
+// lensLabel resolves a lens uid to its NAME for an error message, falling back
+// to the uid when nothing knows it — the counterpart of Manager.repoLabel, so
+// both halves of a stored pin fail with a name the reader has actually seen.
+//
+// It scans List() because the uid lookup is what just failed: a registry error
+// or a genuinely deleted lens leaves no row to read, and in the deleted case
+// the uid IS all that is left. The scan only runs on a path that is already
+// failing, and a registry holds tens of lenses, not thousands.
+func lensLabel(reg *LensRegistry, uid string) string {
+	if reg == nil || uid == "" {
+		return uid
+	}
+	lenses, err := reg.List()
+	if err != nil {
+		return uid
+	}
+	for _, l := range lenses {
+		if l.UID == uid && l.Name != "" {
+			return l.Name
+		}
+	}
+	return uid
 }

@@ -71,3 +71,30 @@ func TestMcpURL_UnscopedMode(t *testing.T) {
 		t.Errorf("mcpURL unscoped mode = %q, want %q", got, want)
 	}
 }
+
+// selectMode distinguishes "flag not given" from "flag given empty". Only the
+// first selects the session-bound mount; the second is a misconfigured wrapper
+// (an unset variable) and must exit rather than silently proxy.
+func TestSelectMode(t *testing.T) {
+	cases := []struct {
+		name             string
+		repo, lens       string
+		repoSet, lensSet bool
+		want             bridgeMode
+	}{
+		{"neither flag given", "", "", false, false, modeSessionBound},
+		{"repo given", "work", "", true, false, modeRepo},
+		{"lens given", "", "eng", false, true, modeLens},
+		{"repo given empty", "", "", true, false, modeInvalid},
+		{"lens given empty", "", "", false, true, modeInvalid},
+		{"both given empty", "", "", true, true, modeInvalid},
+		// An unset shell variable is the real-world shape of this mistake.
+		{"repo from unset var", "", "", true, false, modeInvalid},
+	}
+	for _, c := range cases {
+		if got := selectMode(c.repo, c.lens, c.repoSet, c.lensSet); got != c.want {
+			t.Errorf("%s: selectMode(%q,%q,%v,%v)=%v want %v",
+				c.name, c.repo, c.lens, c.repoSet, c.lensSet, got, c.want)
+		}
+	}
+}
