@@ -35,8 +35,10 @@ type gitHTTPProvider interface {
 // knowledge base it follows. "kb.git.git" and "KB" are not this repo.
 func splitGitRoute(p string) (repoName, suffix string) {
 	repoName, suffix, _ = strings.Cut(p, "/")
-	// Exactly one ".git", and never the whole segment — ".git" alone is a
-	// repo named "", not an empty suffix on a nameless repo.
+	// At most one ".git", and never the whole segment: ".git" on its own stays
+	// a repo NAMED ".git" rather than becoming a nameless one. (No repo can
+	// actually be called that — isValidRepoName admits only [a-z0-9-_] — so
+	// this is about not manufacturing an empty name, not about serving it.)
 	if trimmed := strings.TrimSuffix(repoName, ".git"); trimmed != "" {
 		repoName = trimmed
 	}

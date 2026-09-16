@@ -41,8 +41,15 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 				"invalid JSON body", r.URL.Path)
 			return
 		}
-		// Before isGitURL below, which a padded URL fails, and before the URL
-		// is carried on the session into the origin it eventually persists.
+		// Before isGitURL below, and before the URL is carried on the session
+		// into the origin it eventually persists.
+		//
+		// isGitURL does NOT reject every padded URL, which is the whole
+		// trouble: url.Parse tolerates a TRAILING space, so the reported
+		// defect — a URL pasted with trailing spaces — sails through and is
+		// carried padded. Only a leading space, a tab or a newline make
+		// url.Parse fail. So the trim is here to make the accepted form clean,
+		// not merely to spare the rejected forms.
 		req.URL = trimOriginURL(req.URL)
 
 		if req.URL == "" {
