@@ -1,5 +1,6 @@
 import { useReducer, useRef, useState } from 'react';
 import { api, type RepoCreateStatus, type ProbeResult } from './api';
+import { refreshRepoCreates } from './useRepoCreates';
 import { wizardReducer, initialWizardState, currentStep, stepsFor, branchCheckBlocked, probeIsCurrent, createBodyFor, authFor, originURL, isValidRepoName, type WizardAction } from './wizardState';
 import { WizardStepRail } from './WizardStepRail';
 import { StepSource } from './StepSource';
@@ -245,10 +246,18 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     setCreateErr(''); setCreateStatus(null); setCreating(true);
     const body = createBodyFor(state);
     try {
+      let announced = false;
       // createRepo POSTs, gets a 202, and polls to a terminal state. A failed
       // create RESOLVES with state 'failed' — it is an outcome to render, not
       // an exception — so the catch below is for a REFUSED request only.
-      const final = await api.createRepo(body, setCreateStatus);
+      const final = await api.createRepo(body, s => {
+        setCreateStatus(s);
+        // Tell the SHARED list about this create the moment it has an id, so
+        // the top-bar light and the pending rows are live before the user
+        // leaves the wizard rather than up to one poll interval later. The
+        // first status is the 202 itself, so this fires immediately.
+        if (!announced) { announced = true; void refreshRepoCreates(); }
+      });
       if (final.state === 'failed') {
         setCreateErr(final.error || 'create failed');
       } else {

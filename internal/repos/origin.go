@@ -1,6 +1,7 @@
 package repos
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,21 @@ func localOriginPath(s string) (string, bool) {
 	return "", false
 }
 
+// ErrLocalOriginDenied is the local-origin policy refusing a filesystem
+// origin.
+//
+// A sentinel because more than one edge now has to turn this refusal into a
+// STATUS rather than a stack trace. PUT /origin has always answered 400
+// "Origin not allowed"; CreatePreflight reaches the same verdict since the
+// identity layers moved the gate ahead of the create, and without something to
+// match on it fell into createErrStatus' default and answered 500 — a server
+// error for a request the server understood perfectly and declined on policy.
+//
+// The message stays in the wrapped error: the sentinel says WHICH KIND of
+// refusal this is, and the text says which path and which root, which is the
+// part the reader can act on.
+var ErrLocalOriginDenied = errors.New("origin not allowed")
+
 // validateLocalOrigin enforces the local-origin policy. Network origins pass
 // through untouched. Local-filesystem origins (bare absolute paths, relative
 // paths, and file:// URLs — anything go-git would clone via the local file
@@ -55,13 +71,13 @@ func validateLocalOrigin(s, localOriginRoot string) error {
 		return nil
 	}
 	if localOriginRoot == "" {
-		return fmt.Errorf("local-path origins are disabled — set local_origin_root (or KNOMIT_LOCAL_ORIGIN_ROOT) to allow them")
+		return fmt.Errorf("%w: local-path origins are disabled — set local_origin_root (or KNOMIT_LOCAL_ORIGIN_ROOT) to allow them", ErrLocalOriginDenied)
 	}
 	root := resolveSymlinks(filepath.Clean(localOriginRoot))
 	target := resolveSymlinks(filepath.Clean(path))
 	rel, err := filepath.Rel(root, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("local origin %q is outside the allowed root %q", path, localOriginRoot)
+		return fmt.Errorf("%w: local origin %q is outside the allowed root %q", ErrLocalOriginDenied, path, localOriginRoot)
 	}
 	return nil
 }

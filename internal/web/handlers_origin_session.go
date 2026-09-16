@@ -152,34 +152,6 @@ func handleDeleteSession(sm *SessionManager) http.HandlerFunc {
 	}
 }
 
-// heldByAnotherActiveRepo returns the NAME of an active repo other than
-// selfUID whose registered identity is repoID, or "" if none.
-//
-// One local copy per knowledge base: two repos backed by the same root commit
-// would both write agent/<host> and clobber each other on push to the shared
-// origin. Registry.RecordRepoID enforces that structurally, but by the time it
-// speaks in the connect flow the store has already been swapped — so the
-// connect flow asks this question BEFORE it acts, twice (see the call sites).
-//
-// selfUID is excluded: re-pointing a repo at the knowledge base it already
-// holds is not a duplicate.
-func heldByAnotherActiveRepo(rm *repos.Manager, selfUID, repoID string) (string, error) {
-	reg := rm.Repos()
-	if reg == nil {
-		return "", nil
-	}
-	active, err := reg.List(repos.StateActive)
-	if err != nil {
-		return "", fmt.Errorf("list registered repos: %w", err)
-	}
-	for _, rec := range active {
-		if rec.UID != selfUID && rec.RepoID == repoID {
-			return rec.Name, nil
-		}
-	}
-	return "", nil
-}
-
 // rootCommitOfDB opens the database at dbPath read-only, resolves the root
 // commit reachable from branch, and closes it again on every path.
 //
@@ -349,7 +321,7 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// (auth, clone) reports the same way. The session is moved to
 		// StateError so /apply and /commit refuse it outright.
 		if rootCommit, rcErr := remoteSvc.RootCommit(r.Context(), defaultBranch); rcErr == nil && rootCommit != "" {
-			holder, hErr := heldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
+			holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
 			if hErr != nil || holder != "" {
 				var msg string
 				if hErr != nil {
@@ -983,7 +955,7 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			swapBranch = agentBranch
 		}
 		if rootCommit, rcErr := rootCommitOfDB(r.Context(), tempDBPath, swapBranch); rcErr == nil && rootCommit != "" {
-			holder, hErr := heldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
+			holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
 			if hErr != nil {
 				sendEvent(map[string]string{"phase": "error", "message": hErr.Error()})
 				return
@@ -1133,7 +1105,7 @@ func (s *Server) commitSharedHistory(
 	// this first; re-check before touching anything, while refusing is still
 	// free — the transient clone is still open and nothing has been written.
 	if rootCommit := ri.ID(); rootCommit != "" {
-		holder, hErr := heldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
+		holder, hErr := repos.HeldByAnotherActiveRepo(rm, ri.UID(), rootCommit)
 		if hErr != nil {
 			sendEvent(map[string]string{"phase": "error", "message": hErr.Error()})
 			return

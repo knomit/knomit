@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/format/pktline"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/sideband"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
 
@@ -19,6 +22,16 @@ import (
 // It is a bandwidth/CPU knob, the same value go-git's own server uses; it
 // describes nothing about the repository being served.
 const packWindow = 10
+
+// packProgressWindow is how many packfile bytes pass between two band-2
+// progress lines.
+//
+// CLASSIFICATION (MN13): an OUTPUT-RATE knob, not a corpus property. It
+// measures nothing about any repository — it decides how chatty the sideband
+// is, and 1 MiB keeps a large transfer visibly moving without turning the
+// progress channel into a second bandwidth cost. A store small enough never to
+// reach it still gets the two lines that bracket every transfer.
+const packProgressWindow = 1 << 20
 
 // Handler returns an http.Handler implementing the read-only Smart HTTP git
 // protocol (https://git-scm.com/docs/http-protocol) for this store.
@@ -49,6 +62,10 @@ func (s *Service) Handler() http.Handler {
 func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 	sto := rh.gits
 	mux := http.NewServeMux()
+	// One cache per handler, shared by both endpoints: the advertisement is
+	// built on every request, and the first-parent walk to the root commit is
+	// the only part of it that is not a ref lookup.
+	roots := &rootCommitCache{}
 
 	mux.HandleFunc("/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
@@ -57,7 +74,7 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 			return
 		}
 
-		advRefs, _, err := buildAdvRefs(rh, upstream())
+		advRefs, _, err := buildAdvRefs(rh, upstream(), roots)
 		if errors.Is(err, errUpstreamMissing) {
 			// An unservable repo is refused HERE, in the advertisement, so no
 			// client ever gets far enough to "succeed" against it.
@@ -130,7 +147,7 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 		// git's own uploadpack.allowAnySHA1InWant=false default; a real client
 		// refuses such a want before sending it, so this answers the ones that
 		// speak the protocol directly.
-		_, tips, err := buildAdvRefs(rh, upstream())
+		_, tips, err := buildAdvRefs(rh, upstream(), roots)
 		if err != nil && !errors.Is(err, errUpstreamMissing) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -238,6 +255,26 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 			_ = enc.Encodef("%s\n", "NAK")
 		}
 
+		// SIDEBAND, only when the client asked for it. A request without
+		// side-band(-64k) gets the raw packfile appended to the ACK/NAK exactly
+		// as before — byte for byte — which is what keeps every client that
+		// predates this capability working unchanged.
+		//
+		// What the client sees when it DOES ask: real git prints band-2 lines
+		// prefixed "remote: ", and go-git writes them to FetchOptions.Progress.
+		// That is the whole point — a subscriber's create job has had no way to
+		// say anything at all between "cloning…" and "cloned".
+		packDst := io.Writer(w)
+		var band *sidebandPackWriter
+		if sbType, ok := requestedSideband(req.Capabilities); ok {
+			band = &sidebandPackWriter{
+				mux:    sideband.NewMuxer(sbType, w),
+				nextAt: packProgressWindow,
+			}
+			band.progressf("knomit: sending %d objects\n", len(objs))
+			packDst = band
+		}
+
 		pr, pw := io.Pipe()
 		go func() {
 			e := packfile.NewEncoder(pw, sto, false)
@@ -245,12 +282,65 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 			_ = pw.CloseWithError(err)
 		}()
 		defer pr.Close()
-		if _, err := io.Copy(w, pr); err != nil {
+		if _, err := io.Copy(packDst, pr); err != nil {
 			return
+		}
+		if band != nil {
+			band.progressf("knomit: done\n")
+			// The flush-pkt terminates a sideband stream. go-git's demuxer
+			// reads it as EOF on the pack channel and real git requires it;
+			// without sideband there is no pkt-line framing left to flush, and
+			// appending one there would corrupt the raw pack.
+			_ = enc.Flush()
 		}
 	})
 
 	return mux
+}
+
+// requestedSideband reports which sideband the client asked for, preferring
+// the 64k variant. The capability must be one the CLIENT sent: advertising
+// side-band-64k only offers it, and a client that ignored the offer expects
+// raw pack bytes.
+func requestedSideband(caps *capability.List) (sideband.Type, bool) {
+	switch {
+	case caps.Supports(capability.Sideband64k):
+		return sideband.Sideband64k, true
+	case caps.Supports(capability.Sideband):
+		return sideband.Sideband, true
+	default:
+		// sideband.Type is an int8 whose zero value IS Sideband, so the bool is
+		// the only answer here — never test the type against a zero value.
+		return sideband.Sideband, false
+	}
+}
+
+// sidebandPackWriter forwards packfile bytes onto sideband channel 1 and emits
+// a human-readable progress line on channel 2 every packProgressWindow bytes.
+//
+// Band-2 write errors are DROPPED on purpose. Progress is a courtesy; the pack
+// is the answer. A client that stopped reading progress (or a muxer that
+// refused a line) must not turn a transfer that is otherwise fine into a
+// failed fetch — and the band-1 write right next to it will report any error
+// that actually matters.
+type sidebandPackWriter struct {
+	mux     *sideband.Muxer
+	written int64
+	nextAt  int64
+}
+
+func (s *sidebandPackWriter) Write(p []byte) (int, error) {
+	n, err := s.mux.Write(p)
+	s.written += int64(n)
+	if s.written >= s.nextAt {
+		s.nextAt = s.written + packProgressWindow
+		s.progressf("knomit: sent %d MiB\n", s.written/packProgressWindow)
+	}
+	return n, err
+}
+
+func (s *sidebandPackWriter) progressf(format string, args ...any) {
+	_, _ = s.mux.WriteChannel(sideband.ProgressMessage, []byte(fmt.Sprintf(format, args...)))
 }
 
 // firstCommonHave returns the first "have" the storer already holds, marking
