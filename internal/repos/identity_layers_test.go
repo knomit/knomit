@@ -346,3 +346,42 @@ func mirrorOfOrigin(t *testing.T, f *identityFixture, name string, ahead bool) s
 	runGit(t, work, "push", "mirror", "main")
 	return "file://" + bare
 }
+
+// The wizard's BRANCH step learns it too. probe-initialized reuses the same
+// advertisement, so the user is told "already local, as <name>" before
+// pressing Create rather than only by the POST's 409.
+//
+// AlreadyLocal is ORTHOGONAL to Initialized: this remote IS a knowledge base
+// (initialized=yes) AND is already here, and collapsing the second answer into
+// the first would make every client that switches on `initialized` wrong.
+func TestProbeInitialized_ReportsAlreadyLocal(t *testing.T) {
+	f := newIdentityFixture(t)
+	ctx := context.Background()
+
+	res, err := f.m.ProbeInitializedOn(ctx, OriginSpec{URL: f.altURL}, "main")
+	require.NoError(t, err)
+	require.Equal(t, InitializedYes, res.Initialized, "the remote really is a knowledge base")
+	require.Equal(t, "kept", res.AlreadyLocal)
+}
+
+// And a remote holding a DIFFERENT knowledge base reports nothing there — the
+// discriminating counterpart, without which the assertion above is satisfied
+// by a field that is always set.
+func TestProbeInitialized_UnrelatedRemoteIsNotAlreadyLocal(t *testing.T) {
+	f := newIdentityFixture(t)
+	ctx := context.Background()
+
+	other, err := store.Open(filepath.Join(t.TempDir(), "other.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = other.Close() })
+	ont, err := fact.DefaultOntology().Serialize()
+	require.NoError(t, err)
+	require.NoError(t, other.InitRepo(map[string]string{OntologyPath: string(ont)}, "main"))
+	srv := httptest.NewServer(other.Handler())
+	t.Cleanup(srv.Close)
+
+	res, err := f.m.ProbeInitializedOn(ctx, OriginSpec{URL: srv.URL}, "main")
+	require.NoError(t, err)
+	require.Equal(t, InitializedYes, res.Initialized)
+	require.Empty(t, res.AlreadyLocal)
+}

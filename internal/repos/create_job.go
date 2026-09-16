@@ -185,9 +185,9 @@ type CreateJob struct {
 	indeterminate bool
 	indexState    string
 	ri            *RepoInstance
-	err        error
-	timedOut   bool
-	finishedAt time.Time
+	err           error
+	timedOut      bool
+	finishedAt    time.Time
 }
 
 // ID returns the job's identifier, minted at start. It is what a client holds
