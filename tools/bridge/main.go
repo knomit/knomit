@@ -49,6 +49,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -133,6 +134,32 @@ func selectMode(repo, lens string, repoSet, lensSet bool) bridgeMode {
 		// A flag was given but empty.
 		return modeInvalid
 	}
+}
+
+// baseURLArg validates the optional leading positional argument as the server
+// base URL, returning "" when there is none.
+//
+// This guard exists because session-bound mode made no-flags legal. Before it,
+// a mistyped subcommand still failed loudly: `knomit-bridge clade init` parsed
+// no --repo and the required-flag check exited. Now the same typo would be
+// accepted as a base URL and the proxy would dial http://clade/... forever.
+//
+// Go's flag package stops parsing at the FIRST non-flag argument, so
+// `clade init -repo x` never parses -repo at all: "clade", "init", "-repo" and
+// "x" all land in flag.Args(), flag.Visit reports neither flag as set, and the
+// mode selector picks session-bound. Rejecting a first positional that is not
+// an http/https URL is what turns that silent misconfiguration back into an
+// exit.
+func baseURLArg(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	raw := args[0]
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("unknown command or base-url %q (expected http:// or https://)", raw)
+	}
+	return strings.TrimRight(raw, "/"), nil
 }
 
 func main() {
@@ -225,8 +252,14 @@ func main() {
 	log.Info().Str("repo", *repo).Msg("bridge starting")
 
 	baseURL := "http://localhost:19278"
-	if flag.NArg() >= 1 {
-		baseURL = strings.TrimRight(flag.Arg(0), "/")
+	arg, argErr := baseURLArg(flag.Args())
+	if argErr != nil {
+		fmt.Fprintf(os.Stderr, "knomit-bridge: %v\n", argErr)
+		flag.Usage()
+		os.Exit(2)
+	}
+	if arg != "" {
+		baseURL = arg
 	} else if url, err := readLockfileBaseURL(); err == nil && url != "" {
 		baseURL = url
 		log.Debug().Str("base_url", baseURL).Msg("discovered base-url from lockfile")
