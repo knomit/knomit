@@ -150,8 +150,18 @@ func TestSessionBoundMCP_EndToEnd(t *testing.T) {
 	require.Equal(t, "", bindingOf(t, sessStore, sid),
 		"initialize must not stamp a binding on the newly minted session")
 
+	// knomit_catalog needs NO binding: it is how the agent learns the names
+	// knomit_bind accepts, so it must answer before anything is bound.
+	text, isErr := callTool(t, h, sid, "knomit_catalog", `{}`)
+	require.False(t, isErr, "knomit_catalog must work unbound: %s", text)
+	require.Contains(t, text, `"name": "alpha"`)
+	require.Contains(t, text, `"name": "followed"`)
+	require.Contains(t, text, `"mode": "subscribe"`)
+	require.NotContains(t, text, `"bound"`, "nothing is bound yet")
+	require.NotContains(t, text, "uid-", "registry uids must never be exposed")
+
 	// Unbound: every tool fails closed, naming the tool to call.
-	text, isErr := callTool(t, h, sid, "knomit_repos", `{}`)
+	text, isErr = callTool(t, h, sid, "knomit_repos", `{}`)
 	require.True(t, isErr, "knomit_repos must fail while unbound: %s", text)
 	require.Contains(t, text, "knomit_bind")
 

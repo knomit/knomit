@@ -125,6 +125,9 @@ func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []t
 		// Not a write tool: a read-only server still needs knomit_bind on
 		// the unscoped mount, or nothing there could ever be read either.
 		{bindTool(), BindHandler(mgr), false},
+		// Also not a write tool, and needs no binding: it is how an agent on
+		// the unscoped mount learns the names knomit_bind accepts.
+		{catalogTool(), CatalogHandler(mgr), false},
 	}
 }
 
