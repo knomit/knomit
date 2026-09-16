@@ -58,7 +58,7 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 		server.WithTaskCapabilities(true, true, true),
 	)
 
-	for _, t := range enabledTools(toolRegistrations(embedders...), readOnly) {
+	for _, t := range enabledTools(toolRegistrations(mgr, embedders...), readOnly) {
 		s.AddTool(t.tool, t.handler)
 	}
 
@@ -99,7 +99,7 @@ type toolReg struct {
 }
 
 // toolRegistrations is the full catalog in registration order.
-func toolRegistrations(embedders ...store.BatchEmbedder) []toolReg {
+func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []toolReg {
 	return []toolReg{
 		{learnTool(), LearnHandler(embedders...), true},
 		{queryTool(), QueryHandler(embedders...), false},
@@ -109,6 +109,9 @@ func toolRegistrations(embedders ...store.BatchEmbedder) []toolReg {
 		{hypothesizeTool(), HypothesizeHandler(), true},
 		{reviewTool(), ReviewHandler(), true},
 		{reposTool(), ReposHandler(), false},
+		// Not a write tool: a read-only server still needs knomit_bind on
+		// the unscoped mount, or nothing there could ever be read either.
+		{bindTool(), BindHandler(mgr), false},
 	}
 }
 
