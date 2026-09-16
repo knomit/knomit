@@ -280,7 +280,7 @@ func listLenses(mgr *repos.Manager) []reposLens {
 	if reg == nil {
 		// Same conflation as a failed List: "the registry never started" must
 		// not reach the agent as "this server has no lenses".
-		log.Warn().Msg("knomit_catalog: lens registry not started")
+		log.Warn().Msg("knomit_repos: lens registry not started")
 		return nil
 	}
 	lenses, err := reg.List()
@@ -289,7 +289,7 @@ func listLenses(mgr *repos.Manager) []reposLens {
 		// "this server has no lenses" from "the lookup broke", and would bind
 		// to a bare repo instead of the lens it needed with nothing recording
 		// why. Surfaced as an error by the caller.
-		log.Warn().Err(err).Msg("knomit_catalog: lens registry list failed")
+		log.Warn().Err(err).Msg("knomit_repos: lens registry list failed")
 		return nil
 	}
 	for _, l := range lenses {
