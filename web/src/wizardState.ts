@@ -465,8 +465,27 @@ export function authFor(s: WizardState): { auth_method: string; auth_token: stri
   return { auth_method: method, auth_token: token };
 }
 
+/**
+ * originURL is the URL the wizard SENDS, as opposed to the one it holds.
+ *
+ * The wizard already trimmed for every decision it made about the URL —
+ * transportFor, hostOf, repoNameFromURL and the probe key all call .trim() —
+ * and then sent state.url raw. So a URL pasted with a trailing space was
+ * classified as one address and requested as another: the spaces survive
+ * url.Parse on the server and arrive percent-encoded in the path, which came
+ * back as "repository not found: 404 page not found" against a URL the user
+ * could see was right.
+ *
+ * Every request object is built through this, so what the wizard sends is what
+ * it classified. The server trims too and is the durable fix; this is so the
+ * client stops asking the wrong question in the first place.
+ */
+export function originURL(s: Pick<WizardState, 'url'>): string {
+  return s.url.trim();
+}
+
 function originFor(s: WizardState): NonNullable<CreateRepoBody['origin']> {
-  return { url: s.url, branch: s.branch, ...authFor(s) };
+  return { url: originURL(s), branch: s.branch, ...authFor(s) };
 }
 
 /**
