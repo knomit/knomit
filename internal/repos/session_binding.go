@@ -83,7 +83,7 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 			return nil, &SessionBindingError{
 				Kind: BindingRepoUnavailable,
 				Err: fmt.Errorf("bound repo %q is not available (deleted, archived or failed to open) — call knomit_bind again",
-					m.repoLabel(uid)),
+					m.RepoLabel(uid)),
 			}
 		}
 		b = NewBindingOfRepo(ri, "")
@@ -119,7 +119,7 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 }
 
 // lensLabel resolves a lens uid to its NAME for an error message, falling back
-// to the uid when nothing knows it — the counterpart of Manager.repoLabel, so
+// to the uid when nothing knows it — the counterpart of Manager.RepoLabel, so
 // both halves of a stored pin fail with a name the reader has actually seen.
 //
 // It scans List() because the uid lookup is what just failed: a registry error

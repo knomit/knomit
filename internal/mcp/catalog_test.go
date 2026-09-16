@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
@@ -165,8 +167,15 @@ func TestCatalog_UnavailableRepoListed(t *testing.T) {
 	require.NotContains(t, string(raw), uid, "the registry uid must not leak as a fallback id")
 }
 
-// The catalogue is a cheap index: it must not touch any repo's store, so a
-// closed store cannot make it fail.
+// The catalogue is a cheap index: the fields it reports come from memory and
+// the control-plane registry, so a repo whose STORE is dead is still listed
+// with its name, mode, branches, ontology root and profile intact.
+//
+// Asserting only len(repos)==3 would be self-deceiving: it passes precisely
+// BECAUSE a failed id read is swallowed, so it would keep passing if someone
+// added a genuine per-repo store read whose failure is also swallowed. These
+// assertions name the fields that must survive, and check the OTHER repos still
+// carry ids so a blanket id failure cannot masquerade as success.
 func TestCatalog_NoPerRepoStoreRead(t *testing.T) {
 	m, _, _ := bindFixture(t)
 	ri := m.Get("alpha")
@@ -174,9 +183,164 @@ func TestCatalog_NoPerRepoStoreRead(t *testing.T) {
 	svc, release, err := ri.Acquire()
 	require.NoError(t, err)
 	release()
-	require.NoError(t, svc.Close()) // a README read would now fail
+	require.NoError(t, svc.Close()) // any per-repo store read would now fail
 
 	out := catalogOf(t, m, context.Background())
 	reposList, _ := out["repos"].([]any)
 	require.Len(t, reposList, 3, "listing must not depend on any repo's store")
+
+	byName := map[string]map[string]any{}
+	for _, r := range reposList {
+		row := r.(map[string]any)
+		byName[row["name"].(string)] = row
+	}
+
+	// The dead-store repo keeps every memory- and registry-resident field.
+	alpha := byName["alpha"]
+	require.Equal(t, "writable", alpha["mode"])
+	require.Equal(t, "agent/test", alpha["agent_branch"])
+	require.Equal(t, "agent/test", alpha["read_branch"])
+	require.Equal(t, "kb", alpha["ontology_root"])
+	require.Equal(t, "code", alpha["profile"], "profile comes from control.db, not the repo store")
+
+	// And the repos whose stores are still open keep their ids, so this test
+	// cannot pass by everything failing at once.
+	for _, name := range []string{"beta", "followed"} {
+		id, _ := byName[name]["id"].(string)
+		require.Len(t, id, 12, "%s should still carry its 12-hex id", name)
+	}
+}
+
+// REGRESSION, and the reason the callback only snapshots: ForEach holds
+// m.mu.RLock for the whole iteration, so any mgr call inside it takes m.mu a
+// second time. sync.RWMutex is not reentrant and Go blocks new readers once a
+// writer is pending, so a concurrent write wedges the Manager permanently —
+// from an unauthenticated, binding-free tool call.
+//
+// This drives knomit_catalog while another goroutine repeatedly takes the
+// manager's WRITE lock, and fails on a timeout rather than hanging the suite.
+func TestCatalog_NoDeadlockUnderConcurrentWriter(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	// Two REAL instances: the point is write-lock contention, not the nil-entry
+	// quirk of Set(name, nil), which no production path uses.
+	spareA := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "churn", UID: "uid-churn-a", AgentBranch: "agent/test", OntologyRoot: "kb",
+	})
+	spareB := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "churn", UID: "uid-churn-b", AgentBranch: "agent/test", OntologyRoot: "kb",
+	})
+
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				m.Set("churn", spareA) // takes m.mu.Lock
+				m.Set("churn", spareB)
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop) })
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			res, err := CatalogHandler(m)(context.Background(), mcpgo.CallToolRequest{})
+			require.NoError(t, err)
+			require.NotNil(t, res)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("knomit_catalog deadlocked against a concurrent manager writer")
+	}
+}
+
+// Structural guard on the same property: a future edit that reaches for mgr
+// inside the ForEach callback reintroduces the deadlock, and no ordinary test
+// would catch it because it only fires under a concurrent writer.
+func TestCatalog_ForEachCallbackTouchesNoManager(t *testing.T) {
+	src, err := os.ReadFile("catalog.go")
+	require.NoError(t, err)
+	body := string(src)
+	start := strings.Index(body, "mgr.ForEach(func(")
+	require.Positive(t, start, "ForEach call not found — did catalogRepos change shape?")
+	end := strings.Index(body[start:], "\n\t})")
+	require.Positive(t, end, "could not find the end of the ForEach callback")
+	callback := body[start+len("mgr.ForEach(func(") : start+end]
+	// Check for `mgr` in ANY form, not just `mgr.` — the original defect was
+	// profileFor(mgr, ri), which passes the manager to a helper that takes
+	// m.mu. A `mgr.`-only check passes that mutation and is worse than no test,
+	// because it looks like coverage.
+	require.NotContains(t, callback, "mgr",
+		"the ForEach callback must not use mgr at all, directly or as an argument: m.mu is not reentrant")
+}
+
+// A lens member with no LIVE INSTANCE is still named from its registry row —
+// Manager.RepoLabel — not shown as a bare uid. The uid fallback applies only
+// when the registry has no row for it either, which is why the other tests can
+// assert no "uid-" appears: every member in those fixtures has a registry row.
+//
+// The member is registered but never instantiated, which is the real shape of
+// this case (a repo whose store failed to open). Note it is built through the
+// LensRegistry directly: Manager.CreateLens validates that members resolve, so
+// it would refuse this lens by design.
+func TestCatalog_LensMemberWithoutInstanceUsesRegistryName(t *testing.T) {
+	m, _, _ := bindFixture(t)
+	require.NoError(t, m.Repos().Insert(repos.RepoRecord{
+		UID: "uid-ghost", Name: "ghost", State: repos.StateActive,
+		Profile: "code", CreatedAt: 1,
+	}))
+	_, err := m.LensRegistry().Create(repos.Lens{
+		Name: "haunted", WriteUID: "uid-alpha",
+		Reads:     []repos.LensRead{{RepoUID: "uid-ghost"}},
+		CreatedAt: 1, UpdatedAt: 1,
+	})
+	require.NoError(t, err)
+
+	out := catalogOf(t, m, context.Background())
+
+	lenses, _ := out["lenses"].([]any)
+	var haunted map[string]any
+	for _, l := range lenses {
+		if l.(map[string]any)["name"] == "haunted" {
+			haunted = l.(map[string]any)
+		}
+	}
+	require.NotNil(t, haunted)
+	mounts, _ := haunted["mounts"].([]any)
+
+	var ghost map[string]any
+	for _, mt := range mounts {
+		if mt.(map[string]any)["repo"] == "ghost" {
+			ghost = mt.(map[string]any)
+		}
+	}
+	require.NotNil(t, ghost, "the member must be named from the registry, not shown as a uid")
+	require.Equal(t, true, ghost["unavailable"])
+	require.NotContains(t, ghost, "branch", "no live instance means no resolved branch")
+}
+
+// A lens registry that is unavailable must NOT render as "lenses": [] — an
+// agent would read that as "this server has no lenses" and bind to a bare repo
+// instead of the lens it needed, with nothing recording why.
+//
+// This exercises the not-started path (a Manager that was never Start()ed).
+// The sibling path — List() itself failing — takes the same branch, but cannot
+// be induced from here: the Manager-owned LensRegistry shares the control.db
+// handle, so its Close() is a no-op (owns == false) and the query keeps working.
+func TestCatalog_LensRegistryUnavailableIsAnError(t *testing.T) {
+	m := repos.New(context.Background(), repos.Deps{})
+	t.Cleanup(func() { _ = m.Close() })
+	require.Nil(t, m.LensRegistry(), "an unstarted manager has no lens registry")
+
+	res, err := CatalogHandler(m)(context.Background(), mcpgo.CallToolRequest{})
+	require.NoError(t, err)
+	require.True(t, res.IsError, "an unavailable registry must not look like an empty one")
+	require.Contains(t, resultText(t, res), "lens registry")
 }

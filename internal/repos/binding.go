@@ -181,13 +181,13 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 	write := m.GetByUID(l.WriteUID)
 	if write == nil {
-		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.repoLabel(l.WriteUID))
+		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.RepoLabel(l.WriteUID))
 	}
 	reads := make([]ReadTarget, 0, len(l.Reads))
 	for _, lr := range l.Reads {
 		ri := m.GetByUID(lr.RepoUID)
 		if ri == nil {
-			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.repoLabel(lr.RepoUID))
+			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.RepoLabel(lr.RepoUID))
 		}
 		// Empty read pins default to each member's own READ branch at resolve
 		// time — the agent branch, or the upstream for a subscription.
@@ -302,11 +302,20 @@ func BindingPinFromContext(ctx context.Context) string {
 	return ""
 }
 
-// repoLabel resolves a registry uid to the repo NAME for an error message,
-// falling back to the uid when nothing knows it. A member that has no live
-// instance still has a registry row, so the name is almost always available —
-// and a bare ksuid names nothing the reader has ever been shown.
-func (m *Manager) repoLabel(uid string) string {
+// RepoLabel resolves a registry uid to its display NAME for messages, falling
+// back to the uid when nothing knows it. A member that has no live instance
+// still has a registry row, so the name is almost always available — and a bare
+// ksuid names nothing the reader has ever been shown.
+//
+// Exported because internal/mcp needs the same resolution when listing a lens
+// member that has no live instance (knomit_catalog), and a second copy of five
+// lines in another package would be free to drift from this one.
+//
+// LOCKING: takes m.mu (via Repos). NEVER call it from inside a ForEach callback
+// or any code path already holding m.mu — sync.RWMutex is not reentrant, and a
+// pending writer between the two acquisitions deadlocks the Manager. Same rule
+// as validateLensLocked above.
+func (m *Manager) RepoLabel(uid string) string {
 	reg := m.Repos()
 	if reg == nil || uid == "" {
 		return uid
