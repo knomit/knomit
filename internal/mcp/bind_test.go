@@ -101,6 +101,10 @@ func TestBind_RepoWritable(t *testing.T) {
 
 	text := resultText(t, res)
 	require.Contains(t, text, `"role": "read+write"`)
+	// knomit_bind returns the mount table it just made, NOT the whole
+	// catalogue: the agent asked to bind, not to browse.
+	require.NotContains(t, text, `"repos":`)
+	require.NotContains(t, text, `"lenses":`)
 	require.Contains(t, text, `"write_branch": "agent/test"`)
 	require.Contains(t, text, "## Ontology Structure", "the bound base's instructions ride back")
 

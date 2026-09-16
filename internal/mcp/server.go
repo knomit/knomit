@@ -121,13 +121,11 @@ func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []t
 		{retractTool(), RetractHandler(), true},
 		{hypothesizeTool(), HypothesizeHandler(), true},
 		{reviewTool(), ReviewHandler(), true},
-		{reposTool(), ReposHandler(), false},
-		// Not a write tool: a read-only server still needs knomit_bind on
-		// the unscoped mount, or nothing there could ever be read either.
+		// Neither is a write tool, and knomit_repos needs no binding: a
+		// read-only server still needs both, or nothing on the unscoped mount
+		// could be discovered, bound, and therefore read.
+		{reposTool(), ReposHandler(mgr), false},
 		{bindTool(), BindHandler(mgr), false},
-		// Also not a write tool, and needs no binding: it is how an agent on
-		// the unscoped mount learns the names knomit_bind accepts.
-		{catalogTool(), CatalogHandler(mgr), false},
 	}
 }
 

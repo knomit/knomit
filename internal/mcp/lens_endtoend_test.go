@@ -503,10 +503,13 @@ func TestLensE2E_ReposMountsMatchQualifiedIDs(t *testing.T) {
 	seedFedFact(t, ctxB, "seed-b", "mission/ui", "Bravo", "ui", nil)
 
 	// Discover mounts through the lens.
-	result, text := viaLens(t, m, lens, ReposHandler(), map[string]any{})
+	result, text := viaLens(t, m, lens, ReposHandler(m), map[string]any{})
 	require.Falsef(t, result.IsError, "repos failed: %s", text)
-	var mounts reposResponse
-	require.NoError(t, json.Unmarshal([]byte(text), &mounts))
+	// The mount table lives under `bound` since knomit_catalog was folded in.
+	var envelope reposResponse
+	require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+	require.NotNil(t, envelope.Bound, "a lens-scoped call is bound: %s", text)
+	mounts := envelope.Bound
 	require.Equal(t, "eng", mounts.Binding)
 	require.Len(t, mounts.Mounts, 2, "both mounts must be listed: %s", text)
 
