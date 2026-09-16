@@ -43,7 +43,10 @@ type reposResponse struct {
 // the binding's mounts and never touches a store.
 func ReposHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-		b := repos.BindingFromContext(ctx)
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		resp := reposResponse{Binding: b.Name(), Mounts: []reposMount{}}
 		for _, rt := range b.Reads() {
 			role := "read"

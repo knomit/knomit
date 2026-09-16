@@ -41,6 +41,9 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 		_, ok := repos.RepoFromContextOpt(ctx)
 		if !ok {
 			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil)
+			if repos.SessionScoped(ctx) {
+				result.Instructions += unboundAddendum
+			}
 			return
 		}
 		b := repos.BindingFromContext(ctx) // safe: ri present ⇒ never panics
