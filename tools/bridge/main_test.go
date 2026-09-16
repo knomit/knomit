@@ -62,3 +62,12 @@ func TestMcpURL_LensTakesPrecedence(t *testing.T) {
 		t.Errorf("mcpURL lens precedence = %q, want %q", got, want)
 	}
 }
+
+// With neither flag the bridge connects to the unscoped mount: the agent
+// picks its repo or lens later with knomit_bind.
+func TestMcpURL_UnscopedMode(t *testing.T) {
+	got := mcpURL("http://h:1", "", "", "")
+	if want := "http://h:1/api/v1/mcp"; got != want {
+		t.Errorf("mcpURL unscoped mode = %q, want %q", got, want)
+	}
+}

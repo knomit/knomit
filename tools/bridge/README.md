@@ -69,14 +69,21 @@ the session goes dead by silence instead. There is no reconnect and no retry.
 Without a command, `knomit-bridge` runs as the MCP stdio↔HTTP proxy:
 
 ```
-knomit-bridge [--repo <name>] [--log <path>] [base-url]
+knomit-bridge [--repo <name> | --lens <name>] [--log <path>] [base-url]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--repo` | `core` | Repository name |
+| `--repo` | none | Repository name; connects to `/api/v1/repos/<repo>/branches/<branch>/mcp` |
+| `--lens` | none | Lens name; connects to `/api/v1/lenses/<lens>/mcp` (mutually exclusive with `--repo`) |
+| *(neither)* | — | Connects to the session-bound mount `/api/v1/mcp`; the agent binds with `knomit_bind` |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
 | `base-url` | `http://localhost:19278` | Base URL of the knomit server |
+
+With neither flag the bridge connects to `/api/v1/mcp`; the agent binds a repo
+or lens with `knomit_bind` and may switch later. Until it does, every other
+tool fails. A bound subscription (a read-only follower of a remote branch)
+serves reads at the branch it follows and refuses writes.
 
 Flags accept both `-flag value` and `--flag value` styles.
 

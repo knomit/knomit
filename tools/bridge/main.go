@@ -8,6 +8,10 @@
 //
 //	/api/v1/repos/{repo}/branches/{branch}/mcp
 //
+// or, with neither --repo nor --lens, the session-bound mount:
+//
+//	/api/v1/mcp
+//
 // knomit-bridge discovers the agent branch automatically by querying
 // GET /api/v1/repos/{repo} and reading the agent_branch field.
 //
@@ -15,9 +19,12 @@
 //
 //	knomit-bridge --repo <name> [base-url]
 //	knomit-bridge --lens <name> [base-url]
+//	knomit-bridge [base-url]
 //	knomit-bridge --repo work http://myhost:8080
 //
-// Exactly one of --repo / --lens is required — knomit has no default repo.
+// --repo and --lens are mutually exclusive. With neither, the bridge connects
+// to the unscoped mount /api/v1/mcp and the agent binds a repo or lens by
+// calling knomit_bind; knomit has no default repo either way.
 // The base-url defaults to http://localhost:19278.
 //
 // Claude Desktop config:
@@ -122,8 +129,9 @@ func main() {
 	os.Args = append([]string{os.Args[0]}, args...)
 
 	// No default: knomit serves no privileged repo, so the bridge cannot guess
-	// which one to proxy. Exactly one of --repo / --lens must be given.
-	repo := flag.String("repo", "", "repository name (required unless --lens)")
+	// which one to proxy. Give --repo, or --lens, or neither — with neither the
+	// bridge connects to the unscoped mount and the agent binds per session.
+	repo := flag.String("repo", "", "repository name (omit both --repo and --lens to bind per session via knomit_bind)")
 	lens := flag.String("lens", "", "lens name; connects to /api/v1/lenses/<lens>/mcp (mutually exclusive with --repo)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
@@ -144,6 +152,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -lens eng\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge                            (session-bound: the agent calls knomit_bind)\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work http://myhost:8080\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook post-edit\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
@@ -168,12 +177,6 @@ func main() {
 	if msg := lensConflict(*lens, repoSet); msg != "" {
 		log.Fatal().Msg(msg)
 	}
-	if *lens == "" && *repo == "" {
-		fmt.Fprintf(os.Stderr, "knomit-bridge: one of --repo or --lens is required\n")
-		flag.Usage()
-		os.Exit(2)
-	}
-
 	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: %s (pid=%d)\n", logPath, os.Getpid())
 	log.Info().Str("repo", *repo).Msg("bridge starting")
 
@@ -190,7 +193,13 @@ func main() {
 	// branch is also what the bridge declares about itself; it stays empty in
 	// lens mode, where the branch is resolved per mount server-side.
 	var branch string
-	if *lens != "" {
+	if *lens == "" && *repo == "" {
+		// Session-bound mode: nothing to discover. The mount is unscoped and
+		// the agent binds a repo or lens by calling knomit_bind; until it
+		// does, every other tool fails.
+		serverURL = mcpURL(baseURL, "", "", "")
+		log.Info().Str("url", serverURL).Msg("bridge configured (session-bound; call knomit_bind)")
+	} else if *lens != "" {
 		// Lens mode: skip branch discovery entirely. A lens resolves each
 		// mount's branch server-side via LensMiddleware, so the bridge just
 		// connects to the lens endpoint (no branch).
@@ -470,6 +479,11 @@ func truncate(s string, n int) string {
 // A lens has no branch segment — LensMiddleware resolves each mount's branch
 // server-side.
 func mcpURL(baseURL, repo, lens, encodedBranch string) string {
+	// Neither set: the session-bound mount. The agent chooses its repo or lens
+	// with knomit_bind, so the URL names none.
+	if repo == "" && lens == "" {
+		return baseURL + "/api/v1/mcp"
+	}
 	if lens != "" {
 		return fmt.Sprintf("%s/api/v1/lenses/%s/mcp", baseURL, lens)
 	}
