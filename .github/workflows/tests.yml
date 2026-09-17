@@ -55,11 +55,20 @@ name: Tests
 # the next one.
 #
 # WHAT THE RUNNER DOES NOT GIVE US, and this file supplies:
+#   - sqlite3.h. sqlite-vec-go-bindings/cgo includes it and ships no copy;
+#     ubuntu has it from libsqlite3-dev and macos from the SDK, and C:\mingw64
+#     has it from nowhere. The action installs MSYS2's
+#     mingw-w64-x86_64-sqlite3. This was an UNDECLARED requirement until this
+#     job's first run died on it: #212's Windows build worked because that one
+#     machine happened to carry the package. The Makefile's setup target and
+#     README now say so too.
 #   - A cache for dist/windows-amd64/lib. daulet/tokenizers publishes no
 #     Windows artifact (darwin/linux only through v1.27.0), so fetchlibs BUILDS
-#     libtokenizers.a from source there — clone the pinned tag, run cargo, ~5
-#     minutes — before a single test executes. See .github/actions/
-#     native-toolchain, which also explains why the key has no restore-keys.
+#     libtokenizers.a from source there — clone the pinned tag, run cargo —
+#     before a single test executes. Measured: the whole Windows bootstrap is
+#     ~2m40s cold, and the cache entry it leaves is 15.6 MiB. See
+#     .github/actions/native-toolchain, which also explains why the key has no
+#     restore-keys.
 #   - `-timeout 40m`, on the WINDOWS slow-tests legs only — ubuntu and macos
 #     take 10m from the same matrix. On Windows internal/synthesize
 #     (1776s) and internal/store (816s) exceed go test's 10-minute per-package

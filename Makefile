@@ -246,6 +246,21 @@ define dist_runtime_libs
 endef
 endif
 
+# PREREQUISITES THIS TARGET DOES NOT FETCH, because they belong to the C
+# toolchain rather than to us:
+#
+#   sqlite3.h — github.com/asg017/sqlite-vec-go-bindings/cgo includes it and
+#   ships no copy, so the CGo build needs the SQLite development HEADER on
+#   every platform: libsqlite3-dev on Debian/Ubuntu, the SDK on macOS, and on
+#   Windows the MSYS2 package mingw-w64-x86_64-sqlite3 (C:\msys64\mingw64\
+#   include). The header only — mattn/go-sqlite3's vendored amalgamation is
+#   what actually implements it, so nothing links against a system libsqlite3.
+#   This went unwritten until a Windows CI runner without the MSYS2 package
+#   failed on it; "it builds here" had been carrying an undeclared dependency.
+#
+#   Windows also needs Rust/cargo and `rustup target add
+#   x86_64-pc-windows-gnu`, because fetchlibs builds libtokenizers.a from
+#   source there. fetchlibs says so itself when either is missing.
 setup:
 	go run ./tools/fetchlibs $(LIBDIR)
 	@echo "Setup complete. Run 'make run' to start the server."

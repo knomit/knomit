@@ -18,8 +18,11 @@ reference are under [knomit.io/docs](https://knomit.io/docs).**
 ## Quick start
 
 Requires **Go 1.24+**, **Node.js + npm**, the **Git CLI**, and a **C compiler**
-(the build is CGO-based). See [the docs](https://knomit.io/docs) for the full
-prerequisites and platform notes.
+(the build is CGO-based) with the **SQLite development header** on its include
+path — `sqlite3.h`, from `libsqlite3-dev` on Debian/Ubuntu, the SDK on macOS,
+or `mingw-w64-x86_64-sqlite3` on Windows/MSYS2. See
+[the docs](https://knomit.io/docs) for the full prerequisites and platform
+notes.
 
 ```sh
 git clone https://github.com/knomit/knomit.git

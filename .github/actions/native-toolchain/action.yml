@@ -87,6 +87,52 @@ runs:
         rustup show active-toolchain 2>/dev/null || true
         echo "autocrlf: $(git config --get core.autocrlf || echo '(unset)')"
 
+    # sqlite3.h — the Windows build requirement nobody had written down, found
+    # by this job's first run.
+    #
+    # github.com/asg017/sqlite-vec-go-bindings/cgo does `#include "sqlite3.h"`
+    # and carries no header of its own. ubuntu resolves that from
+    # libsqlite3-dev, macos from the SDK, and the machine that verified #212 by
+    # hand resolved it from MSYS2's mingw-w64-x86_64-sqlite3 package — which no
+    # Makefile, doc or source comment in this repo mentions. C:\mingw64, the
+    # image's toolchain, ships no sqlite3.h at all, so the very first Windows
+    # CI build died on a missing header. That is this PR's own argument landing
+    # on this PR: a requirement that lives only on one developer's machine is a
+    # requirement nobody can reproduce.
+    #
+    # The header ONLY. mattn/go-sqlite3's vendored amalgamation is still what
+    # provides the implementation, on Windows exactly as on the other two — the
+    # split between a system header and a vendored implementation is the
+    # existing arrangement, not something introduced here, and nothing links
+    # against MSYS2's libsqlite3.
+    #
+    # CGO_CPPFLAGS rather than CGO_CFLAGS: CFLAGS has a meaningful default
+    # (-O2 -g) that setting it here would silently drop. CPPFLAGS is empty by
+    # default and reaches every cgo compile.
+    #
+    # Invoked through MSYS2's own login bash rather than calling pacman.exe
+    # from this one: two MSYS runtimes on one PATH is the kind of mixing this
+    # action avoids everywhere else.
+    - name: sqlite3 development header (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        hdr=/c/msys64/mingw64/include/sqlite3.h
+        if [ ! -f "$hdr" ]; then
+          C:/msys64/usr/bin/bash -lc \
+            'pacman -Sy --noconfirm --needed mingw-w64-x86_64-sqlite3'
+        fi
+        if [ ! -f "$hdr" ]; then
+          echo "::error::sqlite3.h is still missing after installing mingw-w64-x86_64-sqlite3"
+          echo "sqlite-vec-go-bindings/cgo includes it and ships no copy. If MSYS2 moved," >&2
+          echo "the alternatives are the sqlite.org amalgamation header or a toolchain that" >&2
+          echo "bundles one." >&2
+          exit 1
+        fi
+        grep -m1 '#define SQLITE_VERSION ' "$hdr" || true
+        echo "CGO_CPPFLAGS=-IC:/msys64/mingw64/include" >> "$GITHUB_ENV"
+
     # Informational, and deliberately NOT a failure. onnxruntime >= 1.21 needs
     # the VC++ 2015-2022 runtime >= 14.40, or its DLL refuses to initialise
     # with nothing but "a dynamic link library (DLL) initialization routine
