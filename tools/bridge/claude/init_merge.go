@@ -267,13 +267,39 @@ func insertElement(data []byte, span jsonSpan, value []byte) ([]byte, error) {
 
 // replaceValue swaps a container's bytes for a freshly rendered value, keeping
 // its surroundings untouched.
+//
+// A value the file kept on ONE line comes back on one line. Reflowing it is the
+// same formatting churn this file exists to avoid, merely confined to the region
+// init is allowed to rewrite — and `"args": ["--lens", "eng"]` becoming three
+// lines is a diff the user did not ask for.
 func replaceValue(data []byte, span jsonSpan, value []byte) ([]byte, error) {
+	if !bytes.ContainsRune(data[span.open:span.close+1], '\n') {
+		rendered, err := oneLine(value)
+		if err != nil {
+			return nil, err
+		}
+		return splice(data, span.open, span.close+1, rendered), nil
+	}
 	unit := indentUnit(data)
 	rendered, err := reindent(value, lineIndent(data, span.open), unit)
 	if err != nil {
 		return nil, err
 	}
 	return splice(data, span.open, span.close+1, rendered), nil
+}
+
+// oneLine renders a value on a single line, keeping the source spelling when the
+// source already is one line — the templates write `["--lens", "eng"]`, and
+// json.Compact would strip the space after the comma for no reason.
+func oneLine(value []byte) (string, error) {
+	if !bytes.ContainsRune(value, '\n') {
+		return string(bytes.TrimSpace(value)), nil
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, value); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 func splice(data []byte, from, to int, text string) []byte {
@@ -420,6 +446,14 @@ func insertHookEntry(data []byte, root *jsonNode, event string, entry json.RawMe
 // mergeMcpJSON brings the entry under the derived server key up to date, adding
 // it if the project has no knomit entry at all.
 //
+// An existing entry is split into the half init owns and the half the user owns.
+// `args` carry the SCOPE, which init derived, so init refreshes them. `command`
+// is DEPLOYMENT-specific and stays exactly as written: knomit-bridge is
+// deliberately never on $PATH outside the macOS .app, so a checkout pointing at
+// its own build (`${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge`) does so on
+// purpose, and resetting it to the bare name silently stops the MCP server
+// loading. Every other key the user set is preserved for the same reason.
+//
 // conflict is true for the one case a merge cannot decide: a knomit-bridge entry
 // under a DIFFERENT key. Adding ours beside it would leave the project with two
 // knomit scopes, which is not a merge artefact but a configuration that disables
@@ -456,11 +490,27 @@ func mergeMcpJSON(existing, template []byte, key string) (merged []byte, note st
 		if !entry.span.container() {
 			return nil, "", true, nil
 		}
-		if sameJSON(existing[entry.span.open:entry.span.close+1], value) {
+		tmplArgs := tmplEntry.child("args")
+		if tmplArgs == nil || !tmplArgs.span.container() {
+			return nil, "", false, fmt.Errorf("mcp template entry %q has no args array", key)
+		}
+		args := template[tmplArgs.span.open : tmplArgs.span.close+1]
+
+		existingArgs := entry.child("args")
+		if existingArgs == nil {
+			merged, err := insertMember(existing, entry.span, "args", args)
+			return merged, "(" + key + " args)", false, err
+		}
+		if !existingArgs.span.container() {
+			return nil, "", true, nil
+		}
+		if sameJSON(existing[existingArgs.span.open:existingArgs.span.close+1], args) {
+			// Already naming the right scope. Rewriting it would churn the file
+			// and report work that was not done.
 			return existing, "", false, nil
 		}
-		merged, err := replaceValue(existing, entry.span, value)
-		return merged, "(" + key + ")", false, err
+		merged, err := replaceValue(existing, existingArgs.span, args)
+		return merged, "(" + key + " args)", false, err
 	}
 
 	// A knomit-bridge entry under another key is the two-scopes case.

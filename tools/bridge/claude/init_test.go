@@ -1174,6 +1174,141 @@ func TestRunInit_ExistingMcpJson_SameKey_UpdatedInPlace(t *testing.T) {
 	assertReInitChangesNothing(t, dir, "--repo", "x")
 }
 
+// TestRunInit_ExistingMcpJson_SameKey_PreservesCommandAndExtraKeys splits the
+// entry under our own key into the half init owns and the half the user owns.
+// `args` are derived from the scope, so init refreshes them. `command` is
+// DEPLOYMENT-specific: knomit-bridge is never on $PATH outside the macOS .app,
+// so a checkout that points at its own build does so deliberately, and a refresh
+// that resets it to the bare name silently stops the MCP server loading. Any
+// other key the user added is theirs for the same reason.
+func TestRunInit_ExistingMcpJson_SameKey_PreservesCommandAndExtraKeys(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	key := knomitapi.ServerKey("x", "")
+	mcpPath := filepath.Join(dir, ".mcp.json")
+	existing := fmt.Sprintf(`{
+  "mcpServers": {
+    %q: {
+      "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge",
+      "args": ["--repo", "stale"],
+      "env": { "KNOMIT_MCP_DEBUG": "1" }
+    }
+  }
+}
+`, key)
+	writeFixture(t, mcpPath, existing)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	got := mustRead(t, mcpPath)
+	cfg := parseMcpServers(t, got)
+	if want := []string{"--repo", "x"}; !reflect.DeepEqual(cfg[key].Args, want) {
+		t.Errorf("args = %v, want %v — the scope was not refreshed", cfg[key].Args, want)
+	}
+	// The user's half must survive verbatim, not merely equivalently.
+	for _, want := range []string{
+		`"command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge"`,
+		`"env": { "KNOMIT_MCP_DEBUG": "1" }`,
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("merge did not preserve %s byte-for-byte; got:\n%s", want, got)
+		}
+	}
+	// Only args moved, so only args' bytes may differ.
+	assertSingleInsertion(t, []byte(strings.Replace(existing, `["--repo", "stale"]`, "", 1)),
+		[]byte(strings.Replace(string(got), string(argsBytes(t, got, key)), "", 1)), ".mcp.json")
+	assertNoCompanion(t, dir, ".mcp.json")
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// argsBytes returns the literal `args` value text for a server key, so a test
+// can subtract the one region init is allowed to have rewritten.
+func argsBytes(t *testing.T, data []byte, key string) []byte {
+	t.Helper()
+	root, err := indexJSON(data)
+	if err != nil {
+		t.Fatalf("index .mcp.json: %v", err)
+	}
+	args := root.child("mcpServers").child(key).child("args")
+	if args == nil || !args.span.container() {
+		t.Fatalf("no args array under %q", key)
+	}
+	return data[args.span.open : args.span.close+1]
+}
+
+// TestRunInit_ExistingMcpJson_SameKey_KeepsArgsOnOneLine: replacing a value must
+// not reflow it. A project that writes `"args": ["--lens", "eng"]` on one line
+// gets it back on one line — expanding it to three is the same formatting churn
+// this merge exists to avoid, just confined to the one region init may rewrite.
+func TestRunInit_ExistingMcpJson_SameKey_KeepsArgsOnOneLine(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	key := knomitapi.ServerKey("", "eng")
+	mcpPath := filepath.Join(dir, ".mcp.json")
+	writeFixture(t, mcpPath, fmt.Sprintf(`{
+  "mcpServers": {
+    %q: {
+      "command": "knomit-bridge",
+      "args": ["--lens", "stale-scope"]
+    }
+  }
+}
+`, key))
+
+	if err := runInit([]string{"--lens", "eng"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	got := string(mustRead(t, mcpPath))
+	if !strings.Contains(got, `"args": ["--lens", "eng"]`) {
+		t.Errorf("a one-line args array was reflowed; got:\n%s", got)
+	}
+	if n := strings.Count(got, "\n"); n != 8 {
+		t.Errorf("file has %d newlines, want 8 — the merge changed the line structure:\n%s", n, got)
+	}
+	assertReInitChangesNothing(t, dir, "--lens", "eng")
+}
+
+// TestRunInit_ExistingMcpJson_SameKey_CorrectArgs_IsNoOp: an entry already
+// naming the right scope is left completely alone — no rewrite, and no Updated
+// line, because a summary that reports work it did not do is how an operator
+// stops reading the summary.
+func TestRunInit_ExistingMcpJson_SameKey_CorrectArgs_IsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	key := knomitapi.ServerKey("x", "")
+	mcpPath := filepath.Join(dir, ".mcp.json")
+	existing := fmt.Sprintf(`{
+  "mcpServers": {
+    %q: {
+      "command": "/opt/knomit/knomit-bridge",
+      "args": ["--repo", "x"]
+    }
+  }
+}
+`, key)
+	writeFixture(t, mcpPath, existing)
+
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+	})
+
+	if got := mustRead(t, mcpPath); !bytes.Equal(got, []byte(existing)) {
+		t.Errorf(".mcp.json was rewritten although its args were already correct:\n%s", got)
+	}
+	if strings.Contains(out, ".mcp.json") {
+		t.Errorf("summary mentions .mcp.json although nothing changed:\n%s", out)
+	}
+	assertNoCompanion(t, dir, ".mcp.json")
+}
+
 // TestRunInit_ExistingMcpJson_NoKnomitEntry_AddsEntry: a project with other MCP
 // servers and no knomit entry gets one added beside them.
 func TestRunInit_ExistingMcpJson_NoKnomitEntry_AddsEntry(t *testing.T) {

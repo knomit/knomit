@@ -124,7 +124,7 @@ are mostly yours — and init now MERGES into them in place rather than dropping
 |------|-----------------------|
 | `.claude/settings.json` | Appends any hook this build ships that the file does not already register. Your own hook entries, matchers, `permissions` and every other key are untouched, and so is your formatting — the merge is a byte-level insertion, not a re-encode. |
 | `CLAUDE.md` | Replaces the region between `<!-- knomit:integration vN -->` and `<!-- /knomit:integration -->` with the current block; everything outside it is left alone. A file with no knomit block gains one, appended. |
-| `.mcp.json` | Refreshes the entry under the derived server key, or adds it beside your other servers. |
+| `.mcp.json` | Refreshes the `args` of the entry under the derived server key, or adds the whole entry beside your other servers. Your `command` and any other key on that entry are left alone — `args` name the scope init derived, but `command` is deployment-specific and yours. |
 
 Re-running init is therefore a no-op when nothing has changed: the files come
 back byte-identical and nothing is printed for them. When something IS merged,
