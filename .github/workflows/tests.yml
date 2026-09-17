@@ -77,9 +77,10 @@ name: Tests
 #     take 10m from the same matrix. On a Windows laptop internal/synthesize
 #     (1776s) and internal/store (816s) exceed go test's 10-minute per-package
 #     default outright and internal/repos (441-639s) straddles it; on THIS
-#     runner only synthesize still does, at 1166-1533s. Nothing hangs; it is
-#     filesystem cost, and the Makefile scopes the same 40m to GOOS=windows for
-#     the same reason. The slow-tests job below carries both machines' numbers.
+#     runner only synthesize still does, at 1166-1641s across four runs.
+#     Nothing hangs; it is filesystem cost, and the Makefile scopes the same
+#     40m to GOOS=windows for the same reason. The slow-tests job below
+#     carries both machines' numbers.
 #     Every OTHER step keeps the 10-minute default deliberately: a ceiling is
 #     also a hang guard, and a package that suddenly needs 40 minutes is news.
 #     The package nearest that line in build-test is internal/web — 455s alone
@@ -94,22 +95,28 @@ name: Tests
 # 2026-09-17:
 #   build-test (windows-2025)            9m15s-12m12s  (runs 35250857183,
 #                                                       35253289005)
-#   slow-tests (windows-2025 synthesize) 20m21s-26m39s (runs 35247045603,
-#                                        35250857183, 35253289005) — the
-#                                        longest check on the board
+#   slow-tests (windows-2025 synthesize) 20-30 minutes — the longest check on
+#                                        the board, and see the warning below
 # Do not confuse these with the PACKAGE times in the slow-tests job below:
 # those are the `go test` step alone, which is what -timeout bounds, and they
 # run 2-4 minutes shorter than the job that contains them. "Green legs" rather
 # than green runs, because 35247045603 was red overall — on a step this block
 # is not about.
 #
-# RANGES, because the same leg on the same image varied by 30% between two
-# consecutive runs. Any single figure here reads as typical and would be wrong
-# by minutes. So the build answer arrives in roughly ten minutes and a FULL
-# green waits on synthesize. The unix legs are unchanged by any of this.
-# If that second number is ever the thing standing between this repo and a
-# merge, the fix is in internal/synthesize's fixtures — the tests each build a
-# 400-fact corpus one WriteFact at a time — and not in this file.
+# SYNTHESIZE IS VARIABLE, NOT BOUNDED, and that distinction is written here
+# because getting it wrong cost two corrections. Four job samples on 2026-09-17
+# — 20m21s, 22m43s, 26m39s, 29m17s (runs 35253289005, 35250857183,
+# 35247045603, 35257034491) — a 44% spread on the same image and the same
+# commit range. A stated range invites planning against its upper bound, and
+# this one was exceeded by the next sample TWICE. Re-measure; do not plan
+# against these.
+#
+# So the build answer arrives in roughly ten minutes and a FULL green waits on
+# synthesize, for somewhere between twenty and thirty minutes. The unix legs
+# are unchanged by any of this. If that second number is ever the thing
+# standing between this repo and a merge, the fix is in internal/synthesize's
+# fixtures — the tests each build a 400-fact corpus one WriteFact at a time —
+# and not in this file.
 #
 # THE RUNNER CHECKS OUT WITH core.autocrlf=true, which is Git for Windows'
 # installed default and the opposite of the machine knomit's Windows support
@@ -268,7 +275,7 @@ jobs:
   # them, and note that synthesize alone varied by four minutes across them:
   #
   #                     laptop      runner
-  #   internal/synthesize  1776s      1166-1533s (three runs)
+  #   internal/synthesize  1776s      1166-1641s (four runs, 41% spread)
   #   internal/store        816s       212s
   #   internal/repos    441-639s       307s
   #
@@ -281,17 +288,24 @@ jobs:
   # THE MATRIX IS DELIBERATELY ASYMMETRIC, and the runner's numbers are why.
   # unix runs all three in one leg (7m25s for the lot) because splitting three
   # fast packages across three runners buys nothing. Windows runs ONE PACKAGE
-  # PER LEG because packages are serial within a leg: together they are 28-34
-  # minutes of critical path, split they are as long as the longest, which is
-  # synthesize at 19m26s-25m33s. The split also puts a per-package wall time on
-  # the checks list, which is the number anyone tuning this wants next. If
-  # synthesize ever gets cheap, collapse this to one Windows leg and match the
-  # unix shape.
+  # PER LEG because packages are serial within a leg: together they are around
+  # half an hour of critical path, split they are as long as the longest, which
+  # is synthesize. The split also puts a per-package wall time on the checks
+  # list, which is the number anyone tuning this wants next. If synthesize ever
+  # gets cheap, collapse this to one Windows leg and match the unix shape.
   #
-  # 40m against a measured 19-26 minutes is a margin of 14 to 20 minutes, and
-  # it is a HANG guard, not a target. If synthesize creeps toward it, the answer
-  # is to find out why the package got slower, not to raise the ceiling
-  # reflexively.
+  # THE HONEST MARGIN UNDER -timeout 40m IS 13 MINUTES, not the twenty the
+  # midpoint of that range suggests: take it from the WORST sample seen (1641s),
+  # because that is the one that would have tripped a tighter ceiling. Four
+  # samples spread 41%, and the two ranges written here before this were each
+  # exceeded by the next sample, so treat the figure as variable rather than
+  # bounded and re-measure before relying on it.
+  #
+  # If that margin keeps shrinking, RAISE THE WINDOWS CEILING. This package is
+  # bound by per-operation latency and nothing in it hangs — the 40m exists to
+  # catch a hang, and a hang does not arrive by creeping five minutes at a time.
+  # The thing that would deserve investigation is the shape changing: a sudden
+  # step, or the unix legs slowing with it.
   #
   # synthesize and repos have never run in a PR job on ANY platform (race.yml
   # covers them, but only after a merge to dev and without blocking); store ran
