@@ -31,10 +31,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/client/sessions"
 	"knomit/internal/config"
 	"knomit/internal/repos"
 )
@@ -44,7 +46,7 @@ import (
 // or one read-only repo would make a misrouted write fail for the wrong reason,
 // and two different ontologies would reproduce the near miss instead of the
 // incident.
-func incidentServer(t *testing.T) http.Handler {
+func incidentServer(t *testing.T) (http.Handler, *sessions.Store) {
 	t.Helper()
 	m := repos.New(context.Background(), repos.Deps{
 		Cfg:         config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
@@ -63,7 +65,7 @@ func incidentServer(t *testing.T) http.Handler {
 
 	s := &Server{Manager: m, ClientSessions: store, OntologyRoot: "kb"}
 	s.buildMCPHandler()
-	return s.NewAPIRouter()
+	return s.NewAPIRouter(), store
 }
 
 // rpcAt posts one JSON-RPC message to an arbitrary mount and returns the decoded
@@ -215,7 +217,7 @@ const (
 // incident. It is RED on the session-keyed implementation and green on the
 // per-bind handle.
 func TestIncident20260917_TwoCoworkJobsOneMCPSession(t *testing.T) {
-	h := incidentServer(t)
+	h, store := incidentServer(t)
 
 	// ONE initialize, ONE session id, for everything below — the shared Claude
 	// Desktop connection.
@@ -278,6 +280,41 @@ func TestIncident20260917_TwoCoworkJobsOneMCPSession(t *testing.T) {
 	_ = learnInto(t, h, sid, handleA, "jobA-repo", "jobs/a", "job A later fact")
 	_ = learnInto(t, h, sid, handleA2, "jobA-repo", "jobs/a", "job A newest fact")
 
+	// THE SESSION'S BINDING SET. One session id served two jobs, so the row
+	// must record BOTH — and the singular column must hold the last one, not
+	// be the only thing recorded. This is what the Sessions UI reads, and a
+	// set of one here would mean the UI shows an operator a single binding for
+	// a session that is in fact serving two.
+	sets, err := store.SessionBindings(context.Background(), []string{sid})
+	require.NoError(t, err)
+	set := sets[sid]
+	require.Len(t, set, 3, "three handles were presented: A, B, and A's second")
+
+	byRepo := map[string]int{}
+	handles := map[string]bool{}
+	for _, b := range set {
+		handles[b.Handle] = true
+		switch b.Binding {
+		case "repo:uid-jobA-repo":
+			byRepo["jobA-repo"]++
+		case "repo:uid-jobB-repo":
+			byRepo["jobB-repo"]++
+		}
+		require.Equal(t, "", b.Branch, `"" means the target's own read branch`)
+		require.Positive(t, b.RequestCount)
+	}
+	require.Len(t, handles, 3, "each handle is its OWN row, even the two naming jobA-repo")
+	require.Equal(t, 2, byRepo["jobA-repo"], "two handles named jobA-repo and both are recorded")
+	require.Equal(t, 1, byRepo["jobB-repo"])
+
+	// And the filter finds this session through EITHER job's binding, once.
+	for _, pin := range []string{"repo:uid-jobA-repo", "repo:uid-jobB-repo"} {
+		rows, ferr := store.List(context.Background(), sessions.Filter{Binding: pin, Now: time.Now()})
+		require.NoError(t, ferr)
+		require.Len(t, rows, 1, "filter on %s must find the session exactly once", pin)
+		require.Equal(t, sid, rows[0].ID)
+	}
+
 	// Both jobs' corpora are intact and disjoint at the end.
 	text, isErr = callToolAt(t, h, unscopedMount, sid, "knomit_query",
 		fmt.Sprintf(`{"binding":%q,"path":"kb/architecture/jobs/"}`, handleB))
@@ -311,7 +348,7 @@ func requireFactAbsent(t *testing.T, h http.Handler, sid, handle, path, msg stri
 // The negative half: the three ways a caller can get the handle wrong, each
 // asserted on its EXACT message.
 func TestIncident20260917_HandleRefusals(t *testing.T) {
-	h := incidentServer(t)
+	h, _ := incidentServer(t)
 	_, sid := rpcAt(t, h, unscopedMount, "",
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cowork","version":"1.0"}}}`)
 	handleA := bindHandle(t, h, sid, "jobA-repo")

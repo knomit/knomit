@@ -1548,7 +1548,7 @@ describe('Manage tabs', () => {
   const ACTIVE = 'rgb(34, 48, 58)'; // #22303a, the same lit background the rail uses
   const sess = (state: 'live' | 'idle' | 'dead') => ({
     id: `s-${state}-${Math.random()}`, instance_id: 'i', state, transport: 'stdio' as const,
-    binding: { kind: 'repo', uid: 'uid-core', name: 'core' }, branch: 'agent/test',
+    binding: { kind: 'repo', uid: 'uid-core', name: 'core' }, bindings: [], branch: 'agent/test',
     client: { name: 'claude-code', version: '2', initialized: true },
     bridge: { host: 'h', user: 'u', cwd: '/w', pid: 1, parent: 'claude', parent_pid: 2, version: '1' },
     remote_addr: '127.0.0.1', user_agent: 'knomit-bridge/1',

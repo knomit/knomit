@@ -106,30 +106,46 @@ func BindingErrorFromContext(ctx context.Context) (error, bool) {
 // A task-augmented tool call keeps running after the response is written, so
 // the write and the read genuinely race; the mutex is not decoration.
 type PinRecorder struct {
-	mu  sync.Mutex
-	pin string
+	mu       sync.Mutex
+	resolved ResolvedBinding
 }
 
-// Record stores the pin the gate resolved. Last write wins: one request carries
+// ResolvedBinding is what the gate resolved for one request: the handle the
+// caller presented, the pin it names, and the branch it names.
+//
+// The HANDLE is carried, not just the pin, because the session's binding set is
+// keyed by handle: two handles naming one repo are two callers, and a recorder
+// that reported only the pin would collapse them back into the single value
+// this whole design exists to split apart.
+type ResolvedBinding struct {
+	Handle string
+	Pin    string
+	Branch string // "" ⇒ the target's own read branch
+}
+
+// Record stores what the gate resolved. Last write wins: one request carries
 // one tool call, and a second would be a later, equally true observation.
-func (p *PinRecorder) Record(pin string) {
+func (p *PinRecorder) Record(rb ResolvedBinding) {
 	if p == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.pin = pin
+	p.resolved = rb
 }
 
-// Pin returns what was recorded, or "" when nothing was.
-func (p *PinRecorder) Pin() string {
+// Resolved returns what was recorded; the zero value when nothing was.
+func (p *PinRecorder) Resolved() ResolvedBinding {
 	if p == nil {
-		return ""
+		return ResolvedBinding{}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.pin
+	return p.resolved
 }
+
+// Pin returns just the resolved pin, or "" when nothing was recorded.
+func (p *PinRecorder) Pin() string { return p.Resolved().Pin }
 
 // pinRecorderKey carries the box. Only web.SessionBindingMiddleware installs
 // one; every other mount resolves its binding before the handler and needs no

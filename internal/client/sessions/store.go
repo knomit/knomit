@@ -183,6 +183,11 @@ func (s *Store) End(ctx context.Context, sessionID string, at time.Time) error {
 
 // Filter selects rows for List.
 type Filter struct {
+	// Binding matches a session if ANY binding it has presented is this pin —
+	// its last-seen one, or any handle in client_session_bindings. One session
+	// can serve several jobs at once, so "the session's binding" is a set, and
+	// a filter that looked only at the last-seen column would hide a session
+	// that is actively using this repo through a handle whose turn has passed.
 	Binding       string // "" = all
 	IncludeHidden bool   // include rows silent longer than Policy.HiddenAfter
 	Now           time.Time
@@ -210,8 +215,13 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Session, error) {
 FROM client_sessions WHERE 1=1`
 	args := []any{}
 	if f.Binding != "" {
-		q += ` AND binding = ?`
-		args = append(args, f.Binding)
+		// EXISTS, not a JOIN: a session with three handles on this pin is ONE
+		// session and must appear once. A join would return it three times and
+		// every count built on this list would be wrong.
+		q += ` AND (binding = ? OR EXISTS (
+                  SELECT 1 FROM client_session_bindings b
+                  WHERE b.session_id = client_sessions.id AND b.binding = ?))`
+		args = append(args, f.Binding, f.Binding)
 	}
 	if !f.IncludeHidden {
 		q += ` AND last_seen_at >= ?`
@@ -275,6 +285,15 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM binding_handles WHERE last_used_at < ?`,
 		now.Add(-s.policy.Retention).Unix()); err != nil {
 		return n, fmt.Errorf("purge binding_handles: %w", err)
+	}
+	// The binding SET belongs to its session and dies with it. Unlike
+	// binding_handles, which is routing state a live caller may still present
+	// and therefore ages on its own last-used time, these rows are only a
+	// description of a session — once the session row is gone they describe
+	// nothing. No foreign key, so the orphans are collected here.
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM client_session_bindings WHERE session_id NOT IN (SELECT id FROM client_sessions)`); err != nil {
+		return n, fmt.Errorf("purge client_session_bindings: %w", err)
 	}
 	// No id: a purge is not about one row, and the consumer re-reads the
 	// whole list anyway.

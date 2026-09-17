@@ -127,7 +127,13 @@ func TestGate_ResolvedHandleReachesTheHandler(t *testing.T) {
 	// And the pin is reported for the observational client_sessions column.
 	rec, ok := repos.PinRecorderFromContext(spy.ctx)
 	require.True(t, ok)
-	require.Equal(t, "repo:uid-alpha", rec.Pin())
+	// The HANDLE is recorded alongside the pin: the session's binding set is
+	// keyed by handle, so a recorder that reported only the pin would collapse
+	// two callers back into one.
+	resolved := rec.Resolved()
+	require.Equal(t, "repo:uid-alpha", resolved.Pin)
+	require.NotEmpty(t, resolved.Handle)
+	require.Equal(t, "", resolved.Branch, `"" means the target's own read branch`)
 }
 
 // TWO handles resolve independently in the SAME process with no session state

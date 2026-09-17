@@ -38,9 +38,14 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 		}
 		return
 	}
+	// One resolution, read once and used twice: the last-seen pin on the
+	// client_sessions row, and the per-handle row in the session's binding set.
+	// Reading it twice could disagree, because a task-augmented call may still
+	// be writing into the recorder while this runs.
+	resolved := repos.ResolvedBindingFromContext(r.Context())
 	obs := sessions.Observation{
 		SessionID: sid,
-		Binding:   repos.BindingPinFromContext(r.Context()),
+		Binding:   resolved.Pin,
 		RemoteIP:  sessions.RemoteIP(r.RemoteAddr),
 		UserAgent: r.Header.Get("User-Agent"),
 		Now:       now,
@@ -56,5 +61,15 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 	}
 	if err := store.Touch(ctx, obs); err != nil {
 		log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: touch failed")
+	}
+	// The binding SET. Only a request that actually resolved a handle adds a
+	// row, so a URL-scoped request — which has a pin but no handle — records
+	// its pin on the session row as before and contributes nothing here. That
+	// asymmetry is correct: the set answers "which handles has this session
+	// presented", and a URL-scoped caller presented none.
+	if resolved.Handle != "" && resolved.Pin != "" {
+		if err := store.RecordSessionBinding(ctx, sid, resolved.Handle, resolved.Pin, resolved.Branch, now); err != nil {
+			log.Warn().Err(err).Str("mcp_session", sid).Msg("client sessions: binding set update failed")
+		}
 	}
 }

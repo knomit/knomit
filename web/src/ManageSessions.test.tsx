@@ -13,7 +13,7 @@ const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800,
 const now = new Date('2026-09-14T12:00:00Z');
 const sess = (over: Partial<import('./api').ClientSession>): import('./api').ClientSession => ({
   id: 'mcp-session-1', instance_id: 'abc', state: 'live' as const, transport: 'stdio' as const,
-  binding: { kind: 'repo', uid: 'u1', name: 'core' }, branch: 'agent/h-1',
+  binding: { kind: 'repo', uid: 'u1', name: 'core' }, bindings: [], branch: 'agent/h-1',
   client: { name: 'claude-code', version: '2.1', initialized: true },
   bridge: { host: 'h1', user: 'pba', cwd: '/home/pba/p', pid: 42, parent: 'claude', parent_pid: 41, version: '1.4' },
   remote_addr: '127.0.0.1', user_agent: 'knomit-bridge/1.4',
@@ -265,5 +265,89 @@ describe('ManageSessions', () => {
     // above is the only spacing mechanism. Named here so a later reader does
     // not assume a second one is holding it up.
     expect(input.style.margin).toBe('');
+  });
+});
+
+// One session id can serve several concurrent callers, each holding its own
+// handle, so the Binding cell shows the SET — one line per handle, most
+// recently used first — not just the last one.
+describe('ManageSessions binding set', () => {
+  const bindingRow = (over: Partial<import('./api').ClientSessionBindingRow> = {}) => ({
+    handle: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kind: 'repo', uid: 'u1', name: 'core', branch: '',
+    first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:58:00Z', request_count: 1,
+    ...over,
+  });
+
+  it('renders one line per handle, including two handles on the same repo', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: POLICY,
+      sessions: [sess({
+        bindings: [
+          bindingRow({ handle: 'HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb', name: 'core' }),
+          bindingRow({ handle: 'GGGGGGaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'core' }),
+        ],
+      })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    const entries = screen.getAllByTestId('session-binding');
+    expect(entries).toHaveLength(2);
+    // Both name the same repo — the handle is what tells them apart, so it has
+    // to be on screen or the two lines are indistinguishable.
+    expect(entries[0]).toHaveTextContent('core');
+    expect(entries[0]).toHaveTextContent('HHHHHH');
+    expect(entries[1]).toHaveTextContent('GGGGGG');
+  });
+
+  it('shows the full handle on hover and the branch only when set', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: POLICY,
+      sessions: [sess({
+        bindings: [
+          bindingRow({ handle: 'FULLHANDLEVALUE0000000000000000x', branch: 'main' }),
+          bindingRow({ handle: 'SECONDHANDLE00000000000000000000', name: 'eng', kind: 'lens', branch: '' }),
+        ],
+      })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-binding')).toHaveLength(2));
+    const entries = screen.getAllByTestId('session-binding');
+
+    // Shortened on screen, whole value in the title — 32 opaque characters
+    // would dominate the row, but an operator correlating a log line needs all
+    // of it.
+    expect(entries[0]).toHaveTextContent('FULLHA');
+    expect(entries[0]).not.toHaveTextContent('FULLHANDLEVALUE0000000000000000x');
+    expect(entries[0].querySelector('[title="FULLHANDLEVALUE0000000000000000x"]')).not.toBeNull();
+
+    expect(entries[0]).toHaveTextContent('@main');
+    // "" means the target's own read branch — nothing to show.
+    expect(entries[1]).not.toHaveTextContent('@');
+  });
+
+  it('falls back to the singular binding when the session presented no handle', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: POLICY,
+      sessions: [sess({ bindings: [], binding: { kind: 'repo', uid: 'u1', name: 'core' } })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    // A URL-scoped caller presents no handle, so the cell shows what the row
+    // itself says rather than going blank.
+    expect(screen.queryAllByTestId('session-binding')).toHaveLength(0);
+    expect(screen.getByTestId('session-bindings')).toHaveTextContent('core');
+  });
+
+  it('renders a read-only server\'s redacted rows without a handle', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      policy: POLICY,
+      sessions: [sess({ bindings: [bindingRow({ handle: '', branch: '' })] })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-binding')).toHaveLength(1));
+    const entry = screen.getAllByTestId('session-binding')[0];
+    expect(entry).toHaveTextContent('core');
+    expect(entry).not.toHaveTextContent('…');
   });
 });

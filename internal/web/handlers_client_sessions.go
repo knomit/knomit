@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"knomit/internal/client/sessions"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
@@ -15,6 +17,28 @@ type clientSessionBinding struct {
 	Kind string  `json:"kind"`
 	UID  string  `json:"uid"`
 	Name *string `json:"name"` // null when the repo/lens no longer resolves
+}
+
+// clientSessionBindingRow is one HANDLE the session has presented, inside the
+// `bindings` array.
+//
+// One row per handle, NOT per target: two handles naming the same repo are two
+// rows, because they are two callers. That is the whole reason the array exists
+// — `binding` on the row above is the LAST pin seen, which stopped describing a
+// session completely the moment one session id could serve several jobs at once.
+type clientSessionBindingRow struct {
+	// Handle is the opaque value the caller presented. Empty under ReadOnly —
+	// see redactForDemo.
+	Handle string  `json:"handle"`
+	Kind   string  `json:"kind"`
+	UID    string  `json:"uid"`
+	Name   *string `json:"name"` // null when the repo/lens no longer resolves
+	// Branch is the read branch the handle names; "" means the target's own.
+	// Empty under ReadOnly, like the row-level branch, which it mirrors.
+	Branch       string `json:"branch"`
+	FirstSeenAt  string `json:"first_seen_at"`
+	LastSeenAt   string `json:"last_seen_at"`
+	RequestCount int    `json:"request_count"`
 }
 
 type clientSessionClient struct {
@@ -34,20 +58,26 @@ type clientSessionBridge struct {
 }
 
 type clientSessionView struct {
-	ID           string               `json:"id"`
-	InstanceID   string               `json:"instance_id"`
-	State        sessions.State       `json:"state"`
-	Transport    string               `json:"transport"`
-	Binding      clientSessionBinding `json:"binding"`
-	Branch       string               `json:"branch"`
-	Client       clientSessionClient  `json:"client"`
-	Bridge       clientSessionBridge  `json:"bridge"`
-	RemoteAddr   string               `json:"remote_addr"`
-	UserAgent    string               `json:"user_agent"`
-	FirstSeenAt  string               `json:"first_seen_at"`
-	LastSeenAt   string               `json:"last_seen_at"`
-	EndedAt      *string              `json:"ended_at"`
-	RequestCount int                  `json:"request_count"`
+	ID         string         `json:"id"`
+	InstanceID string         `json:"instance_id"`
+	State      sessions.State `json:"state"`
+	Transport  string         `json:"transport"`
+	// Binding is the LAST pin this session was seen using. Kept as-is for
+	// compatibility; Bindings is the complete picture.
+	Binding clientSessionBinding `json:"binding"`
+	// Bindings is every handle the session has presented, most recently used
+	// first. Empty for a session that has only ever used URL-scoped mounts,
+	// which present no handle.
+	Bindings     []clientSessionBindingRow `json:"bindings"`
+	Branch       string                    `json:"branch"`
+	Client       clientSessionClient       `json:"client"`
+	Bridge       clientSessionBridge       `json:"bridge"`
+	RemoteAddr   string                    `json:"remote_addr"`
+	UserAgent    string                    `json:"user_agent"`
+	FirstSeenAt  string                    `json:"first_seen_at"`
+	LastSeenAt   string                    `json:"last_seen_at"`
+	EndedAt      *string                   `json:"ended_at"`
+	RequestCount int                       `json:"request_count"`
 }
 
 type clientSessionPolicy struct {
@@ -107,6 +137,21 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 		// once. So the worst case per open tab is roughly one read per 5s
 		// plus one per arrival or departure, not one per MCP request.
 		names := newBindingNames(m)
+		// ONE query for every session's binding set, for the same reason the
+		// name index is built once: control.db is SetMaxOpenConns(1), so a
+		// per-row read would serialise the page behind a single connection.
+		// A failure here DEGRADES — the sets are dropped and the rows still
+		// render — because the last-seen binding is on the row itself and
+		// losing the whole page over the richer view would be the worse trade.
+		sids := make([]string, 0, len(rows))
+		for _, s := range rows {
+			sids = append(sids, s.ID)
+		}
+		sets, err := store.SessionBindings(r.Context(), sids)
+		if err != nil {
+			log.Warn().Err(err).Msg("client sessions: binding sets unavailable; serving rows without them")
+			sets = map[string][]sessions.SessionBinding{}
+		}
 		items := make([]clientSessionView, 0, len(rows))
 		for _, s := range rows {
 			kind, uid, name := names.lookup(s.Binding)
@@ -120,11 +165,28 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 				e := s.Ended.UTC().Format(time.RFC3339)
 				ended = &e
 			}
+			// Most recently used first, as the store returns them.
+			set := make([]clientSessionBindingRow, 0, len(sets[s.ID]))
+			for _, sb := range sets[s.ID] {
+				bKind, bUID, bName := names.lookup(sb.Binding)
+				var bNamePtr *string
+				if bName != "" {
+					n := bName
+					bNamePtr = &n
+				}
+				set = append(set, clientSessionBindingRow{
+					Handle: sb.Handle, Kind: bKind, UID: bUID, Name: bNamePtr, Branch: sb.Branch,
+					FirstSeenAt:  sb.FirstSeen.UTC().Format(time.RFC3339),
+					LastSeenAt:   sb.LastSeen.UTC().Format(time.RFC3339),
+					RequestCount: sb.RequestCount,
+				})
+			}
 			view := clientSessionView{
 				ID: s.ID, InstanceID: s.InstanceID, State: s.State, Transport: s.Transport,
-				Binding: clientSessionBinding{Kind: kind, UID: uid, Name: namePtr},
-				Branch:  s.Branch,
-				Client:  clientSessionClient{Name: s.ClientName, Version: s.ClientVersion, Initialized: s.Initialized},
+				Binding:  clientSessionBinding{Kind: kind, UID: uid, Name: namePtr},
+				Bindings: set,
+				Branch:   s.Branch,
+				Client:   clientSessionClient{Name: s.ClientName, Version: s.ClientVersion, Initialized: s.Initialized},
 				Bridge: clientSessionBridge{Host: s.Host, User: s.User, Cwd: s.Cwd, PID: s.PID,
 					Parent: s.ParentApp, ParentPID: s.ParentPID, Version: s.BridgeVersion},
 				RemoteAddr: s.RemoteAddr, UserAgent: s.UserAgent,
@@ -239,6 +301,22 @@ func redactForDemo(v *clientSessionView) {
 	v.Branch = ""
 	v.RemoteAddr = ""
 	v.UserAgent = ""
+	// The binding SET stays — which repos a visitor's demo instance is serving
+	// is the presence story, and the pin and name are already public on the row
+	// above. Two fields do not:
+	//
+	//   handle — a live routing capability. It is not an authorization boundary
+	//   (anyone who can reach the endpoint can reach any repo by URL anyway),
+	//   but publishing one caller's handle on an unauthenticated page invites
+	//   another visitor to aim calls at that binding, and presence needs none
+	//   of it. Redacting costs the demo nothing.
+	//
+	//   branch — redacted for exactly the reason the row-level branch is: an
+	//   agent branch embeds the operator's hostname by construction.
+	for i := range v.Bindings {
+		v.Bindings[i].Handle = ""
+		v.Bindings[i].Branch = ""
+	}
 }
 
 // bindingNames maps a binding uid to its current display name, for both
