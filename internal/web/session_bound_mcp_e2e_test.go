@@ -150,9 +150,20 @@ func TestSessionBoundMCP_EndToEnd(t *testing.T) {
 	require.Equal(t, "", bindingOf(t, sessStore, sid),
 		"initialize must not stamp a binding on the newly minted session")
 
-	// Unbound: every tool fails closed, naming the tool to call.
+	// knomit_repos needs NO binding: it is the discovery tool, and how the
+	// agent learns the names knomit_bind accepts. It answers before anything is
+	// bound, and the other seven tools still fail closed until it does.
 	text, isErr := callTool(t, h, sid, "knomit_repos", `{}`)
-	require.True(t, isErr, "knomit_repos must fail while unbound: %s", text)
+	require.False(t, isErr, "knomit_repos must work unbound: %s", text)
+	require.Contains(t, text, `"name": "alpha"`)
+	require.Contains(t, text, `"name": "followed"`)
+	require.Contains(t, text, `"mode": "subscribe"`)
+	require.NotContains(t, text, `"bound"`, "nothing is bound yet")
+	require.NotContains(t, text, "uid-", "a registry uid must never reach a name or id field")
+
+	// A binding-required tool still fails closed, naming the tool to call.
+	text, isErr = callTool(t, h, sid, "knomit_query", `{"text":"anything"}`)
+	require.True(t, isErr, "knomit_query must fail while unbound: %s", text)
 	require.Contains(t, text, "knomit_bind")
 
 	// Bind the writable repo.
@@ -167,13 +178,25 @@ func TestSessionBoundMCP_EndToEnd(t *testing.T) {
 	require.Equal(t, "", bindingOf(t, sessStore, sid),
 		"the bind call itself was still an unbound request when it arrived")
 
-	// Now knomit_repos answers, and the binding survived in the store.
+	// Now knomit_repos reports the binding under `bound`, alongside the
+	// catalogue it already returned while unbound.
 	text, isErr = callTool(t, h, sid, "knomit_repos", `{}`)
 	require.False(t, isErr, text)
 	require.Equal(t, "repo:uid-alpha", bindingOf(t, sessStore, sid),
 		"the pin lands on the first request AFTER the bind")
-	require.Contains(t, text, `"name": "alpha"`)
-	require.Contains(t, text, `"role": "read+write"`)
+	var envelope struct {
+		Repos []map[string]any `json:"repos"`
+		Bound *struct {
+			Binding string           `json:"binding"`
+			Mounts  []map[string]any `json:"mounts"`
+		} `json:"bound"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &envelope))
+	require.Len(t, envelope.Repos, 2, "the catalogue is still there when bound")
+	require.NotNil(t, envelope.Bound)
+	require.Equal(t, "alpha", envelope.Bound.Binding)
+	require.Len(t, envelope.Bound.Mounts, 1)
+	require.Equal(t, "read+write", envelope.Bound.Mounts[0]["role"])
 
 	// Switch to the subscription.
 	text, isErr = callTool(t, h, sid, "knomit_bind", `{"repo":"followed"}`)

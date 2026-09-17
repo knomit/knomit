@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -15,10 +16,12 @@ import (
 // — never panic, and never a transport error. The agent reads the text, so the
 // name of the tool it has to call next has to be in it.
 func TestHandlers_UnboundSessionFailsClosed(t *testing.T) {
+	// knomit_repos is deliberately absent: it is the DISCOVERY tool and works
+	// unbound by decision 314b18e6, since it is how an agent learns the names
+	// knomit_bind accepts. The other seven still fail closed.
 	ctx := repos.WithSessionScoped(context.Background())
 	var req mcpgo.CallToolRequest
 	for name, h := range map[string]func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error){
-		"repos":       ReposHandler(),
 		"explain":     ExplainHandler(),
 		"query":       QueryHandler(),
 		"learn":       LearnHandler(),
@@ -41,10 +44,28 @@ func TestHandlers_UnboundSessionFailsClosed(t *testing.T) {
 func TestHandlers_StoredBindingErrorSurfaces(t *testing.T) {
 	ctx := repos.WithBindingError(repos.WithSessionScoped(context.Background()),
 		errors.New(`bound repo "x" is not available — call knomit_bind again`))
-	res, err := ReposHandler()(ctx, mcpgo.CallToolRequest{})
+
+	// The binding-required tools surface the stored reason as a failure.
+	res, err := ExplainHandler()(ctx, mcpgo.CallToolRequest{})
 	require.NoError(t, err)
 	require.True(t, res.IsError)
 	require.Contains(t, resultText(t, res), `bound repo "x"`)
+
+	// knomit_repos instead SUCCEEDS and reports it, because it is the tool an
+	// agent calls to find out what went wrong.
+	m, _, _ := bindFixture(t)
+	res, err = ReposHandler(m)(ctx, mcpgo.CallToolRequest{})
+	require.NoError(t, err)
+	require.False(t, res.IsError, resultText(t, res))
+	var envelope struct {
+		Bound struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"bound"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &envelope))
+	require.Equal(t, "unresolvable", envelope.Bound.Status)
+	require.Contains(t, envelope.Bound.Error, `bound repo "x"`)
 }
 
 // On the unscoped mount initialize can only carry the DEFAULT ontology — there

@@ -21,7 +21,7 @@ import (
 // the bound base's instructions.
 func bindTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_bind",
-		mcpgo.WithDescription("Only on the unscoped /api/v1/mcp endpoint (a bridge started with neither --repo nor --lens); on a URL-scoped endpoint this always fails. Bind this session to a repo or lens by name. Required on the unscoped endpoint before any other tool works; call again to switch. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the mounts table and the knowledge base's instructions — treat them as session instructions."),
+		mcpgo.WithDescription("Only on the unscoped /api/v1/mcp endpoint (a bridge started with neither --repo nor --lens); on a URL-scoped endpoint this always fails. Bind this session to a repo or lens by name (see knomit_repos for the names). Required on the unscoped endpoint before any other tool works; call again to switch. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the mounts table and the knowledge base's instructions — treat them as session instructions."),
 		mcpgo.WithString("repo", mcpgo.Description("Name of the repo to bind this session to. Mutually exclusive with lens.")),
 		mcpgo.WithString("lens", mcpgo.Description("Name of the lens to bind this session to. Mutually exclusive with repo.")),
 	)
@@ -90,7 +90,7 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 				"the binding could not be recorded for this session, so nothing was bound; ask the operator to check the server log"), nil
 		}
 
-		out, err := json.MarshalIndent(reposResponseFor(b), "", "  ")
+		out, err := json.MarshalIndent(boundFor(b), "", "  ")
 		if err != nil {
 			return mcpgo.NewToolResultError("marshal error: " + err.Error()), nil
 		}
