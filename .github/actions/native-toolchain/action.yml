@@ -110,9 +110,24 @@ runs:
     # (-O2 -g) that setting it here would silently drop. CPPFLAGS is empty by
     # default and reaches every cgo compile.
     #
+    # THE HEADER IS COPIED OUT rather than the MSYS2 include directory being
+    # put on the search path. -IC:/msys64/mingw64/include would add an entire
+    # second mingw sysroot — zlib.h, iconv.h, the openssl tree, hundreds more —
+    # to every cgo compile in the build, and it belongs to a DIFFERENT mingw
+    # distribution than the compiler in use (MSYS2's is MSVCRT-flavoured, the
+    # image's C:\mingw64 is UCRT). That is the header form of the rule this
+    # action applies to shells: never two of the same thing on one path. With
+    # one header in the directory, an #include that is not sqlite3.h fails
+    # loudly here instead of quietly resolving against the other sysroot.
+    #
     # Invoked through MSYS2's own login bash rather than calling pacman.exe
     # from this one: two MSYS runtimes on one PATH is the kind of mixing this
-    # action avoids everywhere else.
+    # action avoids everywhere else. `-Sy` without `-u` is pacman's documented
+    # partial-upgrade hazard and is deliberate here: this is a throwaway runner
+    # and MSYS2 is a header source that never reaches PATH, so syncing the
+    # package database without committing to a full system upgrade is the
+    # cheaper half of the trade. The existence check and --needed make the step
+    # idempotent.
     - name: sqlite3 development header (Windows)
       if: runner.os == 'Windows'
       shell: bash
@@ -131,7 +146,14 @@ runs:
           exit 1
         fi
         grep -m1 '#define SQLITE_VERSION ' "$hdr" || true
-        echo "CGO_CPPFLAGS=-IC:/msys64/mingw64/include" >> "$GITHUB_ENV"
+        # RUNNER_TEMP is a WINDOWS path (D:\a\_temp), and bash reads its
+        # backslashes as escapes, so it is converted before mkdir/cp touch it
+        # and converted back for the compiler flag. Naming both conversions is
+        # the same discipline LIBDIR gets below.
+        inc="$(cygpath -u "$RUNNER_TEMP")/sqlite-include"
+        mkdir -p "$inc"
+        cp "$hdr" "$inc/"
+        echo "CGO_CPPFLAGS=-I$(cygpath -m "$inc")" >> "$GITHUB_ENV"
 
     # Informational, and deliberately NOT a failure. onnxruntime >= 1.21 needs
     # the VC++ 2015-2022 runtime >= 14.40, or its DLL refuses to initialise
