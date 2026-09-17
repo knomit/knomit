@@ -1054,6 +1054,61 @@ func TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated(t *testi
 	assertReInitChangesNothing(t, dir, "--repo", "x")
 }
 
+// TestRunInit_ExistingSettings_QuotedHookPath_NotDuplicated is the end-to-end
+// half of the quoted-path identity. "Application Support" is where a macOS
+// install actually lives, so this is the common spelling, not an exotic one.
+func TestRunInit_ExistingSettings_QuotedHookPath_NotDuplicated(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	writeFixture(t, settingsPath, `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"/Users/me/Application Support/knomit-bridge\" claude hook memory-guard"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'$CLAUDE_PROJECT_DIR/dist/knomit-bridge' claude hook post-edit"
+          }
+        ]
+      }
+    ]
+  }
+}
+`)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	got := string(mustRead(t, settingsPath))
+	for _, cmd := range []string{"claude hook memory-guard", "claude hook post-edit"} {
+		if n := strings.Count(got, cmd); n != 1 {
+			t.Errorf("%q appears %d times, want 1 — a quoted hook path was not "+
+				"recognised as the same hook:\n%s", cmd, n, got)
+		}
+	}
+	for _, want := range []string{"Application Support", "$CLAUDE_PROJECT_DIR"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("merge rewrote the user's quoted path %q away; got:\n%s", want, got)
+		}
+	}
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
 // TestRunInit_UnmergeableSettings_LeftByteIdentical: a settings.json init cannot
 // merge is one it must not touch at all. Rewriting it would destroy the hand edit
 // the user is halfway through, and a companion would be exactly the silent
@@ -1127,6 +1182,43 @@ func TestRunInit_UnmergeableSettings_LeftByteIdentical(t *testing.T) {
 	}
 }
 
+// TestRunInit_SettingsPathUnreadable_NothingIsWritten: preflightSettings used to
+// treat EVERY read error as "absent, init will create it". A directory at that
+// path, an unreadable file, an I/O error — all passed the preflight, and the
+// failure then fired mid-walk with CLAUDE.md and .mcp.json already rewritten.
+// That is the half-landed scaffold the preflight exists to prevent, reached
+// through the preflight itself.
+func TestRunInit_SettingsPathUnreadable_NothingIsWritten(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	// A directory where the file should be: readable by stat, not by ReadFile.
+	if err := os.MkdirAll(filepath.Join(dir, ".claude", "settings.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	md := "# Project\n"
+	mcp := `{"mcpServers":{}}`
+	writeFixture(t, filepath.Join(dir, "CLAUDE.md"), md)
+	writeFixture(t, filepath.Join(dir, ".mcp.json"), mcp)
+
+	err := runInit([]string{"--repo", "x"})
+	if err == nil {
+		t.Fatal("runInit accepted a settings.json path it cannot read")
+	}
+	if !strings.Contains(err.Error(), ".claude/settings.json") {
+		t.Errorf("error %q does not name the offending file", err)
+	}
+	if got := mustRead(t, filepath.Join(dir, "CLAUDE.md")); !bytes.Equal(got, []byte(md)) {
+		t.Errorf("CLAUDE.md was merged before the settings check failed:\n%s", got)
+	}
+	if got := mustRead(t, filepath.Join(dir, ".mcp.json")); !bytes.Equal(got, []byte(mcp)) {
+		t.Errorf(".mcp.json was merged before the settings check failed:\n%s", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".claude", "skills")); statErr == nil {
+		t.Error("skills were written before the settings check failed")
+	}
+}
+
 // TestRunInit_ExistingClaudeMd_OlderMarker_ReplacedInPlace: the version marker
 // exists so a stale block can be REPLACED. Telling the operator to do it by hand
 // is what let installed blocks drift to "Nine /knomit-… slash commands" against
@@ -1165,6 +1257,179 @@ func TestRunInit_ExistingClaudeMd_OlderMarker_ReplacedInPlace(t *testing.T) {
 		}
 	}
 	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// TestRunInit_ClaudeMdMarkerInProse_IsNotTheBlock: the markers delimit a region,
+// so they only mean anything ALONE ON THEIR OWN LINE. Matched anywhere in the
+// text, a CLAUDE.md that merely documents its own integration — quoting the
+// marker in a sentence, which is exactly what a project explaining the block to
+// its contributors does — has that sentence treated as the block boundary.
+func TestRunInit_ClaudeMdMarkerInProse_IsNotTheBlock(t *testing.T) {
+	block, err := templatesFS.ReadFile(claudeMdBlockTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tail := "\n## Local section\n\nkeep me\n"
+
+	// A mention of the CURRENT marker is the nastier of the two: it reports the
+	// file as already up to date, so the stale block is never repaired and the
+	// failure is permanent and silent.
+	t.Run("a mention of the current marker does not mask a stale block", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		prose := "# Project\n\nOur knomit block is delimited by `" + blockMarkerCurrent +
+			"` and its closing twin; do not hand-edit between them.\n\n"
+		stale := "<!-- knomit:integration v3 -->\n" + blockHeading + "\n\nold text\n" +
+			blockMarkerClose + "\n"
+		mdPath := filepath.Join(dir, "CLAUDE.md")
+		writeFixture(t, mdPath, prose+stale+tail)
+
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		if got, want := string(mustRead(t, mdPath)), prose+string(block)+tail; got != want {
+			t.Errorf("prose mention masked the stale block\n--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+		assertReInitChangesNothing(t, dir, "--repo", "x")
+	})
+
+	// A mention of an OLDER marker is the destructive one: the region is taken
+	// from the prose sentence through the real block's closing marker, so the
+	// sentence is eaten and replaced.
+	t.Run("a mention of an older marker does not become the block start", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		prose := "# Project\n\nHistorically the block opened with `<!-- knomit:integration v2 -->`.\n\n"
+		stale := "<!-- knomit:integration v3 -->\n" + blockHeading + "\n\nold text\n" +
+			blockMarkerClose + "\n"
+		mdPath := filepath.Join(dir, "CLAUDE.md")
+		writeFixture(t, mdPath, prose+stale+tail)
+
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		if got, want := string(mustRead(t, mdPath)), prose+string(block)+tail; got != want {
+			t.Errorf("prose sentence was consumed as the block\n--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+		assertReInitChangesNothing(t, dir, "--repo", "x")
+	})
+
+	// With no real block at all, a mention must not make init think one exists.
+	t.Run("a mention with no real block still appends", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		prose := "# Project\n\nWe will add `" + blockMarkerCurrent + "` one day.\n"
+		mdPath := filepath.Join(dir, "CLAUDE.md")
+		writeFixture(t, mdPath, prose)
+
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		if got, want := string(mustRead(t, mdPath)), prose+"\n"+string(block); got != want {
+			t.Errorf("block not appended\n--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+		if n := strings.Count(string(mustRead(t, mdPath)), blockHeading); n != 1 {
+			t.Errorf("knomit block heading appears %d times, want 1", n)
+		}
+		assertReInitChangesNothing(t, dir, "--repo", "x")
+	})
+}
+
+// TestRunInit_WritesAtomically: writeFile is applied IN PLACE to three files init
+// does not own. Truncate-then-write means an interrupted run leaves a user's
+// CLAUDE.md empty or half-written with no backup, so the write goes to a temp
+// file in the same directory and is renamed over the target.
+func TestRunInit_WritesAtomically(t *testing.T) {
+	t.Run("leaves no temp files behind", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		var stray []string
+		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() && strings.HasPrefix(d.Name(), ".knomit-init-") {
+				stray = append(stray, path)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stray) > 0 {
+			t.Errorf("init left temp files behind: %v", stray)
+		}
+	})
+
+	// Renaming over a path replaces it, so a CLAUDE.md the user symlinked into
+	// another checkout would become a regular file and their real file would stop
+	// receiving updates. Writing through the link is the behaviour os.WriteFile
+	// had, and it must survive the move to a rename.
+	t.Run("writes through a symlink instead of replacing it", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		real := filepath.Join(dir, "shared", "RULES.md")
+		writeFixture(t, real, "# Existing\n")
+		if err := os.Symlink(real, filepath.Join(dir, "CLAUDE.md")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+
+		info, err := os.Lstat(filepath.Join(dir, "CLAUDE.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Error("the symlink was replaced by a regular file")
+		}
+		if got := string(mustRead(t, real)); !strings.Contains(got, blockHeading) {
+			t.Errorf("the symlink target did not receive the block:\n%s", got)
+		}
+	})
+}
+
+// TestRunInit_StaleCompanion_RemovedOnSuccessfulMerge: a companion left by the
+// old flow carries an older template and no expiry. Once init has merged the
+// real file, the companion beside it is a stale copy that an operator may merge
+// later, undoing the merge — so a successful in-place merge clears it. A run that
+// DECLINED to the companion must obviously keep it.
+func TestRunInit_StaleCompanion_RemovedOnSuccessfulMerge(t *testing.T) {
+	t.Run("merging a file clears its companion", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		settingsPath := filepath.Join(dir, ".claude", "settings.json")
+		writeFixture(t, settingsPath, handFormattedSettings)
+		writeFixture(t, settingsPath+".knomit", "{ \"stale\": true }\n")
+		writeFixture(t, filepath.Join(dir, "CLAUDE.md"), "# Existing\n")
+		writeFixture(t, filepath.Join(dir, "CLAUDE.md.knomit-block"), "stale block\n")
+
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		assertNoCompanion(t, filepath.Join(dir, ".claude"), "settings.json")
+		assertNoCompanion(t, dir, "CLAUDE.md")
+	})
+
+	t.Run("a declined merge keeps its companion", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		// A knomit entry under a different key: the case init declines.
+		writeFixture(t, filepath.Join(dir, ".mcp.json"),
+			`{"mcpServers":{"knomit":{"command":"knomit-bridge","args":["--repo","legacy"]}}}`)
+
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".mcp.json.knomit")); err != nil {
+			t.Errorf("a declined merge must leave its companion: %v", err)
+		}
+	})
 }
 
 // TestRunInit_ExistingClaudeMd_NoBlock_AppendsOnce: a CLAUDE.md with no knomit
@@ -1438,6 +1703,15 @@ func TestHookIdentity(t *testing.T) {
 		"knomit-bridge.exe claude hook post-edit",
 		"knomit-bridge  claude   hook   post-edit",
 		"knomit-bridge --log /tmp/b.log claude hook post-edit",
+		// Quoted paths. A hook command is a SHELL line, so a path containing a
+		// space has to be quoted — and on macOS "Application Support" is the
+		// normal install location. strings.Fields plus filepath.Base lets the
+		// quote ride into the token and shreds the path at the space, so all
+		// three of these used to register as foreign and get duplicated.
+		`"$CLAUDE_PROJECT_DIR/dist/knomit-bridge" claude hook post-edit`,
+		`'$CLAUDE_PROJECT_DIR/dist/knomit-bridge' claude hook post-edit`,
+		`"/Users/me/Application Support/knomit-bridge" claude hook post-edit`,
+		`'/Users/me/Application Support/knomit-bridge' claude hook post-edit`,
 	}
 	want := hookIdentity(same[0])
 	for _, cmd := range same[1:] {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -228,7 +229,16 @@ func runInit(args []string) error {
 func preflightSettings(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil // absent is fine; init will create it
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // absent is fine; init will create it
+		}
+		// Anything else — a directory at that path, a permission error, bad I/O —
+		// is NOT "absent". Treating it as absent passed the preflight and left the
+		// failure to fire mid-walk, with CLAUDE.md and .mcp.json already rewritten:
+		// the half-landed scaffold, reached through the check meant to prevent it.
+		return fmt.Errorf("cannot merge %s: %w"+
+			" (fix the file by hand, or move it aside and re-run init)",
+			filepath.Join(".claude", "settings.json"), err)
 	}
 	if err := checkSettingsShape(data); err != nil {
 		return fmt.Errorf("cannot merge %s: %w"+
@@ -273,7 +283,7 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 		if err := writeFile(dst, merged, 0o644); err != nil {
 			return "", err
 		}
-		return "(+" + strings.Join(added, ", +") + ")", nil
+		return "(+" + strings.Join(added, ", +") + ")", clearCompanion(dst)
 	case "CLAUDE.md":
 		merged, note, conflict := mergeClaudeMd(existing, rendered)
 		if conflict {
@@ -285,7 +295,7 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 		if err := writeFile(dst, merged, 0o644); err != nil {
 			return "", err
 		}
-		return note, nil
+		return note, clearCompanion(dst)
 	case ".mcp.json":
 		merged, note, conflict, err := mergeMcpJSON(existing, rendered, serverKey)
 		if err != nil {
@@ -300,9 +310,23 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 		if err := writeFile(dst, merged, 0o644); err != nil {
 			return "", err
 		}
-		return note, nil
+		return note, clearCompanion(dst)
 	}
 	return mergeNotPossible, nil
+}
+
+// clearCompanion removes the companion beside a file THIS run merged in place.
+//
+// A companion from the old flow has no expiry: it sits there carrying a template
+// from whenever it was dropped, and an operator who merges it later silently
+// reverts the merge init just did. Once the real file is up to date the companion
+// is strictly a trap. It is removed ONLY after a successful in-place merge —
+// never when the run declined to the companion, where it is the whole point.
+func clearCompanion(dst string) error {
+	if err := os.Remove(companionPath(dst)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // isOwnedByIntegration reports whether dstRel is a file that the integration
@@ -365,11 +389,43 @@ func jsonStr(s string) string {
 	return string(b)
 }
 
+// writeFile replaces a file's contents atomically: it writes a temp file beside
+// the target and renames over it, so a reader sees the old bytes or the new ones
+// and never a truncated file. os.WriteFile opens with O_TRUNC, which is fine for
+// a file init owns and regenerates, but init now writes IN PLACE to three files
+// it does not own — an interrupted run would leave a user's CLAUDE.md empty with
+// no backup.
+//
+// Symlinks are resolved first. A rename replaces the path, so a CLAUDE.md the
+// user symlinked into another checkout would silently become a regular file and
+// their real file would stop receiving updates. Writing through the link is what
+// os.WriteFile did, and it has to survive the move to a rename.
 func writeFile(path string, data []byte, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, mode)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".knomit-init-*")
+	if err != nil {
+		return err
+	}
+	// Removes the temp file on every failure path; a no-op once renamed away.
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	// CreateTemp makes the file 0600; restore the mode init asked for.
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func printSummary(created, overwritten, updated, conflicts []string) {

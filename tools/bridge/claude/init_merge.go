@@ -46,15 +46,48 @@ import (
 // take `claude hook post-edit` arguments is NOT our hook, and merging into it
 // would hide the user's own command behind ours.
 func hookIdentity(command string) string {
-	fields := strings.Fields(command)
-	if len(fields) > 0 && knomitapi.IsKnomitCommand(fields[0]) {
-		for i := 1; i+2 < len(fields); i++ {
+	binary, rest := splitLeadingToken(command)
+	if knomitapi.IsKnomitCommand(binary) {
+		fields := strings.Fields(rest)
+		for i := 0; i+2 < len(fields); i++ {
 			if fields[i] == "claude" && fields[i+1] == "hook" {
 				return "knomit-bridge claude hook " + fields[i+2]
 			}
 		}
 	}
-	return strings.Join(fields, " ")
+	return strings.Join(strings.Fields(command), " ")
+}
+
+// splitLeadingToken returns a command line's first token and the remainder.
+//
+// A hook command is a SHELL line, so a path containing a space is quoted — and
+// on macOS the install lives under "Application Support", which makes this the
+// ordinary spelling rather than an exotic one. Splitting on whitespace alone
+// both shreds such a path at the space AND leaves the opening quote glued to the
+// token, so filepath.Base sees `"/Users/me/Application` and the hook reads as
+// somebody else's. Single and double quotes are both recognised; an unterminated
+// quote takes the rest of the line, which is the reading a shell would give it.
+//
+// This is deliberately not a shell parser: escapes, concatenated quoting and
+// variable expansion are out of scope. It only has to recognise the binary well
+// enough to decide `is this hook already registered`, and the fallback for
+// anything it cannot read is the whole command string, which is never equal to a
+// knomit identity and so is never merged into.
+func splitLeadingToken(command string) (token, rest string) {
+	s := strings.TrimLeft(command, " \t")
+	if s == "" {
+		return "", ""
+	}
+	if q := s[0]; q == '"' || q == '\'' {
+		if end := strings.IndexByte(s[1:], q); end >= 0 {
+			return s[1 : 1+end], s[2+end:]
+		}
+		return s[1:], ""
+	}
+	if i := strings.IndexAny(s, " \t"); i >= 0 {
+		return s[:i], s[i:]
+	}
+	return s, ""
 }
 
 // hookEventName is the short name a summary line uses for a hook — the event
@@ -648,30 +681,62 @@ const (
 )
 
 // classifyClaudeMd locates the knomit block in content. For blockOlder, start
-// and end bound the region to replace (end is exclusive and includes the
-// newline after the closing marker, if any) and version names the marker found.
+// and end bound the region to replace (end is exclusive and includes the newline
+// after the closing marker, if any) and version names the marker found.
+//
+// A marker counts only ALONE ON ITS OWN LINE, whitespace-trimmed. The markers
+// delimit a region, and matching them anywhere in the text makes a file that
+// merely DOCUMENTS its own integration — quoting the marker in a sentence, which
+// is what a project explaining the block to its contributors writes — part of
+// the block. Both failures are silent: a quoted OLDER marker becomes the start
+// of the region, so the sentence is eaten and replaced; and a quoted CURRENT
+// marker reports the file as already up to date, so a genuinely stale block below
+// it is never repaired, on that run or any later one.
 func classifyClaudeMd(content string) (state claudeMdState, version string, start, end int) {
-	if blockMarkerCurrent != "" && strings.Contains(content, blockMarkerCurrent) {
-		return blockCurrent, "", 0, 0
-	}
-	if open := strings.Index(content, blockMarkerPrefix); open >= 0 {
-		start = strings.LastIndexByte(content[:open], '\n') + 1
-		if closeAt := strings.Index(content[open:], blockMarkerClose); closeAt >= 0 {
-			end = open + closeAt + len(blockMarkerClose)
-			if end < len(content) && content[end] == '\n' {
-				end++
-			}
-			markerLine, _, _ := strings.Cut(content[open:], "\n")
-			return blockOlder, blockVersion(markerLine), start, end
+	openStart, openVersion := -1, ""
+	closeEnd := -1
+	sawCurrent, sawHeading := false, false
+
+	for off := 0; off <= len(content); {
+		lineEnd, next := len(content), len(content)+1
+		if nl := strings.IndexByte(content[off:], '\n'); nl >= 0 {
+			lineEnd, next = off+nl, off+nl+1
 		}
-		return blockUndelimited, "", 0, 0
+		line := strings.TrimSpace(content[off:lineEnd])
+		switch {
+		case blockMarkerCurrent != "" && line == blockMarkerCurrent:
+			sawCurrent = true
+		case strings.HasPrefix(line, blockMarkerPrefix):
+			if openStart < 0 {
+				openStart, openVersion = off, blockVersion(line)
+			}
+		case line == blockMarkerClose:
+			if openStart >= 0 && closeEnd < 0 {
+				closeEnd = next
+				if closeEnd > len(content) {
+					closeEnd = len(content)
+				}
+			}
+		case strings.HasPrefix(line, blockHeading):
+			sawHeading = true
+		}
+		off = next
 	}
-	// The template shipped without the HTML markers until c36015e7, and users
-	// strip comments. Treating such a block as absent would append a SECOND copy.
-	if strings.Contains(content, blockHeading) {
+
+	switch {
+	case sawCurrent:
+		return blockCurrent, "", 0, 0
+	case openStart >= 0 && closeEnd >= 0:
+		return blockOlder, openVersion, openStart, closeEnd
+	case openStart >= 0, sawHeading:
+		// Recognisable but not bounded: an opening marker with no closing one, or
+		// a block identified only by its heading. The template shipped without
+		// the HTML markers until c36015e7, and users strip comments. Treating
+		// either as absent would append a SECOND copy.
 		return blockUndelimited, "", 0, 0
+	default:
+		return blockAbsent, "", 0, 0
 	}
-	return blockAbsent, "", 0, 0
 }
 
 // blockVersion pulls the version token out of a marker line, e.g. "v3" from
