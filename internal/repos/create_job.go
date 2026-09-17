@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -53,6 +54,36 @@ const createDrainTimeout = 30 * time.Second
 // the registry.
 const CreateJobTTL = time.Hour
 
+// The PHASES a create passes through, as distinct from its finer-grained Step.
+//
+// A phase says what KIND of thing is happening, and therefore how a client
+// should draw it; a step says which one. They are separate because the
+// drawable answer is not derivable from the step name without the client
+// knowing every step there is — and the set of steps is ours to change.
+//
+// PhaseTransfer is the one that matters: it is the phase with NO percent.
+// Nothing on the wire knows how many bytes a clone will move, so a create in
+// transfer reports Indeterminate with the remote's own progress line as its
+// message, and the UI draws an indeterminate bar. Inventing a number here was
+// the original sin — the incident this work comes from is a wizard that sat at
+// "40%" for minutes because 40 was a constant.
+const (
+	PhaseValidate = "validate"
+	PhaseTransfer = "transfer"
+	PhaseRegister = "register"
+	PhaseIndex    = "index"
+	PhaseDone     = "done"
+)
+
+// The index states a create job can report, mirroring RepoInstance.IndexStatus.
+// Empty means the job never reached indexing (it failed earlier, or is still
+// before it).
+const (
+	IndexStateIndexing = "indexing"
+	IndexStateReady    = "ready"
+	IndexStateError    = "error"
+)
+
 // CreateState is the lifecycle state of a detached create.
 //
 // Terminal states are CreateDone and CreateFailed. There is no separate
@@ -92,6 +123,21 @@ type CreateStatus struct {
 	Message string
 	Pct     int
 
+	// Phase is the coarse stage Step belongs to — one of the Phase* constants.
+	Phase string
+	// Indeterminate says the job is doing something whose completion CANNOT be
+	// expressed as a percent, so Pct must not be drawn as one. True during
+	// transfer, where the only honest report is the remote's own message.
+	Indeterminate bool
+	// IndexState mirrors RepoInstance.IndexStatus for the repo being created:
+	// "" before indexing starts, then indexing | ready | error.
+	//
+	// An "error" here rides on a job whose State is CreateDone, and that is
+	// deliberate: the repo EXISTS and is registered, so failing the job would
+	// describe a repo that is not there. The row shows the chip; the log has
+	// the cause.
+	IndexState string
+
 	// Err is nil unless State is CreateFailed.
 	Err error
 	// TimedOut reports whether the failure was the create's own deadline
@@ -130,15 +176,18 @@ type CreateJob struct {
 
 	startedAt time.Time
 
-	mu         sync.Mutex
-	state      CreateState
-	step       string
-	message    string
-	pct        int
-	ri         *RepoInstance
-	err        error
-	timedOut   bool
-	finishedAt time.Time
+	mu            sync.Mutex
+	state         CreateState
+	step          string
+	message       string
+	pct           int
+	phase         string
+	indeterminate bool
+	indexState    string
+	ri            *RepoInstance
+	err           error
+	timedOut      bool
+	finishedAt    time.Time
 }
 
 // ID returns the job's identifier, minted at start. It is what a client holds
@@ -161,18 +210,26 @@ func (j *CreateJob) Result() (*RepoInstance, error) {
 func (j *CreateJob) Status() CreateStatus {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.statusLocked()
+}
+
+// statusLocked is Status's body for callers that already hold j.mu.
+func (j *CreateJob) statusLocked() CreateStatus {
 	return CreateStatus{
-		ID:         j.id,
-		Name:       j.name,
-		Mode:       j.mode,
-		State:      j.state,
-		Step:       j.step,
-		Message:    j.message,
-		Pct:        j.pct,
-		Err:        j.err,
-		TimedOut:   j.timedOut,
-		StartedAt:  j.startedAt,
-		FinishedAt: j.finishedAt,
+		ID:            j.id,
+		Name:          j.name,
+		Mode:          j.mode,
+		State:         j.state,
+		Step:          j.step,
+		Message:       j.message,
+		Pct:           j.pct,
+		Phase:         j.phase,
+		Indeterminate: j.indeterminate,
+		IndexState:    j.indexState,
+		Err:           j.err,
+		TimedOut:      j.timedOut,
+		StartedAt:     j.startedAt,
+		FinishedAt:    j.finishedAt,
 	}
 }
 
@@ -181,6 +238,15 @@ func (j *CreateJob) Status() CreateStatus {
 func (j *CreateJob) record(e Event) {
 	j.mu.Lock()
 	j.step, j.message, j.pct = e.Step, e.Message, e.Pct
+	j.phase, j.indeterminate = e.Phase, e.Indeterminate
+	// IndexState is STICKY, unlike every other field here: an event that says
+	// nothing about the index must not erase what the last one established.
+	// The terminal "done" event carries no index state of its own, and the
+	// whole point of the mirror is that the final status still says how the
+	// index ended up.
+	if e.IndexState != "" {
+		j.indexState = e.IndexState
+	}
 	j.mu.Unlock()
 }
 
@@ -217,6 +283,62 @@ func (m *Manager) CreateJobByID(id string) (*CreateJob, bool) {
 	defer m.createJobsMu.Unlock()
 	j, ok := m.createJobs[id]
 	return j, ok
+}
+
+// ErrCreateRunning refuses to dismiss a job that has not finished. Dismissal
+// is how a FINISHED row leaves the list early; a running create is not a row a
+// client gets to discard, because the work is still happening and its outcome
+// still has to land somewhere.
+var ErrCreateRunning = errors.New("create is still running")
+
+// ErrCreateUnknown names a job id the manager does not hold — never started,
+// or reaped past CreateJobTTL. Indistinguishable on purpose, exactly as
+// CreateJobByID's second result is.
+var ErrCreateUnknown = errors.New("no create job with that id")
+
+// CreateJobs returns a snapshot of every job the manager still holds — running
+// ones and those that finished within CreateJobTTL — newest first.
+//
+// This is what makes a detached create RECOVERABLE. Without it, a client that
+// lost the id from the 202 (closed the tab, navigated away, restarted the app)
+// had no way back to a running or failed create: the single-job endpoint needs
+// an id it no longer has, and the repo list cannot show a repo that does not
+// exist yet. That is the "no trace of the create anywhere" half of the
+// incident.
+//
+// Newest first because the list is read as "what is happening now", and a
+// pending row's place in the UI is decided by the UI, not by this order.
+func (m *Manager) CreateJobs() []CreateStatus {
+	m.createJobsMu.Lock()
+	m.reapCreateJobsLocked(time.Now().UTC())
+	out := make([]CreateStatus, 0, len(m.createJobs))
+	for _, j := range m.createJobs {
+		out = append(out, j.Status())
+	}
+	m.createJobsMu.Unlock()
+	sort.Slice(out, func(i, k int) bool { return out[i].StartedAt.After(out[k].StartedAt) })
+	return out
+}
+
+// DismissCreateJob forgets a FINISHED job, so a failed create's row can leave
+// the list before its TTL expires without the user waiting an hour for it.
+//
+// Refuses a running job (ErrCreateRunning) rather than cancelling it: this is
+// a LIST operation, and cancelling a create is a different act with different
+// consequences (a half-clone to roll back) that no client asked for by
+// dismissing a row.
+func (m *Manager) DismissCreateJob(id string) error {
+	m.createJobsMu.Lock()
+	defer m.createJobsMu.Unlock()
+	j, ok := m.createJobs[id]
+	if !ok {
+		return ErrCreateUnknown
+	}
+	if j.Status().State == CreateRunning {
+		return ErrCreateRunning
+	}
+	delete(m.createJobs, id)
+	return nil
 }
 
 // reapCreateJobsLocked drops FINISHED jobs older than CreateJobTTL. A running

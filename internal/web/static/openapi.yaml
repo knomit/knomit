@@ -2315,6 +2315,41 @@ paths:
     put: *lensMcpSub
     delete: *lensMcpSub
 
+  /mcp:
+    get: &sessionMcp
+      tags: [mcp]
+      summary: MCP server proxy, session-bound
+      description: |
+        Dispatches to the configured MCP handler with NO repo or lens fixed by
+        the URL. The session chooses one by calling the knomit_bind tool, and
+        the choice is remembered against its Mcp-Session-Id; until it does,
+        every other tool returns a tool error naming knomit_bind. A stored
+        binding that no longer resolves is reported the same way rather than as
+        an HTTP status, so the JSON-RPC framing survives. Accepts any HTTP
+        method; request/response shape is defined by the Model Context
+        Protocol.
+      operationId: sessionMcpDispatch
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+    post: *sessionMcp
+    put: *sessionMcp
+    delete: *sessionMcp
+
+  /mcp/{path}:
+    parameters:
+      - { name: path, in: path, required: true, schema: { type: string } }
+    get: &sessionMcpSub
+      tags: [mcp]
+      summary: MCP server proxy, session-bound (sub-path)
+      operationId: sessionMcpDispatchSub
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+    post: *sessionMcpSub
+    put: *sessionMcpSub
+    delete: *sessionMcpSub
+
 components:
   parameters:
     Repo:

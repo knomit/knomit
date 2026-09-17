@@ -1,3 +1,4 @@
+import { CreateBar } from './PendingCreateRow';
 import type { RepoCreateStatus } from './api';
 
 // CREATE_STEPS is the step list each create mode runs, in order, mirroring the
@@ -16,10 +17,11 @@ import type { RepoCreateStatus } from './api';
 // match a row — a step missing here shows as an unmatched current step, not as
 // a hang.
 const CREATE_STEPS: Record<string, string[]> = {
-  preset: ['validate', 'ontology', 'init-git', 'register', 'done'],
-  custom: ['validate', 'ontology', 'init-git', 'register', 'done'],
-  clone: ['validate', 'clone', 'persist-origin', 'register', 'sync', 'done'],
-  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'sync', 'done'],
+  preset: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
+  custom: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
+  clone: ['validate', 'clone', 'persist-origin', 'register', 'sync', 'index', 'done'],
+  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'sync', 'index', 'done'],
+  subscribe: ['validate', 'subscribe', 'persist-origin', 'register', 'sync', 'index', 'done'],
 };
 
 const LABELS: Record<string, string> = {
@@ -33,6 +35,8 @@ const LABELS: Record<string, string> = {
   'persist-origin': 'Saving remote config',
   register: 'Registering repo',
   sync: 'Activating sync',
+  subscribe: 'Subscribing to the remote',
+  index: 'Building the search index',
   done: 'Repo ready',
 };
 
@@ -58,9 +62,21 @@ export function CreateProgress({ status }: { status: RepoCreateStatus | null }) 
 
   return (
     <div data-testid="create-progress" style={box}>
-      <div style={{ color: '#9c9', marginBottom: 6 }}>
-        {status.pct ?? 0}% {status.message || ''}
+      {/* The headline refuses to say a percent the server did not give.
+          During the transfer nothing on the wire knows how many bytes a clone
+          will move, so the server reports `indeterminate` and sends the
+          remote's own progress line as the message — which MOVES, while a
+          number invented to fill the gap does not. A wizard stuck at a
+          constant "40%" for minutes is the incident this replaces. */}
+      <div data-testid="create-progress-headline" style={{ color: '#9c9', marginBottom: 6 }}>
+        {status.indeterminate ? '' : `${status.pct ?? 0}% `}{status.message || ''}
       </div>
+      <div style={{ marginBottom: 6 }}><CreateBar status={status} /></div>
+      {status.index_state === 'error' && (
+        <div data-testid="create-index-error" style={{ color: '#e2c07a', marginBottom: 6 }}>
+          The repository is ready, but its search index did not finish building.
+        </div>
+      )}
       {steps.map((s, i) => {
         const done = cursor > i || status.state === 'done';
         const current = cursor === i && status.state !== 'done';

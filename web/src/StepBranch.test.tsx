@@ -135,3 +135,44 @@ describe('StepBranch when the answer is about knomit\'s own branch', () => {
     expect(card).not.toHaveTextContent(/earlier/i);
   });
 });
+
+// The advisory the server's `already_local` earns. This is the client half of
+// the early duplicate refusal: the user learns "you already have this" at the
+// BRANCH step, before pressing Create and waiting through a clone, which is
+// the complaint the whole change came from.
+describe('StepBranch reporting a knowledge base that is already local', () => {
+  it('names the local repo that already holds it', () => {
+    renderStep(state({ initialized: 'yes', initializedBranch: 'main', alreadyLocal: 'cyberai-kb' }));
+    const card = screen.getByTestId('branch-already-local');
+    expect(card).toHaveTextContent('You already have this knowledge base');
+    expect(card).toHaveTextContent('cyberai-kb');
+  });
+
+  // ORTHOGONAL to `initialized`, and this is the assertion that pins it: the
+  // existing answer still renders unchanged alongside the advisory. A remote
+  // can be a knowledge base AND already local, and folding the second answer
+  // into the first would change what every consumer of `initialized` does.
+  it('does not disturb the initialized answer it sits beside', () => {
+    renderStep(state({ initialized: 'yes', initializedBranch: 'main', alreadyLocal: 'cyberai-kb' }));
+    expect(screen.getByTestId('branch-initialized')).toBeInTheDocument();
+    expect(screen.getByTestId('branch-initialized')).toHaveTextContent('already holds a knowledge base');
+  });
+
+  // It also shows on the UNESTABLISHED branch answer: the two come from
+  // different halves of one response, and a probe that could not read the
+  // branch may still have read the remote's identity.
+  it('shows even when the branch check did not complete', () => {
+    renderStep(state({ initialized: '', initializedDetail: 'timed out', alreadyLocal: 'cyberai-kb' }));
+    expect(screen.getByTestId('branch-already-local')).toBeInTheDocument();
+    expect(screen.getByTestId('branch-blocked')).toBeInTheDocument();
+  });
+
+  // ABSENCE PROVES NOTHING, so absence says nothing. The two cheap layers are
+  // silent for a non-knomit remote and for a local copy that is behind; a card
+  // claiming "not a duplicate" would be the screen asserting something the
+  // server never established.
+  it('renders nothing when the server named no holder', () => {
+    renderStep(state({ initialized: 'yes', initializedBranch: 'main' }));
+    expect(screen.queryByTestId('branch-already-local')).toBeNull();
+  });
+});

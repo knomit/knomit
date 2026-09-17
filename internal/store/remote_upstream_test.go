@@ -167,7 +167,7 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 
 	// Empty upstreamMain → detection must find "master", and must REPORT it:
 	// the caller persists the returned name into control.db's origin.
-	upstream, wasEmpty, err := svc.InitFromRemote(fileuri.New(bareDir), nil, "", "agent/test", nil)
+	upstream, wasEmpty, err := svc.InitFromRemote(fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "master", upstream, "InitFromRemote must return the branch it resolved")
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
@@ -217,7 +217,7 @@ func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 
 	// Empty upstreamMain → must prefer "main", NOT the agent-branch HEAD.
-	upstream, wasEmpty, err := svc.InitFromRemote(fileuri.New(bareDir), nil, "", "agent/test", nil)
+	upstream, wasEmpty, err := svc.InitFromRemote(fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream, "InitFromRemote must return the branch it resolved")
 	require.False(t, wasEmpty, "a remote with refs must be reported as the CLONE path, not the empty one")
@@ -278,7 +278,7 @@ func TestInitSubscription_TracksUpstreamOnlyWithNoAgentRef(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	upstream, err := svc.InitSubscription(fileuri.New(bareDir), nil, "")
+	upstream, err := svc.InitSubscription(fileuri.New(bareDir), nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream)
 
@@ -345,7 +345,7 @@ func TestInitSubscription_EmptyRemoteIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	_, err = svc.InitSubscription(fileuri.New(bareDir), nil, "")
+	_, err = svc.InitSubscription(fileuri.New(bareDir), nil, "", nil)
 	require.ErrorIs(t, err, transport.ErrEmptyRemoteRepository)
 }
 
@@ -370,7 +370,7 @@ func TestInitSubscription_ResolvesRemoteHEADWhenNoMain(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	upstream, err := svc.InitSubscription(fileuri.New(bareDir), nil, "")
+	upstream, err := svc.InitSubscription(fileuri.New(bareDir), nil, "", nil)
 	require.NoError(t, err)
 	require.Equal(t, "master", upstream)
 	_, mainErr := svc.rh.gits.Reference(plumbing.NewBranchReferenceName("main"))

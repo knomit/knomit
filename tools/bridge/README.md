@@ -69,14 +69,21 @@ the session goes dead by silence instead. There is no reconnect and no retry.
 Without a command, `knomit-bridge` runs as the MCP stdio↔HTTP proxy:
 
 ```
-knomit-bridge [--repo <name>] [--log <path>] [base-url]
+knomit-bridge [--repo <name> | --lens <name>] [--log <path>] [base-url]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--repo` | `core` | Repository name |
+| `--repo` | none | Repository name; connects to `/api/v1/repos/<repo>/branches/<branch>/mcp` |
+| `--lens` | none | Lens name; connects to `/api/v1/lenses/<lens>/mcp` (mutually exclusive with `--repo`) |
+| *(neither)* | — | Connects to the session-bound mount `/api/v1/mcp`; the agent binds with `knomit_bind` |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
 | `base-url` | `http://localhost:19278` | Base URL of the knomit server |
+
+With neither flag the bridge connects to `/api/v1/mcp`; the agent binds a repo
+or lens with `knomit_bind` and may switch later. Until it does, every other
+tool fails. A bound subscription (a read-only follower of a remote branch)
+serves reads at the branch it follows and refuses writes.
 
 Flags accept both `-flag value` and `--flag value` styles.
 
@@ -89,12 +96,23 @@ host, not by hand):
 knomit-bridge claude init [-repo <name>]
                                   # scaffold Claude Code integration files here
 knomit-bridge claude hook <event>       # event ∈ session-start, post-edit,
-                                        #         post-ask, pre-compact
+                                        #         post-ask, pre-compact,
+                                        #         memory-guard
 
 knomit-bridge antigravity init [-repo <name>|-lens <name>]
                                   # scaffold the Antigravity plugin here
 knomit-bridge antigravity hook <event>  # event ∈ pre-invocation
 ```
+
+`memory-guard` is a PreToolUse hook (matcher `Write|Edit|MultiEdit|Bash`). It
+denies a tool call that would write a team-relevant note into Claude Code's
+private auto-memory directory (`~/.claude/projects/<cwd>/memory/`), pointing at
+`/knomit-remember` instead — that directory belongs to one session on one
+machine, so a note left there is invisible to every other agent. `MEMORY.md` and
+`type: user` memories are allowed through. It fails OPEN on anything it does not
+positively recognise: a malformed payload, an unreadable file, a Bash command
+that only READS the directory. A guard on those four tools sees nearly every
+action an agent takes, so a false deny would block real work and get it removed.
 
 `agy` is accepted as an alias for `antigravity`. Global flags such as `--log`
 are accepted before any subcommand.

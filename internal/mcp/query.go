@@ -189,7 +189,10 @@ func QueryHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// A binding federates one write repo and N read mounts. Sessions and
 		// snapshots always live in the WRITE repo's store (sWrite); relevance
 		// reads fan out across every mount (queryFirstCall).
-		b := repos.BindingFromContext(ctx)
+		b, err := repos.RequireBinding(ctx)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		sWrite, releaseWrite, err := storeIndices(b.Write())
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil

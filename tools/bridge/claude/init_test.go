@@ -418,6 +418,16 @@ func TestClaudeMdBlockNote(t *testing.T) {
 			"older version",
 		},
 		{
+			// v3 is the marker that was CURRENT until the memory-guard block
+			// bumped it to v4. A project scaffolded before that bump must be
+			// told its block is stale, or it never learns the rule the bump
+			// exists to ship — this is the case a bump silently breaks if the
+			// template and the constant ever drift apart.
+			"the immediately previous version is still older",
+			"# Project\n\n<!-- knomit:integration v3 -->\n" + blockHeading + "\n\nold text\n",
+			"older version",
+		},
+		{
 			// The template shipped without the HTML marker until c36015e7, and
 			// users strip comments. Calling such a block absent would advise
 			// appending a SECOND full copy.

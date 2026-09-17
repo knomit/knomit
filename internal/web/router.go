@@ -126,6 +126,11 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// param without backtracking, so nesting it here would make a repo
 	// actually named "creates" unreachable at every route below.
 	r.Get("/repo-creates/{id}", handleHALRepoCreateStatus(b, s.Manager))
+	// The collection: a client that lost the id from its 202 finds its create
+	// here. DELETE forgets a FINISHED job so a failed row can be dismissed
+	// without waiting out CreateJobTTL.
+	r.Get("/repo-creates", handleHALRepoCreates(b, s.Manager))
+	r.Delete("/repo-creates/{id}", handleHALRepoCreateDismiss(s.Manager))
 
 	// Probes an origin before create, so the wizard can classify it (has refs
 	// / empty / unreachable) instead of asking the user to declare that up
@@ -237,6 +242,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 				r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 			})
 		})
+	})
+
+	// Unscoped MCP mount: the session picks its repo/lens through knomit_bind.
+	r.Group(func(r chi.Router) {
+		r.Use(SessionBindingMiddleware(s.Manager))
+		r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+		r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 	})
 
 	// Lens collection: no {lens} segment, so unwrapped.

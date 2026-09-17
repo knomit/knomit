@@ -13,10 +13,17 @@ import (
 // are POST-for-reads and must bypass the read-only method gate. Read-only-ness
 // for MCP is enforced by tool filtering in mcp.NewServer instead.
 //
-// Two route shapes reach the same dispatcher (see router.go): the branch-scoped
-// /repos/{repo}/branches/{branch}/mcp route and the lens-scoped /lenses/{lens}/mcp
-// route. Both must bypass the method gate; the lens REST CRUD endpoints
-// (/lenses and /lenses/{lens}) are deliberately NOT matched so they stay gated.
+// Three route shapes reach the same dispatcher (see router.go): the
+// branch-scoped /repos/{repo}/branches/{branch}/mcp route, the lens-scoped
+// /lenses/{lens}/mcp route, and the session-bound /mcp mount. All three must
+// bypass the method gate; the lens REST CRUD endpoints (/lenses and
+// /lenses/{lens}) are deliberately NOT matched so they stay gated.
+//
+// The bare /mcp alternative matters most in read-only mode: initialize and
+// knomit_bind are themselves POSTs, so gating them would make a read-only
+// instance unreachable through the no-flag bridge — nothing could ever be
+// bound, and therefore nothing read. Read-only-ness there is enforced where it
+// is for the other two mounts: by tool filtering in mcp.NewServer.
 //
 // The gate runs on r.URL.Path, which retains the full APIBase prefix even
 // though the handler is inside a chi sub-router mounted at APIBase. Each
@@ -24,7 +31,7 @@ import (
 // so that arbitrary …/facts/* paths that happen to contain a /branches/X/mcp or
 // /lenses/X/mcp segment cannot bypass the gate.
 var mcpRoutePattern = regexp.MustCompile("^" + regexp.QuoteMeta(APIBase) +
-	`(?:/repos/[^/]+/branches/[^/]+/mcp|/lenses/[^/]+/mcp)(/|$)`)
+	`(?:/repos/[^/]+/branches/[^/]+/mcp|/lenses/[^/]+/mcp|/mcp)(/|$)`)
 
 // isMutatingRequest reports whether a request would mutate state and therefore
 // must be rejected in read-only mode. Mutating HTTP methods are gated unless

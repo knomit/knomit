@@ -7,6 +7,7 @@ package repos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -180,13 +181,13 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 	write := m.GetByUID(l.WriteUID)
 	if write == nil {
-		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.repoLabel(l.WriteUID))
+		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.RepoLabel(l.WriteUID))
 	}
 	reads := make([]ReadTarget, 0, len(l.Reads))
 	for _, lr := range l.Reads {
 		ri := m.GetByUID(lr.RepoUID)
 		if ri == nil {
-			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.repoLabel(lr.RepoUID))
+			return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.RepoLabel(lr.RepoUID))
 		}
 		// Empty read pins default to each member's own READ branch at resolve
 		// time — the agent branch, or the upstream for a subscription.
@@ -237,7 +238,7 @@ func BindingFromContextOpt(ctx context.Context) (*Binding, bool) {
 // RepoInstance and bound branch — so the single-repo path needs no middleware
 // change and stays behavior-identical. Panics when neither a binding nor a
 // RepoInstance is in the context: that is a programming error, mirroring
-// RepoFromContext.
+// RepoFromContext. MCP tool handlers use RequireBinding, which never panics.
 func BindingFromContext(ctx context.Context) *Binding {
 	if b, ok := BindingFromContextOpt(ctx); ok {
 		return b
@@ -248,6 +249,34 @@ func BindingFromContext(ctx context.Context) *Binding {
 	}
 	branch, _ := BranchFromContextOpt(ctx)
 	return NewBindingOfRepo(ri, branch)
+}
+
+// ErrUnbound is what every tool returns on a session-bound mount that has not
+// chosen a repo or lens yet. The text is the tool error the agent reads, so it
+// names the tool it must call.
+var ErrUnbound = errors.New("no repo or lens is bound to this session — call knomit_bind with a repo or lens name first")
+
+// RequireBinding is BindingFromContext for callers that must FAIL rather than
+// panic: the MCP tool handlers, which on the unscoped mount can legitimately
+// run with nothing bound.
+//
+// Order matters. An explicit Binding wins. Failing that, a RepoInstance in the
+// context means a URL-scoped mount (or a direct handler call in a test), and
+// the lens-of-one is synthesized exactly as BindingFromContext does. Only then
+// do the session-bound cases apply: a stored pin that would not resolve
+// surfaces its own reason, and anything else is simply unbound.
+func RequireBinding(ctx context.Context) (*Binding, error) {
+	if b, ok := BindingFromContextOpt(ctx); ok {
+		return b, nil
+	}
+	if ri, ok := RepoFromContextOpt(ctx); ok {
+		branch, _ := BranchFromContextOpt(ctx)
+		return NewBindingOfRepo(ri, branch), nil
+	}
+	if err, ok := BindingErrorFromContext(ctx); ok {
+		return nil, err
+	}
+	return nil, ErrUnbound
 }
 
 // BindingPinFromContext resolves the request's binding to a PinID
@@ -273,11 +302,20 @@ func BindingPinFromContext(ctx context.Context) string {
 	return ""
 }
 
-// repoLabel resolves a registry uid to the repo NAME for an error message,
-// falling back to the uid when nothing knows it. A member that has no live
-// instance still has a registry row, so the name is almost always available —
-// and a bare ksuid names nothing the reader has ever been shown.
-func (m *Manager) repoLabel(uid string) string {
+// RepoLabel resolves a registry uid to its display NAME for messages, falling
+// back to the uid when nothing knows it. A member that has no live instance
+// still has a registry row, so the name is almost always available — and a bare
+// ksuid names nothing the reader has ever been shown.
+//
+// Exported because internal/mcp needs the same resolution when knomit_repos
+// lists a lens member that has no live instance, and a second copy of five
+// lines in another package would be free to drift from this one.
+//
+// LOCKING: takes m.mu (via Repos). NEVER call it from inside a ForEach callback
+// or any code path already holding m.mu — sync.RWMutex is not reentrant, and a
+// pending writer between the two acquisitions deadlocks the Manager. Same rule
+// as validateLensLocked above.
+func (m *Manager) RepoLabel(uid string) string {
 	reg := m.Repos()
 	if reg == nil || uid == "" {
 		return uid

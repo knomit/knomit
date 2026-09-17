@@ -105,7 +105,9 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		// asked to start.
 		if err := m.CreatePreflight(r.Context(), spec); err != nil {
 			status, title := createErrStatus(err)
-			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)
+			// The title already names the kind of refusal, so the detail must
+			// not repeat it — see detailWithoutTitlePrefix.
+			hal.WriteProblem(w, status, title, detailWithoutTitlePrefix(err, repos.ErrLocalOriginDenied), r.URL.Path)
 			return
 		}
 
@@ -143,6 +145,51 @@ func handleHALRepoCreateStatus(b hal.URLBuilder, m *repos.Manager) http.HandlerF
 	}
 }
 
+// handleHALRepoCreates serves GET /api/v1/repo-creates — every job the manager
+// still holds, running and finished-within-TTL, newest first.
+//
+// The collection is what makes a detached create RECOVERABLE. The 202 hands
+// back one id; a client that loses it (closed tab, navigated to Logs,
+// restarted the app) had no route back to a running or failed create, because
+// the single-job endpoint needs the id and the repo list cannot show a repo
+// that does not exist yet. That is the "no trace of the create anywhere" half
+// of the incident.
+func handleHALRepoCreates(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobs := m.CreateJobs()
+		items := make([]map[string]any, 0, len(jobs))
+		for _, st := range jobs {
+			items = append(items, createStatusBody(b, st))
+		}
+		hal.WriteHAL(w, http.StatusOK, hal.CollectionView[map[string]any]{
+			Count:    len(items),
+			Links:    hal.LinkMap{"self": {Href: b.RepoCreates()}},
+			Embedded: map[string][]map[string]any{"creates": items},
+		})
+	}
+}
+
+// handleHALRepoCreateDismiss serves DELETE /api/v1/repo-creates/{id}: forget a
+// FINISHED job so its row leaves the list without waiting out CreateJobTTL.
+//
+// A RUNNING job answers 409, not 204 and not a cancel. Dismissing a row is a
+// list operation; cancelling a create is a different act with a half-clone to
+// roll back, and no client asked for that by clicking a dismiss control.
+func handleHALRepoCreateDismiss(m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch err := m.DismissCreateJob(chi.URLParam(r, "id")); {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, repos.ErrCreateRunning):
+			hal.WriteProblem(w, http.StatusConflict, "Create is still running",
+				"a running create cannot be dismissed; it will finish or reach its deadline", r.URL.Path)
+		default:
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+				"no create job with that id (it may have expired)", r.URL.Path)
+		}
+	}
+}
+
 // createStatusBody renders one create job for the wire. Both the 202 and the
 // poll use it, so a client parses ONE shape and the initial response is
 // literally the first poll result.
@@ -154,8 +201,36 @@ func createStatusBody(b hal.URLBuilder, st repos.CreateStatus) map[string]any {
 		"state":     string(st.State),
 		"step":      st.Step,
 		"message":   st.Message,
-		"pct":       st.Pct,
-		"_links":    hal.LinkMap{"self": {Href: b.RepoCreate(st.ID)}},
+		// phase says what KIND of work is happening and is what a client draws
+		// from; the step set is ours to change.
+		"phase":         st.Phase,
+		"indeterminate": st.Indeterminate,
+		"_links":        hal.LinkMap{"self": {Href: b.RepoCreate(st.ID)}},
+	}
+	// THE WIRE CONTRACT: indeterminate true → NO pct key at all; otherwise pct
+	// is present. A client sees no number rather than a false one.
+	//
+	// Omitted rather than zeroed. The job's Pct is a latest value, so writing 0
+	// here would run 5 → 0 → 70 across a create and send a monotonic client's
+	// bar BACKWARDS mid-transfer — a different wrong picture from the frozen
+	// 40%, not a fix for it. Absence is the only honest encoding of "there is
+	// no percentage for this", and it is the one a client cannot accidentally
+	// render: `pct ?? 0` produces a number, but only if something reads it, and
+	// a client that respects `indeterminate` never does.
+	//
+	// knomit's own UI honours the flag (CreateProgress prints no percent,
+	// PendingCreateRow draws an indeterminate bar), but this collection is now
+	// listable by anyone, and a consumer that ignored `indeterminate` would
+	// otherwise draw exactly the incident's frozen bar from a number the server
+	// invented. Now there is no number to draw.
+	if !st.Indeterminate {
+		body["pct"] = st.Pct
+	}
+	if st.IndexState != "" {
+		// Present on a DONE job too, and that is the point: "done" now means
+		// indexed, and an index that ended in error rides on a create that
+		// succeeded — the repo is there, and its row shows the chip.
+		body["index_state"] = st.IndexState
 	}
 	switch st.State {
 	case repos.CreateDone:
@@ -198,6 +273,26 @@ func createErrStatus(err error) (int, string) {
 		return http.StatusConflict, "Remote is not a knowledge base"
 	case errors.Is(err, repos.ErrRemoteAlreadyInitialized):
 		return http.StatusConflict, "Remote is already a knowledge base"
+	// The duplicate-knowledge-base refusal, from any of the three layers. 409
+	// for the same reason as the shape refusals above: the request is
+	// well-formed and understood, and the conflict is with local state — the
+	// error text names the repo that already holds it, which is the only thing
+	// the reader can act on.
+	case errors.Is(err, repos.ErrKnowledgeBaseAlreadyLocal):
+		return http.StatusConflict, "Knowledge base already registered"
+	// NOT a refusal: the check could not be RUN. Reported as unavailable so it
+	// can never be mistaken for a create that was examined and rejected, nor
+	// for one that was examined and passed.
+	case errors.Is(err, repos.ErrRegistryUnavailable):
+		return http.StatusServiceUnavailable, "Registry unavailable"
+	// The local-origin policy, reached at preflight since the identity layers
+	// moved the gate ahead of the create. 400 and this title match what
+	// PUT /origin has always answered for the same refusal — one policy, one
+	// status, whichever door the request came through. Without this arm it
+	// fell to the default and answered 500: a server error for a request the
+	// server understood perfectly and declined on policy.
+	case errors.Is(err, repos.ErrLocalOriginDenied):
+		return http.StatusBadRequest, "Origin not allowed"
 	default:
 		return http.StatusInternalServerError, "Create failed"
 	}

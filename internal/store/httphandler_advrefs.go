@@ -1,9 +1,11 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
@@ -12,6 +14,63 @@ import (
 
 	"knomit/internal/platform/version"
 )
+
+// capKnomitRepoID advertises the knowledge base this store holds — the 40-hex
+// ROOT COMMIT of the consensus branch, which is a knowledge base's identity
+// (kb/decisions/fact/src-ref-repo-id-commit-blob) and is identical in every
+// copy of it.
+//
+// It exists so a subscriber can learn, from the ref advertisement alone,
+// whether it ALREADY holds this knowledge base under another name — a refusal
+// that used to arrive only after the whole clone (see
+// kb/invariants/repos/one-local-copy-per-knowledge-base). Advertising it is
+// safe with every client: git and go-git both ignore capabilities they do not
+// know, and neither echoes one back.
+//
+// It is a claim the remote makes about ITSELF, and it is trusted only to
+// REFUSE. Nothing records identity from it: the authoritative root commit is
+// always the one computed on the local store after the clone.
+const capKnomitRepoID = capability.Capability("knomit-repo-id")
+
+// rootCommitCache memoises the consensus branch's root commit, keyed by the
+// branch TIP it was computed from.
+//
+// CLASSIFICATION (MN13): not a corpus property — it stores one value the
+// repository itself determines, and derives nothing. The key is the tip rather
+// than the branch name because a root commit cannot change while the tip
+// stands still: history is append-only in front of it, so any advance of the
+// tip leaves the same root, and the only thing that can install a DIFFERENT
+// root is a wholesale store replacement, which moves the tip too. Keying on
+// the tip therefore makes a stale answer unrepresentable rather than unlikely,
+// at the cost of one first-parent walk after each push.
+type rootCommitCache struct {
+	mu   sync.Mutex
+	tip  plumbing.Hash
+	root string
+}
+
+// rootFor returns the root commit reachable from tip, computing it at most
+// once per distinct tip. A failure is NOT cached: it is retried on the next
+// advertisement, and reported as "" so the caller can advertise nothing rather
+// than a wrong identity.
+func (c *rootCommitCache) rootFor(rh *repoHandler, branch string, tip plumbing.Hash) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.root != "" && c.tip == tip {
+		return c.root
+	}
+	root, err := rh.rootCommit(context.Background(), branch)
+	if err != nil {
+		// Advertising no identity is the honest answer, and it costs only the
+		// early refusal: the post-clone check (layer 3) is authoritative and
+		// still runs.
+		log.Warn().Err(err).Str("branch", branch).
+			Msg("git advertise: root commit unresolved; knomit-repo-id not advertised")
+		return ""
+	}
+	c.tip, c.root = tip, root
+	return root
+}
 
 // errUpstreamMissing is returned when refs/heads/<upstream> does not exist.
 // The repo is unservable: there is no consensus branch to put HEAD on, and a
@@ -28,7 +87,7 @@ var errUpstreamMissing = errors.New("knomit: consensus branch does not exist in 
 // The returned set holds every advertised tip; upload-pack refuses wants
 // outside it, which is git's own uploadpack.allowAnySHA1InWant=false default
 // and what stops a hidden ref from being fetchable by hash.
-func buildAdvRefs(rh *repoHandler, upstream string) (*packp.AdvRefs, map[plumbing.Hash]struct{}, error) {
+func buildAdvRefs(rh *repoHandler, upstream string, roots *rootCommitCache) (*packp.AdvRefs, map[plumbing.Hash]struct{}, error) {
 	ar := packp.NewAdvRefs()
 	tips := map[plumbing.Hash]struct{}{}
 
@@ -39,6 +98,10 @@ func buildAdvRefs(rh *repoHandler, upstream string) (*packp.AdvRefs, map[plumbin
 	// not advertised, so no client ever sends them and the pack builder never
 	// has to answer a request shape it does not implement.
 	_ = caps.Set(capability.Shallow)
+	// side-band-64k so a fetch can carry human-readable progress alongside the
+	// pack. Advertising it is what lets a client ASK for it; a client that does
+	// not ask gets exactly the bytes it got before (httphandler.go).
+	_ = caps.Set(capability.Sideband64k)
 
 	upstreamRef := plumbing.NewBranchReferenceName(upstream)
 	ref, err := rh.gits.Reference(upstreamRef)
@@ -64,6 +127,11 @@ func buildAdvRefs(rh *repoHandler, upstream string) (*packp.AdvRefs, map[plumbin
 	ar.References[upstreamRef.String()] = h
 	tips[h] = struct{}{}
 	_ = caps.Set(capability.SymRef, "HEAD:"+upstreamRef.String())
+	if roots != nil {
+		if root := roots.rootFor(rh, upstream, h); root != "" {
+			_ = caps.Set(capKnomitRepoID, root)
+		}
+	}
 
 	iter, err := rh.gits.IterReferences()
 	if err != nil {

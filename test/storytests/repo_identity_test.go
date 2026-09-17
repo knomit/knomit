@@ -98,10 +98,35 @@ func TestCreate_MirrorCloneRejected(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
+	var betaEvents []repos.Event
 	_, err = m.Create(context.Background(), repos.CreateSpec{
 		Name: "beta", Mode: "clone", Origin: &repos.OriginSpec{URL: mirror.URL()},
-	}, nil)
-	require.ErrorIs(t, err, repos.ErrRepoAlreadyRegistered)
+	}, func(e repos.Event) { betaEvents = append(betaEvents, e) })
+
+	// The refusal MOVED EARLIER, and this is the assertion that records it.
+	//
+	// It used to be ErrRepoAlreadyRegistered: Registry.RecordRepoID spoke after
+	// m.Add had already opened the store, backfilled the commit graph and
+	// started the index heal, and the rollback then cancelled that heal. The
+	// three-layer check refuses the same create on the same grounds — a shared
+	// root commit — but before registration, so nothing expensive is done and
+	// then undone.
+	//
+	// RecordRepoID is NOT gone and this is not a weakening: it remains the
+	// structural guard named by
+	// kb/invariants/repos/one-local-copy-per-knowledge-base, and it still fires
+	// for anything that reaches it. It is simply unreachable along THIS path
+	// now. Its own coverage lives in internal/repos; the early refusal's is
+	// TestCreate_Layer3_RefusesBeforeRegistrationWhenLocalCopyIsBehind.
+	require.ErrorIs(t, err, repos.ErrKnowledgeBaseAlreadyLocal)
+	require.Contains(t, err.Error(), `"alpha"`, "the refusal names the repo that already holds it")
+
+	// BEFORE registration, not merely "rejected": reaching the register step
+	// is what used to cost the store open, the backfill and the cancelled heal.
+	for _, e := range betaEvents {
+		require.NotEqual(t, "register", e.Step, "the refusal must precede m.Add")
+		require.NotEqual(t, repos.PhaseIndex, e.Phase, "the refusal must precede the index heal")
+	}
 
 	// The rejected create leaves nothing: no live repo, no registry row.
 	require.Nil(t, m.Get("beta"))
