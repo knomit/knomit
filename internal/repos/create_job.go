@@ -327,9 +327,18 @@ func (m *Manager) CreateJobs() []CreateStatus {
 	// Linux and macOS but the system clock's tick on Windows — coarse enough
 	// that two creates started back to back routinely land on the SAME instant,
 	// and the faster the machine the likelier. That is how this surfaced: the
-	// repo's first Windows CI job failed
-	// internal/web's TestGetRepoCreates_ListsNewestFirst, which had been
-	// passing everywhere else on nothing but clock resolution.
+	// repo's first Windows CI job failed internal/web's create-list test, which
+	// had been passing everywhere else on nothing but clock resolution.
+	//
+	// NAME THE CALL THAT MAKES THAT TRUE: StartCreate stores
+	// `time.Now().UTC()`, and .UTC() STRIPS THE MONOTONIC READING. Equal and
+	// After compare the monotonic clock when both operands carry one — QPC on
+	// Windows, sub-microsecond — so a StartedAt that kept its monotonic reading
+	// would practically never tie and none of the above would hold. It is the
+	// .UTC() that puts the coarse wall clock into this comparison. The fix
+	// below does not depend on that (the tiebreak is unconditional), but this
+	// explanation does: drop the .UTC() in StartCreate and the ties stop,
+	// leaving a paragraph that describes something no longer true.
 	//
 	// The tiebreak is for DETERMINISM, not for recency. Ids are ksuids, which
 	// order by a one-SECOND timestamp before their random payload, so two ids

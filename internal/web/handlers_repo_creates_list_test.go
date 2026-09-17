@@ -12,10 +12,18 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// GET /repo-creates lists every job the manager holds, newest first, in the
-// SAME body shape the single-job resource serves — so a client parses one
-// shape, and a row in the list is a row it can already draw.
-func TestGetRepoCreates_ListsNewestFirst(t *testing.T) {
+// GET /repo-creates lists every job the manager holds, IN THE MANAGER'S OWN
+// ORDER, in the SAME body shape the single-job resource serves — so a client
+// parses one shape, and a row in the list is a row it can already draw.
+//
+// The newest-first CONTRACT is not asserted here and deliberately so: it
+// belongs to repos.CreateJobs, where it can be tested against constructed
+// timestamps instead of whatever two back-to-back creates happen to get from
+// the platform's clock. See TestCreateJobs_NewestFirstAndReapsExpired and
+// TestCreateJobs_SameInstantIsATotalOrder in internal/repos. What this covers
+// is the HTTP layer's own failure modes — reordering, dropping or duplicating
+// what the manager returned.
+func TestGetRepoCreates_ServesTheManagersOrder(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
 
@@ -45,9 +53,18 @@ func TestGetRepoCreates_ListsNewestFirst(t *testing.T) {
 	// repos.CreateJobs and tested there against constructed timestamps
 	// (TestCreateJobs_NewestFirstAndReapsExpired,
 	// TestCreateJobs_SameInstantIsATotalOrder).
+	//
+	// CreateJobs also REAPS expired jobs, so this oracle mutates the manager.
+	// Harmless where it stands — both jobs are running, and the handler has
+	// already called it — but do not move it earlier without re-reading
+	// reapCreateJobsLocked.
 	want := make([]string, 0, 2)
 	for _, st := range s.Manager.CreateJobs() {
 		want = append(want, st.ID)
+	}
+	if len(want) != len(creates) {
+		t.Fatalf("manager reports %d creates, handler served %d: %v vs %s",
+			len(want), len(creates), want, rec.Body.String())
 	}
 	if creates[0]["create_id"] != want[0] || creates[1]["create_id"] != want[1] {
 		t.Fatalf("handler reordered the manager's list: want %v, got %v / %v",
