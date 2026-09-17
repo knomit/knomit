@@ -60,7 +60,8 @@ name: Tests
 #     libtokenizers.a from source there — clone the pinned tag, run cargo, ~5
 #     minutes — before a single test executes. See .github/actions/
 #     native-toolchain, which also explains why the key has no restore-keys.
-#   - `-timeout 40m` on the slow-tests legs. On Windows internal/synthesize
+#   - `-timeout 40m`, on the WINDOWS slow-tests legs only — ubuntu and macos
+#     take 10m from the same matrix. On Windows internal/synthesize
 #     (1776s) and internal/store (816s) exceed go test's 10-minute per-package
 #     default outright, and internal/repos (441-639s across runs) straddles it.
 #     Nothing hangs; all three are filesystem cost, and the Makefile scopes the
@@ -85,8 +86,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-2025]
+        include:
+          # contract-timeout is the ceiling on the origin-sync cells at the end
+          # of this job, and it is per-platform for the same reason slow-tests
+          # is: those cells drive clone/sync/push over a git server, which is
+          # filesystem cost, and Windows runs that class 5-10x slower here
+          # (internal/store 816s against seconds elsewhere). A unix-tuned 300s
+          # applied to Windows would be a red build reporting a ceiling, not a
+          # fault. unix KEEPS 300s deliberately — it is a hang guard there and
+          # the cells take a fraction of it.
+          - os: ubuntu-latest
+            contract-timeout: 300s
+          - os: macos-latest
+            contract-timeout: 300s
+          - os: windows-2025
+            contract-timeout: 1200s
     runs-on: ${{ matrix.os }}
+    # A wedged runner should not burn the 6-hour default. Same reasoning as the
+    # ceiling on slow-tests, at a third of it: every step in this job is
+    # measured in minutes, the slowest of them on the slowest platform being
+    # the 93s of bridge+platform+cmd.
+    timeout-minutes: 60
     # bash on every platform, stated once. GitHub's default shell on Windows is
     # pwsh, so without this line every `run:` below would need its own `shell:`
     # or would be read by a shell that does not know what $LIBDIR or `export`
@@ -170,7 +190,7 @@ jobs:
       - name: Origin-sync contract cells (fault matrix)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test -tags contract ./test/storytests/ -count=1 -timeout 300s
+          CGO_ENABLED=1 go test -tags contract ./test/storytests/ -count=1 -timeout ${{ matrix.contract-timeout }}
 
   # The three packages that are slow ON WINDOWS ONLY, in their own job so the
   # build-test leg stays a fast answer to "did this break the build". Measured

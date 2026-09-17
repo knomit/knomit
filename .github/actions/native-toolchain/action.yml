@@ -138,9 +138,12 @@ runs:
           grep -oE "^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"[^\"]+\"" tools/fetchlibs/spec.go \
             | grep -oE '"[^"]+"' | tr -d '"'
         }
-        ort=$(read_const ortVersion)
-        ver=$(read_const tokenizersVersion)
-        tgt=$(read_const tokenizersTarget)
+        # `|| true` on each: under `set -e` an assignment takes the exit status
+        # of its substitution, so a grep that matches nothing would kill the
+        # step here with a bare exit 1 and the message below would never print.
+        ort=$(read_const ortVersion || true)
+        ver=$(read_const tokenizersVersion || true)
+        tgt=$(read_const tokenizersTarget || true)
         if [ -z "$ort" ] || [ -z "$ver" ] || [ -z "$tgt" ]; then
           echo "::error::could not read ortVersion/tokenizersVersion/tokenizersTarget from tools/fetchlibs/spec.go"
           echo "tokenizersTarget IS part of the native-lib cache key, and all three are what" >&2
@@ -161,10 +164,17 @@ runs:
     # would never correct it — a green job linking the wrong native library,
     # which is worse than the 5 minutes it saved.
     #
-    # restore + save rather than the combined actions/cache, because the
-    # combined action saves only when the job SUCCEEDS. This suite is expected
-    # to go red sometimes (that is what it is for), and every red run would
-    # then repay the cargo build. The save below runs with `if: always()`.
+    # restore + save rather than the combined actions/cache, so the save can
+    # sit HERE — at the end of this action, before either calling job runs a
+    # single test — instead of in a post step that fires after them. That
+    # placement is the whole point: a red `go test` later cannot reach back and
+    # skip a step that already ran, so a failing suite keeps the cargo build
+    # without any `always()` on the save, and a failure INSIDE this action
+    # (cargo dying on the CRT mismatch above, say) correctly saves nothing.
+    # Saving a half-built lib dir would be the worst outcome available here:
+    # cache keys are immutable, so a dir holding only onnxruntime.dll would hit
+    # forever, skip the rustup guard, rebuild libtokenizers.a every run, and
+    # never re-save.
     #
     # The literal path cannot go stale: tokenizersSpec returns an error for any
     # windows GOARCH other than amd64, so windows-amd64 is the only Windows lib
@@ -186,7 +196,9 @@ runs:
     # host triple.
     #
     # Skipped on a cache hit: the target is only needed for the cargo build
-    # that a hit means we are not doing.
+    # that a hit means we are not doing. That inference holds because the save
+    # below is all-or-nothing — a hit is a complete lib dir, never a partial
+    # one that would send fetchlibs back to cargo without this guard.
     - name: Rust GNU target (only when the native libs are cold)
       if: runner.os == 'Windows' && steps.native-libs-cache.outputs.cache-hit != 'true'
       shell: bash
@@ -233,11 +245,16 @@ runs:
       shell: bash
       run: make setup
 
-    # always(), so a red test run does not throw away a cold cargo build; and
-    # only on a miss, because saving under a key that already exists is a
-    # warning and a wasted upload.
+    # NO always(). It would buy nothing — this step already runs before any
+    # test, so a red suite cannot skip it — and it would cost the cache: a
+    # fetch that failed part-way (ort downloaded, cargo dead) would be saved
+    # under a key that can never be rewritten. Only on a miss, too, because
+    # saving under a key that already exists is a warning and a wasted upload.
+    # On a cold key all four Windows legs build in parallel and race to save
+    # this key; three will log "Unable to reserve cache" and that is the loser
+    # of a race, not a failure.
     - name: Save native libs (Windows)
-      if: always() && runner.os == 'Windows' && steps.native-libs-cache.outputs.cache-hit != 'true'
+      if: runner.os == 'Windows' && steps.native-libs-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
         path: dist/windows-amd64/lib
