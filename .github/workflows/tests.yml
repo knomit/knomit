@@ -82,6 +82,16 @@ name: Tests
 #     10-minute default deliberately: a ceiling is also a hang guard, and a
 #     package that suddenly needs 40 minutes is news.
 #
+# THE RUNNER CHECKS OUT WITH core.autocrlf=true, which is Git for Windows'
+# installed default and the opposite of the machine knomit's Windows support
+# was developed on. The first run of this job that got as far as running tests
+# failed internal/fact's TestCorpus_RoundTripIdentical on nothing but line
+# endings. The fix is the repo's new .gitattributes (`* text=auto eol=lf`), not
+# a git config in this workflow: setting autocrlf=false here would have made
+# the job green while leaving the failure in place for every Windows developer
+# who took the installer's default — which is to say, hiding in the one job
+# built to find this exactly the thing it found.
+#
 # THE RUNNER IS ELEVATED, and that is not a choice we have. GitHub-hosted
 # Windows runners run as administrator with UAC disabled, so the process holds
 # SeCreateSymbolicLinkPrivilege and the canSymlink() probes in
