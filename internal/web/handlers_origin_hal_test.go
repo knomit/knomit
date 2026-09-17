@@ -16,6 +16,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -412,7 +413,7 @@ func seedBareRemoteForTest(t *testing.T, bare string) string {
 	runGitForTest(t, work, "commit", "-m", "seed")
 	runGitForTest(t, work, "push", "origin", "main")
 	runGitForTest(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // newControlDBTestServer boots a REAL Manager — control.db opened via
@@ -1023,7 +1024,7 @@ func seedBareRemoteKBForTest(t *testing.T, bare string) string {
 	runGitForTest(t, work, "commit", "-m", "seed kb")
 	runGitForTest(t, work, "push", "origin", "main")
 	runGitForTest(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // PUT /origin on a subscription must not DEMOTE it. Origins.Set with an empty

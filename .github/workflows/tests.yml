@@ -17,13 +17,36 @@ name: Tests
 # libtokenizers.a statically (CGo) and loads ONNX Runtime at
 # runtime, so this matrix proves the native-lib wiring resolves on each OS.
 #
-# Windows is intentionally NOT in the matrix yet. Native-lib fetching is now
-# cross-platform (`go run ./tools/fetchlibs` replaced the bash scripts and runs
-# on windows-latest), and ONNX Runtime publishes Windows assets.
-# The remaining blocker is upstream: daulet/tokenizers ships NO Windows artifact
-# (darwin/linux only through v1.27.0), and internal/embeddings statically links
-# libtokenizers.a, so a Windows build needs an upstream/from-source .a plus an
-# MSYS2/mingw CGo toolchain on the runner. That is the follow-up, not the fetch.
+# Windows is NOT in the matrix, but no longer for lack of a way to build it.
+# knomit builds, tests and runs on windows/amd64; the gap is CI cost, not
+# support.
+#
+# What used to be the blocker is closed. daulet/tokenizers still ships no
+# Windows artifact (darwin/linux only through v1.27.0), so `go run
+# ./tools/fetchlibs` now BUILDS libtokenizers.a from source there — it clones
+# the pinned tag and runs cargo (see tools/fetchlibs/spec.go, tokenizersSpec).
+# ONNX Runtime publishes Windows assets and is fetched as on the other two.
+#
+# Adding a windows-latest job therefore needs four things on the runner:
+# msys2/setup-msys2 for the mingw CGo toolchain; a Rust toolchain WITH
+# `rustup target add x86_64-pc-windows-gnu` (rustup's default Windows host is
+# MSVC, whose .lib mingw's ld cannot link); a cache keyed on tokenizersVersion,
+# without which every run pays a ~5-minute cargo build before a single test
+# executes; and `-timeout 40m`, because on Windows internal/synthesize (1776s)
+# and internal/store (816s) exceed go test's 10-minute per-package default
+# outright and internal/repos (441-639s across runs) straddles it — nothing
+# hangs, all three are filesystem cost. Those are the reasons this is still a
+# follow-up. store is the newest entry: #208-#211 grew it past the default.
+#
+# Two Windows-only requirements a runner has to satisfy, both learned the hard
+# way and neither obvious from a green build elsewhere:
+#   - onnxruntime >= 1.21 needs the VC++ 2015-2022 runtime >= 14.40. Below it
+#     the DLL fails to load with nothing but "a dynamic link library (DLL)
+#     initialization routine failed" (internal/embeddings/ortinit_windows.go
+#     turns that into an actionable message).
+#   - Several tests skip when the process cannot create a symlink. An ELEVATED
+#     runner can, so it would silently cover code paths ordinary users never
+#     reach; prefer a non-elevated one.
 on:
   workflow_call:
 

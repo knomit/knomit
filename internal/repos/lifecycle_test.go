@@ -14,6 +14,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 )
 
@@ -195,7 +196,7 @@ func seedBareRemoteWithOntology(t *testing.T, bare string, withOntology bool) st
 	runGit(t, work, "commit", "-m", "seed")
 	runGit(t, work, "push", "origin", "main")
 	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // TestCreate_CloneMode_FetchesAndPersistsOrigin exercises the clone path end to
@@ -929,7 +930,7 @@ func seedBareRemoteWithFact(t *testing.T, bare string) string {
 	runGit(t, work, "commit", "-m", "seed fact")
 	runGit(t, work, "push", "origin", "main")
 	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // TestCreate_CloneMode_ActivateSyncDoesNotKillIndex regresses the runtime

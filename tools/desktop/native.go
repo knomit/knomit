@@ -40,7 +40,25 @@ func writeFile(name, contents string) (string, error) {
 	if name == "" {
 		return "", errors.New("name must not be empty")
 	}
-	if filepath.IsAbs(name) {
+	// "Not absolute" is three separate checks on Windows, and filepath.IsAbs
+	// alone is only the first of them:
+	//
+	//	C:\etc\passwd   IsAbs        -> rejected by IsAbs
+	//	\etc\passwd     rooted       -> IsAbs says FALSE (no volume), but it
+	//	                                resolves against the current drive
+	//	C:passwd        drive-rel    -> IsAbs says FALSE, resolves against the
+	//	                                current directory ON drive C
+	//	\\srv\share\x   UNC          -> another machine entirely
+	//
+	// None of those is a path relative to the exports dir, which is the only
+	// thing this parameter is allowed to be. On Unix IsAbs already covers the
+	// case and the extra checks never fire: ToSlash is a no-op there, so a file
+	// genuinely named "\x" stays a legal relative name.
+	//
+	// The containment check below would catch all of these anyway — this is
+	// about REFUSING rather than silently rewriting the caller's path into
+	// something else inside the sandbox.
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" || strings.HasPrefix(filepath.ToSlash(name), "/") {
 		return "", fmt.Errorf("name must be relative to the exports dir: %q", name)
 	}
 	base, err := exportsDir()

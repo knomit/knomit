@@ -261,3 +261,30 @@ func TestRelPath_SameAsCwd_ReturnsDot(t *testing.T) {
 		t.Errorf("relPath of same paths = %q; want \".\"", got)
 	}
 }
+
+// relPath's result is matched against fact ENTITY paths, which are git-style
+// and forward-slashed whoever wrote them. So the contract is not "a relative
+// path" but "a relative path spelled the way a repo spells one", on every OS.
+//
+// Built with filepath.Join so the inputs are host-native: on Windows that
+// makes them backslashed, and filepath.Rel answers in backslashes too, so
+// without the ToSlash in relPath this fails with
+// `internal\synthesize\weight.go`. That was the live bug — filterByEntity
+// compared that against `internal/synthesize/weight.go`, never matched, and
+// the post-edit nudge silently never fired.
+func TestRelPath_IsSlashSeparatedOnEveryOS(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("testdata", "repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	abs := filepath.Join(root, "internal", "synthesize", "weight.go")
+
+	got := relPath(root, abs)
+	want := "internal/synthesize/weight.go"
+	if got != want {
+		t.Errorf("relPath(%q, %q) = %q, want %q", root, abs, got, want)
+	}
+	if strings.Contains(got, `\`) {
+		t.Errorf("relPath returned %q — a fact entity path never contains a backslash", got)
+	}
+}

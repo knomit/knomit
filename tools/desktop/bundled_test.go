@@ -5,12 +5,16 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestLinkInto(t *testing.T) {
+	if !canSymlink(t) {
+		t.Skip("this host cannot create symlinks (Windows without Developer Mode or an elevated shell)")
+	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "src", "knomit-bridge")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -58,6 +62,9 @@ func TestLinkInto(t *testing.T) {
 }
 
 func TestLinkInto_ReplacesRegularFile(t *testing.T) {
+	if !canSymlink(t) {
+		t.Skip("this host cannot create symlinks (Windows without Developer Mode or an elevated shell)")
+	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "knomit-bridge")
 	if err := os.WriteFile(target, []byte("bin"), 0o755); err != nil {
@@ -147,7 +154,10 @@ func TestCopyIntoReplacesStaleContent(t *testing.T) {
 	if fi.Mode()&os.ModeSymlink != 0 {
 		t.Error("copyInto produced a symlink; the AppImage mount it points into will vanish")
 	}
-	if fi.Mode().Perm()&0o111 == 0 {
+	// Windows has no execute bit — a file is executable by extension, and Go
+	// reports 0666 for anything writable. The bit is load-bearing on macOS and
+	// Linux, where an MCP client could not launch the tool without it.
+	if runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0 {
 		t.Errorf("copied tool is not executable: mode %v", fi.Mode().Perm())
 	}
 	if b, _ := os.ReadFile(got); string(b) != "v1" {
@@ -182,6 +192,9 @@ func TestCopyIntoReplacesStaleContent(t *testing.T) {
 func TestCopyIntoReplacesAnExistingSymlink(t *testing.T) {
 	// Upgrading from a tarball install leaves a symlink behind at the
 	// destination. It must be replaced by a real file, not written through.
+	if !canSymlink(t) {
+		t.Skip("this host cannot create the symlink this fixture needs")
+	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "src", "knomit-bridge")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -259,13 +272,22 @@ func TestPlaceToolDispatchesPerPlatform(t *testing.T) {
 		goos        string
 		wantSymlink bool
 	}{
-		{"linux", false},  // AppImage: the source mount vanishes, so copy
-		{"darwin", true},  // .app at a stable path, updated in place
-		{"windows", true}, // not a release target; falls back to the default
+		{"linux", false},   // AppImage: the source mount vanishes, so copy
+		{"darwin", true},   // .app at a stable path, updated in place
+		{"windows", false}, // symlinks need a privilege ordinary users lack
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.goos, func(t *testing.T) {
+			// The darwin row calls os.Symlink on the HOST, whatever goos says.
+			// Windows refuses that without SeCreateSymbolicLinkPrivilege, so
+			// the row fails on a normal account and passes in an elevated
+			// shell — exactly the difference that must not decide whether the
+			// suite is green.
+			if tt.wantSymlink && !canSymlink(t) {
+				t.Skip("this host cannot create symlinks (Windows without Developer Mode or an elevated shell)")
+			}
+
 			dir := t.TempDir()
 			target := filepath.Join(dir, "src", "knomit-bridge")
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -368,6 +390,9 @@ func TestCopyIntoRecopiesWhenTheSourceChanges(t *testing.T) {
 // would leave the dangling-into-the-FUSE-mount link that this whole code path
 // exists to eliminate.
 func TestCopyIntoReplacesASymlinkThatLooksCurrent(t *testing.T) {
+	if !canSymlink(t) {
+		t.Skip("this host cannot create the symlink this fixture needs")
+	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "src", "knomit-bridge")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -395,5 +420,242 @@ func TestCopyIntoReplacesASymlinkThatLooksCurrent(t *testing.T) {
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
 		t.Error("destination is still a symlink; it will dangle once the AppImage unmounts")
+	}
+}
+
+// canSymlink reports whether this host lets THIS process create a symlink.
+//
+// It probes rather than checking runtime.GOOS because the answer is not a
+// property of the OS: Windows grants SeCreateSymbolicLinkPrivilege to an
+// elevated process and to any process when Developer Mode is on, and denies it
+// otherwise. A GOOS check would skip on a Windows machine that can in fact
+// symlink, and — worse — an elevated developer shell would report a pass for
+// behaviour that fails for the users the app ships to.
+func canSymlink(t *testing.T) bool {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(dir, "target"), filepath.Join(dir, "link")); err != nil {
+		t.Logf("symlink probe failed, treating this host as unable to symlink: %v", err)
+		return false
+	}
+	return true
+}
+
+// The bundled tools are built with the platform's executable suffix, so the
+// lookup has to use it too. Without this, installBundledTool looked for
+// "knomit-bridge" next to a "knomit-bridge.exe" and found nothing on Windows —
+// and because both installers are best-effort, the app started up looking
+// perfectly healthy while no MCP client could find the bridge and knomit-okf
+// was never placed on the user's PATH. A warning in a log file was the only
+// sign.
+//
+// Asserted through the error message because installBundledTool resolves
+// against os.Executable(), which a test cannot redirect; the name it reports
+// is the name it looked for.
+func TestInstallTool_LooksForThePlatformExecutableName(t *testing.T) {
+	want := map[string]string{"windows": ".exe"}[runtime.GOOS]
+
+	for _, tc := range []struct {
+		name string
+		base string
+		call func(string) (string, error)
+	}{
+		{"bridge", bridgeExecName, installBridgeTool},
+		{"okf", okfExecName, installOKFTool},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.call(t.TempDir())
+			if err == nil {
+				t.Fatal("expected an error with no bundled tool present")
+			}
+			if !strings.Contains(err.Error(), tc.base+want) {
+				t.Errorf("looked for the wrong filename on %s: want %q in %v",
+					runtime.GOOS, tc.base+want, err)
+			}
+		})
+	}
+}
+
+// The suffix must be empty everywhere but Windows — appending ".exe" on macOS
+// or Linux would break the platforms that currently work.
+func TestExeSuffixIsWindowsOnly(t *testing.T) {
+	switch runtime.GOOS {
+	case "windows":
+		if exeSuffix != ".exe" {
+			t.Errorf("exeSuffix = %q, want .exe", exeSuffix)
+		}
+	default:
+		if exeSuffix != "" {
+			t.Errorf("exeSuffix = %q on %s, want empty", exeSuffix, runtime.GOOS)
+		}
+	}
+}
+
+// replaceFile's happy path: a plain rename when nothing is in the way.
+func TestReplaceFile_RenamesOverAnExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "knomit-bridge")
+	tmp := filepath.Join(dir, ".knomit-tool-new")
+	if err := os.WriteFile(dst, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceFile(tmp, dst); err != nil {
+		t.Fatalf("replaceFile: %v", err)
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "new" {
+		t.Errorf("dst = %q, want new", b)
+	}
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Error("the staging file should have been renamed away, not copied")
+	}
+}
+
+// A rename that cannot succeed for a reason moving the destination aside would
+// not fix must report the ORIGINAL failure, not a confusing one from the
+// fallback. Here the source does not exist at all.
+func TestReplaceFile_ReportsTheRealErrorWhenThereIsNothingToMoveAside(t *testing.T) {
+	dir := t.TempDir()
+	err := replaceFile(filepath.Join(dir, "absent"), filepath.Join(dir, "knomit-bridge"))
+	if err == nil {
+		t.Fatal("expected an error renaming a file that does not exist")
+	}
+	if strings.Contains(err.Error(), "move aside") {
+		t.Errorf("reported the fallback's error rather than the real one: %v", err)
+	}
+}
+
+// The debris sweep: both shapes go, and real files stay.
+func TestSweepToolDebrisRemovesStagingFilesOnly(t *testing.T) {
+	dir := t.TempDir()
+	debris := []string{".knomit-tool-123456", ".knomit-tool-old-987654"}
+	keep := []string{"knomit-bridge", "knomit-okf", "something-else"}
+	for _, n := range append(append([]string{}, debris...), keep...) {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sweepToolDebris(dir)
+
+	for _, n := range debris {
+		if _, err := os.Stat(filepath.Join(dir, n)); !os.IsNotExist(err) {
+			t.Errorf("%s survived the sweep", n)
+		}
+	}
+	for _, n := range keep {
+		if _, err := os.Stat(filepath.Join(dir, n)); err != nil {
+			t.Errorf("%s was swept but must be kept: %v", n, err)
+		}
+	}
+}
+
+// A missing bin dir is the fresh-install case and must not panic or error.
+func TestSweepToolDebrisToleratesAMissingDir(t *testing.T) {
+	sweepToolDebris(filepath.Join(t.TempDir(), "nope", "bin"))
+}
+
+// The FALLBACK path, end to end: CreateTemp, rename-aside, rename-in, and the
+// best-effort remove of the aside. Nothing reached it before, so the branch
+// that exists specifically to replace a RUNNING knomit-bridge.exe on Windows
+// was never executed by a test on any platform.
+//
+// A non-empty directory at dst is the portable way in. os.Rename(tmp, dst)
+// refuses to replace a directory that has entries, while os.Stat(dst)
+// succeeds — which is exactly the shape replaceFile's fallback is written for
+// (something is genuinely in the way) without needing a locked file, and so
+// it runs identically on macOS, Linux and Windows.
+//
+// The final os.Remove of the sidelined directory fails here, because it is
+// non-empty. That is the point: it proves the ignored-failure path leaves a
+// correct result rather than an error, which is what happens in production
+// when the sidelined binary is still running.
+func TestReplaceFile_FallsBackWhenTheDestinationCannotBeRenamedOver(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "knomit-bridge")
+	tmp := filepath.Join(dir, ".knomit-tool-new")
+
+	// A non-empty directory where the binary should be.
+	if err := os.MkdirAll(filepath.Join(dst, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "occupied", "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, []byte("new"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceFile(tmp, dst); err != nil {
+		t.Fatalf("replaceFile fallback: %v", err)
+	}
+
+	// The new binary is at the name clients launch, and it is a FILE now.
+	fi, err := os.Lstat(dst)
+	if err != nil {
+		t.Fatalf("stat dst: %v", err)
+	}
+	if fi.IsDir() {
+		t.Fatal("dst is still a directory; the fallback did not put the new file in place")
+	}
+	if b, _ := os.ReadFile(dst); string(b) != "new" {
+		t.Errorf("dst = %q, want new", b)
+	}
+	// The staging file was renamed away, not copied.
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Error("the staging file is still present")
+	}
+	// And the thing that was in the way was moved aside, not destroyed.
+	asides, _ := filepath.Glob(filepath.Join(dir, ".knomit-tool-old-*"))
+	if len(asides) != 1 {
+		t.Fatalf("expected exactly one sidelined entry, got %v", asides)
+	}
+	if _, err := os.Stat(filepath.Join(asides[0], "occupied", "f")); err != nil {
+		t.Errorf("the sidelined content was lost: %v", err)
+	}
+	// sweepToolDebris is what eventually clears it — .knomit-tool-old-* is
+	// matched by the same glob.
+	sweepToolDebris(dir)
+}
+
+// When the fallback's final rename fails, the original must be put BACK: a
+// user left with no tool at all is worse than one left with the old version.
+//
+// Forcing that branch takes some care. Making the STAGING path a directory
+// does not work — once the aside has been moved, the destination name is free
+// and renaming a directory onto a free name succeeds. What does work is a
+// staging path that does not exist: the first rename fails, os.Stat(dst) still
+// succeeds so the fallback runs, the aside is moved, and the rename-in then
+// fails with the same missing source.
+//
+// A vanished staging file is artificial — copyInto has just written it — but
+// the branch under test is "the rename-in failed for whatever reason", and
+// this is the one way to reach it that behaves identically on every OS.
+func TestReplaceFile_RestoresTheOriginalWhenTheFallbackCannotFinish(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "knomit-bridge")
+	missingTmp := filepath.Join(dir, ".knomit-tool-never-written")
+
+	if err := os.MkdirAll(filepath.Join(dst, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "occupied", "f"), []byte("knomit-bridge"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := replaceFile(missingTmp, dst); err == nil {
+		t.Fatal("expected an error when the replacement cannot be moved into place")
+	}
+
+	// The original is back under its own name, with its own content.
+	b, err := os.ReadFile(filepath.Join(dst, "occupied", "f"))
+	if err != nil {
+		t.Fatalf("the original was not restored: %v", err)
+	}
+	if string(b) != "knomit-bridge" {
+		t.Errorf("restored content = %q, want knomit-bridge", b)
 	}
 }

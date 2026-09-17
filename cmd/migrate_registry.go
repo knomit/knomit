@@ -46,7 +46,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -64,6 +63,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	storegit "knomit/internal/store/git"
@@ -1382,7 +1382,7 @@ func backupControlDB(controlPath string) (string, error) {
 	// concerned (it writes the destination), so this open must be read-write.
 	// It happens after the plan is known good, so it is already past the point
 	// where "the home is untouched" is a promise this tool makes.
-	db, err := sql.Open("sqlite3", "file:"+(&url.URL{Path: controlPath}).String()+"?_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", fileuri.New(controlPath)+"?_busy_timeout=5000")
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", controlPath, err)
 	}
@@ -1673,7 +1673,7 @@ func moveRepoFiles(out io.Writer, plan *migrationPlan) error {
 // touched. It also runs in the write phase, after control.db has already
 // committed every captured origin.
 func checkpointDatabase(path string) error {
-	db, err := sql.Open("sqlite3", "file:"+(&url.URL{Path: path}).String()+"?_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", fileuri.New(path)+"?_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("open %s to checkpoint: %w", path, err)
 	}
@@ -1875,9 +1875,14 @@ func printSummary(out io.Writer, plan *migrationPlan) {
 // (the tool is about to rename files in it). Verified against a database copied
 // out mid-write with its -wal and -shm.
 func openRaw(path string) (*sql.DB, error) {
-	// url.URL escapes exactly what a file: URI needs and nothing more, so a
-	// home containing spaces (macOS "core 1.db") resolves correctly.
-	dsn := "file:" + (&url.URL{Path: path}).String() + "?mode=ro&_busy_timeout=5000&_query_only=1"
+	// fileuri escapes exactly what a file: URI needs and nothing more, so a
+	// home containing spaces (macOS "core 1.db") resolves correctly, and it
+	// spells a Windows path the way SQLite's URI parser reads it — see the
+	// package comment for what the hand-rolled version did instead.
+	//
+	// The file: form is not decoration: mode=ro and _query_only=1 are URI
+	// parameters, and SQLite only honours them when the DSN is a URI.
+	dsn := fileuri.New(path) + "?mode=ro&_busy_timeout=5000&_query_only=1"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 	"knomit/test/testenv/gitserver"
 )
@@ -24,9 +25,9 @@ import (
 type RemoteHandle struct {
 	sb             *Storyboard
 	name           string
-	dir            string // absolute path to the bare git directory
-	url            string // file:// or http:// URL the product clones/pushes
-	upstreamBranch string // consensus branch on this remote (default "main")
+	dir            string            // absolute path to the bare git directory
+	url            string            // file:// or http:// URL the product clones/pushes
+	upstreamBranch string            // consensus branch on this remote (default "main")
 	httpSrv        *gitserver.Server // non-nil when served over smart-HTTP (see BareRemoteHTTP)
 }
 
@@ -57,7 +58,7 @@ func (sb *Storyboard) BareRemoteWithBranch(name, upstreamBranch string) *RemoteH
 		sb:             sb,
 		name:           name,
 		dir:            dir,
-		url:            "file://" + dir,
+		url:            fileuri.New(dir),
 		upstreamBranch: upstreamBranch,
 	}
 }
@@ -90,7 +91,7 @@ func (sb *Storyboard) MirrorOf(name string, src *RemoteHandle) *RemoteHandle {
 		sb:             sb,
 		name:           name,
 		dir:            dir,
-		url:            "file://" + dir,
+		url:            fileuri.New(dir),
 		upstreamBranch: src.UpstreamBranch(),
 	}
 }

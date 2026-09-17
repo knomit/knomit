@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 )
 
 // The three answers, against real bare repos on disk.
@@ -51,7 +52,7 @@ func TestProbeInitialized_UnknownWhenTheRemoteCannotBeRead(t *testing.T) {
 	m := newRemoteModeManager(t, dir)
 
 	got, err := m.ProbeInitialized(context.Background(),
-		OriginSpec{URL: "file://" + filepath.Join(dir, "does-not-exist.git"), Branch: "main"})
+		OriginSpec{URL: fileuri.New(filepath.Join(dir, "does-not-exist.git")), Branch: "main"})
 	require.NoError(t, err, "an unreadable remote is a RESULT, not an error")
 	require.Equal(t, InitializedUnknown, got.Initialized,
 		"a failed check must be the third state, never 'no'")
@@ -79,7 +80,7 @@ func TestProbeInitialized_EmptyRemoteIsUnknownAndSaysWhy(t *testing.T) {
 	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
 	m := newRemoteModeManager(t, dir)
 
-	got, err := m.ProbeInitialized(context.Background(), OriginSpec{URL: "file://" + remoteDir})
+	got, err := m.ProbeInitialized(context.Background(), OriginSpec{URL: fileuri.New(remoteDir)})
 	require.NoError(t, err)
 	require.Equal(t, InitializedUnknown, got.Initialized)
 	require.Contains(t, got.Detail, "one commit is enough")
@@ -157,7 +158,7 @@ func TestProbeInitialized_YesForALegacyOntologyPath(t *testing.T) {
 	runGit(t, work, "push", "origin", "main")
 
 	m := newRemoteModeManager(t, dir)
-	got, perr := m.ProbeInitialized(context.Background(), OriginSpec{URL: "file://" + bare, Branch: "main"})
+	got, perr := m.ProbeInitialized(context.Background(), OriginSpec{URL: fileuri.New(bare), Branch: "main"})
 	require.NoError(t, perr)
 	require.Equal(t, InitializedYes, got.Initialized,
 		"a legacy ontology rung still makes the repo a knowledge base")

@@ -46,15 +46,52 @@ macOS/Linux, `http://wails.localhost` on Windows).
 ```sh
 make desktop-deps # Linux only: install the GTK4 + WebKitGTK build deps (once, sudo)
 make setup        # fetch native libs into dist/<platform>/lib (once)
-make desktop      # macOS: dist/<platform>/Knomit.app  ·  Linux/Windows: dist/<platform>/knomit-desktop
+make desktop      # macOS: dist/<platform>/Knomit.app  ·  Linux: dist/<platform>/knomit-desktop  ·  Windows: knomit-desktop.exe
 make desktop-run  # macOS: open the .app               ·  else: run the binary
 make desktop-install # Linux only: install the .desktop launcher + app icon into ~/.local
 ```
 
 On **Linux** the desktop app links GTK4 + WebKitGTK 6.0, so run `make
 desktop-deps` once first (it `apt-get install`s the dev packages; the `-dev`
-packages also pull the runtime libs). macOS/Windows need nothing extra (system
-Cocoa/WebKit, WebView2).
+packages also pull the runtime libs). **macOS** needs nothing extra (system
+Cocoa/WebKit).
+
+**Windows** uses the system WebView2, but the build and the embedder need three
+things that are not on a stock machine:
+
+- an **MSYS2 mingw-w64 gcc** for CGo, and MSYS2's `make` — run it from an
+  **MSYS2 MINGW64 shell with `MSYS2_PATH_TYPE=inherit`**, which is the only
+  combination where the whole Makefile works. Two near-misses, both of which
+  fail confusingly rather than clearly:
+  - from **Git Bash**, `C:\msys64\usr\bin\make.exe` does not pass its
+    environment to recipes (Git Bash and MSYS2 are different msys runtimes), so
+    `%LocalAppData%` is empty, `go env GOCACHE` reports `off`, and every build
+    dies with "build cache is required, but could not be located";
+  - from **PowerShell/cmd**, the environment survives but recipes run with the
+    Windows `PATH`, so npm's `#!/usr/bin/env bash` shebang fails with
+    `/usr/bin/env: 'bash': No such file or directory`.
+
+  A plain MSYS2 shell without `MSYS2_PATH_TYPE=inherit` has neither `go` nor
+  `npm` on its PATH.
+- **Rust/cargo** ([rustup.rs](https://rustup.rs)) plus the GNU target:
+
+  ```sh
+  rustup target add x86_64-pc-windows-gnu
+  ```
+
+  daulet/tokenizers publishes no Windows artifact, so `make setup` builds
+  `libtokenizers.a` from source (~5 min, once). The target is not optional:
+  rustup's default Windows host is **MSVC**, which produces a `.lib` that the
+  MSYS2 mingw linker cannot use — cargo would succeed and the knomit link would
+  then fail with a wall of undefined references. Set
+  `KNOMIT_TOKENIZERS_SRC=<checkout>` to reuse an existing daulet/tokenizers
+  working tree, and the whole step is skipped when
+  `dist/windows-amd64/lib/libtokenizers.a` already exists;
+- the **Visual C++ 2015-2022 x64 redistributable, version 14.40 or newer**
+  ([installer](https://aka.ms/vs/17/release/vc_redist.x64.exe)). ONNX Runtime
+  has required it since 1.21; below it `onnxruntime.dll` fails to load and the
+  server dies at embedder init. knomit checks the installed version and says so
+  by name when it is too old.
 
 Artifacts are written under `dist/<goos>-<goarch>/` (Wails can't cross-compile,
 so each platform is built natively). The desktop app/binary lives **only** under

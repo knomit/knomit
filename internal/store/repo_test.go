@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"knomit/internal/platform/fileuri"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,7 +44,7 @@ func TestCloneFrom_EmptyRemoteReturnsErrEmptyRemote(t *testing.T) {
 	require.NoError(t, err)
 	defer svc.Close()
 
-	err = svc.CloneFrom("file://"+remoteDir, nil, nil)
+	err = svc.CloneFrom(fileuri.New(remoteDir), nil, nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrEmptyRemote), "empty remote must return ErrEmptyRemote, got: %v", err)
 }

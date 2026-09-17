@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 )
 
@@ -87,7 +88,7 @@ func TestProbeInitialized_HTTP_UnknownIs200WithTheFieldAbsent(t *testing.T) {
 	root := t.TempDir()
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	rec, got := postProbeInitialized(t, s.NewAPIRouter(),
-		`{"url":"file://`+filepath.Join(root, "does-not-exist.git")+`","branch":"main"}`)
+		probeBody(t, fileuri.New(filepath.Join(root, "does-not-exist.git")), "main"))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 — a check that failed is a RESULT; body=%s", rec.Code, rec.Body.String())
@@ -137,7 +138,7 @@ func seedPlainRemoteForTest(t *testing.T, bare string) string {
 	runGitForTest(t, work, "commit", "-m", "readme")
 	runGitForTest(t, work, "push", "origin", "main")
 	runGitForTest(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // Guard on the premise the two fixtures above encode: OntologyPath is what
@@ -150,4 +151,21 @@ func TestSeedFixtures_DifferOnlyByTheOntology(t *testing.T) {
 	if repos.OntologyPath == "" {
 		t.Fatal("OntologyPath is empty — the fixtures write nothing distinguishing")
 	}
+}
+
+// probeBody builds the request JSON with encoding/json rather than by pasting
+// the URL into a string literal.
+//
+// A path is not safe to interpolate into JSON. On Windows t.TempDir lives
+// under "C:\Users\...", and "\U" is not a valid JSON escape — the handler
+// rejected the body with 400 "invalid character 'U' in string escape code",
+// so the test failed on its own fixture rather than on the behaviour it
+// describes. Marshalling escapes whatever the path happens to contain.
+func probeBody(t *testing.T, url, branch string) string {
+	t.Helper()
+	b, err := json.Marshal(map[string]string{"url": url, "branch": branch})
+	if err != nil {
+		t.Fatalf("marshal probe body: %v", err)
+	}
+	return string(b)
 }

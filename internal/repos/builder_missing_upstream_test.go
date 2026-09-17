@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/fileuri"
 )
 
 // TestOpen_StoredUpstreamWithNoLocalRef regresses PR #73 review finding #1: a
@@ -52,13 +53,18 @@ func TestOpen_StoredUpstreamWithNoLocalRef(t *testing.T) {
 	// First boot: a plain local repo, then point it at an origin whose default
 	// branch this repo does not have.
 	m, done := boot()
-	ri := bootRepo(t, m)
+	// createRepo, not bootRepo: boot() has already called Start, and bootRepo
+	// calls it again. A second Start opens a second control.db handle and
+	// overwrites the first without closing it, so Close releases only the
+	// newer one and the older stays open for the rest of the process. Unix
+	// never notices; on Windows t.TempDir cannot then remove the home.
+	ri := createRepo(t, m, testRepoName)
 	agentBranch := ri.AgentBranch()
 	uid := ri.UID()
 	// The origin lives in control.db now, which is what the next boot rehydrates
 	// upstreamMain from. "master" is a branch this repo does not have.
 	require.NoError(t, m.Origins().Set(uid, Origin{
-		URL:    "file://" + filepath.Join(dir, "nowhere.git"),
+		URL:    fileuri.New(filepath.Join(dir, "nowhere.git")),
 		Branch: "master",
 	}))
 	done()

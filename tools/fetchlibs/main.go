@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -81,7 +82,11 @@ func fetch(spec libSpec, destDir, goos string) error {
 		return nil
 	}
 
-	fmt.Printf("Downloading %s...\n", spec.desc)
+	if spec.extract == extractCargo {
+		fmt.Printf("Building %s...\n", spec.desc)
+	} else {
+		fmt.Printf("Downloading %s...\n", spec.desc)
+	}
 	switch spec.extract {
 	case extractRaw:
 		if err := downloadTo(spec.url, destPath); err != nil {
@@ -110,10 +115,87 @@ func fetch(spec libSpec, destDir, goos string) error {
 		if err := extractZipMember(destPath, spec.member, tmp.Name()); err != nil {
 			return err
 		}
+	case extractCargo:
+		if err := buildWithCargo(spec, destPath); err != nil {
+			return err
+		}
 	}
 
 	fmt.Printf("%s installed to %s\n", spec.dest, destPath)
 	return nil
+}
+
+// TokenizersSrcEnv names a daulet/tokenizers checkout to build instead of
+// cloning a fresh one. Set it to reuse a working tree — a clone of the tag
+// pulls the whole crates.io index and every dependency, which is minutes of
+// work this skips.
+const TokenizersSrcEnv = "KNOMIT_TOKENIZERS_SRC"
+
+// buildWithCargo produces spec.dest by compiling the Rust crate, for the one
+// platform upstream publishes no artifact for.
+//
+// This is the only part of fetchlibs that is not pure Go + stdlib, and it is
+// gated behind a platform that has no alternative — see tokenizersSpec. The
+// tool checks for cargo and git UP FRONT rather than letting exec fail midway,
+// because "exec: cargo: executable file not found in %PATH%" halfway through a
+// `make build` does not tell anyone to install Rust.
+func buildWithCargo(spec libSpec, destPath string) error {
+	for _, tool := range []string{"git", "cargo"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf(
+				"%s is needed to build %s from source and is not on PATH.\n"+
+					"  Rust (which provides cargo): https://rustup.rs\n"+
+					"  Then add the target this build needs:\n"+
+					"      rustup target add %s\n"+
+					"  Already have a %s checkout? Point %s at it to skip the clone.",
+				tool, spec.dest, spec.target, spec.url, TokenizersSrcEnv)
+		}
+	}
+
+	src := os.Getenv(TokenizersSrcEnv)
+	if src == "" {
+		dir, err := os.MkdirTemp("", "knomit-tokenizers-*")
+		if err != nil {
+			return fmt.Errorf("create build dir: %w", err)
+		}
+		// Best effort: cargo leaves read-only files in target/, and Windows
+		// refuses to remove those. A leftover temp dir is not worth failing a
+		// build that otherwise succeeded.
+		defer func() { _ = os.RemoveAll(dir) }()
+
+		fmt.Printf("Cloning %s at %s...\n", spec.url, spec.ref)
+		if err := runTool(dir, "git", "clone", "--depth", "1", "--branch", spec.ref, spec.url, "."); err != nil {
+			return fmt.Errorf("clone %s at %s: %w", spec.url, spec.ref, err)
+		}
+		src = dir
+	} else {
+		fmt.Printf("Building from the checkout named by %s: %s\n", TokenizersSrcEnv, src)
+	}
+
+	fmt.Printf("Building %s for %s with cargo (this takes a few minutes the first time)...\n", spec.crate, spec.target)
+	if err := runTool(src, "cargo", "build", "--release", "-p", spec.crate, "--target", spec.target); err != nil {
+		return fmt.Errorf("cargo build -p %s --target %s: %w\n"+
+			"  If cargo says the target is not installed: rustup target add %s",
+			spec.crate, spec.target, err, spec.target)
+	}
+
+	built := filepath.Join(src, filepath.FromSlash(spec.member))
+	f, err := os.Open(built)
+	if err != nil {
+		return fmt.Errorf("cargo reported success but %s is missing: %w", built, err)
+	}
+	defer f.Close()
+	return writeFile(destPath, f)
+}
+
+// runTool runs a build command in dir with its output attached, so a clone or
+// a compile that takes minutes shows progress rather than appearing hung.
+func runTool(dir, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // fetchClient bounds connection setup and header wait so an unreachable or
@@ -223,6 +305,13 @@ func extractZipMember(dst, member, zipPath string) error {
 // library at the final path, and every later run said "already present,
 // skipping" — poisoning the cache permanently, with the damage surfacing much
 // later as a link or dlopen failure.
+//
+// KNOWN LIMITATION on Windows: the final rename cannot replace a file that a
+// running process has mapped, so re-fetching onnxruntime.dll while a knomit
+// build is running fails with a sharing violation rather than succeeding.
+// Nothing here works around it, because skip-if-present means the only way to
+// reach this line for an existing dll is to delete it first — at which point
+// nothing has it open. Stop the running binary if a fetch ever does report it.
 func writeFile(dst string, r io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err

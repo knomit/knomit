@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/fileuri"
 )
 
 // TestAuthConfigFromSpec_BasicSplitsUserPassword is the regression test for the
@@ -126,7 +127,7 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 	writeTestKey(t, keyPath)
 
 	m := New(context.Background(), Deps{
-		Cfg:         config.Config{LocalOriginRoot: "/srv/kb"},
+		Cfg:         config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")},
 		AgentBranch: "agent/test",
 		KeyPath:     keyPath,
 	})
@@ -135,8 +136,8 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 		"git@github.com:user/repo.git",
 		"ssh://git@github.com/user/repo.git",
 		"https://github.com/user/repo.git",
-		"file:///srv/kb",
-		"/srv/kb",
+		fileuri.New(hostAbs(t, "/srv/kb")),
+		hostAbs(t, "/srv/kb"),
 	} {
 		auth, err := m.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, url)
 		require.NoError(t, err, url)
@@ -151,15 +152,15 @@ func TestManager_ResolveAuth_NoneIsAnonymous(t *testing.T) {
 func TestManager_ResolveAuth_GatesLocalOrigin(t *testing.T) {
 	// No root configured: local origins are disabled, network origins pass.
 	off := New(context.Background(), Deps{Cfg: config.Config{}, AgentBranch: "agent/test"})
-	_, err := off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, "/srv/kb")
+	_, err := off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/srv/kb"))
 	require.Error(t, err)
 	_, err = off.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "token", Token: "x"}, "https://github.com/u/r.git")
 	require.NoError(t, err)
 
 	// Root configured: in-root local origin passes, out-of-root is rejected.
-	on := New(context.Background(), Deps{Cfg: config.Config{LocalOriginRoot: "/srv/kb"}, AgentBranch: "agent/test"})
-	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, "/srv/kb/work")
+	on := New(context.Background(), Deps{Cfg: config.Config{LocalOriginRoot: hostAbs(t, "/srv/kb")}, AgentBranch: "agent/test"})
+	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, filepath.Join(hostAbs(t, "/srv/kb"), "work"))
 	require.NoError(t, err)
-	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, "/etc/passwd")
+	_, err = on.ResolveAuth(config.RemoteAuthConfig{AuthMethod: "none"}, hostAbs(t, "/etc/passwd"))
 	require.Error(t, err)
 }

@@ -116,6 +116,14 @@ func hookPostEdit(r io.Reader, w io.Writer) error {
 
 // relPath returns the path of abs relative to cwd, or "" if abs is outside
 // cwd. Both must be absolute paths in the same filesystem.
+//
+// The result is SLASH-separated on every OS. It is matched against the entity
+// paths stored on facts, and those are git-style repo-relative paths — always
+// forward slashes, whoever wrote them. filepath.Rel answers in the host's
+// separator, so on Windows this returned `internal\synthesize\weight.go` and
+// compared it against `internal/synthesize/weight.go`: never equal, so
+// filterByEntity matched nothing and the post-edit nudge silently never fired.
+// Nothing errored, which is why it would not have been noticed.
 func relPath(cwd, abs string) string {
 	if cwd == "" || abs == "" {
 		return ""
@@ -127,7 +135,7 @@ func relPath(cwd, abs string) string {
 	if strings.HasPrefix(rel, "..") {
 		return ""
 	}
-	return rel
+	return filepath.ToSlash(rel)
 }
 
 // filterByEntity keeps only facts whose entities array references rel —

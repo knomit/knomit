@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -388,6 +389,13 @@ func TestApplySettingsRollsBackAutostartWhenTheWriteFails(t *testing.T) {
 // knomit.toml can hold an API key ([llm] api_key). A dialog-created file must
 // not be world-readable, and an existing file's mode is the user's business.
 func TestApplySettingsFilePermissions(t *testing.T) {
+	// Windows synthesises Perm() from the read-only attribute alone: every
+	// writable file reads 0666, so neither "not group/world readable" nor
+	// "mode preserved at 0644" is expressible. Keeping the API key off other
+	// users there is an ACL question, and nothing in this tree sets ACLs.
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix mode bits are not represented on Windows; see the ACL note above")
+	}
 	dir := t.TempDir()
 	s := Settings{Port: "19278", LogLevel: "info", LogFormat: "console"}
 

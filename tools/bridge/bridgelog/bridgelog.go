@@ -5,20 +5,30 @@ package bridgelog
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// DefaultPath is used when no --log flag is supplied.
-const DefaultPath = "/tmp/knomit-bridge.log"
+// DefaultPath returns the log file used when no --log flag is supplied.
+//
+// A function, not a constant, because the constant was "/tmp/knomit-bridge.log"
+// and Windows has no /tmp: that resolves to C:\tmp on the current drive, a
+// directory that does not exist on a stock install and that an ordinary user
+// may not be able to create. os.TempDir gives the per-user %TEMP% there and
+// /tmp everywhere else, so the default lands somewhere writable on every
+// platform.
+func DefaultPath() string {
+	return filepath.Join(os.TempDir(), "knomit-bridge.log")
+}
 
 // Init points the global zerolog logger at path with 4MB lumberjack rotation
 // (3 backups, 7 days). KNOMIT_MCP_DEBUG=1 raises the level to Debug.
 func Init(path string) {
 	if path == "" {
-		path = DefaultPath
+		path = DefaultPath()
 	}
 	writer := &lumberjack.Logger{
 		Filename:   path,

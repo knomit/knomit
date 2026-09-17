@@ -51,12 +51,57 @@ func installBundledTool(home, execName string) (string, error) {
 	if resolved, rerr := filepath.EvalSymlinks(exe); rerr == nil {
 		exe = resolved
 	}
-	target := filepath.Join(filepath.Dir(exe), execName)
+	target := filepath.Join(filepath.Dir(exe), execName+exeSuffix)
 	if _, err := os.Stat(target); err != nil {
-		return "", fmt.Errorf("bundled %s not found at %s: %w", execName, target, err)
+		return "", fmt.Errorf("bundled %s not found at %s: %w", execName+exeSuffix, target, err)
 	}
-	return placeTool(runtime.GOOS, filepath.Join(home, "bin"), target)
+	binDir := filepath.Join(home, "bin")
+	sweepToolDebris(binDir)
+	return placeTool(runtime.GOOS, binDir, target)
 }
+
+// sweepToolDebris removes staging files left behind in binDir by an
+// interrupted install.
+//
+// Two things leave them. copyInto stages through a `.knomit-tool-*` temp file
+// and removes it with a defer, which does not run if the process is killed
+// mid-copy — a crash during startup leaves a partial ~40MB file. And
+// replaceFile moves a locked binary to `.knomit-tool-old-*` and then fails to
+// delete it precisely because it is still running.
+//
+// Both comments used to say this debris was "swept up by the next start". It
+// was not: nothing swept, and copyInto stamps each copy with the source's
+// mtime, so the leftovers were permanent. This is that sweep.
+//
+// Best-effort throughout. A file still held by a running process cannot be
+// removed on Windows, and that is the normal case for `.knomit-tool-old-*` —
+// it goes on the next start, once the old process has exited. Failing an
+// install over undeletable debris would be worse than the debris.
+//
+// Safe to run here because installs are sequential and happen at startup,
+// before any copy is in flight; a concurrent installer would need this to
+// exclude the file it is currently staging.
+func sweepToolDebris(binDir string) {
+	matches, err := filepath.Glob(filepath.Join(binDir, ".knomit-tool-*"))
+	if err != nil {
+		return // only ErrBadPattern, which this pattern is not
+	}
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+// exeSuffix is what the OS requires on the end of an executable's filename.
+//
+// The bundled tools are built as knomit-bridge.exe and knomit-okf.exe on
+// Windows (the Makefile's $(EXE)), so looking for the bare name finds nothing
+// and BOTH installs are skipped — with a warning, because callers treat this
+// as best-effort, so the app comes up looking healthy while no MCP client can
+// find knomit-bridge and `knomit-okf` is not on the user's PATH.
+//
+// It also has to be on the DESTINATION name, which it is: placeTool names the
+// installed copy after target's base.
+var exeSuffix = map[string]string{"windows": ".exe"}[runtime.GOOS]
 
 // placeTool installs target into binDir the way goos requires. goos is a
 // parameter rather than a runtime.GOOS read so both branches are testable on
@@ -66,11 +111,16 @@ func installBundledTool(home, execName string) (string, error) {
 // when the app exits. A symlink into it would dangle the moment the app quits,
 // breaking every MCP client wired to <home>/bin, so the tool is COPIED.
 //
+// Windows COPIES as well, for a different reason: creating a symlink there
+// needs SeCreateSymbolicLinkPrivilege, which an ordinary user does not have
+// unless Developer Mode is switched on. linkInto would fail outright for most
+// users, and "most users" is not a case to leave to a runtime error.
+//
 // macOS keeps the symlink: the .app sits at a stable path and the updater
 // replaces the bundle in place, so the link stays valid and the bundled tools
 // update along with the app.
 func placeTool(goos, binDir, target string) (string, error) {
-	if goos == "linux" {
+	if goos == "linux" || goos == "windows" {
 		return copyInto(binDir, target)
 	}
 	return linkInto(binDir, target)
@@ -178,10 +228,64 @@ func copyInto(binDir, target string) (string, error) {
 			return "", fmt.Errorf("remove stale symlink %s: %w", dst, err)
 		}
 	}
-	if err := os.Rename(tmpName, dst); err != nil {
+	if err := replaceFile(tmpName, dst); err != nil {
 		return "", fmt.Errorf("install %s: %w", dst, err)
 	}
 	return dst, nil
+}
+
+// replaceFile renames tmpName over dst, falling back to moving dst aside first.
+//
+// On Unix the plain rename always works: unlinking a file that a process has
+// open is legal, and the open fd keeps the old inode alive. On WINDOWS it is
+// not. A file that is mapped as a running executable cannot be deleted or
+// overwritten, so the rename fails with a sharing violation whenever the user
+// has an MCP client holding knomit-bridge.exe open — which, since the client
+// is the reason the tool is installed, is the common case rather than the
+// exotic one.
+//
+// Windows does allow RENAMING such a file. So: move the old one aside, put the
+// new one in its place, and try to delete the sidelined copy. The delete fails
+// while the process is still running; that is fine and deliberately ignored —
+// the name every MCP client launches now points at the new binary, and the
+// leftover is swept up by the next start, once the old process has exited.
+//
+// The sidelined name stays inside binDir so the move is a same-volume rename
+// rather than a copy, and is prefixed to match what the temp-file sweep
+// already recognises as debris.
+func replaceFile(tmpName, dst string) error {
+	err := os.Rename(tmpName, dst)
+	if err == nil {
+		return nil
+	}
+	if _, serr := os.Stat(dst); serr != nil {
+		// Nothing is in the way, so moving it aside cannot be the fix — the
+		// rename failed for some other reason. Report that one.
+		return err
+	}
+
+	aside, aerr := os.CreateTemp(filepath.Dir(dst), ".knomit-tool-old-*")
+	if aerr != nil {
+		return fmt.Errorf("stage replacement of %s: %w", dst, aerr)
+	}
+	asideName := aside.Name()
+	if cerr := aside.Close(); cerr != nil {
+		return fmt.Errorf("stage replacement of %s: %w", dst, cerr)
+	}
+	// CreateTemp made the file; Rename needs the name free on Windows.
+	if rerr := os.Remove(asideName); rerr != nil {
+		return fmt.Errorf("stage replacement of %s: %w", dst, rerr)
+	}
+	if rerr := os.Rename(dst, asideName); rerr != nil {
+		return fmt.Errorf("move aside %s: %w", dst, rerr)
+	}
+	if rerr := os.Rename(tmpName, dst); rerr != nil {
+		// Put it back rather than leaving the user with no tool at all.
+		_ = os.Rename(asideName, dst)
+		return rerr
+	}
+	_ = os.Remove(asideName) // still running: swept up on a later start
+	return nil
 }
 
 // upToDate reports whether dst is already the copy copyInto would produce.

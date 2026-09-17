@@ -96,14 +96,67 @@ func TestTokenizersSpec(t *testing.T) {
 }
 
 // daulet/tokenizers publishes no Windows artifact (darwin/linux only through
-// v1.27.0), so the tool must fail with an actionable message rather than fetch
-// a 404. This is the load-bearing edge case for "cross-platform".
-func TestTokenizersSpecWindowsUnsupported(t *testing.T) {
-	_, err := tokenizersSpec("windows", "amd64")
-	if err == nil {
-		t.Fatal("expected error for windows tokenizers, got nil")
+// v1.27.0). Rather than fetching a 404 or refusing outright — which aborted
+// `make build` and `make test` on Windows in their very first prerequisite,
+// before anything else could run — the spec builds the crate from source.
+func TestTokenizersSpecWindowsBuildsFromSource(t *testing.T) {
+	spec, err := tokenizersSpec("windows", "amd64")
+	if err != nil {
+		t.Fatalf("windows tokenizers must resolve to a source build: %v", err)
 	}
-	if !strings.Contains(err.Error(), "windows") {
-		t.Errorf("error should mention windows: %v", err)
+	if spec.extract != extractCargo {
+		t.Errorf("extract = %v, want extractCargo", spec.extract)
+	}
+	if spec.dest != "libtokenizers.a" {
+		t.Errorf("dest = %q, want libtokenizers.a — the name cgo_link_windows_amd64.go passes to -ltokenizers", spec.dest)
+	}
+	if spec.ref != tokenizersVersion {
+		t.Errorf("ref = %q, want the pinned %q; a source build that drifts from the pin is not the same library", spec.ref, tokenizersVersion)
+	}
+	if spec.crate != tokenizersCrate {
+		t.Errorf("crate = %q, want %q", spec.crate, tokenizersCrate)
+	}
+	// cargo normalises the dash in the package name to an underscore, and
+	// getting this wrong fails only AFTER a multi-minute compile. The triple
+	// is in the path because the build names a --target; see
+	// TestTokenizersSpecPinsTheGnuTarget for why it must.
+	if want := "target/" + tokenizersTarget + "/release/libtokenizers_ffi.a"; spec.member != want {
+		t.Errorf("member = %q, want %q", spec.member, want)
+	}
+	if !strings.Contains(spec.url, "daulet/tokenizers") {
+		t.Errorf("url = %q, want the daulet/tokenizers repo", spec.url)
+	}
+}
+
+// Only amd64 is claimed. windows/arm64 has no verified toolchain story here,
+// and silently attempting a build that cannot link is worse than saying so.
+func TestTokenizersSpecWindowsArm64Unsupported(t *testing.T) {
+	_, err := tokenizersSpec("windows", "arm64")
+	if err == nil {
+		t.Fatal("expected an error for windows/arm64")
+	}
+	if !strings.Contains(err.Error(), "arm64") {
+		t.Errorf("error should name the platform: %v", err)
+	}
+}
+
+// The target triple is load-bearing, not cosmetic. rustup's default host on
+// Windows is x86_64-pc-windows-MSVC, whose output is an MSVC .lib that the
+// MSYS2 mingw ld cannot link — cargo succeeds and the knomit link then fails
+// with undefined references. Pinning -gnu makes the artifact depend on this
+// constant rather than on the developer's toolchain default.
+func TestTokenizersSpecPinsTheGnuTarget(t *testing.T) {
+	spec, err := tokenizersSpec("windows", "amd64")
+	if err != nil {
+		t.Fatalf("tokenizersSpec: %v", err)
+	}
+	if spec.target != "x86_64-pc-windows-gnu" {
+		t.Errorf("target = %q, want x86_64-pc-windows-gnu — an MSVC build cannot link with mingw", spec.target)
+	}
+	// --target changes where cargo puts the output; the two must agree or the
+	// copy fails only AFTER a multi-minute compile.
+	want := "target/" + spec.target + "/release/libtokenizers_ffi.a"
+	if spec.member != want {
+		t.Errorf("member = %q, want %q — naming a --target moves the output under the triple", spec.member, want)
 	}
 }

@@ -251,12 +251,24 @@ func startManagerForHome(t *testing.T, home string) *repos.Manager {
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.Home = home
-	return repos.New(context.Background(), repos.Deps{
+	m := repos.New(context.Background(), repos.Deps{
 		Cfg:                   cfg,
 		AgentBranch:           testAgentBranch,
 		KeyPath:               filepath.Join(home, "id_ed25519"),
 		DisableBackgroundSync: true,
 	})
+	// Close here rather than at each call site. Several callers only want the
+	// error from Start — `startManagerForHome(t, home).Start()` — and never
+	// hold the manager, so its control.db handle stayed open for the rest of
+	// the test. On Unix that is invisible, because unlink works on an open
+	// file; on Windows it makes t.TempDir's cleanup fail with "The process
+	// cannot access the file because it is being used by another process".
+	//
+	// Cleanups run LIFO and t.TempDir registered its removal first, so this
+	// always runs before the directory goes. Manager.Close nils its handles,
+	// so call sites that already close explicitly are unaffected.
+	t.Cleanup(func() { _ = m.Close() })
+	return m
 }
 
 // testCryptFor returns the Crypt derived from the home's agent key, creating

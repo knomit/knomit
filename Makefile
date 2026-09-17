@@ -7,8 +7,9 @@
 # libs. Wails (CGO + the OS-native webview toolkit) cannot cross-compile, so each
 # platform is built in its own native environment; this layout keeps the outputs
 # separate. For consumers that need a stable, platform-independent path (e.g.
-# .mcp.json, the e2e harness), `build`/`desktop` also drop top-level symlinks
-# dist/<tool> -> <platform>/<tool>.
+# .mcp.json, the e2e harness), `build`/`desktop` also drop top-level entries
+# dist/<tool> -> <platform>/<tool>: symlinks on Unix, copies on Windows (see
+# symlink_tool for why).
 GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 PLATFORM := $(GOOS)-$(GOARCH)
@@ -175,12 +176,75 @@ else
   ORT_LIB_NAME := libonnxruntime.so
 endif
 
-# symlink_tool creates/refreshes a stable top-level symlink
-# dist/<name> -> <platform>/<name>. The target is relative to dist/ so the link
-# stays valid regardless of where the repo lives.
+# EXE is the executable suffix for GOOS. Windows will not run an
+# extensionless file by name, so every `go build -o` and every consumer path
+# has to carry it; it is empty everywhere else, leaving those unchanged.
+ifeq ($(GOOS),windows)
+  EXE := .exe
+else
+  EXE :=
+endif
+
+# symlink_tool creates/refreshes a stable top-level entry
+# dist/<name> -> <platform>/<name>, so consumers that need a platform-
+# independent path (.mcp.json, the e2e harness) have one.
+#
+# On Unix it is a symlink whose target is RELATIVE to dist/, so it stays valid
+# regardless of where the repo lives.
+#
+# On Windows it is a copy. Two reasons, either sufficient: `ln -sfn` under
+# MSYS2 does not create a symlink unless MSYS=winsymlinks:nativestrict is set
+# AND the process holds SeCreateSymbolicLinkPrivilege — by default it silently
+# copies instead, and it FAILS outright when the target does not exist,
+# because there is nothing to copy. The copy is explicit here so the behaviour
+# does not depend on how the developer's shell happens to be configured.
+#
+# cp -f, not cp: the destination is an executable that a previous build left
+# behind, and it may be read-only.
+#
+# The copies keep their .exe suffix, and .mcp.json's extensionless
+# "dist/knomit-bridge" still works: CreateProcess appends .exe to a name with
+# no extension, so both Node's spawn and Go's exec.LookPath resolve it —
+# measured, not assumed. Do not "fix" .mcp.json to name the .exe; that would
+# break the macOS and Linux entries, which have no suffix.
+ifeq ($(GOOS),windows)
+define symlink_tool
+	cp -f "dist/$(PLATFORM)/$(1)$(EXE)" "dist/$(1)$(EXE)"
+endef
+else
 define symlink_tool
 	ln -sfn "$(PLATFORM)/$(1)" "dist/$(1)"
 endef
+endif
+
+# dist_runtime_libs puts the runtime shared libraries beside the top-level
+# copies on Windows. It is a no-op everywhere else, and it is not optional.
+#
+# knomit finds ONNX Runtime at <dir of this executable>/lib (see
+# internal/embeddings.libCandidates). A SYMLINK keeps that working for free:
+# os.Executable is resolved through filepath.EvalSymlinks, so dist/knomit
+# resolves to dist/<platform>/knomit and lib/ is right there. A COPY does not
+# — dist/knomit.exe genuinely lives in dist/, where there is no lib/.
+#
+# The failure is nastier than "file not found". With no candidate present the
+# loader falls back to the bare name "onnxruntime.dll" and Windows resolves it
+# off the process search path, so knomit picks up whatever unrelated
+# onnxruntime happens to be on the machine and dies with
+# "Error finding OrtGetApiBase function in onnxruntime.dll: The specified
+# procedure could not be found" — which reads like a corrupt install rather
+# than the wrong file.
+#
+# Only the runtime libs are copied. libtokenizers.a is linked INTO the binary
+# at build time and is dead weight at runtime.
+ifeq ($(GOOS),windows)
+define dist_runtime_libs
+	mkdir -p dist/lib
+	cp -f $(LIBDIR)/*.dll dist/lib/
+endef
+else
+define dist_runtime_libs
+endef
+endif
 
 setup:
 	go run ./tools/fetchlibs $(LIBDIR)
@@ -197,12 +261,13 @@ tokenizers-lib:
 # a fresh `make build && ./dist/<platform>/knomit serve` fails to load them.
 build: web tokenizers-lib download-ort
 	mkdir -p $(DIST)
-	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit .
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge/
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf ./tools/okf/
+	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit$(EXE) .
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge$(EXE) ./tools/bridge/
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf$(EXE) ./tools/okf/
 	$(call symlink_tool,knomit)
 	$(call symlink_tool,knomit-bridge)
 	$(call symlink_tool,knomit-okf)
+	$(call dist_runtime_libs)
 
 web:
 	cd web && npm ci && npm run build
@@ -213,8 +278,37 @@ web:
 desktop-ui:
 	cd tools/desktop/ui && npm ci && npm run build
 
+# GOTEST_TIMEOUT overrides go test's 10-minute per-package default, which three
+# packages exceed on WINDOWS only:
+#
+#   internal/synthesize  1776s   (macOS/Linux: minutes)
+#   internal/store        816s   — grew past the default with #208-#211; it used
+#                         to sit under it, so an older reading of this list is
+#                         not wrong so much as out of date
+#   internal/repos        441-639s — straddles the 600s default, so whether it
+#                         fails depends on what else the machine is doing
+#
+# Nothing hangs. synthesize's structural identity tests each build a 400-fact
+# corpus one WriteFact at a time: measured at ~56s per test on Windows against
+# a few seconds elsewhere, 1053s for the 20 TestStructural_* tests alone, and
+# every one of them passes. It is filesystem cost, not a deadlock.
+#
+# A raised ceiling rather than a faster fixture: the corpus size is load-
+# bearing (shortlistBudget is derived from it), and marking the tests
+# t.Parallel would be the real fix but needs evidence that they are independent
+# — a change to make deliberately, not as a footnote to a timeout.
+#
+# Windows-only, because a ceiling is also a guard: leaving macOS and Linux on
+# the 10-minute default means a genuine hang there is still caught in ten
+# minutes instead of forty. It costs nothing when tests are fast.
+ifeq ($(GOOS),windows)
+  GOTEST_TIMEOUT ?= 40m
+else
+  GOTEST_TIMEOUT ?= 10m
+endif
+
 test: tokenizers-lib
-	CGO_ENABLED=1 go test $(GOFLAGS) ./...
+	CGO_ENABLED=1 go test $(GOFLAGS) -timeout $(GOTEST_TIMEOUT) ./...
 
 dist: download-ort tokenizers-lib build
 	@echo "Distribution package ready in $(DIST)/"
@@ -297,10 +391,10 @@ ifeq ($(GOOS),darwin)
 	@echo "Built $(APP) — launch with: open $(APP)"
 else
 	mkdir -p $(DIST)
-	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop ./tools/desktop
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge ./tools/bridge
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf ./tools/okf
-	@echo "Built $(DIST)/knomit-desktop + knomit-bridge + knomit-okf"
+	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop$(EXE) ./tools/desktop
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge$(EXE) ./tools/bridge
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf$(EXE) ./tools/okf
+	@echo "Built $(DIST)/knomit-desktop$(EXE) + knomit-bridge$(EXE) + knomit-okf$(EXE)"
 endif
 
 # Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
@@ -455,7 +549,7 @@ desktop-run: desktop
 ifeq ($(GOOS),darwin)
 	open $(APP)
 else
-	$(DIST)/knomit-desktop
+	$(DIST)/knomit-desktop$(EXE)
 endif
 
 # ---- release packaging ------------------------------------------------------
@@ -527,7 +621,7 @@ release-server: build
 	mkdir -p $(RELEASE_DIR)
 	rm -rf $(DIST)/$(SERVER_PKG)
 	mkdir -p $(DIST)/$(SERVER_PKG)/lib
-	cp $(DIST)/knomit $(DIST)/knomit-bridge $(DIST)/knomit-okf $(DIST)/$(SERVER_PKG)/
+	cp $(DIST)/knomit$(EXE) $(DIST)/knomit-bridge$(EXE) $(DIST)/knomit-okf$(EXE) $(DIST)/$(SERVER_PKG)/
 	cp -R $(LIBDIR)/. $(DIST)/$(SERVER_PKG)/lib/
 	rm -f $(DIST)/$(SERVER_PKG)/lib/*.a
 ifeq ($(GOOS),darwin)

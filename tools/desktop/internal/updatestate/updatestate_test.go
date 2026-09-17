@@ -3,6 +3,7 @@ package updatestate
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -94,7 +95,11 @@ func TestSaveWritesOwnerOnlyPermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := fi.Mode().Perm(); perm != 0o600 {
+	// Windows has no Unix mode bits: Go derives Perm() from the read-only
+	// attribute alone, so a writable file always reports 0666 and 0600 is not
+	// reachable. Owner-only access there would mean setting an ACL, which
+	// nothing in this tree does.
+	if perm := fi.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		t.Errorf("mode = %v, want 0600", perm)
 	}
 }
