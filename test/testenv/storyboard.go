@@ -127,6 +127,16 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 	if err != nil {
 		sb.t.Fatalf("Repo(%q): manager boot failed: %v", name, err)
 	}
+	// Registered at boot, not after Create succeeds — same reason as connect().
+	// A booted manager holds an open control.db and teardown closes only what
+	// this map holds, so a Fatalf below would leak it and, on Windows, stack a
+	// TempDir cleanup failure on top of the real one.
+	//
+	// A BARE MAP WRITE, deliberately: this function holds sb.mu for its whole
+	// body (deferred unlock above) and sync.Mutex is not reentrant, so copying
+	// connect()'s Lock/Unlock trio here would deadlock rather than protect
+	// anything.
+	sb.managers[name] = m
 	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: name, Mode: "preset"}, nil)
 	if err != nil {
 		sb.t.Fatalf("Repo(%q): create failed: %v", name, err)
@@ -141,7 +151,6 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 		branches: map[string]*BranchHandle{},
 	}
 	sb.repos[name] = r
-	sb.managers[name] = m
 	return r
 }
 
@@ -636,20 +645,36 @@ func (r *RepoHandle) Restart() {
 	t.Helper()
 	r.manager.Close()
 
+	// Close above already made this handle storeless, so EVERY failure from
+	// here marks it dirty — the same rule connect() follows, and for the same
+	// reason: teardown's auto-verify must not run against a repo whose manager
+	// is closed. AssertIntegrity on one of those leaves a control.db handle
+	// open, which is a second holder on top of the orphaned manager below.
+	// Measured, not reasoned: with the registration alone a forced failure here
+	// still failed TempDir cleanup, and only with BOTH halves did it come back
+	// clean.
 	m, err := r.sb.bootManager(r.cfg, r.keyPath)
 	if err != nil {
+		r.expectDirty = true
 		t.Fatalf("Restart(%q): manager re-boot failed: %v", r.name, err)
 	}
+	// Registered at boot, not after the Get below — same reason as connect()
+	// and Repo(): teardown closes only what this map holds, so a Fatalf between
+	// here and the end would orphan this manager's open control.db. This
+	// function does NOT hold sb.mu, so it takes the lock; Repo() does hold it
+	// and writes the map bare.
+	r.sb.mu.Lock()
+	r.sb.managers[r.name] = m
+	r.sb.mu.Unlock()
+
 	ri := m.Get(r.name)
 	if ri == nil {
+		r.expectDirty = true
 		t.Fatalf("Restart(%q): repo not re-opened from disk after boot", r.name)
 	}
 	r.manager = m
 	r.ri = ri
 	r.branches = map[string]*BranchHandle{}
-	r.sb.mu.Lock()
-	r.sb.managers[r.name] = m
-	r.sb.mu.Unlock()
 }
 
 // RestartWithEmbedder restarts the repo using a different embedder, simulating

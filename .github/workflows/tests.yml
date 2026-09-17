@@ -89,16 +89,24 @@ name: Tests
 #     is a thing to watch rather than a thing to fix: if that step ever times
 #     out, internal/web is where to look first.
 #
-# WHAT THIS COSTS SOMEONE WAITING ON A PR, from the green runs on 2026-09-17:
+# WHAT THIS COSTS SOMEONE WAITING ON A PR. JOB durations — what the checks list
+# shows, including checkout and the bootstrap — from the green legs of
+# 2026-09-17:
 #   build-test (windows-2025)            9m15s-12m12s  (runs 35250857183,
 #                                                       35253289005)
-#   slow-tests (windows-2025 synthesize) 19m26s-25m33s (runs 35247045603,
+#   slow-tests (windows-2025 synthesize) 20m21s-26m39s (runs 35247045603,
 #                                        35250857183, 35253289005) — the
 #                                        longest check on the board
+# Do not confuse these with the PACKAGE times in the slow-tests job below:
+# those are the `go test` step alone, which is what -timeout bounds, and they
+# run 2-4 minutes shorter than the job that contains them. "Green legs" rather
+# than green runs, because 35247045603 was red overall — on a step this block
+# is not about.
+#
 # RANGES, because the same leg on the same image varied by 30% between two
-# consecutive green runs. Any single figure here reads as typical and would be
-# wrong by minutes. So the build answer arrives in roughly ten minutes and a
-# FULL green waits on synthesize. The unix legs are unchanged by any of this.
+# consecutive runs. Any single figure here reads as typical and would be wrong
+# by minutes. So the build answer arrives in roughly ten minutes and a FULL
+# green waits on synthesize. The unix legs are unchanged by any of this.
 # If that second number is ever the thing standing between this repo and a
 # merge, the fix is in internal/synthesize's fixtures — the tests each build a
 # 400-fact corpus one WriteFact at a time — and not in this file.
