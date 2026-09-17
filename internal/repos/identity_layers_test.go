@@ -15,6 +15,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 )
 
@@ -337,14 +338,14 @@ func mirrorOfOrigin(t *testing.T, f *identityFixture, name string, ahead bool) s
 
 	work := filepath.Join(t.TempDir(), "work")
 	runGit(t, "", "clone", f.url, work)
-	runGit(t, work, "remote", "add", "mirror", "file://"+bare)
+	runGit(t, work, "remote", "add", "mirror", fileuri.New(bare))
 	if ahead {
 		require.NoError(t, os.WriteFile(filepath.Join(work, "ahead.txt"), []byte("ahead of the local copy"), 0o644))
 		runGit(t, work, "add", "-A")
 		runGit(t, work, "commit", "-m", "ahead of the local copy")
 	}
 	runGit(t, work, "push", "mirror", "main")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // The wizard's BRANCH step learns it too. probe-initialized reuses the same

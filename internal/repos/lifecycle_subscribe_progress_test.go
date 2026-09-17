@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 )
 
@@ -206,7 +207,7 @@ func TestCreatePreflight_RefusesAnOriginOutsideTheGate(t *testing.T) {
 
 	outside := filepath.Join(t.TempDir(), "elsewhere.git")
 	err := m.CreatePreflight(context.Background(), CreateSpec{
-		Name: "sneaky", Mode: "subscribe", Origin: &OriginSpec{URL: "file://" + outside},
+		Name: "sneaky", Mode: "subscribe", Origin: &OriginSpec{URL: fileuri.New(outside)},
 	})
 	require.ErrorIs(t, err, ErrLocalOriginDenied)
 	require.Contains(t, err.Error(), "outside the allowed root")
@@ -214,7 +215,7 @@ func TestCreatePreflight_RefusesAnOriginOutsideTheGate(t *testing.T) {
 	// And the create itself refuses too — the preflight is an affordance, not
 	// the enforcement point, and the gate must hold on the path that clones.
 	_, cerr := m.Create(context.Background(), CreateSpec{
-		Name: "sneaky", Mode: "subscribe", Origin: &OriginSpec{URL: "file://" + outside},
+		Name: "sneaky", Mode: "subscribe", Origin: &OriginSpec{URL: fileuri.New(outside)},
 	}, nil)
 	require.Error(t, cerr)
 	require.Nil(t, m.Get("sneaky"))
