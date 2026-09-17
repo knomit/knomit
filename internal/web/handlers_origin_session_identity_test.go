@@ -13,6 +13,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 )
 
@@ -63,7 +64,7 @@ func seedKnomitRemoteForTest(t *testing.T, bare, factBody string) string {
 	runGitForTest(t, work, "commit", "-m", "seed "+factBody)
 	runGitForTest(t, work, "push", "origin", "main")
 	runGitForTest(t, bare, "symbolic-ref", "HEAD", "refs/heads/main")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // rootCommitOfBare returns the root commit hash of branch in a bare repo,

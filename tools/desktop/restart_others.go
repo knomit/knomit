@@ -5,7 +5,6 @@ package main
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 )
 
 // relaunchTarget resolves the executable to re-exec — the .AppImage file when
@@ -32,10 +31,4 @@ func relaunchTarget() (string, error) {
 // darwin relaunch for why the naive "spawn then quit" order races.
 func relaunch(exe string) error {
 	return exec.Command(exe).Start()
-}
-
-// revealInFileManager opens the log file's directory with the desktop's default
-// handler. There is no portable "select this file", so the directory is opened.
-func revealInFileManager(path string) error {
-	return exec.Command("xdg-open", filepath.Dir(path)).Start()
 }

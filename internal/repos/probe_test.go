@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/fileuri"
 )
 
 // newProbeTestManager returns an unstarted Manager whose LocalOriginRoot is
@@ -40,7 +41,7 @@ func initBareRepo(t *testing.T, parent string) string {
 	t.Helper()
 	dir := filepath.Join(parent, "remote.git")
 	require.NoError(t, exec.Command("git", "init", "--bare", dir).Run())
-	return "file://" + dir
+	return fileuri.New(dir)
 }
 
 // An empty bare repo on disk is the case the wizard BLOCKS on: with no

@@ -36,10 +36,37 @@ func TestWriteFile_WritesIntoExportsDir(t *testing.T) {
 	}
 }
 
+// Every spelling of "not relative to the exports dir" must be refused, not
+// quietly rewritten into something inside the sandbox.
+//
+// filepath.IsAbs alone is not that check on Windows: it answers FALSE for
+// "/etc/passwd", for "\etc\passwd" and for the drive-relative "C:passwd", all
+// of which resolve outside the exports dir there. Only the first of these was
+// tested, and it was the one that failed on Windows.
 func TestWriteFile_RejectsAbsolutePath(t *testing.T) {
 	sandboxHome(t)
-	if _, err := writeFile("/etc/passwd", "x"); err == nil {
-		t.Error("absolute path must be rejected")
+
+	// Rejected everywhere.
+	names := []string{"/etc/passwd"} // rooted, POSIX spelling
+
+	// The Windows spellings are only non-relative ON Windows. A backslash is
+	// an ordinary filename character on macOS and Linux, so `\etc\passwd` and
+	// `C:passwd` are legal RELATIVE names there and writeFile is right to
+	// accept them — asserting otherwise would fail the existing macOS/Linux
+	// desktop job, which is what an unguarded version of this table did.
+	if filepath.Separator != '/' {
+		names = append(names,
+			`\etc\passwd`,       // rooted: relative to the current DRIVE
+			`C:\Windows\me.txt`, // fully absolute
+			"C:passwd",          // drive-relative: the current dir of drive C
+			`\\srv\share\x`,     // UNC: another machine altogether
+		)
+	}
+
+	for _, name := range names {
+		if _, err := writeFile(name, "x"); err == nil {
+			t.Errorf("writeFile(%q) was accepted; a non-relative name must be rejected", name)
+		}
 	}
 }
 

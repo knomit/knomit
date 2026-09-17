@@ -61,7 +61,7 @@ import (
 // can be configured uniformly across the MCP and hook paths. Unknown args
 // are passed through untouched.
 func peelLogFlag(args []string) (logPath string, remaining []string) {
-	logPath = bridgelog.DefaultPath
+	logPath = bridgelog.DefaultPath()
 	remaining = make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -140,7 +140,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
-		fmt.Fprintf(os.Stderr, "  --log <path>            log file path (default %s, lumberjack 4MB rotation)\n\n", bridgelog.DefaultPath)
+		fmt.Fprintf(os.Stderr, "  --log <path>            log file path (default %s, lumberjack 4MB rotation)\n\n", bridgelog.DefaultPath())
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -lens eng\n")

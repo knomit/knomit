@@ -10,6 +10,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 )
 
 // TestOpenGit_UpstreamBranchSurvivesReboot pins that the resolved upstream
@@ -68,7 +69,7 @@ func TestOpenGit_UpstreamBranchSurvivesReboot(t *testing.T) {
 	_, err := m.Create(context.Background(), CreateSpec{
 		Name:   testRepoName,
 		Mode:   "clone",
-		Origin: &OriginSpec{URL: "file://" + remoteDir},
+		Origin: &OriginSpec{URL: fileuri.New(remoteDir)},
 	}, nil)
 	require.NoError(t, err)
 

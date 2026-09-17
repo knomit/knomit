@@ -23,7 +23,7 @@ func RedirectStderr(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open crash log: %w", err)
 	}
-	if err := dupToStderr(int(f.Fd())); err != nil {
+	if err := dupToStderr(f); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("redirect stderr: %w", err)
 	}

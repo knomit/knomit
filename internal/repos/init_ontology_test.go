@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/fileuri"
 )
 
 // TestCreate_localWritesOntologyToAgentBranch verifies that a brand new repo
@@ -20,6 +21,10 @@ func TestCreate_localWritesOntologyToAgentBranch(t *testing.T) {
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "agent/test-abc",
 	})
+	// Release the control.db handle before t.TempDir removes the home.
+	// Windows refuses to unlink an open file, so a manager left open fails
+	// the test in cleanup after every assertion has passed.
+	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)
 
 	result, err := testService(t, ri).Facts().ReadFact(context.Background(), "agent/test-abc", OntologyPath, nil)
@@ -62,11 +67,14 @@ func TestCreate_LocalOriginRejectedWithoutRoot(t *testing.T) {
 		AgentBranch:           "agent/test-abc",
 		DisableBackgroundSync: true,
 	})
+	// Release the control.db handle before t.TempDir removes the home:
+	// Windows refuses to unlink an open file.
+	t.Cleanup(func() { _ = m.Close() })
 	require.NoError(t, m.Start())
 	_, err := m.Create(context.Background(), CreateSpec{
 		Name:   testRepoName,
 		Mode:   "clone",
-		Origin: &OriginSpec{URL: "file://" + remoteDir},
+		Origin: &OriginSpec{URL: fileuri.New(remoteDir)},
 	}, nil)
 	require.Error(t, err, "a file:// origin must be rejected when local_origin_root is unset")
 	require.Contains(t, err.Error(), "local-path origins are disabled")
@@ -90,11 +98,14 @@ func TestCreate_LocalOriginRejectedOutsideRoot(t *testing.T) {
 		AgentBranch:           "agent/test-abc",
 		DisableBackgroundSync: true,
 	})
+	// Release the control.db handle before t.TempDir removes the home:
+	// Windows refuses to unlink an open file.
+	t.Cleanup(func() { _ = m.Close() })
 	require.NoError(t, m.Start())
 	_, err := m.Create(context.Background(), CreateSpec{
 		Name:   testRepoName,
 		Mode:   "clone",
-		Origin: &OriginSpec{URL: "file://" + remoteDir},
+		Origin: &OriginSpec{URL: fileuri.New(remoteDir)},
 	}, nil)
 	require.Error(t, err, "a file:// origin outside local_origin_root must be rejected")
 	require.Contains(t, err.Error(), "outside the allowed root")

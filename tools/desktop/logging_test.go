@@ -55,12 +55,27 @@ func TestDesktopLogConfigKeepsExplicitValues(t *testing.T) {
 
 // restoreGlobalLogger puts the process logger back on plain stderr once a test
 // has pointed it at a temp file, so a later test never writes into a TempDir
-// that has already been removed.
-func restoreGlobalLogger(t *testing.T) {
+// that has already been removed. It RETURNS the directory such a test should
+// put its log files in.
+//
+// Handing back the directory is what keeps the two cleanups in the right
+// order. Cleanups run LIFO, and the swap below is what closes the lumberjack
+// file: a test that called t.TempDir() for itself AFTER this helper would have
+// its directory removed BEFORE the file inside it was closed. Unix does not
+// care — unlinking an open file is legal — but Windows refuses, and the test
+// fails in cleanup having passed every assertion it makes. Creating the
+// directory here, before registering the cleanup, makes the ordering a
+// property of the helper instead of something each test has to remember.
+//
+// A test needing more than one log file takes subdirectories of this one
+// rather than calling t.TempDir() again, for the same reason.
+func restoreGlobalLogger(t *testing.T) string {
 	t.Helper()
+	dir := t.TempDir()
 	t.Cleanup(func() {
 		globalSink.swap(zerolog.MultiLevelWriter(zerolog.ConsoleWriter{Out: os.Stderr}), nil)
 	})
+	return dir
 }
 
 // The file the logger writes, the one "Reveal in Finder" opens, and the one the
@@ -102,8 +117,7 @@ func TestResolveLogFileFallsBackToTheDesktopDefault(t *testing.T) {
 // the only thing that drives both sides at once, which is why the race survived
 // eleven task reviews.
 func TestApplyLogConfigIsSafeWhileLogging(t *testing.T) {
-	restoreGlobalLogger(t)
-	path := filepath.Join(t.TempDir(), "race.log")
+	path := filepath.Join(restoreGlobalLogger(t), "race.log")
 
 	// applyLogConfig always builds its console sink over os.Stderr, and this
 	// test writes thousands of records; without this the real signal is buried
@@ -169,8 +183,8 @@ func TestApplyLogConfigIsSafeWhileLogging(t *testing.T) {
 // assignment, the logger would stop being the one built over globalSink and
 // swapping would silently stop having any effect.
 func TestApplyLogConfigKeepsTheLoggerBoundToTheSink(t *testing.T) {
-	restoreGlobalLogger(t)
-	path := filepath.Join(t.TempDir(), "bound.log")
+	logDir := restoreGlobalLogger(t)
+	path := filepath.Join(logDir, "bound.log")
 
 	if err := applyLogConfig(config.LogConfig{Level: "info", Format: "console"}, path); err != nil {
 		t.Fatalf("applyLogConfig: %v", err)
@@ -178,7 +192,7 @@ func TestApplyLogConfigKeepsTheLoggerBoundToTheSink(t *testing.T) {
 	log.Info().Msg("first sink")
 
 	// A second apply must redirect the SAME logger, without reassigning it.
-	second := filepath.Join(t.TempDir(), "second.log")
+	second := filepath.Join(logDir, "second.log")
 	if err := applyLogConfig(config.LogConfig{Level: "info", Format: "console"}, second); err != nil {
 		t.Fatalf("applyLogConfig: %v", err)
 	}

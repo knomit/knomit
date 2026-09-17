@@ -24,6 +24,19 @@ import (
 // budgets 1 and the reservation test would pass vacuously.
 const structuralFiller = 404
 
+// structuralEnv seeds a corpus big enough for the shortlist budget to behave
+// as it does in production, then adds the pair under test.
+//
+// This is SLOW, and deliberately so: structuralFiller facts are written one
+// WriteFact at a time, each a real commit. On macOS and Linux that is a few
+// seconds; on Windows it is ~56s per test, and the twenty TestStructural_*
+// tests together take about 17 minutes — past go test's 10-minute per-package
+// default, which is why the Makefile raises it (GOTEST_TIMEOUT). The cost is
+// filesystem work, not a hang: every one of them passes.
+//
+// The count cannot simply be lowered. shortlistBudget is derived from corpus
+// size, and TestStructural_AllowanceSurvivesAFullOrdinaryBand and its
+// neighbours assert behaviour that only appears once the band is full.
 func structuralEnv(t *testing.T, pair [2]struct{ Path, Title string }) *restatementEnv {
 	t.Helper()
 	env := newRestatementEnv(t, 0)

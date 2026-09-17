@@ -40,6 +40,12 @@ func isolateCache(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "xdg"))
+	// os.UserCacheDir consults a DIFFERENT variable on each OS, and setting
+	// only the Unix ones left Windows pointed at the real user cache. Every
+	// test then shared one marker directory, so the first to greet
+	// conversation "c1" made every later test see "already_greeted" — nine
+	// tests failing on a greeting written by a tenth.
+	t.Setenv("LocalAppData", filepath.Join(home, "localappdata"))
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		t.Fatalf("UserCacheDir: %v", err)

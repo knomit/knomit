@@ -4,7 +4,6 @@ package singleinstance
 import (
 	"errors"
 	"os"
-	"syscall"
 
 	"knomit/tools/desktop/internal/lockfile"
 )
@@ -33,15 +32,4 @@ func Acquire(path string) error {
 	}
 	// Stale lockfile; caller will overwrite it.
 	return nil
-}
-
-// isAlive reports whether the process is running. On Unix, FindProcess never
-// errors, so we send signal 0 to probe.
-func isAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	err = p.Signal(syscall.Signal(0))
-	return err == nil
 }

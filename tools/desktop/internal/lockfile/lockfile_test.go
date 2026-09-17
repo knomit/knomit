@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"knomit/tools/desktop/internal/lockfile"
@@ -21,7 +22,12 @@ func TestWriteRead_Roundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows has no Unix mode bits. Go synthesises Perm() from the read-only
+	// attribute alone, so a writable file always reports 0666 and 0600 is not
+	// a mode any file here can have. Restricting this file to its owner on
+	// Windows means an ACL, which nothing in the tree sets; the rest of the
+	// round trip is still worth asserting.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("perms = %o, want 0600", info.Mode().Perm())
 	}
 

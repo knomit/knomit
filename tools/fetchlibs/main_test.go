@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -74,7 +75,11 @@ func TestWriteFile_SucceedsAndIsExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	// Windows has no execute bit — a file is executable by extension, and
+	// Go reports 0666 for anything writable — so there is nothing to assert
+	// there. The bit still matters on macOS and Linux, where a dylib/.so
+	// without it cannot be loaded.
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Errorf("library must be executable, got mode %v", info.Mode().Perm())
 	}
 }

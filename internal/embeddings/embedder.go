@@ -70,7 +70,11 @@ func initORT() error {
 				}
 			}
 		}
-		ortInitErr = ort.InitializeEnvironment()
+		// annotateORTInitError adds the VC++ redistributable requirement on
+		// Windows when this machine's runtime is genuinely too old for the
+		// prebuilt onnxruntime, whose own error says only that a DLL
+		// initialization routine failed. A no-op everywhere else.
+		ortInitErr = annotateORTInitError(ort.InitializeEnvironment())
 	})
 	return ortInitErr
 }

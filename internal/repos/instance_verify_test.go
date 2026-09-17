@@ -20,6 +20,9 @@ func TestRepoInstance_Verify(t *testing.T) {
 		Cfg:         config.Config{Home: dir},
 		AgentBranch: "agent/test",
 	})
+	// Release the control.db handle before t.TempDir removes the home:
+	// Windows refuses to unlink an open file.
+	t.Cleanup(func() { _ = m.Close() })
 	ri := bootRepo(t, m)
 	require.NotNil(t, ri)
 

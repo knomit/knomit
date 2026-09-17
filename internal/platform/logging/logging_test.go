@@ -42,10 +42,7 @@ func TestBuildLogger_ConsoleFormatUsesConsoleSink(t *testing.T) {
 	var console, jsonOut bytes.Buffer
 	opts := Options{Format: "console", Level: "info"}
 
-	lg, _, err := Build(opts, &console, &jsonOut, nil)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	lg := buildForTest(t, opts, &console, &jsonOut, nil)
 	lg.Info().Msg("hi")
 
 	if jsonOut.Len() != 0 {
@@ -61,10 +58,7 @@ func TestBuildLogger_FileSinkReceivesOutput(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "knomit.log")
 	opts := Options{Format: "console", Level: "info", File: file, MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1}
 
-	lg, _, err := Build(opts, &console, &jsonOut, nil)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	lg := buildForTest(t, opts, &console, &jsonOut, nil)
 	lg.Info().Msg("to-file")
 
 	raw, err := os.ReadFile(file)
@@ -81,10 +75,7 @@ func TestBuildLogger_RingIsTeed(t *testing.T) {
 	var ring bytes.Buffer
 	opts := Options{Format: "console", Level: "info"}
 
-	lg, _, err := Build(opts, &console, &jsonOut, &ring)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	lg := buildForTest(t, opts, &console, &jsonOut, &ring)
 	lg.Info().Msg("teed")
 
 	if !strings.Contains(ring.String(), "teed") {
@@ -111,10 +102,7 @@ func TestBuildConsoleFormatWritesHumanReadableFile(t *testing.T) {
 		MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1,
 	}
 
-	lg, _, err := Build(opts, io.Discard, io.Discard, nil)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	lg := buildForTest(t, opts, io.Discard, io.Discard, nil)
 	lg.Info().Str("port", "19278").Msg("server up")
 
 	b, err := os.ReadFile(path)
@@ -157,10 +145,7 @@ func TestFileSinkTimestampIsDatedAndSpaceFree(t *testing.T) {
 		MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1,
 	}
 
-	lg, _, err := Build(opts, io.Discard, io.Discard, nil)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	lg := buildForTest(t, opts, io.Discard, io.Discard, nil)
 	lg.Info().Msg("server up")
 
 	b, err := os.ReadFile(path)
@@ -194,10 +179,7 @@ func TestConsoleSinkKeepsTheShortClockTime(t *testing.T) {
 	var console bytes.Buffer
 	opts := Options{Format: "console", Level: "info"}
 
-	lg, _, err := Build(opts, &console, io.Discard, nil)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	lg := buildForTest(t, opts, &console, io.Discard, nil)
 	lg.Info().Msg("hi")
 
 	// The stderr writer colorises (unlike the file writer's NoColor), so the
@@ -256,10 +238,7 @@ func TestBuildJSONFormatKeepsTheFileStructured(t *testing.T) {
 		MaxSizeMB: 1, MaxBackups: 1, MaxAgeDays: 1,
 	}
 
-	lg, _, err := Build(opts, io.Discard, io.Discard, nil)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	lg := buildForTest(t, opts, io.Discard, io.Discard, nil)
 	lg.Info().Msg("server up")
 
 	b, err := os.ReadFile(path)
@@ -269,4 +248,29 @@ func TestBuildJSONFormatKeepsTheFileStructured(t *testing.T) {
 	if !strings.Contains(string(b), `"message":"server up"`) {
 		t.Errorf("json format lost its structured file sink:\n%s", b)
 	}
+}
+
+// buildForTest is Build with the rotating file sink closed when the test ends.
+//
+// Build discards BuildWriter's closer on purpose: a process configures its
+// logger once and keeps it for its lifetime, so there is nothing to close.
+// A test configures one per case, and lumberjack opens the file eagerly on
+// first write. On Windows an open file cannot be unlinked, so t.TempDir's
+// cleanup fails with "The process cannot access the file because it is being
+// used by another process" — failing tests that had already passed every
+// assertion they make.
+//
+// Tests with no File in their Options get a nil closer and nothing to clean
+// up; they use this helper anyway so the package has one way to build a
+// logger and no per-test judgement about whether a sink needs closing.
+func buildForTest(t *testing.T, o Options, consoleOut, jsonOut, ring io.Writer, tees ...io.Writer) zerolog.Logger {
+	t.Helper()
+	w, closer, _, err := BuildWriter(o, consoleOut, jsonOut, ring, tees...)
+	if err != nil {
+		t.Fatalf("BuildWriter: %v", err)
+	}
+	if closer != nil {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+	return zerolog.New(w).With().Timestamp().Logger()
 }

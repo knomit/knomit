@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 )
 
@@ -59,9 +60,19 @@ func refHash(t *testing.T, bare, ref string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// bareOf turns the file:// URL these fixtures return back into a path, so the
+// bareOf turns the file: URL these fixtures return back into a path, so the
 // git plumbing helpers above can be pointed at the same repo.
-func bareOf(url string) string { return strings.TrimPrefix(url, "file://") }
+//
+// It is fileuri.Path rather than a TrimPrefix because the URL is percent-
+// escaped and, on Windows, carries a slash in front of the drive letter that
+// no OS call accepts — t.TempDir under "AppData\Local" makes both real.
+func bareOf(u string) string {
+	p, ok := fileuri.Path(u)
+	if !ok {
+		panic("bareOf: not a file URL: " + u)
+	}
+	return p
+}
 
 // ── the mode's whole point ────────────────────────────────────────────────
 //
@@ -198,7 +209,7 @@ func TestCreate_InitializeRefusesAnEmptyRemote(t *testing.T) {
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote.git")
 	require.NoError(t, exec.Command("git", "init", "--bare", remoteDir).Run())
-	url := "file://" + remoteDir
+	url := fileuri.New(remoteDir)
 	m := newRemoteModeManager(t, dir)
 
 	_, err := m.Create(context.Background(), CreateSpec{
@@ -223,7 +234,7 @@ func TestCreate_CloneRefusesAnEmptyRemote(t *testing.T) {
 
 	_, err := m.Create(context.Background(), CreateSpec{
 		Name: "kb", Mode: "clone",
-		Origin: &OriginSpec{URL: "file://" + remoteDir},
+		Origin: &OriginSpec{URL: fileuri.New(remoteDir)},
 	}, nil)
 	require.ErrorIs(t, err, ErrRemoteNoBranches)
 	require.Nil(t, m.Get("kb"), "a refused clone must leave no repo registered")
@@ -279,7 +290,7 @@ func TestCreate_InitializeRequiresOntology_AuthoritativeInCreate(t *testing.T) {
 
 func TestCreate_InitializeFailsOnUnreachableRemote(t *testing.T) {
 	dir := t.TempDir()
-	url := "file://" + filepath.Join(dir, "does-not-exist.git")
+	url := fileuri.New(filepath.Join(dir, "does-not-exist.git"))
 	m := newRemoteModeManager(t, dir)
 
 	_, err := m.Create(context.Background(), CreateSpec{
@@ -333,7 +344,7 @@ func TestCreatePreflight_InitializeRefusesAnEmptyRemote(t *testing.T) {
 
 	err := m.CreatePreflight(context.Background(), CreateSpec{
 		Name: "kb", Mode: "initialize", OntologyPreset: "code",
-		Origin: &OriginSpec{URL: "file://" + remoteDir},
+		Origin: &OriginSpec{URL: fileuri.New(remoteDir)},
 	})
 	require.ErrorIs(t, err, ErrRemoteNoBranches)
 }
@@ -362,7 +373,7 @@ func TestCreatePreflight_InitializeAllowsUnreachableRemoteThrough(t *testing.T) 
 
 	require.NoError(t, m.CreatePreflight(context.Background(), CreateSpec{
 		Name: "kb", Mode: "initialize", OntologyPreset: "code",
-		Origin: &OriginSpec{URL: "file://" + filepath.Join(dir, "does-not-exist.git")},
+		Origin: &OriginSpec{URL: fileuri.New(filepath.Join(dir, "does-not-exist.git"))},
 	}))
 }
 

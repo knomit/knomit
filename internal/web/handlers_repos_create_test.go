@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/repos"
 )
 
@@ -156,7 +157,7 @@ func TestPostRepos_InitializeEmptyRemoteIs409NotAStreamedError(t *testing.T) {
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	body := `{"name":"kb","mode":"initialize","ontology_preset":"default","origin":{"url":"file://` + remote + `"}}`
+	body := createBody(t, "initialize", "default", fileuri.New(remote))
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
 
 	if rec.Code != http.StatusConflict {
@@ -351,7 +352,7 @@ func TestPostRepos_CloneOfARefLessRemoteIs409NotAStreamedError(t *testing.T) {
 	s := &Server{Manager: newRealManagerWithLocalOriginRoot(t, root)}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	body := `{"name":"kb","mode":"clone","origin":{"url":"file://` + remote + `"}}`
+	body := createBody(t, "clone", "", fileuri.New(remote))
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body)))
 
 	if rec.Code != http.StatusConflict {
@@ -502,4 +503,30 @@ func TestReposNamedCreatesStaysReachable(t *testing.T) {
 			"\"creates\" is shadowed by the create-status route; body=%s",
 			rec.Code, rec.Body.String())
 	}
+}
+
+// createBody builds a POST /repos body with encoding/json instead of pasting
+// the origin URL into a string literal.
+//
+// A filesystem path cannot be interpolated into JSON. On Windows t.TempDir
+// sits under "C:\Users\...", and "\U" is not a valid JSON escape: the handler
+// answered 400 "invalid character 'U' in string escape code", so these tests
+// failed on their own fixture rather than on the 409 they were written to
+// assert. ontologyPreset is omitted when empty, matching the clone-mode
+// request shape, which refuses a preset outright.
+func createBody(t *testing.T, mode, ontologyPreset, originURL string) string {
+	t.Helper()
+	req := map[string]any{
+		"name":   "kb",
+		"mode":   mode,
+		"origin": map[string]string{"url": originURL},
+	}
+	if ontologyPreset != "" {
+		req["ontology_preset"] = ontologyPreset
+	}
+	b, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal create body: %v", err)
+	}
+	return string(b)
 }

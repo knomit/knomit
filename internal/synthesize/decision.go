@@ -5,7 +5,7 @@ package synthesize
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
@@ -22,10 +22,18 @@ import (
 // filenames (e.g. "chrome-extension-threat-surface-2026.md") from clashing
 // with each other or with learn-generated facts. Directory case is normalised
 // by fact.NewFact, which lowercases the full path unconditionally.
-func normalizeFactPath(path string) string {
-	dir := filepath.Dir(path)
+//
+// path.Dir, NOT filepath.Dir. A fact path is a git-style repo path: always
+// forward-slashed, on every OS, because it names a blob in a tree rather than
+// a file on this machine. filepath.Dir answers in the host separator, so on
+// Windows "kb/synthesis/x.md" came back as "kb\synthesis" and this returned
+// the mongrel "kb\synthesis/<uuid>.md". validateOutputPath then looked for the
+// "kb/" prefix, did not find it, and every merge, distill, propose and
+// emergent-fact write was rejected — silently, as a warning on the progress
+// channel rather than an error, so synthesis simply produced nothing.
+func normalizeFactPath(p string) string {
 	id := uuid.New().String()[:8]
-	return dir + "/" + id + ".md"
+	return path.Dir(p) + "/" + id + ".md"
 }
 
 // validateOutputPath rejects LLM-emitted fact paths that don't live under

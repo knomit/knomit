@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"knomit/internal/platform/fileuri"
 )
 
 // initBareRepoForWebTest creates an empty bare git repo under parent and
@@ -18,7 +20,7 @@ func initBareRepoForWebTest(t *testing.T, parent string) string {
 	if err := exec.Command("git", "init", "--bare", dir).Run(); err != nil {
 		t.Fatalf("git init --bare: %v", err)
 	}
-	return "file://" + dir
+	return fileuri.New(dir)
 }
 
 func TestProbeOrigin_ReportsEmptyRemote(t *testing.T) {

@@ -5,13 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
 	"knomit/internal/fact"
+	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
 )
 
@@ -154,8 +154,16 @@ func gitRefs(t *testing.T, bare string) string {
 	return string(out)
 }
 
-// plainPath strips the file:// scheme the seed helpers return.
-func plainPath(url string) string { return strings.TrimPrefix(url, "file://") }
+// plainPath turns the file: URL the seed helpers return back into a path.
+// Not a TrimPrefix: the URL is percent-escaped, and on Windows it carries a
+// slash before the drive letter that no OS call accepts.
+func plainPath(u string) string {
+	p, ok := fileuri.Path(u)
+	if !ok {
+		panic("plainPath: not a file URL: " + u)
+	}
+	return p
+}
 
 // seedBareRemoteHeadNotMain builds a remote whose HEAD is an ontology-LESS
 // "develop", alongside a "main" that IS a knowledge base. The two differ, which
@@ -185,7 +193,7 @@ func seedBareRemoteHeadNotMain(t *testing.T, bare string) string {
 	runGit(t, work, "push", "origin", "main")
 
 	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/develop")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // With no branch requested, the preflight must resolve the branch by the SAME
@@ -239,7 +247,7 @@ func seedBareRemoteMasterOnly(t *testing.T, bare string) string {
 	runGit(t, work, "commit", "-m", "master kb")
 	runGit(t, work, "push", "origin", "master")
 	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/master")
-	return "file://" + bare
+	return fileuri.New(bare)
 }
 
 // The preflight and the create resolve the branch through TWIN rules that live

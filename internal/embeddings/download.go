@@ -162,6 +162,14 @@ func downloadIfMissing(ctx context.Context, dst, url, wantSHA256, name string) e
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", name, err)
 	}
+	// KNOWN LIMITATION on Windows: a rename cannot replace a file another
+	// process holds open, and onnxruntime mmaps the model file for as long as
+	// a session exists. Re-downloading a model that THIS process is already
+	// serving would fail here with a sharing violation instead of succeeding.
+	// It is not reachable today — the caller downloads only when the file is
+	// absent, and a second knomit on the same home is stopped by the port
+	// bind — so this is a note for whoever adds a model refresh, not a bug
+	// with a victim.
 	if err := os.Rename(tmpName, dst); err != nil {
 		return fmt.Errorf("rename tmp: %w", err)
 	}
