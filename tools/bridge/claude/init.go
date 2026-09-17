@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -25,8 +26,11 @@ var templatesFS embed.FS
 // Semantics:
 //   - Owned files (.claude/skills/**): always written (overwritten if they
 //     already exist).
-//   - Merge-required files (.mcp.json, .claude/settings.json, CLAUDE.md):
-//     if the destination exists, a companion file is dropped instead.
+//   - Merge-required files (.mcp.json, .claude/settings.json, CLAUDE.md): if
+//     the destination exists it is MERGED in place — see init_merge.go. A
+//     companion file is dropped only for the cases a merge cannot decide
+//     unambiguously (a knomit .mcp.json entry under a different key, a CLAUDE.md
+//     block with no closing delimiter).
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
@@ -81,8 +85,19 @@ func runInit(args []string) error {
 			strings.TrimPrefix(flag, "--"), scope, len(scope), knomitapi.MaxScopeNameLen, flag)
 	}
 
+	// Merge targets are validated BEFORE anything is written, for the same reason
+	// the name checks above are: a scaffold that half-lands leaves the operator
+	// reconciling the files that merged against an error about the one that did
+	// not. settings.json is the only one that can fail here — the other two fall
+	// back to a companion when they cannot be merged, and a companion is not a
+	// failure.
+	if err := preflightSettings(filepath.Join(cwd, ".claude", "settings.json")); err != nil {
+		return err
+	}
+
 	var created []string
 	var overwritten []string
+	var updated []string
 	var conflicts []string
 
 	// writeOne handles one template file: srcFS/srcPath -> its destination,
@@ -122,10 +137,24 @@ func runInit(args []string) error {
 			return nil
 		}
 		if exists {
-			if err := writeFile(companionPath(dst), []byte(rendered), 0o644); err != nil {
+			note, err := mergeInto(dst, dstRel, []byte(rendered), knomitapi.ServerKey(repoName, *lens))
+			if err != nil {
 				return err
 			}
-			conflicts = append(conflicts, dstRel)
+			if note == "" {
+				// Merged and nothing changed: the file already says what this
+				// build would have written. Deliberately no output — a re-init
+				// that reports nothing is how the operator knows it is a no-op.
+				return nil
+			}
+			if note == mergeNotPossible {
+				if err := writeFile(companionPath(dst), []byte(rendered), 0o644); err != nil {
+					return err
+				}
+				conflicts = append(conflicts, dstRel)
+				return nil
+			}
+			updated = append(updated, strings.TrimSpace(dstRel+" "+note))
 			return nil
 		}
 		if err := writeFile(dst, []byte(rendered), 0o644); err != nil {
@@ -178,7 +207,134 @@ func runInit(args []string) error {
 		return err
 	}
 
-	printSummary(created, overwritten, conflicts)
+	printSummary(created, overwritten, updated, conflicts)
+	return nil
+}
+
+// preflightSettings reports a .claude/settings.json init cannot merge before it
+// writes anything. The file is left exactly as it was: init never clobbers a file
+// it cannot read, and never writes a companion for this one, because a companion
+// beside a settings.json is precisely the silent failure that let the memory-guard
+// hook go unregistered while the CLAUDE.md marker said v4.
+//
+// Two conditions, and the second is the one that bites. Unparseable is obvious.
+// PARSEABLE BUT NOT AN OBJECT is not: `null`, `42`, `true`, a bare string and an
+// array all index to a node whose span offsets are -1 (scalars have no
+// delimiters), jsonNode.child returns nil for every lookup on them, and the
+// splice helpers take those -1 offsets literally — `null` panics in lineIndent
+// with "slice bounds out of range [:-1]". Catching it HERE rather than in
+// mergeSettingsJSON is the point: the merge runs during the template walk, by
+// which time CLAUDE.md and .mcp.json have already been rewritten, and a panic
+// there leaves exactly the half-landed scaffold this preflight exists to prevent.
+func preflightSettings(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // absent is fine; init will create it
+		}
+		// Anything else — a directory at that path, a permission error, bad I/O —
+		// is NOT "absent". Treating it as absent passed the preflight and left the
+		// failure to fire mid-walk, with CLAUDE.md and .mcp.json already rewritten:
+		// the half-landed scaffold, reached through the check meant to prevent it.
+		return fmt.Errorf("cannot merge %s: %w"+
+			" (fix the file by hand, or move it aside and re-run init)",
+			filepath.Join(".claude", "settings.json"), err)
+	}
+	if err := checkSettingsShape(data); err != nil {
+		return fmt.Errorf("cannot merge %s: %w"+
+			" (fix the file by hand, or move it aside and re-run init)",
+			filepath.Join(".claude", "settings.json"), err)
+	}
+	return nil
+}
+
+// mergeNotPossible is the note a merge returns when it declines: the file is
+// recognisable but the change is not unambiguous, so the companion protocol
+// takes over. It is a sentinel rather than a bool so the three mergers share one
+// return shape.
+const mergeNotPossible = "\x00merge-not-possible"
+
+// mergeInto merges the rendered template into an existing destination and
+// reports what changed, as the parenthetical a summary line appends to the file
+// name. An empty note means the file already agreed with the template and was
+// not rewritten — which is what makes a second `init` byte-identical.
+//
+// An unparseable .claude/settings.json is the one case that ERRORS rather than
+// falling back to a companion. The companion is silent-failure-prone by nature
+// (the operator merges the files they noticed and the rest go stale), and
+// settings.json is the file where going stale means a hook is simply not
+// registered — the failure that motivated this whole change. So it is loud, and
+// the file is left exactly as it was.
+func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, error) {
+	existing, err := os.ReadFile(dst)
+	if err != nil {
+		return "", err
+	}
+	switch dstRel {
+	case ".claude/settings.json":
+		merged, added, err := mergeSettingsJSON(existing, rendered)
+		if err != nil {
+			return "", fmt.Errorf("cannot merge %s: %w "+
+				"(fix the file by hand, or move it aside and re-run init)", dstRel, err)
+		}
+		if len(added) == 0 {
+			return "", clearCompanion(dst)
+		}
+		if err := writeFile(dst, merged, 0o644); err != nil {
+			return "", err
+		}
+		return "(+" + strings.Join(added, ", +") + ")", clearCompanion(dst)
+	case "CLAUDE.md":
+		merged, note, conflict := mergeClaudeMd(existing, rendered)
+		if conflict {
+			return mergeNotPossible, nil
+		}
+		if note == "" {
+			return "", clearCompanion(dst)
+		}
+		if err := writeFile(dst, merged, 0o644); err != nil {
+			return "", err
+		}
+		return note, clearCompanion(dst)
+	case ".mcp.json":
+		merged, note, conflict, err := mergeMcpJSON(existing, rendered, serverKey)
+		if err != nil {
+			return "", fmt.Errorf("cannot merge %s: %w", dstRel, err)
+		}
+		if conflict {
+			return mergeNotPossible, nil
+		}
+		if note == "" {
+			return "", clearCompanion(dst)
+		}
+		if err := writeFile(dst, merged, 0o644); err != nil {
+			return "", err
+		}
+		return note, clearCompanion(dst)
+	}
+	return mergeNotPossible, nil
+}
+
+// clearCompanion removes the companion beside a file this run found MERGEABLE
+// and left IN SYNC — whether the merge changed bytes or not.
+//
+// A companion exists for exactly one purpose: to carry init's rendering into a
+// file init could not edit. Once the live file agrees with the template that
+// purpose is spent, and what remains is a copy with no expiry, carrying whatever
+// the template said when it was dropped. An operator who merges it later
+// silently reverts the merge — or, for a file since merged BY HAND, applies a
+// version older than the one already there. The hand-merged case is why the
+// no-change path clears it too: that file will never have bytes to change again,
+// so a changed-bytes-only rule would strand its companion permanently. That is
+// not hypothetical; it is how this checkout ended up carrying one.
+//
+// Kept only when the run DECLINED — an unmergeable shape, a .mcp.json naming a
+// knomit scope under another key, a CLAUDE.md block with no closing marker —
+// where handing the operator the rendering is the whole point.
+func clearCompanion(dst string) error {
+	if err := os.Remove(companionPath(dst)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 
@@ -242,19 +398,54 @@ func jsonStr(s string) string {
 	return string(b)
 }
 
+// writeFile replaces a file's contents atomically: it writes a temp file beside
+// the target and renames over it, so a reader sees the old bytes or the new ones
+// and never a truncated file. os.WriteFile opens with O_TRUNC, which is fine for
+// a file init owns and regenerates, but init now writes IN PLACE to three files
+// it does not own — an interrupted run would leave a user's CLAUDE.md empty with
+// no backup.
+//
+// Symlinks are resolved first. A rename replaces the path, so a CLAUDE.md the
+// user symlinked into another checkout would silently become a regular file and
+// their real file would stop receiving updates. Writing through the link is what
+// os.WriteFile did, and it has to survive the move to a rename.
 func writeFile(path string, data []byte, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, mode)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".knomit-init-*")
+	if err != nil {
+		return err
+	}
+	// Removes the temp file on every failure path; a no-op once renamed away.
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	// CreateTemp makes the file 0600; restore the mode init asked for.
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
-func printSummary(created, overwritten, conflicts []string) {
+func printSummary(created, overwritten, updated, conflicts []string) {
 	if len(created) > 0 {
 		fmt.Printf("Created: %s\n", strings.Join(created, ", "))
 	}
 	if len(overwritten) > 0 {
 		fmt.Printf("Restored: %s\n", strings.Join(overwritten, ", "))
+	}
+	for _, u := range updated {
+		fmt.Printf("Updated: %s\n", u)
 	}
 	for _, c := range conflicts {
 		fmt.Printf("WARNING: %s exists — merge from %s manually\n", c, companionRel(c))
@@ -320,25 +511,28 @@ func templateBlockMarker() string {
 	return first
 }
 
-// claudeMdBlockNote reports how the CLAUDE.md already on disk compares to the
-// block this build ships, so the merge warning says WHAT to merge. Returns ""
-// when the file is unreadable or already current — nothing useful to add.
+// claudeMdBlockNote turns the classification of the CLAUDE.md already on disk
+// into the advice its merge warning carries, so the warning says WHAT to merge.
+// Returns "" when the file is unreadable or already current — nothing to add.
+//
+// It shares classifyClaudeMd with mergeClaudeMd on purpose: the advice printed
+// and the merge attempted must never disagree about which block is there. Since
+// init merges the cases it can, the only classification that still reaches this
+// function from printSummary is blockUndelimited — a block with no closing
+// marker, the one CLAUDE.md a merge cannot bound. The other arms stay because
+// they are the same classification, stated as advice.
 func claudeMdBlockNote(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	content := string(data)
-	switch {
-	case blockMarkerCurrent != "" && strings.Contains(content, blockMarkerCurrent):
+	switch state, _, _, _ := classifyClaudeMd(string(data)); state {
+	case blockCurrent:
 		return ""
-	case strings.Contains(content, blockMarkerPrefix), strings.Contains(content, blockHeading):
-		// The heading is checked too: the template shipped without the HTML
-		// marker until c36015e7, and users strip comments. Calling such a block
-		// absent would advise appending a SECOND full copy.
-		return "its knomit block is from an older version — replace the whole block, not just parts"
-	default:
+	case blockAbsent:
 		return "it has no knomit block yet — append the companion's contents"
+	default: // blockOlder, blockUndelimited
+		return "its knomit block is from an older version — replace the whole block, not just parts"
 	}
 }
 
