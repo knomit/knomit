@@ -238,12 +238,12 @@ func preflightSettings(path string) error {
 		// the half-landed scaffold, reached through the check meant to prevent it.
 		return fmt.Errorf("cannot merge %s: %w"+
 			" (fix the file by hand, or move it aside and re-run init)",
-			filepath.Join(".claude", "settings.json"), err)
+			settingsRel, err)
 	}
 	if err := checkSettingsShape(data); err != nil {
 		return fmt.Errorf("cannot merge %s: %w"+
 			" (fix the file by hand, or move it aside and re-run init)",
-			filepath.Join(".claude", "settings.json"), err)
+			settingsRel, err)
 	}
 	return nil
 }
@@ -271,7 +271,7 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 		return "", err
 	}
 	switch dstRel {
-	case ".claude/settings.json":
+	case settingsRel:
 		merged, added, err := mergeSettingsJSON(existing, rendered)
 		if err != nil {
 			return "", fmt.Errorf("cannot merge %s: %w "+
@@ -349,6 +349,27 @@ func isOwnedByIntegration(dstRel string) bool {
 // destination inside the project. Returns "" if the file should not be copied.
 // Skills are NOT handled here; they come from the shared skills package and are
 // routed by the second walk in runInit.
+// settingsRel is the LOGICAL NAME of the settings file: repo-relative,
+// forward-slash, identical on every platform. dstRel values are keys, not
+// filesystem paths — mergeInto switches on this one, isSkill prefix-matches
+// ".claude/skills/", and the single conversion to a real path happens at the
+// boundary, `dst := filepath.Join(cwd, dstRel)` in writeOne. A path you OPEN is
+// built with filepath.Join; a name you PRINT or MATCH is this.
+//
+// It is a constant because the drift is what caused the bug. preflightSettings
+// built its message with filepath.Join instead — one site out of four — so on
+// Windows a single `claude init` could report the same file two ways depending
+// on which error fired:
+//
+//	cannot merge .claude\settings.json   (preflight)
+//	cannot merge .claude/settings.json   (mergeInto)
+//
+// The switch case, the mapper and both messages now read the same constant, so
+// they cannot drift apart again. Found by the Windows CI leg on the merge of
+// #213 with the branch that added it, which is the first time #213's code ran
+// on Windows at all.
+const settingsRel = ".claude/settings.json"
+
 func mapDestination(srcPath string) string {
 	switch strings.TrimPrefix(srcPath, "templates/") {
 	case "mcp.json.tmpl", "mcp.json.lens.tmpl":
@@ -356,7 +377,7 @@ func mapDestination(srcPath string) string {
 	case "CLAUDE-md-block.txt":
 		return "CLAUDE.md"
 	case "settings.json.tmpl":
-		return ".claude/settings.json"
+		return settingsRel
 	}
 	return ""
 }
