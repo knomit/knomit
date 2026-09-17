@@ -79,8 +79,6 @@ type jsonSpan struct {
 	empty       bool
 }
 
-func (s jsonSpan) container() bool { return s.open >= 0 }
-
 // jsonNode is one value of an indexed document. Only object members are kept by
 // name — array elements are recovered from the array's own bytes when needed,
 // which keeps the index small and its offsets few enough to reason about.
@@ -93,10 +91,15 @@ type jsonNode struct {
 }
 
 // object and array are the only safe way to ask what a node is before splicing
-// into it. A container() check is NOT enough: an object and an array both have
-// delimiters, so splicing an object member into an array — or an array element
-// into an object — passes it and emits JSON that does not parse. A scalar is
-// worse still, since its offsets are -1 and every helper takes them literally.
+// into it, and every splice site must ask. The predicate that suggests itself —
+// "does this value have delimiters?", i.e. open >= 0 — is NOT a type check, and
+// guarding with it produced four defects at once: an object and an array both
+// answer yes, so an object member spliced into an array (or an array element
+// into an object) emits JSON that does not parse; and a scalar answers no with
+// offsets of -1, which a caller reading "not a container" as "absent" then
+// splices at, either panicking or appending a duplicate key beside the value it
+// failed to recognise. That last one parses, so it is the quiet one. The weak
+// predicate is deliberately not defined here — see the json-splicing gotcha.
 func (n *jsonNode) object() bool { return n != nil && n.isObject }
 func (n *jsonNode) array() bool  { return n != nil && n.isArray }
 

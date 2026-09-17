@@ -1296,7 +1296,7 @@ func argsBytes(t *testing.T, data []byte, key string) []byte {
 		t.Fatalf("index .mcp.json: %v", err)
 	}
 	args := root.child("mcpServers").child(key).child("args")
-	if args == nil || !args.span.container() {
+	if !args.array() {
 		t.Fatalf("no args array under %q", key)
 	}
 	return data[args.span.open : args.span.close+1]
