@@ -33,9 +33,10 @@ name: Tests
 # MSVC, whose .lib mingw's ld cannot link); a cache keyed on tokenizersVersion,
 # without which every run pays a ~5-minute cargo build before a single test
 # executes; and `-timeout 40m`, because on Windows internal/synthesize (1776s)
-# exceeds go test's 10-minute per-package default outright and internal/repos
-# (441-639s across runs) straddles it — neither hangs, both are filesystem
-# cost. Those are the reasons this is still a follow-up.
+# and internal/store (816s) exceed go test's 10-minute per-package default
+# outright and internal/repos (441-639s across runs) straddles it — nothing
+# hangs, all three are filesystem cost. Those are the reasons this is still a
+# follow-up. store is the newest entry: #208-#211 grew it past the default.
 #
 # Two Windows-only requirements a runner has to satisfy, both learned the hard
 # way and neither obvious from a green build elsewhere:

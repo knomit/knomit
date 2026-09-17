@@ -278,10 +278,13 @@ web:
 desktop-ui:
 	cd tools/desktop/ui && npm ci && npm run build
 
-# GOTEST_TIMEOUT overrides go test's 10-minute per-package default, which two
+# GOTEST_TIMEOUT overrides go test's 10-minute per-package default, which three
 # packages exceed on WINDOWS only:
 #
 #   internal/synthesize  1776s   (macOS/Linux: minutes)
+#   internal/store        816s   — grew past the default with #208-#211; it used
+#                         to sit under it, so an older reading of this list is
+#                         not wrong so much as out of date
 #   internal/repos        441-639s — straddles the 600s default, so whether it
 #                         fails depends on what else the machine is doing
 #
