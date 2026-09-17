@@ -23,8 +23,9 @@
 //	knomit-bridge --repo work http://myhost:8080
 //
 // --repo and --lens are mutually exclusive. With neither, the bridge connects
-// to the unscoped mount /api/v1/mcp and the agent binds a repo or lens by
-// calling knomit_bind; knomit has no default repo either way.
+// to the unscoped mount /api/v1/mcp, where the agent calls knomit_bind and
+// passes the handle it returns on every other tool call; knomit has no default
+// repo either way.
 // The base-url defaults to http://localhost:19278.
 //
 // Claude Desktop config:
@@ -190,8 +191,8 @@ func main() {
 
 	// No default: knomit serves no privileged repo, so the bridge cannot guess
 	// which one to proxy. Give --repo, or --lens, or neither — with neither the
-	// bridge connects to the unscoped mount and the agent binds per session.
-	repo := flag.String("repo", "", "repository name (omit both --repo and --lens to bind per session via knomit_bind)")
+	// bridge connects to the unscoped mount and the agent binds per call.
+	repo := flag.String("repo", "", "repository name (omit both --repo and --lens to let the agent bind via knomit_bind)")
 	lens := flag.String("lens", "", "lens name; connects to /api/v1/lenses/<lens>/mcp (mutually exclusive with --repo)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
@@ -212,7 +213,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "examples:\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -lens eng\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge                            (session-bound: the agent calls knomit_bind)\n")
+		fmt.Fprintf(os.Stderr, "  knomit-bridge                            (unscoped: the agent calls knomit_bind)\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work http://myhost:8080\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook post-edit\n")
 		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
@@ -243,7 +244,7 @@ func main() {
 	mode := selectMode(*repo, *lens, repoSet, lensSet)
 	if mode == modeInvalid {
 		fmt.Fprintf(os.Stderr,
-			"knomit-bridge: --repo/--lens given but empty; omit both to bind per session via knomit_bind\n")
+			"knomit-bridge: --repo/--lens given but empty; omit both to let the agent bind via knomit_bind\n")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -271,11 +272,16 @@ func main() {
 	// lens mode, where the branch is resolved per mount server-side.
 	var branch string
 	if mode == modeSessionBound {
-		// Session-bound mode: nothing to discover. The mount is unscoped and
-		// the agent binds a repo or lens by calling knomit_bind; until it
-		// does, every other tool fails.
+		// Unscoped mode: nothing to discover. The mount names no repo, and the
+		// agent binds by calling knomit_bind and passing the handle it returns
+		// on every other call; until it does, every other tool fails.
+		//
+		// Note this is a property of the BRIDGE's connection, not of any
+		// session: several independent jobs may share one bridge process, and
+		// each holds its own handle. The bridge itself stays ignorant — it
+		// forwards tool arguments untouched.
 		serverURL = mcpURL(baseURL, "", "", "")
-		log.Info().Str("url", serverURL).Msg("bridge configured (session-bound; call knomit_bind)")
+		log.Info().Str("url", serverURL).Msg("bridge configured (unscoped; the agent calls knomit_bind)")
 	} else if mode == modeLens {
 		// Lens mode: skip branch discovery entirely. A lens resolves each
 		// mount's branch server-side via LensMiddleware, so the bridge just
@@ -556,8 +562,8 @@ func truncate(s string, n int) string {
 // A lens has no branch segment — LensMiddleware resolves each mount's branch
 // server-side.
 func mcpURL(baseURL, repo, lens, encodedBranch string) string {
-	// Neither set: the session-bound mount. The agent chooses its repo or lens
-	// with knomit_bind, so the URL names none.
+	// Neither set: the unscoped mount. The agent chooses its repo or lens with
+	// knomit_bind and names it per call by handle, so the URL names none.
 	if repo == "" && lens == "" {
 		return baseURL + "/api/v1/mcp"
 	}

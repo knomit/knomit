@@ -76,14 +76,36 @@ knomit-bridge [--repo <name> | --lens <name>] [--log <path>] [base-url]
 |------|---------|-------------|
 | `--repo` | none | Repository name; connects to `/api/v1/repos/<repo>/branches/<branch>/mcp` |
 | `--lens` | none | Lens name; connects to `/api/v1/lenses/<lens>/mcp` (mutually exclusive with `--repo`) |
-| *(neither)* | — | Connects to the session-bound mount `/api/v1/mcp`; the agent binds with `knomit_bind` |
+| *(neither)* | — | Connects to the unscoped mount `/api/v1/mcp`; the agent binds with `knomit_bind` and passes the handle it returns |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
 | `base-url` | `http://localhost:19278` | Base URL of the knomit server |
 
-With neither flag the bridge connects to `/api/v1/mcp`; the agent binds a repo
-or lens with `knomit_bind` and may switch later. Until it does, every other
-tool fails. A bound subscription (a read-only follower of a remote branch)
-serves reads at the branch it follows and refuses writes.
+With neither flag the bridge connects to `/api/v1/mcp`. There the agent binds a
+repo or lens with `knomit_bind`, which returns an opaque **`binding` handle**,
+and every other tool requires that handle as its `binding` argument. Until the
+agent has one, every other tool fails.
+
+Binding is per CALL, not per connection, and that is deliberate. Some hosts —
+Claude Desktop among them — open ONE connection per configured MCP server and
+share it across several independent jobs, so anything keyed on the connection
+(or on `Mcp-Session-Id`) would let one job silently redirect another's reads and
+writes. The handle travels in the call, so two jobs on one bridge process can
+hold different bindings at the same time. Calling `knomit_bind` again mints a
+second handle and leaves the first working; there is no unbind. MCP revision
+2026-07-28 removed protocol sessions for this reason and directs servers needing
+cross-call state to server-minted handles passed as ordinary tool arguments
+(SEP-2567).
+
+`knomit_repos` is the exception: it needs no handle (it is how the agent learns
+the names `knomit_bind` accepts) and takes an optional one to report what that
+handle points at. On a `--repo` or `--lens` endpoint the repo comes from the URL
+and passing `binding` is an error.
+
+A bound subscription (a read-only follower of a remote branch) serves reads at
+the branch it follows and refuses writes.
+
+The bridge itself needs no knowledge of any of this: it forwards tool arguments
+untouched.
 
 Flags accept both `-flag value` and `--flag value` styles.
 

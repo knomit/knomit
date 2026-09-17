@@ -61,6 +61,7 @@ const (
 func learnTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_learn",
 		mcpgo.WithDescription("Write one or more facts to the knowledge base in a single commit. A fact that shares a subject with an existing one (similar text AND a shared entity) is refused with the candidates listed; update the existing fact, or resubmit with distinct_from naming the paths you have checked."),
+		bindingArg(true),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
 			mcpgo.Description("A short label for this learning moment."),

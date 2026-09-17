@@ -7,35 +7,48 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/client/sessions"
 	"knomit/internal/repos"
 )
 
-// bindTool defines knomit_bind: the session's choice of repo or lens.
+// bindTool defines knomit_bind: the caller's choice of repo or lens.
 //
 // The description is what an agent reads before its first call on a fresh
-// session, so it states the two things it cannot discover by trying: that a
-// subscription serves reads but refuses writes, and that the result carries
-// the bound base's instructions.
+// session, so it states the things it cannot discover by trying: that the
+// result carries a HANDLE every other tool needs, that a subscription serves
+// reads but refuses writes, and that the result carries the bound base's
+// instructions.
+//
+// It declares no `binding` argument of its own — knomit_bind is where handles
+// come from — so rejectUnknownArguments refuses one, which is the right answer
+// for an agent reflexively attaching its handle to every call.
 func bindTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_bind",
-		mcpgo.WithDescription("Only on the unscoped /api/v1/mcp endpoint (a bridge started with neither --repo nor --lens); on a URL-scoped endpoint this always fails. Bind this session to a repo or lens by name (see knomit_repos for the names). Required on the unscoped endpoint before any other tool works; call again to switch. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the mounts table and the knowledge base's instructions — treat them as session instructions."),
-		mcpgo.WithString("repo", mcpgo.Description("Name of the repo to bind this session to. Mutually exclusive with lens.")),
-		mcpgo.WithString("lens", mcpgo.Description("Name of the lens to bind this session to. Mutually exclusive with repo.")),
+		mcpgo.WithDescription("Only on the unscoped /api/v1/mcp endpoint (a bridge started with neither --repo nor --lens); on a URL-scoped endpoint this always fails. Bind a repo or lens by name (see knomit_repos for the names) and receive an opaque `binding` handle. EVERY other tool requires that handle as its `binding` argument — keep it for the rest of your work and pass it on every call. Required before any other tool works; call again for a different base, which mints a SECOND handle and leaves the first one valid. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the handle, the mounts table and the knowledge base's instructions — treat them as session instructions."),
+		mcpgo.WithString("repo", mcpgo.Description("Name of the repo to bind to. Mutually exclusive with lens.")),
+		mcpgo.WithString("lens", mcpgo.Description("Name of the lens to bind to. Mutually exclusive with repo.")),
 	)
 }
 
 // BindHandler returns the handler for knomit_bind.
 //
 // It binds by NAME because that is what the agent knows, but stores the uid
-// pin: a rename must not strand a live session. The binding is then built
-// in-process rather than re-read through the middleware, so the result
-// describes exactly what was persisted.
+// pin: a rename must not strand a live handle. The binding is then built
+// in-process rather than re-read, so the result describes exactly what was
+// persisted.
 //
-// There is deliberately no unbind form. A session can switch repos forever but
-// can never return to the unbound state it started in.
+// EVERY CALL MINTS A FRESH HANDLE, and old handles stay valid. That is what
+// makes two concurrent callers on one connection safe: each holds a handle that
+// names what it named when minted, and neither can overwrite the other. An
+// agent that binds twice by mistake ends up holding two working handles rather
+// than one broken one — a strictly better failure than the upsert this
+// replaced, where the second bind silently redirected the first caller's
+// writes.
+//
+// There is deliberately no unbind form: a handle is abandoned, not cleared. It
+// ages out of binding_handles once unused for the retention window.
 func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		if err := rejectUnknownArguments(req, bindTool()); err != nil {
@@ -66,39 +79,46 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		store := mgr.ClientSessions()
 		if store == nil {
 			return mcpgo.NewToolResultError(
-				"session store unavailable — this server cannot remember a binding right now"), nil
+				"session store unavailable — this server cannot mint a binding handle right now"), nil
 		}
-		// The binding is keyed by the MCP session id, so there is nothing to
-		// key it by without one.
-		sess := mcpserver.ClientSessionFromContext(ctx)
-		if sess == nil || sess.SessionID() == "" {
-			return mcpgo.NewToolResultError(
-				"binding requires an MCP session id; initialize the session first"), nil
-		}
+		// No MCP session id is read, and none is needed. The handle is the key,
+		// which is exactly why two callers sharing one session id no longer
+		// collide.
 
 		b, pin, err := bindTarget(mgr, repoName, lensName)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		if err := store.BindSession(ctx, sess.SessionID(), pin, time.Now()); err != nil {
-			// Worth a log line: the likely cause is a control.db that never got
-			// migration 000004, and without server-side evidence that presents
-			// to the agent as an unexplained refusal it would retry forever.
-			log.Warn().Err(err).Str("mcp_session", sess.SessionID()).Str("pin", pin).
-				Msg("knomit_bind: recording the session binding failed")
+		handle, err := sessions.NewBindingHandle()
+		if err != nil {
+			log.Error().Err(err).Msg("knomit_bind: minting a handle failed")
 			return mcpgo.NewToolResultError(
-				"the binding could not be recorded for this session, so nothing was bound; ask the operator to check the server log"), nil
+				"a binding handle could not be generated, so nothing was bound; ask the operator to check the server log"), nil
+		}
+		// No branch: knomit_bind does not take one yet, and "" already means
+		// the target's own read branch. The column is carried so the planned
+		// per-handle branch switch is a behaviour change, not a migration.
+		if err := store.MintBindingHandle(ctx, handle, pin, "", time.Now()); err != nil {
+			// Worth a log line: the likely cause is a control.db that never got
+			// migration 000005, and without server-side evidence that presents
+			// to the agent as an unexplained refusal it would retry forever.
+			log.Warn().Err(err).Str("pin", pin).
+				Msg("knomit_bind: recording the binding handle failed")
+			return mcpgo.NewToolResultError(
+				"the binding could not be recorded, so nothing was bound; ask the operator to check the server log"), nil
 		}
 
-		out, err := json.MarshalIndent(boundFor(b), "", "  ")
+		out, err := json.MarshalIndent(bindResultOf(handle, b), "", "  ")
 		if err != nil {
 			return mcpgo.NewToolResultError("marshal error: " + err.Error()), nil
 		}
 		// initialize on the unscoped mount could only carry the DEFAULT
 		// ontology, and MCP cannot re-send instructions mid-session, so the
-		// bound base's own instructions have to ride back here.
+		// bound base's own instructions have to ride back here — behind the
+		// handle banner, which has to be the first thing read.
 		return mcpgo.NewToolResultText(
-			string(out) + "\n\n" + BindingInstructions(b, profileFor(mgr, b.Write()))), nil
+			string(out) + "\n\n" + handleBanner(handle) +
+				BindingInstructions(b, profileFor(mgr, b.Write()))), nil
 	}
 }
 

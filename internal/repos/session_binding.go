@@ -67,11 +67,22 @@ func PinForLens(l Lens) string { return pinOf("lens:", l.UID) }
 // ResolveLensBinding sets, so everything downstream of either mount reads an
 // identically shaped context.
 //
+// branch is the READ branch the caller's handle names. "" means "the target's
+// own read branch" and is what every handle carries today, so it goes to the
+// very same NewBindingOfRepo(ri, branch) the URL-scoped mounts use — the branch
+// argument is not a second code path, it is the one that was already there.
+//
 // Write eligibility needs no logic here: NewBindingOfRepo(ri, "") binds at the
 // repo's own read branch (the agent branch, or the followed upstream for a
 // subscription) and takes writeOK from WritableBranch, which is false for a
 // subscription. Every write tool already gates on Binding.WriteOK().
-func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context.Context, error) {
+//
+// A LENS pin with a non-empty branch is REFUSED rather than served. A lens pins
+// a branch per mount at resolve time, so there is nothing a single branch could
+// mean across its members, and silently ignoring it would serve a branch other
+// than the one the handle names. Unreachable today — knomit_bind always stores
+// "" — and that is exactly why it must fail loudly if it ever becomes reachable.
+func ResolveSessionBinding(ctx context.Context, m *Manager, pin, branch string) (context.Context, error) {
 	kind, uid, err := ParsePin(pin)
 	if err != nil {
 		return nil, &SessionBindingError{
@@ -91,8 +102,14 @@ func ResolveSessionBinding(ctx context.Context, m *Manager, pin string) (context
 					m.RepoLabel(uid)),
 			}
 		}
-		b = NewBindingOfRepo(ri, "")
+		b = NewBindingOfRepo(ri, branch)
 	case "lens":
+		if branch != "" {
+			return nil, &SessionBindingError{
+				Kind: BindingMalformed, Pin: pin,
+				Err: fmt.Errorf("binding names lens branch %q, but a lens pins a branch per mount — call knomit_bind again", branch),
+			}
+		}
 		reg := m.LensRegistry()
 		if reg == nil {
 			return nil, &SessionBindingError{

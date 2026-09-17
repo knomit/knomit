@@ -62,6 +62,7 @@ func pageSizeFor(limit int, includeBody bool) int {
 func queryTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_query",
 		mcpgo.WithDescription("Search the knowledge base. Returns lightweight result rows (title, type, domain, score, and a ~400-char body SNIPPET with body_truncated=true) — NOT full bodies — so a large result set never floods. Results are paginated: when more remain, the response carries a `cursor`; pass it back (with no other filters) to get the next page. For the full body of a fact, set include_body=true (small pages only) or, better for a single fact, call knomit_explain. At least one of text, entities, domain, applies_to, path, type, origin, or min_confidence is required (not needed when paging with cursor). Set sort=recent to browse most-recently-updated facts (optionally filtered by type/domain/path); sort=recent needs no other filter."),
+		bindingArg(true),
 		mcpgo.WithString("text",
 			mcpgo.Description("Full-text search query."),
 		),

@@ -2,9 +2,11 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -79,7 +81,9 @@ func newBindRepo(t *testing.T, m *repos.Manager, name string, subscribed bool) *
 	return ri
 }
 
-// callBind invokes knomit_bind on a session-scoped context carrying sid.
+// callBind invokes knomit_bind on a session-scoped context. sid is threaded
+// only to prove it is IGNORED — knomit_bind reads no session id, which is what
+// lets two callers sharing one connection bind independently.
 func callBind(t *testing.T, m *repos.Manager, srv *mcpserver.MCPServer, sid string, args map[string]any) *mcpgo.CallToolResult {
 	t.Helper()
 	ctx := repos.WithSessionScoped(context.Background())
@@ -92,6 +96,28 @@ func callBind(t *testing.T, m *repos.Manager, srv *mcpserver.MCPServer, sid stri
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	return res
+}
+
+// handleFrom pulls the minted handle out of a knomit_bind result: the leading
+// JSON object, before the prose.
+func handleFrom(t *testing.T, res *mcpgo.CallToolResult) string {
+	t.Helper()
+	var envelope struct {
+		Binding string `json:"binding"`
+	}
+	require.NoError(t, json.NewDecoder(strings.NewReader(resultText(t, res))).Decode(&envelope))
+	require.NotEmpty(t, envelope.Binding)
+	return envelope.Binding
+}
+
+// pinOfHandle reads what a handle routes to.
+func pinOfHandle(t *testing.T, st *sessions.Store, handle string) string {
+	t.Helper()
+	pin, branch, ok, err := st.BindingHandle(context.Background(), handle, time.Now())
+	require.NoError(t, err)
+	require.True(t, ok, "handle %q was not recorded", handle)
+	require.Equal(t, "", branch, `knomit_bind stores no branch yet; "" means the target's own`)
+	return pin
 }
 
 func TestBind_RepoWritable(t *testing.T) {
@@ -108,10 +134,19 @@ func TestBind_RepoWritable(t *testing.T) {
 	require.Contains(t, text, `"write_branch": "agent/test"`)
 	require.Contains(t, text, "## Ontology Structure", "the bound base's instructions ride back")
 
-	pin, ok, err := st.SessionBinding(context.Background(), "sid-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, "repo:uid-alpha", pin, "stored by uid, so a rename cannot strand the session")
+	// The handle comes FIRST, and the instruction to resend it comes before the
+	// knowledge base's own instructions: an agent that reads only the opening
+	// of a long result must still come away knowing it has to carry this value.
+	require.Regexp(t, `\A\s*\{\s*"binding":`, text, "the handle must be the first key")
+	require.Less(t, strings.Index(text, "## Your binding handle"),
+		strings.Index(text, "## Ontology Structure"),
+		"the handle banner must precede the base's instructions")
+	require.Contains(t, text, "`binding` argument")
+
+	handle := handleFrom(t, res)
+	require.NotContains(t, handle, "alpha", "a handle must not be derivable from the name")
+	require.Equal(t, "repo:uid-alpha", pinOfHandle(t, st, handle),
+		"stored by uid, so a rename cannot strand the handle")
 }
 
 // A subscription binds at the branch it FOLLOWS and is read-only — reads work,
@@ -127,8 +162,7 @@ func TestBind_SubscriptionReadOnly(t *testing.T) {
 	require.Contains(t, text, `"branch": "main"`)
 	require.NotContains(t, text, `"write_branch"`)
 
-	pin, _, _ := st.SessionBinding(context.Background(), "sid-2")
-	require.Equal(t, "repo:uid-followed", pin)
+	require.Equal(t, "repo:uid-followed", pinOfHandle(t, st, handleFrom(t, res)))
 }
 
 func TestBind_Lens(t *testing.T) {
@@ -137,21 +171,44 @@ func TestBind_Lens(t *testing.T) {
 	require.False(t, res.IsError, resultText(t, res))
 
 	text := resultText(t, res)
-	require.Contains(t, text, `"binding": "eng"`)
+	// `name` is the lens name. `binding` is the HANDLE and never a name — one
+	// key, one meaning, across knomit_bind and knomit_repos alike.
+	require.Contains(t, text, `"name": "eng"`)
+	require.NotContains(t, text, `"binding": "eng"`)
 	require.Contains(t, text, "### Mounts", "a lens binding carries the mount table")
 
-	pin, ok, _ := st.SessionBinding(context.Background(), "sid-3")
-	require.True(t, ok)
+	pin := pinOfHandle(t, st, handleFrom(t, res))
 	require.True(t, strings.HasPrefix(pin, "lens:"), "pin=%q", pin)
 }
 
-func TestBind_RebindSwitches(t *testing.T) {
+// THE INCIDENT, at the tool. Two binds on ONE session id mint two DIFFERENT
+// handles, and the first keeps naming what it named. Under the session-keyed
+// upsert this replaced, the second bind silently redirected the first caller's
+// writes — which is exactly what happened to two Cowork jobs sharing one
+// Claude Desktop connection on 2026-09-17.
+func TestBind_SecondBindDoesNotStealTheFirstHandle(t *testing.T) {
 	m, st, srv := bindFixture(t)
-	require.False(t, callBind(t, m, srv, "sid-4", map[string]any{"repo": "alpha"}).IsError)
-	require.False(t, callBind(t, m, srv, "sid-4", map[string]any{"repo": "beta"}).IsError)
+	first := callBind(t, m, srv, "sid-4", map[string]any{"repo": "alpha"})
+	require.False(t, first.IsError, resultText(t, first))
+	second := callBind(t, m, srv, "sid-4", map[string]any{"repo": "beta"})
+	require.False(t, second.IsError, resultText(t, second))
 
-	pin, _, _ := st.SessionBinding(context.Background(), "sid-4")
-	require.Equal(t, "repo:uid-beta", pin, "a session switches; the second bind overwrites")
+	hA, hB := handleFrom(t, first), handleFrom(t, second)
+	require.NotEqual(t, hA, hB, "each bind mints its own handle")
+	require.Equal(t, "repo:uid-alpha", pinOfHandle(t, st, hA),
+		"the second bind must not retarget the first handle")
+	require.Equal(t, "repo:uid-beta", pinOfHandle(t, st, hB))
+}
+
+// The same session id is not merely tolerated, it is IRRELEVANT: binding twice
+// under two different ids, or none at all, behaves identically.
+func TestBind_SessionIDIsIgnored(t *testing.T) {
+	m, st, srv := bindFixture(t)
+	for _, sid := range []string{"sid-a", "sid-b", ""} {
+		res := callBind(t, m, srv, sid, map[string]any{"repo": "alpha"})
+		require.False(t, res.IsError, "sid=%q: %s", sid, resultText(t, res))
+		require.Equal(t, "repo:uid-alpha", pinOfHandle(t, st, handleFrom(t, res)), "sid=%q", sid)
+	}
 }
 
 // Neither argument is an argument error, NOT a clear: there is no unbind form.
@@ -194,9 +251,12 @@ func TestBind_RefusedOnURLScopedMount(t *testing.T) {
 	require.Contains(t, resultText(t, res), "/api/v1/mcp")
 }
 
-func TestBind_NoSessionID(t *testing.T) {
+// knomit_bind is where handles come from, so it declares no `binding` argument
+// and rejectUnknownArguments refuses one — the right answer for an agent that
+// has started attaching its handle reflexively to every call.
+func TestBind_RejectsABindingArgument(t *testing.T) {
 	m, _, srv := bindFixture(t)
-	res := callBind(t, m, srv, "", map[string]any{"repo": "alpha"})
+	res := callBind(t, m, srv, "sid-8", map[string]any{"repo": "alpha", "binding": "whatever"})
 	require.True(t, res.IsError)
-	require.Contains(t, resultText(t, res), "session id")
+	require.Contains(t, resultText(t, res), "binding")
 }

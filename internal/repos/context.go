@@ -1,6 +1,9 @@
 package repos
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 type contextKey string
 
@@ -82,4 +85,64 @@ func WithBindingError(ctx context.Context, err error) context.Context {
 func BindingErrorFromContext(ctx context.Context) (error, bool) {
 	err, ok := ctx.Value(bindingErrCtxKey{}).(error)
 	return err, ok
+}
+
+// PinRecorder is a MUTABLE box the unscoped MCP mount puts in the request
+// context so the resolved binding can travel BACKWARDS, from the tool handler
+// out to the HTTP layer.
+//
+// It exists because handle resolution moved. On a URL-scoped mount the binding
+// is in the context before the handler runs, so recordClientSession can read it
+// off the request. On the unscoped mount the binding is named by an argument
+// inside the JSON-RPC body, so nothing knows it until the tool gate runs — and
+// a handler cannot alter the context its caller holds. The gate writes the pin
+// here instead, and recordClientSession — which runs AFTER the response, and so
+// after the handler — reads it out.
+//
+// What it records is still OBSERVATIONAL: client_sessions.binding is a trail of
+// what a session was seen doing, and must never gate anything. Routing is
+// decided by the handle argument alone.
+//
+// A task-augmented tool call keeps running after the response is written, so
+// the write and the read genuinely race; the mutex is not decoration.
+type PinRecorder struct {
+	mu  sync.Mutex
+	pin string
+}
+
+// Record stores the pin the gate resolved. Last write wins: one request carries
+// one tool call, and a second would be a later, equally true observation.
+func (p *PinRecorder) Record(pin string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pin = pin
+}
+
+// Pin returns what was recorded, or "" when nothing was.
+func (p *PinRecorder) Pin() string {
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pin
+}
+
+// pinRecorderKey carries the box. Only web.SessionBindingMiddleware installs
+// one; every other mount resolves its binding before the handler and needs no
+// return path.
+type pinRecorderKey struct{}
+
+// WithPinRecorder installs a recorder for this request.
+func WithPinRecorder(ctx context.Context, p *PinRecorder) context.Context {
+	return context.WithValue(ctx, pinRecorderKey{}, p)
+}
+
+// PinRecorderFromContext retrieves the request's recorder if one was installed.
+func PinRecorderFromContext(ctx context.Context) (*PinRecorder, bool) {
+	p, ok := ctx.Value(pinRecorderKey{}).(*PinRecorder)
+	return p, ok
 }

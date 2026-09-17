@@ -36,6 +36,34 @@ func unmarshalArg[T any](req mcpgo.CallToolRequest, key string, target *T) error
 	return nil
 }
 
+// rejectNonObjectArguments fails a call whose `arguments` is present but is not
+// a JSON object. Split out of rejectUnknownArguments because the binding gate
+// runs BEFORE the handler and must answer this case identically rather than
+// letting it read as a missing `binding`.
+//
+// GetArguments type-asserts to map[string]any and yields nil for ANYTHING else
+// — including `arguments` that is present but is a string, number or array.
+// Those two cases need opposite answers.
+//
+// Absent arguments is legitimate: calling with none is the documented way to
+// start a session, and there is nothing to enumerate.
+//
+// Present-but-not-an-object is NOT. An earlier comment claimed "the ordinary
+// per-argument accessors handle it" — they do not, they silently default, which
+// is exactly the failure mode this check exists to close. Left unrejected, a
+// caller sending the #121 payload as a JSON string reached an unscoped
+// whole-corpus pass and advanced the watermark: the same consequence as an
+// unknown key, by a second route. It is wire-reachable, because mcp-go
+// unmarshals `arguments` into a bare `any` and does no schema validation on the
+// server path.
+func rejectNonObjectArguments(req mcpgo.CallToolRequest, tool mcpgo.Tool) error {
+	if req.GetArguments() == nil && req.GetRawArguments() != nil {
+		return fmt.Errorf("invalid arguments for %s: expected a JSON object, got %T",
+			tool.Name, req.GetRawArguments())
+	}
+	return nil
+}
+
 // rejectUnknownArguments fails a call carrying an argument key the tool does
 // not declare (knomit#122).
 //
@@ -61,27 +89,7 @@ func unmarshalArg[T any](req mcpgo.CallToolRequest, key string, target *T) error
 func rejectUnknownArguments(req mcpgo.CallToolRequest, tool mcpgo.Tool) error {
 	args := req.GetArguments()
 	if args == nil {
-		// GetArguments type-asserts to map[string]any and yields nil for
-		// ANYTHING else — including `arguments` that is present but is a
-		// string, number or array. Those two cases need opposite answers.
-		//
-		// Absent arguments is legitimate: calling with none is the documented
-		// way to start a session, and there is nothing to enumerate.
-		//
-		// Present-but-not-an-object is NOT. An earlier version of this comment
-		// claimed "the ordinary per-argument accessors handle it" — they do
-		// not, they silently default, which is exactly the failure mode this
-		// function exists to close. Left unrejected, a caller sending the #121
-		// payload as a JSON string reached an unscoped whole-corpus pass and
-		// advanced the watermark: the same consequence as an unknown key, by a
-		// second route. It is wire-reachable, because mcp-go unmarshals
-		// `arguments` into a bare `any` and does no schema validation on the
-		// server path.
-		if req.GetRawArguments() != nil {
-			return fmt.Errorf("invalid arguments for %s: expected a JSON object, got %T",
-				tool.Name, req.GetRawArguments())
-		}
-		return nil
+		return rejectNonObjectArguments(req, tool)
 	}
 
 	var unknown []string

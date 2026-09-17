@@ -87,7 +87,7 @@ func TestControlSchemaSQL_CreatesEveryObject(t *testing.T) {
 	}
 }
 
-// Every object the control chain is responsible for: seven tables and five
+// Every object the control chain is responsible for: eight tables and six
 // indexes. TestControl_FreshDatabase asserts the MIGRATOR creates each one and
 // TestControlSchemaSQL_CreatesEveryObject asserts the concatenated schema text
 // does — the two paths must not drift, so they share this list.
@@ -96,7 +96,12 @@ var controlObjects = []string{
 	"repo_origins", "lenses", "lenses_name", "lens_reads",
 	"repo_subscriptions",
 	"client_sessions", "client_sessions_last_seen", "client_sessions_binding",
+	// session_bindings is DEAD as of 000005 — nothing reads or writes it — but
+	// it is still created, because the control chain is replayed as one
+	// concatenated script and therefore admits no DROP. It stays listed so the
+	// two appliers keep agreeing about what the chain produces.
 	"session_bindings",
+	"binding_handles", "binding_handles_last_used",
 }
 
 // A fresh home gets the whole control schema and lands on the newest version.
@@ -108,7 +113,7 @@ func TestControl_FreshDatabase(t *testing.T) {
 		require.True(t, objectExists(t, db, name), "expected %q to exist", name)
 	}
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 4, v)
+	require.Equal(t, 5, v)
 	require.False(t, dirty)
 }
 
@@ -152,7 +157,7 @@ CREATE TABLE lens_reads (
 	require.NoError(t, Control(db))
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 4, v)
+	require.Equal(t, 5, v)
 	require.False(t, dirty)
 
 	var name string
@@ -375,7 +380,37 @@ func TestControl_RecoversDirtyVersion(t *testing.T) {
 	require.NoError(t, Control(db), "a dirty control.db must self-heal")
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 4, v)
+	require.Equal(t, 5, v)
 	require.False(t, dirty)
 	require.True(t, objectExists(t, db, "repos"))
+}
+
+// The binding-handles migration goes up and comes back down cleanly, and the
+// down leaves the rest of the control schema standing: a rollback must cost the
+// operator their handles, not their registry.
+func TestControl_BindingHandlesUpDown(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+	require.True(t, objectExists(t, db, "binding_handles"))
+	require.True(t, objectExists(t, db, "binding_handles_last_used"))
+
+	m, err := newMigrator(db, controlFS, "control")
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(4), "000005 must roll back")
+
+	require.False(t, objectExists(t, db, "binding_handles"), "down must drop the table")
+	require.False(t, objectExists(t, db, "binding_handles_last_used"), "down must drop the index")
+	for _, name := range []string{"repos", "lenses", "client_sessions"} {
+		require.True(t, objectExists(t, db, name), "%q must survive the rollback", name)
+	}
+	v, dirty := controlVersion(t, db)
+	require.Equal(t, 4, v)
+	require.False(t, dirty)
+
+	// And up again, so a rollback is not a one-way door.
+	require.NoError(t, Control(db))
+	require.True(t, objectExists(t, db, "binding_handles"))
+	v, dirty = controlVersion(t, db)
+	require.Equal(t, 5, v)
+	require.False(t, dirty)
 }

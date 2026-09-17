@@ -21,6 +21,7 @@ import (
 func updateTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_update",
 		mcpgo.WithDescription("Update an existing fact in the knowledge base."),
+		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
 			mcpgo.Description("Path to the fact file to update."),
