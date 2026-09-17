@@ -1,8 +1,10 @@
 package claude
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -115,45 +117,74 @@ func TestRunInit_SettingsJsonReferencesGoHooks(t *testing.T) {
 	}
 }
 
-func TestRunInit_ExistingMcpJson_DropsCompanion(t *testing.T) {
+// TestRunInit_ExistingMcpJson_DifferentKnomitKey_DropsCompanion is the one
+// .mcp.json case init still refuses to merge. A knomit-bridge entry under some
+// OTHER key is a scope init cannot reconcile: adding the derived key beside it
+// would give the project two knomit scopes, which disables the hooks outright
+// (see the one-scope-per-project rule in mcpBinding). Only a human can say
+// which scope was meant, so the companion and its two-scopes warning stay.
+func TestRunInit_ExistingMcpJson_DifferentKnomitKey_DropsCompanion(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(`{"mcpServers":{}}`), 0o644); err != nil {
+	// The legacy constant key, from before the key was derived per scope.
+	existing := []byte(`{"mcpServers":{"knomit":{"command":"knomit-bridge","args":["--repo","legacy"]}}}`)
+	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), existing, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := runInit([]string{"--repo", "x"}); err != nil {
-		t.Fatalf("runInit: %v", err)
-	}
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+	})
 
 	companion := filepath.Join(dir, ".mcp.json.knomit")
 	if _, err := os.Stat(companion); err != nil {
 		t.Errorf("expected companion file at %s: %v", companion, err)
 	}
 
-	// Original .mcp.json should be untouched
-	orig, _ := os.ReadFile(filepath.Join(dir, ".mcp.json"))
-	if !strings.Contains(string(orig), `"mcpServers":{}`) {
-		t.Errorf("original .mcp.json was modified; got:\n%s", orig)
+	// The original must be untouched, byte for byte.
+	if got := mustRead(t, filepath.Join(dir, ".mcp.json")); !bytes.Equal(got, existing) {
+		t.Errorf("original .mcp.json was modified; got:\n%s", got)
+	}
+	// The two-scopes warning is the whole point of keeping the companion here.
+	if !strings.Contains(out, "ONE knomit SCOPE") {
+		t.Errorf("summary omitted the two-scopes warning:\n%s", out)
 	}
 }
 
-func TestRunInit_ExistingClaudeMd_DropsBlockCompanion(t *testing.T) {
+// TestRunInit_ExistingClaudeMd_HeadingWithoutMarker_DropsBlockCompanion is the
+// one CLAUDE.md case init still refuses to merge. A block identified only by
+// its heading has no closing delimiter, so init cannot tell where it ends —
+// the template shipped without the HTML markers until c36015e7, and users strip
+// comments. Guessing the extent would either eat the user's own prose or leave
+// half a stale block behind, so this one keeps the companion and the
+// "replace the whole block" warning.
+func TestRunInit_ExistingClaudeMd_HeadingWithoutMarker_DropsBlockCompanion(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# Existing\n"), 0o644); err != nil {
+	existing := []byte("# Existing\n\n" + blockHeading + "\n\nsome older prose\n")
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), existing, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := runInit([]string{"--repo", "x"}); err != nil {
-		t.Fatalf("runInit: %v", err)
-	}
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+	})
 
 	companion := filepath.Join(dir, "CLAUDE.md.knomit-block")
 	if _, err := os.Stat(companion); err != nil {
 		t.Errorf("expected companion at %s: %v", companion, err)
+	}
+	if got := mustRead(t, filepath.Join(dir, "CLAUDE.md")); !bytes.Equal(got, existing) {
+		t.Errorf("original CLAUDE.md was modified; got:\n%s", got)
+	}
+	if !strings.Contains(out, "replace the whole block") {
+		t.Errorf("summary omitted the whole-block warning:\n%s", out)
 	}
 }
 
@@ -600,5 +631,631 @@ func chdir(t *testing.T, dir string) {
 	t.Cleanup(func() { _ = os.Chdir(old) })
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Merging the three merge-required files.
+//
+// The companion protocol — write <file>.knomit beside it, print "merge
+// manually" — is silent-failure-prone. Re-running init on this very checkout
+// after the memory-guard hook shipped left .claude/settings.json WITHOUT the
+// PreToolUse entry: the operator merged CLAUDE.md and .mcp.json by hand and
+// never noticed the third companion, so the block marker said v4 while the
+// guard was not registered. init now merges structurally wherever the file's
+// shape makes the merge unambiguous, and keeps a companion only where it does
+// not.
+// ---------------------------------------------------------------------------
+
+// handFormattedSettings is a settings.json as a PROJECT actually carries one:
+// pretty-printed, with the user's own permissions and keys beside the hooks.
+// Merge tests start from this rather than from init's own output, because
+// re-emitting the file is only invisible when the input already looks like what
+// the encoder would have produced.
+const handFormattedSettings = `{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knomit-bridge claude hook session-start"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knomit-bridge claude hook post-edit"
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knomit-bridge claude hook post-ask"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knomit-bridge claude hook pre-compact"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [],
+    "deny": [
+      "Read(./.claude/plans/archive/**)"
+    ],
+    "additionalDirectories": []
+  },
+  "plansDirectory": ".claude/plans"
+}
+`
+
+// captureStdout runs fn with os.Stdout redirected and returns what it printed.
+// The summary lines ARE the user-facing contract: a merge nobody is told about
+// is indistinguishable from the silent no-merge this change removes.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	defer func() { os.Stdout = old }()
+	fn()
+	_ = w.Close()
+	return <-done
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
+}
+
+func writeFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertNoCompanion is the negative half of every merge test. A file init can
+// merge must never ALSO leave a companion — the companion is the artefact the
+// operator learns to ignore, which is how the memory-guard hook went missing.
+func assertNoCompanion(t *testing.T, dir string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		for _, suffix := range []string{".knomit", ".knomit-block"} {
+			if _, err := os.Stat(filepath.Join(dir, name+suffix)); err == nil {
+				t.Errorf("companion %s%s was written; this file is mergeable", name, suffix)
+			}
+		}
+	}
+}
+
+// assertSingleInsertion pins the merge to an INSERTION rather than a rewrite:
+// after stripping the longest common prefix and the longest common suffix, all
+// of the original must be accounted for. Re-emitting the file from a decoded
+// structure fails this even when the JSON is semantically identical, which is
+// the point — the user's formatting, key order and blank lines are theirs.
+func assertSingleInsertion(t *testing.T, before, after []byte, what string) {
+	t.Helper()
+	p := 0
+	for p < len(before) && p < len(after) && before[p] == after[p] {
+		p++
+	}
+	s := 0
+	for s < len(before)-p && s < len(after)-p && before[len(before)-1-s] == after[len(after)-1-s] {
+		s++
+	}
+	if p+s != len(before) {
+		t.Errorf("%s was rewritten, not inserted into: %d of %d original bytes survive "+
+			"as a common prefix/suffix\n--- before ---\n%s\n--- after ---\n%s",
+			what, p+s, len(before), before, after)
+	}
+}
+
+// TestRunInit_SecondRun_IsByteIdenticalNoOp is what makes re-init safe to run
+// at any time. Under the companion protocol the three files were byte-identical
+// only because init declined to touch them — and left three companions saying
+// so.
+func TestRunInit_SecondRun_IsByteIdenticalNoOp(t *testing.T) {
+	t.Run("from init's own output", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit #1: %v", err)
+		}
+		assertReInitChangesNothing(t, dir, "--repo", "x")
+	})
+
+	// The case that actually occurs: a project whose files were hand-formatted
+	// and hand-merged, already carrying every hook this build ships.
+	t.Run("from a hand-formatted project already up to date", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		block, err := templatesFS.ReadFile(claudeMdBlockTemplate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFixture(t, filepath.Join(dir, ".claude", "settings.json"),
+			strings.Replace(handFormattedSettings,
+				`    "PreCompact": [`,
+				`    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knomit-bridge claude hook memory-guard"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [`, 1))
+		writeFixture(t, filepath.Join(dir, "CLAUDE.md"), "# Project\n\nHouse rules.\n\n"+string(block))
+		writeFixture(t, filepath.Join(dir, ".mcp.json"), fmt.Sprintf(`{
+  "mcpServers": {
+    %q: {
+      "command": "knomit-bridge",
+      "args": ["--repo", "x"]
+    }
+  }
+}
+`, knomitapi.ServerKey("x", "")))
+		assertReInitChangesNothing(t, dir, "--repo", "x")
+	})
+}
+
+func assertReInitChangesNothing(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	files := []string{".mcp.json", ".claude/settings.json", "CLAUDE.md"}
+	before := map[string][]byte{}
+	for _, f := range files {
+		before[f] = mustRead(t, filepath.Join(dir, f))
+	}
+
+	out := captureStdout(t, func() {
+		if err := runInit(args); err != nil {
+			t.Fatalf("re-init: %v", err)
+		}
+	})
+
+	for _, f := range files {
+		if got := mustRead(t, filepath.Join(dir, f)); !bytes.Equal(got, before[f]) {
+			t.Errorf("%s changed on a re-init\n--- before ---\n%s\n--- after ---\n%s", f, before[f], got)
+		}
+	}
+	assertNoCompanion(t, dir, ".mcp.json", "CLAUDE.md")
+	assertNoCompanion(t, filepath.Join(dir, ".claude"), "settings.json")
+	if strings.Contains(out, "Updated:") {
+		t.Errorf("a no-op re-init reported an update:\n%s", out)
+	}
+	if strings.Contains(out, "merge") {
+		t.Errorf("a no-op re-init asked for a manual merge:\n%s", out)
+	}
+}
+
+// TestRunInit_ExistingSettings_MergesTemplateHooks is the regression this change
+// exists for: a settings.json scaffolded before the memory-guard hook must GAIN
+// the PreToolUse entry, keeping the user's hooks, permissions and formatting.
+func TestRunInit_ExistingSettings_MergesTemplateHooks(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	existing := handFormattedSettings + ""
+	writeFixture(t, settingsPath, existing)
+
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+	})
+
+	got := mustRead(t, settingsPath)
+	if !strings.Contains(string(got), "knomit-bridge claude hook memory-guard") {
+		t.Errorf("memory-guard hook was not merged in; got:\n%s", got)
+	}
+	for _, want := range []string{
+		`"Read(./.claude/plans/archive/**)"`,
+		`"additionalDirectories": []`,
+		`"plansDirectory": ".claude/plans"`,
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("merge dropped %s; got:\n%s", want, got)
+		}
+	}
+	// Exactly one hook event is missing, so exactly one insertion is correct.
+	assertSingleInsertion(t, []byte(existing), got, ".claude/settings.json")
+
+	var parsed any
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Errorf("merged settings.json does not parse: %v\n%s", err, got)
+	}
+	assertNoCompanion(t, filepath.Join(dir, ".claude"), "settings.json")
+	if !strings.Contains(out, "Updated: .claude/settings.json") {
+		t.Errorf("summary did not report the settings merge:\n%s", out)
+	}
+	if !strings.Contains(out, "memory-guard") {
+		t.Errorf("summary did not name the hook it added:\n%s", out)
+	}
+
+	// And it settles: a second run has nothing left to do.
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// TestRunInit_ExistingSettings_HookUnderUserMatcher_NotDuplicated pins
+// idempotence to the hook COMMAND, not the matcher. A user who registered
+// post-edit under their own matcher already HAS the hook; keying off the
+// template's matcher hands them a second copy that fires on every edit twice,
+// and a duplicate is invisible in the diff of a long settings.json.
+func TestRunInit_ExistingSettings_HookUnderUserMatcher_NotDuplicated(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	writeFixture(t, settingsPath, `{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knomit-bridge claude hook post-edit"
+          }
+        ]
+      }
+    ]
+  }
+}
+`)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	got := string(mustRead(t, settingsPath))
+	if n := strings.Count(got, "claude hook post-edit"); n != 1 {
+		t.Errorf("post-edit appears %d times, want 1 — idempotence is keyed by the "+
+			"matcher rather than by the hook command:\n%s", n, got)
+	}
+	if !strings.Contains(got, `"Bash"`) {
+		t.Errorf("the merge rewrote the user's own matcher; got:\n%s", got)
+	}
+	// A hook genuinely absent is still added, under the template's matcher.
+	if !strings.Contains(got, "claude hook post-ask") {
+		t.Errorf("post-ask was not added; got:\n%s", got)
+	}
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated: hooks are
+// commonly registered by absolute path, because knomit-bridge is not on $PATH
+// outside the macOS .app. A plain string compare treats
+// "<dir>/knomit-bridge claude hook post-edit" as a different hook and registers
+// a second copy — which then runs the SAME hook twice per edit.
+func TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	writeFixture(t, settingsPath, `{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge claude hook post-edit"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/knomit-bridge claude hook session-start"
+          }
+        ]
+      }
+    ]
+  }
+}
+`)
+
+	if err := runInit([]string{"--repo", "x"}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+
+	got := string(mustRead(t, settingsPath))
+	for _, cmd := range []string{"claude hook post-edit", "claude hook session-start"} {
+		if n := strings.Count(got, cmd); n != 1 {
+			t.Errorf("%q appears %d times, want 1 — a path-prefixed hook command was "+
+				"not recognised as the same hook:\n%s", cmd, n, got)
+		}
+	}
+	// The user's paths are theirs; the merge must not rewrite them to bare names.
+	for _, want := range []string{"${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge", "/usr/local/bin/knomit-bridge"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("merge rewrote the user's hook path %q away; got:\n%s", want, got)
+		}
+	}
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// TestRunInit_MalformedSettings_LeftByteIdentical: a settings.json init cannot
+// parse is one it must not touch at all. Rewriting it would destroy the hand
+// edit the user is halfway through, and a companion would be exactly the silent
+// failure this change removes — so the only safe outcome is a loud error naming
+// the file.
+func TestRunInit_MalformedSettings_LeftByteIdentical(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	broken := "{\n  \"hooks\": {\n    \"SessionStart\": [ , ]\n  }\n"
+	settingsPath := filepath.Join(dir, ".claude", "settings.json")
+	writeFixture(t, settingsPath, broken)
+
+	// The other two merge targets, to pin that nothing lands before the check.
+	md := "# Project\n"
+	mcp := `{"mcpServers":{}}`
+	writeFixture(t, filepath.Join(dir, "CLAUDE.md"), md)
+	writeFixture(t, filepath.Join(dir, ".mcp.json"), mcp)
+
+	err := runInit([]string{"--repo", "x"})
+	if err == nil {
+		t.Fatal("runInit accepted an unparseable settings.json")
+	}
+	if !strings.Contains(err.Error(), ".claude/settings.json") {
+		t.Errorf("error %q does not name the offending file", err)
+	}
+	if got := mustRead(t, settingsPath); !bytes.Equal(got, []byte(broken)) {
+		t.Errorf("unparseable settings.json was modified:\n%s", got)
+	}
+	assertNoCompanion(t, filepath.Join(dir, ".claude"), "settings.json")
+
+	// init validates before it writes — the same contract the name checks hold
+	// (TestRunInit_InvalidNames_ErrorBeforeWriting). A scaffold that half-lands
+	// leaves the operator reconciling two files against an error about a third.
+	if got := mustRead(t, filepath.Join(dir, "CLAUDE.md")); !bytes.Equal(got, []byte(md)) {
+		t.Errorf("CLAUDE.md was merged before the settings check failed:\n%s", got)
+	}
+	if got := mustRead(t, filepath.Join(dir, ".mcp.json")); !bytes.Equal(got, []byte(mcp)) {
+		t.Errorf(".mcp.json was merged before the settings check failed:\n%s", got)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".claude", "skills")); statErr == nil {
+		t.Error("skills were written before the settings check failed")
+	}
+}
+
+// TestRunInit_ExistingClaudeMd_OlderMarker_ReplacedInPlace: the version marker
+// exists so a stale block can be REPLACED. Telling the operator to do it by hand
+// is what let installed blocks drift to "Nine /knomit-… slash commands" against
+// a template saying eleven.
+func TestRunInit_ExistingClaudeMd_OlderMarker_ReplacedInPlace(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	block, err := templatesFS.ReadFile(claudeMdBlockTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preamble := "# Project\n\nOur own house rules.\n\n"
+	stale := "<!-- knomit:integration v3 -->\n" + blockHeading + "\n\nold text\n<!-- /knomit:integration -->\n"
+	tail := "\n## Local section\n\nkeep me\n"
+	mdPath := filepath.Join(dir, "CLAUDE.md")
+	writeFixture(t, mdPath, preamble+stale+tail)
+
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+	})
+
+	if got, want := string(mustRead(t, mdPath)), preamble+string(block)+tail; got != want {
+		t.Errorf("block not replaced in place\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	assertNoCompanion(t, dir, "CLAUDE.md")
+	if !strings.Contains(out, "Updated: CLAUDE.md") {
+		t.Errorf("summary did not report the block replacement:\n%s", out)
+	}
+	// Naming both versions is what tells the operator the bump actually landed.
+	for _, want := range []string{"v3", "v4"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary %q does not name version %q", out, want)
+		}
+	}
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// TestRunInit_ExistingClaudeMd_NoBlock_AppendsOnce: a CLAUDE.md with no knomit
+// block gains one — and gains exactly one, however often init runs.
+func TestRunInit_ExistingClaudeMd_NoBlock_AppendsOnce(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	block, err := templatesFS.ReadFile(claudeMdBlockTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mdPath := filepath.Join(dir, "CLAUDE.md")
+	writeFixture(t, mdPath, "# Existing\n")
+
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit #1: %v", err)
+		}
+	})
+	if !strings.Contains(out, "Updated: CLAUDE.md") {
+		t.Errorf("summary did not report the append:\n%s", out)
+	}
+
+	afterFirst := string(mustRead(t, mdPath))
+	if want := "# Existing\n\n" + string(block); afterFirst != want {
+		t.Errorf("block not appended blank-line separated\n--- got ---\n%s\n--- want ---\n%s", afterFirst, want)
+	}
+	if n := strings.Count(afterFirst, blockHeading); n != 1 {
+		t.Errorf("knomit block heading appears %d times, want 1", n)
+	}
+	assertNoCompanion(t, dir, "CLAUDE.md")
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// TestRunInit_ExistingMcpJson_SameKey_UpdatedInPlace: the entry under the
+// derived key is ours, so init refreshes it and leaves every other server alone.
+func TestRunInit_ExistingMcpJson_SameKey_UpdatedInPlace(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	key := knomitapi.ServerKey("x", "")
+	mcpPath := filepath.Join(dir, ".mcp.json")
+	writeFixture(t, mcpPath, fmt.Sprintf(`{
+  "mcpServers": {
+    "other": { "command": "other-server", "args": ["--flag"] },
+    %q: { "command": "knomit-bridge", "args": ["--repo", "stale"] }
+  }
+}
+`, key))
+
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+	})
+
+	raw := mustRead(t, mcpPath)
+	cfg := parseMcpServers(t, raw)
+	if got, want := cfg[key].Args, []string{"--repo", "x"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("%s args = %v, want %v — the stale entry was not refreshed", key, got, want)
+	}
+	if got, want := cfg["other"].Args, []string{"--flag"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("an unrelated server was modified: args = %v, want %v", got, want)
+	}
+	assertNoCompanion(t, dir, ".mcp.json")
+	if !strings.Contains(out, "Updated: .mcp.json") {
+		t.Errorf("summary did not report the .mcp.json update:\n%s", out)
+	}
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+// TestRunInit_ExistingMcpJson_NoKnomitEntry_AddsEntry: a project with other MCP
+// servers and no knomit entry gets one added beside them.
+func TestRunInit_ExistingMcpJson_NoKnomitEntry_AddsEntry(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	mcpPath := filepath.Join(dir, ".mcp.json")
+	existing := `{
+  "mcpServers": {
+    "other": { "command": "other-server", "args": ["--flag"] }
+  }
+}
+`
+	writeFixture(t, mcpPath, existing)
+
+	out := captureStdout(t, func() {
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+	})
+
+	raw := mustRead(t, mcpPath)
+	cfg := parseMcpServers(t, raw)
+	key := knomitapi.ServerKey("x", "")
+	if got, want := cfg[key].Args, []string{"--repo", "x"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("%s args = %v, want %v", key, got, want)
+	}
+	if _, ok := cfg["other"]; !ok {
+		t.Errorf("the pre-existing server was dropped:\n%s", raw)
+	}
+	assertSingleInsertion(t, []byte(existing), raw, ".mcp.json")
+	assertNoCompanion(t, dir, ".mcp.json")
+	if !strings.Contains(out, "Updated: .mcp.json") {
+		t.Errorf("summary did not report the .mcp.json merge:\n%s", out)
+	}
+	assertReInitChangesNothing(t, dir, "--repo", "x")
+}
+
+func parseMcpServers(t *testing.T, raw []byte) map[string]struct {
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+} {
+	t.Helper()
+	var cfg struct {
+		McpServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf(".mcp.json does not parse: %v\n%s", err, raw)
+	}
+	return cfg.McpServers
+}
+
+// TestHookIdentity is the unit behind command-keyed idempotence. Everything
+// that reduces to the same identity is the same hook however it was spelled;
+// anything else must stay distinct, or a merge would swallow a user's own hook.
+func TestHookIdentity(t *testing.T) {
+	same := []string{
+		"knomit-bridge claude hook post-edit",
+		"/usr/local/bin/knomit-bridge claude hook post-edit",
+		"${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge claude hook post-edit",
+		"knomit-bridge.exe claude hook post-edit",
+		"knomit-bridge  claude   hook   post-edit",
+		"knomit-bridge --log /tmp/b.log claude hook post-edit",
+	}
+	want := hookIdentity(same[0])
+	for _, cmd := range same[1:] {
+		if got := hookIdentity(cmd); got != want {
+			t.Errorf("hookIdentity(%q) = %q, want %q — the same hook would be registered twice", cmd, got, want)
+		}
+	}
+	for _, cmd := range []string{
+		"knomit-bridge claude hook post-ask",
+		"knomit-bridge claude hook memory-guard",
+		"my-own-hook",
+		// Not the bridge: a third-party tool must never be mistaken for ours.
+		"some-other-tool claude hook post-edit",
+	} {
+		if got := hookIdentity(cmd); got == want {
+			t.Errorf("hookIdentity(%q) = %q collides with post-edit", cmd, got)
+		}
 	}
 }
