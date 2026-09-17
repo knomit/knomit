@@ -1,0 +1,244 @@
+name: Native toolchain + libs
+description: >
+  Go, a verified CGo toolchain, and the native libraries every knomit build
+  links (libtokenizers.a) or loads (ONNX Runtime).
+
+# WHY THIS IS A COMPOSITE ACTION RATHER THAN COPIED STEPS. On ubuntu and macos
+# the bootstrap is three lines and copying it costs nothing; on WINDOWS it is a
+# toolchain probe, a Rust target, a restore/save cache pair and a path-spelling
+# conversion. Two jobs in tests.yml need it (build-test and slow-tests), and a
+# second copy of the Windows half is a copy that stops matching the first one
+# the day either is edited — the same argument the tests.yml header makes for
+# being a reusable workflow instead of a duplicate of its jobs.
+#
+# The macOS-only jobs (desktop, embed-smoke) keep their inline steps: they
+# never run the Windows half, so folding them in here would trade three
+# readable lines for an indirection that buys them nothing.
+
+inputs:
+  go-version:
+    description: Go toolchain version, passed to actions/setup-go.
+    required: false
+    default: '1.26'
+
+runs:
+  using: composite
+  steps:
+    # The image's tool cache already holds Go 1.26.x, so this resolves without
+    # a download. Its default module/build cache (keyed on go.sum) is separate
+    # from the native-lib cache below and is left alone.
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    # ---------------------------------------------------------------- Windows
+    # Everything up to "Resolve native lib dir" is Windows-only. ubuntu and
+    # macos ship a working C toolchain and download a published
+    # libtokenizers.a; windows has neither — daulet/tokenizers publishes no
+    # windows asset through v1.27.0, so fetchlibs builds it with cargo.
+
+    # A PROBE, NOT AN INSTALL. The windows-2025 image (20260907.x) already puts
+    # mingw-w64 gcc 15.2.0 on the MACHINE PATH from C:\mingw64\bin
+    # — Install-Mingw64.ps1 ends in Add-MachinePathItem — and copies
+    # mingw32-make.exe to make.exe in the same directory, so `make` is there
+    # too. So there is nothing to set up, only something to verify and record.
+    #
+    # DELIBERATELY NOT msys2/setup-msys2. MSYS2 is preinstalled at C:\msys64
+    # but is NOT on PATH and carries NO mingw gcc (toolset-2025.json's
+    # MsysPackages.mingw is empty), so using it means pacman-installing a
+    # compiler — a download, a second bash with its own PATH and its own path
+    # spellings, and the `shell: msys2 {0}` split across steps. Mixing two
+    # shells' path spellings is exactly the failure class PR #212 spent a week
+    # on. It stays the documented fallback for the CRT mismatch below, not the
+    # default.
+    #
+    # KNOWN, UNVERIFIED MISMATCH — read this first if the CGo build breaks.
+    # The image's gcc is a UCRT build (toolset-2025.json pins
+    # {"version": "15.*", "runtime": "ucrt"}); Rust's x86_64-pc-windows-gnu,
+    # which spec.go pins for libtokenizers.a, is the MSVCRT-flavoured mingw
+    # target, and the machine that verified #212 by hand used MSYS2's MSVCRT
+    # gcc 16.2. Linking an MSVCRT-flavoured Rust staticlib with a UCRT gcc is a
+    # combination nobody has run. If the CGo build step reports undefined or
+    # duplicate CRT symbols, that is the cause; the fix is msys2/setup-msys2
+    # with mingw-w64-x86_64-gcc (MSVCRT, matching the known-good local box).
+    #
+    # The diagnostics are printed on every run, not just the first: on Windows
+    # they are the difference between reading a cause and bisecting for one.
+    # core.autocrlf especially — the repo has no .gitattributes, so if a future
+    # image flips it, golden-file comparisons start failing for a reason that
+    # has nothing to do with the code under test.
+    - name: Verify Windows CGo toolchain
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        set -uo pipefail
+        if ! command -v gcc >/dev/null; then
+          echo "::error::no gcc on PATH; knomit's CGo build needs a mingw-w64 toolchain"
+          echo "windows-2025 ships one at C:\\mingw64\\bin on the machine PATH." >&2
+          echo "If the image dropped it, add msys2/setup-msys2 with" >&2
+          echo "install: mingw-w64-x86_64-gcc and run the CGo steps in that shell." >&2
+          exit 1
+        fi
+        echo "gcc:      $(command -v gcc)"
+        gcc --version | head -1
+        gcc -dumpmachine
+        echo "make:     $(command -v make || echo '(none)')"
+        echo "rustup:   $(command -v rustup || echo '(none)')"
+        rustup show active-toolchain 2>/dev/null || true
+        echo "autocrlf: $(git config --get core.autocrlf || echo '(unset)')"
+
+    # Informational, and deliberately NOT a failure. onnxruntime >= 1.21 needs
+    # the VC++ 2015-2022 runtime >= 14.40, or its DLL refuses to initialise
+    # with nothing but "a dynamic link library (DLL) initialization routine
+    # failed" (internal/embeddings/ortinit_windows.go turns that into an
+    # actionable message). The image ships 14.51.36247, comfortably above the
+    # floor, and no step in tests.yml LOADS onnxruntime.dll on Windows today
+    # anyway — embed-smoke, the job that runs real inference, is ubuntu and
+    # macos. So a runtime below the floor would break nothing here and going
+    # red over it would be a red build for a hypothetical. It is PRINTED
+    # because that is the one fact in this file that could regress silently: an
+    # image rollback would leave the comment above stating a version the runner
+    # no longer has, and this line would say so in every log.
+    #
+    # pwsh, not bash: a file's version resource is a Windows API call.
+    - name: VC++ runtime version (informational)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $dll = Join-Path $env:SystemRoot 'System32\msvcp140.dll'
+        if (-not (Test-Path $dll)) {
+          Write-Host 'msvcp140.dll not found: the VC++ 2015-2022 redistributable is not installed.'
+          exit 0
+        }
+        $v = (Get-Item $dll).VersionInfo
+        $ok = ($v.FileMajorPart -gt 14) -or ($v.FileMajorPart -eq 14 -and $v.FileMinorPart -ge 40)
+        $verdict = if ($ok) { 'OK' } else { 'TOO OLD' }
+        Write-Host "msvcp140.dll $($v.FileVersion) - onnxruntime >= 1.21 needs >= 14.40: $verdict"
+
+    # tools/fetchlibs/spec.go is the single source of truth for the ORT release
+    # (1.24.3), the pinned tokenizers tag (v1.27.0) and the Rust target triple,
+    # so hashing it moves the cache key exactly when the fetch plan moves. The
+    # cost is a cold rebuild when only its prose changes — #212 edited those
+    # comments twice — and that is the right side to err on: the failure it
+    # rules out is a cache that keeps serving a lib built at a different pin.
+    #
+    # The triple is ALSO named explicitly in the key. It is redundant with the
+    # hash and it is the one component whose staleness would be invisible: an
+    # MSVC-target .lib and a GNU-target .a are both called libtokenizers.a, and
+    # only one of them links against mingw's ld. This step reads it out of the
+    # source (the rustup step below uses it too) and fails loudly if the
+    # constant is ever renamed, rather than letting the key quietly lose a
+    # component.
+    - name: Read pinned native-lib versions
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+        read_const() {
+          grep -oE "^[[:space:]]*$1[[:space:]]*=[[:space:]]*\"[^\"]+\"" tools/fetchlibs/spec.go \
+            | grep -oE '"[^"]+"' | tr -d '"'
+        }
+        ort=$(read_const ortVersion)
+        ver=$(read_const tokenizersVersion)
+        tgt=$(read_const tokenizersTarget)
+        if [ -z "$ort" ] || [ -z "$ver" ] || [ -z "$tgt" ]; then
+          echo "::error::could not read ortVersion/tokenizersVersion/tokenizersTarget from tools/fetchlibs/spec.go"
+          echo "tokenizersTarget IS part of the native-lib cache key, and all three are what" >&2
+          echo "the cached libs are. If they were renamed or moved, fix this step — do not" >&2
+          echo "let the key silently lose a component." >&2
+          exit 1
+        fi
+        echo "ort $ort, tokenizers $ver for $tgt"
+        echo "TOKENIZERS_TARGET=$tgt" >> "$GITHUB_ENV"
+
+    # Caches the whole per-platform lib dir: onnxruntime.dll (a ~100MB zip to
+    # download and unpack) and libtokenizers.a (~5 minutes of cargo, cold).
+    # fetchlibs skips any library whose dest already exists, so a hit means
+    # neither happens.
+    #
+    # NO restore-keys, deliberately. A prefix-matched restore would hand this
+    # job a lib built at a DIFFERENT pin, and skip-if-exists means fetchlibs
+    # would never correct it — a green job linking the wrong native library,
+    # which is worse than the 5 minutes it saved.
+    #
+    # restore + save rather than the combined actions/cache, because the
+    # combined action saves only when the job SUCCEEDS. This suite is expected
+    # to go red sometimes (that is what it is for), and every red run would
+    # then repay the cargo build. The save below runs with `if: always()`.
+    #
+    # The literal path cannot go stale: tokenizersSpec returns an error for any
+    # windows GOARCH other than amd64, so windows-amd64 is the only Windows lib
+    # dir that can exist.
+    - name: Restore native libs (Windows)
+      id: native-libs-cache
+      if: runner.os == 'Windows'
+      uses: actions/cache/restore@v4
+      with:
+        path: dist/windows-amd64/lib
+        key: native-libs-windows-${{ hashFiles('tools/fetchlibs/spec.go') }}-${{ env.TOKENIZERS_TARGET }}
+
+    # A ~1s no-op on today's image, which installs this target at image build
+    # time (Install-Rust.ps1 runs `rustup target add x86_64-pc-windows-gnu` on
+    # the x64 branch) — kept as a guard against that changing, because the
+    # failure it prevents is a wall of undefined references from cargo rather
+    # than a missing-target message. rustup's default HOST is still MSVC, which
+    # is why spec.go passes --target explicitly; nothing here depends on the
+    # host triple.
+    #
+    # Skipped on a cache hit: the target is only needed for the cargo build
+    # that a hit means we are not doing.
+    - name: Rust GNU target (only when the native libs are cold)
+      if: runner.os == 'Windows' && steps.native-libs-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v rustup >/dev/null; then
+          echo "::error::rustup is not on this runner image; fetchlibs builds libtokenizers.a with cargo"
+          echo "Add dtolnay/rust-toolchain before this step." >&2
+          exit 1
+        fi
+        # TOKENIZERS_TARGET comes from spec.go, read above — the same value the
+        # cache key carries and the same one fetchlibs will pass to cargo.
+        rustup target add "$TOKENIZERS_TARGET"
+        rustc --version
+        cargo --version
+
+    # ----------------------------------------------------------------- shared
+
+    # Native libs live under the per-platform dir, dist/<goos>-<goarch>/lib.
+    #
+    # The Windows conversion is not decoration. In a `shell: bash` step $PWD is
+    # an MSYS path — /d/a/knomit/knomit — and every tool in this repo is a
+    # Windows process that cannot open it. `cygpath -m` is the named
+    # conversion: it yields D:/a/knomit/knomit, which Go handles (forward
+    # slashes are fine on Windows; the missing drive letter is what is fatal).
+    # It is spelled this way rather than `pwd -W` because cygpath exists in
+    # both Git bash and MSYS2 bash, so the line survives a shell change.
+    - name: Resolve native lib dir
+      shell: bash
+      run: |
+        set -euo pipefail
+        root=$PWD
+        if [ "$RUNNER_OS" = Windows ]; then root=$(cygpath -m "$PWD"); fi
+        echo "LIBDIR=$root/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
+
+    # `make setup` on all three, Windows included: the image's mingw ships a
+    # make.exe on PATH (Install-Mingw64.ps1 copies mingw32-make.exe to it), and
+    # the recipe is one line, `go run ./tools/fetchlibs $(LIBDIR)`, with make
+    # computing its own relative LIBDIR — no path spelling crosses a shell
+    # boundary here. If that make ever turns out not to run the recipe, the
+    # Windows branch is `go run ./tools/fetchlibs "$LIBDIR"`, which is the same
+    # command with the absolute path resolved above.
+    - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
+      shell: bash
+      run: make setup
+
+    # always(), so a red test run does not throw away a cold cargo build; and
+    # only on a miss, because saving under a key that already exists is a
+    # warning and a wasted upload.
+    - name: Save native libs (Windows)
+      if: always() && runner.os == 'Windows' && steps.native-libs-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: dist/windows-amd64/lib
+        key: native-libs-windows-${{ hashFiles('tools/fetchlibs/spec.go') }}-${{ env.TOKENIZERS_TARGET }}
