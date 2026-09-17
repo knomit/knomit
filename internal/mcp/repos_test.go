@@ -32,8 +32,8 @@ func TestReposHandler_ListsMounts(t *testing.T) {
 	require.False(t, result.IsError, resultText(t, result))
 
 	var resp struct {
-		Binding string `json:"binding"`
-		Mounts  []struct {
+		Name   string `json:"name"`
+		Mounts []struct {
 			Name        string `json:"name"`
 			ID          string `json:"id"`
 			Branch      string `json:"branch"`
@@ -43,7 +43,7 @@ func TestReposHandler_ListsMounts(t *testing.T) {
 		} `json:"mounts"`
 	}
 	require.NoError(t, json.Unmarshal(boundJSON(t, result), &resp))
-	require.Equal(t, "test", resp.Binding)
+	require.Equal(t, "test", resp.Name)
 	require.Len(t, resp.Mounts, 1)
 	require.Equal(t, "test", resp.Mounts[0].Name)
 	require.Equal(t, "agent/test", resp.Mounts[0].Branch)
@@ -71,8 +71,8 @@ func TestReposHandler_ReadOnlyView(t *testing.T) {
 	require.False(t, result.IsError, resultText(t, result))
 
 	var resp struct {
-		Binding string `json:"binding"`
-		Mounts  []struct {
+		Name   string `json:"name"`
+		Mounts []struct {
 			Branch      string `json:"branch"`
 			Role        string `json:"role"`
 			WriteBranch string `json:"write_branch,omitempty"`
@@ -270,7 +270,10 @@ func TestRepos_ReportsBound(t *testing.T) {
 	// catalogue was folded in — now nested under `bound`.
 	bound, ok := out["bound"].(map[string]any)
 	require.True(t, ok, "payload: %v", out)
-	require.Equal(t, "alpha", bound["binding"])
+	// `name`, not `binding`: `binding` is the opaque handle everywhere, and a
+	// key that meant a name here would invite an agent to send the name as one.
+	require.Equal(t, "alpha", bound["name"])
+	require.NotContains(t, bound, "binding")
 	mounts, _ := bound["mounts"].([]any)
 	require.Len(t, mounts, 1)
 	require.Equal(t, "alpha", mounts[0].(map[string]any)["name"])
@@ -292,7 +295,8 @@ func TestRepos_ReportsBoundLens(t *testing.T) {
 	out := catalogOf(t, m, repos.WithBinding(context.Background(), b))
 
 	bound, _ := out["bound"].(map[string]any)
-	require.Equal(t, "eng", bound["binding"])
+	require.Equal(t, "eng", bound["name"])
+	require.NotContains(t, bound, "binding")
 	mounts, _ := bound["mounts"].([]any)
 	require.Len(t, mounts, 2, "a lens binding reports every mount")
 }
@@ -552,7 +556,7 @@ func TestRepos_LensRegistryUnavailableDegrades(t *testing.T) {
 	// The bound section survives — that is the point of degrading.
 	bound, ok := out["bound"].(map[string]any)
 	require.True(t, ok, "the binding's own mount table must survive: %v", out)
-	require.Equal(t, "alpha", bound["binding"])
+	require.Equal(t, "alpha", bound["name"])
 }
 
 // The empty case stays distinguishable from the failed one: a server with no
@@ -588,7 +592,7 @@ func TestRepos_ReportsUnresolvableBinding(t *testing.T) {
 		UID: "uid-departed", Name: "departed", State: repos.StateActive,
 		Profile: "code", CreatedAt: 1,
 	}))
-	_, resolveErr := repos.ResolveSessionBinding(context.Background(), m, "repo:uid-departed")
+	_, resolveErr := repos.ResolveSessionBinding(context.Background(), m, "repo:uid-departed", "")
 	require.Error(t, resolveErr)
 
 	ctx := repos.WithBindingError(repos.WithSessionScoped(context.Background()), resolveErr)
@@ -611,7 +615,7 @@ func TestRepos_ReportsUnresolvableBinding(t *testing.T) {
 // one. The kind still survives, because it comes from the pin's prefix.
 func TestRepos_UnresolvableBindingWithoutRegistryRow(t *testing.T) {
 	m, _, _ := bindFixture(t)
-	_, resolveErr := repos.ResolveSessionBinding(context.Background(), m, "repo:uid-never-existed")
+	_, resolveErr := repos.ResolveSessionBinding(context.Background(), m, "repo:uid-never-existed", "")
 	require.Error(t, resolveErr)
 
 	out := catalogOf(t, m, repos.WithBindingError(context.Background(), resolveErr))

@@ -15,7 +15,8 @@ import (
 
 // NewServer creates the single knomit MCP server instance. Tools are shared
 // across all repos and lenses — each handler resolves its binding from the
-// request context at call time. Instructions are computed per-session in
+// request context at call time, and on the unscoped mount the binding gate is
+// what puts it there, from the call's own `binding` handle. Instructions are computed per-session in
 // AfterInitialize: the authoring addendum comes from the context repo's
 // per-repo profile (the registry row's profile column — lenses RFC decision
 // 12), so one instance replaces the three formerly profile-keyed ones.
@@ -38,18 +39,19 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 	})
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, req *mcp.InitializeRequest, result *mcp.InitializeResult) {
 		recordClientInfo(ctx, mgr, req)
-		// The session-bound mount answers initialize with the UNBOUND
-		// instructions unconditionally. web.SessionBindingMiddleware is the
-		// primary guard — it skips resolution for initialize entirely — and
-		// this keeps the hook correct on its own, independent of it.
+		// The unscoped mount answers initialize with the UNBOUND instructions
+		// unconditionally, and since binding became per-CALL that is not a
+		// guard against stale state but a plain statement of fact: nothing is
+		// bound at initialize because nothing is bound until a tool call
+		// carries a handle, and there is no handle yet. A connection to this
+		// mount has no repo of its own at any point in its life.
 		//
-		// mcp-go mints a fresh session id on every initialize and ignores the
-		// inbound header (v0.45 server/streamable_http.go: isInitializeRequest
-		// ⇒ sessionIdManager.Generate()). The bridge keeps sending its old id
-		// once it has one, so a re-initialize resolves the PREVIOUS session's
-		// pin while the response carries a NEW id that has no session_bindings
-		// row. Describing that binding here would tell the agent it is bound to
-		// repo X and then fail its very next tool call with "nothing bound".
+		// The check stays unconditional rather than inspecting the context.
+		// Nothing puts a Binding there on this mount today, and a hook that
+		// described whatever it found would tell the agent it is bound to repo
+		// X while its very next tool call — which is gated on the handle it was
+		// never given — refuses. That was a live bug under session-keyed
+		// binding; keeping the branch absolute is what stops it returning.
 		if repos.SessionScoped(ctx) {
 			result.Instructions = ProfileInstructions("code", defaultOntologyRoot, nil) + unboundAddendum
 			return
@@ -71,8 +73,15 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 		server.WithTaskCapabilities(true, true, true),
 	)
 
+	// The gate wraps the handler BEFORE registration, which is the one seam
+	// both dispatch paths share — see gateBinding for why neither a hook nor
+	// mcp-go's tool middleware would do.
 	for _, t := range enabledTools(toolRegistrations(mgr, embedders...), readOnly) {
-		s.AddTool(t.tool, t.handler)
+		h := t.handler
+		if t.gate != gateUngated {
+			h = gateBinding(mgr, t.tool, t.gate, h)
+		}
+		s.AddTool(t.tool, h)
 	}
 
 	return s
@@ -104,28 +113,33 @@ func profileFor(mgr *repos.Manager, ri *repos.RepoInstance) string {
 	return p
 }
 
-// toolReg pairs a tool with its handler and whether it mutates the KB.
+// toolReg pairs a tool with its handler, whether it mutates the KB, and how the
+// binding gate treats its `binding` handle.
 type toolReg struct {
 	tool    mcp.Tool
 	handler server.ToolHandlerFunc
 	write   bool
+	gate    gateMode
 }
 
 // toolRegistrations is the full catalog in registration order.
 func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []toolReg {
 	return []toolReg{
-		{learnTool(), LearnHandler(embedders...), true},
-		{queryTool(), QueryHandler(embedders...), false},
-		{explainTool(), ExplainHandler(), false},
-		{updateTool(), UpdateHandler(), true},
-		{retractTool(), RetractHandler(), true},
-		{hypothesizeTool(), HypothesizeHandler(), true},
-		{reviewTool(), ReviewHandler(), true},
-		// Neither is a write tool, and knomit_repos needs no binding: a
+		{learnTool(), LearnHandler(embedders...), true, gateRequired},
+		{queryTool(), QueryHandler(embedders...), false, gateRequired},
+		{explainTool(), ExplainHandler(), false, gateRequired},
+		{updateTool(), UpdateHandler(), true, gateRequired},
+		{retractTool(), RetractHandler(), true, gateRequired},
+		{hypothesizeTool(), HypothesizeHandler(), true, gateRequired},
+		{reviewTool(), ReviewHandler(), true, gateRequired},
+		// Neither is a write tool, and knomit_repos needs no handle: a
 		// read-only server still needs both, or nothing on the unscoped mount
 		// could be discovered, bound, and therefore read.
-		{reposTool(), ReposHandler(mgr), false},
-		{bindTool(), BindHandler(mgr), false},
+		{reposTool(), ReposHandler(mgr), false, gateOptional},
+		// knomit_bind is where handles COME FROM, so it is the one tool the
+		// gate never wraps. It takes no `binding` argument at all, and
+		// rejectUnknownArguments refuses one.
+		{bindTool(), BindHandler(mgr), false, gateUngated},
 	}
 }
 

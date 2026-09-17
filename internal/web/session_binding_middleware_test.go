@@ -36,74 +36,58 @@ func probeCtx(t *testing.T, m *repos.Manager, sid string) (context.Context, int)
 	return seen, rec.Code
 }
 
-// No session id at all (the initialize request): session-scoped, unbound, and
-// the handler still runs — initialize has no id yet by design.
-func TestSessionBindingMiddleware_NoSessionID(t *testing.T) {
+// The middleware marks the context session-scoped and installs a pin recorder,
+// and does nothing else. Those two are what knomit_bind and the tool gate read.
+func TestSessionBindingMiddleware_MarksScopeAndInstallsRecorder(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 	m.SetClientSessions(newClientSessionsStore(t))
 
 	ctx, code := probeCtx(t, m, "")
 	require.Equal(t, http.StatusOK, code)
 	require.True(t, repos.SessionScoped(ctx))
-	_, ok := repos.BindingFromContextOpt(ctx)
+	rec, ok := repos.PinRecorderFromContext(ctx)
+	require.True(t, ok, "the gate needs somewhere to report the resolved pin")
+	require.Equal(t, "", rec.Pin(), "nothing has been resolved yet")
+
+	_, ok = repos.BindingFromContextOpt(ctx)
 	require.False(t, ok)
 	_, hasErr := repos.BindingErrorFromContext(ctx)
 	require.False(t, hasErr)
 }
 
-// A session id with no stored row is simply unbound — not an error.
-func TestSessionBindingMiddleware_UnboundSession(t *testing.T) {
-	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	m.SetClientSessions(newClientSessionsStore(t))
-
-	ctx, code := probeCtx(t, m, "sid-unknown")
-	require.Equal(t, http.StatusOK, code)
-	require.True(t, repos.SessionScoped(ctx))
-	_, ok := repos.BindingFromContextOpt(ctx)
-	require.False(t, ok)
-	_, hasErr := repos.BindingErrorFromContext(ctx)
-	require.False(t, hasErr)
-}
-
-// A stored pin that resolves puts BOTH the Binding and the write RepoInstance
-// in the context — the same shape LensMiddleware produces.
-func TestSessionBindingMiddleware_BoundRepo(t *testing.T) {
+// THE REGRESSION GUARD FOR THE INCIDENT, at the middleware.
+//
+// Binding used to be looked up here, from Mcp-Session-Id. Because a client may
+// share one connection — and so one session id — across several logical jobs,
+// that made every request on the connection resolve to whatever the connection
+// had bound LAST, and two Cowork jobs' writes crossed over. So the guard is not
+// "the lookup returns the right thing"; it is that THERE IS NO LOOKUP. No
+// session id, however well-known, may put a Binding in the context.
+//
+// If a future change reintroduces any session-keyed resolution here, this fails.
+func TestSessionBindingMiddleware_ResolvesNothingFromTheSessionID(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 	store := newClientSessionsStore(t)
 	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-1", "repo:u-alpha", time.Now()))
+	// A live handle exists, and its value is even used as the session id — the
+	// most favourable case any session-keyed lookup could possibly have.
+	require.NoError(t, store.MintBindingHandle(context.Background(), "sid-1", "repo:u-alpha", "", time.Now()))
 
-	ctx, code := probeCtx(t, m, "sid-1")
-	require.Equal(t, http.StatusOK, code)
-
-	b, ok := repos.BindingFromContextOpt(ctx)
-	require.True(t, ok)
-	require.Equal(t, "repo:u-alpha", b.PinID())
-	ri, ok := repos.RepoFromContextOpt(ctx)
-	require.True(t, ok)
-	require.Equal(t, "alpha", ri.Name())
+	for _, sid := range []string{"", "sid-1", "sid-unknown"} {
+		ctx, code := probeCtx(t, m, sid)
+		require.Equal(t, http.StatusOK, code, "sid=%q", sid)
+		require.True(t, repos.SessionScoped(ctx), "sid=%q", sid)
+		_, ok := repos.BindingFromContextOpt(ctx)
+		require.False(t, ok, "sid=%q must not resolve a Binding", sid)
+		_, ok = repos.RepoFromContextOpt(ctx)
+		require.False(t, ok, "sid=%q must not resolve a RepoInstance", sid)
+		_, hasErr := repos.BindingErrorFromContext(ctx)
+		require.False(t, hasErr, "sid=%q", sid)
+	}
 }
 
-// A stored pin that no longer resolves is a context ERROR, not a 4xx: the
-// caller speaks JSON-RPC and a status code would break the framing and tell
-// the agent nothing it could act on.
-func TestSessionBindingMiddleware_UnresolvablePin(t *testing.T) {
-	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	store := newClientSessionsStore(t)
-	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-2", "repo:gone", time.Now()))
-
-	ctx, code := probeCtx(t, m, "sid-2")
-	require.Equal(t, http.StatusOK, code, "must NOT be an HTTP failure")
-
-	_, ok := repos.BindingFromContextOpt(ctx)
-	require.False(t, ok)
-	err, hasErr := repos.BindingErrorFromContext(ctx)
-	require.True(t, hasErr)
-	require.Contains(t, err.Error(), "knomit_bind")
-}
-
-// A manager with no sessions store is treated as unbound, never a 500.
+// A manager with no sessions store is still fine here: the middleware never
+// touches one.
 func TestSessionBindingMiddleware_NilStore(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 
@@ -114,15 +98,27 @@ func TestSessionBindingMiddleware_NilStore(t *testing.T) {
 	require.False(t, ok)
 }
 
-// The unscoped mount is wired into the real API router, and a bound request
-// records that pin on the client_sessions row like any other MCP request.
+// The unscoped mount is wired into the real API router, and the pin the tool
+// gate resolved lands on the client_sessions row like any other MCP request —
+// travelling back out through the recorder, since on this mount nothing knows
+// the binding until the handler has run.
+//
+// It stays OBSERVATIONAL: the column records what the session was seen doing
+// and gates nothing. Routing came from the handle.
 func TestUnscopedMCPMount_RecordsBindingPin(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 	store := newClientSessionsStore(t)
 	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-4", "repo:u-alpha", time.Now()))
 
-	s := &Server{Manager: m, ClientSessions: store, mcpHandler: stubMCP(200)}
+	// Stand in for the tool gate: record a pin from inside the handler, which
+	// is where it becomes known.
+	s := &Server{Manager: m, ClientSessions: store,
+		mcpHandler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			rec, ok := repos.PinRecorderFromContext(req.Context())
+			require.True(t, ok)
+			rec.Record("repo:u-alpha")
+			w.WriteHeader(http.StatusOK)
+		})}
 	router := s.NewAPIRouter()
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp",
@@ -144,157 +140,62 @@ func TestUnscopedMCPMount_RecordsBindingPin(t *testing.T) {
 	require.True(t, found, "the unscoped mount must record the session like any other")
 }
 
-// probePost runs one POST with a body through the middleware, returning the
-// resulting context and the body bytes the NEXT handler managed to read.
-func probePost(t *testing.T, m *repos.Manager, sid, body string) (context.Context, string) {
-	t.Helper()
-	var seen context.Context
-	var readBack string
-	r := chi.NewRouter()
-	r.With(SessionBindingMiddleware(m)).Post("/mcp", func(w http.ResponseWriter, req *http.Request) {
-		seen = req.Context()
-		b, err := io.ReadAll(req.Body)
-		require.NoError(t, err)
-		readBack = string(b)
-		w.WriteHeader(http.StatusOK)
-	})
-	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
-	if sid != "" {
-		req.Header.Set("Mcp-Session-Id", sid)
-	}
-	r.ServeHTTP(httptest.NewRecorder(), req)
-	require.NotNil(t, seen)
-	return seen, readBack
-}
-
-const initBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`
-const callBody = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"knomit_repos"}}`
-
-// An initialize carrying a STALE session id must not resolve that session's
-// binding: mcp-go mints a new id for it, so the header names a different
-// session than the response will.
-func TestSessionBindingMiddleware_InitializeIgnoresStaleSessionID(t *testing.T) {
+// A request whose handler recorded nothing leaves the column empty rather than
+// inheriting some other request's pin.
+func TestUnscopedMCPMount_NoPinRecordedLeavesColumnEmpty(t *testing.T) {
 	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
 	store := newClientSessionsStore(t)
 	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-old", "repo:u-alpha", time.Now()))
 
-	ctx, body := probePost(t, m, "sid-old", initBody)
+	s := &Server{Manager: m, ClientSessions: store, mcpHandler: stubMCP(200)}
+	router := s.NewAPIRouter()
 
-	require.True(t, repos.SessionScoped(ctx))
-	_, ok := repos.BindingFromContextOpt(ctx)
-	require.False(t, ok, "initialize must not carry the previous session's Binding")
-	_, ok = repos.RepoFromContextOpt(ctx)
-	require.False(t, ok, "nor its RepoInstance — recordClientInfo reads the pin off this")
-	_, hasErr := repos.BindingErrorFromContext(ctx)
-	require.False(t, hasErr)
-	require.Equal(t, initBody, body, "the peek must restore the body for the real handler")
-}
+	req := httptest.NewRequest(http.MethodPost, "/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("Mcp-Session-Id", "sid-5")
+	router.ServeHTTP(httptest.NewRecorder(), req)
 
-// Any other method with the same header resolves exactly as before.
-func TestSessionBindingMiddleware_NonInitializeStillResolves(t *testing.T) {
-	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	store := newClientSessionsStore(t)
-	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-old", "repo:u-alpha", time.Now()))
-
-	ctx, body := probePost(t, m, "sid-old", callBody)
-
-	b, ok := repos.BindingFromContextOpt(ctx)
-	require.True(t, ok)
-	require.Equal(t, "repo:u-alpha", b.PinID())
-	require.Equal(t, callBody, body)
-}
-
-// A body that is not JSON at all must degrade to "not initialize" and still
-// reach the handler intact, rather than eating the request.
-func TestSessionBindingMiddleware_UnparseableBodyStillResolves(t *testing.T) {
-	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	store := newClientSessionsStore(t)
-	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-old", "repo:u-alpha", time.Now()))
-
-	ctx, body := probePost(t, m, "sid-old", "not json at all")
-
-	_, ok := repos.BindingFromContextOpt(ctx)
-	require.True(t, ok, "an undecodable body is not an initialize")
-	require.Equal(t, "not json at all", body)
-}
-
-// A body larger than the peek window must reach the handler byte-identical —
-// the peeked prefix is restored ahead of the still-streaming remainder — and
-// must resolve normally, since an oversized body is never an initialize.
-func TestSessionBindingMiddleware_OversizeBodyRoundTripsAndResolves(t *testing.T) {
-	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	store := newClientSessionsStore(t)
-	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-old", "repo:u-alpha", time.Now()))
-
-	big := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"knomit_learn","arguments":{"body":"` +
-		strings.Repeat("x", peekLimit*3) + `"}}}`
-	require.Greater(t, len(big), peekLimit)
-
-	ctx, body := probePost(t, m, "sid-old", big)
-
-	require.Equal(t, big, body, "the whole body must survive the bounded peek")
-	b, ok := repos.BindingFromContextOpt(ctx)
-	require.True(t, ok, "an oversized body is not an initialize, so it resolves as normal")
-	require.Equal(t, "repo:u-alpha", b.PinID())
-}
-
-// An initialize body sitting just under the window is still detected — the
-// boundary is the thing most likely to rot if peekLimit changes.
-func TestSessionBindingMiddleware_InitializeNearPeekLimit(t *testing.T) {
-	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	store := newClientSessionsStore(t)
-	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-old", "repo:u-alpha", time.Now()))
-
-	pad := strings.Repeat("y", peekLimit-200)
-	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"pad":"` + pad + `"}}`
-	require.Less(t, len(body), peekLimit)
-
-	ctx, got := probePost(t, m, "sid-old", body)
-
-	require.Equal(t, body, got)
-	_, ok := repos.BindingFromContextOpt(ctx)
-	require.False(t, ok, "still an initialize: no stale binding")
-}
-
-// The window is safe because the method is read token-wise: an initialize far
-// larger than peekLimit is still recognised, so it cannot fall through to the
-// stale-binding path.
-func TestSessionBindingMiddleware_OversizeInitializeStillDetected(t *testing.T) {
-	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
-	store := newClientSessionsStore(t)
-	m.SetClientSessions(store)
-	require.NoError(t, store.BindSession(context.Background(), "sid-old", "repo:u-alpha", time.Now()))
-
-	// method first, then a capabilities blob many times the window.
-	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"blob":"` +
-		strings.Repeat("z", peekLimit*4) + `"}}}`
-	require.Greater(t, len(body), peekLimit)
-
-	ctx, got := probePost(t, m, "sid-old", body)
-
-	require.Equal(t, body, got, "body must survive intact")
-	_, ok := repos.BindingFromContextOpt(ctx)
-	require.False(t, ok, "an oversized initialize must NOT resolve the previous session's pin")
-}
-
-func TestMethodOf(t *testing.T) {
-	for _, c := range []struct{ name, in, want string }{
-		{"plain", `{"jsonrpc":"2.0","id":1,"method":"initialize"}`, "initialize"},
-		{"method last", `{"jsonrpc":"2.0","params":{"a":[1,2,{"b":3}]},"method":"tools/call"}`, "tools/call"},
-		{"truncated after method", `{"method":"initialize","params":{"x":"yyyy`, "initialize"},
-		{"truncated before method", `{"params":{"x":"yyyy`, ""},
-		{"not an object", `[1,2,3]`, ""},
-		{"garbage", `not json`, ""},
-		{"empty", ``, ""},
-		{"no method key", `{"jsonrpc":"2.0","id":1}`, ""},
-	} {
-		if got := methodOf([]byte(c.in)); got != c.want {
-			t.Errorf("%s: methodOf(%q)=%q want %q", c.name, c.in, got, c.want)
+	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	require.NoError(t, err)
+	for _, row := range rows {
+		if row.ID == "sid-5" {
+			require.Equal(t, "", row.Binding)
+			return
 		}
+	}
+	t.Fatal("row not recorded")
+}
+
+// The middleware must not read the request body. It used to peek it to detect
+// an initialize — machinery that existed only to keep the session lookup off
+// the one request whose header names a different session — and every byte of
+// that went with the lookup. A body arrives at the handler untouched, at any
+// size, whatever it contains.
+func TestSessionBindingMiddleware_BodyUntouched(t *testing.T) {
+	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
+	m.SetClientSessions(newClientSessionsStore(t))
+
+	for name, body := range map[string]string{
+		"initialize": `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`,
+		"tools/call": `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"knomit_repos"}}`,
+		"not json":   "not json at all",
+		"empty":      "",
+		"huge": `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"knomit_learn","arguments":{"body":"` +
+			strings.Repeat("x", 32*1024) + `"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var readBack string
+			r := chi.NewRouter()
+			r.With(SessionBindingMiddleware(m)).Post("/mcp", func(w http.ResponseWriter, req *http.Request) {
+				b, err := io.ReadAll(req.Body)
+				require.NoError(t, err)
+				readBack = string(b)
+				w.WriteHeader(http.StatusOK)
+			})
+			req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+			req.Header.Set("Mcp-Session-Id", "sid-old")
+			r.ServeHTTP(httptest.NewRecorder(), req)
+			require.Equal(t, body, readBack)
+		})
 	}
 }

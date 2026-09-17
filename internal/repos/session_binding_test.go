@@ -65,7 +65,7 @@ func TestResolveSessionBinding_RepoBindsAtAgentBranch(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootNamedRepo(t, m, "core")
 
-	ctx, err := ResolveSessionBinding(context.Background(), m, PinForRepo(ri))
+	ctx, err := ResolveSessionBinding(context.Background(), m, PinForRepo(ri), "")
 	require.NoError(t, err)
 
 	b, ok := BindingFromContextOpt(ctx)
@@ -92,7 +92,7 @@ func TestResolveSessionBinding_SubscriptionIsReadOnlyAtUpstream(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ri.Subscribed())
 
-	ctx, err := ResolveSessionBinding(context.Background(), m, PinForRepo(ri))
+	ctx, err := ResolveSessionBinding(context.Background(), m, PinForRepo(ri), "")
 	require.NoError(t, err)
 
 	b, ok := BindingFromContextOpt(ctx)
@@ -114,7 +114,7 @@ func TestResolveSessionBinding_Lens(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ctx, err := ResolveSessionBinding(context.Background(), m, PinForLens(l))
+	ctx, err := ResolveSessionBinding(context.Background(), m, PinForLens(l), "")
 	require.NoError(t, err)
 
 	b, ok := BindingFromContextOpt(ctx)
@@ -129,18 +129,66 @@ func TestResolveSessionBinding_Unresolvable(t *testing.T) {
 
 	var sbe *SessionBindingError
 
-	_, err := ResolveSessionBinding(context.Background(), m, "repo:nope")
+	_, err := ResolveSessionBinding(context.Background(), m, "repo:nope", "")
 	require.ErrorAs(t, err, &sbe)
 	require.Equal(t, BindingRepoUnavailable, sbe.Kind)
 	require.Contains(t, err.Error(), "knomit_bind")
 
-	_, err = ResolveSessionBinding(context.Background(), m, "garbage")
+	_, err = ResolveSessionBinding(context.Background(), m, "garbage", "")
 	require.ErrorAs(t, err, &sbe)
 	require.Equal(t, BindingMalformed, sbe.Kind)
 	require.Contains(t, err.Error(), "knomit_bind")
 
-	_, err = ResolveSessionBinding(context.Background(), m, "lens:nope")
+	_, err = ResolveSessionBinding(context.Background(), m, "lens:nope", "")
 	require.ErrorAs(t, err, &sbe)
 	require.Equal(t, BindingLensUnavailable, sbe.Kind)
+	require.Contains(t, err.Error(), "knomit_bind")
+}
+
+// A handle may name a READ BRANCH, and "" means the target's own. The column
+// exists ahead of the feature (knomit_bind always stores ""), so these two
+// cases pin the contract before anything can reach it.
+func TestResolveSessionBinding_BranchOverride(t *testing.T) {
+	m := newTestManager(t)
+	ri := bootNamedRepo(t, m, "core")
+
+	// "" is the repo's own read branch — identical to what the URL-scoped
+	// mounts synthesize with NewBindingOfRepo(ri, "").
+	ctx, err := ResolveSessionBinding(context.Background(), m, PinForRepo(ri), "")
+	require.NoError(t, err)
+	b, ok := BindingFromContextOpt(ctx)
+	require.True(t, ok)
+	require.Equal(t, ri.ReadBranch(), b.WriteMountBranch())
+
+	// A named branch goes to the very same constructor, so write eligibility
+	// follows WritableBranch exactly as it does through a URL.
+	ctx, err = ResolveSessionBinding(context.Background(), m, PinForRepo(ri), "main")
+	require.NoError(t, err)
+	b, ok = BindingFromContextOpt(ctx)
+	require.True(t, ok)
+	require.Equal(t, "main", b.WriteMountBranch())
+	require.False(t, b.WriteOK(), "a non-agent branch is a read-only view")
+}
+
+// A LENS pins a branch per mount, so a single branch on a lens handle names
+// nothing coherent. It is refused rather than ignored: ignoring it would serve
+// a branch other than the one the handle names.
+func TestResolveSessionBinding_LensBranchRefused(t *testing.T) {
+	m := newTestManager(t)
+	write := bootNamedRepo(t, m, "writer")
+
+	l, err := m.LensRegistry().Create(Lens{
+		Name: "eng", WriteUID: write.UID(),
+		Reads:     []LensRead{{RepoUID: write.UID()}},
+		CreatedAt: 1, UpdatedAt: 1,
+	})
+	require.NoError(t, err)
+
+	_, err = ResolveSessionBinding(context.Background(), m, PinForLens(l), "")
+	require.NoError(t, err, "the empty branch is the only one a lens handle carries today")
+
+	_, err = ResolveSessionBinding(context.Background(), m, PinForLens(l), "some-branch")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "lens pins a branch per mount")
 	require.Contains(t, err.Error(), "knomit_bind")
 }

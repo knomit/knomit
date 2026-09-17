@@ -299,6 +299,13 @@ func BindingPinFromContext(ctx context.Context) string {
 	if _, ok := RepoFromContextOpt(ctx); ok {
 		return BindingFromContext(ctx).PinID()
 	}
+	// The unscoped mount is a THIRD shape: its binding is named by a handle
+	// argument inside the request body, so it is not in the context at all when
+	// the request arrives — the tool gate resolves it and records it here. See
+	// PinRecorder for why the value has to travel this way.
+	if p, ok := PinRecorderFromContext(ctx); ok {
+		return p.Pin()
+	}
 	return ""
 }
 

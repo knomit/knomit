@@ -510,7 +510,7 @@ func TestLensE2E_ReposMountsMatchQualifiedIDs(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text), &envelope))
 	require.NotNil(t, envelope.Bound, "a lens-scoped call is bound: %s", text)
 	mounts := envelope.Bound
-	require.Equal(t, "eng", mounts.Binding)
+	require.Equal(t, "eng", mounts.Name)
 	require.Len(t, mounts.Mounts, 2, "both mounts must be listed: %s", text)
 
 	byName := map[string]reposMount{}

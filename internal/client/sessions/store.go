@@ -248,13 +248,17 @@ FROM client_sessions WHERE 1=1`
 }
 
 // Purge deletes rows whose last_seen_at is older than the retention window,
-// then drops session_bindings rows whose session has aged out with them — that
-// table carries no foreign key, so its orphans are collected here. A binding is
+// then ages out binding handles unused for that same window. A handle is
 // therefore durable across restarts but not beyond the retention window
 // (session.client_retention, default 168h — configurable, not a constant): a
-// session idle that long loses its selection and must call knomit_bind again.
+// caller that has not used a handle for that long must call knomit_bind again.
 // Returns the number of client_sessions rows deleted. Retention 0 disables
 // purging.
+//
+// Handles age on their OWN last_used_at, not on any session's. They are not
+// keyed by session id — that is the whole point of the handle — so there is no
+// session row whose death could collect them, and a handle held by a long-lived
+// caller stays alive precisely as long as it keeps being used.
 func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 	if s.policy.Retention <= 0 {
 		return 0, nil
@@ -268,9 +272,9 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM session_bindings WHERE session_id NOT IN (SELECT id FROM client_sessions)`); err != nil {
-		return n, fmt.Errorf("purge session_bindings: %w", err)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM binding_handles WHERE last_used_at < ?`,
+		now.Add(-s.policy.Retention).Unix()); err != nil {
+		return n, fmt.Errorf("purge binding_handles: %w", err)
 	}
 	// No id: a purge is not about one row, and the consumer re-reads the
 	// whole list anyway.

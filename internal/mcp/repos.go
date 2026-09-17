@@ -27,7 +27,8 @@ import (
 // world rather than a mode the tool is in.
 func reposTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_repos",
-		mcpgo.WithDescription("List every repo and lens this server serves, and what this session is bound to. Needs no binding — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
+		mcpgo.WithDescription("List every repo and lens this server serves, and what a binding points at. The ONE tool that works without a binding handle — call it first on the unscoped endpoint to learn the names knomit_bind accepts. Pass `binding` to have the result also describe what that handle names (or why it no longer resolves). Use a repo's id to interpret kb://<id>/… paths. Note a mount's source slug is NOT what a src:// ref carries — src:// refs are keyed by the SOURCE repo's own root commit, obtained by running git in that checkout."),
+		bindingArg(false),
 	)
 }
 
@@ -47,23 +48,64 @@ type reposMount struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-// boundSection is the `bound` key: what THIS session points at, present only
-// when it points at anything.
+// boundSection is the `bound` key: what a call's binding points at, present
+// only when it points at anything.
 //
 // It carries the mount table knomit_repos returned before the catalogue was
-// folded in. A session whose STORED pin no longer resolves is a third state,
-// distinct from both bound and never-bound: Status "unresolvable" with the
-// reason, since every other tool is already telling that agent to bind again
-// and this is the tool it calls to find out why. Every field is omitempty, so
-// no partial state serializes a "" key.
+// folded in. A handle whose pin no longer resolves is a third state, distinct
+// from both bound and never-bound: Status "unresolvable" with the reason, since
+// every other tool is already telling that agent to bind again and this is the
+// tool it calls to find out why. Every field is omitempty, so no partial state
+// serializes a "" key.
+//
+// The repo-or-lens name is `name` in BOTH states, and the key `binding` appears
+// nowhere in this struct. That is deliberate. `binding` used to hold the name
+// here, and since knomit_bind now returns a handle under exactly that key, one
+// word would have meant the name in one result and an opaque handle in
+// another — the single most expensive confusion available in this design, since
+// an agent that sends the name as its handle gets a hard failure it cannot read
+// its way out of. One key, one meaning: `binding` is the handle, everywhere.
 type boundSection struct {
-	Binding string       `json:"binding,omitempty"`
-	Mounts  []reposMount `json:"mounts,omitempty"`
+	Name   string       `json:"name,omitempty"`
+	Mounts []reposMount `json:"mounts,omitempty"`
 
-	Kind   string `json:"kind,omitempty"` // repo | lens, from the dead pin's prefix
-	Name   string `json:"name,omitempty"`
+	Kind   string `json:"kind,omitempty"`   // repo | lens, from the dead pin's prefix
 	Status string `json:"status,omitempty"` // "unresolvable"
 	Error  string `json:"error,omitempty"`
+}
+
+// bindResult is what knomit_bind returns: the HANDLE first, then what it names.
+//
+// Field order is the JSON key order, and it is load-bearing rather than
+// cosmetic: the handle is the one value the agent must carry forward, and a
+// reader that stops early must hit it before the mount table.
+type bindResult struct {
+	// Binding is the opaque handle. Never a name, never derivable from one.
+	Binding string       `json:"binding"`
+	Name    string       `json:"name"`
+	Mounts  []reposMount `json:"mounts"`
+}
+
+// bindResultOf pairs a freshly minted handle with the binding it names, reusing
+// boundFor so the mount table cannot drift between knomit_bind and
+// knomit_repos.
+func bindResultOf(handle string, b *repos.Binding) bindResult {
+	bound := boundFor(b)
+	return bindResult{Binding: handle, Name: bound.Name, Mounts: bound.Mounts}
+}
+
+// handleBanner is the first thing an agent reads after the bind result. It is
+// prose, before the knowledge base's own instructions, because the instructions
+// are long and the one instruction that makes the rest reachable is this one.
+func handleBanner(handle string) string {
+	return "## Your binding handle\n\n`" + handle + "`\n\n" +
+		"Pass this value as the `binding` argument on EVERY other knomit tool call in this session " +
+		"(knomit_query, knomit_learn, knomit_explain, knomit_update, knomit_retract, knomit_review, " +
+		"knomit_hypothesize — and knomit_repos when you want to see what you are bound to). " +
+		"It is how the server knows which knowledge base a call is for; there is no session fallback, " +
+		"so a call without it is refused. Copy it verbatim: it is random, it is not the repo or lens " +
+		"name, and a value you construct yourself will be rejected. If any call answers " +
+		"\"unknown binding handle\", stop and call knomit_bind again rather than guessing.\n\n"
 }
 
 // reposResponse is the knomit_repos envelope.
@@ -83,8 +125,10 @@ type reposResponse struct {
 
 // ReposHandler returns the handler for knomit_repos.
 //
-// It requires NO binding: on the unscoped mount a fresh session has none, and
-// this is how an agent learns the names knomit_bind accepts.
+// It requires NO binding: on the unscoped endpoint a fresh caller has no handle
+// yet, and this is how an agent learns the names knomit_bind accepts. A handle
+// that IS passed but does not resolve is reported under `bound` rather than
+// raised — see the gate's gateOptional mode.
 //
 // It is a CHEAP INDEX, and the claim is precise: no README, no LICENSE, no
 // per-fact read. Values come from control-plane state (Manager.ForEach,
@@ -136,7 +180,7 @@ func ReposHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolReques
 // learn what it just bound. Both tools share this builder so the mount table
 // cannot drift between them.
 func boundFor(b *repos.Binding) *boundSection {
-	out := &boundSection{Binding: b.Name(), Mounts: []reposMount{}}
+	out := &boundSection{Name: b.Name(), Mounts: []reposMount{}}
 	for _, rt := range b.Reads() {
 		role := "read"
 		var writeBranch string
@@ -339,7 +383,7 @@ func listLenses(mgr *repos.Manager) []reposLens {
 	return out
 }
 
-// unresolvableBound describes a stored binding that no longer resolves.
+// unresolvableBound describes a handle whose pin no longer resolves.
 //
 // The kind comes from the pin the resolver failed on, which *SessionBindingError
 // carries for exactly this purpose — the context holds only the error, so

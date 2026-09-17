@@ -2318,16 +2318,18 @@ paths:
   /mcp:
     get: &sessionMcp
       tags: [mcp]
-      summary: MCP server proxy, session-bound
+      summary: MCP server proxy, unscoped
       description: |
         Dispatches to the configured MCP handler with NO repo or lens fixed by
-        the URL. The session chooses one by calling the knomit_bind tool, and
-        the choice is remembered against its Mcp-Session-Id; until it does,
-        every other tool returns a tool error naming knomit_bind. A stored
-        binding that no longer resolves is reported the same way rather than as
-        an HTTP status, so the JSON-RPC framing survives. Accepts any HTTP
-        method; request/response shape is defined by the Model Context
-        Protocol.
+        the URL. A caller chooses one by calling the knomit_bind tool, which
+        returns an opaque handle; every other tool requires that handle as its
+        `binding` argument and fails with a tool error naming knomit_bind
+        without one. NOTHING is keyed on Mcp-Session-Id: a client may share one
+        connection across several independent jobs, so binding is per call, and
+        several handles may be in use over the same connection at once. A handle
+        that no longer resolves is reported as a tool error rather than an HTTP
+        status, so the JSON-RPC framing survives. Accepts any HTTP method;
+        request/response shape is defined by the Model Context Protocol.
       operationId: sessionMcpDispatch
       responses:
         "200": { description: MCP response (shape varies) }
@@ -2341,7 +2343,7 @@ paths:
       - { name: path, in: path, required: true, schema: { type: string } }
     get: &sessionMcpSub
       tags: [mcp]
-      summary: MCP server proxy, session-bound (sub-path)
+      summary: MCP server proxy, unscoped (sub-path)
       operationId: sessionMcpDispatchSub
       responses:
         "200": { description: MCP response (shape varies) }

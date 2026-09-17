@@ -26,6 +26,7 @@ const explainHistoryDisplay = 3
 func explainTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explain",
 		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its evolution `history` (recent revisions, each with the confidence/content diff from its predecessor). Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
+		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
 			mcpgo.Description("Path to the fact file (e.g. kb/technology/go/abc123.md)."),

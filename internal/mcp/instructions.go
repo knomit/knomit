@@ -326,7 +326,11 @@ var profileAddenda = map[string]string{
 	"generic": `You are a general-purpose knowledge assistant. Store and retrieve knowledge across any domain. Use descriptive domain and entity tags. Maintain clear, self-contained fact bodies that can be understood without additional context.`,
 }
 
-// unboundAddendum is appended on the unscoped /api/v1/mcp mount, where a fresh
-// session has no repo or lens yet. MCP cannot re-send instructions later, so
-// the ontology of whatever gets bound rides back in the knomit_bind result.
-const unboundAddendum = "\n\n## No repo bound yet\n\nThis session is connected to the unscoped endpoint and is NOT bound to any repo or lens. Call `knomit_repos` first: it works unbound and lists every repo and lens you can bind to. Every other tool fails until you call `knomit_bind` with either `repo` or `lens` (one name). The bind response carries that knowledge base's ontology and mount table — read it as if it were these instructions. You may call `knomit_bind` again later to switch; you cannot unbind."
+// unboundAddendum is appended on the unscoped /api/v1/mcp endpoint, where a
+// fresh caller has no repo or lens yet. MCP cannot re-send instructions later,
+// so the ontology of whatever gets bound rides back in the knomit_bind result.
+//
+// It leads with the handle, because the handle is what makes every other tool
+// reachable: an agent that reads only the first sentences must still come away
+// knowing that knomit_bind returns a value it has to keep and resend.
+const unboundAddendum = "\n\n## No repo bound yet\n\nThis connection is to the unscoped endpoint, which is NOT bound to any repo or lens. Binding is PER CALL, not per session: `knomit_bind` returns an opaque `binding` handle, and EVERY other tool requires that handle as its `binding` argument. Keep the value and pass it verbatim on every call — it is random, it is not the repo or lens name, and there is no session fallback, so a call without it is refused.\n\nStart with `knomit_repos`: it is the one tool that works with no handle, and it lists every repo and lens you can bind to. Then call `knomit_bind` with either `repo` or `lens` (one name) and read its response — it carries the handle, the mount table and that knowledge base's ontology, and you should treat it as if it were these instructions. Calling `knomit_bind` again mints a SECOND handle for a different base; the first one keeps working, so make sure each call carries the handle for the base you mean."
