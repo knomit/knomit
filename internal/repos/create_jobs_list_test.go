@@ -55,6 +55,43 @@ func TestCreateJobs_NewestFirstAndReapsExpired(t *testing.T) {
 	require.False(t, ok, "the listing reaped it, so polling must not find it either")
 }
 
+// Two jobs started at the SAME INSTANT still come back in one fixed order, and
+// the same one every call. The order must be TOTAL, not merely "newest first".
+//
+// The timestamps are seeded identical on purpose rather than by starting two
+// creates and hoping the clock collides. That hope is what made the original
+// defect invisible: StartedAt is time.Now(), nanosecond-resolution on Linux and
+// macOS, the system clock's tick on Windows — so the unstable sort underneath
+// this was fine on two platforms and a coin toss on the third, and the repo's
+// first Windows CI run is what caught it. A test for a tie has to CONSTRUCT the
+// tie; one that waits for the platform to produce it is testing the platform.
+func TestCreateJobs_SameInstantIsATotalOrder(t *testing.T) {
+	m := newTestManager(t)
+	at := time.Now().UTC()
+
+	// Seeded in the order that makes an unstable sort most likely to expose
+	// itself: the id that must come FIRST is inserted second.
+	seedJob(m, "b-second-id", "beta", at, time.Time{})
+	seedJob(m, "a-first-id", "alpha", at, time.Time{})
+
+	first := m.CreateJobs()
+	ids := make([]string, 0, len(first))
+	for _, st := range first {
+		ids = append(ids, st.ID)
+	}
+	require.Equal(t, []string{"a-first-id", "b-second-id"}, ids,
+		"equal StartedAt must fall back to id ascending")
+
+	// Repeated calls over an unchanged manager must agree. CreateJobs builds
+	// `out` by ranging a MAP, so its input order is randomised on every call;
+	// without a total order this is where the disagreement shows up.
+	for i := 0; i < 20; i++ {
+		got := m.CreateJobs()
+		require.Equal(t, ids[0], got[0].ID, "call %d disagreed with the first", i)
+		require.Equal(t, ids[1], got[1].ID, "call %d disagreed with the first", i)
+	}
+}
+
 // A RUNNING job is never reaped however old it is: its own deadline bounds it,
 // and dropping it would lose the outcome a client is waiting for.
 func TestCreateJobs_NeverReapsARunningJob(t *testing.T) {

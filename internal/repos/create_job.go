@@ -316,7 +316,33 @@ func (m *Manager) CreateJobs() []CreateStatus {
 		out = append(out, j.Status())
 	}
 	m.createJobsMu.Unlock()
-	sort.Slice(out, func(i, k int) bool { return out[i].StartedAt.After(out[k].StartedAt) })
+	// Newest first, then id ascending — a TOTAL order, not merely a primary
+	// key, for the same reason ListArchived sorts the way it does (see
+	// lifecycle.go): with sort.Slice, which is NOT stable, two jobs whose
+	// StartedAt compares equal may come back in either order, and two calls
+	// over one unchanged manager are free to disagree.
+	//
+	// "Compares equal" is not hypothetical here, it is the ordinary case on
+	// Windows. StartedAt is time.Now(), whose resolution is nanoseconds on
+	// Linux and macOS but the system clock's tick on Windows — coarse enough
+	// that two creates started back to back routinely land on the SAME instant,
+	// and the faster the machine the likelier. That is how this surfaced: the
+	// repo's first Windows CI job failed
+	// internal/web's TestGetRepoCreates_ListsNewestFirst, which had been
+	// passing everywhere else on nothing but clock resolution.
+	//
+	// The tiebreak is for DETERMINISM, not for recency. Ids are ksuids, which
+	// order by a one-SECOND timestamp before their random payload, so two ids
+	// minted in the same tick carry no usable ordering between them — there is
+	// no direction that would make this "newest first" below a second.
+	// Ascending matches the tiebreak in lifecycle.go so the two sorts read the
+	// same way.
+	sort.SliceStable(out, func(i, k int) bool {
+		if !out[i].StartedAt.Equal(out[k].StartedAt) {
+			return out[i].StartedAt.After(out[k].StartedAt)
+		}
+		return out[i].ID < out[k].ID
+	})
 	return out
 }
 

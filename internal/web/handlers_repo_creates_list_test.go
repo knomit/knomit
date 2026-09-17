@@ -34,9 +34,29 @@ func TestGetRepoCreates_ListsNewestFirst(t *testing.T) {
 	if len(creates) != 2 {
 		t.Fatalf("want 2 creates, got %d: %s", len(creates), rec.Body.String())
 	}
-	if creates[0]["create_id"] != second || creates[1]["create_id"] != first {
-		t.Fatalf("want newest first (%s then %s), got %v / %v",
-			second, first, creates[0]["create_id"], creates[1]["create_id"])
+	// The handler's job is to SERVE the manager's order, not to invent one, so
+	// that is what this asserts. It deliberately does NOT hardcode "second then
+	// first": both creates are started back to back, and StartedAt is
+	// time.Now(), whose resolution is the system clock's tick on Windows — so
+	// the two routinely share an instant there and the manager's tiebreak, not
+	// their start order, decides which comes first. Hardcoding the expectation
+	// made this test pass on Linux and macOS and fail on Windows for a reason
+	// that was never about the handler. The ordering CONTRACT is owned by
+	// repos.CreateJobs and tested there against constructed timestamps
+	// (TestCreateJobs_NewestFirstAndReapsExpired,
+	// TestCreateJobs_SameInstantIsATotalOrder).
+	want := make([]string, 0, 2)
+	for _, st := range s.Manager.CreateJobs() {
+		want = append(want, st.ID)
+	}
+	if creates[0]["create_id"] != want[0] || creates[1]["create_id"] != want[1] {
+		t.Fatalf("handler reordered the manager's list: want %v, got %v / %v",
+			want, creates[0]["create_id"], creates[1]["create_id"])
+	}
+	// Both creates are present, whatever order the tie resolved to.
+	got := map[any]bool{creates[0]["create_id"]: true, creates[1]["create_id"]: true}
+	if !got[first] || !got[second] {
+		t.Fatalf("want both %s and %s listed, got %v", first, second, got)
 	}
 	// The row carries everything the poll resource does, including the new
 	// fields a client draws a bar from.
