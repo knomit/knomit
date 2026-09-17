@@ -90,6 +90,16 @@ name: Tests
 #     is a thing to watch rather than a thing to fix: if that step ever times
 #     out, internal/web is where to look first.
 #
+# WHAT THIS COSTS SOMEONE WAITING ON A PR, measured on the first all-green run
+# (35250857183, 2026-09-17):
+#   build-test (windows-2025)             9m15s  17:08:08 -> 17:17:23
+#   slow-tests (windows-2025 synthesize) 21m32s  the longest check on the board
+# So the build answer arrives in under ten minutes and a FULL green waits on
+# synthesize. The unix legs are unchanged by any of this. If that second number
+# is ever the thing standing between this repo and a merge, the fix is in
+# internal/synthesize's fixtures — the tests each build a 400-fact corpus one
+# WriteFact at a time — and not in this file.
+#
 # THE RUNNER CHECKS OUT WITH core.autocrlf=true, which is Git for Windows'
 # installed default and the opposite of the machine knomit's Windows support
 # was developed on. The first run of this job that got as far as running tests
@@ -246,7 +256,7 @@ jobs:
   # runner. SINGLE SAMPLES taken 2026-09-17 — re-measure rather than trust them:
   #
   #                     laptop      runner
-  #   internal/synthesize  1776s      1533s
+  #   internal/synthesize  1776s      1292-1533s (two runs)
   #   internal/store        816s       212s
   #   internal/repos    441-639s       307s
   #
@@ -259,15 +269,17 @@ jobs:
   # THE MATRIX IS DELIBERATELY ASYMMETRIC, and the runner's numbers are why.
   # unix runs all three in one leg (7m25s for the lot) because splitting three
   # fast packages across three runners buys nothing. Windows runs ONE PACKAGE
-  # PER LEG because packages are serial within a leg: together they are 34m12s
-  # of critical path, split they are as long as the longest, 25m33s. The split
-  # also puts a per-package wall time on the checks list, which is the number
-  # anyone tuning this wants next. If synthesize ever gets cheap, collapse this
-  # to one Windows leg and match the unix shape.
+  # PER LEG because packages are serial within a leg: together they are 30-34
+  # minutes of critical path, split they are as long as the longest, which is
+  # synthesize at 21m32s-25m33s. The split also puts a per-package wall time on
+  # the checks list, which is the number anyone tuning this wants next. If
+  # synthesize ever gets cheap, collapse this to one Windows leg and match the
+  # unix shape.
   #
-  # 40m against a measured 25m33s is a 14-minute margin, and it is a HANG
-  # guard, not a target. If synthesize creeps toward it, the answer is to find
-  # out why the package got slower, not to raise the ceiling reflexively.
+  # 40m against a measured 21-26 minutes is a margin of 14 to 18 minutes, and
+  # it is a HANG guard, not a target. If synthesize creeps toward it, the answer
+  # is to find out why the package got slower, not to raise the ceiling
+  # reflexively.
   #
   # synthesize and repos have never run in a PR job on ANY platform (race.yml
   # covers them, but only after a merge to dev and without blocking); store ran
