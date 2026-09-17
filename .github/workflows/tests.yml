@@ -83,6 +83,14 @@ on:
 
 jobs:
   build-test:
+    # PINNED, because `include:` puts EVERY matrix value in the generated
+    # display name: without this line the legs report as
+    # "build-test (ubuntu-latest, 300s)" and the two that dev's branch
+    # protection already requires would never report again under the names it
+    # lists — every PR would wait forever on a check that cannot arrive. This
+    # reproduces the old names byte for byte, so only the windows-2025 leg is
+    # new. Any matrix value added here must keep that true.
+    name: build-test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
