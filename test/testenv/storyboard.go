@@ -136,6 +136,14 @@ func (sb *Storyboard) Repo(name string) *RepoHandle {
 	// body (deferred unlock above) and sync.Mutex is not reentrant, so copying
 	// connect()'s Lock/Unlock trio here would deadlock rather than protect
 	// anything.
+	//
+	// HALF the fix Restart() needs, and the asymmetry is provable rather than
+	// incidental: this function puts the RepoHandle into sb.repos only at the
+	// very end, after Create succeeds, so on a failing path teardown's
+	// repoList cannot contain it and auto-verify has nothing to run against.
+	// Restart() operates on a handle that is ALREADY registered, which is
+	// exactly why it needs an expectDirty mark as well. Do not "tidy" these
+	// into the same shape.
 	sb.managers[name] = m
 	ri, err := m.Create(context.Background(), repos.CreateSpec{Name: name, Mode: "preset"}, nil)
 	if err != nil {
