@@ -498,6 +498,23 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 		r.expectDirty = true
 		return fmt.Errorf("connect(%s): re-boot failed: %w", remote.Name(), err)
 	}
+	// Registered with the Storyboard the moment it boots, NOT after the Create
+	// below succeeds. A booted manager holds an open control.db, and teardown
+	// closes exactly what this map holds — so registering on success only meant
+	// that a FAILED clone leaked the handle for the rest of the process. The
+	// map entry replaces this repo's previous manager, which the Close above
+	// already shut down, so teardown still closes each manager once.
+	//
+	// It looked harmless for as long as CI was unix-only: RemoveAll unlinks an
+	// open file happily there, so t.TempDir's cleanup swallowed it. Windows
+	// cannot delete an open file, so the leak surfaced as
+	// TestContract_Clone_Stall_AbortsWithinDeadline FAILING ON ITS CLEANUP
+	// while its own contract assertion passed — the test was green and the
+	// harness was red.
+	r.sb.mu.Lock()
+	r.sb.managers[r.name] = m
+	r.sb.mu.Unlock()
+
 	ri, err := m.Create(context.Background(), repos.CreateSpec{
 		Name: r.name,
 		Mode: "clone",
@@ -516,9 +533,6 @@ func (r *RepoHandle) connect(remote *RemoteHandle) error {
 	r.manager = m
 	r.ri = ri
 	r.branches = map[string]*BranchHandle{}
-	r.sb.mu.Lock()
-	r.sb.managers[r.name] = m
-	r.sb.mu.Unlock()
 	return nil
 }
 
