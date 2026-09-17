@@ -114,6 +114,48 @@ positively recognise: a malformed payload, an unreadable file, a Bash command
 that only READS the directory. A guard on those four tools sees nearly every
 action an agent takes, so a false deny would block real work and get it removed.
 
+`claude init` writes two kinds of file. The skills under `.claude/skills/` are
+**owned**: overwritten on every run, so deleting one and re-running restores it.
+`.mcp.json`, `.claude/settings.json` and `CLAUDE.md` are **merge-required** — they
+are mostly yours — and init now MERGES into them in place rather than dropping a
+`.knomit` companion beside them:
+
+| File | What a re-`init` does |
+|------|-----------------------|
+| `.claude/settings.json` | Appends any hook this build ships that the file does not already register. Your own hook entries, matchers, `permissions` and every other key are untouched, and so is your formatting — the merge is a byte-level insertion, not a re-encode. |
+| `CLAUDE.md` | Replaces the region between `<!-- knomit:integration vN -->` and `<!-- /knomit:integration -->` with the current block; everything outside it is left alone. A file with no knomit block gains one, appended. |
+| `.mcp.json` | Refreshes the `args` of the entry under the derived server key, or adds the whole entry beside your other servers. Your `command` and any other key on that entry are left alone — `args` name the scope init derived, but `command` is deployment-specific and yours. |
+
+Re-running init is therefore a no-op when nothing has changed: the files come
+back byte-identical and nothing is printed for them. When something IS merged,
+init says what — `Updated: .claude/settings.json (+PreToolUse memory-guard)`.
+
+Two consequences worth knowing. **A knomit hook you deliberately deleted comes
+back on the next `init`**, because init cannot tell "removed on purpose" from
+"scaffolded before this hook existed" — and the second is what this merge exists
+to fix. To keep a hook off, disable it on your side rather than deleting the
+entry. **A hook is matched by its `claude hook <event>` suffix, not by its
+command string**, so registering `/path/to/knomit-bridge claude hook post-edit`
+under a matcher of your own counts as having that hook and init will not add a
+second copy.
+
+**Keep knomit hooks in the project's `.claude/settings.json` only.** Claude Code
+merges hook entries across user, project and local settings and runs identical
+handlers once, but a knomit hook you also registered in `~/.claude/settings.json`
+or `.claude/settings.local.json` under a *different* spelling — an absolute path
+against init's bare `knomit-bridge` — is not the same handler, so both copies run
+and the hook fires twice per tool call. `init` reads only the project file and
+cannot see the others.
+
+A companion file is still written for the two cases a merge cannot decide: a
+`.mcp.json` carrying a knomit-bridge entry under some OTHER key (adding ours
+beside it would give the project two knomit scopes, which disables the hooks —
+see below), and a `CLAUDE.md` whose knomit block has no closing marker, which
+init can recognise but not bound. An unparseable `.claude/settings.json` is
+neither merged nor companioned: init fails with the file named and writes
+nothing at all, because a companion beside a settings.json is exactly the silent
+failure this merge removes.
+
 `agy` is accepted as an alias for `antigravity`. Global flags such as `--log`
 are accepted before any subcommand.
 
@@ -131,7 +173,8 @@ are accepted before any subcommand.
 ```
 
 Unlike the Claude Code scaffold, **nothing here is merge-required**: every file
-belongs to the integration and is overwritten on re-run. Delete the directory
+belongs to the integration and is overwritten on re-run, with no merging and no
+companion files. Delete the directory
 and re-run `init` to restore it. Use `agy plugin disable knomit` to switch it
 off — that setting lives in your own `config.json` and survives a re-`init`.
 
@@ -208,7 +251,9 @@ does not have to match the directory.
 > The MCP tools themselves keep working for both; only the hooks stand down, and
 > `session-start` says so. Duplicate entries resolving to the *same* scope — what
 > the obvious merge of a `.mcp.json.knomit` companion produces — are not
-> ambiguous and keep the hooks on.
+> ambiguous and keep the hooks on. This is why `claude init` refuses to merge a
+> `.mcp.json` that already names a knomit scope under a different key: it would
+> be creating the ambiguous configuration rather than resolving one.
 
 ## Debugging
 
