@@ -139,6 +139,14 @@ command string**, so registering `/path/to/knomit-bridge claude hook post-edit`
 under a matcher of your own counts as having that hook and init will not add a
 second copy.
 
+**Keep knomit hooks in the project's `.claude/settings.json` only.** Claude Code
+merges hook entries across user, project and local settings and runs identical
+handlers once, but a knomit hook you also registered in `~/.claude/settings.json`
+or `.claude/settings.local.json` under a *different* spelling — an absolute path
+against init's bare `knomit-bridge` — is not the same handler, so both copies run
+and the hook fires twice per tool call. `init` reads only the project file and
+cannot see the others.
+
 A companion file is still written for the two cases a merge cannot decide: a
 `.mcp.json` carrying a knomit-bridge entry under some OTHER key (adding ours
 beside it would give the project two knomit scopes, which disables the hooks —

@@ -278,7 +278,7 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 				"(fix the file by hand, or move it aside and re-run init)", dstRel, err)
 		}
 		if len(added) == 0 {
-			return "", nil
+			return "", clearCompanion(dst)
 		}
 		if err := writeFile(dst, merged, 0o644); err != nil {
 			return "", err
@@ -290,7 +290,7 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 			return mergeNotPossible, nil
 		}
 		if note == "" {
-			return "", nil
+			return "", clearCompanion(dst)
 		}
 		if err := writeFile(dst, merged, 0o644); err != nil {
 			return "", err
@@ -305,7 +305,7 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 			return mergeNotPossible, nil
 		}
 		if note == "" {
-			return "", nil
+			return "", clearCompanion(dst)
 		}
 		if err := writeFile(dst, merged, 0o644); err != nil {
 			return "", err
@@ -315,13 +315,22 @@ func mergeInto(dst, dstRel string, rendered []byte, serverKey string) (string, e
 	return mergeNotPossible, nil
 }
 
-// clearCompanion removes the companion beside a file THIS run merged in place.
+// clearCompanion removes the companion beside a file this run found MERGEABLE
+// and left IN SYNC — whether the merge changed bytes or not.
 //
-// A companion from the old flow has no expiry: it sits there carrying a template
-// from whenever it was dropped, and an operator who merges it later silently
-// reverts the merge init just did. Once the real file is up to date the companion
-// is strictly a trap. It is removed ONLY after a successful in-place merge —
-// never when the run declined to the companion, where it is the whole point.
+// A companion exists for exactly one purpose: to carry init's rendering into a
+// file init could not edit. Once the live file agrees with the template that
+// purpose is spent, and what remains is a copy with no expiry, carrying whatever
+// the template said when it was dropped. An operator who merges it later
+// silently reverts the merge — or, for a file since merged BY HAND, applies a
+// version older than the one already there. The hand-merged case is why the
+// no-change path clears it too: that file will never have bytes to change again,
+// so a changed-bytes-only rule would strand its companion permanently. That is
+// not hypothetical; it is how this checkout ended up carrying one.
+//
+// Kept only when the run DECLINED — an unmergeable shape, a .mcp.json naming a
+// knomit scope under another key, a CLAUDE.md block with no closing marker —
+// where handing the operator the rendering is the whole point.
 func clearCompanion(dst string) error {
 	if err := os.Remove(companionPath(dst)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err

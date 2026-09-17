@@ -1416,6 +1416,64 @@ func TestRunInit_StaleCompanion_RemovedOnSuccessfulMerge(t *testing.T) {
 		assertNoCompanion(t, dir, "CLAUDE.md")
 	})
 
+	// The case that actually occurs. The companion that started all this was
+	// left beside a settings.json the operator then merged BY HAND: the live file
+	// is in sync, so no future run has bytes to change, and under a
+	// changed-bytes-only rule the stale companion would sit there forever.
+	t.Run("a no-op merge clears the companion too", func(t *testing.T) {
+		dir := t.TempDir()
+		chdir(t, dir)
+		block, err := templatesFS.ReadFile(claudeMdBlockTemplate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Every file already in sync — nothing for init to change.
+		settingsPath := filepath.Join(dir, ".claude", "settings.json")
+		writeFixture(t, settingsPath, strings.Replace(handFormattedSettings,
+			`    "PreCompact": [`,
+			`    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "knomit-bridge claude hook memory-guard"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [`, 1))
+		writeFixture(t, filepath.Join(dir, "CLAUDE.md"), "# Project\n\n"+string(block))
+		writeFixture(t, filepath.Join(dir, ".mcp.json"), fmt.Sprintf(`{
+  "mcpServers": {
+    %q: { "command": "knomit-bridge", "args": ["--repo", "x"] }
+  }
+}
+`, knomitapi.ServerKey("x", "")))
+		// Companions left over from the old flow, beside files hand-merged since.
+		writeFixture(t, settingsPath+".knomit", "{ \"stale\": true }\n")
+		writeFixture(t, filepath.Join(dir, "CLAUDE.md.knomit-block"), "stale block\n")
+		writeFixture(t, filepath.Join(dir, ".mcp.json.knomit"), "{ \"stale\": true }\n")
+
+		before := map[string][]byte{}
+		for _, f := range []string{".mcp.json", ".claude/settings.json", "CLAUDE.md"} {
+			before[f] = mustRead(t, filepath.Join(dir, f))
+		}
+
+		if err := runInit([]string{"--repo", "x"}); err != nil {
+			t.Fatalf("runInit: %v", err)
+		}
+
+		assertNoCompanion(t, dir, ".mcp.json", "CLAUDE.md")
+		assertNoCompanion(t, filepath.Join(dir, ".claude"), "settings.json")
+		// Clearing a companion must not be an excuse to touch the file itself.
+		for f, want := range before {
+			if got := mustRead(t, filepath.Join(dir, f)); !bytes.Equal(got, want) {
+				t.Errorf("%s changed on a no-op run:\n%s", f, got)
+			}
+		}
+	})
+
 	t.Run("a declined merge keeps its companion", func(t *testing.T) {
 		dir := t.TempDir()
 		chdir(t, dir)
