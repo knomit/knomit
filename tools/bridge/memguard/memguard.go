@@ -10,6 +10,7 @@ package memguard
 
 import (
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -49,6 +50,14 @@ const Reason = "This path is Claude Code's PRIVATE auto-memory directory: it bel
 // empty string means the caller could not read it, and the path is judged on
 // its own.
 func CheckFileWrite(filePath, frontmatter string) Decision {
+	// Both hosts hand us a HOST path, which on Windows is spelled
+	// C:\Users\me\.claude\projects\...\memory\x.md. memoryPathRe and the
+	// path.Base exemption below are both forward-slash-only, so without this
+	// the guard FAILS OPEN on Windows: the regex never matches, every private
+	// memory write is allowed, and nothing anywhere reports that the guard has
+	// stopped working. Normalising here rather than at the call sites means a
+	// future caller cannot reopen the hole by forgetting to.
+	filePath = filepath.ToSlash(filePath)
 	if filePath == "" || !memoryPathRe.MatchString(filePath) {
 		return Decision{}
 	}
