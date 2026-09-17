@@ -91,7 +91,10 @@ func runInit(args []string) error {
 	// not. settings.json is the only one that can fail here — the other two fall
 	// back to a companion when they cannot be merged, and a companion is not a
 	// failure.
-	if err := preflightSettings(filepath.Join(cwd, ".claude", "settings.json")); err != nil {
+	// filepath.Join because this one IS opened; settingsRel because it must be
+	// the same file mergeInto splices, and spelling it out again here is the
+	// fourth restatement the constant exists to remove.
+	if err := preflightSettings(filepath.Join(cwd, settingsRel)); err != nil {
 		return err
 	}
 
@@ -345,10 +348,6 @@ func isOwnedByIntegration(dstRel string) bool {
 	return strings.HasPrefix(dstRel, ".claude/skills/")
 }
 
-// mapDestination translates a template path under templates/ to its
-// destination inside the project. Returns "" if the file should not be copied.
-// Skills are NOT handled here; they come from the shared skills package and are
-// routed by the second walk in runInit.
 // settingsRel is the LOGICAL NAME of the settings file: repo-relative,
 // forward-slash, identical on every platform. dstRel values are keys, not
 // filesystem paths — mergeInto switches on this one, isSkill prefix-matches
@@ -370,6 +369,10 @@ func isOwnedByIntegration(dstRel string) bool {
 // on Windows at all.
 const settingsRel = ".claude/settings.json"
 
+// mapDestination translates a template path under templates/ to its
+// destination inside the project. Returns "" if the file should not be copied.
+// Skills are NOT handled here; they come from the shared skills package and are
+// routed by the second walk in runInit.
 func mapDestination(srcPath string) string {
 	switch strings.TrimPrefix(srcPath, "templates/") {
 	case "mcp.json.tmpl", "mcp.json.lens.tmpl":
