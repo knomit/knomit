@@ -69,16 +69,15 @@ name: Tests
 #     bootstrap is ~2m40s cold (cargo itself 2m28s of it, so the ~5 minutes
 #     this used to estimate is pessimistic here) and 51s-2m45s warm across
 #     three runs, leaving a 15.6 MiB cache entry. Note what warm does NOT mean:
-#     `make setup` still
-#     costs ~50s of that minute, because it compiles and runs fetchlibs before
-#     fetchlibs decides both libs are already there. The cache saves the
-#     download and the cargo build, not the step. See .github/actions/
+#     `make setup` still costs ~50s of that, because it compiles and runs
+#     fetchlibs before it decides both libs are already there. The cache saves
+#     the download and the cargo build, not the step. See .github/actions/
 #     native-toolchain, which also explains why the key has no restore-keys.
 #   - `-timeout 40m`, on the WINDOWS slow-tests legs only — ubuntu and macos
 #     take 10m from the same matrix. On a Windows laptop internal/synthesize
 #     (1776s) and internal/store (816s) exceed go test's 10-minute per-package
 #     default outright and internal/repos (441-639s) straddles it; on THIS
-#     runner only synthesize still does, at 1533s. Nothing hangs; it is
+#     runner only synthesize still does, at 1166-1533s. Nothing hangs; it is
 #     filesystem cost, and the Makefile scopes the same 40m to GOOS=windows for
 #     the same reason. The slow-tests job below carries both machines' numbers.
 #     Every OTHER step keeps the 10-minute default deliberately: a ceiling is
@@ -90,15 +89,19 @@ name: Tests
 #     is a thing to watch rather than a thing to fix: if that step ever times
 #     out, internal/web is where to look first.
 #
-# WHAT THIS COSTS SOMEONE WAITING ON A PR, measured on the first all-green run
-# (35250857183, 2026-09-17):
-#   build-test (windows-2025)             9m15s  17:08:08 -> 17:17:23
-#   slow-tests (windows-2025 synthesize) 21m32s  the longest check on the board
-# So the build answer arrives in under ten minutes and a FULL green waits on
-# synthesize. The unix legs are unchanged by any of this. If that second number
-# is ever the thing standing between this repo and a merge, the fix is in
-# internal/synthesize's fixtures — the tests each build a 400-fact corpus one
-# WriteFact at a time — and not in this file.
+# WHAT THIS COSTS SOMEONE WAITING ON A PR, from the green runs on 2026-09-17:
+#   build-test (windows-2025)            9m15s-12m12s  (runs 35250857183,
+#                                                       35253289005)
+#   slow-tests (windows-2025 synthesize) 19m26s-25m33s (runs 35247045603,
+#                                        35250857183, 35253289005) — the
+#                                        longest check on the board
+# RANGES, because the same leg on the same image varied by 30% between two
+# consecutive green runs. Any single figure here reads as typical and would be
+# wrong by minutes. So the build answer arrives in roughly ten minutes and a
+# FULL green waits on synthesize. The unix legs are unchanged by any of this.
+# If that second number is ever the thing standing between this repo and a
+# merge, the fix is in internal/synthesize's fixtures — the tests each build a
+# 400-fact corpus one WriteFact at a time — and not in this file.
 #
 # THE RUNNER CHECKS OUT WITH core.autocrlf=true, which is Git for Windows'
 # installed default and the opposite of the machine knomit's Windows support
@@ -253,10 +256,11 @@ jobs:
   # MEASURED, and the two machines disagree enough that both belong here. Left
   # column is a Windows 10 laptop (what a developer running `make test` feels,
   # and what GOTEST_TIMEOUT was derived from); right is this windows-2025
-  # runner. SINGLE SAMPLES taken 2026-09-17 — re-measure rather than trust them:
+  # runner, over three green runs on 2026-09-17 — re-measure rather than trust
+  # them, and note that synthesize alone varied by four minutes across them:
   #
   #                     laptop      runner
-  #   internal/synthesize  1776s      1292-1533s (two runs)
+  #   internal/synthesize  1776s      1166-1533s (three runs)
   #   internal/store        816s       212s
   #   internal/repos    441-639s       307s
   #
@@ -269,14 +273,14 @@ jobs:
   # THE MATRIX IS DELIBERATELY ASYMMETRIC, and the runner's numbers are why.
   # unix runs all three in one leg (7m25s for the lot) because splitting three
   # fast packages across three runners buys nothing. Windows runs ONE PACKAGE
-  # PER LEG because packages are serial within a leg: together they are 30-34
+  # PER LEG because packages are serial within a leg: together they are 28-34
   # minutes of critical path, split they are as long as the longest, which is
-  # synthesize at 21m32s-25m33s. The split also puts a per-package wall time on
+  # synthesize at 19m26s-25m33s. The split also puts a per-package wall time on
   # the checks list, which is the number anyone tuning this wants next. If
   # synthesize ever gets cheap, collapse this to one Windows leg and match the
   # unix shape.
   #
-  # 40m against a measured 21-26 minutes is a margin of 14 to 18 minutes, and
+  # 40m against a measured 19-26 minutes is a margin of 14 to 20 minutes, and
   # it is a HANG guard, not a target. If synthesize creeps toward it, the answer
   # is to find out why the package got slower, not to raise the ceiling
   # reflexively.
