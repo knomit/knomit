@@ -117,6 +117,41 @@ func TestRunInit_SettingsJsonReferencesGoHooks(t *testing.T) {
 	}
 }
 
+// TestRunInit_UnmergeableMcpJson_DropsCompanion: the same non-object shapes on
+// the .mcp.json side. Here the honest outcome is the companion rather than an
+// error — a .mcp.json that is not an object of servers already means the MCP
+// server is not loading, so nothing is being silently broken by declining.
+func TestRunInit_UnmergeableMcpJson_DropsCompanion(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"root is a scalar", "null"},
+		{"root is an array", "[1,2,3]"},
+		{"mcpServers is an array", `{"mcpServers": [1,2]}`},
+		{"mcpServers is a scalar", `{"mcpServers": "nope"}`},
+		{"the entry is a scalar", `{"mcpServers": {"knomit-repo-x": 7}}`},
+		{"syntax error", `{"mcpServers": {`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			chdir(t, dir)
+			mcpPath := filepath.Join(dir, ".mcp.json")
+			writeFixture(t, mcpPath, tc.content)
+
+			if err := runInit([]string{"--repo", "x"}); err != nil {
+				t.Fatalf("runInit: %v", err)
+			}
+
+			if got := mustRead(t, mcpPath); !bytes.Equal(got, []byte(tc.content)) {
+				t.Errorf(".mcp.json was modified:\n%s", got)
+			}
+			if _, err := os.Stat(filepath.Join(dir, ".mcp.json.knomit")); err != nil {
+				t.Errorf("expected a companion: %v", err)
+			}
+		})
+	}
+}
+
 // TestRunInit_ExistingMcpJson_DifferentKnomitKey_DropsCompanion is the one
 // .mcp.json case init still refuses to merge. A knomit-bridge entry under some
 // OTHER key is a scope init cannot reconcile: adding the derived key beside it
@@ -1019,48 +1054,76 @@ func TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated(t *testi
 	assertReInitChangesNothing(t, dir, "--repo", "x")
 }
 
-// TestRunInit_MalformedSettings_LeftByteIdentical: a settings.json init cannot
-// parse is one it must not touch at all. Rewriting it would destroy the hand
-// edit the user is halfway through, and a companion would be exactly the silent
+// TestRunInit_UnmergeableSettings_LeftByteIdentical: a settings.json init cannot
+// merge is one it must not touch at all. Rewriting it would destroy the hand edit
+// the user is halfway through, and a companion would be exactly the silent
 // failure this change removes — so the only safe outcome is a loud error naming
-// the file.
-func TestRunInit_MalformedSettings_LeftByteIdentical(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
+// the file, raised BEFORE anything else is written.
+//
+// The non-object cases are not hypothetical pedantry: a top-level scalar indexes
+// to a node with span offsets of -1, and every splice helper takes those offsets
+// literally. Without a guard `null` panics in lineIndent with "slice bounds out
+// of range [:-1]" — and it panics during the template walk, after CLAUDE.md and
+// .mcp.json have already been rewritten, which is the half-landed scaffold the
+// preflight exists to prevent.
+func TestRunInit_UnmergeableSettings_LeftByteIdentical(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"syntax error", "{\n  \"hooks\": {\n    \"SessionStart\": [ , ]\n  }\n"},
+		{"null", "null"},
+		{"array", "[1,2,3]"},
+		{"number", "42"},
+		{"bool", "true"},
+		{"string", `"a string"`},
+		// One level down, same family. `hooks` as a scalar took the
+		// "no hooks object" arm and appended a SECOND "hooks" key to the root —
+		// parseable JSON, silently broken config, reported as success. `hooks` as
+		// an array spliced a `"Event": [...]` member into an array. An event whose
+		// value is an object had an array element spliced into it.
+		{"hooks is an array", `{"hooks": [1,2]}`},
+		{"hooks is a scalar", `{"hooks": "nope"}`},
+		{"an event is an object", `{"hooks": {"SessionStart": {"a": 1}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			chdir(t, dir)
 
-	broken := "{\n  \"hooks\": {\n    \"SessionStart\": [ , ]\n  }\n"
-	settingsPath := filepath.Join(dir, ".claude", "settings.json")
-	writeFixture(t, settingsPath, broken)
+			settingsPath := filepath.Join(dir, ".claude", "settings.json")
+			writeFixture(t, settingsPath, tc.content)
 
-	// The other two merge targets, to pin that nothing lands before the check.
-	md := "# Project\n"
-	mcp := `{"mcpServers":{}}`
-	writeFixture(t, filepath.Join(dir, "CLAUDE.md"), md)
-	writeFixture(t, filepath.Join(dir, ".mcp.json"), mcp)
+			// The other two merge targets, to pin that nothing lands before the check.
+			md := "# Project\n"
+			mcp := `{"mcpServers":{}}`
+			writeFixture(t, filepath.Join(dir, "CLAUDE.md"), md)
+			writeFixture(t, filepath.Join(dir, ".mcp.json"), mcp)
 
-	err := runInit([]string{"--repo", "x"})
-	if err == nil {
-		t.Fatal("runInit accepted an unparseable settings.json")
-	}
-	if !strings.Contains(err.Error(), ".claude/settings.json") {
-		t.Errorf("error %q does not name the offending file", err)
-	}
-	if got := mustRead(t, settingsPath); !bytes.Equal(got, []byte(broken)) {
-		t.Errorf("unparseable settings.json was modified:\n%s", got)
-	}
-	assertNoCompanion(t, filepath.Join(dir, ".claude"), "settings.json")
+			err := runInit([]string{"--repo", "x"})
+			if err == nil {
+				t.Fatalf("runInit accepted a settings.json it cannot merge (%s)", tc.name)
+			}
+			if !strings.Contains(err.Error(), ".claude/settings.json") {
+				t.Errorf("error %q does not name the offending file", err)
+			}
+			if got := mustRead(t, settingsPath); !bytes.Equal(got, []byte(tc.content)) {
+				t.Errorf("settings.json was modified:\n%s", got)
+			}
+			assertNoCompanion(t, filepath.Join(dir, ".claude"), "settings.json")
 
-	// init validates before it writes — the same contract the name checks hold
-	// (TestRunInit_InvalidNames_ErrorBeforeWriting). A scaffold that half-lands
-	// leaves the operator reconciling two files against an error about a third.
-	if got := mustRead(t, filepath.Join(dir, "CLAUDE.md")); !bytes.Equal(got, []byte(md)) {
-		t.Errorf("CLAUDE.md was merged before the settings check failed:\n%s", got)
-	}
-	if got := mustRead(t, filepath.Join(dir, ".mcp.json")); !bytes.Equal(got, []byte(mcp)) {
-		t.Errorf(".mcp.json was merged before the settings check failed:\n%s", got)
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, ".claude", "skills")); statErr == nil {
-		t.Error("skills were written before the settings check failed")
+			// init validates before it writes — the same contract the name checks
+			// hold (TestRunInit_InvalidNames_ErrorBeforeWriting). A scaffold that
+			// half-lands leaves the operator reconciling two files against an
+			// error about a third.
+			if got := mustRead(t, filepath.Join(dir, "CLAUDE.md")); !bytes.Equal(got, []byte(md)) {
+				t.Errorf("CLAUDE.md was merged before the settings check failed:\n%s", got)
+			}
+			if got := mustRead(t, filepath.Join(dir, ".mcp.json")); !bytes.Equal(got, []byte(mcp)) {
+				t.Errorf(".mcp.json was merged before the settings check failed:\n%s", got)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, ".claude", "skills")); statErr == nil {
+				t.Error("skills were written before the settings check failed")
+			}
+		})
 	}
 }
 

@@ -87,9 +87,18 @@ func (s jsonSpan) container() bool { return s.open >= 0 }
 type jsonNode struct {
 	span     jsonSpan
 	isObject bool
+	isArray  bool
 	order    []string
 	children map[string]*jsonNode
 }
+
+// object and array are the only safe way to ask what a node is before splicing
+// into it. A container() check is NOT enough: an object and an array both have
+// delimiters, so splicing an object member into an array — or an array element
+// into an object — passes it and emits JSON that does not parse. A scalar is
+// worse still, since its offsets are -1 and every helper takes them literally.
+func (n *jsonNode) object() bool { return n != nil && n.isObject }
+func (n *jsonNode) array() bool  { return n != nil && n.isArray }
 
 // child returns the named member, or nil. It is nil-safe so callers can walk a
 // path through a document that may not have it.
@@ -163,7 +172,7 @@ func indexValue(dec *json.Decoder) (*jsonNode, error) {
 		if _, err := dec.Token(); err != nil { // the closing bracket
 			return nil, err
 		}
-		return &jsonNode{span: jsonSpan{open: start, close: int(dec.InputOffset()) - 1, empty: count == 0}}, nil
+		return &jsonNode{isArray: true, span: jsonSpan{open: start, close: int(dec.InputOffset()) - 1, empty: count == 0}}, nil
 	}
 	return nil, fmt.Errorf("unexpected delimiter %v", delim)
 }
@@ -335,6 +344,33 @@ func hookIdentitiesIn(entry json.RawMessage) []string {
 	return ids
 }
 
+// checkSettingsShape reports whether a settings.json has the shape the merge
+// splices into: an object at the root, a `hooks` object if the key is present,
+// and an array for each hook event. Anything else is a file init must decline
+// rather than splice — see the failure modes on jsonNode.object.
+func checkSettingsShape(data []byte) error {
+	root, err := indexJSON(data)
+	if err != nil {
+		return err
+	}
+	if !root.object() {
+		return fmt.Errorf("its top-level value is not a JSON object")
+	}
+	hooks := root.child("hooks")
+	if hooks == nil {
+		return nil
+	}
+	if !hooks.object() {
+		return fmt.Errorf("its \"hooks\" value is not a JSON object")
+	}
+	for _, event := range hooks.order {
+		if !hooks.child(event).array() {
+			return fmt.Errorf("its hook event %q is not a JSON array", event)
+		}
+	}
+	return nil
+}
+
 // mergeSettingsJSON adds the template's hook registrations to an existing
 // settings.json and returns the merged bytes plus a description of each hook
 // added. It returns the existing bytes unchanged, and no additions, when every
@@ -344,6 +380,13 @@ func hookIdentitiesIn(entry json.RawMessage) []string {
 // matcher: a user who put post-edit behind their own matcher HAS post-edit, and
 // giving them ours as well would run it twice on every edit.
 func mergeSettingsJSON(existing, template []byte) ([]byte, []string, error) {
+	// A non-object root has span offsets of -1 and would be spliced at them.
+	// preflightSettings rejects that before init writes anything; this is the
+	// same guard at the point of use, so the function is safe on its own terms.
+	if err := checkSettingsShape(existing); err != nil {
+		return nil, nil, err
+	}
+
 	tmplRoot, err := indexJSON(template)
 	if err != nil {
 		// The template is //go:embed-bundled and author-controlled, so this is a
@@ -363,6 +406,13 @@ func mergeSettingsJSON(existing, template []byte) ([]byte, []string, error) {
 			return nil, nil, fmt.Errorf("settings template event %q: %w", event, err)
 		}
 		for _, entry := range entries {
+			// Insertion is per template ENTRY, and allPresent requires EVERY hook
+			// in the entry to be registered before skipping it. An entry carrying
+			// two hooks, one of them already present, would therefore re-insert
+			// the present one alongside the missing one. Today's template gives
+			// each entry exactly one hook, so the case is unreachable; splitting
+			// an entry per hook would change the matcher the user sees, so it
+			// wants a decision rather than a quiet fix.
 			ids := hookIdentitiesIn(entry)
 			// Re-index every round: each splice moves the offsets after it, and
 			// recomputing them is far cheaper to get right than adjusting them.
@@ -396,7 +446,7 @@ func mergeSettingsJSON(existing, template []byte) ([]byte, []string, error) {
 func registeredHooks(data []byte, root *jsonNode, event string) (map[string]bool, error) {
 	present := map[string]bool{}
 	node := root.child("hooks").child(event)
-	if node == nil || !node.span.container() {
+	if !node.array() {
 		return present, nil
 	}
 	entries, err := elements(data, node.span)
@@ -427,14 +477,23 @@ func allPresent(ids []string, present map[string]bool) bool {
 // array — and the `hooks` object itself — if the file has neither.
 func insertHookEntry(data []byte, root *jsonNode, event string, entry json.RawMessage) ([]byte, error) {
 	hooks := root.child("hooks")
-	if hooks == nil || !hooks.span.container() {
+	if hooks == nil {
 		value := append(append([]byte(`{`+jsonStr(event)+`:[`), entry...), `]}`...)
 		return insertMember(data, root.span, "hooks", value)
 	}
+	if !hooks.object() {
+		// Never reached via runInit (preflightSettings rejects it), but a caller
+		// that skipped the preflight must not get a second "hooks" key spliced in
+		// beside this one.
+		return nil, fmt.Errorf("\"hooks\" is not a JSON object")
+	}
 	eventNode := hooks.child(event)
-	if eventNode == nil || !eventNode.span.container() {
+	if eventNode == nil {
 		value := append(append([]byte(`[`), entry...), ']')
 		return insertMember(data, hooks.span, event, value)
+	}
+	if !eventNode.array() {
+		return nil, fmt.Errorf("hook event %q is not a JSON array", event)
 	}
 	return insertElement(data, eventNode.span, entry)
 }
@@ -466,13 +525,13 @@ func mergeMcpJSON(existing, template []byte, key string) (merged []byte, note st
 		return nil, "", false, fmt.Errorf("mcp template does not parse: %w", err)
 	}
 	tmplEntry := tmplRoot.child("mcpServers").child(key)
-	if tmplEntry == nil || !tmplEntry.span.container() {
+	if !tmplEntry.object() {
 		return nil, "", false, fmt.Errorf("mcp template has no %q entry", key)
 	}
 	value := template[tmplEntry.span.open : tmplEntry.span.close+1]
 
 	root, err := indexJSON(existing)
-	if err != nil || !root.isObject {
+	if err != nil || !root.object() {
 		// Unparseable, or not an object: nothing to splice into. The companion is
 		// the honest outcome, and unlike settings.json it is not a silent failure
 		// — a broken .mcp.json means the MCP server is already not loading.
@@ -480,18 +539,24 @@ func mergeMcpJSON(existing, template []byte, key string) (merged []byte, note st
 	}
 
 	servers := root.child("mcpServers")
-	if servers == nil || !servers.span.container() {
+	if servers == nil {
 		merged, err := insertMember(existing, root.span, "mcpServers",
 			append(append([]byte(`{`+jsonStr(key)+`:`), value...), '}'))
 		return merged, "(+" + key + ")", false, err
 	}
+	if !servers.object() {
+		// "mcpServers" holding an array or a scalar is not a config init can add
+		// a server to — splicing a member in would emit JSON that does not parse,
+		// or a duplicate key beside it.
+		return nil, "", true, nil
+	}
 
 	if entry := servers.child(key); entry != nil {
-		if !entry.span.container() {
+		if !entry.object() {
 			return nil, "", true, nil
 		}
 		tmplArgs := tmplEntry.child("args")
-		if tmplArgs == nil || !tmplArgs.span.container() {
+		if !tmplArgs.array() {
 			return nil, "", false, fmt.Errorf("mcp template entry %q has no args array", key)
 		}
 		args := template[tmplArgs.span.open : tmplArgs.span.close+1]
@@ -501,7 +566,7 @@ func mergeMcpJSON(existing, template []byte, key string) (merged []byte, note st
 			merged, err := insertMember(existing, entry.span, "args", args)
 			return merged, "(" + key + " args)", false, err
 		}
-		if !existingArgs.span.container() {
+		if !existingArgs.array() {
 			return nil, "", true, nil
 		}
 		if sameJSON(existing[existingArgs.span.open:existingArgs.span.close+1], args) {
@@ -529,7 +594,7 @@ func otherKnomitServer(data []byte, servers *jsonNode) bool {
 	for _, key := range servers.order {
 		entry := servers.child(key)
 		command := ""
-		if entry.span.container() {
+		if entry.object() {
 			var parsed struct {
 				Command string `json:"command"`
 			}

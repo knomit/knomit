@@ -210,19 +210,29 @@ func runInit(args []string) error {
 	return nil
 }
 
-// preflightSettings reports an unparseable .claude/settings.json before init
-// writes anything. The file is left exactly as it was: init never clobbers a
-// file it cannot read, and never writes a companion for this one, because a
-// companion beside a settings.json is precisely the silent failure that let the
-// memory-guard hook go unregistered while the CLAUDE.md marker said v4.
+// preflightSettings reports a .claude/settings.json init cannot merge before it
+// writes anything. The file is left exactly as it was: init never clobbers a file
+// it cannot read, and never writes a companion for this one, because a companion
+// beside a settings.json is precisely the silent failure that let the memory-guard
+// hook go unregistered while the CLAUDE.md marker said v4.
+//
+// Two conditions, and the second is the one that bites. Unparseable is obvious.
+// PARSEABLE BUT NOT AN OBJECT is not: `null`, `42`, `true`, a bare string and an
+// array all index to a node whose span offsets are -1 (scalars have no
+// delimiters), jsonNode.child returns nil for every lookup on them, and the
+// splice helpers take those -1 offsets literally — `null` panics in lineIndent
+// with "slice bounds out of range [:-1]". Catching it HERE rather than in
+// mergeSettingsJSON is the point: the merge runs during the template walk, by
+// which time CLAUDE.md and .mcp.json have already been rewritten, and a panic
+// there leaves exactly the half-landed scaffold this preflight exists to prevent.
 func preflightSettings(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil // absent is fine; init will create it
 	}
-	if _, err := indexJSON(data); err != nil {
-		return fmt.Errorf("cannot merge %s: %w "+
-			"(fix the file by hand, or move it aside and re-run init)",
+	if err := checkSettingsShape(data); err != nil {
+		return fmt.Errorf("cannot merge %s: %w"+
+			" (fix the file by hand, or move it aside and re-run init)",
 			filepath.Join(".claude", "settings.json"), err)
 	}
 	return nil
