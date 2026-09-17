@@ -316,7 +316,42 @@ func (m *Manager) CreateJobs() []CreateStatus {
 		out = append(out, j.Status())
 	}
 	m.createJobsMu.Unlock()
-	sort.Slice(out, func(i, k int) bool { return out[i].StartedAt.After(out[k].StartedAt) })
+	// Newest first, then id ascending — a TOTAL order, not merely a primary
+	// key, for the same reason ListArchived sorts the way it does (see
+	// lifecycle.go): with sort.Slice, which is NOT stable, two jobs whose
+	// StartedAt compares equal may come back in either order, and two calls
+	// over one unchanged manager are free to disagree.
+	//
+	// "Compares equal" is not hypothetical here, it is the ordinary case on
+	// Windows. StartedAt is time.Now(), whose resolution is nanoseconds on
+	// Linux and macOS but the system clock's tick on Windows — coarse enough
+	// that two creates started back to back routinely land on the SAME instant,
+	// and the faster the machine the likelier. That is how this surfaced: the
+	// repo's first Windows CI job failed internal/web's create-list test, which
+	// had been passing everywhere else on nothing but clock resolution.
+	//
+	// NAME THE CALL THAT MAKES THAT TRUE: StartCreate stores
+	// `time.Now().UTC()`, and .UTC() STRIPS THE MONOTONIC READING. Equal and
+	// After compare the monotonic clock when both operands carry one — QPC on
+	// Windows, sub-microsecond — so a StartedAt that kept its monotonic reading
+	// would practically never tie and none of the above would hold. It is the
+	// .UTC() that puts the coarse wall clock into this comparison. The fix
+	// below does not depend on that (the tiebreak is unconditional), but this
+	// explanation does: drop the .UTC() in StartCreate and the ties stop,
+	// leaving a paragraph that describes something no longer true.
+	//
+	// The tiebreak is for DETERMINISM, not for recency. Ids are ksuids, which
+	// order by a one-SECOND timestamp before their random payload, so two ids
+	// minted in the same tick carry no usable ordering between them — there is
+	// no direction that would make this "newest first" below a second.
+	// Ascending matches the tiebreak in lifecycle.go so the two sorts read the
+	// same way.
+	sort.SliceStable(out, func(i, k int) bool {
+		if !out[i].StartedAt.Equal(out[k].StartedAt) {
+			return out[i].StartedAt.After(out[k].StartedAt)
+		}
+		return out[i].ID < out[k].ID
+	})
 	return out
 }
 

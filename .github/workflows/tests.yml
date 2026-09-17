@@ -13,63 +13,186 @@ name: Tests
 # Duplicating the jobs into release-stable.yml would gate on a copy that
 # silently stops matching CI the first time either side is edited.
 #
+# ONE CONSEQUENCE OF THAT, NOW THAT WINDOWS IS HERE: `publish` waits on the
+# Windows legs too, including the ~30-minute internal/synthesize one, and a
+# Windows-only failure blocks a macOS release. That is the same gate working as
+# designed — a tree that fails on a platform we support is not a tree to cut a
+# signed release from — but it is a new cost, and decoupling it would mean an
+# input on this workflow rather than a second copy of these jobs.
+#
 # Cross-platform build + test. The pluggable embedder links daulet/tokenizers'
 # libtokenizers.a statically (CGo) and loads ONNX Runtime at
 # runtime, so this matrix proves the native-lib wiring resolves on each OS.
 #
-# Windows is NOT in the matrix, but no longer for lack of a way to build it.
-# knomit builds, tests and runs on windows/amd64; the gap is CI cost, not
-# support.
+# WINDOWS IS IN THE MATRIX, and it is here for a specific failure. The memguard
+# fail-open bug (shipped in #211, fixed in #212) matched forward-slash paths
+# only, so on Windows the guard allowed every write it exists to deny — and
+# nothing anywhere went red, because no CI job ran this suite on Windows. It
+# was found by a person running the tests by hand. A platform nobody's CI runs
+# is a platform whose bugs are silent, and that is the whole argument for the
+# cost of the legs below.
 #
-# What used to be the blocker is closed. daulet/tokenizers still ships no
-# Windows artifact (darwin/linux only through v1.27.0), so `go run
-# ./tools/fetchlibs` now BUILDS libtokenizers.a from source there — it clones
-# the pinned tag and runs cargo (see tools/fetchlibs/spec.go, tokenizersSpec).
-# ONNX Runtime publishes Windows assets and is fetched as on the other two.
+# WINDOWS-2025, NOT WINDOWS-LATEST. This leg exists to catch OUR regressions,
+# not the image's migrations. `windows-latest` is a moving alias — GitHub
+# migrates it gradually over a month or two — and on Windows the toolchain is
+# the IMAGE's, not ours: the compiler, the Rust target and the C runtime all
+# come from it. A silent migration would therefore change what this leg tests
+# on a day nobody touched this file. The facts the Windows leg relies on, all
+# from image 20260907.x (Server 2025), are:
+#   - mingw-w64 gcc 15.2.0 on the machine PATH at C:\mingw64\bin, plus a
+#     make.exe in the same directory — so the CGo toolchain and `make setup`
+#     need no install step. NOTE it is a UCRT build while the Rust GNU target
+#     is MSVCRT-flavoured; see the action for what to do if that ever bites.
+#   - Rust 1.98.1 with x86_64-pc-windows-gnu already added at image build time.
+#     The explicit `rustup target add` in the action is a drift guard, not a
+#     requirement the image fails to meet.
+#   - VC++ 2015-2022 runtime 14.51.36247, well above the >= 14.40 that
+#     onnxruntime >= 1.21 needs, so ortinit_windows.go's annotation path is
+#     unreachable here. The action prints the installed version every run,
+#     because an image rollback is the one way this paragraph goes quietly
+#     wrong.
+# When the pin is eventually retired, re-read those four facts before moving to
+# the next one.
 #
-# Adding a windows-latest job therefore needs four things on the runner:
-# msys2/setup-msys2 for the mingw CGo toolchain; a Rust toolchain WITH
-# `rustup target add x86_64-pc-windows-gnu` (rustup's default Windows host is
-# MSVC, whose .lib mingw's ld cannot link); a cache keyed on tokenizersVersion,
-# without which every run pays a ~5-minute cargo build before a single test
-# executes; and `-timeout 40m`, because on Windows internal/synthesize (1776s)
-# and internal/store (816s) exceed go test's 10-minute per-package default
-# outright and internal/repos (441-639s across runs) straddles it — nothing
-# hangs, all three are filesystem cost. Those are the reasons this is still a
-# follow-up. store is the newest entry: #208-#211 grew it past the default.
+# WHAT THE RUNNER DOES NOT GIVE US, and this file supplies:
+#   - sqlite3.h. sqlite-vec-go-bindings/cgo includes it and ships no copy;
+#     ubuntu has it from libsqlite3-dev and macos from the SDK, and C:\mingw64
+#     has it from nowhere. The action installs MSYS2's
+#     mingw-w64-x86_64-sqlite3. This was an UNDECLARED requirement until this
+#     job's first run died on it: #212's Windows build worked because that one
+#     machine happened to carry the package. The Makefile's setup target and
+#     README now say so too.
+#   - A cache for dist/windows-amd64/lib. daulet/tokenizers publishes no
+#     Windows artifact (darwin/linux only through v1.27.0), so fetchlibs BUILDS
+#     libtokenizers.a from source there — clone the pinned tag, run cargo —
+#     before a single test executes. MEASURED on this image: the whole Windows
+#     bootstrap is ~2m40s cold (cargo itself 2m28s of it, so the ~5 minutes
+#     this used to estimate is pessimistic here) and 51s-2m45s warm across
+#     three runs, leaving a 15.6 MiB cache entry. Note what warm does NOT mean:
+#     `make setup` still costs ~50s of that, because it compiles and runs
+#     fetchlibs before it decides both libs are already there. The cache saves
+#     the download and the cargo build, not the step. See .github/actions/
+#     native-toolchain, which also explains why the key has no restore-keys.
+#   - `-timeout 40m`, on the WINDOWS slow-tests legs only — ubuntu and macos
+#     take 10m from the same matrix. On a Windows laptop internal/synthesize
+#     (1776s) and internal/store (816s) exceed go test's 10-minute per-package
+#     default outright and internal/repos (441-639s) straddles it; on THIS
+#     runner only synthesize still does, at 1166-1641s across four runs.
+#     Nothing hangs; it is filesystem cost, and the Makefile scopes the same
+#     40m to GOOS=windows for the same reason. The slow-tests job below
+#     carries both machines' numbers.
+#     Every OTHER step keeps the 10-minute default deliberately: a ceiling is
+#     also a hang guard, and a package that suddenly needs 40 minutes is news.
+#     The package nearest that line in build-test is internal/web — 455s alone
+#     on the laptop, and it shares its step with storytests and the desktop
+#     helpers, which go test runs CONCURRENTLY, so its real margin is thinner
+#     than 455s suggests. On the runner the whole step is 3m13s-3m55s, so this
+#     is a thing to watch rather than a thing to fix: if that step ever times
+#     out, internal/web is where to look first.
 #
-# Two Windows-only requirements a runner has to satisfy, both learned the hard
-# way and neither obvious from a green build elsewhere:
-#   - onnxruntime >= 1.21 needs the VC++ 2015-2022 runtime >= 14.40. Below it
-#     the DLL fails to load with nothing but "a dynamic link library (DLL)
-#     initialization routine failed" (internal/embeddings/ortinit_windows.go
-#     turns that into an actionable message).
-#   - Several tests skip when the process cannot create a symlink. An ELEVATED
-#     runner can, so it would silently cover code paths ordinary users never
-#     reach; prefer a non-elevated one.
+# WHAT THIS COSTS SOMEONE WAITING ON A PR. JOB durations — what the checks list
+# shows, including checkout and the bootstrap — from the green legs of
+# 2026-09-17:
+#   build-test (windows-2025)            9m15s-12m12s  (runs 35250857183,
+#                                                       35253289005)
+#   slow-tests (windows-2025 synthesize) 20-30 minutes — the longest check on
+#                                        the board, and see the warning below
+# Do not confuse these with the PACKAGE times in the slow-tests job below:
+# those are the `go test` step alone, which is what -timeout bounds, and they
+# run 2-4 minutes shorter than the job that contains them. "Green legs" rather
+# than green runs, because 35247045603 was red overall — on a step this block
+# is not about.
+#
+# SYNTHESIZE IS VARIABLE, NOT BOUNDED, and that distinction is written here
+# because getting it wrong cost two corrections. Four job samples on 2026-09-17
+# — 20m21s, 22m43s, 26m39s, 29m17s (runs 35253289005, 35250857183,
+# 35247045603, 35257034491) — a 44% spread on the same image and the same
+# commit range. A stated range invites planning against its upper bound, and
+# this one was exceeded by the next sample TWICE. Re-measure; do not plan
+# against these.
+#
+# So the build answer arrives in roughly ten minutes and a FULL green waits on
+# synthesize, for somewhere between twenty and thirty minutes. The unix legs
+# are unchanged by any of this. If that second number is ever the thing
+# standing between this repo and a merge, the fix is in internal/synthesize's
+# fixtures — the tests each build a 400-fact corpus one WriteFact at a time —
+# and not in this file.
+#
+# THE RUNNER CHECKS OUT WITH core.autocrlf=true, which is Git for Windows'
+# installed default and the opposite of the machine knomit's Windows support
+# was developed on. The first run of this job that got as far as running tests
+# failed internal/fact's TestCorpus_RoundTripIdentical on nothing but line
+# endings. The fix is the repo's new .gitattributes (`* text=auto eol=lf`), not
+# a git config in this workflow: setting autocrlf=false here would have made
+# the job green while leaving the failure in place for every Windows developer
+# who took the installer's default — which is to say, hiding in the one job
+# built to find this exactly the thing it found.
+#
+# THE RUNNER IS ELEVATED, and that is not a choice we have. GitHub-hosted
+# Windows runners run as administrator with UAC disabled, so the process holds
+# SeCreateSymbolicLinkPrivilege and the canSymlink() probes in
+# internal/repos/origin_test.go and tools/desktop/bundled_test.go come back
+# TRUE. Two consequences, both of them what IS rather than what we would like:
+# the symlink-escape security test really does execute here (one of the reasons
+# ./internal/repos/ is worth running on this leg at all), and the UNPRIVILEGED
+# branch — the skip path an ordinary Windows user actually takes — is exercised
+# by no CI leg on any platform and remains local-verification-only.
 on:
   workflow_call:
 
 jobs:
   build-test:
+    # PINNED, because `include:` puts EVERY matrix value in the generated
+    # display name: without this line the legs report as "build-test
+    # (ubuntu-latest, 300s)", i.e. adding a Windows leg would have renamed the
+    # ubuntu and macos checks. dev requires no status checks by name today, so
+    # nothing would have hung; the ground is that a matrix value is an
+    # implementation detail and a check name is an interface, and a Windows PR
+    # has no business changing the other two platforms' identity. The
+    # forward-looking half matters more: if required checks are ever configured
+    # on dev, a matrix value added here would silently rename them out from
+    # under that configuration. This reproduces the old names byte for byte —
+    # any matrix value added here must keep that true.
+    name: build-test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          # contract-timeout is the ceiling on the origin-sync cells at the end
+          # of this job, and it is per-platform for the same reason slow-tests
+          # is: those cells drive clone/sync/push over a git server, which is
+          # filesystem cost, and Windows runs that class 5-10x slower here
+          # (internal/store 816s against seconds elsewhere). A unix-tuned 300s
+          # applied to Windows would be a red build reporting a ceiling, not a
+          # fault. unix KEEPS 300s deliberately — it is a hang guard there and
+          # the cells take a fraction of it.
+          - os: ubuntu-latest
+            contract-timeout: 300s
+          - os: macos-latest
+            contract-timeout: 300s
+          - os: windows-2025
+            contract-timeout: 1200s
     runs-on: ${{ matrix.os }}
+    # A wedged runner should not burn the 6-hour default. Same reasoning as the
+    # ceiling on slow-tests, at a third of it: every step in this job is
+    # measured in minutes, the slowest of them on the slowest platform being
+    # the 93s of bridge+platform+cmd.
+    timeout-minutes: 60
+    # bash on every platform, stated once. GitHub's default shell on Windows is
+    # pwsh, so without this line every `run:` below would need its own `shell:`
+    # or would be read by a shell that does not know what $LIBDIR or `export`
+    # are. One shell across the matrix is also what keeps the steps themselves
+    # platform-neutral.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26'
-
-      # Native libs live under the per-platform dir, dist/<goos>-<goarch>/lib.
-      - name: Resolve native lib dir
-        run: echo "LIBDIR=$(pwd)/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
-
-      - name: Fetch native libs (ONNX Runtime, libtokenizers.a)
-        run: make setup
+      # setup-go, the Windows CGo toolchain checks, the native-lib cache and
+      # `make setup`. Shared with slow-tests; see the action for the Windows
+      # specifics.
+      - uses: ./.github/actions/native-toolchain
 
       # Build every package that has buildable (non-test) Go files in the
       # default (no -tags) configuration. `{{if .GoFiles}}` drops test-only
@@ -92,15 +215,42 @@ jobs:
       - name: Test-harness isolation guard
         run: go test ./test/archtest/
 
-      # Store needs the runtime native libs; internal/web links them transitively
-      # (it constructs a store in tests) and the desktop helper packages
+      # These link the runtime native libs: internal/web transitively (it
+      # constructs a store in tests), and the desktop helper packages
       # (lockfile/netutil/paths/autostart/singleinstance) are plain Go but run
       # here too so the build-test job actually exercises them. The desktop
       # `//go:build desktop` packages are covered by the `desktop` job below.
-      - name: Store, web + desktop-helper tests (runtime native libs)
+      #
+      # internal/store itself moved to the slow-tests job — 816s on Windows,
+      # past go test's per-package default. It is the only package that moved.
+      #
+      # The two exports are INERT ON WINDOWS and are left unguarded on purpose:
+      # there the loader searches PATH, not LD_LIBRARY_PATH/DYLD_LIBRARY_PATH.
+      # Nothing in the default suite loads onnxruntime.dll on any platform — a
+      # test binary never sits next to dist/<platform>/lib, so libCandidates()
+      # misses everywhere and the real-inference tests are cache-gated to
+      # embed-smoke — so this is a no-op, not a gap. If a test here ever does
+      # need ORT on Windows, the spelling is ORT_LIB_PATH="$LIBDIR/onnxruntime.dll"
+      # (no lib prefix on the filename; see tools/fetchlibs/spec.go ortSpec).
+      - name: Story, web + desktop-helper tests (runtime native libs)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test ./internal/store/... ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
+          CGO_ENABLED=1 go test ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
+
+      # NEW WITH THE WINDOWS LEG, AND HALF THE POINT OF IT. These packages were
+      # COMPILED by the build step above but their tests ran on no platform in
+      # any PR job — tools/bridge on no platform at all. That is where the
+      # memguard fail-open bug lived: a guard that silently permitted every
+      # write it exists to deny, in a package CI never executed. cmd, too,
+      # covers the server's entry points, and internal/platform holds fileuri,
+      # the path-spelling helper #212 introduced.
+      #
+      # They are here rather than in slow-tests because they are cheap even on
+      # the slow platform: 93s for all of them on Windows, of which cmd is 57s.
+      - name: Bridge, platform + cmd tests
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test ./tools/bridge/... ./internal/platform/... ./cmd/
 
       # Origin-sync fault matrix: build-tagged contract cells drive the real
       # product clone/sync/push path over an in-process fault-injecting git
@@ -111,7 +261,100 @@ jobs:
       - name: Origin-sync contract cells (fault matrix)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test -tags contract ./test/storytests/ -count=1 -timeout 300s
+          CGO_ENABLED=1 go test -tags contract ./test/storytests/ -count=1 -timeout ${{ matrix.contract-timeout }}
+
+  # The three packages that are slow ON WINDOWS ONLY, in their own job so the
+  # build-test leg stays a fast answer to "did this break the build". The cost
+  # is filesystem, not computation, and nothing hangs (see the Makefile's
+  # GOTEST_TIMEOUT comment, which scopes the same 40m to GOOS=windows).
+  #
+  # MEASURED, and the two machines disagree enough that both belong here. Left
+  # column is a Windows 10 laptop (what a developer running `make test` feels,
+  # and what GOTEST_TIMEOUT was derived from); right is this windows-2025
+  # runner, over three green runs on 2026-09-17 — re-measure rather than trust
+  # them, and note that synthesize alone varied by four minutes across them:
+  #
+  #                     laptop      runner
+  #   internal/synthesize  1776s      1166-1641s (four runs, 41% spread)
+  #   internal/store        816s       212s
+  #   internal/repos    441-639s       307s
+  #
+  # Note which way that cuts. store and repos are ~2.5x faster on the runner,
+  # synthesize barely faster at all — it writes a 400-fact corpus one WriteFact
+  # at a time, so it is bound by per-operation latency that a faster machine
+  # does not help. synthesize is therefore the number this job's shape depends
+  # on, and the one to re-measure first if any of this stops making sense.
+  #
+  # THE MATRIX IS DELIBERATELY ASYMMETRIC, and the runner's numbers are why.
+  # unix runs all three in one leg (7m25s for the lot) because splitting three
+  # fast packages across three runners buys nothing. Windows runs ONE PACKAGE
+  # PER LEG because packages are serial within a leg: together they are around
+  # half an hour of critical path, split they are as long as the longest, which
+  # is synthesize. The split also puts a per-package wall time on the checks
+  # list, which is the number anyone tuning this wants next. If synthesize ever
+  # gets cheap, collapse this to one Windows leg and match the unix shape.
+  #
+  # THE HONEST MARGIN UNDER -timeout 40m IS 13 MINUTES, not the twenty the
+  # midpoint of that range suggests: take it from the WORST sample seen (1641s),
+  # because that is the one that would have tripped a tighter ceiling. Four
+  # samples spread 41%, and the two ranges written here before this were each
+  # exceeded by the next sample, so treat the figure as variable rather than
+  # bounded and re-measure before relying on it.
+  #
+  # If that margin keeps shrinking, RAISE THE WINDOWS CEILING. This package is
+  # bound by per-operation latency and nothing in it hangs — the 40m exists to
+  # catch a hang, and a hang does not arrive by creeping five minutes at a time.
+  # The thing that would deserve investigation is the shape changing: a sudden
+  # step, or the unix legs slowing with it.
+  #
+  # synthesize and repos have never run in a PR job on ANY platform (race.yml
+  # covers them, but only after a merge to dev and without blocking); store ran
+  # on ubuntu and macos as part of build-test and moved here.
+  slow-tests:
+    name: slow-tests (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: ubuntu-latest
+            os: ubuntu-latest
+            packages: ./internal/synthesize/ ./internal/store/... ./internal/repos/
+            timeout: 10m
+          - leg: macos-latest
+            os: macos-latest
+            packages: ./internal/synthesize/ ./internal/store/... ./internal/repos/
+            timeout: 10m
+          - leg: windows-2025 synthesize
+            os: windows-2025
+            packages: ./internal/synthesize/
+            timeout: 40m
+          - leg: windows-2025 store
+            os: windows-2025
+            packages: ./internal/store/...
+            timeout: 40m
+          - leg: windows-2025 repos
+            os: windows-2025
+            packages: ./internal/repos/
+            timeout: 40m
+    runs-on: ${{ matrix.os }}
+    # Deliberately looser than the -timeout below, for the reason race.yml
+    # spells out: the go test timeout prints a goroutine dump naming the stuck
+    # test, while a job timeout kills the runner and leaves a truncated log.
+    # This ceiling exists to stop a wedged runner burning the 6-hour default,
+    # never to be the thing that reports a hang.
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/native-toolchain
+      # The exports are inert on Windows and harmless there; see the note on
+      # the same line in build-test.
+      - name: go test ${{ matrix.packages }}
+        run: |
+          export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
+          CGO_ENABLED=1 go test -timeout ${{ matrix.timeout }} ${{ matrix.packages }}
 
   # Build + test the Wails v3 desktop app. It lives behind `//go:build desktop`
   # and links the OS-native webview toolkit (Cocoa/WebKit on macOS), so the

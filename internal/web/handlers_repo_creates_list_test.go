@@ -12,10 +12,18 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// GET /repo-creates lists every job the manager holds, newest first, in the
-// SAME body shape the single-job resource serves — so a client parses one
-// shape, and a row in the list is a row it can already draw.
-func TestGetRepoCreates_ListsNewestFirst(t *testing.T) {
+// GET /repo-creates lists every job the manager holds, IN THE MANAGER'S OWN
+// ORDER, in the SAME body shape the single-job resource serves — so a client
+// parses one shape, and a row in the list is a row it can already draw.
+//
+// The newest-first CONTRACT is not asserted here and deliberately so: it
+// belongs to repos.CreateJobs, where it can be tested against constructed
+// timestamps instead of whatever two back-to-back creates happen to get from
+// the platform's clock. See TestCreateJobs_NewestFirstAndReapsExpired and
+// TestCreateJobs_SameInstantIsATotalOrder in internal/repos. What this covers
+// is the HTTP layer's own failure modes — reordering, dropping or duplicating
+// what the manager returned.
+func TestGetRepoCreates_ServesTheManagersOrder(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	r := s.NewAPIRouter()
 
@@ -34,9 +42,38 @@ func TestGetRepoCreates_ListsNewestFirst(t *testing.T) {
 	if len(creates) != 2 {
 		t.Fatalf("want 2 creates, got %d: %s", len(creates), rec.Body.String())
 	}
-	if creates[0]["create_id"] != second || creates[1]["create_id"] != first {
-		t.Fatalf("want newest first (%s then %s), got %v / %v",
-			second, first, creates[0]["create_id"], creates[1]["create_id"])
+	// The handler's job is to SERVE the manager's order, not to invent one, so
+	// that is what this asserts. It deliberately does NOT hardcode "second then
+	// first": both creates are started back to back, and StartedAt is
+	// time.Now(), whose resolution is the system clock's tick on Windows — so
+	// the two routinely share an instant there and the manager's tiebreak, not
+	// their start order, decides which comes first. Hardcoding the expectation
+	// made this test pass on Linux and macOS and fail on Windows for a reason
+	// that was never about the handler. The ordering CONTRACT is owned by
+	// repos.CreateJobs and tested there against constructed timestamps
+	// (TestCreateJobs_NewestFirstAndReapsExpired,
+	// TestCreateJobs_SameInstantIsATotalOrder).
+	//
+	// CreateJobs also REAPS expired jobs, so this oracle mutates the manager.
+	// Harmless where it stands — both jobs are running, and the handler has
+	// already called it — but do not move it earlier without re-reading
+	// reapCreateJobsLocked.
+	want := make([]string, 0, 2)
+	for _, st := range s.Manager.CreateJobs() {
+		want = append(want, st.ID)
+	}
+	if len(want) != len(creates) {
+		t.Fatalf("manager reports %d creates, handler served %d: %v vs %s",
+			len(want), len(creates), want, rec.Body.String())
+	}
+	if creates[0]["create_id"] != want[0] || creates[1]["create_id"] != want[1] {
+		t.Fatalf("handler reordered the manager's list: want %v, got %v / %v",
+			want, creates[0]["create_id"], creates[1]["create_id"])
+	}
+	// Both creates are present, whatever order the tie resolved to.
+	got := map[any]bool{creates[0]["create_id"]: true, creates[1]["create_id"]: true}
+	if !got[first] || !got[second] {
+		t.Fatalf("want both %s and %s listed, got %v", first, second, got)
 	}
 	// The row carries everything the poll resource does, including the new
 	// fields a client draws a bar from.

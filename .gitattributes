@@ -1,0 +1,29 @@
+# LF in the object database AND in the working tree, on every platform.
+#
+# Git for Windows' installer defaults to core.autocrlf=true ("checkout
+# Windows-style, commit Unix-style"), which rewrites text files to CRLF on
+# checkout. That is invisible until something compares file bytes — and this
+# repo does: internal/fact's TestCorpus_RoundTripIdentical reads a testdata
+# corpus file and asserts it round-trips byte for byte through the fact
+# writer, which emits LF. With autocrlf=true every line differs and the test
+# fails on a clean clone of an unmodified tree.
+#
+# It went unnoticed because the machine knomit's Windows support was developed
+# on has autocrlf=false, the setting a Windows developer has to choose
+# deliberately. So `git clone && go test ./internal/fact/` failed on a DEFAULT
+# Windows install, and the first Windows CI job in the repo's history is what
+# said so.
+#
+# eol=lf rather than plain `text=auto`: text=auto alone still defers to
+# core.autocrlf for the working-tree ending, which is the setting causing the
+# problem. Pinning it here takes the decision away from each developer's
+# config, which is the point — a byte-comparison test should not depend on how
+# someone answered an installer question.
+#
+# Nothing is renormalised by this: no blob in this repo is stored with CRLF or
+# mixed endings (`git ls-files --eol`), so the object database is untouched and
+# only Windows CHECKOUTS change. There are no .bat, .cmd or .ps1 files, which
+# would need `eol=crlf` exceptions; add them here if any are ever introduced.
+# text=auto keeps binary files (images, fonts, the vendored libs) untouched by
+# detection rather than by an exception list.
+* text=auto eol=lf

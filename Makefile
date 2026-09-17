@@ -246,6 +246,21 @@ define dist_runtime_libs
 endef
 endif
 
+# PREREQUISITES THIS TARGET DOES NOT FETCH, because they belong to the C
+# toolchain rather than to us:
+#
+#   sqlite3.h — github.com/asg017/sqlite-vec-go-bindings/cgo includes it and
+#   ships no copy, so the CGo build needs the SQLite development HEADER on
+#   every platform: libsqlite3-dev on Debian/Ubuntu, the SDK on macOS, and on
+#   Windows the MSYS2 package mingw-w64-x86_64-sqlite3 (C:\msys64\mingw64\
+#   include). The header only — mattn/go-sqlite3's vendored amalgamation is
+#   what actually implements it, so nothing links against a system libsqlite3.
+#   This went unwritten until a Windows CI runner without the MSYS2 package
+#   failed on it; "it builds here" had been carrying an undeclared dependency.
+#
+#   Windows also needs Rust/cargo and `rustup target add
+#   x86_64-pc-windows-gnu`, because fetchlibs builds libtokenizers.a from
+#   source there. fetchlibs says so itself when either is missing.
 setup:
 	go run ./tools/fetchlibs $(LIBDIR)
 	@echo "Setup complete. Run 'make run' to start the server."
@@ -279,14 +294,24 @@ desktop-ui:
 	cd tools/desktop/ui && npm ci && npm run build
 
 # GOTEST_TIMEOUT overrides go test's 10-minute per-package default, which three
-# packages exceed on WINDOWS only:
+# packages exceed on WINDOWS only. Two machines, because they disagree and the
+# difference is the interesting part — left is the Windows 10 laptop this was
+# derived from, right is CI's windows-2025 runner (single samples, 2026-09-17,
+# see .github/workflows/tests.yml):
 #
-#   internal/synthesize  1776s   (macOS/Linux: minutes)
-#   internal/store        816s   — grew past the default with #208-#211; it used
-#                         to sit under it, so an older reading of this list is
-#                         not wrong so much as out of date
-#   internal/repos        441-639s — straddles the 600s default, so whether it
-#                         fails depends on what else the machine is doing
+#   internal/synthesize  1776s / 1533s  (macOS/Linux: minutes)
+#   internal/store        816s /  212s  — grew past the default with #208-#211;
+#                         it used to sit under it, so an older reading of this
+#                         list is not wrong so much as out of date
+#   internal/repos    441-639s /  307s  — straddles the 600s default on the
+#                         laptop, so whether it fails depends on what else the
+#                         machine is doing
+#
+# Only synthesize still outruns the default on the faster machine, and that is
+# the point of keeping the ceiling here: `make test` runs where a DEVELOPER is,
+# not on CI's hardware. store and repos are ~2.5x faster on the runner because
+# they are filesystem-bound; synthesize is barely faster because it is bound by
+# per-operation latency that better hardware does not fix.
 #
 # Nothing hangs. synthesize's structural identity tests each build a 400-fact
 # corpus one WriteFact at a time: measured at ~56s per test on Windows against
