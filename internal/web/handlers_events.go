@@ -67,6 +67,13 @@ func handleHALEvents() http.HandlerFunc {
 					sent = stream.Write("event: task\ndata: %s\n\n", data)
 				case repos.StatusEvent:
 					sent = stream.Write("event: status\ndata: {\"head\":\"%s\"}\n\n", ev.Head)
+				case repos.IndexEvent:
+					// The index state changes with no commit behind it, so the
+					// `status` event above never fires for it. A client watching
+					// one repo gets it here; the fleet-wide chip uses
+					// GET /api/v1/repos/events instead.
+					data, _ := json.Marshal(ev)
+					sent = stream.Write("event: index\ndata: %s\n\n", data)
 				case repos.SyncEvent:
 					data, _ := json.Marshal(ev)
 					sent = stream.Write("event: %s\ndata: %s\n\n", ev.Status, data)

@@ -182,6 +182,13 @@ func (h *TaskHub) Subscribe(ctx context.Context) (goob.Events, []TaskEvent) {
 	return events, snapshot
 }
 
+// broadcastIndex publishes an index-state change to this repo's SSE
+// subscribers. Called only from RepoInstance.publishIndex, which is the
+// chokepoint every index-state change goes through.
+func (h *TaskHub) broadcastIndex(ev IndexEvent) {
+	h.ob.Publish(ev)
+}
+
 // broadcastStatus publishes a HEAD change to all SSE subscribers.
 func (h *TaskHub) broadcastStatus(head string) {
 	h.ob.Publish(StatusEvent{Head: head})

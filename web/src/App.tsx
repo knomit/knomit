@@ -2,8 +2,8 @@ import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, 
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
-import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember } from './api';
-import type { RepoInfo, Lens, Status } from './api';
+import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoIndex } from './api';
+import type { RepoInfo, Lens, Status, RepoIndexEvent } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useFactEdges } from './useFactEdges';
@@ -506,19 +506,12 @@ export default function App() {
     return () => { cancelled = true; };
   }, [state.repo]);
 
-  // While a repo indexes in the background, poll status so the indexing banner
-  // updates and clears when it reaches "ready" (no commits fire during a
-  // background rebuild, so SSE 'status' events wouldn't refresh it).
-  useEffect(() => {
-    if (state.indexState !== 'indexing' || !state.branch) return;
-    let cancelled = false;
-    const id = setInterval(() => {
-      api.status(state.repo, state.branch)
-        .then(s => { if (!cancelled) dispatch(statusAction(s)); })
-        .catch(() => {});
-    }, 2000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [state.indexState, state.repo, state.branch]);
+  // The indexing banner and every repo's index chip follow the index-event
+  // stream — see the subscription below. There used to be a 2 s status poll
+  // here, because no commit fires during a background heal so the `status`
+  // event never refreshed it; the event now carries exactly that transition,
+  // and a poll that exists only to notice a missing event is the thing this
+  // replaces. The reconnect path (refetch on stream open) is the fallback.
 
   // Re-read the branch head on a slow cycle. See HEAD_POLL_MS: this is the
   // fallback for a `status` event that never arrives, whether because the
@@ -607,6 +600,49 @@ export default function App() {
       // the banner as it is rather than clearing a real failure on the strength
       // of an unrelated hiccup.
     });
+  }, [dispatch]);
+
+  // Server-wide index events. ONE stream for every repo, held for the app's
+  // whole life — unlike the branch stream below, which is scoped to the active
+  // repo and so can only ever speak for one chip.
+  //
+  // The generation guard is the same pattern as RepoManager's live count, and
+  // it is load-bearing for the same reason: the refetch below is async, and an
+  // event can land while it is in flight. Without the guard a refetch dispatched
+  // before an event could resolve after it and reinstate the state the event
+  // had just corrected — the stale "indexing" chip, restored by the very
+  // mechanism meant to clear it.
+  const repoListGen = useRef(0);
+  useEffect(() => {
+    const stop = subscribeRepoIndex((ev: RepoIndexEvent | { type: 'reconnect' }) => {
+      if ('type' in ev) {
+        // Reconnected: a terminal event is broadcast once and never replayed,
+        // so anything that healed while we were disconnected is unrepresented.
+        // Re-read the list once.
+        const gen = ++repoListGen.current;
+        api.repos()
+          .then(list => { if (gen === repoListGen.current) setRepos(list); })
+          .catch(() => {});
+        return;
+      }
+      // An event is NEWER than any refetch in flight, so it retires them.
+      repoListGen.current += 1;
+      setRepos(prev => prev.map(r => r.name === ev.repo
+        ? { ...r, index_state: ev.state, index_done: ev.done, index_total: ev.total }
+        : r));
+      // The banner speaks for the ACTIVE repo only, and this stream carries
+      // every repo — so it is filtered here rather than at the source.
+      //
+      // Read through stateRef, NOT from a closure over state.repo: this stream
+      // is server-wide and must stay open for the app's whole life. Depending
+      // on the active repo would tear it down and reopen it on every repo
+      // switch — needless reconnects, and each one triggers the refetch above.
+      if (ev.repo === stateRef.current.repo) {
+        dispatch({ type: 'SET_INDEX', indexState: ev.state, indexDone: ev.done, indexTotal: ev.total });
+      }
+    });
+    return stop;
+    // Mounted once. dispatch is stable; the active repo is read from the ref.
   }, [dispatch]);
 
   // SSE for task and status events — reconnects when repo/branch changes.
