@@ -80,13 +80,22 @@ type indexPublisher struct {
 // publishIndex is THE chokepoint for index events. Every index-state change
 // goes through it, and nothing else may publish an IndexEvent.
 //
-// WHY A CHOKEPOINT rather than a call at each site: there are six places that
-// change index state (the openOne heal's two exits, the rebuild path's three,
-// and markIndexing at rebuild start), and a seventh will be added by someone
-// who does not know this event exists. Publishing inside the mark* methods
-// makes the event a property of the STATE CHANGE rather than of remembering to
-// announce it — the same reason every branch-ref mutation goes through
+// WHY A CHOKEPOINT rather than a call at each site: index state changes in five
+// places today, ALL of them inside Manager.openOne — the synchronous
+// (DisableBackgroundSync) branch's two exits, and the background heal's
+// markIndexing plus its two exits — and a sixth will be added by someone who
+// does not know this event exists. Publishing inside the mark* methods makes
+// the event a property of the STATE CHANGE rather than of remembering to
+// announce it, the same reason every branch-ref mutation goes through
 // notifyCommit rather than each mutation emitting its own.
+//
+// NOT covered, and deliberately so: the manual rebuild endpoint
+// (handleStartRebuild) calls IndexManager().Rebuild directly and never touches
+// index state at all, so IndexStatus reads "ready" throughout one. That is a
+// separate defect — the state lying, not the event missing — and bracketing the
+// rebuild with these same marks is its own change. Do not read this chokepoint
+// as covering a rebuild; it covers every place the state actually changes, and
+// a rebuild is not one of them yet.
 //
 // It also inherits the stuck-indexing incident's guarantee for free. That
 // incident was a heal exit path that reached neither markIndexReady nor

@@ -626,7 +626,11 @@ describe('App SSE — teardown and resubscribe', () => {
   it('unmounting closes the stream', async () => {
     const { unmount } = render(<App />);
     await waitFor(() => expect(streamsMatching('/branches/')).toHaveLength(1));
-    const es = FakeEventSource.instances[0];
+    // The BRANCH stream specifically. instances[0] happens to be closed by
+    // unmount too — the app closes every stream — so taking it would leave the
+    // test passing whichever stream it grabbed, which is not what its name
+    // claims.
+    const es = latestStream('/branches/') as FakeEventSource;
     unmount();
     expect(es.closeCount).toBe(1);
   });
