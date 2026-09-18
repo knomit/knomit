@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"knomit/internal/platform/logging"
+	"knomit/internal/repos"
 )
 
 // gunzip reads a gzip stream whole, failing the test on any error. Every
@@ -248,52 +251,54 @@ func TestCompressor_MatchesYAMLWithCharsetParameter(t *testing.T) {
 }
 
 // Server.Handler() is what the deployed binary runs; NewAPIRouter() alone is
-// not. The SSE guarantee has to hold through the full chain.
+// not. The SSE guarantee has to hold through the full chain, for EVERY stream
+// the server exposes — a new endpoint is exactly where this regresses, so
+// this enumerates rather than sampling.
 func TestSSE_IsNeverCompressedThroughServerHandler(t *testing.T) {
-	s, _ := branchEventsServer(t)
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	defer hubCancel()
+	tapCtx, tapCancel := context.WithCancel(context.Background())
+	defer tapCancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		srv.URL+APIBase+"/repos/alpha/branches/agent:test/events", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
+	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
+	hub := repos.NewTaskHub(context.Background())
+	m.Set("beta", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{Name: "beta", Hub: hub}))
 
-	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
-		t.Fatalf("content-type: got %q, want text/event-stream", got)
+	s := &Server{
+		Manager:        m,
+		ClientSessions: newClientSessionsStore(t).WithHub(hubCtx),
+		Logs:           logging.NewTap(tapCtx, 10),
 	}
-	if got := resp.Header.Get("Content-Encoding"); got != "" {
-		t.Fatalf("SSE was compressed through Server.Handler(): Content-Encoding %q, want empty", got)
-	}
+	h := s.Handler()
 
-	lines := make(chan string, 8)
-	go func() {
-		defer close(lines)
-		sc := bufio.NewScanner(resp.Body)
-		for sc.Scan() {
-			lines <- sc.Text()
-		}
-	}()
-	for {
-		select {
-		case line, ok := <-lines:
-			if !ok {
-				t.Fatal("stream ended before the initial status frame")
+	for _, path := range []string{
+		APIBase + "/repo-events",
+		APIBase + "/sessions/events",
+		APIBase + "/logs/events",
+		APIBase + "/repos/beta/branches/agent:test/events",
+	} {
+		t.Run(path, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			rec := newStreamRecorder()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+				// Ask for gzip explicitly: this is the request shape that
+				// would trip an allowlist carrying text/* or event-stream.
+				req.Header.Set("Accept-Encoding", "gzip")
+				h.ServeHTTP(rec, req)
+			}()
+			rec.waitFor(t, "the first frame", func(b string) bool { return strings.Contains(b, "event: ") })
+
+			if got := rec.Header().Get("Content-Type"); got != "text/event-stream" {
+				t.Errorf("Content-Type = %q, want text/event-stream", got)
 			}
-			if line == "event: status" {
-				return
+			if got := rec.Header().Get("Content-Encoding"); got != "" {
+				t.Errorf("stream was compressed: Content-Encoding = %q, want empty", got)
 			}
-		case <-time.After(10 * time.Second):
-			t.Fatal("timed out waiting for the initial status frame")
-		}
+			cancel()
+			<-done
+		})
 	}
 }
