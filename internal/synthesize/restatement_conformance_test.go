@@ -215,26 +215,44 @@ func TestConformance_EffortNormalTestByteIdentical(t *testing.T) {
 	got := fmt.Sprintf("%x", sha256.Sum256(b))
 	require.Equal(t, effortNormalTestSHA256, got, `MN5 VIOLATION: %s has changed.
 
-That file is the contract test for effort=normal, and
-invariants/synthesize/effort-normal-byte-identical is the invariant it
-enforces: at effort=normal the pipeline must spend NOTHING on emergent-fact
-discovery — bridgeSeeds returns nil, zero discover work items are enqueued, no
-origin=discovered facts are written.
-
-READ THE INVARIANT BEFORE YOU ACT ON THIS. It is NOT a freeze on normal-effort
-pipeline behaviour, and it names that misreading explicitly: a change applied
-UNIFORMLY at every effort level does not violate it, even one that changes the
-work-item queue. What MN5 protects is narrower and is about THIS FILE — that
-nobody quietly weakens the test doing the enforcing. Editing the pipeline is
-often fine. Editing its enforcing test is the thing that needs an argument.
-
   observed: %s
   pinned:   %s
 
-If you edited %s on purpose, updating the constant above is part of that
-change and your PR has to say why the new contract is still the contract —
-which is the review moment this whole mechanism exists to create. If you did
-NOT edit it on purpose, you have found an accidental change: revert it.`,
+WHAT THIS PROTECTS. That file is the contract test for effort=normal, and the
+invariant it enforces is kb/invariants/synthesize/effort-normal-byte-identical:
+at effort=normal the pipeline must spend NOTHING on emergent-fact discovery —
+bridgeSeeds returns nil, zero discover work items are enqueued, no
+origin=discovered facts are written.
+
+WHAT IT DOES NOT PROTECT, and read the invariant itself before acting on this,
+because it names this misreading by name. MN5 is NOT a freeze on normal-effort
+pipeline behaviour. A change applied UNIFORMLY at every effort level does not
+violate the invariant, even one that changes the work-item queue — an earlier,
+broader wording of the fact blocked a legitimate uniform fix, which is why the
+fact now says so explicitly. What MN5 protects is narrower and is about THIS
+FILE: that nobody quietly weakens the test doing the enforcing. Editing the
+pipeline is often fine. Editing its enforcing test is what needs an argument.
+
+DID YOU MEAN TO EDIT IT?
+
+  NO  — you have found an accidental change. Revert the file; leave the
+        constant alone.
+
+  YES — then updating the pin is part of your change, not a workaround for it.
+        The commonest legitimate case is exactly the one above: a change applied
+        uniformly at every effort level that moves this contract's expected
+        output. Do all three:
+          1. Put the observed hash above into effortNormalTestSHA256 in this
+             file. (Or recompute it:
+                 shasum -a 256 internal/synthesize/%s
+             — sha256sum on Linux.)
+          2. Say in the PR what the contract now is and why it is still the
+             contract. This sentence is the entire point of the mechanism; a
+             pin nobody has to argue past protects nothing.
+          3. Check the change really is uniform across effort levels. If it is
+             not, you are changing what normal effort SPENDS, and that is the
+             invariant itself rather than MN5 — a different and much larger
+             conversation.`,
 		effortNormalTestFile, got, effortNormalTestSHA256, effortNormalTestFile)
 }
 
