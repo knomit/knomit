@@ -3,17 +3,19 @@ description: >
   Go, a verified CGo toolchain, and the native libraries every knomit build
   links (libtokenizers.a) or loads (ONNX Runtime).
 
-# WHY THIS IS A COMPOSITE ACTION RATHER THAN COPIED STEPS. On ubuntu and macos
-# the bootstrap is three lines and copying it costs nothing; on WINDOWS it is a
-# toolchain probe, a Rust target, a restore/save cache pair and a path-spelling
-# conversion. Two jobs in tests.yml need it (build-test and slow-tests), and a
-# second copy of the Windows half is a copy that stops matching the first one
-# the day either is edited — the same argument the tests.yml header makes for
-# being a reusable workflow instead of a duplicate of its jobs.
+# WHY THIS IS A COMPOSITE ACTION RATHER THAN COPIED STEPS. Every platform gets
+# the native-lib restore/save pair and a resolved lib dir; WINDOWS additionally
+# gets a toolchain probe, an sqlite3 header, a Rust target and a path-spelling
+# conversion. Two jobs in tests.yml need all of it (build-test and slow-tests),
+# and a second copy is a copy that stops matching the first one the day either
+# is edited — the same argument the tests.yml header makes for being a reusable
+# workflow instead of a duplicate of its jobs.
 #
-# The macOS-only jobs (desktop, embed-smoke) keep their inline steps: they
-# never run the Windows half, so folding them in here would trade three
-# readable lines for an indirection that buys them nothing.
+# The macOS-only jobs (desktop, embed-smoke) keep their inline steps: they run
+# neither the Windows half nor the cache, so folding them in here would trade
+# three readable lines for an indirection that buys them nothing. They still
+# download both libs on every run; that is a known, deliberate gap, not an
+# oversight — they are two jobs, not the matrix.
 
 inputs:
   go-version:
@@ -32,8 +34,8 @@ runs:
         go-version: ${{ inputs.go-version }}
 
     # ---------------------------------------------------------------- Windows
-    # Everything up to "Resolve native lib dir" is Windows-only. ubuntu and
-    # macos ship a working C toolchain and download a published
+    # Everything from here to the "native libs" banner is Windows-only. ubuntu
+    # and macos ship a working C toolchain and download a published
     # libtokenizers.a; windows has neither — daulet/tokenizers publishes no
     # windows asset through v1.27.0, so fetchlibs builds it with cargo.
 
@@ -183,20 +185,20 @@ runs:
         $verdict = if ($ok) { 'OK' } else { 'TOO OLD' }
         Write-Host "msvcp140.dll $($v.FileVersion) - onnxruntime >= 1.21 needs >= 14.40: $verdict"
 
-    # tools/fetchlibs/spec.go is the single source of truth for the ORT release
-    # (1.24.3), the pinned tokenizers tag (v1.27.0) and the Rust target triple,
-    # so hashing it moves the cache key exactly when the fetch plan moves. The
-    # cost is a cold rebuild when only its prose changes — #212 edited those
-    # comments twice — and that is the right side to err on: the failure it
-    # rules out is a cache that keeps serving a lib built at a different pin.
+    # WINDOWS-ONLY, AND IT STAYS THAT WAY. What this step produces that the
+    # cache key needs is the Rust target triple, and there is no Rust on ubuntu
+    # or macos — they download a published libtokenizers.a. So the unix key
+    # does not carry a triple and does not need this step; see the key's own
+    # comment under "Restore native libs".
     #
-    # The triple is ALSO named explicitly in the key. It is redundant with the
-    # hash and it is the one component whose staleness would be invisible: an
-    # MSVC-target .lib and a GNU-target .a are both called libtokenizers.a, and
-    # only one of them links against mingw's ld. This step reads it out of the
-    # source (the rustup step below uses it too) and fails loudly if the
-    # constant is ever renamed, rather than letting the key quietly lose a
-    # component.
+    # The triple is named explicitly in the Windows key (via
+    # NATIVE_LIBS_SLUG, assembled in "Resolve native lib dir" below). It is
+    # redundant with the hashFiles('tools/fetchlibs/spec.go') component and it
+    # is the one component whose staleness would be invisible: an MSVC-target
+    # .lib and a GNU-target .a are both called libtokenizers.a, and only one of
+    # them links against mingw's ld. This step reads it out of the source (the
+    # rustup step below uses it too) and fails loudly if the constant is ever
+    # renamed, rather than letting the key quietly lose a component.
     - name: Read pinned native-lib versions
       if: runner.os == 'Windows'
       shell: bash
@@ -222,10 +224,95 @@ runs:
         echo "ort $ort, tokenizers $ver for $tgt"
         echo "TOKENIZERS_TARGET=$tgt" >> "$GITHUB_ENV"
 
-    # Caches the whole per-platform lib dir: onnxruntime.dll (a ~100MB zip to
-    # download and unpack) and libtokenizers.a (~5 minutes of cargo, cold).
-    # fetchlibs skips any library whose dest already exists, so a hit means
-    # neither happens.
+    # ----------------------------------------------------------- native libs
+    # From here down every step runs on ALL THREE platforms.
+
+    # Native libs live under the per-platform dir, dist/<goos>-<goarch>/lib.
+    # This step resolves that dir once and publishes it twice, because the two
+    # consumers cannot use the same spelling:
+    #
+    #   LIBDIR      absolute, for `make setup` and anything downstream.
+    #   LIBDIR_REL  workspace-relative, for the cache path below. actions/cache
+    #               keys its entries on paths relative to GITHUB_WORKSPACE, and
+    #               a relative path is the spelling that is identical on all
+    #               three runners — notably it is byte-for-byte the
+    #               `dist/windows-amd64/lib` this step replaced on Windows, so
+    #               extending the cache did not move the Windows entry.
+    #
+    # The Windows conversion for LIBDIR is not decoration. In a `shell: bash`
+    # step $PWD is an MSYS path — /d/a/knomit/knomit — and every tool in this
+    # repo is a Windows process that cannot open it. `cygpath -m` is the named
+    # conversion: it yields D:/a/knomit/knomit, which Go handles (forward
+    # slashes are fine on Windows; the missing drive letter is what is fatal).
+    # It is spelled this way rather than `pwd -W` because cygpath exists in
+    # both Git bash and MSYS2 bash, so the line survives a shell change.
+    # LIBDIR_REL needs no conversion: it never leaves the actions runtime.
+    #
+    # IT RUNS BEFORE THE RESTORE, and that ordering is load-bearing — the cache
+    # path is ${{ env.LIBDIR_REL }}, and an env var only reaches the expression
+    # context of steps that come after the step that wrote it.
+    - name: Resolve native lib dir
+      shell: bash
+      run: |
+        set -euo pipefail
+        root=$PWD
+        if [ "$RUNNER_OS" = Windows ]; then root=$(cygpath -m "$PWD"); fi
+        rel="dist/$(go env GOOS)-$(go env GOARCH)/lib"
+        echo "LIBDIR=$root/$rel" >> "$GITHUB_ENV"
+        echo "LIBDIR_REL=$rel" >> "$GITHUB_ENV"
+        # The cache key's platform component. GOOS-GOARCH rather than
+        # runner.os/runner.arch because it is the same pair that NAMES the
+        # directory being cached, so the key cannot drift from its contents.
+        # On Windows the pinned Rust target joins it — see below.
+        slug="$(go env GOOS)-$(go env GOARCH)"
+        if [ "$RUNNER_OS" = Windows ]; then
+          if [ -z "${TOKENIZERS_TARGET:-}" ]; then
+            echo "::error::TOKENIZERS_TARGET is unset; 'Read pinned native-lib versions' must run before this step"
+            echo "It is a component of the Windows cache key. Reordering these two steps would" >&2
+            echo "silently key the cache on the platform alone, which an MSVC-target .lib and a" >&2
+            echo "GNU-target .a cannot be told apart by." >&2
+            exit 1
+          fi
+          slug="$slug-$TOKENIZERS_TARGET"
+        fi
+        echo "NATIVE_LIBS_SLUG=$slug" >> "$GITHUB_ENV"
+
+    # Caches the whole per-platform lib dir. On Windows that is onnxruntime.dll
+    # (a ~100MB zip to download and unpack) and libtokenizers.a (~5 minutes of
+    # cargo, cold); on ubuntu and macos it is the same two libraries, both
+    # downloaded from GitHub releases. fetchlibs skips any library whose dest
+    # already exists, so a hit means neither download happens.
+    #
+    # WHY THIS IS NO LONGER WINDOWS-ONLY. It was, on the reasoning that the
+    # cargo build is what costs real time and a download is cheap. That is true
+    # about TIME and false about RELIABILITY: two unconditional downloads from
+    # the release CDN on every ubuntu and macos job are two chances per job for
+    # a 5xx to red the build, which is exactly what happened in job
+    # 105443136472. fetchlibs now retries (tools/fetchlibs/main.go), and this
+    # cache is the other half — a hit means there is nothing to retry.
+    #
+    # THE KEY. Platform + the hash of tools/fetchlibs/spec.go, which is the
+    # single source of truth for the ORT release (1.24.3), the pinned
+    # tokenizers tag (v1.27.0) and the Rust target triple. Hashing it moves the
+    # key exactly when the fetch plan moves. The cost is a cold rebuild when
+    # only its prose changes — #212 edited those comments twice — and that is
+    # the right side to err on: the failure it rules out is a cache that keeps
+    # serving a lib built at a different pin.
+    #
+    # On Windows the triple is ALSO named in the key, via NATIVE_LIBS_SLUG. It
+    # is redundant with the hash and it is the one component whose staleness
+    # would be invisible: an MSVC-target .lib and a GNU-target .a are both
+    # called libtokenizers.a, and only one of them links against mingw's ld.
+    # ubuntu and macos download a published artifact and never run cargo, so
+    # there is no target to pin there and the unix key does not carry one —
+    # which is why "Read pinned native-lib versions" stays Windows-only.
+    #
+    # ONE-TIME COST, PAID ON MERGE: the Windows key gained its GOARCH
+    # (native-libs-windows-… became native-libs-windows-amd64-…), so the
+    # existing 15.6 MiB entry was abandoned and the first Windows run after
+    # this landed paid a cold ~2m40s bootstrap. The alternative was keeping a
+    # literal "windows" special case in the key forever to preserve one cache
+    # entry, which is a one-off migration encoded permanently into the build.
     #
     # NO restore-keys, deliberately. A prefix-matched restore would hand this
     # job a lib built at a DIFFERENT pin, and skip-if-exists means fetchlibs
@@ -243,17 +330,12 @@ runs:
     # cache keys are immutable, so a dir holding only onnxruntime.dll would hit
     # forever, skip the rustup guard, rebuild libtokenizers.a every run, and
     # never re-save.
-    #
-    # The literal path cannot go stale: tokenizersSpec returns an error for any
-    # windows GOARCH other than amd64, so windows-amd64 is the only Windows lib
-    # dir that can exist.
-    - name: Restore native libs (Windows)
+    - name: Restore native libs
       id: native-libs-cache
-      if: runner.os == 'Windows'
       uses: actions/cache/restore@v4
       with:
-        path: dist/windows-amd64/lib
-        key: native-libs-windows-${{ hashFiles('tools/fetchlibs/spec.go') }}-${{ env.TOKENIZERS_TARGET }}
+        path: ${{ env.LIBDIR_REL }}
+        key: native-libs-${{ env.NATIVE_LIBS_SLUG }}-${{ hashFiles('tools/fetchlibs/spec.go') }}
 
     # A ~1s no-op on today's image, which installs this target at image build
     # time (Install-Rust.ps1 runs `rustup target add x86_64-pc-windows-gnu` on
@@ -283,25 +365,6 @@ runs:
         rustc --version
         cargo --version
 
-    # ----------------------------------------------------------------- shared
-
-    # Native libs live under the per-platform dir, dist/<goos>-<goarch>/lib.
-    #
-    # The Windows conversion is not decoration. In a `shell: bash` step $PWD is
-    # an MSYS path — /d/a/knomit/knomit — and every tool in this repo is a
-    # Windows process that cannot open it. `cygpath -m` is the named
-    # conversion: it yields D:/a/knomit/knomit, which Go handles (forward
-    # slashes are fine on Windows; the missing drive letter is what is fatal).
-    # It is spelled this way rather than `pwd -W` because cygpath exists in
-    # both Git bash and MSYS2 bash, so the line survives a shell change.
-    - name: Resolve native lib dir
-      shell: bash
-      run: |
-        set -euo pipefail
-        root=$PWD
-        if [ "$RUNNER_OS" = Windows ]; then root=$(cygpath -m "$PWD"); fi
-        echo "LIBDIR=$root/dist/$(go env GOOS)-$(go env GOARCH)/lib" >> "$GITHUB_ENV"
-
     # `make setup` on all three, Windows included: the image's mingw ships a
     # make.exe on PATH (Install-Mingw64.ps1 copies mingw32-make.exe to it), and
     # the recipe is one line, `go run ./tools/fetchlibs $(LIBDIR)`, with make
@@ -315,15 +378,20 @@ runs:
 
     # NO always(). It would buy nothing — this step already runs before any
     # test, so a red suite cannot skip it — and it would cost the cache: a
-    # fetch that failed part-way (ort downloaded, cargo dead) would be saved
-    # under a key that can never be rewritten. Only on a miss, too, because
-    # saving under a key that already exists is a warning and a wasted upload.
-    # On a cold key all four Windows legs build in parallel and race to save
-    # this key; three will log "Unable to reserve cache" and that is the loser
-    # of a race, not a failure.
-    - name: Save native libs (Windows)
-      if: runner.os == 'Windows' && steps.native-libs-cache.outputs.cache-hit != 'true'
+    # fetch that failed part-way (ort downloaded, cargo dead, or a download
+    # that exhausted fetchlibs' retries) would be saved under a key that can
+    # never be rewritten. Only on a miss, too, because saving under a key that
+    # already exists is a warning and a wasted upload. On a cold key every leg
+    # on a platform runs in parallel and races to save that platform's key; the
+    # losers log "Unable to reserve cache", which is the loser of a race, not a
+    # failure.
+    #
+    # Same key expression as the restore above. They are two steps rather than
+    # one actions/cache for the placement reason given there, so the two key
+    # lines have to be edited together — they are deliberately identical text.
+    - name: Save native libs
+      if: steps.native-libs-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v4
       with:
-        path: dist/windows-amd64/lib
-        key: native-libs-windows-${{ hashFiles('tools/fetchlibs/spec.go') }}-${{ env.TOKENIZERS_TARGET }}
+        path: ${{ env.LIBDIR_REL }}
+        key: native-libs-${{ env.NATIVE_LIBS_SLUG }}-${{ hashFiles('tools/fetchlibs/spec.go') }}
