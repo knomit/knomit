@@ -374,6 +374,10 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 onDismiss={async id => {
                   try { await api.dismissRepoCreate(id); } catch { /* the refresh tells the truth */ }
                   await refreshRepoCreates();
+                }}
+                onCancel={async id => {
+                  try { await api.cancelRepoCreate(id); } catch { /* the refresh tells the truth */ }
+                  await refreshRepoCreates();
                 }} />
             ))}
             {repos.map(r => (

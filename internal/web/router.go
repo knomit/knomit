@@ -183,6 +183,11 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// without waiting out CreateJobTTL.
 	r.Get("/repo-creates", handleHALRepoCreates(b, s.Manager))
 	r.Delete("/repo-creates/{id}", handleHALRepoCreateDismiss(s.Manager))
+	// Cancel is a POST on a colon-suffixed sub-resource, the same spelling as
+	// /repos:probe-origin: it is an ACTION on the job, not a deletion of its
+	// row, and the two must stay distinct because dismiss refuses a running
+	// job while cancel is exactly for one.
+	r.Post("/repo-creates/{id}:cancel", handleHALRepoCreateCancel(b, s.Manager))
 
 	// Probes an origin before create, so the wizard can classify it (has refs
 	// / empty / unreachable) instead of asking the user to declare that up

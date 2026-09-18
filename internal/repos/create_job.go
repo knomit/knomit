@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -104,7 +105,30 @@ const (
 	// there, and here is why" — rather than a registry row pointing at a
 	// half-written file.
 	CreateFailed CreateState = "failed"
+	// CreateCancelled means a caller asked for the create to stop, and nothing
+	// it produced survives: a create still running was unwound through its
+	// own cleanup(), and one that had already registered a repo had that repo
+	// deleted outright — archived and purged in one motion, no archive row
+	// left to find. Terminal, like CreateFailed, and like it a promise that
+	// the repo is NOT there.
+	//
+	// It is its own state rather than a flavour of failed because a client
+	// renders the two differently: a failure is something to read and retry,
+	// a cancellation is the outcome the user asked for.
+	CreateCancelled CreateState = "cancelled"
 )
+
+// ErrCreateCancelled is the error a cancelled job reports through Result. It
+// is deliberately NOT context.Canceled: Create returns that for the
+// manager's own shutdown as well, and the two must stay distinguishable —
+// one is a job the user stopped, the other a process going away.
+var ErrCreateCancelled = errors.New("create cancelled")
+
+// ErrCreateFinished refuses to cancel a job that already ended in failure or
+// cancellation. There is nothing left to undo: a failed create rolled itself
+// back, and a cancelled one already did what cancel does. Dismiss is the
+// operation for making that row go away.
+var ErrCreateFinished = errors.New("create already finished")
 
 // CreateStatus is an immutable snapshot of a CreateJob, safe to read from any
 // goroutine at any time, running or finished. It is what a polling client
@@ -188,6 +212,17 @@ type CreateJob struct {
 	err           error
 	timedOut      bool
 	finishedAt    time.Time
+
+	// cancel ends the create's context. It is the job's OWN cancel, distinct
+	// from the manager-wide createsCancel that Close pulls: cancelling one
+	// job must not touch its neighbours.
+	cancel context.CancelFunc
+	// cancelRequested is set by CancelCreate and read by the worker goroutine
+	// after Create returns. Create honours cancellation only at its step
+	// boundaries, and past m.Add it honours none (mirrorIndexing merely stops
+	// narrating), so a cancelled create can still hand back a live repo. This
+	// flag is how the worker knows to delete it rather than report it done.
+	cancelRequested bool
 }
 
 // ID returns the job's identifier, minted at start. It is what a client holds
@@ -253,15 +288,85 @@ func (j *CreateJob) record(e Event) {
 // finish records the terminal outcome and releases every waiter.
 func (j *CreateJob) finish(ri *RepoInstance, err error, timedOut bool) {
 	j.mu.Lock()
-	j.ri, j.err, j.timedOut = ri, err, timedOut
-	j.finishedAt = time.Now().UTC()
-	if err != nil {
-		j.state = CreateFailed
-	} else {
-		j.state = CreateDone
-	}
+	j.finishLocked(ri, err, timedOut)
 	j.mu.Unlock()
 	close(j.done)
+}
+
+// finishLocked is finish's body for a caller that already holds j.mu and will
+// close j.done itself. ErrCreateCancelled lands the job in CreateCancelled,
+// every other error in CreateFailed.
+func (j *CreateJob) finishLocked(ri *RepoInstance, err error, timedOut bool) {
+	j.ri, j.err, j.timedOut = ri, err, timedOut
+	j.finishedAt = time.Now().UTC()
+	switch {
+	case errors.Is(err, ErrCreateCancelled):
+		j.state = CreateCancelled
+	case err != nil:
+		j.state = CreateFailed
+	default:
+		j.state = CreateDone
+	}
+}
+
+// CancelCreate stops a create and removes everything it produced.
+//
+// A RUNNING job has its context cancelled. Create unwinds at its next step
+// boundary through its own cleanup() — the partial database and the
+// registry row go — and the job lands in CreateCancelled. Past m.Add there
+// is no boundary left that honours the context (mirrorIndexing only stops
+// narrating), so the worker goroutine checks cancelRequested when Create
+// returns and, if a repo came back anyway, deletes it (DeleteRepo: archive
+// and purge in one motion) before finishing the job. Either way the caller
+// polls the job to CreateCancelled; this call returns as soon as the request
+// is recorded, because a transfer in flight is not interruptible and the
+// caller must not be held for it.
+//
+// A DONE job — the create already finished and its repo is live — is the
+// case the user actually hits: "I picked the wrong mode and realised the
+// moment it landed". Cancel here IS the delete, done synchronously so the
+// caller learns whether the repo is gone. The repo is deleted only if it is
+// the very instance this job registered: a repo of the same name created
+// later by someone else is not this job's to remove, and answers
+// ErrCreateFinished.
+//
+// FAILED and CANCELLED jobs answer ErrCreateFinished: there is nothing to
+// undo. An unknown id answers ErrCreateUnknown, indistinguishable from an
+// expired one for the same reason CreateJobByID's second result is.
+func (m *Manager) CancelCreate(id string) error {
+	j, ok := m.CreateJobByID(id)
+	if !ok {
+		return ErrCreateUnknown
+	}
+	j.mu.Lock()
+	switch j.state {
+	case CreateRunning:
+		j.cancelRequested = true
+		cancel := j.cancel
+		j.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		return nil
+	case CreateDone:
+		created := j.ri
+		j.mu.Unlock()
+		if created == nil || m.Get(j.name) != created {
+			return ErrCreateFinished
+		}
+		if err := m.DeleteRepo(j.name); err != nil {
+			return err
+		}
+		j.mu.Lock()
+		j.ri, j.err, j.state = nil, ErrCreateCancelled, CreateCancelled
+		j.mu.Unlock()
+		log.Info().Str("repo", j.name).Str("create_id", j.id).
+			Msg("repo create cancelled after completion; the repo was deleted")
+		return nil
+	default:
+		j.mu.Unlock()
+		return ErrCreateFinished
+	}
 }
 
 // createTimeout is the manager's configured create deadline, or the package
@@ -452,35 +557,82 @@ func (m *Manager) StartCreate(spec CreateSpec) *CreateJob {
 	// when Close reads the waitgroup, which is the very gap this closes.
 	m.createWg.Add(1)
 
+	// Parented to createsCtx, not m.ctx: same lifetime, plus a cancel that
+	// Close owns, so shutdown can wind an in-flight create down instead of
+	// waiting out its full deadline. Cancelled on the way out either way so
+	// the timer is released rather than left to fire.
+	//
+	// Minted HERE, before the goroutine, and handed to the job: CancelCreate
+	// needs the cancel from the moment StartCreate returns, and a job whose
+	// cancel is still nil for a scheduling tick would silently ignore the one
+	// request it exists to honour.
+	ctx, cancel := context.WithTimeout(m.createsCtx, timeout)
+	j.mu.Lock()
+	j.cancel = cancel
+	j.mu.Unlock()
+
 	go func() {
 		defer m.createWg.Done()
-		// Parented to createsCtx, not m.ctx: same lifetime, plus a cancel that
-		// Close owns, so shutdown can wind an in-flight create down instead of
-		// waiting out its full deadline. Cancelled on the way out either way so
-		// the timer is released rather than left to fire.
-		ctx, cancel := context.WithTimeout(m.createsCtx, timeout)
 		defer cancel()
 
 		ri, err := m.Create(ctx, spec, j.record)
-		timedOut := err != nil && errors.Is(err, context.DeadlineExceeded)
 
-		switch {
-		case timedOut:
-			log.Error().Str("repo", spec.Name).Str("mode", spec.Mode).
-				Str("create_id", j.id).Dur("timeout", timeout).
-				Msg("repo create exceeded its deadline; partial repo rolled back")
-		case err != nil:
-			log.Error().Err(err).Str("repo", spec.Name).Str("mode", spec.Mode).
-				Str("create_id", j.id).Msg("repo create failed; partial repo rolled back")
-		default:
-			log.Info().Str("repo", spec.Name).Str("mode", spec.Mode).
-				Str("create_id", j.id).Msg("repo create finished")
+		// A cancel that arrived while Create ran. Decided under j.mu so a
+		// CancelCreate racing this very instant lands on one side or the
+		// other: either it sees CreateRunning and sets the flag before we read
+		// it here, or it sees the terminal state finishLocked writes below and
+		// takes the done-job path itself.
+		j.mu.Lock()
+		cancelled := j.cancelRequested
+		if !cancelled {
+			timedOut := err != nil && errors.Is(err, context.DeadlineExceeded)
+			j.finishLocked(ri, err, timedOut)
+			j.mu.Unlock()
+			logCreateOutcome(spec, j.id, timeout, err, timedOut)
+			close(j.done)
+			return
 		}
+		j.mu.Unlock()
 
-		j.finish(ri, err, timedOut)
+		// Cancelled. A repo that came back anyway got past the last step
+		// boundary that honours the context (m.Add and after), so it is live
+		// and registered — delete it, the whole of it. An error from Create
+		// means its own cleanup() already ran and there is nothing to remove.
+		if err == nil && ri != nil {
+			if derr := m.DeleteRepo(spec.Name); derr != nil {
+				// The one outcome cancel cannot make good on: the repo exists
+				// and would not go. Report it as a FAILURE with the reason,
+				// never as cancelled — "cancelled" promises the repo is gone.
+				log.Error().Err(derr).Str("repo", spec.Name).Str("create_id", j.id).
+					Msg("repo create cancelled after it completed, but the repo could not be deleted")
+				j.finish(ri, fmt.Errorf("cancel: the repo was created but could not be deleted: %w", derr), false)
+				return
+			}
+		}
+		log.Info().Str("repo", spec.Name).Str("mode", spec.Mode).
+			Str("create_id", j.id).Msg("repo create cancelled; nothing was kept")
+		j.finish(nil, ErrCreateCancelled, false)
 	}()
 
 	return j
+}
+
+// logCreateOutcome writes the terminal log line for an uncancelled create. The
+// line matters precisely because the client that asked may no longer be there
+// to read the status.
+func logCreateOutcome(spec CreateSpec, id string, timeout time.Duration, err error, timedOut bool) {
+	switch {
+	case timedOut:
+		log.Error().Str("repo", spec.Name).Str("mode", spec.Mode).
+			Str("create_id", id).Dur("timeout", timeout).
+			Msg("repo create exceeded its deadline; partial repo rolled back")
+	case err != nil:
+		log.Error().Err(err).Str("repo", spec.Name).Str("mode", spec.Mode).
+			Str("create_id", id).Msg("repo create failed; partial repo rolled back")
+	default:
+		log.Info().Str("repo", spec.Name).Str("mode", spec.Mode).
+			Str("create_id", id).Msg("repo create finished")
+	}
 }
 
 // drainCreates cancels every in-flight detached create and waits for them,

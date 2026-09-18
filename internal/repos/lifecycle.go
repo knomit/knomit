@@ -624,18 +624,24 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 	}
 
-	if spec.hasRemote() && ri != nil {
-		emit(Event{Step: "sync", Phase: PhaseRegister, Message: "activating sync", Pct: 95})
-		if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
-			log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
-		}
-	}
-
 	// DONE MEANS INDEXED, not "registered". The repo exists from m.Add onwards,
 	// but a knowledge base whose search index is still being built is not a
 	// knowledge base anyone can use — and reporting 100% while a 3254-commit
 	// backfill ran in silence is the other half of the incident this work comes
 	// from.
+	//
+	// THE INDEX IS NARRATED BEFORE SYNC IS ACTIVATED, and the order is
+	// load-bearing. ActivateSync runs one SYNCHRONOUS reconcile, and that
+	// reconcile takes lockBranch(upstream) — the very lock the background
+	// heal openOne just started holds for as long as it indexes that branch.
+	// With sync first, the job sat at "95% activating sync" for the whole of
+	// the index, reporting a step that was not the work being done; a reader
+	// who refreshed saw the repo already indexing under a wizard that said
+	// otherwise. Now the job narrates the index while the heal holds the lock,
+	// and activates sync once the lock is free, which is also when the call
+	// is quick. mirrorIndexing returning early (the job's deadline, shutdown)
+	// still falls through to activation: sync is never skipped on account of
+	// how the narration ended.
 	indexState := IndexStateReady
 	message := "repo ready"
 	if ri != nil {
@@ -644,8 +650,41 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 			message = "repo ready; index needs attention"
 		}
 	}
+
+	if spec.hasRemote() && ri != nil {
+		// Pct is the index band's ceiling, not 95: the mirror has already
+		// reported up to indexPctCeil, and a bar that steps backwards for the
+		// sync activation would read as the create losing ground.
+		emit(Event{Step: "sync", Phase: PhaseRegister, Message: "activating sync", Pct: indexPctCeil, IndexState: indexState})
+		if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
+			log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
+		}
+	}
+
 	emit(Event{Step: "done", Phase: PhaseDone, Message: message, Pct: 100, IndexState: indexState})
 	return ri, nil
+}
+
+// DeleteRepo removes an ACTIVE repo outright: Archive then Purge in one
+// motion, so no archive row is left behind to be found, restored or
+// forgotten. It exists for cancel — a create the user stopped must leave no
+// trace, and "archived" is a trace — and refuses exactly what its two halves
+// refuse: an unknown name, and a repo a lens still reads or writes.
+//
+// The halves are sequenced, not fused, and that shows in the one failure
+// between them: if Purge fails after Archive succeeded the repo is archived,
+// not deleted, and the error says so, because a caller told "deleted" would
+// otherwise never look in the archive for the row that remains.
+func (m *Manager) DeleteRepo(name string) error {
+	info, err := m.Archive(name)
+	if err != nil {
+		return err
+	}
+	if perr := m.Purge(info.ID); perr != nil {
+		return fmt.Errorf("delete %q: archived, but the purge that follows failed (the row remains in the archive): %w", name, perr)
+	}
+	log.Info().Str("repo", name).Str("uid", info.ID).Msg("deleted repo")
+	return nil
 }
 
 // indexMirrorInterval is how often the create job re-reads the repo's index

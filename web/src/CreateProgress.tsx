@@ -19,9 +19,16 @@ import type { RepoCreateStatus } from './api';
 const CREATE_STEPS: Record<string, string[]> = {
   preset: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
   custom: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
-  clone: ['validate', 'clone', 'persist-origin', 'register', 'sync', 'index', 'done'],
-  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'sync', 'index', 'done'],
-  subscribe: ['validate', 'subscribe', 'persist-origin', 'register', 'sync', 'index', 'done'],
+  // INDEX BEFORE SYNC on every remote mode, and the order is not cosmetic.
+  // ActivateSync runs a synchronous reconcile that takes the branch lock the
+  // background index heal already holds, so with sync first the job sat on
+  // "Activating sync" for the whole of the index — narrating a step that was
+  // not the work being done, under a repo that was in fact already indexing.
+  // lifecycle.go now emits the index before the sync step; this list mirrors
+  // that, and a mirror that disagrees is how the wizard lies about the phase.
+  clone: ['validate', 'clone', 'persist-origin', 'register', 'index', 'sync', 'done'],
+  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'index', 'sync', 'done'],
+  subscribe: ['validate', 'subscribe', 'persist-origin', 'register', 'index', 'sync', 'done'],
 };
 
 const LABELS: Record<string, string> = {
@@ -51,6 +58,20 @@ export function CreateProgress({ status }: { status: RepoCreateStatus | null }) 
     return (
       <div data-testid="create-progress" style={box}>
         <div style={{ color: '#f88' }}>{status.error || 'create failed'}</div>
+      </div>
+    );
+  }
+
+  // A cancellation is the outcome the user ASKED for, so it is not drawn as a
+  // failure and carries no error to read: the step list, the bar and the
+  // percent all describe work that is no longer happening and that nobody is
+  // waiting on. The one thing worth saying is what the state of the world is
+  // now — no repository — because that is the reader's actual question after
+  // stopping something halfway.
+  if (status.state === 'cancelled') {
+    return (
+      <div data-testid="create-cancelled" style={box}>
+        <div style={{ color: '#9c9' }}>Create cancelled. No repository was added.</div>
       </div>
     );
   }

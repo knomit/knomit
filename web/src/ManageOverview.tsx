@@ -79,6 +79,14 @@ function PendingCreates({ repos, onOpenCreate, surface }: {
               try { await api.dismissRepoCreate(id); } catch { /* the refresh below tells the truth */ }
               await refreshRepoCreates();
             }}
+            onCancel={async id => {
+              // Same refusal of optimism as dismiss above, and for a stronger
+              // reason: cancel is ACCEPTED (202), not done — a running create
+              // stops at its next step boundary. A row flipped to 'cancelled'
+              // here would claim an outcome the server has not reached yet.
+              try { await api.cancelRepoCreate(id); } catch { /* the refresh below tells the truth */ }
+              await refreshRepoCreates();
+            }}
           />
         ))}
       </div>

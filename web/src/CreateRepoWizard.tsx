@@ -59,6 +59,16 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   const [checkedOk, setCheckedOk] = useState(0);
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState('');
+  // A cancel request in flight. Separate from `creating`, which stays true
+  // across the cancel: the create is still running until the server says
+  // otherwise, and the poll that will report `cancelled` is the same poll that
+  // was already running.
+  const [cancelling, setCancelling] = useState(false);
+  // A cancel that was REFUSED, kept apart from createErr because the two say
+  // opposite things about the world. createErr's card ends "No repository was
+  // added"; a failed cancel means one very possibly WAS, and telling the
+  // reader otherwise is the one mistake this state cannot afford.
+  const [cancelErr, setCancelErr] = useState('');
   // The latest reported create status, or null before a create starts.
   // Polling reports a LATEST VALUE rather than a stream, so the progress
   // component renders the mode's known step list with this as the cursor —
@@ -80,6 +90,27 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
 
   const step = currentStep(state);
 
+  // adoptStatus is the ONE writer of createStatus for reports that arrive from
+  // the server, and it refuses to walk a TERMINAL state back to 'running'.
+  //
+  // Two sources write this state and they are not ordered with respect to each
+  // other: api.createRepo's poll loop, and the 202 body handleCancelCreate
+  // adopts out of band. A poll request that was already in flight when the
+  // cancel returned resolves AFTER it, carrying the snapshot the server held
+  // before the cancel was recorded — so the card would flip from "Create
+  // cancelled" back to a progress bar for up to one poll interval, telling the
+  // user the thing they just stopped is still running.
+  //
+  // Stated as the general rule rather than as a special case for cancel: a
+  // terminal state is terminal, and nothing the server can say afterwards
+  // makes the job run again. Only the cancel path actually produces the
+  // inversion today, because the poll loop otherwise stops at the first
+  // terminal status it sees. Starting a NEW create is unaffected — handleCreate
+  // and navigate both reset this to null first, so there is no stale terminal
+  // state left to guard against.
+  const adoptStatus = (s: RepoCreateStatus) =>
+    setCreateStatus(prev => (prev && prev.state !== 'running' && s.state === 'running') ? prev : s);
+
   // Navigating retires the last attempt's report.
   //
   // createErr and the event log describe ONE press of Create. They were
@@ -98,6 +129,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     // probeError/probeFailure are deliberately NOT cleared: they belong to the
     // access step's own check, which is still true when you navigate back to it.
     setCreateErr('');
+    setCancelErr('');
     setCreateStatus(null);
     dispatch(a);
   };
@@ -242,8 +274,36 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     dispatch({ type: 'NEXT' });
   };
 
+  // handleCancelCreate stops the create the wizard is currently watching.
+  //
+  // It does NOT stop the polling, and that is the point: cancel is accepted
+  // (202), not performed, so the create's terminal state is still something
+  // the server reaches and the poll reports. api.createRepo's loop runs while
+  // the state is 'running' and 'cancelled' is terminal, so the existing poll
+  // carries this to its end with no second loop and no way for the two to
+  // disagree.
+  //
+  // The 202's body is the job's own snapshot, so adopting it gives the reader
+  // the server's answer now rather than up to one poll interval later — and
+  // for a create that had already finished it ALREADY reads 'cancelled'.
+  const handleCancelCreate = async () => {
+    const id = createStatus?.create_id;
+    if (!id) return;
+    setCancelErr(''); setCancelling(true);
+    try {
+      adoptStatus(await api.cancelRepoCreate(id));
+      // The shared list is showing this same job on the rail and the overview;
+      // tell it now rather than letting the two surfaces disagree for a tick.
+      void refreshRepoCreates();
+    } catch (e) {
+      setCancelErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const handleCreate = async () => {
-    setCreateErr(''); setCreateStatus(null); setCreating(true);
+    setCreateErr(''); setCancelErr(''); setCreateStatus(null); setCreating(true);
     const body = createBodyFor(state);
     try {
       let announced = false;
@@ -251,7 +311,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
       // create RESOLVES with state 'failed' — it is an outcome to render, not
       // an exception — so the catch below is for a REFUSED request only.
       const final = await api.createRepo(body, s => {
-        setCreateStatus(s);
+        adoptStatus(s);
         // Tell the SHARED list about this create the moment it has an id, so
         // the top-bar light and the pending rows are live before the user
         // leaves the wizard rather than up to one poll interval later. The
@@ -260,7 +320,12 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
       });
       if (final.state === 'failed') {
         setCreateErr(final.error || 'create failed');
-      } else {
+      } else if (final.state !== 'cancelled') {
+        // NOT on 'cancelled'. onDone hands the app a repo name to select, and
+        // a cancelled create left no repo of that name to select — calling it
+        // here would navigate the user into a repository that does not exist,
+        // immediately after they asked for it not to be made. The wizard stays
+        // where it is and CreateProgress says what happened.
         onDone(final.repo?.name || state.name);
       }
     } catch (e) {
@@ -352,6 +417,15 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
         </div>
       )}
       {step === 'review' && <CreateProgress status={createStatus} />}
+      {/* Red, unlike every other report on this screen: a cancel that was
+          refused is the one outcome here where something may EXIST that the
+          reader asked not to exist, and they have to go and look. */}
+      {step === 'review' && cancelErr && (
+        <div data-testid="create-cancel-error" style={{ ...errText, color: '#e29a9a', borderColor: '#4a2222', background: '#261313' }}>
+          <div>{cancelErr}</div>
+          <div style={{ ...errNote, color: '#a86a6a' }}>The create was not cancelled. Check the repository list before trying again.</div>
+        </div>
+      )}
 
       <div style={footer}>
         {step !== 'source' && (
@@ -401,6 +475,22 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
             {/* "Create repository" after a failure invites the same press
                 again; the label should say what pressing it does NOW. */}
             {creating ? 'Creating…' : createErr ? 'Try again' : 'Create repository'}
+          </button>
+        )}
+        {/* Only while a create is actually RUNNING — driven by the reported
+            state, not by `creating`, which is still true while the terminal
+            status is being adopted. Cancelling is refused (409) on a job that
+            already failed or was cancelled, and a control that exists only to
+            be refused is the dead button this wizard has removed elsewhere.
+
+            "Cancel create", beside a bare "Cancel" that abandons the wizard:
+            the two are distinguishable only by the noun, so the wizard's own
+            Cancel stays disabled for the whole of a create (btn(creating)),
+            which leaves exactly one enabled cancel on screen at a time. */}
+        {step === 'review' && createStatus?.state === 'running' && (
+          <button type="button" data-testid="create-cancel-button" style={btn(cancelling)}
+            disabled={cancelling} onClick={() => { void handleCancelCreate(); }}>
+            {cancelling ? 'Cancelling…' : 'Cancel create'}
           </button>
         )}
         {onCancel && (

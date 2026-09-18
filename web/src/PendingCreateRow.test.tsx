@@ -126,3 +126,44 @@ describe('RepoIndexChip', () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+describe('PendingCreateRow cancel', () => {
+  // The exact complement of dismiss: dismiss is refused for a running job and
+  // never touches a repo; cancel is ONLY for a running job and the repo going
+  // away is the point. The two are therefore never offered at the same time.
+  it('offers cancel while running, and never alongside dismiss', () => {
+    const onCancel = vi.fn();
+    render(<PendingCreateRow status={job()} onOpen={vi.fn()} onDismiss={vi.fn()} onCancel={onCancel} />);
+
+    fireEvent.click(screen.getByTestId('pending-create-cancel-kb'));
+    expect(onCancel).toHaveBeenCalledWith('c1');
+    expect(screen.queryByTestId('pending-create-dismiss-kb')).toBeNull();
+  });
+
+  it('offers no cancel once the job is terminal', () => {
+    for (const state of ['done', 'failed', 'cancelled'] as const) {
+      const { unmount } = render(
+        <PendingCreateRow status={job({ state })} onDismiss={vi.fn()} onCancel={vi.fn()} />);
+      expect(screen.queryByTestId('pending-create-cancel-kb')).toBeNull();
+      unmount();
+    }
+  });
+
+  // A cancelled row is drawn as neither a success nor a failure: no error to
+  // read, no progress bar for work that stopped, and no 'created' chip over a
+  // repo that does not exist. It is there to be dismissed.
+  it('renders a cancelled create plainly, and dismissably', () => {
+    const onDismiss = vi.fn();
+    render(<PendingCreateRow status={job({ state: 'cancelled', step: 'clone', pct: 40 })}
+      onOpen={vi.fn()} onDismiss={onDismiss} onCancel={vi.fn()} />);
+
+    expect(screen.getByTestId('pending-create-kb')).toHaveAttribute('data-create-state', 'create-cancelled');
+    expect(screen.getByTestId('pending-create-chip-kb')).toHaveTextContent('cancelled');
+    expect(screen.getByTestId('pending-create-cancelled-kb')).toHaveTextContent('No repository was added.');
+    expect(screen.queryByTestId('pending-create-error-kb')).toBeNull();
+    expect(screen.queryByTestId('create-bar-kb')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('pending-create-dismiss-kb'));
+    expect(onDismiss).toHaveBeenCalledWith('c1');
+  });
+});

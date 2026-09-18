@@ -214,6 +214,46 @@ paths:
                 $ref: "#/components/schemas/RepoCreateStatus"
         "404": { $ref: "#/components/responses/Problem" }
 
+  /repo-creates/{id}:cancel:
+    post:
+      tags: [repos]
+      summary: Cancel a repo-create job and remove everything it produced
+      description: |
+        Stops a create and leaves NO trace of it. A running create is
+        cancelled at its next step boundary and rolls back its partial
+        database and registry row; a create that had already finished has
+        its repo deleted outright — archived and purged in one motion, so no
+        archive row is left behind. Either way the job's terminal state is
+        `cancelled`, which promises the repo is not there.
+
+        Answers 202 with the job's current snapshot rather than waiting: a
+        transfer in flight is not interruptible, so the caller polls
+        `/repo-creates/{id}` until `state` reads `cancelled`. For a job that
+        had already finished the deletion is synchronous and the 202 body
+        already reads `cancelled`.
+
+        An action on the job, not a deletion of its row: `DELETE
+        /repo-creates/{id}` (dismiss) refuses a running job, this is exactly
+        for one. A job that already failed or was cancelled answers 409 —
+        there is nothing to undo; dismiss it instead. A finished create whose
+        repo has since been taken into a lens answers 409 as well, because
+        the delete underneath refuses a lens member.
+      operationId: cancelRepoCreate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "202":
+          description: Cancellation recorded; the body is the job's current snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepoCreateStatus"
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /repos:probe-origin:
     post:
       tags: [repos, origin]
@@ -3328,11 +3368,15 @@ components:
           description: Requested create mode.
         state:
           type: string
-          enum: [running, done, failed]
+          enum: [running, done, failed, cancelled]
           description: |
             `running` is the only non-terminal value. `failed` means the repo
             does NOT exist — the partial database and registry row were rolled
-            back before the job became terminal.
+            back before the job became terminal. `cancelled` also means the
+            repo does not exist: a caller stopped the create
+            (`POST /repo-creates/{id}:cancel`), and whatever it had produced —
+            a partial database, or a finished, registered repo — was removed
+            without leaving an archive row. No `error` accompanies it.
         step:
           type: string
           description: Machine-readable step identifier (e.g. "clone", "register").

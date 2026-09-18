@@ -12,7 +12,7 @@ import type { RepoCreateStatus } from './api';
 // The row is not a repository and does not pretend to be one. It is the work
 // that will become one, with the state of that work on it, and it disappears
 // when the repo it made appears in its place.
-export function PendingCreateRow({ status, surface, onOpen, onDismiss }: {
+export function PendingCreateRow({ status, surface, onOpen, onDismiss, onCancel }: {
   status: RepoCreateStatus;
   /** Which list this row is in ('rail' | 'overview' | …). It only scopes the
    *  test ids: two surfaces legitimately show the same job at the same time,
@@ -24,26 +24,42 @@ export function PendingCreateRow({ status, surface, onOpen, onDismiss }: {
   /** Dismisses a FINISHED job. Absent while it is running — the server
    *  refuses that, and offering a dead control is worse than offering none. */
   onDismiss?: (createId: string) => void;
+  /** Cancels a RUNNING create: stops the work and deletes anything it already
+   *  produced. The exact complement of onDismiss — that one refuses a running
+   *  job and never touches a repo, this one is only for a running job and the
+   *  repo going away is the point — so the two are never offered together. */
+  onCancel?: (createId: string) => void;
 }) {
   const failed = status.state === 'failed';
   const running = status.state === 'running';
+  // A cancellation is the outcome someone ASKED for, so it is neither a
+  // failure nor a success and is drawn as neither: no error to read, no
+  // progress bar for work that stopped, and no 'created' chip over a repo
+  // that does not exist.
+  const cancelled = status.state === 'cancelled';
   const key = surface ? `${surface}-${status.name}` : status.name;
 
   return (
     <div
       data-testid={`pending-create-${key}`}
-      data-create-state={failed ? 'create-failed' : running ? 'creating' : 'created'}
+      data-create-state={failed ? 'create-failed' : cancelled ? 'create-cancelled' : running ? 'creating' : 'created'}
       style={row}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-        <span style={{ ...name, opacity: failed ? 0.7 : 1 }}>{status.name}</span>
-        <span data-testid={`pending-create-chip-${key}`} style={failed ? failedChip : creatingChip}>
-          {failed ? 'create failed' : running ? 'creating' : 'created'}
+        <span style={{ ...name, opacity: failed || cancelled ? 0.7 : 1 }}>{status.name}</span>
+        <span data-testid={`pending-create-chip-${key}`}
+          style={failed ? failedChip : cancelled ? cancelledChip : creatingChip}>
+          {failed ? 'create failed' : cancelled ? 'cancelled' : running ? 'creating' : 'created'}
         </span>
         {running && onOpen && (
           <button type="button" className="k-bare" style={linkBtn}
             data-testid={`pending-create-open-${key}`}
             onClick={() => onOpen(status.create_id)}>details</button>
+        )}
+        {running && onCancel && (
+          <button type="button" className="k-bare" style={linkBtn}
+            data-testid={`pending-create-cancel-${key}`}
+            onClick={() => onCancel(status.create_id)}>cancel</button>
         )}
         {!running && onDismiss && (
           <button type="button" className="k-bare" style={linkBtn}
@@ -55,6 +71,10 @@ export function PendingCreateRow({ status, surface, onOpen, onDismiss }: {
       {failed ? (
         <div data-testid={`pending-create-error-${key}`} style={errorText}>
           {status.error || 'create failed'}
+        </div>
+      ) : cancelled ? (
+        <div data-testid={`pending-create-cancelled-${key}`} style={messageText}>
+          No repository was added.
         </div>
       ) : (
         <>
@@ -115,6 +135,12 @@ const creatingChip: CSSProperties = {
 // nothing is half-made. The row exists to say why and to be dismissed.
 const failedChip: CSSProperties = {
   ...chipBase, color: '#e2c07a', background: '#262013', border: '1px solid #4a3f22',
+};
+// Grey, not amber: amber is the colour this row uses to say "read me, something
+// did not go as asked". A cancellation went exactly as asked, so it recedes —
+// the row is there to be dismissed, not attended to.
+const cancelledChip: CSSProperties = {
+  ...chipBase, color: '#8a8a8a', background: '#161616', border: '1px solid #2e2e2e',
 };
 const linkBtn: CSSProperties = {
   color: '#7a9ab5', fontSize: 11, padding: 0, background: 'none', border: 'none', cursor: 'pointer',
