@@ -17,6 +17,23 @@ describe('BootScreen', () => {
     expect(screen.getByTestId('boot-phase')).toHaveTextContent('Opening alpha…');
   });
 
+  // The label's size changes with the phase and again when the elapsed
+  // counter appears, so anything rendered BELOW it gets nudged on every
+  // transition. Bar first, label under it: the two elements that do not change
+  // size come first and stay put.
+  it('renders the bar before the label, so a changing label moves nothing above it', () => {
+    render(<BootScreen boot={stateAt('opening', { target: 'alpha' })} onRetry={vi.fn()} now={() => 0} />);
+
+    const bar = screen.getByTestId('boot-bar');
+    const phase = screen.getByTestId('boot-phase');
+    // DOCUMENT_POSITION_FOLLOWING: phase comes after bar in document order.
+    expect(bar.compareDocumentPosition(phase) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // The label reserves its line, so it does not collapse to zero height
+    // before the first phase text and then push the block down when it fills.
+    expect((phase as HTMLElement).style.minHeight).not.toBe('');
+  });
+
   it('drives the bar width from the phase, reaching 100% on the fast path', () => {
     const { rerender } = render(<BootScreen boot={stateAt('connecting')} onRetry={vi.fn()} now={() => 0} />);
     const early = Number(screen.getByTestId('boot-bar').getAttribute('aria-valuenow'));
