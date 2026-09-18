@@ -204,6 +204,12 @@ describe('CreateRepoWizard cancel', () => {
       .toHaveTextContent('Waiting for the current step to finish, then rolling back.');
     // The abandoned progress line is gone rather than left up to look stuck.
     expect(screen.getByTestId('create-progress-headline')).toHaveTextContent('Cancelling…');
+    // ONE STATUS ONLY. The wizard's own 'creating' flag is still true through
+    // a cancel, so the primary button went on reading "Creating…" right beside
+    // this one — a footer claiming both at once is the contradictory status
+    // this screen exists to avoid. Absent, not disabled: the cancel IS the action.
+    expect(screen.queryByRole('button', { name: /^Creating/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /create repository/i })).toBeNull();
 
     // And it STAYS saying so once the 202 lands reading 'cancelling', rather
     // than flicking back to "Cancel create" between the two sources.

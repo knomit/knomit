@@ -493,7 +493,14 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
             Stop checking
           </button>
         )}
-        {step === 'review' && (
+        {/* GONE while a cancel is under way, not merely disabled.
+            `creating` is still true throughout a cancel — the create has not
+            ended — so this button went on reading "Creating…" beside the
+            "Cancelling…" one, and a footer that says both at once is the
+            contradictory status this whole screen was rewritten to stop. The
+            cancel button is the action now, so this one has nothing to say
+            rather than something to say quietly. */}
+        {step === 'review' && !stopping && (
           <button type="button" style={btn(creating || !nameOk, 'primary')} disabled={creating || !nameOk} onClick={handleCreate}>
             {/* "Create repository" after a failure invites the same press
                 again; the label should say what pressing it does NOW. */}
