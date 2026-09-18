@@ -28,6 +28,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -210,22 +211,170 @@ var fetchClient = &http.Client{
 	},
 }
 
+// Retry policy for transient fetch failures. A single 500 from the GitHub
+// release CDN used to fail `make setup` and with it the whole build-test job
+// (job 105443136472: "GET .../libtokenizers.linux-amd64.tar.gz: 500 Internal
+// Server Error", one request, no retry).
+//
+// The numbers are chosen against two failure modes, not one. Too few attempts
+// and a blip still reds the build; too many and a genuine release outage burns
+// the job's timeout instead of failing fast with a readable error. Four
+// attempts with a doubling 2s backoff waits 2+4+8 = 14s in the worst case —
+// long enough to outlast a CDN hiccup, short enough that nobody watching the
+// log thinks the step has hung.
+//
+// These are vars, not consts, only so the tests can shrink the delay and
+// capture the log; nothing in the tool reassigns them.
+var (
+	fetchAttempts             = 4
+	fetchRetryDelay           = 2 * time.Second
+	retryLog        io.Writer = os.Stderr
+)
+
+// backoffFor is the wait BEFORE attempt+1, doubling per attempt.
+func backoffFor(attempt int) time.Duration {
+	return fetchRetryDelay << (attempt - 1)
+}
+
+// retryBudget is the TOTAL time httpGet may spend waiting across all of its
+// retries: the sum of the default schedule. It exists so that a server-supplied
+// Retry-After can redistribute that spending but never exceed it — a
+// `Retry-After: 3600` from a rate limiter must not turn a CI step into an
+// hour-long hang that reads as a hung job.
+func retryBudget() time.Duration {
+	var total time.Duration
+	for attempt := 1; attempt < fetchAttempts; attempt++ {
+		total += backoffFor(attempt)
+	}
+	return total
+}
+
+// retryAdvice says whether a failed attempt is worth repeating and, when the
+// server said so, how long to hold off first.
+type retryAdvice struct {
+	again bool
+	after time.Duration // 0 when the server gave no usable Retry-After
+}
+
+// nextWait picks how long to hold off before the attempt after `attempt`: the
+// doubling backoff is the FLOOR, a longer Retry-After raises it, and whatever
+// is left of the overall budget is the CEILING. A non-positive result means
+// the budget is spent and the caller should stop retrying.
+//
+// A Retry-After SHORTER than the backoff is ignored on purpose. A server may
+// ask us to wait longer; it does not get to ask us to hammer it sooner.
+func nextWait(attempt int, advice retryAdvice, spent time.Duration) time.Duration {
+	wait := backoffFor(attempt)
+	if advice.after > wait {
+		wait = advice.after
+	}
+	if remaining := retryBudget() - spent; wait > remaining {
+		wait = remaining
+	}
+	return wait
+}
+
+// parseRetryAfter reads RFC 9110's Retry-After in either of its two forms,
+// delay-seconds or an HTTP-date, relative to now. Anything unusable — a
+// negative value, a word, an absent header — reports false, and the caller
+// falls back to its own backoff rather than to a zero wait.
+func parseRetryAfter(v string, now time.Time) (time.Duration, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		if d := t.Sub(now); d > 0 {
+			return d, true
+		}
+		// A date already in the past means "you may retry now".
+		return 0, true
+	}
+	return 0, false
+}
+
 // httpGet performs a GET and returns the body, erroring on non-2xx so a 404
 // release URL fails loudly instead of writing an HTML error page to disk.
+//
+// RETRIED: transport errors, 5xx, and 429 Too Many Requests.
+// NOT RETRIED: every other 4xx.
+//
+// That asymmetry is the point of the function. A 5xx, a dropped connection or
+// a rate limit all say the server is having a bad minute and will not be having
+// it in fifteen seconds. A 404 says tools/fetchlibs/spec.go pins a release that
+// does not exist — a wrong pin is not going to become right, and retrying it
+// only delays the message that says so. 429 sits on the 4xx side of the status
+// split and the transient side of the one that matters here; it is the
+// exception, and 403 in the test file is the boundary case proving it is the
+// only one.
+//
+// Every retry is announced on stderr. A silent one turns a 14-second wait into
+// an unexplained pause in a CI log, and the whole reason this exists is so a
+// future reader can see that a flaky download WAS the story.
 func httpGet(url string) (io.ReadCloser, error) {
+	var lastErr error
+	var spent time.Duration
+	for attempt := 1; ; attempt++ {
+		body, advice, err := httpGetOnce(url)
+		if err == nil {
+			return body, nil
+		}
+		lastErr = err
+
+		var wait time.Duration
+		if advice.again && attempt < fetchAttempts {
+			wait = nextWait(attempt, advice, spent)
+		}
+		if wait <= 0 {
+			if attempt > 1 {
+				return nil, fmt.Errorf("after %d attempts: %w", attempt, lastErr)
+			}
+			return nil, lastErr
+		}
+
+		fmt.Fprintf(retryLog, "fetchlibs: %v; retrying in %s (attempt %d of %d)\n",
+			err, wait, attempt+1, fetchAttempts)
+		time.Sleep(wait)
+		spent += wait
+	}
+}
+
+// httpGetOnce performs one GET. It reports whether the failure it returns is
+// the kind worth trying again, and carries the server's own Retry-After when
+// there is a usable one.
+func httpGetOnce(url string) (body io.ReadCloser, advice retryAdvice, err error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		// A URL this tool built out of its own constants is malformed:
+		// re-issuing it produces the same error.
+		return nil, retryAdvice{}, err
 	}
 	resp, err := fetchClient.Do(req)
 	if err != nil {
-		return nil, err
+		// Dial, TLS, header-timeout, connection reset — all transient by
+		// nature, and all of them fail the build today.
+		return nil, retryAdvice{again: true}, err
 	}
 	if resp.StatusCode/100 != 2 {
-		resp.Body.Close()
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		defer resp.Body.Close()
+		// >= 500 rather than /100 == 5 so that a 3xx reaching here — which
+		// means the client REFUSED to follow a redirect, e.g. too many hops —
+		// is treated as the permanent condition it is.
+		advice.again = resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
+		if advice.again {
+			if d, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
+				advice.after = d
+			}
+		}
+		return nil, advice, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	return resp.Body, nil
+	return resp.Body, retryAdvice{}, nil
 }
 
 // downloadTo streams a URL to a destination path, atomically.
