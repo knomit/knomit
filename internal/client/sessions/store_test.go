@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ func TestTouch_InsertsThenBumps(t *testing.T) {
 	if err := s.Touch(ctx, bridgeObs("sid", t0.Add(time.Minute))); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := s.List(ctx, Filter{Now: t0.Add(time.Minute)})
+	rows, _, err := s.List(ctx, Filter{Now: t0.Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestTouch_EmptySessionIDIsNoOp(t *testing.T) {
 	if err := s.Touch(ctx, bridgeObs("", t0)); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := s.List(ctx, Filter{Now: t0, IncludeHidden: true})
+	rows, _, _ := s.List(ctx, Filter{Now: t0, IncludeHidden: true})
 	if len(rows) != 0 {
 		t.Fatalf("a request without a session id must record nothing, got %d rows", len(rows))
 	}
@@ -82,7 +83,7 @@ func TestTouch_HTTPIdentityDerivedAndStableAfterClientInfo(t *testing.T) {
 	if err := s.Touch(ctx, obs); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := s.List(ctx, Filter{Now: t0})
+	rows, _, _ := s.List(ctx, Filter{Now: t0})
 	if rows[0].Transport != "http" || rows[0].InstanceID != DeriveInstanceID("10.0.0.5", "curl/8", "", "") {
 		t.Fatalf("%+v", rows[0])
 	}
@@ -90,7 +91,7 @@ func TestTouch_HTTPIdentityDerivedAndStableAfterClientInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := DeriveInstanceID("10.0.0.5", "curl/8", "mcp-inspector", "0.9")
-	rows, _ = s.List(ctx, Filter{Now: t0})
+	rows, _, _ = s.List(ctx, Filter{Now: t0})
 	if rows[0].InstanceID != want || !rows[0].Initialized || rows[0].ClientName != "mcp-inspector" {
 		t.Fatalf("%+v", rows[0])
 	}
@@ -99,7 +100,7 @@ func TestTouch_HTTPIdentityDerivedAndStableAfterClientInfo(t *testing.T) {
 	if err := s.Touch(ctx, obs); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ = s.List(ctx, Filter{Now: t0.Add(time.Minute)})
+	rows, _, _ = s.List(ctx, Filter{Now: t0.Add(time.Minute)})
 	if rows[0].InstanceID != want {
 		t.Fatalf("instance id drifted: %s", rows[0].InstanceID)
 	}
@@ -114,7 +115,7 @@ func TestSetClientInfo_BeforeFirstTouchCreatesRow(t *testing.T) {
 	if err := s.Touch(ctx, bridgeObs("sid", t0.Add(time.Second))); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := s.List(ctx, Filter{Now: t0.Add(time.Second)})
+	rows, _, _ := s.List(ctx, Filter{Now: t0.Add(time.Second)})
 	r := rows[0]
 	if r.ClientName != "claude-code" || !r.Initialized || r.Transport != "stdio" || r.InstanceID != "inst1" || r.RequestCount != 1 {
 		t.Fatalf("%+v", r)
@@ -130,7 +131,7 @@ func TestEnd_MarksDead(t *testing.T) {
 	if err := s.End(ctx, "sid", t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := s.List(ctx, Filter{Now: t0.Add(2 * time.Second)})
+	rows, _, _ := s.List(ctx, Filter{Now: t0.Add(2 * time.Second)})
 	if rows[0].State != StateDead || rows[0].Ended == nil {
 		t.Fatalf("%+v", rows[0])
 	}
@@ -151,7 +152,7 @@ func TestList_StatesFilterAndHidden(t *testing.T) {
 	other.Binding = "repo:uid2"
 	_ = s.Touch(ctx, other)
 
-	rows, err := s.List(ctx, Filter{Now: now})
+	rows, _, err := s.List(ctx, Filter{Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,11 +169,11 @@ func TestList_StatesFilterAndHidden(t *testing.T) {
 	if rows[0].ID != "other" { // newest last_seen first
 		t.Fatalf("order: %s", rows[0].ID)
 	}
-	rows, _ = s.List(ctx, Filter{Now: now, IncludeHidden: true})
+	rows, _, _ = s.List(ctx, Filter{Now: now, IncludeHidden: true})
 	if len(rows) != 5 {
 		t.Fatalf("include hidden: %d", len(rows))
 	}
-	rows, _ = s.List(ctx, Filter{Now: now, Binding: "repo:uid2"})
+	rows, _, _ = s.List(ctx, Filter{Now: now, Binding: "repo:uid2"})
 	if len(rows) != 1 || rows[0].ID != "other" {
 		t.Fatalf("binding filter: %+v", rows)
 	}
@@ -189,7 +190,7 @@ func TestPurge_RetentionBoundaryAndDisabled(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
-	rows, _ := s.List(ctx, Filter{Now: now, IncludeHidden: true})
+	rows, _, _ := s.List(ctx, Filter{Now: now, IncludeHidden: true})
 	if len(rows) != 2 {
 		t.Fatalf("%d rows remain", len(rows))
 	}
@@ -218,7 +219,7 @@ func TestSessionIDIsCapped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := s.List(ctx, Filter{Now: t0.Add(time.Second), IncludeHidden: true})
+	rows, _, err := s.List(ctx, Filter{Now: t0.Add(time.Second), IncludeHidden: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +266,7 @@ func TestTouch_AfterEndRevivesTheRow(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			rows, err := s.List(ctx, Filter{Now: t0.Add(2 * time.Second)})
+			rows, _, err := s.List(ctx, Filter{Now: t0.Add(2 * time.Second)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -298,7 +299,7 @@ func TestSetClientInfo_DerivesHTTPIdentityFromTheRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows, err := s.List(ctx, Filter{Now: t0})
+	rows, _, err := s.List(ctx, Filter{Now: t0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +324,7 @@ func TestSetClientInfo_DerivesHTTPIdentityFromTheRequest(t *testing.T) {
 	if err := s.Touch(ctx, obs); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ = s.List(ctx, Filter{Now: t0.Add(time.Minute)})
+	rows, _, _ = s.List(ctx, Filter{Now: t0.Add(time.Minute)})
 	for _, r := range rows {
 		if r.ID == "s1" && r.InstanceID != DeriveInstanceID("198.51.100.1", "curl/8", "mcp-inspector", "0.9") {
 			t.Fatalf("instance id drifted on the first Touch: %s", r.InstanceID)
@@ -342,8 +343,89 @@ func TestSetClientInfo_DoesNotClobberDeclaredIdentity(t *testing.T) {
 	if err := s.SetClientInfo(ctx, "sid", "repo:uid1", "claude-code", "2.0", "198.51.100.1", "knomit-bridge/1", t0); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ := s.List(ctx, Filter{Now: t0})
+	rows, _, _ := s.List(ctx, Filter{Now: t0})
 	if rows[0].InstanceID != "inst1" || rows[0].Transport != "stdio" {
 		t.Fatalf("declared identity overwritten: %+v", rows[0])
+	}
+}
+
+// TRUNCATION KEEPS THE NEWEST ROWS, IN ORDER. A count-only assertion would pass
+// against a LIMIT that kept an arbitrary page, which for a presence view is the
+// wrong page: the sessions worth showing are the most recently active.
+func TestList_TruncationKeepsNewestInOrder(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Distinguishable last_seen times, seeded OLDEST first so insertion order
+	// cannot be what makes the assertion pass.
+	const n = 12
+	for i := 0; i < n; i++ {
+		o := bridgeObs(fmt.Sprintf("s%02d", i), t0.Add(time.Duration(i)*time.Minute))
+		if err := s.Touch(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, truncated, err := s.List(ctx, Filter{Now: t0.Add(time.Hour), IncludeHidden: true, Limit: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated {
+		t.Fatal("more rows matched than were returned; truncated must be true")
+	}
+	if len(rows) != 5 {
+		t.Fatalf("got %d rows, want exactly the limit", len(rows))
+	}
+	// last_seen_at DESC: the five newest are s11..s07, in that order.
+	want := []string{"s11", "s10", "s09", "s08", "s07"}
+	for i, id := range want {
+		if rows[i].ID != id {
+			got := make([]string, len(rows))
+			for j, r := range rows {
+				got[j] = r.ID
+			}
+			t.Fatalf("row %d is %q, want %q (full page %v, want %v)", i, rows[i].ID, id, got, want)
+		}
+	}
+}
+
+// truncated distinguishes a full page from an exhausted one. Both return the
+// same number of rows, so nothing but this flag can tell them apart.
+func TestList_TruncatedIsFalseOnExactFit(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		_ = s.Touch(ctx, bridgeObs(fmt.Sprintf("s%d", i), t0.Add(time.Duration(i)*time.Minute)))
+	}
+
+	// Exactly the limit: full page, nothing beyond it.
+	rows, truncated, err := s.List(ctx, Filter{Now: t0.Add(time.Hour), IncludeHidden: true, Limit: 5})
+	if err != nil || len(rows) != 5 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
+	}
+	if truncated {
+		t.Fatal("an exactly-full page is not truncated — the probe row must not be counted")
+	}
+	// One fewer than the limit: also not truncated.
+	if _, truncated, _ := s.List(ctx, Filter{Now: t0.Add(time.Hour), IncludeHidden: true, Limit: 6}); truncated {
+		t.Fatal("an under-full page is not truncated")
+	}
+}
+
+// The limit has a default and a ceiling, and there is no way to ask for the
+// unbounded read back.
+func TestResolveListLimit(t *testing.T) {
+	for in, want := range map[int]int{
+		0:                DefaultListLimit,
+		-1:               DefaultListLimit,
+		1:                1,
+		DefaultListLimit: DefaultListLimit,
+		MaxListLimit:     MaxListLimit,
+		MaxListLimit + 1: MaxListLimit,
+		1 << 30:          MaxListLimit,
+	} {
+		if got := ResolveListLimit(in); got != want {
+			t.Errorf("ResolveListLimit(%d)=%d, want %d", in, got, want)
+		}
 	}
 }

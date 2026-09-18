@@ -1508,6 +1508,16 @@ paths:
           required: false
           schema: { type: string, enum: [hidden] }
           description: '`hidden` also returns rows silent past `policy.hidden_after_s`.'
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: |
+            Page size. Omitted or non-positive uses the server default; a value
+            above the server maximum is clamped to it. Both are echoed as
+            `policy.limit` and `policy.max_limit`, and there is no unbounded
+            form. The page kept is the most recently active, ordered
+            `last_seen_at DESC, id`; `truncated` says whether more matched.
       responses:
         "200":
           description: HAL collection of client sessions
@@ -3541,7 +3551,14 @@ components:
       allOf:
         - $ref: "#/components/schemas/CollectionBase"
         - type: object
+          required: [truncated]
           properties:
+            truncated:
+              type: boolean
+              description: |
+                True when MORE sessions matched than were returned. A caller
+                must be able to tell a truncated page from an exhausted one — a
+                cut list is otherwise indistinguishable from a complete one.
             policy:
               type: object
               description: The server's thresholds, echoed so clients never hardcode them.
@@ -3554,6 +3571,12 @@ components:
                 live_window_s:
                   type: integer
                   description: Derived as dead_after_s/10; not a separate setting.
+                limit:
+                  type: integer
+                  description: The page size this response was built with, after default and clamp.
+                max_limit:
+                  type: integer
+                  description: The largest `?limit=` the server accepts.
             _embedded:
               type: object
               properties:

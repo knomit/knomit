@@ -138,7 +138,7 @@ func TestStore_WithoutHub_WritesSucceedAndSubscribeNeverDelivers(t *testing.T) {
 	if err := s.Touch(ctx, bridgeObs("sid", t0)); err != nil {
 		t.Fatalf("Touch on a hubless store: %v", err)
 	}
-	rows, err := s.List(ctx, Filter{Now: t0})
+	rows, _, err := s.List(ctx, Filter{Now: t0})
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("List: %d rows, %v; want 1, nil", len(rows), err)
 	}

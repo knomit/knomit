@@ -30,7 +30,7 @@ func TestManagerStart_OpensClientSessionsStore(t *testing.T) {
 
 	m.tickSessionReaper(ctx, sessionReaperConfig{})
 
-	rows, err := s.List(ctx, sessions.Filter{Now: now, IncludeHidden: true})
+	rows, _, err := s.List(ctx, sessions.Filter{Now: now, IncludeHidden: true})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "new", rows[0].ID)

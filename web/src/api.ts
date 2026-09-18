@@ -1086,25 +1086,38 @@ export interface ClientSession {
   remote_addr: string; user_agent: string;
   first_seen_at: string; last_seen_at: string; ended_at: string | null; request_count: number;
 }
-export interface ClientSessionPolicy { dead_after_s: number; hidden_after_s: number; retention_s: number; live_window_s: number }
-export interface ClientSessionsResponse { sessions: ClientSession[]; policy: ClientSessionPolicy }
+// `limit` is the page size the server actually used and `max_limit` the largest
+// it will accept, echoed for the same reason the thresholds are: so the UI never
+// hardcodes a number that can disagree with the server.
+export interface ClientSessionPolicy {
+  dead_after_s: number; hidden_after_s: number; retention_s: number; live_window_s: number;
+  limit: number; max_limit: number;
+}
+// `truncated` says MORE sessions matched than came back. Without it a cut page
+// and a complete one are indistinguishable, which is why the server sends it
+// rather than leaving the UI to infer it from a count.
+export interface ClientSessionsResponse { sessions: ClientSession[]; policy: ClientSessionPolicy; truncated: boolean }
 
 // listClientSessions GETs /api/v1/sessions — every MCP client session the
 // server has seen recently (presence), or the whole retention window with
 // includeHidden. Unwraps the HAL collection like listLenses. The policy rides
 // along so the UI never hardcodes a threshold.
-async function listClientSessions(opts: { binding?: string; includeHidden?: boolean } = {}): Promise<ClientSessionsResponse> {
+async function listClientSessions(opts: { binding?: string; includeHidden?: boolean; limit?: number } = {}): Promise<ClientSessionsResponse> {
   const q = new URLSearchParams();
   if (opts.binding) q.set('binding', opts.binding);
   if (opts.includeHidden) q.set('include', 'hidden');
+  if (opts.limit) q.set('limit', String(opts.limit));
   const qs = q.toString();
-  const data = await fetchJSON<{ policy: ClientSessionPolicy; _embedded?: { sessions?: ClientSession[] } }>(
+  const data = await fetchJSON<{ policy: ClientSessionPolicy; truncated?: boolean; _embedded?: { sessions?: ClientSession[] } }>(
     apiUrl('/api/v1/sessions' + (qs ? `?${qs}` : '')));
   // `bindings` is defaulted rather than trusted: a server older than the
   // binding-set release omits the key entirely, and every consumer maps over
   // it.
   const sessions = (data._embedded?.sessions ?? []).map(s => ({ ...s, bindings: s.bindings ?? [] }));
-  return { sessions, policy: data.policy };
+  // `truncated` defaulted for the same reason `bindings` is: a server older
+  // than this release omits the key, and `undefined` would render as "not
+  // truncated", which is the safe reading for a server that never truncates.
+  return { sessions, policy: data.policy, truncated: data.truncated ?? false };
 }
 
 // listLenses GETs /api/v1/lenses and unwraps the HAL CollectionView

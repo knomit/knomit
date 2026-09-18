@@ -22,7 +22,7 @@ const ORIGIN_PUSH_REJECTED = {
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
   api: {
-    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
+    listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
     listArchived: vi.fn().mockResolvedValue([]),
     listLenses: vi.fn().mockResolvedValue([]),
     getLens: vi.fn().mockResolvedValue({ name: 'all', write: { uid: 'uid-core', name: 'core' }, reads: [] }),
@@ -324,7 +324,8 @@ describe('live sessions line', () => {
 
   it('counts only live sessions and opens the Sessions pane', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
-      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 },
+      truncated: false,
+      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 },
       sessions: [session('live'), session('live'), session('dead')],
     });
     render(<RepoManager {...baseProps} />);
@@ -338,7 +339,8 @@ describe('live sessions line', () => {
 
   it('renders the live line from the count RepoManager already owns, without a fetch of its own', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
-      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 },
+      truncated: false,
+      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 },
       sessions: [session('live'), session('dead')],
     });
     render(<RepoManager {...baseProps} />);

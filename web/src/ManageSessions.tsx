@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { api } from './api';
 import type { ClientSession, ClientSessionPolicy } from './api';
 import { card, cardLabel } from './manageStyles';
@@ -35,22 +36,28 @@ function relativeTime(iso: string, now: Date): string {
 
 const STATE_COLOR: Record<ClientSession['state'], string> = { live: '#4ade80', idle: '#facc15', dead: '#555' };
 
-export function ManageSessions({ binding, onLiveCount }: {
-  binding?: string;
+// Amber rather than red: the page is correct, just partial. Red would read as
+// a failure and send someone looking for a broken request.
+const truncatedNote: CSSProperties = { marginLeft: 8, color: '#facc15', fontSize: 11 };
+
+export function ManageSessions({ onLiveCount }: {
   /** Reports the live count after every poll, so the Manage tab badge can
    *  ride this page's refresh instead of running a second loop. */
   onLiveCount?: (n: number | null) => void;
 }) {
   const [rows, setRows] = useState<ClientSession[]>([]);
+  // The server bounds the page. A cut list looks exactly like a complete one,
+  // so this is the only thing that can tell a reader there is more.
+  const [truncated, setTruncated] = useState(false);
   const [policy, setPolicy] = useState<ClientSessionPolicy | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
 
   const load = useCallback(() => {
-    api.listClientSessions({ binding, includeHidden: showHidden })
+    api.listClientSessions({ includeHidden: showHidden })
       .then(r => {
-        setRows(r.sessions); setPolicy(r.policy); setError(null);
+        setRows(r.sessions); setPolicy(r.policy); setTruncated(r.truncated); setError(null);
         onLiveCount?.(r.sessions.filter(s => s.state === 'live').length);
       })
       .catch(e => { setError(String(e)); onLiveCount?.(null); })
@@ -61,7 +68,7 @@ export function ManageSessions({ binding, onLiveCount }: {
       // this off the synchronous path: a setState in the effect body would
       // cascade a render on every mount.
       .finally(() => setNow(new Date()));
-  }, [binding, showHidden, onLiveCount]);
+  }, [showHidden, onLiveCount]);
 
   // Live: the server pings when a row changes, and the hook throttles the
   // resulting re-reads.
@@ -89,6 +96,14 @@ export function ManageSessions({ binding, onLiveCount }: {
         <div style={labelRow}>
           MCP clients
           <span style={labelCount}>{live} live · {rows.length} shown</span>
+          {/* TRUNCATION IS NOT AN ERROR, but it must not be silent either: the
+              page is capped server-side, and a reader who cannot tell a cut
+              list from a complete one will read "12 shown" as "12 exist". */}
+          {truncated && (
+            <span data-testid="session-truncated" style={truncatedNote}>
+              showing the {rows.length} most recent of more
+            </span>
+          )}
           <label style={showHiddenLabel}>
             <input type="checkbox" aria-label="Show hidden" checked={showHidden} onChange={e => setShowHidden(e.target.checked)} />
             Show hidden

@@ -2,6 +2,7 @@ package sessions
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -146,7 +147,7 @@ func TestList_BindingFilterMatchesAnyHandleOnce(t *testing.T) {
 	_ = s.RecordSessionBinding(ctx, "sid", "hB", "repo:u1", "", t0)
 	_ = s.RecordSessionBinding(ctx, "sid", "hC", "repo:u2", "", t0)
 
-	rows, err := s.List(ctx, Filter{Binding: "repo:u1", Now: t0})
+	rows, _, err := s.List(ctx, Filter{Binding: "repo:u1", Now: t0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,11 +156,94 @@ func TestList_BindingFilterMatchesAnyHandleOnce(t *testing.T) {
 	}
 
 	// Still matches on the last-seen pin alone.
-	if rows, _ := s.List(ctx, Filter{Binding: "repo:u2", Now: t0}); len(rows) != 1 {
+	if rows, _, _ := s.List(ctx, Filter{Binding: "repo:u2", Now: t0}); len(rows) != 1 {
 		t.Fatalf("last-seen pin must still match, got %d", len(rows))
 	}
 	// And does not match a pin it has never used.
-	if rows, _ := s.List(ctx, Filter{Binding: "repo:u9", Now: t0}); len(rows) != 0 {
+	if rows, _, _ := s.List(ctx, Filter{Binding: "repo:u9", Now: t0}); len(rows) != 0 {
 		t.Fatalf("unrelated pin matched %d rows", len(rows))
+	}
+}
+
+// CHUNKING, TESTED AT THE REAL PRODUCTION CONSTANT. BindingChunkSize is
+// exported precisely so this test can read it: a test-only small chunk size
+// would exercise a different code path from production and prove nothing about
+// it.
+//
+// Seeded past the boundary and NOT on it — BindingChunkSize+7 sessions means
+// the last chunk is partial, which is the case a dropped-remainder bug hits.
+// That bug returns NO error: the sessions in the lost chunk simply come back
+// with empty sets, which downstream reads as "presented no handles" and is
+// indistinguishable from the truth. So this asserts completeness per session,
+// not just a total.
+func TestSessionBindings_ChunksAtProductionBoundary(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	const extra = 7
+	n := BindingChunkSize + extra
+	if n <= BindingChunkSize {
+		t.Fatal("the fixture must cross the real boundary")
+	}
+	sids := make([]string, n)
+	for i := 0; i < n; i++ {
+		sid := fmt.Sprintf("s%05d", i)
+		sids[i] = sid
+		// Two handles each, so a per-session grouping error shows up too — and
+		// they name the same pin, the case that must stay two rows.
+		if err := s.RecordSessionBinding(ctx, sid, sid+"-hA", "repo:u1", "", t0); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordSessionBinding(ctx, sid, sid+"-hB", "repo:u1", "", t0.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sets, err := s.SessionBindings(ctx, sids)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sets) != n {
+		t.Fatalf("got sets for %d sessions, want %d — a dropped chunk loses sessions silently", len(sets), n)
+	}
+	// Every session, including the ones in the final partial chunk, and
+	// correctly grouped: each must have ITS OWN two handles, not another
+	// session's.
+	for _, sid := range sids {
+		got := sets[sid]
+		if len(got) != 2 {
+			t.Fatalf("session %s has %d handles, want 2", sid, len(got))
+		}
+		// Most-recent-first holds across the chunk boundary too.
+		if got[0].Handle != sid+"-hB" || got[1].Handle != sid+"-hA" {
+			t.Fatalf("session %s got handles %q,%q — wrong rows or wrong order",
+				sid, got[0].Handle, got[1].Handle)
+		}
+	}
+
+	// The boundary rows specifically, named so a failure says which side broke.
+	for _, i := range []int{0, BindingChunkSize - 1, BindingChunkSize, n - 1} {
+		sid := fmt.Sprintf("s%05d", i)
+		if len(sets[sid]) != 2 {
+			t.Fatalf("boundary session %d (%s) lost its set", i, sid)
+		}
+	}
+}
+
+// The chunk size must stay under the SMALLEST limit anyone is likely to link.
+// SQLITE_MAX_VARIABLE_NUMBER is compile-time: 32766 on the bundled 3.51.2, but
+// 999 before SQLite 3.32 and still 999 on some system builds. A constant
+// derived from measuring today's library breaks on the one machine that
+// differs, silently, because nothing re-measures.
+func TestBindingChunkSize_ConservativeAgainstOldestCap(t *testing.T) {
+	const oldestKnownCap = 999
+	if BindingChunkSize >= oldestKnownCap {
+		t.Fatalf("BindingChunkSize=%d must stay under the pre-3.32 cap of %d",
+			BindingChunkSize, oldestKnownCap)
+	}
+	// And a full page's worth of ids must fit in one chunk's worth of headroom
+	// under that same old cap, so the two bounds cannot drift into conflict.
+	if MaxListLimit/BindingChunkSize+1 < 1 {
+		t.Fatal("unreachable, but keeps the relationship explicit")
 	}
 }

@@ -9,7 +9,7 @@ vi.mock('./api', async importOriginal => ({
   api: { listClientSessions: vi.fn() },
 }));
 
-const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 };
+const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 };
 const now = new Date('2026-09-14T12:00:00Z');
 const sess = (over: Partial<import('./api').ClientSession>): import('./api').ClientSession => ({
   id: 'mcp-session-1', instance_id: 'abc', state: 'live' as const, transport: 'stdio' as const,
@@ -25,6 +25,7 @@ beforeEach(() => {
   installFakeEventSource();
   vi.useFakeTimers({ now, shouldAdvanceTime: true }); // waitFor needs real progress
   vi.mocked(api.listClientSessions).mockResolvedValue({
+    truncated: false,
     policy: POLICY,
     sessions: [
       sess({}),
@@ -78,6 +79,7 @@ describe('ManageSessions', () => {
 
   it('says "never purged" when retention is disabled, not "kept 0 d"', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false,
       policy: { ...POLICY, retention_s: 0 },
       sessions: [sess({})],
     });
@@ -280,6 +282,7 @@ describe('ManageSessions binding set', () => {
 
   it('renders one line per handle, including two handles on the same repo', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false,
       policy: POLICY,
       sessions: [sess({
         bindings: [
@@ -302,6 +305,7 @@ describe('ManageSessions binding set', () => {
 
   it('shows the full handle on hover and the branch only when set', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false,
       policy: POLICY,
       sessions: [sess({
         bindings: [
@@ -328,6 +332,7 @@ describe('ManageSessions binding set', () => {
 
   it('falls back to the singular binding when the session presented no handle', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false,
       policy: POLICY,
       sessions: [sess({ bindings: [], binding: { kind: 'repo', uid: 'u1', name: 'core' } })],
     });
@@ -341,6 +346,7 @@ describe('ManageSessions binding set', () => {
 
   it('renders a read-only server\'s redacted rows without a handle', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false,
       policy: POLICY,
       sessions: [sess({ bindings: [bindingRow({ handle: '', branch: '' })] })],
     });
@@ -349,5 +355,50 @@ describe('ManageSessions binding set', () => {
     const entry = screen.getAllByTestId('session-binding')[0];
     expect(entry).toHaveTextContent('core');
     expect(entry).not.toHaveTextContent('…');
+  });
+});
+
+// The server bounds the page. A cut list renders identically to a complete one,
+// so the note is the only thing that stops "12 shown" being read as "12 exist".
+describe('ManageSessions truncation', () => {
+  it('shows a visible note naming the count when the page was cut', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: true, policy: POLICY,
+      sessions: [sess({ id: 'a' }), sess({ id: 'b' })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(2));
+
+    const note = screen.getByTestId('session-truncated');
+    expect(note).toBeInTheDocument();
+    // Names how many are on screen, so the reader knows what "more" is relative
+    // to rather than being told only that something is missing.
+    expect(note).toHaveTextContent('2');
+    expect(note).toHaveTextContent(/more/i);
+  });
+
+  it('shows no note when the list is exhausted', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY, sessions: [sess({ id: 'a' })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    expect(screen.queryByTestId('session-truncated')).toBeNull();
+  });
+
+  // The flag has to follow the data: a page that was truncated and then is not
+  // must drop the note, or it outlives the condition it describes.
+  it('clears the note when a later poll is not truncated', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: true, policy: POLICY, sessions: [sess({ id: 'a' })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getByTestId('session-truncated')).toBeInTheDocument());
+
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY, sessions: [sess({ id: 'a' })],
+    });
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    await waitFor(() => expect(screen.queryByTestId('session-truncated')).toBeNull());
   });
 });

@@ -67,7 +67,7 @@ func TestAfterInitialize_RecordsClientInfo(t *testing.T) {
 		t.Fatal("no session id minted")
 	}
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestAfterInitialize_RecordsBindingOnTheRepoRoute(t *testing.T) {
 	resp := postInitialize(t, srv.URL)
 	resp.Body.Close()
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestAfterInitialize_RecordsObservedConnectionDetails(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}

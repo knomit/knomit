@@ -309,7 +309,7 @@ func TestIncident20260917_TwoCoworkJobsOneMCPSession(t *testing.T) {
 
 	// And the filter finds this session through EITHER job's binding, once.
 	for _, pin := range []string{"repo:uid-jobA-repo", "repo:uid-jobB-repo"} {
-		rows, ferr := store.List(context.Background(), sessions.Filter{Binding: pin, Now: time.Now()})
+		rows, _, ferr := store.List(context.Background(), sessions.Filter{Binding: pin, Now: time.Now()})
 		require.NoError(t, ferr)
 		require.Len(t, rows, 1, "filter on %s must find the session exactly once", pin)
 		require.Equal(t, sid, rows[0].ID)
