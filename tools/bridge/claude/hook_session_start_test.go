@@ -242,8 +242,8 @@ func TestSessionStart_FallsBackToInvariantsWhenNoGlobalPrinciples(t *testing.T) 
 func TestSessionStart_MultipleServersLogsTheSkipReason(t *testing.T) {
 	dir := t.TempDir()
 	cfg := `{"mcpServers":{
-		"knomit-repo-a":{"command":"knomit-bridge","args":["--repo","a"]},
-		"knomit-repo-b":{"command":"knomit-bridge","args":["--repo","b"]}
+		"knomit-repo-a":{"command":"kb","args":["--repo","a"]},
+		"knomit-repo-b":{"command":"kb","args":["--repo","b"]}
 	}}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644))
 

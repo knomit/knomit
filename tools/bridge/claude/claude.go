@@ -5,7 +5,7 @@ import "fmt"
 // Run dispatches the `claude <subcommand>` arguments.
 func Run(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: knomit-bridge claude <subcommand> (init | hook)")
+		return fmt.Errorf("usage: kb claude <subcommand> (init | hook)")
 	}
 	switch args[0] {
 	case "init":

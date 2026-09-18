@@ -7,13 +7,17 @@ func TestIsKnomitCommand(t *testing.T) {
 		cmd  string
 		want bool
 	}{
-		{"knomit-bridge", true},
-		{"/usr/local/bin/knomit-bridge", true},
-		{"knomit-bridge.exe", true},
-		// Note: a `C:\...\knomit-bridge.exe` style path is only split correctly
+		{"kb", true},
+		{"/usr/local/bin/kb", true},
+		{"kb.exe", true},
+		// Note: a `C:\...\kb.exe` style path is only split correctly
 		// by filepath.Base on Windows. That is fine — the config is written and
 		// read on the same machine — so there is no cross-platform row here.
-		{"knomit-bridge-dev", false}, // a wrapper/dev build is NOT a command match
+		{"kb-dev", false}, // a wrapper/dev build is NOT a command match
+		// The pre-rename name. The rename shipped no compatibility alias, so
+		// an un-migrated config is not recognised and init re-scaffolds beside it.
+		{"knomit-bridge", false},
+		{"/usr/local/bin/knomit-bridge", false},
 		{"something-else", false},
 		{"", false},
 	} {

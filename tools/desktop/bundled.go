@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/rs/zerolog/log"
 )
 
 // The CLI tools shipped next to the desktop binary (Contents/MacOS in the
@@ -15,16 +17,48 @@ import (
 // dylibs — so they run straight from where they are staged.
 const (
 	// bridgeExecName is the stdio↔HTTP MCP adapter stdio clients launch.
-	bridgeExecName = "knomit-bridge"
+	bridgeExecName = "kb"
+	// legacyBridgeExecName is what bridgeExecName was called before the rename.
+	// <home>/bin is a directory this app installs into and owns, so a link or
+	// copy it left there under the old name is its own artefact to clean up —
+	// not a user configuration, which the rename deliberately does not migrate.
+	legacyBridgeExecName = "knomit-bridge"
 	// okfExecName is the OKF export CLI.
 	okfExecName = "knomit-okf"
 )
 
-// installBridgeTool exposes the bundled knomit-bridge at a stable path so
+// installBridgeTool exposes the bundled kb at a stable path so
 // MCP client configs can launch it by a path that survives app moves and
 // updates.
 func installBridgeTool(home string) (string, error) {
+	removeLegacyBridgeTool(filepath.Join(home, "bin"))
 	return installBundledTool(home, bridgeExecName)
+}
+
+// removeLegacyBridgeTool deletes a pre-rename bridge install from binDir.
+//
+// The remove is unconditional rather than gated on the entry being a symlink,
+// because the two platforms leave different debris and both have to go: macOS
+// linked the tool in and is left with a symlink dangling into the .app, while
+// linux and windows copied it (placeTool) and are left with a real binary that
+// goes on launching the pre-rename code forever. Only the copy has teeth, and
+// it is the one a symlink check would skip.
+//
+// Deliberately NOT part of the install's result. On Windows a client holding
+// the old .exe open makes this fail with a sharing violation — the same
+// condition replaceFile documents below — and aborting over that would trade a
+// stale extra binary for no working one. The suffix comes from exeSuffix for
+// the same reason the install's target does: without it Windows would try to
+// remove a name that never existed.
+func removeLegacyBridgeTool(binDir string) {
+	old := filepath.Join(binDir, legacyBridgeExecName+exeSuffix)
+	if err := os.Remove(old); err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("path", old).Msg("kb: pre-rename bridge install not removed")
+		}
+		return
+	}
+	log.Info().Str("path", old).Msg("kb: removed the pre-rename bridge install")
 }
 
 // installOKFTool exposes the bundled knomit-okf on the same stable path.
@@ -93,11 +127,11 @@ func sweepToolDebris(binDir string) {
 
 // exeSuffix is what the OS requires on the end of an executable's filename.
 //
-// The bundled tools are built as knomit-bridge.exe and knomit-okf.exe on
+// The bundled tools are built as kb.exe and knomit-okf.exe on
 // Windows (the Makefile's $(EXE)), so looking for the bare name finds nothing
 // and BOTH installs are skipped — with a warning, because callers treat this
 // as best-effort, so the app comes up looking healthy while no MCP client can
-// find knomit-bridge and `knomit-okf` is not on the user's PATH.
+// find kb and `knomit-okf` is not on the user's PATH.
 //
 // It also has to be on the DESTINATION name, which it is: placeTool names the
 // installed copy after target's base.
@@ -240,7 +274,7 @@ func copyInto(binDir, target string) (string, error) {
 // open is legal, and the open fd keeps the old inode alive. On WINDOWS it is
 // not. A file that is mapped as a running executable cannot be deleted or
 // overwritten, so the rename fails with a sharing violation whenever the user
-// has an MCP client holding knomit-bridge.exe open — which, since the client
+// has an MCP client holding kb.exe open — which, since the client
 // is the reason the tool is installed, is the common case rather than the
 // exotic one.
 //

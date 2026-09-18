@@ -49,7 +49,7 @@ func TestRunInit_EmptyDirectory_DropsAllFiles(t *testing.T) {
 
 	// No .claude/hooks/ directory should be created
 	if _, err := os.Stat(filepath.Join(dir, ".claude/hooks")); err == nil {
-		t.Error(".claude/hooks/ should NOT be created; hooks are now in knomit-bridge binary")
+		t.Error(".claude/hooks/ should NOT be created; hooks are now in kb binary")
 	}
 }
 
@@ -83,9 +83,9 @@ func TestRunInit_SettingsJsonReferencesGoHooks(t *testing.T) {
 
 	// Must reference the three Go-based hook commands we ship.
 	wantHooks := []string{
-		"knomit-bridge claude hook session-start",
-		"knomit-bridge claude hook post-edit",
-		"knomit-bridge claude hook pre-compact",
+		"kb claude hook session-start",
+		"kb claude hook post-edit",
+		"kb claude hook pre-compact",
 	}
 	for _, h := range wantHooks {
 		if !strings.Contains(content, h) {
@@ -153,7 +153,7 @@ func TestRunInit_UnmergeableMcpJson_DropsCompanion(t *testing.T) {
 }
 
 // TestRunInit_ExistingMcpJson_DifferentKnomitKey_DropsCompanion is the one
-// .mcp.json case init still refuses to merge. A knomit-bridge entry under some
+// .mcp.json case init still refuses to merge. A kb entry under some
 // OTHER key is a scope init cannot reconcile: adding the derived key beside it
 // would give the project two knomit scopes, which disables the hooks outright
 // (see the one-scope-per-project rule in mcpBinding). Only a human can say
@@ -163,7 +163,7 @@ func TestRunInit_ExistingMcpJson_DifferentKnomitKey_DropsCompanion(t *testing.T)
 	chdir(t, dir)
 
 	// The legacy constant key, from before the key was derived per scope.
-	existing := []byte(`{"mcpServers":{"knomit":{"command":"knomit-bridge","args":["--repo","legacy"]}}}`)
+	existing := []byte(`{"mcpServers":{"knomit":{"command":"kb","args":["--repo","legacy"]}}}`)
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), existing, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -372,8 +372,8 @@ func TestRunInit_ScaffoldedConfigBindsHooks(t *testing.T) {
 func TestMcpBinding_MultipleKnomitServers(t *testing.T) {
 	dir := t.TempDir()
 	cfg := `{"mcpServers":{
-		"knomit-codebase":{"command":"knomit-bridge","args":["--repo","codebase"]},
-		"knomit-agentic":{"command":"knomit-bridge","args":["--lens","agentic"]}
+		"knomit-codebase":{"command":"kb","args":["--repo","codebase"]},
+		"knomit-agentic":{"command":"kb","args":["--lens","agentic"]}
 	}}`
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
@@ -695,7 +695,7 @@ const handFormattedSettings = `{
         "hooks": [
           {
             "type": "command",
-            "command": "knomit-bridge claude hook session-start"
+            "command": "kb claude hook session-start"
           }
         ]
       }
@@ -706,7 +706,7 @@ const handFormattedSettings = `{
         "hooks": [
           {
             "type": "command",
-            "command": "knomit-bridge claude hook post-edit"
+            "command": "kb claude hook post-edit"
           }
         ]
       },
@@ -715,7 +715,7 @@ const handFormattedSettings = `{
         "hooks": [
           {
             "type": "command",
-            "command": "knomit-bridge claude hook post-ask"
+            "command": "kb claude hook post-ask"
           }
         ]
       }
@@ -726,7 +726,7 @@ const handFormattedSettings = `{
         "hooks": [
           {
             "type": "command",
-            "command": "knomit-bridge claude hook pre-compact"
+            "command": "kb claude hook pre-compact"
           }
         ]
       }
@@ -852,7 +852,7 @@ func TestRunInit_SecondRun_IsByteIdenticalNoOp(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "knomit-bridge claude hook memory-guard"
+            "command": "kb claude hook memory-guard"
           }
         ]
       }
@@ -862,7 +862,7 @@ func TestRunInit_SecondRun_IsByteIdenticalNoOp(t *testing.T) {
 		writeFixture(t, filepath.Join(dir, ".mcp.json"), fmt.Sprintf(`{
   "mcpServers": {
     %q: {
-      "command": "knomit-bridge",
+      "command": "kb",
       "args": ["--repo", "x"]
     }
   }
@@ -919,7 +919,7 @@ func TestRunInit_ExistingSettings_MergesTemplateHooks(t *testing.T) {
 	})
 
 	got := mustRead(t, settingsPath)
-	if !strings.Contains(string(got), "knomit-bridge claude hook memory-guard") {
+	if !strings.Contains(string(got), "kb claude hook memory-guard") {
 		t.Errorf("memory-guard hook was not merged in; got:\n%s", got)
 	}
 	for _, want := range []string{
@@ -968,7 +968,7 @@ func TestRunInit_ExistingSettings_HookUnderUserMatcher_NotDuplicated(t *testing.
         "hooks": [
           {
             "type": "command",
-            "command": "knomit-bridge claude hook post-edit"
+            "command": "kb claude hook post-edit"
           }
         ]
       }
@@ -997,9 +997,9 @@ func TestRunInit_ExistingSettings_HookUnderUserMatcher_NotDuplicated(t *testing.
 }
 
 // TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated: hooks are
-// commonly registered by absolute path, because knomit-bridge is not on $PATH
+// commonly registered by absolute path, because kb is not on $PATH
 // outside the macOS .app. A plain string compare treats
-// "<dir>/knomit-bridge claude hook post-edit" as a different hook and registers
+// "<dir>/kb claude hook post-edit" as a different hook and registers
 // a second copy — which then runs the SAME hook twice per edit.
 func TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated(t *testing.T) {
 	dir := t.TempDir()
@@ -1014,7 +1014,7 @@ func TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated(t *testi
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge claude hook post-edit"
+            "command": "${CLAUDE_PROJECT_DIR:-.}/dist/kb claude hook post-edit"
           }
         ]
       }
@@ -1025,7 +1025,7 @@ func TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated(t *testi
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/local/bin/knomit-bridge claude hook session-start"
+            "command": "/usr/local/bin/kb claude hook session-start"
           }
         ]
       }
@@ -1046,7 +1046,7 @@ func TestRunInit_ExistingSettings_PathPrefixedHookCommand_NotDuplicated(t *testi
 		}
 	}
 	// The user's paths are theirs; the merge must not rewrite them to bare names.
-	for _, want := range []string{"${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge", "/usr/local/bin/knomit-bridge"} {
+	for _, want := range []string{"${CLAUDE_PROJECT_DIR:-.}/dist/kb", "/usr/local/bin/kb"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("merge rewrote the user's hook path %q away; got:\n%s", want, got)
 		}
@@ -1070,7 +1070,7 @@ func TestRunInit_ExistingSettings_QuotedHookPath_NotDuplicated(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "\"/Users/me/Application Support/knomit-bridge\" claude hook memory-guard"
+            "command": "\"/Users/me/Application Support/kb\" claude hook memory-guard"
           }
         ]
       }
@@ -1081,7 +1081,7 @@ func TestRunInit_ExistingSettings_QuotedHookPath_NotDuplicated(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "'$CLAUDE_PROJECT_DIR/dist/knomit-bridge' claude hook post-edit"
+            "command": "'$CLAUDE_PROJECT_DIR/dist/kb' claude hook post-edit"
           }
         ]
       }
@@ -1437,7 +1437,7 @@ func TestRunInit_StaleCompanion_RemovedOnSuccessfulMerge(t *testing.T) {
         "hooks": [
           {
             "type": "command",
-            "command": "knomit-bridge claude hook memory-guard"
+            "command": "kb claude hook memory-guard"
           }
         ]
       }
@@ -1446,7 +1446,7 @@ func TestRunInit_StaleCompanion_RemovedOnSuccessfulMerge(t *testing.T) {
 		writeFixture(t, filepath.Join(dir, "CLAUDE.md"), "# Project\n\n"+string(block))
 		writeFixture(t, filepath.Join(dir, ".mcp.json"), fmt.Sprintf(`{
   "mcpServers": {
-    %q: { "command": "knomit-bridge", "args": ["--repo", "x"] }
+    %q: { "command": "kb", "args": ["--repo", "x"] }
   }
 }
 `, knomitapi.ServerKey("x", "")))
@@ -1479,7 +1479,7 @@ func TestRunInit_StaleCompanion_RemovedOnSuccessfulMerge(t *testing.T) {
 		chdir(t, dir)
 		// A knomit entry under a different key: the case init declines.
 		writeFixture(t, filepath.Join(dir, ".mcp.json"),
-			`{"mcpServers":{"knomit":{"command":"knomit-bridge","args":["--repo","legacy"]}}}`)
+			`{"mcpServers":{"knomit":{"command":"kb","args":["--repo","legacy"]}}}`)
 
 		if err := runInit([]string{"--repo", "x"}); err != nil {
 			t.Fatalf("runInit: %v", err)
@@ -1534,7 +1534,7 @@ func TestRunInit_ExistingMcpJson_SameKey_UpdatedInPlace(t *testing.T) {
 	writeFixture(t, mcpPath, fmt.Sprintf(`{
   "mcpServers": {
     "other": { "command": "other-server", "args": ["--flag"] },
-    %q: { "command": "knomit-bridge", "args": ["--repo", "stale"] }
+    %q: { "command": "kb", "args": ["--repo", "stale"] }
   }
 }
 `, key))
@@ -1563,7 +1563,7 @@ func TestRunInit_ExistingMcpJson_SameKey_UpdatedInPlace(t *testing.T) {
 // TestRunInit_ExistingMcpJson_SameKey_PreservesCommandAndExtraKeys splits the
 // entry under our own key into the half init owns and the half the user owns.
 // `args` are derived from the scope, so init refreshes them. `command` is
-// DEPLOYMENT-specific: knomit-bridge is never on $PATH outside the macOS .app,
+// DEPLOYMENT-specific: kb is never on $PATH outside the macOS .app,
 // so a checkout that points at its own build does so deliberately, and a refresh
 // that resets it to the bare name silently stops the MCP server loading. Any
 // other key the user added is theirs for the same reason.
@@ -1576,7 +1576,7 @@ func TestRunInit_ExistingMcpJson_SameKey_PreservesCommandAndExtraKeys(t *testing
 	existing := fmt.Sprintf(`{
   "mcpServers": {
     %q: {
-      "command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge",
+      "command": "${CLAUDE_PROJECT_DIR:-.}/dist/kb",
       "args": ["--repo", "stale"],
       "env": { "KNOMIT_MCP_DEBUG": "1" }
     }
@@ -1596,7 +1596,7 @@ func TestRunInit_ExistingMcpJson_SameKey_PreservesCommandAndExtraKeys(t *testing
 	}
 	// The user's half must survive verbatim, not merely equivalently.
 	for _, want := range []string{
-		`"command": "${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge"`,
+		`"command": "${CLAUDE_PROJECT_DIR:-.}/dist/kb"`,
 		`"env": { "KNOMIT_MCP_DEBUG": "1" }`,
 	} {
 		if !strings.Contains(string(got), want) {
@@ -1638,7 +1638,7 @@ func TestRunInit_ExistingMcpJson_SameKey_KeepsArgsOnOneLine(t *testing.T) {
 	writeFixture(t, mcpPath, fmt.Sprintf(`{
   "mcpServers": {
     %q: {
-      "command": "knomit-bridge",
+      "command": "kb",
       "args": ["--lens", "stale-scope"]
     }
   }
@@ -1672,7 +1672,7 @@ func TestRunInit_ExistingMcpJson_SameKey_CorrectArgs_IsNoOp(t *testing.T) {
 	existing := fmt.Sprintf(`{
   "mcpServers": {
     %q: {
-      "command": "/opt/knomit/knomit-bridge",
+      "command": "/opt/knomit/kb",
       "args": ["--repo", "x"]
     }
   }
@@ -1755,21 +1755,21 @@ func parseMcpServers(t *testing.T, raw []byte) map[string]struct {
 // anything else must stay distinct, or a merge would swallow a user's own hook.
 func TestHookIdentity(t *testing.T) {
 	same := []string{
-		"knomit-bridge claude hook post-edit",
-		"/usr/local/bin/knomit-bridge claude hook post-edit",
-		"${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge claude hook post-edit",
-		"knomit-bridge.exe claude hook post-edit",
-		"knomit-bridge  claude   hook   post-edit",
-		"knomit-bridge --log /tmp/b.log claude hook post-edit",
+		"kb claude hook post-edit",
+		"/usr/local/bin/kb claude hook post-edit",
+		"${CLAUDE_PROJECT_DIR:-.}/dist/kb claude hook post-edit",
+		"kb.exe claude hook post-edit",
+		"kb  claude   hook   post-edit",
+		"kb --log /tmp/b.log claude hook post-edit",
 		// Quoted paths. A hook command is a SHELL line, so a path containing a
 		// space has to be quoted — and on macOS "Application Support" is the
 		// normal install location. strings.Fields plus filepath.Base lets the
 		// quote ride into the token and shreds the path at the space, so all
 		// three of these used to register as foreign and get duplicated.
-		`"$CLAUDE_PROJECT_DIR/dist/knomit-bridge" claude hook post-edit`,
-		`'$CLAUDE_PROJECT_DIR/dist/knomit-bridge' claude hook post-edit`,
-		`"/Users/me/Application Support/knomit-bridge" claude hook post-edit`,
-		`'/Users/me/Application Support/knomit-bridge' claude hook post-edit`,
+		`"$CLAUDE_PROJECT_DIR/dist/kb" claude hook post-edit`,
+		`'$CLAUDE_PROJECT_DIR/dist/kb' claude hook post-edit`,
+		`"/Users/me/Application Support/kb" claude hook post-edit`,
+		`'/Users/me/Application Support/kb' claude hook post-edit`,
 	}
 	want := hookIdentity(same[0])
 	for _, cmd := range same[1:] {
@@ -1778,11 +1778,20 @@ func TestHookIdentity(t *testing.T) {
 		}
 	}
 	for _, cmd := range []string{
-		"knomit-bridge claude hook post-ask",
-		"knomit-bridge claude hook memory-guard",
+		"kb claude hook post-ask",
+		"kb claude hook memory-guard",
 		"my-own-hook",
 		// Not the bridge: a third-party tool must never be mistaken for ours.
 		"some-other-tool claude hook post-edit",
+		// The pre-rename binary name. The rename shipped NO compatibility
+		// alias, so a config that still spells it is a foreign command and
+		// init must scaffold the working `kb` hook beside it rather than read
+		// the stale one as "already registered" and skip it. This is the case
+		// the canonical identity must not spell: while hookIdentity returned
+		// "knomit-bridge claude hook <event>", this string reduced to itself
+		// via the raw fallback and collided with the canonical form exactly.
+		"knomit-bridge claude hook post-edit",
+		`"$CLAUDE_PROJECT_DIR/dist/knomit-bridge" claude hook post-edit`,
 	} {
 		if got := hookIdentity(cmd); got == want {
 			t.Errorf("hookIdentity(%q) = %q collides with post-edit", cmd, got)
