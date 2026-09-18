@@ -16,7 +16,7 @@ func TestLinkInto(t *testing.T) {
 		t.Skip("this host cannot create symlinks (Windows without Developer Mode or an elevated shell)")
 	}
 	dir := t.TempDir()
-	target := filepath.Join(dir, "src", "knomit-bridge")
+	target := filepath.Join(dir, "src", "kb")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestLinkInto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first linkInto: %v", err)
 	}
-	if want := filepath.Join(binDir, "knomit-bridge"); link != want {
+	if want := filepath.Join(binDir, "kb"); link != want {
 		t.Errorf("link path = %q, want %q", link, want)
 	}
 	if got, _ := os.Readlink(link); got != target {
@@ -46,7 +46,7 @@ func TestLinkInto(t *testing.T) {
 	}
 
 	// Refresh: a stale link (app moved/updated) is repointed at the new target.
-	newTarget := filepath.Join(dir, "src2", "knomit-bridge")
+	newTarget := filepath.Join(dir, "src2", "kb")
 	if err := os.MkdirAll(filepath.Dir(newTarget), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestLinkInto_ReplacesRegularFile(t *testing.T) {
 		t.Skip("this host cannot create symlinks (Windows without Developer Mode or an elevated shell)")
 	}
 	dir := t.TempDir()
-	target := filepath.Join(dir, "knomit-bridge")
+	target := filepath.Join(dir, "kb")
 	if err := os.WriteFile(target, []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestLinkInto_ReplacesRegularFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A pre-existing regular file at the link path must be replaced by the link.
-	if err := os.WriteFile(filepath.Join(binDir, "knomit-bridge"), []byte("old"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "kb"), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link, err := linkInto(binDir, target)
@@ -92,7 +92,7 @@ func TestLinkInto_ReplacesRegularFile(t *testing.T) {
 // no siblings, so this exercises the skip path for both.
 func TestInstallTool_NoBundledTool(t *testing.T) {
 	if _, err := installBridgeTool(t.TempDir()); err == nil {
-		t.Error("expected an error when no bundled knomit-bridge is present")
+		t.Error("expected an error when no bundled kb is present")
 	}
 	if _, err := installOKFTool(t.TempDir()); err == nil {
 		t.Error("expected an error when no bundled knomit-okf is present")
@@ -129,7 +129,7 @@ func TestCopyIntoReplacesStaleContent(t *testing.T) {
 	// the source lives in a FUSE mount that vanishes when the app exits, so a
 	// symlink would dangle and every MCP client wired to <home>/bin would break.
 	dir := t.TempDir()
-	target := filepath.Join(dir, "src", "knomit-bridge")
+	target := filepath.Join(dir, "src", "kb")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestCopyIntoReplacesStaleContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("copyInto: %v", err)
 	}
-	if want := filepath.Join(binDir, "knomit-bridge"); got != want {
+	if want := filepath.Join(binDir, "kb"); got != want {
 		t.Errorf("path = %q, want %q", got, want)
 	}
 
@@ -196,7 +196,7 @@ func TestCopyIntoReplacesAnExistingSymlink(t *testing.T) {
 		t.Skip("this host cannot create the symlink this fixture needs")
 	}
 	dir := t.TempDir()
-	target := filepath.Join(dir, "src", "knomit-bridge")
+	target := filepath.Join(dir, "src", "kb")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -207,8 +207,8 @@ func TestCopyIntoReplacesAnExistingSymlink(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := filepath.Join(dir, "gone", "knomit-bridge")
-	if err := os.Symlink(stale, filepath.Join(binDir, "knomit-bridge")); err != nil {
+	stale := filepath.Join(dir, "gone", "kb")
+	if err := os.Symlink(stale, filepath.Join(binDir, "kb")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -241,7 +241,7 @@ func TestCopyIntoSurvivesSourceRemoval(t *testing.T) {
 	if err := os.MkdirAll(mount, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(mount, "knomit-bridge")
+	target := filepath.Join(mount, "kb")
 	if err := os.WriteFile(target, []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +289,7 @@ func TestPlaceToolDispatchesPerPlatform(t *testing.T) {
 			}
 
 			dir := t.TempDir()
-			target := filepath.Join(dir, "src", "knomit-bridge")
+			target := filepath.Join(dir, "src", "kb")
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -318,7 +318,7 @@ func TestPlaceToolDispatchesPerPlatform(t *testing.T) {
 // launch, for bytes it already has.
 func TestCopyIntoSkipsAnUnchangedFile(t *testing.T) {
 	dir := t.TempDir()
-	target := filepath.Join(dir, "src", "knomit-bridge")
+	target := filepath.Join(dir, "src", "kb")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestCopyIntoSkipsAnUnchangedFile(t *testing.T) {
 // which is exactly what upToDate keys on.
 func TestCopyIntoRecopiesWhenTheSourceChanges(t *testing.T) {
 	dir := t.TempDir()
-	target := filepath.Join(dir, "src", "knomit-bridge")
+	target := filepath.Join(dir, "src", "kb")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestCopyIntoReplacesASymlinkThatLooksCurrent(t *testing.T) {
 		t.Skip("this host cannot create the symlink this fixture needs")
 	}
 	dir := t.TempDir()
-	target := filepath.Join(dir, "src", "knomit-bridge")
+	target := filepath.Join(dir, "src", "kb")
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +405,7 @@ func TestCopyIntoReplacesASymlinkThatLooksCurrent(t *testing.T) {
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(binDir, "knomit-bridge")
+	link := filepath.Join(binDir, "kb")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +443,7 @@ func canSymlink(t *testing.T) bool {
 
 // The bundled tools are built with the platform's executable suffix, so the
 // lookup has to use it too. Without this, installBundledTool looked for
-// "knomit-bridge" next to a "knomit-bridge.exe" and found nothing on Windows —
+// "kb" next to a "kb.exe" and found nothing on Windows —
 // and because both installers are best-effort, the app started up looking
 // perfectly healthy while no MCP client could find the bridge and knomit-okf
 // was never placed on the user's PATH. A warning in a log file was the only
@@ -494,7 +494,7 @@ func TestExeSuffixIsWindowsOnly(t *testing.T) {
 // replaceFile's happy path: a plain rename when nothing is in the way.
 func TestReplaceFile_RenamesOverAnExistingFile(t *testing.T) {
 	dir := t.TempDir()
-	dst := filepath.Join(dir, "knomit-bridge")
+	dst := filepath.Join(dir, "kb")
 	tmp := filepath.Join(dir, ".knomit-tool-new")
 	if err := os.WriteFile(dst, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
@@ -519,7 +519,7 @@ func TestReplaceFile_RenamesOverAnExistingFile(t *testing.T) {
 // fallback. Here the source does not exist at all.
 func TestReplaceFile_ReportsTheRealErrorWhenThereIsNothingToMoveAside(t *testing.T) {
 	dir := t.TempDir()
-	err := replaceFile(filepath.Join(dir, "absent"), filepath.Join(dir, "knomit-bridge"))
+	err := replaceFile(filepath.Join(dir, "absent"), filepath.Join(dir, "kb"))
 	if err == nil {
 		t.Fatal("expected an error renaming a file that does not exist")
 	}
@@ -532,7 +532,7 @@ func TestReplaceFile_ReportsTheRealErrorWhenThereIsNothingToMoveAside(t *testing
 func TestSweepToolDebrisRemovesStagingFilesOnly(t *testing.T) {
 	dir := t.TempDir()
 	debris := []string{".knomit-tool-123456", ".knomit-tool-old-987654"}
-	keep := []string{"knomit-bridge", "knomit-okf", "something-else"}
+	keep := []string{"kb", "knomit-okf", "something-else"}
 	for _, n := range append(append([]string{}, debris...), keep...) {
 		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
@@ -560,7 +560,7 @@ func TestSweepToolDebrisToleratesAMissingDir(t *testing.T) {
 
 // The FALLBACK path, end to end: CreateTemp, rename-aside, rename-in, and the
 // best-effort remove of the aside. Nothing reached it before, so the branch
-// that exists specifically to replace a RUNNING knomit-bridge.exe on Windows
+// that exists specifically to replace a RUNNING kb.exe on Windows
 // was never executed by a test on any platform.
 //
 // A non-empty directory at dst is the portable way in. os.Rename(tmp, dst)
@@ -575,7 +575,7 @@ func TestSweepToolDebrisToleratesAMissingDir(t *testing.T) {
 // when the sidelined binary is still running.
 func TestReplaceFile_FallsBackWhenTheDestinationCannotBeRenamedOver(t *testing.T) {
 	dir := t.TempDir()
-	dst := filepath.Join(dir, "knomit-bridge")
+	dst := filepath.Join(dir, "kb")
 	tmp := filepath.Join(dir, ".knomit-tool-new")
 
 	// A non-empty directory where the binary should be.
@@ -636,13 +636,13 @@ func TestReplaceFile_FallsBackWhenTheDestinationCannotBeRenamedOver(t *testing.T
 // this is the one way to reach it that behaves identically on every OS.
 func TestReplaceFile_RestoresTheOriginalWhenTheFallbackCannotFinish(t *testing.T) {
 	dir := t.TempDir()
-	dst := filepath.Join(dir, "knomit-bridge")
+	dst := filepath.Join(dir, "kb")
 	missingTmp := filepath.Join(dir, ".knomit-tool-never-written")
 
 	if err := os.MkdirAll(filepath.Join(dst, "occupied"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dst, "occupied", "f"), []byte("knomit-bridge"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dst, "occupied", "f"), []byte("kb"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -655,7 +655,7 @@ func TestReplaceFile_RestoresTheOriginalWhenTheFallbackCannotFinish(t *testing.T
 	if err != nil {
 		t.Fatalf("the original was not restored: %v", err)
 	}
-	if string(b) != "knomit-bridge" {
-		t.Errorf("restored content = %q, want knomit-bridge", b)
+	if string(b) != "kb" {
+		t.Errorf("restored content = %q, want kb", b)
 	}
 }

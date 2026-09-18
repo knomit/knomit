@@ -62,7 +62,7 @@ func boundPlugin(t *testing.T) string {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","proj"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--repo","proj"]}}}`)
 	chdir(t, dir)
 	isolateCache(t)
 	return dir
@@ -242,10 +242,10 @@ func TestPreInvocation_NoFacts_Empty(t *testing.T) {
 func TestPreInvocation_Misconfiguration_SaysSoOutLoud(t *testing.T) {
 	for _, tc := range []struct{ name, config, want string }{
 		{"ambiguous", `{"mcpServers":{
-			"knomit-repo-alpha":{"command":"knomit-bridge","args":["--repo","alpha"]},
-			"knomit-repo-beta":{"command":"knomit-bridge","args":["--repo","beta"]}}}`, "more than one"},
-		{"degenerate lens", `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--lens"]}}}`, "--lens flag with no value"},
-		{"invalid scope", `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","../evil"]}}}`, "not a valid knomit name"},
+			"knomit-repo-alpha":{"command":"kb","args":["--repo","alpha"]},
+			"knomit-repo-beta":{"command":"kb","args":["--repo","beta"]}}}`, "more than one"},
+		{"degenerate lens", `{"mcpServers":{"k":{"command":"kb","args":["--lens"]}}}`, "--lens flag with no value"},
+		{"invalid scope", `{"mcpServers":{"k":{"command":"kb","args":["--repo","../evil"]}}}`, "not a valid knomit name"},
 		{"no knomit server", `{"mcpServers":{"other":{"command":"something-else"}}}`, "no usable knomit server"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -271,7 +271,7 @@ func TestPreInvocation_RunFromWorkspaceRoot_StillBinds(t *testing.T) {
 	ws := t.TempDir()
 	dir := filepath.Join(ws, PluginDir)
 	os.MkdirAll(dir, 0o755)
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","proj"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--repo","proj"]}}}`)
 	chdir(t, ws) // workspace root, NOT the plugin dir
 	isolateCache(t)
 	factsServer(t)
@@ -292,7 +292,7 @@ func TestPreInvocation_WorkspaceNamedKnomit_StillBinds(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","proj"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--repo","proj"]}}}`)
 	chdir(t, ws) // a workspace root that shares the plugin dir's name
 	isolateCache(t)
 	factsServer(t)
@@ -307,7 +307,7 @@ func TestPreInvocation_UsesWorkspacePathsWhenCwdIsUnrelated(t *testing.T) {
 	ws := t.TempDir()
 	dir := filepath.Join(ws, PluginDir)
 	os.MkdirAll(dir, 0o755)
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","proj"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--repo","proj"]}}}`)
 	chdir(t, t.TempDir()) // somewhere else entirely
 	isolateCache(t)
 	factsServer(t)

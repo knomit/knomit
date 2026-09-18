@@ -61,7 +61,7 @@ type preInvocationOutput struct {
 // see the log field — so say it out loud".
 var configSkips = map[string]string{
 	skipNoBinding: "knomit found no usable knomit server in this plugin's mcp_config.json, " +
-		"so it cannot tell which repo to read. Re-run `knomit-bridge antigravity init` in this project.",
+		"so it cannot tell which repo to read. Re-run `kb antigravity init` in this project.",
 	skipAmbiguousBinding: "knomit is DISABLED here: this plugin's mcp_config.json names more than one " +
 		"knomit scope, so there is no single repo to bind to. Leave exactly one entry to re-enable it.",
 	skipLensUnusable: "knomit is DISABLED here: this plugin's mcp_config.json has a --lens flag with no " +

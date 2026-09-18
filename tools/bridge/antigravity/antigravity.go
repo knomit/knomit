@@ -12,7 +12,7 @@ import "fmt"
 // Run dispatches the `antigravity <subcommand>` arguments.
 func Run(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: knomit-bridge antigravity <subcommand> (init | hook)")
+		return fmt.Errorf("usage: kb antigravity <subcommand> (init | hook)")
 	}
 	switch args[0] {
 	case "init":

@@ -96,8 +96,8 @@ func TestRunInit_ScaffoldedConfigBindsHook(t *testing.T) {
 	if !ok {
 		t.Fatalf("no knomit-repo-testproj key; got %v", cfg.MCPServers)
 	}
-	if srv.Command != "knomit-bridge" {
-		t.Errorf("command = %q, want knomit-bridge", srv.Command)
+	if srv.Command != "kb" {
+		t.Errorf("command = %q, want kb", srv.Command)
 	}
 	if len(srv.Args) != 2 || srv.Args[0] != "--repo" || srv.Args[1] != "testproj" {
 		t.Errorf("args = %v, want [--repo testproj]", srv.Args)

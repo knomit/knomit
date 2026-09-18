@@ -1,16 +1,16 @@
-# knomit-bridge
+# kb
 
-`knomit-bridge` is a stdio↔HTTP adapter that lets stdio-only MCP clients (Claude Desktop, VS Code extensions, and any other client that only supports process-based MCP) talk to a running knomit server.
+`kb` is the executable; `knomit-bridge` is the program it runs. It is a stdio↔HTTP adapter that lets stdio-only MCP clients (Claude Desktop, VS Code extensions, and any other client that only supports process-based MCP) talk to a running knomit server.
 
 ## Why it exists
 
-The knomit server speaks MCP over streamable-HTTP (`/api/v1/{repo}/mcp`). Many MCP clients only support stdio transport — they launch a subprocess, write JSON-RPC to its stdin, and read responses from its stdout. `knomit-bridge` is that subprocess: it translates between the two transports so no client-side changes are needed.
+The knomit server speaks MCP over streamable-HTTP (`/api/v1/{repo}/mcp`). Many MCP clients only support stdio transport — they launch a subprocess, write JSON-RPC to its stdin, and read responses from its stdout. `kb` is that subprocess: it translates between the two transports so no client-side changes are needed.
 
 ```
 MCP client (stdio)
       │  JSON-RPC over stdin/stdout
       ▼
-knomit-bridge
+kb
       │  POST /api/v1/{repo}/mcp
       ▼
 knomit server (HTTP)
@@ -66,10 +66,10 @@ the session goes dead by silence instead. There is no reconnect and no retry.
 
 ## Usage
 
-Without a command, `knomit-bridge` runs as the MCP stdio↔HTTP proxy:
+Without a command, `kb` runs as the MCP stdio↔HTTP proxy:
 
 ```
-knomit-bridge [--repo <name> | --lens <name>] [--log <path>] [base-url]
+kb [--repo <name> | --lens <name>] [--log <path>] [base-url]
 ```
 
 | Flag | Default | Description |
@@ -115,15 +115,15 @@ The bridge also wraps agent-host integration helpers (typically invoked by the
 host, not by hand):
 
 ```
-knomit-bridge claude init [-repo <name>]
+kb claude init [-repo <name>]
                                   # scaffold Claude Code integration files here
-knomit-bridge claude hook <event>       # event ∈ session-start, post-edit,
+kb claude hook <event>       # event ∈ session-start, post-edit,
                                         #         post-ask, pre-compact,
                                         #         memory-guard
 
-knomit-bridge antigravity init [-repo <name>|-lens <name>]
+kb antigravity init [-repo <name>|-lens <name>]
                                   # scaffold the Antigravity plugin here
-knomit-bridge antigravity hook <event>  # event ∈ pre-invocation
+kb antigravity hook <event>  # event ∈ pre-invocation
 ```
 
 `memory-guard` is a PreToolUse hook (matcher `Write|Edit|MultiEdit|Bash`). It
@@ -157,7 +157,7 @@ back on the next `init`**, because init cannot tell "removed on purpose" from
 "scaffolded before this hook existed" — and the second is what this merge exists
 to fix. To keep a hook off, disable it on your side rather than deleting the
 entry. **A hook is matched by its `claude hook <event>` suffix, not by its
-command string**, so registering `/path/to/knomit-bridge claude hook post-edit`
+command string**, so registering `/path/to/kb claude hook post-edit`
 under a matcher of your own counts as having that hook and init will not add a
 second copy.
 
@@ -165,12 +165,12 @@ second copy.
 merges hook entries across user, project and local settings and runs identical
 handlers once, but a knomit hook you also registered in `~/.claude/settings.json`
 or `.claude/settings.local.json` under a *different* spelling — an absolute path
-against init's bare `knomit-bridge` — is not the same handler, so both copies run
+against init's bare `kb` — is not the same handler, so both copies run
 and the hook fires twice per tool call. `init` reads only the project file and
 cannot see the others.
 
 A companion file is still written for the two cases a merge cannot decide: a
-`.mcp.json` carrying a knomit-bridge entry under some OTHER key (adding ours
+`.mcp.json` carrying a kb entry under some OTHER key (adding ours
 beside it would give the project two knomit scopes, which disables the hooks —
 see below), and a `CLAUDE.md` whose knomit block has no closing marker, which
 init can recognise but not bound. An unparseable `.claude/settings.json` is
@@ -183,13 +183,13 @@ are accepted before any subcommand.
 
 ## Antigravity (`agy`)
 
-`knomit-bridge antigravity init` writes a single owned plugin directory:
+`kb antigravity init` writes a single owned plugin directory:
 
 ```
 .agents/plugins/knomit/
 ├── plugin.json
-├── mcp_config.json      knomit-bridge --repo <name> (or --lens <name>)
-├── hooks.json           PreInvocation → knomit-bridge antigravity hook pre-invocation
+├── mcp_config.json      kb --repo <name> (or --lens <name>)
+├── hooks.json           PreInvocation → kb antigravity hook pre-invocation
 ├── rules/AGENTS.md      the "Working with knomit memory" block
 └── skills/knomit-*/SKILL.md
 ```
@@ -233,25 +233,25 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 {
   "mcpServers": {
     "knomit-personal": {
-      "command": "/path/to/dist/knomit-bridge"
+      "command": "/path/to/dist/kb"
     }
   }
 }
 ```
 
 Multiple repos. Name each key `knomit-repo-<name>` (or `knomit-lens-<name>` for
-a lens), matching what `knomit-bridge claude init` generates — the axis is part
+a lens), matching what `kb claude init` generates — the axis is part
 of the key so a repo and a lens sharing a name cannot collide:
 
 ```json
 {
   "mcpServers": {
     "knomit-repo-personal": {
-      "command": "/path/to/dist/knomit-bridge",
+      "command": "/path/to/dist/kb",
       "args": ["--repo", "personal"]
     },
     "knomit-repo-work": {
-      "command": "/path/to/dist/knomit-bridge",
+      "command": "/path/to/dist/kb",
       "args": ["--repo", "work"]
     }
   }
@@ -282,7 +282,7 @@ does not have to match the directory.
 Set `KNOMIT_MCP_DEBUG=1` to log traffic to stderr:
 
 ```
-KNOMIT_MCP_DEBUG=1 knomit-bridge
+KNOMIT_MCP_DEBUG=1 kb
 ```
 
 Each stdin message, outgoing HTTP request, response status, session ID capture, and stdout write is logged with direction arrows (`←` stdin, `→` stdout).
@@ -290,6 +290,6 @@ Each stdin message, outgoing HTTP request, response status, session ID capture, 
 ## Building
 
 ```
-make build        # produces dist/knomit-bridge
-go build -o dist/knomit-bridge ./tools/bridge/
+make build        # produces dist/kb
+go build -o dist/kb ./tools/bridge/
 ```

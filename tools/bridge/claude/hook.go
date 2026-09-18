@@ -9,7 +9,7 @@ import (
 
 func runHook(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: knomit-bridge claude hook <event>")
+		return fmt.Errorf("usage: kb claude hook <event>")
 	}
 	event := args[0]
 	log.Info().Str("event", event).Msg("hook fired")

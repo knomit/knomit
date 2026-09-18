@@ -20,8 +20,8 @@ launcher (clunky, CGO-heavy, no real systray on Linux).
 - **Native actions** — exposed to the UI as typed Wails bindings
   (`NativeService`), reachable only from the embedded window (never over the
   looknomitck port).
-- **Bundled MCP bridge** — ships `knomit-bridge` (the stdio↔HTTP MCP adapter)
-  and, on launch, symlinks it to `<home>/bin/knomit-bridge` so stdio MCP clients
+- **Bundled MCP bridge** — ships `kb` (the stdio↔HTTP MCP adapter)
+  and, on launch, symlinks it to `<home>/bin/kb` so stdio MCP clients
   have a stable command path (see [MCP integration](#mcp-integration)).
 
 ## How it fits together
@@ -134,15 +134,15 @@ committed (the binary `//go:embed`s them; regen only when a logo changes):
 
 ## MCP integration
 
-Stdio-only MCP clients (Claude Code/Desktop, VS Code) launch `knomit-bridge` as
+Stdio-only MCP clients (Claude Code/Desktop, VS Code) launch `kb` as
 a subprocess; it discovers the running server via `server.json` and proxies MCP
 over the looknomitck port. The app ships that binary so the integration works
 without a separate `make build`:
 
-- `make desktop` builds `knomit-bridge` into the bundle —
-  `Knomit.app/Contents/MacOS/knomit-bridge` on macOS, next to the binary in
+- `make desktop` builds `kb` into the bundle —
+  `Knomit.app/Contents/MacOS/kb` on macOS, next to the binary in
   `dist/<platform>/` elsewhere. It is pure Go (no CGO/dylibs).
-- On launch the app symlinks it to **`<home>/bin/knomit-bridge`** (`home` =
+- On launch the app symlinks it to **`<home>/bin/kb`** (`home` =
   `config.Home`, default `~/.knomit`, overridable via `KNOMIT_HOME`) — a stable
   path that survives the app being moved or updated. The symlink is refreshed
   idempotently each launch; failure is logged but never blocks startup
@@ -154,7 +154,7 @@ Point an MCP client at that stable path, e.g.:
 {
   "mcpServers": {
     "knomit": {
-      "command": "~/.knomit/bin/knomit-bridge",
+      "command": "~/.knomit/bin/kb",
       "args": ["--repo", "<repo>", "--source", "<slug>", "--profile", "code"]
     }
   }
@@ -162,7 +162,7 @@ Point an MCP client at that stable path, e.g.:
 ```
 
 Or scaffold a project's integration files with
-`~/.knomit/bin/knomit-bridge claude init --source <slug>`.
+`~/.knomit/bin/kb claude init --source <slug>`.
 
 Run **either** the app **or** `knomit serve`, not both — the app falls back to
 an ephemeral port when `:19278` is taken, leaving two servers and an ambiguous
