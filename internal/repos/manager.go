@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
@@ -51,6 +52,16 @@ type Manager struct {
 	repos map[string]*RepoInstance
 	ctx   context.Context
 	deps  Deps
+
+	// healGate holds the background index heal at a known point so a test can
+	// observe the 'indexing' state rather than race it. NIL IN PRODUCTION —
+	// only setIndexHealGate writes it, and nothing outside _test.go calls
+	// that. See index_heal_gate.go for why it exists.
+	//
+	// An atomic pointer rather than a mu-guarded field: it is read from the
+	// heal goroutine, which openOne launches while Add may still hold mu, and
+	// a lock-free load keeps that path free of any question about ordering.
+	healGate atomic.Pointer[indexHealGate]
 
 	// sessionReaperStop is set by Start when the background idle-session
 	// reaper is launched, and invoked by Close to wind it down. nil only when
@@ -1130,6 +1141,12 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 	b.indexWg.Add(1)
 	go func() {
 		defer b.indexWg.Done()
+		// A no-op in production: healGate is nil unless a test armed it. When
+		// one has, this is the single point where the heal is holdable, which
+		// is what lets a test observe the 'indexing' state above rather than
+		// race it. It takes b.indexCtx, so a teardown that lands on a held
+		// gate still drains — see index_heal_gate.go.
+		m.healGate.Load().hold(b.indexCtx)
 		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
 		ok := healIndexBranches(b.indexCtx, b.svc.IndexManager(), b.name, b.indexBranches, progress)
 		if b.indexCtx.Err() != nil {

@@ -147,15 +147,33 @@ func TestStartCreate_DoesNotUseTheCallersContext(t *testing.T) {
 // heal before reporting done, so that window is gone by construction and the
 // old anti-vacuity assertion could never hold again.
 //
-// The property is unchanged and the new arrangement pins it DETERMINISTICALLY
-// rather than by timing. The mirror emits an index event only while the heal
-// is in the 'indexing' state, so cancelling the create's context from inside
-// that emit cancels it at a moment when the heal is PROVABLY in flight — no
-// measurement, no flake. Then the same question is asked: did the heal
-// survive? If the create context were ever threaded into openOne, it would
-// parent indexCtx, the cancel would land on a running heal, and the heal would
-// return without markIndexReady/markIndexFailed — pinned at 'indexing', the
-// incident reproducing itself through a new context.
+// The property is unchanged. WHAT MADE THE OLD ARRANGEMENT RACY, and what the
+// gate does about it — the comment here used to claim this was "DETERMINISTIC
+// rather than by timing … no measurement, no flake", and that was false. It is
+// what CI jobs 105650652457 and 105598133397 failed on.
+//
+// The mirror emits an index event only while the heal is in the 'indexing'
+// state, which is true and was mistaken for a guarantee that it emits AT ALL.
+// openOne marks indexing and starts the heal; Create then does RecordRepoID
+// before it calls mirrorIndexing; and mirrorIndexing reads IndexStatus ONCE and
+// returns without emitting if the heal has already finished. With a 0-fact
+// preset the heal is microseconds, so on a loaded runner it finished first, no
+// index event was emitted, and the anti-vacuity assert below fired. The test
+// was not detecting a regression — it was losing a race.
+//
+// indexHealGate removes the race instead of making it less likely: the heal
+// blocks between markIndexing() and healIndexBranches until this test opens
+// the gate, so "the heal is in flight when the mirror looks" is now TRUE BY
+// CONSTRUCTION rather than usually. The fixture is unchanged — a bigger corpus
+// would only have moved the race, which is a measured environment and not a
+// property. See index_heal_gate.go.
+//
+// So the cancel still lands at a moment when the heal is PROVABLY in flight,
+// and the same question is asked: did the heal survive? If the create context
+// were ever threaded into openOne, it would parent indexCtx, the cancel would
+// land on a running heal, and the heal would return without
+// markIndexReady/markIndexFailed — pinned at 'indexing', the incident
+// reproducing itself through a new context.
 func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	m := New(context.Background(), Deps{
 		Cfg:         config.Config{Home: t.TempDir()},
@@ -165,22 +183,35 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
+	// Armed BEFORE the Create, so the heal this create starts is held at the
+	// gate the moment it is launched.
+	gate := newIndexHealGate()
+	m.setIndexHealGate(gate)
+
 	// Create is called directly rather than through StartCreate so the test
 	// OWNS the create's context — which is what StartCreate's own deadline is,
 	// and what its defer cancel() ends the instant Create returns.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var sawIndexing atomic.Bool
+	var sawIndexing, healAlreadyPastGate atomic.Bool
 	ri, err := m.Create(ctx, CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"},
 		func(e Event) {
 			if e.Phase != PhaseIndex {
 				return
 			}
-			// The mirror only emits this while IndexStatus reads 'indexing', so
-			// the heal is in flight right now. Cancel here.
-			sawIndexing.Store(true)
+			// The mirror only emits this while IndexStatus reads 'indexing',
+			// and the gate is why that state is still there to be read.
+			if !sawIndexing.Swap(true) {
+				// Recorded on the FIRST index event only, before the gate is
+				// opened: the heal must still be held. See the assert below.
+				healAlreadyPastGate.Store(gate.passedThrough())
+			}
+			// Order matters. Cancel while the heal is still held, THEN release
+			// it — that is the whole point of the arrangement, and opening
+			// first would let the heal run ahead of the cancel.
 			cancel()
+			gate.open()
 		})
 	require.NoError(t, err)
 	require.NotNil(t, ri)
@@ -191,6 +222,14 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 	require.True(t, sawIndexing.Load(),
 		"the create reported no index phase, so the context was never cancelled "+
 			"while the heal was running and this test cannot detect the regression")
+
+	// THE GATE WAS STILL SHUT when the mirror emitted, so the index event came
+	// from the heal being held rather than from winning a race. This is the
+	// half that fails if the hold is ever made non-blocking.
+	require.False(t, healAlreadyPastGate.Load(),
+		"the heal was already past the gate when the mirror emitted, so the "+
+			"index event was luck rather than the gate holding the heal in place")
+
 	require.Error(t, ctx.Err(), "the create context must be cancelled by now")
 
 	// The property: that cancellation is harmless. Pinned at 'indexing' is the
@@ -200,6 +239,23 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 		return s == "ready"
 	}, 30*time.Second, 50*time.Millisecond,
 		"the detached create's cancelled context must not stop the background index heal")
+
+	// THE OTHER HALF, and it is asserted HERE rather than beside its twin
+	// above for a reason worth writing down: opening the gate does not
+	// schedule the heal goroutine. Create returns the instant the cancelled
+	// context breaks mirrorIndexing's select, which can be — and on a first
+	// run of this test was — before the released heal has run a single
+	// instruction. Reading the flag there tested the Go scheduler, not the
+	// gate. By the time the index reads 'ready' the heal has provably run to
+	// completion, so this is the first point where the answer is stable.
+	//
+	// What it catches: delete the hold from openOne and the heal never touches
+	// the gate, so this fails by name instead of the test quietly going back to
+	// racing the heal the way it did in CI.
+	require.True(t, gate.passedThrough(),
+		"the heal completed without ever passing through the gate; if the hold "+
+			"was removed from openOne this test is racing the heal again, "+
+			"exactly as it was before")
 }
 
 // TestManagerClose_DrainsInFlightCreate is the third instance of an invariant
@@ -298,4 +354,72 @@ func TestManagerClose_DrainsInFlightCreate(t *testing.T) {
 	}
 	require.NotEqual(t, CreateRunning, job.Status().State,
 		"a drained create must be terminal, not merely unobserved")
+}
+
+// TestManagerClose_DrainsAHealHeldAtTheTestGate pins the one constraint the
+// gate adds to teardown, and it is a constraint on the GATE rather than on the
+// manager: hold() must watch indexCtx, not only its release channel.
+//
+// The failure it rules out is a deadlock, which is the worst shape a test hook
+// can take. Every teardown path — Manager.Close, Archive→shutdown, SwapStore —
+// cancels indexCtx and then indexWg.Wait()s on the heal goroutine before
+// closing the SQLite handle it is using (see the comment on the heal launch in
+// manager.go, and kb/incidents/repos/clone-create-index-stuck-indexing for why
+// the heal has its own context at all). A gate that waited only on release
+// would hang every one of them whenever a test returned with the gate still
+// shut — and it would hang them forever, with no assertion to name the cause.
+//
+// So: hold a heal at the gate, never open it, and require that Close still
+// returns.
+func TestManagerClose_DrainsAHealHeldAtTheTestGate(t *testing.T) {
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: t.TempDir()},
+		AgentBranch: "machine/test",
+		Embedder:    testEmbedder{},
+	})
+	require.NoError(t, m.Start())
+
+	gate := newIndexHealGate()
+	m.setIndexHealGate(gate)
+
+	// The create must RETURN while the heal is still held, or there is nothing
+	// to close over. Cancelling from inside the index emit is what does that:
+	// mirrorIndexing's select takes the ctx.Done() arm and Create reports the
+	// last state it saw. The gate is deliberately NOT opened.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var sawIndexing atomic.Bool
+	_, err := m.Create(ctx, CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"},
+		func(e Event) {
+			if e.Phase != PhaseIndex {
+				return
+			}
+			sawIndexing.Store(true)
+			cancel()
+		})
+	require.NoError(t, err)
+	require.True(t, sawIndexing.Load(),
+		"the create reported no index phase, so the heal was never held at the "+
+			"gate and this test would prove nothing about closing over one")
+
+	closed := make(chan error, 1)
+	go func() { closed <- m.Close() }()
+
+	select {
+	case cerr := <-closed:
+		require.NoError(t, cerr)
+	case <-time.After(30 * time.Second):
+		// Not require.Eventually: a hang is the thing under test, and this
+		// wants to say so in words rather than report a boolean that never
+		// went true.
+		t.Fatal("Manager.Close did not return with a heal held at the index gate — " +
+			"indexHealGate.hold must select on indexCtx as well as its release " +
+			"channel, or every teardown deadlocks behind a gate no one will open")
+	}
+
+	// The heal left the gate by the CONTEXT arm, not the release arm: nothing
+	// ever opened this gate. That is the exit path the test exists for.
+	require.True(t, gate.passedThrough(),
+		"the heal never left the gate, so Close returned without draining it")
 }
