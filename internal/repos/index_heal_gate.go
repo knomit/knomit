@@ -94,12 +94,24 @@ func (g *indexHealGate) hold(ctx context.Context) {
 // leftViaRelease reports whether the heal left the gate because the TEST
 // released it, rather than by teardown or by not having been held at all.
 //
-// This is the assertion that is deterministic where the others are not.
-// arrived-then-passed are two events with an instruction window between them,
-// so a fixture sampling passedThrough() at one instant can miss a hold that
-// does not block — measured at 2 escapes in 30 before this existed. The arm
-// the heal actually took has no such window: a hold that fails to block takes
-// neither case, so this stays false every time.
+// It is a STRONGER kind of evidence than the other two, not a stronger
+// probability. passedThrough() samples state at one instant, and arrived and
+// passed are two events with an instruction window between them, so a fixture
+// reading it can miss a hold that does not block — measured at 5 detections in
+// 30 before waitArrived existed, and 28 in 30 after it. This asks which arm the
+// heal actually took, which is a fact about what happened rather than about
+// when we looked: measured 119 detections in 120 on the preset fixture and 30
+// in 30 on the subscribe one.
+//
+// NOT 120 IN 120, and the residue is worth knowing rather than rounding away.
+// hold() closes `arrived` and THEN selects — two statements. If the heal is
+// preempted between them, the test's wait returns, the test goes on to open the
+// gate, and the resumed non-blocking select finds `release` already closed and
+// takes that arm. So the fixture closes its own window by being the thing that
+// opens the gate. Closing that last gap would mean observing that a goroutine
+// is parked, which Go does not expose, or more machinery in a test hook that is
+// already a cost; 119/120 plus 30/30 in the same package means a hold that
+// stops blocking reds CI on essentially every run, which is what this is for.
 func (g *indexHealGate) leftViaRelease() bool {
 	return g != nil && g.viaRelease.Load()
 }

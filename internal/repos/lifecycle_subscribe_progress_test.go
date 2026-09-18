@@ -202,9 +202,11 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	require.True(t, gate.passedThrough(),
 		"the heal never passed through the gate; if the hold was removed from "+
 			"openOne this test is racing the heal again, exactly as it was before")
-	// The deterministic half — see the same assertion in create_job_test.go.
-	// A hold that does not block takes neither select arm, so this catches it
-	// every time, where sampling passedThrough() at one instant does not.
+	// The stronger evidence — see the same assertion in create_job_test.go. A
+	// hold that does not block normally takes neither select arm, so this
+	// catches it where sampling passedThrough() at one instant need not:
+	// measured 30 detections in 30 on this fixture, 119 in 120 on the preset
+	// one. leftViaRelease documents the single path that escapes.
 	require.True(t, gate.leftViaRelease(),
 		"the heal did not leave the gate by the release arm, so it was never "+
 			"actually held: the gate must BLOCK, not merely be on the path")

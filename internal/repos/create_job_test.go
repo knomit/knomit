@@ -266,13 +266,15 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 			"was removed from openOne this test is racing the heal again, "+
 			"exactly as it was before")
 
-	// AND IT LEFT BY THE RELEASE ARM — the deterministic half. The two
-	// assertions above sample state at an instant, and arrival and passage are
-	// two events with an instruction window between them, so a hold that does
-	// not block can slip through that window (measured: 2 escapes in 30). The
-	// ARM the heal took has no window: a non-blocking hold takes neither case,
-	// so this is false every time it is broken. The heal cannot have left by
-	// the ctx arm here — the create's cancel does not touch indexCtx, which is
+	// AND IT LEFT BY THE RELEASE ARM. The two assertions above sample state at
+	// an instant, and arrival and passage are two events with an instruction
+	// window between them, so a hold that does not block can slip through that
+	// window (measured: 5 detections in 30 before waitArrived, 28 in 30 after).
+	// Asking which ARM the heal took is evidence about what happened rather
+	// than about when we looked, and it catches the same mutation 119 times in
+	// 120 here. Not 120 — see leftViaRelease for the one path that escapes and
+	// why closing it is not worth the machinery. The heal cannot have left by
+	// the ctx arm here: the create's cancel does not touch indexCtx, which is
 	// the property this whole test exists to prove.
 	require.True(t, gate.leftViaRelease(),
 		"the heal did not leave the gate by the release arm, so it was never "+
