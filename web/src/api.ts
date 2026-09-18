@@ -856,14 +856,22 @@ export interface RepoCreateStatus {
   name: string;
   mode: string;
   /**
-   * 'running' is the only non-terminal state.
+   * 'running' and 'cancelling' are the two NON-TERMINAL states.
+   *
+   * 'cancelling' means a cancel has been recorded but the repo is not gone
+   * yet: a running create has still to reach its next step boundary, and a
+   * finished one still has its repo to delete. Draw it as "cancelling" rather
+   * than as the last progress line the job emitted — leaving the old step and
+   * percent up is what read as the create being frozen.
    *
    * 'cancelled' is its own terminal state rather than a flavour of 'failed'
    * because the two are read differently: a failure is something to read and
    * retry, a cancellation is the outcome the user asked for. It carries
    * NEITHER `error` nor `repo` — nothing went wrong, and nothing was kept.
+   * The server also OMITS it from GET /repo-creates, so a list never has to
+   * render one; it stays readable by id until its retention window expires.
    */
-  state: 'running' | 'done' | 'failed' | 'cancelled';
+  state: 'running' | 'cancelling' | 'done' | 'failed' | 'cancelled';
   step?: string;
   message?: string;
   pct?: number;
