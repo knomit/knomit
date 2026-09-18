@@ -20,7 +20,7 @@ vi.mock('./api', async importOriginal => ({
   // bare vi.fn() fails inside a click handler rather than at an assertion.
   deleteSession: vi.fn().mockResolvedValue(undefined),
   api: {
-    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
+    listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
@@ -1555,10 +1555,11 @@ describe('Manage tabs', () => {
     first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:59:00Z',
     ended_at: null, request_count: 3,
   });
-  const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 };
+  const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 };
 
   it('badges the live count, and lights NEITHER tab once an entity is selected', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false,
       policy: POLICY,
       sessions: [sess('live'), sess('live'), sess('dead'), sess('idle')],
     });
@@ -1596,13 +1597,13 @@ describe('Manage tabs', () => {
 
   it('updates the badge live while Manage is open on Overview', async () => {
     installFakeEventSource();
-    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [sess('live')] });
     render(<RepoManager {...baseProps} />);
     expect(await screen.findByTestId('repomgr-sessions-badge')).toHaveTextContent('1');
 
     // A second session initializes. Without the stream this badge would not
     // move until the next window focus — the bug this fixes.
-    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [sess('live'), sess('live')] });
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     await act(async () => { FakeEventSource.instances[0].emit('session', { id: 's2', kind: 'init' }); });
 
@@ -1611,7 +1612,7 @@ describe('Manage tabs', () => {
 
   it('opens exactly one sessions stream per tab: the page owns it while it is up', async () => {
     installFakeEventSource();
-    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [sess('live')] });
     render(<RepoManager {...baseProps} />);
     await screen.findByTestId('repomgr-sessions-badge');
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
@@ -1631,7 +1632,7 @@ describe('Manage tabs', () => {
   // read dispatched before that must not land after it and overwrite it.
   it('does not let a stale header read overwrite the count the Sessions page reported', async () => {
     installFakeEventSource();
-    let settleStale: (v: { policy: typeof POLICY; sessions: ReturnType<typeof sess>[] }) => void = () => {};
+    let settleStale: (v: { truncated: boolean; policy: typeof POLICY; sessions: ReturnType<typeof sess>[] }) => void = () => {};
     vi.mocked(api.listClientSessions).mockReturnValueOnce(
       new Promise(resolve => { settleStale = resolve; }),
     );
@@ -1640,13 +1641,13 @@ describe('Manage tabs', () => {
 
     // The Sessions page opens and reports 2 while the header's read is still
     // in flight.
-    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [sess('live'), sess('live')] });
     fireEvent.click(screen.getByTestId('repomgr-sessions'));
     await screen.findByTestId('manage-sessions');
     await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
 
     // ...and only now does the older read come back, with the older number.
-    await act(async () => { settleStale({ policy: POLICY, sessions: [sess('live')] }); });
+    await act(async () => { settleStale({ truncated: false, policy: POLICY, sessions: [sess('live')] }); });
     expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2');
   });
 
@@ -1661,7 +1662,7 @@ describe('Manage tabs', () => {
     render(<RepoManager {...baseProps} />);
     await screen.findByTestId('repomgr-sessions');
 
-    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live'), sess('live')] });
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [sess('live'), sess('live')] });
     fireEvent.click(screen.getByTestId('repomgr-sessions'));
     await screen.findByTestId('manage-sessions');
     await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('2'));
@@ -1682,7 +1683,7 @@ describe('Manage tabs', () => {
   // passes either way.
   it('opening Sessions costs exactly one list read', async () => {
     installFakeEventSource();
-    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('live')] });
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [sess('live')] });
     const { rerender } = render(<RepoManager {...baseProps} />);
     await screen.findByTestId('repomgr-sessions-badge');
     const before = vi.mocked(api.listClientSessions).mock.calls.length;
@@ -1777,7 +1778,7 @@ describe('Manage tabs', () => {
   });
 
   it('renders no badge at zero, and none when the count cannot be read', async () => {
-    vi.mocked(api.listClientSessions).mockResolvedValue({ policy: POLICY, sessions: [sess('dead')] });
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [sess('dead')] });
     const { unmount } = render(<RepoManager {...baseProps} />);
     await screen.findByTestId('repomgr-sessions');
     await waitFor(() => expect(api.listClientSessions).toHaveBeenCalled());
@@ -1796,5 +1797,64 @@ describe('Manage tabs', () => {
     await waitFor(() => expect(screen.getByTestId('step-source')).toBeInTheDocument());
     expect(screen.queryByTestId('repomgr-overview')).not.toBeInTheDocument();
     expect(screen.queryByTestId('repomgr-sessions')).not.toBeInTheDocument();
+  });
+
+  // The badge counts from a page the server BOUNDS. When that page was cut the
+  // number is a lower bound, and a bare count beside a table that admits it is
+  // showing "N of more" would be the one dishonest number on the screen — the
+  // exact silent truncation the limit work exists to prevent.
+  describe('RepoManager live badge truncation', () => {
+    const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 };
+
+    it('marks the count when the page was truncated', async () => {
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: true, policy: POLICY, sessions: [sess('live'), sess('live'), sess('dead')],
+      });
+      render(<RepoManager {...baseProps} />);
+      const badge = await screen.findByTestId('repomgr-sessions-badge');
+      // Two live of three shown, and more exist: "at least two".
+      expect(badge).toHaveTextContent('2+');
+    });
+
+    it('renders the exact count when the list is exhausted', async () => {
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: false, policy: POLICY, sessions: [sess('live'), sess('live')],
+      });
+      render(<RepoManager {...baseProps} />);
+      const badge = await screen.findByTestId('repomgr-sessions-badge');
+      expect(badge).toHaveTextContent('2');
+      expect(badge).not.toHaveTextContent('+');
+    });
+
+    // The marker must follow the DATA. A "+" left over from an earlier truncated
+    // read would claim there is more after the condition has gone.
+    it('clears the marker when a later read is not truncated', async () => {
+      installFakeEventSource();
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: true, policy: POLICY, sessions: [sess('live')],
+      });
+      render(<RepoManager {...baseProps} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('1+'));
+
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: false, policy: POLICY, sessions: [sess('live')],
+      });
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).not.toHaveTextContent('+'));
+    });
+
+    // The Sessions page owns the number while it is open and reports through
+    // onLiveCount — so the marker has to travel that path too, not just the
+    // header's own read.
+    it('marks the count reported by the Sessions page', async () => {
+      installFakeEventSource();
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: true, policy: POLICY, sessions: [sess('live'), sess('live'), sess('live')],
+      });
+      render(<RepoManager {...baseProps} />);
+      fireEvent.click(await screen.findByTestId('repomgr-sessions'));
+      await screen.findByTestId('manage-sessions');
+      await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('3+'));
+    });
   });
 });

@@ -77,7 +77,7 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 	post("sid-2", "", http.MethodPost)                  // direct http caller
 	post("sid-2", "garbage-no-equals", http.MethodPost) // unparseable ⇒ still http
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestMCPDispatch_RecordsSessions(t *testing.T) {
 
 	// DELETE ends the session.
 	post("sid-1", hdr.Encode(), http.MethodDelete)
-	rows, _ = store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, _ = store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	for _, row := range rows {
 		if row.ID == "sid-1" && (row.Ended == nil || row.State != sessions.StateDead) {
 			t.Fatalf("not ended: %+v", row)
@@ -130,7 +130,7 @@ func TestMCPDispatch_RecordsOnlyOnAcceptedStatuses(t *testing.T) {
 			req.Header.Set("Mcp-Session-Id", "mcp-session-attacker-chosen")
 			s.NewAPIRouter().ServeHTTP(httptest.NewRecorder(), req)
 
-			rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+			rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -149,7 +149,7 @@ func TestMCPDispatch_404CreatesNothing_NilStoreSafe(t *testing.T) {
 	req.Header.Set("Mcp-Session-Id", "stale")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
-	rows, _ := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, _ := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
 	if len(rows) != 0 {
 		t.Fatalf("404 must not create a row: %+v", rows)
 	}
@@ -182,7 +182,7 @@ func TestRecordClientSession_SurvivesRequestCancellation(t *testing.T) {
 	req.Header.Set("Mcp-Session-Id", "sid")
 	recordClientSession(req, store)
 
-	rows, err := store.List(ctx, sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, err := store.List(ctx, sessions.Filter{Now: time.Now(), IncludeHidden: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestRecordClientSession_TouchSurvivesRequestCancellation(t *testing.T) {
 	req.Header.Set("Mcp-Session-Id", "sid")
 	recordClientSession(req, store)
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,22 +86,34 @@ type clientSessionPolicy struct {
 	HiddenAfterS int64 `json:"hidden_after_s"`
 	RetentionS   int64 `json:"retention_s"`
 	LiveWindowS  int64 `json:"live_window_s"`
+	// Limit is the page size this response was built with, and MaxLimit the
+	// largest a caller may ask for. Echoed for the same reason the thresholds
+	// are: so the UI never hardcodes a number that can disagree with the
+	// server.
+	Limit    int `json:"limit"`
+	MaxLimit int `json:"max_limit"`
 }
 
 // clientSessionsCollection is the HAL collection plus the policy echo, so the
 // UI never hardcodes a threshold.
 type clientSessionsCollection struct {
-	Count    int                            `json:"count"`
-	Policy   clientSessionPolicy            `json:"policy"`
-	Links    hal.LinkMap                    `json:"_links"`
-	Embedded map[string][]clientSessionView `json:"_embedded"`
+	Count int `json:"count"`
+	// Truncated says MORE sessions matched than were returned. A caller must be
+	// able to tell a truncated page from an exhausted one — a silently cut list
+	// looks complete, which is worse than the unbounded read it replaced.
+	Truncated bool                           `json:"truncated"`
+	Policy    clientSessionPolicy            `json:"policy"`
+	Links     hal.LinkMap                    `json:"_links"`
+	Embedded  map[string][]clientSessionView `json:"_embedded"`
 }
 
 // handleHALClientSessions serves GET /api/v1/sessions — every MCP client
 // session seen by this server, newest activity first. Global (not under a
 // repo) because sessions cut across repos and lenses; filter with
 // ?binding=repo:<uid>|lens:<uid>. Rows silent past the hidden threshold are
-// omitted unless ?include=hidden.
+// omitted unless ?include=hidden, and the page is bounded by ?limit= (default
+// sessions.DefaultListLimit, clamped to MaxListLimit). `truncated` says whether
+// more matched than came back.
 //
 // READ-ONLY MODE REDACTS. The endpoint is a read, so read-only does not
 // refuse it — but read-only is the public DEMO mode, and these rows carry the
@@ -115,10 +128,15 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 			return
 		}
 		now := time.Now()
-		rows, err := store.List(r.Context(), sessions.Filter{
+		// A malformed ?limit= is IGNORED rather than rejected: this is a
+		// presence page, and the store clamps anyway, so failing the read over
+		// a bad query string would cost more than it protects.
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		rows, truncated, err := store.List(r.Context(), sessions.Filter{
 			Binding:       r.URL.Query().Get("binding"),
 			IncludeHidden: r.URL.Query().Get("include") == "hidden",
 			Now:           now,
+			Limit:         limit,
 		})
 		if err != nil {
 			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to list client sessions", err.Error(), r.URL.Path)
@@ -201,10 +219,12 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 		}
 		p := store.Policy()
 		hal.WriteHAL(w, http.StatusOK, clientSessionsCollection{
-			Count: len(items),
+			Count:     len(items),
+			Truncated: truncated,
 			Policy: clientSessionPolicy{
 				DeadAfterS: int64(p.DeadAfter.Seconds()), HiddenAfterS: int64(p.HiddenAfter.Seconds()),
 				RetentionS: int64(p.Retention.Seconds()), LiveWindowS: int64(p.LiveWindow().Seconds()),
+				Limit: sessions.ResolveListLimit(limit), MaxLimit: sessions.MaxListLimit,
 			},
 			Links: hal.LinkMap{
 				"self": {Href: selfWithQuery(b.Sessions(), r)},

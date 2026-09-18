@@ -191,6 +191,37 @@ type Filter struct {
 	Binding       string // "" = all
 	IncludeHidden bool   // include rows silent longer than Policy.HiddenAfter
 	Now           time.Time
+	// Limit bounds the page. 0 means DefaultListLimit; anything above
+	// MaxListLimit is clamped to it. There is no "unlimited": an unbounded
+	// read is what this field exists to remove.
+	Limit int
+}
+
+// Page size bounds for List.
+//
+// The list was unbounded until 2026-09-17, which made the response grow with
+// the number of sessions in the window and made SessionBindings' per-session
+// placeholder count grow with it — past SQLite's compile-time variable cap the
+// binding sets silently vanished from an otherwise normal-looking page.
+//
+// The default is generous enough that no ordinary instance is truncated, and
+// the max exists so a caller cannot ask for the unbounded read back.
+const (
+	DefaultListLimit = 500
+	MaxListLimit     = 2000
+)
+
+// ResolveListLimit applies the default and the clamp. Exported so the handler
+// can echo the SAME number it will actually be served with — two copies of this
+// rule would let the policy echo drift from the page.
+func ResolveListLimit(n int) int {
+	if n <= 0 {
+		return DefaultListLimit
+	}
+	if n > MaxListLimit {
+		return MaxListLimit
+	}
+	return n
 }
 
 // Session is one row with its read-time State.
@@ -207,8 +238,13 @@ type Session struct {
 	State                                      State
 }
 
-// List returns sessions newest-last-seen first.
-func (s *Store) List(ctx context.Context, f Filter) ([]Session, error) {
+// List returns sessions newest-last-seen first, bounded by f.Limit.
+//
+// truncated reports that MORE rows matched than were returned — queried by
+// asking for one row past the limit and dropping it. A caller must be able to
+// tell truncation from exhaustion: a silently cut list is worse than the
+// unbounded read this replaced, because it looks complete.
+func (s *Store) List(ctx context.Context, f Filter) (out []Session, truncated bool, err error) {
 	q := `SELECT id, instance_id, transport, binding, branch, hostname, username, cwd, pid, parent_app, parent_pid,
        bridge_version, remote_addr, user_agent, client_name, client_version, initialized,
        first_seen_at, last_seen_at, ended_at, request_count
@@ -227,13 +263,20 @@ FROM client_sessions WHERE 1=1`
 		q += ` AND last_seen_at >= ?`
 		args = append(args, f.Now.Add(-s.policy.HiddenAfter).Unix())
 	}
-	q += ` ORDER BY last_seen_at DESC, id`
+	// ORDER BY is what makes truncation MEANINGFUL rather than arbitrary: the
+	// page that survives is the most recently active, which is the page a
+	// presence view is for. id breaks ties so the cut is deterministic.
+	limit := ResolveListLimit(f.Limit)
+	q += ` ORDER BY last_seen_at DESC, id LIMIT ?`
+	// One row PAST the limit, dropped below. That extra row is the whole
+	// difference between "this is everything" and "there is more" — without it
+	// a full page and an exhausted one are indistinguishable.
+	args = append(args, limit+1)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
-	var out []Session
 	for rows.Next() {
 		var r Session
 		var first, last int64
@@ -242,7 +285,7 @@ FROM client_sessions WHERE 1=1`
 		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Transport, &r.Binding, &r.Branch, &r.Host, &r.User, &r.Cwd,
 			&r.PID, &r.ParentApp, &r.ParentPID, &r.BridgeVersion, &r.RemoteAddr, &r.UserAgent,
 			&r.ClientName, &r.ClientVersion, &initialized, &first, &last, &ended, &r.RequestCount); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		r.Initialized = initialized == 1
 		r.FirstSeen = time.Unix(first, 0)
@@ -254,7 +297,14 @@ FROM client_sessions WHERE 1=1`
 		r.State = s.policy.StateAt(r.LastSeen, r.Ended != nil, f.Now)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(out) > limit {
+		// Drop the probe row. It was never part of the page.
+		return out[:limit], true, nil
+	}
+	return out, false, nil
 }
 
 // Purge deletes rows whose last_seen_at is older than the retention window,

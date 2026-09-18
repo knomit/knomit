@@ -169,6 +169,11 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // everything below `if (!open) return null` is past an early return, and a
   // hook there would run conditionally.
   const [liveSessions, setLiveSessions] = useState<number | null>(null);
+  // The count comes from a page the server BOUNDS. When it was cut the number
+  // is a lower bound, and the badge has to say so — a bare "500" beside a table
+  // that admits it is showing 500 of more would be the one dishonest number on
+  // the screen.
+  const [liveTruncated, setLiveTruncated] = useState(false);
   // The fallback selection is never 'sessions', so the explicit selection is
   // the whole answer.
   const sessionsOpen = sel?.kind === 'sessions';
@@ -192,8 +197,12 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   const readLiveCount = useCallback(() => {
     const gen = ++liveCountGen.current;
     api.listClientSessions()
-      .then(r => { if (gen === liveCountGen.current) setLiveSessions(r.sessions.filter(s => s.state === 'live').length); })
-      .catch(() => { if (gen === liveCountGen.current) setLiveSessions(null); });
+      .then(r => {
+        if (gen !== liveCountGen.current) return;
+        setLiveSessions(r.sessions.filter(s => s.state === 'live').length);
+        setLiveTruncated(r.truncated);
+      })
+      .catch(() => { if (gen === liveCountGen.current) { setLiveSessions(null); setLiveTruncated(false); } });
   }, []);
   useEffect(() => {
     if (!wantLiveCount) return;
@@ -222,12 +231,15 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // the page's effect and buys an extra list read each time RepoManager
   // renders. Opening Sessions cost two reads instead of one until this was a
   // useCallback.
-  const handleLiveCount = useCallback((n: number | null) => {
+  const handleLiveCount = useCallback((n: number | null, truncated?: boolean) => {
     // The page's count supersedes anything the header has in flight, so it
     // takes a generation too — otherwise a read dispatched before the page
     // opened could still land on top of it.
     liveCountGen.current += 1;
     setLiveSessions(n);
+    // Carried with the count, not inferred: the page knows whether ITS read was
+    // cut, and the badge must not keep a stale "+" from an earlier one.
+    setLiveTruncated(truncated === true);
   }, []);
 
   if (!open) return null;
@@ -296,7 +308,9 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
             {/* Absent at zero AND when the call failed: a "0" we cannot vouch
                 for reads as "nobody is connected". */}
             {liveSessions !== null && liveSessions > 0 && (
-              <span data-testid="repomgr-sessions-badge" style={tabBadge}>{liveSessions}</span>
+              <span data-testid="repomgr-sessions-badge" style={tabBadge}>
+                {liveSessions}{liveTruncated ? '+' : ''}
+              </span>
             )}
           </button>
           {/* Absent under read-only, not disabled: the endpoint answers 403

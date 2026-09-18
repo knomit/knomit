@@ -5,7 +5,7 @@ import { RemoteConnectWizard } from './RemoteConnectWizard';
 vi.mock('./api', () => ({
   api: {
     getOrigin: vi.fn(),
-    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
+    listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
   },
   createSession: vi.fn(),
   streamTest: vi.fn(),

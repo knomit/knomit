@@ -13,7 +13,7 @@ import type { RepoCreateStatus } from './api';
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
   api: {
-    listClientSessions: vi.fn().mockResolvedValue({ sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 } }),
+    listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
     listArchived: vi.fn().mockResolvedValue([]),
     listLenses: vi.fn().mockResolvedValue([]),
     getRepo: vi.fn().mockResolvedValue({ name: 'core' }),

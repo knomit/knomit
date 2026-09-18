@@ -18,7 +18,7 @@ vi.mock('./api', () => ({
     getOrigin: vi.fn().mockResolvedValue(null),
     listClientSessions: vi.fn().mockResolvedValue({
       sessions: [],
-      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360 },
+      policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 },
     }),
   },
   createSession: vi.fn(),

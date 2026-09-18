@@ -63,18 +63,53 @@ ON CONFLICT(session_id, handle) DO UPDATE SET
 	return nil
 }
 
+// BindingChunkSize bounds how many session ids go into one IN (...) clause.
+//
+// 900 is DELIBERATELY CONSERVATIVE and deliberately not measured. SQLite's
+// SQLITE_MAX_VARIABLE_NUMBER is a COMPILE-TIME limit, not a property of SQLite:
+// it is 32766 on the bundled 3.51.2, but it was 999 before 3.32 and a system or
+// differently-built library can still be 999 today. A chunk size derived from
+// measuring today's library is a constant that breaks on the one machine that
+// differs, and breaks silently, because nothing re-measures. 900 is under the
+// smallest limit anyone is likely to link.
+//
+// It is exported so a test can seed past the REAL boundary. A test-only small
+// chunk size would exercise a different code path from production and prove
+// nothing about it.
+const BindingChunkSize = 900
+
 // SessionBindings returns every recorded handle for each of sids, MOST RECENTLY
 // USED FIRST within a session.
 //
-// ONE query for the whole page, deliberately. control.db runs at
+// One query PER CHUNK, not one per session. control.db runs at
 // SetMaxOpenConns(1), so a lookup per session row would serialise the entire
 // response behind a single connection — the same reason the handler builds one
-// name index instead of resolving each row. An empty sids is not a query at
-// all.
+// name index instead of resolving each row. Chunking keeps that property while
+// bounding the variable count; Store.List's limit is what bounds the number of
+// chunks. An empty sids is not a query at all.
 func (s *Store) SessionBindings(ctx context.Context, sids []string) (map[string][]SessionBinding, error) {
 	out := map[string][]SessionBinding{}
+	for start := 0; start < len(sids); start += BindingChunkSize {
+		end := start + BindingChunkSize
+		if end > len(sids) {
+			// The LAST PARTIAL CHUNK. Dropping it is the classic chunking bug
+			// and it returns NO error — the sessions in it would simply come
+			// back with empty sets, which reads downstream as "presented no
+			// handles" and is indistinguishable from the truth.
+			end = len(sids)
+		}
+		if err := s.appendBindings(ctx, sids[start:end], out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// appendBindings reads one chunk into out. Split from the loop so the query is
+// written once and the chunking has nothing to get wrong but its indices.
+func (s *Store) appendBindings(ctx context.Context, sids []string, out map[string][]SessionBinding) error {
 	if len(sids) == 0 {
-		return out, nil
+		return nil
 	}
 	ph := make([]string, len(sids))
 	args := make([]any, len(sids))
@@ -88,7 +123,7 @@ FROM client_session_bindings
 WHERE session_id IN (`+strings.Join(ph, ",")+`)
 ORDER BY session_id, last_seen_at DESC, handle`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("session bindings: %w", err)
+		return fmt.Errorf("session bindings: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -96,11 +131,11 @@ ORDER BY session_id, last_seen_at DESC, handle`, args...)
 		var b SessionBinding
 		var first, last int64
 		if err := rows.Scan(&sid, &b.Handle, &b.Binding, &b.Branch, &first, &last, &b.RequestCount); err != nil {
-			return nil, err
+			return err
 		}
 		b.FirstSeen = time.Unix(first, 0)
 		b.LastSeen = time.Unix(last, 0)
 		out[sid] = append(out[sid], b)
 	}
-	return out, rows.Err()
+	return rows.Err()
 }

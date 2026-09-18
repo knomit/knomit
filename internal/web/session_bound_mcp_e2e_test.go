@@ -232,7 +232,7 @@ func TestURLScopedMCP_RefusesABindingArgument(t *testing.T) {
 // the row does not exist yet.
 func bindingOf(t *testing.T, st *sessions.Store, sid string) string {
 	t.Helper()
-	rows, err := st.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
+	rows, _, err := st.List(context.Background(), sessions.Filter{Now: time.Now(), IncludeHidden: true})
 	require.NoError(t, err)
 	for _, r := range rows {
 		if r.ID == sid {

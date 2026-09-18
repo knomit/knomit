@@ -352,3 +352,68 @@ func TestHandleHALClientSessions_ReadOnlyRedactsHandleAndBranch(t *testing.T) {
 	require.Equal(t, "", body.Embedded.Sessions[0].Bindings[0].Handle)
 	require.Equal(t, "", body.Embedded.Sessions[0].Bindings[0].Branch)
 }
+
+// The page is bounded, and the response says whether it was CUT. A caller must
+// be able to tell truncation from exhaustion — a silently cut list looks
+// complete, which is worse than the unbounded read it replaced.
+func TestHandleHALClientSessions_LimitAndTruncated(t *testing.T) {
+	store := newClientSessionsStore(t)
+	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
+	now := time.Now()
+	ctx := context.Background()
+	// Seeded oldest-first, so insertion order is not what makes the ordering
+	// assertion pass.
+	for i := 0; i < 6; i++ {
+		require.NoError(t, store.Touch(ctx, sessions.Observation{
+			SessionID: fmt.Sprintf("s%d", i), Binding: "repo:u-alpha",
+			Now: now.Add(-time.Duration(6-i) * time.Minute),
+		}))
+	}
+
+	s := &Server{Manager: m, ClientSessions: store}
+	get := func(q string) (int, bool, []string, map[string]any) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions"+q, nil))
+		require.Equal(t, 200, rec.Code)
+		var body struct {
+			Count     int            `json:"count"`
+			Truncated bool           `json:"truncated"`
+			Policy    map[string]any `json:"policy"`
+			Embedded  struct {
+				Sessions []clientSessionView `json:"sessions"`
+			} `json:"_embedded"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		ids := make([]string, len(body.Embedded.Sessions))
+		for i, v := range body.Embedded.Sessions {
+			ids[i] = v.ID
+		}
+		return body.Count, body.Truncated, ids, body.Policy
+	}
+
+	count, truncated, ids, policy := get("?limit=2")
+	require.Equal(t, 2, count)
+	require.True(t, truncated, "four more matched")
+	// The page that survives is the most recently active, newest first.
+	require.Equal(t, []string{"s5", "s4"}, ids)
+	// The policy echoes the size actually used and the ceiling, so the UI never
+	// hardcodes either.
+	require.Equal(t, float64(2), policy["limit"])
+	require.Equal(t, float64(sessions.MaxListLimit), policy["max_limit"])
+
+	// Exhausted: same shape, truncated false.
+	count, truncated, _, policy = get("")
+	require.Equal(t, 6, count)
+	require.False(t, truncated)
+	require.Equal(t, float64(sessions.DefaultListLimit), policy["limit"])
+
+	// A limit past the ceiling is clamped, and the echo tells the truth about it.
+	_, _, _, policy = get(fmt.Sprintf("?limit=%d", sessions.MaxListLimit*10))
+	require.Equal(t, float64(sessions.MaxListLimit), policy["limit"])
+
+	// A malformed limit is ignored rather than failing the read.
+	count, _, _, policy = get("?limit=banana")
+	require.Equal(t, 6, count)
+	require.Equal(t, float64(sessions.DefaultListLimit), policy["limit"])
+}

@@ -67,7 +67,7 @@ func TestAfterInitialize_RecordsClientInfo(t *testing.T) {
 		t.Fatal("no session id minted")
 	}
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestAfterInitialize_RecordsBindingOnTheRepoRoute(t *testing.T) {
 	resp := postInitialize(t, srv.URL)
 	resp.Body.Close()
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func repoScopedMCP(t *testing.T, m *repos.Manager, repo, branch string) http.Han
 // mcp-go does not put the *http.Request in the hook's context, so the wiring
 // that does (WithHTTPContextFunc, in internal/web) is what lets a direct HTTP
 // client's identity be derived from the request that declared its clientInfo.
-// Without it the row is written with '' for both and every such client
+// Without it the row is written with ” for both and every such client
 // collides.
 func TestAfterInitialize_RecordsObservedConnectionDetails(t *testing.T) {
 	m := repos.New(context.Background(), repos.Deps{})
@@ -161,7 +161,7 @@ func TestAfterInitialize_RecordsObservedConnectionDetails(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	rows, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
+	rows, _, err := store.List(context.Background(), sessions.Filter{Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
