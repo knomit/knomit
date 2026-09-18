@@ -130,7 +130,37 @@ export function ManageSessions({ binding, onLiveCount }: {
                     </td>
                     <td>{r.bridge.parent || '—'}{r.bridge.pid ? <span style={{ color: '#666' }}> #{r.bridge.pid}</span> : null}</td>
                     <td><div>{r.bridge.host || r.remote_addr}</div><div style={{ color: '#666', fontSize: 11 }}>{r.bridge.cwd}</div></td>
-                    <td>{r.binding.name ?? <span style={{ color: '#777' }}>{r.binding.kind}:{r.binding.uid}</span>}</td>
+                    {/* Every handle the session has presented, most recently
+                        used first — NOT just the last one. One session id can
+                        serve several concurrent callers, so a single value here
+                        would show whichever call landed most recently and hide
+                        the rest. Falls back to the singular `binding` for a
+                        session that presented no handle at all (a URL-scoped
+                        caller), which is the only case the array is empty. */}
+                    <td data-testid="session-bindings">
+                      {r.bindings.length > 0
+                        ? r.bindings.map(b => (
+                            <div key={b.handle || `${b.kind}:${b.uid}`} data-testid="session-binding" style={{ whiteSpace: 'nowrap' }}>
+                              {b.name ?? <span style={{ color: '#777' }}>{b.kind}:{b.uid}</span>}
+                              {/* The handle, shortened. Full value on hover:
+                                  it is 32 opaque characters and would dominate
+                                  the row, but an operator correlating a log
+                                  line needs the whole thing. Absent on a
+                                  read-only server, which redacts it. */}
+                              {b.handle && (
+                                <span title={b.handle} style={{ marginLeft: 6, color: '#666', fontSize: 11 }}>
+                                  {b.handle.slice(0, 6)}…
+                                </span>
+                              )}
+                              {b.branch && (
+                                <span style={{ marginLeft: 6, color: '#888', fontSize: 11 }}>@{b.branch}</span>
+                              )}
+                            </div>
+                          ))
+                        : (r.binding.name ?? (r.binding.kind
+                            ? <span style={{ color: '#777' }}>{r.binding.kind}:{r.binding.uid}</span>
+                            : <span style={{ color: '#777' }}>—</span>))}
+                    </td>
                     <td style={{ color: '#888' }}>{r.branch || '—'}</td>
                     <td title={r.last_seen_at}>{relativeTime(r.last_seen_at, now)}</td>
                     <td>{r.request_count}</td>

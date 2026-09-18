@@ -1065,9 +1065,22 @@ export interface ClientSessionBinding { kind: string; uid: string; name: string 
  *  `branch` are SELF-REPORTED by the client and unverified — correlation, not
  *  identity. `state` is derived server-side from last-seen; nothing is a live
  *  connection. */
+// ClientSessionBindingRow is one HANDLE a session has presented.
+//
+// One entry per handle, NOT per target: two handles naming the same repo are
+// two entries, because they are two callers. `handle` and `branch` come back
+// empty from a read-only (demo) server.
+export interface ClientSessionBindingRow {
+  handle: string; kind: string; uid: string; name: string | null; branch: string;
+  first_seen_at: string; last_seen_at: string; request_count: number;
+}
 export interface ClientSession {
   id: string; instance_id: string; state: ClientSessionState; transport: 'stdio' | 'http';
-  binding: ClientSessionBinding; branch: string;
+  // `binding` is the LAST binding seen; `bindings` is every handle the session
+  // has presented, most recently used first. One session id can serve several
+  // concurrent callers, so the singular field is a snapshot and the array is
+  // the answer.
+  binding: ClientSessionBinding; bindings: ClientSessionBindingRow[]; branch: string;
   client: { name: string; version: string; initialized: boolean };
   bridge: { host: string; user: string; cwd: string; pid: number; parent: string; parent_pid: number; version: string };
   remote_addr: string; user_agent: string;
@@ -1087,7 +1100,11 @@ async function listClientSessions(opts: { binding?: string; includeHidden?: bool
   const qs = q.toString();
   const data = await fetchJSON<{ policy: ClientSessionPolicy; _embedded?: { sessions?: ClientSession[] } }>(
     apiUrl('/api/v1/sessions' + (qs ? `?${qs}` : '')));
-  return { sessions: data._embedded?.sessions ?? [], policy: data.policy };
+  // `bindings` is defaulted rather than trusted: a server older than the
+  // binding-set release omits the key entirely, and every consumer maps over
+  // it.
+  const sessions = (data._embedded?.sessions ?? []).map(s => ({ ...s, bindings: s.bindings ?? [] }));
+  return { sessions, policy: data.policy };
 }
 
 // listLenses GETs /api/v1/lenses and unwraps the HAL CollectionView

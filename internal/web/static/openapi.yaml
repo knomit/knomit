@@ -1486,16 +1486,23 @@ paths:
 
         On a READ-ONLY (public demo) instance this response is REDACTED: every
         `bridge` field, `branch`, `remote_addr` and `user_agent` come back
-        empty or zero, because they describe the operator's machine. Presence
-        itself — id, instance_id, state, transport, binding, client
-        name/version, timestamps, request_count — is unchanged.
+        empty or zero, because they describe the operator's machine, and inside
+        `bindings` each row's `handle` and `branch` come back empty — a handle
+        is a live routing capability and an agent branch embeds the hostname.
+        Presence itself — id, instance_id, state, transport, binding, the
+        `bindings` targets and counts, client name/version, timestamps,
+        request_count — is unchanged.
       operationId: listClientSessions
       parameters:
         - name: binding
           in: query
           required: false
           schema: { type: string }
-          description: Restrict to one binding, as `repo:<uid>` or `lens:<uid>`.
+          description: |
+            Restrict to one binding, as `repo:<uid>` or `lens:<uid>`. A session
+            matches if ANY binding it has presented is that pin — its last-seen
+            one, or any handle in its `bindings` set — and it is returned ONCE
+            however many of its handles match.
         - name: include
           in: query
           required: false
@@ -3430,7 +3437,7 @@ components:
 
     ClientSession:
       type: object
-      required: [id, instance_id, state, transport, binding, client, bridge, first_seen_at, last_seen_at, request_count]
+      required: [id, instance_id, state, transport, binding, bindings, client, bridge, first_seen_at, last_seen_at, request_count]
       properties:
         id:
           type: string
@@ -3451,6 +3458,10 @@ components:
           enum: [stdio, http]
         binding:
           type: object
+          description: |
+            The LAST binding this session was seen using. Kept for
+            compatibility; `bindings` is the complete picture, because one
+            session id can serve several concurrent callers.
           required: [kind, uid]
           properties:
             kind: { type: string, enum: [repo, lens, ""] }
@@ -3459,6 +3470,35 @@ components:
               type: string
               nullable: true
               description: Null when the repo or lens no longer resolves.
+        bindings:
+          type: array
+          description: |
+            Every binding HANDLE this session has presented, most recently used
+            first. One entry per handle, NOT per target: two handles naming the
+            same repo are two entries, because they are two callers. Empty for
+            a session that has only used URL-scoped mounts, which present no
+            handle.
+          items:
+            type: object
+            required: [handle, kind, uid, branch, first_seen_at, last_seen_at, request_count]
+            properties:
+              handle:
+                type: string
+                description: The opaque handle knomit_bind minted. Empty under read-only.
+              kind: { type: string, enum: [repo, lens, ""] }
+              uid: { type: string }
+              name:
+                type: string
+                nullable: true
+                description: Null when the repo or lens no longer resolves.
+              branch:
+                type: string
+                description: |
+                  Read branch the handle names; empty means the target's own.
+                  Also empty under read-only.
+              first_seen_at: { type: string, format: date-time }
+              last_seen_at: { type: string, format: date-time }
+              request_count: { type: integer }
         branch:
           type: string
           description: Agent branch the client declared; empty in lens mode.

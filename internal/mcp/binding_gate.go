@@ -175,10 +175,11 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle string) (cont
 	if rerr != nil {
 		return ctx, rerr
 	}
-	// Observational only: the client_sessions row records what this session was
-	// seen doing. Routing was already decided, by the handle.
+	// Observational only: the client_sessions row and the session's binding SET
+	// record what this session was seen doing. Routing was already decided, by
+	// the handle. The handle rides along because the set is keyed by it.
 	if rec, found := repos.PinRecorderFromContext(bctx); found {
-		rec.Record(pin)
+		rec.Record(repos.ResolvedBinding{Handle: handle, Pin: pin, Branch: branch})
 	}
 	return bctx, nil
 }

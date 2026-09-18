@@ -279,6 +279,24 @@ func RequireBinding(ctx context.Context) (*Binding, error) {
 	return nil, ErrUnbound
 }
 
+// ResolvedBindingFromContext returns what the tool gate resolved for this
+// request — handle, pin and branch — or the zero value on a mount that has no
+// recorder (every URL-scoped one) or a request that resolved nothing.
+//
+// The URL-scoped mounts deliberately yield an empty HANDLE with a non-empty
+// pin from BindingPinFromContext: their target came from the path, so there is
+// no handle to report, and the session binding set stays empty for them.
+func ResolvedBindingFromContext(ctx context.Context) ResolvedBinding {
+	if p, ok := PinRecorderFromContext(ctx); ok {
+		if rb := p.Resolved(); rb.Pin != "" {
+			return rb
+		}
+	}
+	// No recorder, or nothing recorded: fall back to whatever the context can
+	// say about the pin, so a URL-scoped request still stamps its row.
+	return ResolvedBinding{Pin: BindingPinFromContext(ctx)}
+}
+
 // BindingPinFromContext resolves the request's binding to a PinID
 // ("repo:<uid>" or "lens:<uid>"), or "" when the context carries neither a
 // Binding nor a RepoInstance.

@@ -47,7 +47,7 @@ func TestSessionBindingMiddleware_MarksScopeAndInstallsRecorder(t *testing.T) {
 	require.True(t, repos.SessionScoped(ctx))
 	rec, ok := repos.PinRecorderFromContext(ctx)
 	require.True(t, ok, "the gate needs somewhere to report the resolved pin")
-	require.Equal(t, "", rec.Pin(), "nothing has been resolved yet")
+	require.Equal(t, repos.ResolvedBinding{}, rec.Resolved(), "nothing has been resolved yet")
 
 	_, ok = repos.BindingFromContextOpt(ctx)
 	require.False(t, ok)
@@ -116,7 +116,7 @@ func TestUnscopedMCPMount_RecordsBindingPin(t *testing.T) {
 		mcpHandler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			rec, ok := repos.PinRecorderFromContext(req.Context())
 			require.True(t, ok)
-			rec.Record("repo:u-alpha")
+			rec.Record(repos.ResolvedBinding{Handle: "h-1", Pin: "repo:u-alpha"})
 			w.WriteHeader(http.StatusOK)
 		})}
 	router := s.NewAPIRouter()
