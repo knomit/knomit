@@ -106,12 +106,51 @@ func handleStartSynthesis(llmAdapter llm.LLMAdapter) http.HandlerFunc {
 
 // handleStartRebuild handles POST /api/v1/repos/{repo}/branches/{branch}/index-rebuilds.
 // Clears the index last-commit marker and re-indexes every file from HEAD,
-// emitting progress events via TaskHub. Returns 409 if a rebuild is already running.
+// emitting progress events via TaskHub. Returns 409 if a rebuild is already
+// running, or if the index is already being built by the startup heal.
 func handleStartRebuild() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ri := repos.RepoFromContext(r.Context())
 
 		branch := BranchFromContext(r.Context())
+
+		// SERIALISATION, and the reason this endpoint refuses rather than
+		// coordinating.
+		//
+		// The rebuild below marks the index state (indexing → ready|error) so
+		// the chip and the event stream stop reading "ready" throughout one.
+		// That makes the rebuild a SECOND writer of a cell that has no notion
+		// of who owns it, and the create job infers from that cell: it mirrors
+		// IndexStatus() and returns the instant the state leaves "indexing"
+		// (mirrorIndexing, repos/lifecycle.go). So a rebuild finishing first
+		// while a heal is still in flight would flip the cell to "ready" and
+		// make the create job emit done/100%/ready over a half-built index —
+		// kb/decisions/repos/create-job/done-means-indexed, violated directly.
+		//
+		// Refusing keeps one writer LITERALLY rather than by mechanism. A
+		// claim/release count was considered and rejected: a leaked release
+		// pins the state at "indexing" forever and silently, which is the exact
+		// failure class of the 2026-08 stuck-indexing incident in the same
+		// cell. A 409 has no pairing to leak and fails VISIBLY.
+		//
+		// THE MIRROR CASE — a heal starting while a rebuild runs — is not
+		// covered here and cannot be, because a heal is not a request. It is
+		// structurally unreachable, and ONLY while openOne's callers stay what
+		// they are today: Manager.Add (create, where the repo is brand new, so
+		// no rebuild can target it; and restore, where Archive tore the
+		// instance down through shutdown, cancelling indexCtx and waiting
+		// indexWg — so an in-flight rebuild and a restore of the same repo are
+		// contradictory states) and openRegistered (called only from
+		// Manager.Start, at boot, when no repo is open). ADDING A THIRD CALLER
+		// — a hot reload, a rescan-in-place — silently reintroduces the race,
+		// with nothing here to notice it.
+		if state, _, _ := ri.IndexStatus(); state == repos.IndexStateIndexing {
+			hal.WriteProblem(w, http.StatusConflict, "Index is busy",
+				"the index for this repo is currently "+state+"; a rebuild cannot run "+
+					"at the same time. This is temporary — wait for it to finish and retry.",
+				r.URL.Path)
+			return
+		}
 
 		// Acquire (not a lock-scoped snapshot) because the rebuild task below
 		// outlives this request; the release runs when the task finishes, so a
@@ -137,6 +176,11 @@ func handleStartRebuild() http.HandlerFunc {
 
 		id, err := hub.Start("rebuild", func(ctx context.Context, emit func(repos.TaskEvent)) {
 			defer release()
+			// Marked INSIDE the task fn, not beside the check above: hub.Start
+			// is the single-flight guard, so a second concurrent rebuild loses
+			// there and never reaches a mark. Marking in the handler would put
+			// the mark on the losing path too.
+			ri.MarkIndexRebuildStart()
 			emit(repos.TaskEvent{Status: "running", Phase: "start", Message: "rebuilding index", Repo: repo})
 			th := newProgressThrottle(250 * time.Millisecond)
 			progress := func(subPhase string, done, total int) {
@@ -144,7 +188,12 @@ func handleStartRebuild() http.HandlerFunc {
 					emit(repos.TaskEvent{Status: "running", Phase: subPhase, Message: fmt.Sprintf("%d/%d", done, total), Repo: repo})
 				}
 			}
-			if err := svc.IndexManager().Rebuild(ctx, branch, progress); err != nil {
+			err := svc.IndexManager().Rebuild(ctx, branch, progress)
+			// Every exit from here marks a terminal, including the error one.
+			// Returning without marking would pin the chip at "indexing"
+			// forever — the stuck-indexing failure, reached by a new route.
+			ri.MarkIndexRebuildDone(err)
+			if err != nil {
 				emit(repos.TaskEvent{Status: "error", Message: err.Error(), Repo: repo})
 				return
 			}

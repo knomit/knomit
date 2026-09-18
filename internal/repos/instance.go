@@ -190,6 +190,34 @@ func (ri *RepoInstance) markIndexFailed() {
 	ri.publishIndex(false)
 }
 
+// MarkIndexRebuildStart and MarkIndexRebuildDone bracket a MANUAL index
+// rebuild with the same marks the startup heal uses, so IndexStatus and the
+// index event stream describe a rebuild exactly as they describe a heal —
+// rather than reading "ready" throughout one, which is what they did before.
+//
+// They are exported for internal/web's rebuild endpoint and for nothing else.
+// Everything inside this package uses the unexported marks directly.
+//
+// SAFE ONLY UNDER SERIALISATION. The index-state cell has no notion of who
+// owns it, so a second concurrent writer would let whichever finishes first
+// publish a terminal describing the other's work. The endpoint therefore
+// REFUSES a rebuild with 409 while the state is already "indexing" — see
+// handleStartRebuild, which carries the full argument. If you are reaching for
+// these from a new caller, that caller needs the same refusal, and the
+// structural argument about openOne's callers has to be re-checked for it.
+func (ri *RepoInstance) MarkIndexRebuildStart() { ri.markIndexing() }
+
+// MarkIndexRebuildDone marks the terminal for a manual rebuild: ready on
+// success, error on failure. See MarkIndexRebuildStart for the serialisation
+// requirement.
+func (ri *RepoInstance) MarkIndexRebuildDone(err error) {
+	if err != nil {
+		ri.markIndexFailed()
+		return
+	}
+	ri.markIndexReady()
+}
+
 // TestSetIndexProgress, TestMarkIndexReady and TestMarkIndexFailed drive the
 // index-state chokepoint from a sibling package's test.
 //
