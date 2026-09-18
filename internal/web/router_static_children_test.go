@@ -32,7 +32,7 @@ func walkRoutes(t *testing.T, r chi.Router) []string {
 // registered under /repos/ is ALSO a legal repo name, and chi prefers the
 // static route — the repo of that name becomes unreachable there, with no
 // diagnosis available to its owner. GET /repos/events shipped that way at
-// 594b551a and is why this test exists; the route now lives at /index-events.
+// 594b551a and is why this test exists; the route now lives at /repo-events.
 //
 // The rule is deliberately blunt rather than a judgement per route. The cost of
 // a collision is NOT uniform — a static LEAF costs one method+path because chi
@@ -40,7 +40,7 @@ func walkRoutes(t *testing.T, r chi.Router) []string {
 // below it — and that difference is invisible from "static beats param" alone.
 // Rather than ask each new route's author to work out which case they are in,
 // nothing static goes under /repos/ at all. Top-level collections
-// (/repo-creates, /index-events) are the established way to add one.
+// (/repo-creates, /repo-events) are the established way to add one.
 //
 // This is an EXCLUSION test, not a coverage test: it does not need a list of
 // known-bad names and cannot go stale as routes are added. A new static child
@@ -70,7 +70,7 @@ func TestRouter_NoStaticChildrenUnderRepos(t *testing.T) {
 	if len(offenders) > 0 {
 		t.Errorf("static route(s) registered under /repos/, which shadow a repo of the "+
 			"same name:\n  %s\n\nMove it to a TOP-LEVEL collection (see /repo-creates and "+
-			"/index-events in router.go) rather than adding an exception here.",
+			"/repo-events in router.go) rather than adding an exception here.",
 			strings.Join(offenders, "\n  "))
 	}
 }
@@ -80,7 +80,7 @@ func TestRouter_NoStaticChildrenUnderRepos(t *testing.T) {
 //
 // The shadowing problem needs a {param} SIBLING to shadow into: /repos/events
 // was a hazard because /repos/{repo} exists beside it. At the API root there is
-// no such sibling — every child is static — so /index-events cannot shadow
+// no such sibling — every child is static — so /repo-events cannot shadow
 // anything and nothing can shadow it. If a top-level {param} route is ever
 // added, this fails, and every top-level static collection needs re-examining.
 func TestRouter_APIRootHasNoParamChild(t *testing.T) {
@@ -96,7 +96,7 @@ func TestRouter_APIRootHasNoParamChild(t *testing.T) {
 	}
 	if len(paramChildren) > 0 {
 		t.Errorf("the API root has a {param} child:\n  %s\n\nEvery top-level static "+
-			"collection (/index-events, /repo-creates, /sessions, /logs, /archived) can "+
+			"collection (/repo-events, /repo-creates, /sessions, /logs, /archived) can "+
 			"now be shadowed by it. Re-examine them.", strings.Join(paramChildren, "\n  "))
 	}
 }

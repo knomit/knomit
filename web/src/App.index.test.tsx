@@ -57,7 +57,7 @@ async function primeApi(repos: unknown[]) {
 }
 
 /** The server-wide index stream, selected by URL — never by index. */
-const indexStream = () => latestStream('/api/v1/index-events');
+const repoEventStream = () => latestStream('/api/v1/repo-events');
 
 /**
  * Open the repo picker, which is where the per-repo index chip lives.
@@ -92,9 +92,9 @@ describe('index events clear a stale chip', () => {
     const chip = await screen.findByTestId('repo-index-indexing');
     expect(chip).toBeInTheDocument();
 
-    await waitFor(() => expect(indexStream()).toBeDefined());
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
     act(() => {
-      indexStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
+      repoEventStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
     });
 
     await waitFor(() => expect(screen.queryByTestId('repo-index-indexing')).toBeNull());
@@ -109,9 +109,9 @@ describe('index events clear a stale chip', () => {
     await openRepoMenu();
     await waitFor(() => expect(screen.getAllByTestId('repo-index-indexing').length).toBe(2));
 
-    await waitFor(() => expect(indexStream()).toBeDefined());
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
     act(() => {
-      indexStream()!.emit('index', { repo: 'beta', state: 'ready', done: 10, total: 10 });
+      repoEventStream()!.emit('index', { repo: 'beta', state: 'ready', done: 10, total: 10 });
     });
 
     // One left, not zero and not two: the event names one repo.
@@ -126,11 +126,11 @@ describe('index events clear a stale chip', () => {
     render(<App />);
     await openRepoMenu();
     await screen.findByTestId('repo-index-indexing');
-    await waitFor(() => expect(indexStream()).toBeDefined());
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
     const before = api.repos.mock.calls.length;
 
     act(() => {
-      indexStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
+      repoEventStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
     });
     await waitFor(() => expect(screen.queryByTestId('repo-index-indexing')).toBeNull());
 
@@ -144,7 +144,7 @@ describe('index stream reconnect', () => {
   it('refetches the repo list on a RECONNECT, not on the first ready', async () => {
     const api = await primeApi([repoRow('alpha')]);
     render(<App />);
-    await waitFor(() => expect(indexStream()).toBeDefined());
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
     await waitFor(() => expect(api.repos).toHaveBeenCalled());
     const afterBootstrap = api.repos.mock.calls.length;
 
@@ -155,7 +155,7 @@ describe('index stream reconnect', () => {
 
     // A SECOND ready is a reconnect: the gap may have swallowed a terminal
     // event, which is broadcast once and never replayed.
-    act(() => { indexStream()!.emit('ready', {}); });
+    act(() => { repoEventStream()!.emit('ready', {}); });
     await waitFor(() => expect(api.repos.mock.calls.length).toBe(afterBootstrap + 1));
   });
 
@@ -171,17 +171,17 @@ describe('index stream reconnect', () => {
     render(<App />);
     await openRepoMenu();
     await screen.findByTestId('repo-index-indexing');
-    await waitFor(() => expect(indexStream()).toBeDefined());
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
 
     // Reconnect dispatches a refetch that we hold open. Its answer is STALE —
     // it still says indexing, which is exactly the case that matters.
     let settle: (v: unknown) => void = () => {};
     api.repos.mockReturnValueOnce(new Promise(resolve => { settle = resolve; }));
-    act(() => { indexStream()!.emit('ready', {}); });
+    act(() => { repoEventStream()!.emit('ready', {}); });
 
     // The terminal event arrives while that refetch is still in flight.
     act(() => {
-      indexStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
+      repoEventStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
     });
     await waitFor(() => expect(screen.queryByTestId('repo-index-indexing')).toBeNull());
 
@@ -204,9 +204,9 @@ describe('the indexing banner follows the event', () => {
     const banner = await screen.findByTestId('indexing-banner');
     expect(banner).toBeInTheDocument();
 
-    await waitFor(() => expect(indexStream()).toBeDefined());
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
     act(() => {
-      indexStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
+      repoEventStream()!.emit('index', { repo: 'alpha', state: 'ready', done: 10, total: 10 });
     });
 
     await waitFor(() => expect(screen.queryByTestId('indexing-banner')).toBeNull());
@@ -220,9 +220,9 @@ describe('the indexing banner follows the event', () => {
     render(<App />);
     await screen.findByTestId('indexing-banner');
 
-    await waitFor(() => expect(indexStream()).toBeDefined());
+    await waitFor(() => expect(repoEventStream()).toBeDefined());
     act(() => {
-      indexStream()!.emit('index', { repo: 'beta', state: 'ready', done: 10, total: 10 });
+      repoEventStream()!.emit('index', { repo: 'beta', state: 'ready', done: 10, total: 10 });
     });
 
     // The banner speaks for the ACTIVE repo. Another repo reaching ready says

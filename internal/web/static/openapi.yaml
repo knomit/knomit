@@ -1565,41 +1565,63 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
-  /index-events:
+  /repo-events:
     get:
       tags: [events]
-      summary: Server-Sent Events stream of index-state changes, for every repo
+      summary: Server-Sent Events stream of repo-level events, for every repo
       description: |
-        One connection carrying the index state of EVERY repo, so a UI that
-        renders an index chip per repo does not need a stream per repo or a
-        poll. The per-repo stream at
-        `/repos/{repo}/branches/{branch}/events` also carries `index` events,
-        scoped to that repo, for a client watching only one.
+        One connection carrying REPO-LEVEL events for every repo, so a UI that
+        renders a row per repo does not need a stream per repo or a poll.
+
+        SCOPE — what belongs on this stream. A repo-event is about the repo AS
+        AN ENTRY IN THE REPO LIST: its existence, its availability, or a
+        whole-repo state. It is never about content inside a branch. That test
+        decides membership, not the list of kinds below.
+
+        Worked both ways:
+          * `index` BELONGS — the index chip is rendered per repo, for repos the
+            user is not looking at; index state is a property of the repo, not
+            of any branch being viewed.
+          * a HEAD CHANGE DOES NOT — a commit is meaningful only relative to a
+            branch, so "the head moved" says nothing without naming which. Head
+            changes, task progress and sync/push results stay on the per-branch
+            stream at `/repos/{repo}/branches/{branch}/events`.
+
+        Future kinds follow from that test rather than from an enumeration, but
+        as illustration: a repo becoming unavailable, archived, restored,
+        appearing, or its origin failing at the repo level.
+
+        The `created` case, decided so it does not have two homes: the PROGRESS
+        of a creation belongs to the job stream at `/repo-creates/{id}/events`,
+        which ends when the job does; a repo APPEARING in the list — or
+        disappearing, or changing availability — is a repo-event, on a stream
+        that does not end.
 
         A TOP-LEVEL collection rather than `/repos/events`, deliberately: repo
         names are `[a-z0-9-_]`, so a static segment under `/repos/` is also a
         legal repo name and would shadow a repo called that. It shipped at the
         `/repos/` path and was moved for exactly that reason.
 
-        Events:
+        One `event:` line per kind. Events:
           * `ready` — sent once, immediately on connect, with `data: {}`. A
-            `ready` after the first is a reconnect: a terminal event may have
-            been missed while disconnected, so re-read `/repos` on every one
-            after the first.
+            `ready` after the first is a reconnect: events may have been missed
+            while disconnected, so re-read `/repos` on every one after the
+            first.
           * `index` — one repo's index state:
             `{"repo": "...", "state": "ready|indexing|error", "done": N,
             "total": M}`. `state` uses the same vocabulary as the `index_state`
             field of `/repos`, so a consumer can patch a list row from the
             event without translating anything.
 
-        PROGRESS events are throttled to at most one per repo per second.
-        Entry and terminal events (`indexing`, `ready`, `error`) are NEVER
-        throttled, and a terminal resets the throttle window — dropping one is
-        not a dropped frame, it is a UI stuck showing a state that has passed.
+        PROGRESS events of the `index` kind are throttled to at most one per
+        repo per second. Entry and terminal events (`indexing`, `ready`,
+        `error`) are NEVER throttled, and a terminal resets the throttle window
+        — dropping one is not a dropped frame, it is a UI stuck showing a state
+        that has passed.
 
         A `: keepalive` comment every 30s keeps idle streams open through
         proxies.
-      operationId: streamIndexEvents
+      operationId: streamRepoEvents
       responses:
         "200":
           description: SSE stream

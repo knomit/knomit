@@ -81,10 +81,10 @@ type repoBuilder struct {
 	// runtime clone-create's ActivateSync cannot kill the in-flight initial index.
 	indexCtx context.Context
 	indexWg  *sync.WaitGroup
-	// indexHub is the Manager's server-wide index-event stream, nil when the
+	// repoEventHub is the Manager's server-wide repo-event stream, nil when the
 	// Manager has none (most tests). Carried onto the instance so the mark*
 	// chokepoint can reach it.
-	indexHub *IndexHub
+	repoEventHub *RepoEventHub
 	// upstreamMain is the resolved consensus branch name for this repo's
 	// origin (e.g. "main" or "master"), read back from control.db's origin by
 	// rehydrateUpstreamMain. EMPTY means this repo has no origin — setupIndex
@@ -589,7 +589,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		discoveryWSpec:                b.cfg.Discovery.WSpec,
 		handle:                        newStoreHandle(b.svc),
 		hub:                           hub,
-		indexHub:                      b.indexHub,
+		repoEventHub:                  b.repoEventHub,
 	}
 	ri.setName(b.name)
 

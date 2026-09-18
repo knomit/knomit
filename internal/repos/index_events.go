@@ -36,7 +36,8 @@ type IndexEvent struct {
 // in the state this whole mechanism exists to clear.
 const indexProgressInterval = time.Second
 
-// IndexHub fans index events in from every repo to one server-wide stream.
+// RepoEventHub fans REPO-LEVEL events in from every repo to one server-wide
+// stream. IndexEvent is its first and currently only kind.
 //
 // It exists because the per-repo TaskHub cannot answer the question the UI
 // actually asks. The web app holds ONE events stream, for the ACTIVE repo, but
@@ -45,18 +46,18 @@ const indexProgressInterval = time.Second
 // Rather than open a stream per repo (which scales with the fleet and was
 // explicitly not wanted), the instances publish here as well and the app holds
 // one extra stream for all of them.
-type IndexHub struct {
+type RepoEventHub struct {
 	ob *goob.Observable
 }
 
-// NewIndexHub returns a hub whose lifetime is ctx.
-func NewIndexHub(ob *goob.Observable) *IndexHub { return &IndexHub{ob: ob} }
+// NewRepoEventHub returns a hub whose lifetime is ctx.
+func NewRepoEventHub(ob *goob.Observable) *RepoEventHub { return &RepoEventHub{ob: ob} }
 
-// Subscribe returns the stream of IndexEvents until ctx ends. A nil hub yields
+// Subscribe returns the stream of repo events until ctx ends. A nil hub yields
 // a nil channel — one that blocks forever rather than one that is already
 // closed, because a closed channel would end an SSE handler's loop the instant
 // it started and the browser would reconnect in a tight loop.
-func (h *IndexHub) Subscribe(ctx context.Context) goob.Events {
+func (h *RepoEventHub) Subscribe(ctx context.Context) goob.Events {
 	if h == nil || h.ob == nil {
 		return nil
 	}
@@ -65,7 +66,7 @@ func (h *IndexHub) Subscribe(ctx context.Context) goob.Events {
 
 // publish is nil-safe: a Manager built without a hub (most tests) simply
 // broadcasts nothing, and every caller stays unconditional.
-func (h *IndexHub) publish(ev IndexEvent) {
+func (h *RepoEventHub) publish(ev IndexEvent) {
 	if h == nil || h.ob == nil {
 		return
 	}
@@ -135,5 +136,5 @@ func (ri *RepoInstance) publishIndex(throttled bool) {
 		ri.hub.broadcastIndex(ev)
 	}
 	// Server-wide stream, for the fleet-wide chip.
-	ri.indexHub.publish(ev)
+	ri.repoEventHub.publish(ev)
 }

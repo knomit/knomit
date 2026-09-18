@@ -701,7 +701,7 @@ export interface RepoIndexEvent {
   total: number;
 }
 
-// subscribeRepoIndex opens the SERVER-WIDE index stream and reports every
+// subscribeRepoEvents opens the SERVER-WIDE repo-event stream and reports every
 // index-state change, plus a `reconnect` whenever the stream reopens.
 //
 // Server-wide rather than per repo: the app renders an index chip for every
@@ -713,10 +713,10 @@ export interface RepoIndexEvent {
 // "indexing" chip forever; the consumer refetches the list on reconnect. The
 // FIRST ready is deliberately not one, because the caller has invariably just
 // read the list.
-export function subscribeRepoIndex(
+export function subscribeRepoEvents(
   onEvent: (ev: RepoIndexEvent | { type: 'reconnect' }) => void,
 ): () => void {
-  const es = new EventSource(apiUrl('/api/v1/index-events'));
+  const es = new EventSource(apiUrl('/api/v1/repo-events'));
   const outage = createOutageLog(diagStream);
   let seenReady = false;
 
