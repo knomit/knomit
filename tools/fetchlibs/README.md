@@ -26,12 +26,21 @@ idempotent and safe to re-run.
 
 ## When a download fails
 
-Transport errors and 5xx responses are retried — four attempts, doubling from
-2s, 14s of waiting in the worst case — and each retry prints a line to stderr,
-so a CI log shows a flaky release CDN as what it was rather than as a pause.
+Transport errors, **5xx** and **429 Too Many Requests** are retried — four
+attempts, doubling from 2s, 14s of waiting in the worst case — and each retry
+prints a line to stderr, so a CI log shows a flaky release CDN as what it was
+rather than as a pause.
 
-A **4xx is not retried**. A 404 means [`spec.go`](spec.go) pins a release that
-does not exist; retrying a wrong pin only delays the message that says so.
+**Every other 4xx fails immediately.** A 404 means [`spec.go`](spec.go) pins a
+release that does not exist; retrying a wrong pin only delays the message that
+says so. 429 is the single exception: a rate limit is transient by definition.
+
+On a 429 the server's `Retry-After` is honoured in both RFC 9110 forms
+(delta-seconds and HTTP-date). It can only make the wait **longer**, never
+shorter, and it is clamped to the same 14s overall budget — a
+`Retry-After: 3600` cannot turn a CI step into an hour-long hang. A negative or
+unparseable value is ignored in favour of the normal backoff, never treated as
+"retry now".
 
 Normally you don't call it directly — `make setup` does:
 
