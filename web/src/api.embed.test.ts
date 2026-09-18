@@ -34,7 +34,7 @@ describe('embedded branch roots', () => {
     globalThis.fetch = mockFetchOnce({
       name: 'alpha', read_branch: 'agent/test', agent_branch: 'agent/test',
       _embedded: { branch: branchBody },
-    }) as any;
+    }) as unknown as typeof fetch;
 
     const details = await api.getRepo('alpha');
 
@@ -46,11 +46,11 @@ describe('embedded branch roots', () => {
     expect(details.branch?.head).toBe('h1');
     expect(details.branch?.index_percent).toBe(100);
     // The raw envelope must not leak through as a second shape.
-    expect((details as any)._embedded).toBeUndefined();
+    expect((details as unknown as Record<string, unknown>)._embedded).toBeUndefined();
   });
 
   it('getRepo leaves branch undefined when the server omitted the embed', async () => {
-    globalThis.fetch = mockFetchOnce({ name: 'alpha', read_branch: 'agent/test' }) as any;
+    globalThis.fetch = mockFetchOnce({ name: 'alpha', read_branch: 'agent/test' }) as unknown as typeof fetch;
 
     const details = await api.getRepo('alpha');
 
@@ -62,14 +62,14 @@ describe('embedded branch roots', () => {
     globalThis.fetch = mockFetchOnce({
       name: 'eng', write: { uid: 'u1', name: 'alpha' }, reads: [],
       _embedded: { write_branch: branchBody },
-    }) as any;
+    }) as unknown as typeof fetch;
     const withBranch = await api.getLens('eng');
     expect(withBranch.write_branch).toEqual(statusFromBranchBody(branchBody, 'agent/test'));
 
     // A subscription write member has no agent branch, so the key is absent.
     globalThis.fetch = mockFetchOnce({
       name: 'eng', write: { uid: 'u1', name: 'alpha' }, reads: [],
-    }) as any;
+    }) as unknown as typeof fetch;
     const without = await api.getLens('eng');
     expect(without.write_branch).toBeUndefined();
   });
@@ -77,7 +77,7 @@ describe('embedded branch roots', () => {
   it('ignores an embed carrying no branch name rather than inventing one', async () => {
     globalThis.fetch = mockFetchOnce({
       name: 'alpha', _embedded: { branch: { ...branchBody, name: '' } },
-    }) as any;
+    }) as unknown as typeof fetch;
 
     const details = await api.getRepo('alpha');
     expect(details.branch).toBeUndefined();

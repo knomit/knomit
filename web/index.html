@@ -61,7 +61,42 @@
     <title>knomit</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!--
+      Pre-React splash.
+
+      Everything before React is time the user spends looking at a blank page:
+      the bundle download (~360 KB gzipped over a remote link), and on desktop
+      the `config.js` tag below, which BLOCKS while the Wails server is still
+      coming up. Neither is reachable from application code, so the only thing
+      that can cover them is markup that is already in the document.
+
+      It therefore uses no JS, no web fonts and no external CSS — anything it
+      had to fetch would be unavailable during exactly the window it exists to
+      cover. Inline styles and an inline keyframe only.
+
+      It lives INSIDE #root, so React's first render replaces it: createRoot()
+      .render() clears the container's existing children. (That is for a client
+      render — it is hydrateRoot that would complain about pre-existing markup,
+      and this app does not hydrate.) Verified by a test asserting the splash
+      is inside #root, not assumed.
+
+      The colour matches BootScreen's #141414 so the handover from splash to
+      boot screen is invisible.
+    -->
+    <div id="root">
+      <div id="boot-splash" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#141414;color:#e6e6e6;font:14px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif">
+        <div style="font-size:18px;letter-spacing:0.02em">knomit</div>
+        <div style="width:220px;height:2px;background:#2a2a2a;overflow:hidden">
+          <div style="width:40%;height:100%;background:#4a7c9b;animation:knomit-splash 1.1s ease-in-out infinite"></div>
+        </div>
+      </div>
+      <style>
+        @keyframes knomit-splash {
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(350%); }
+        }
+      </style>
+    </div>
     <!-- Runtime API base; served statically (cloud) or dynamically by Wails (desktop). -->
     <script src="./config.js"></script>
     <script type="module" src="./src/main.tsx"></script>
