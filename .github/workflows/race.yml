@@ -81,15 +81,12 @@ jobs:
       # the machine it was measured on. If a package ever legitimately needs
       # longer, RE-MEASURE and raise this — do not round it up on a hunch.
       #
-      # -skip TestConformance_BridgeFilesUntouched: that test asserts a
-      # NON-EMPTY diff against dev, so that a branch-scoped conformance check
-      # cannot pass vacuously. On a PUSH TO DEV the checkout IS dev, the diff is
-      # empty by construction, and it fails for a reason that has nothing to do
-      # with this job. It is skipped here and still enforced where it means
-      # something — on a branch, before merge.
+      # NO -skip. The diff-based MN5 check that needed one is gone: it asked a
+      # question about the checkout rather than about the file, so it could not
+      # pass on a push to dev and could not run on a PR at all. MN5 is now a
+      # pinned SHA-256 (TestConformance_EffortNormalTestByteIdentical), which
+      # answers the same question everywhere.
       - name: go test -race ./...
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test -race -count=1 -timeout 30m \
-            -skip 'TestConformance_BridgeFilesUntouched' \
-            ./...
+          CGO_ENABLED=1 go test -race -count=1 -timeout 30m ./...
