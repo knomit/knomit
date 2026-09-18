@@ -57,7 +57,7 @@ async function primeApi(repos: unknown[]) {
 }
 
 /** The server-wide index stream, selected by URL — never by index. */
-const indexStream = () => latestStream('/api/v1/repos/events');
+const indexStream = () => latestStream('/api/v1/index-events');
 
 /**
  * Open the repo picker, which is where the per-repo index chip lives.

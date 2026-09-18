@@ -716,7 +716,7 @@ export interface RepoIndexEvent {
 export function subscribeRepoIndex(
   onEvent: (ev: RepoIndexEvent | { type: 'reconnect' }) => void,
 ): () => void {
-  const es = new EventSource(apiUrl('/api/v1/repos/events'));
+  const es = new EventSource(apiUrl('/api/v1/index-events'));
   const outage = createOutageLog(diagStream);
   let seenReady = false;
 

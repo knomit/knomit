@@ -1565,6 +1565,49 @@ paths:
         "500": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /index-events:
+    get:
+      tags: [events]
+      summary: Server-Sent Events stream of index-state changes, for every repo
+      description: |
+        One connection carrying the index state of EVERY repo, so a UI that
+        renders an index chip per repo does not need a stream per repo or a
+        poll. The per-repo stream at
+        `/repos/{repo}/branches/{branch}/events` also carries `index` events,
+        scoped to that repo, for a client watching only one.
+
+        A TOP-LEVEL collection rather than `/repos/events`, deliberately: repo
+        names are `[a-z0-9-_]`, so a static segment under `/repos/` is also a
+        legal repo name and would shadow a repo called that. It shipped at the
+        `/repos/` path and was moved for exactly that reason.
+
+        Events:
+          * `ready` — sent once, immediately on connect, with `data: {}`. A
+            `ready` after the first is a reconnect: a terminal event may have
+            been missed while disconnected, so re-read `/repos` on every one
+            after the first.
+          * `index` — one repo's index state:
+            `{"repo": "...", "state": "ready|indexing|error", "done": N,
+            "total": M}`. `state` uses the same vocabulary as the `index_state`
+            field of `/repos`, so a consumer can patch a list row from the
+            event without translating anything.
+
+        PROGRESS events are throttled to at most one per repo per second.
+        Entry and terminal events (`indexing`, `ready`, `error`) are NEVER
+        throttled, and a terminal resets the throttle window — dropping one is
+        not a dropped frame, it is a UI stuck showing a state that has passed.
+
+        A `: keepalive` comment every 30s keeps idle streams open through
+        proxies.
+      operationId: streamIndexEvents
+      responses:
+        "200":
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /logs/events:
     get:
       tags: [logs]

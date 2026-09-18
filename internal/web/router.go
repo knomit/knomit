@@ -103,9 +103,10 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/sessions", handleHALClientSessions(b, s.Manager, s.ClientSessions, s.ReadOnly))
 	r.Get("/sessions/events", handleHALClientSessionEvents(s.ClientSessions))
-	// Server-wide index-state stream. Outside the /repos/{repo} subtree on
-	// purpose: it is about every repo, and the UI holds exactly one.
-	r.Get("/repos/events", handleRepoIndexEvents(s.Manager))
+	// Server-wide index-state stream. A TOP-LEVEL collection, deliberately not
+	// under /repos/: see the no-static-children rule on /repo-creates below.
+	// It is about every repo rather than any one, and the UI holds exactly one.
+	r.Get("/index-events", handleRepoIndexEvents(s.Manager))
 	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
@@ -124,10 +125,30 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Post("/repos", handleHALReposCreate(b, s.Manager))
 
 	// The poll target for the 202 that POST /repos answers with. A SIBLING
-	// collection rather than "/repos/creates/{id}": "creates" is a legal repo
-	// name ([a-z0-9_-]), and chi prefers a static segment over the {repo}
-	// param without backtracking, so nesting it here would make a repo
-	// actually named "creates" unreachable at every route below.
+	// collection rather than "/repos/creates/{id}", and the precedent for a
+	// rule this router now holds to: NOTHING STATIC LIVES UNDER /repos/.
+	//
+	// Repo names are [a-z0-9_-] (repos.IsValidName), so every static segment
+	// under /repos/ is also a legal repo name and shadows a repo called that.
+	// The cost was measured against the vendored chi rather than assumed — an
+	// earlier version of this comment blamed the absence of backtracking and
+	// was wrong, in a way that mispredicted which static routes are safe:
+	//
+	//   GET    /repos/events           -> the static route   <- shadowed
+	//   DELETE /repos/events           -> {repo}             <- falls through
+	//   GET    /repos/events/branches  -> {repo}             <- falls through
+	//   GET    /repos/creates          -> {repo}             <- works
+	//   GET    /repos/creates/branches -> creates/{id}       <- BROKEN
+	//
+	// chi DOES backtrack to the {repo} param when the static edge has no
+	// handler for the method or no child for the next segment. So a static
+	// LEAF costs exactly one method+path, while a static segment with a PARAM
+	// CHILD costs the whole subtree below it, because the greedy {id} matches
+	// "branches" and wins. Neither is diagnosable by the repo's owner, and the
+	// difference is invisible from "static beats param" alone — which is why
+	// the rule is the blunt one rather than a judgement per route.
+	//
+	// TestRouter_NoStaticChildrenUnderRepos enforces it.
 	r.Get("/repo-creates/{id}", handleHALRepoCreateStatus(b, s.Manager))
 	// The collection: a client that lost the id from its 202 finds its create
 	// here. DELETE forgets a FINISHED job so a failed row can be dismissed

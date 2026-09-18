@@ -9,7 +9,7 @@ import (
 	"knomit/internal/web/hal"
 )
 
-// handleRepoIndexEvents serves GET /api/v1/repos/events — a SERVER-WIDE stream
+// handleRepoIndexEvents serves GET /api/v1/index-events — a SERVER-WIDE stream
 // of index-state changes, one connection for every repo.
 //
 // It exists because the per-repo stream cannot answer the question the UI asks.
@@ -20,6 +20,10 @@ import (
 //
 // It carries ONLY index events. The per-repo stream keeps task, status, sync
 // and push, which are all branch-scoped and have no meaning without one.
+//
+// It lives at a TOP-LEVEL path rather than under /repos/ because a static
+// segment there would shadow a repo of the same name — this route was
+// /repos/events until that was noticed. See router.go's no-static-children rule.
 //
 // Modelled on the client-sessions change stream, including the `ready` frame:
 // a client that reconnects after missing a terminal event is stale, and a frame
