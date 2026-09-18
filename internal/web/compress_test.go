@@ -251,9 +251,18 @@ func TestCompressor_MatchesYAMLWithCharsetParameter(t *testing.T) {
 }
 
 // Server.Handler() is what the deployed binary runs; NewAPIRouter() alone is
-// not. The SSE guarantee has to hold through the full chain, for EVERY stream
-// the server exposes — a new endpoint is exactly where this regresses, so
-// this enumerates rather than sampling.
+// not, so the SSE guarantee is checked through the full chain.
+//
+// ONE STREAM PER HANDLER FAMILY — not every stream the server exposes. There
+// are ten SSE entry points; the four below reach handlers_client_sessions.go,
+// handlers_events.go, handlers_repo_events.go and handlers_logs.go. The job
+// streams (handlers_jobs.go, two routes) and the four origin-session streams
+// (handlers_origin_session.go) are NOT exercised here, because each needs a
+// live job or origin session to produce a frame.
+//
+// What covers those six is TestCompressibleTypes_CannotCoverSSE rather than
+// another route test: all ten share one allowlist, and proving the list
+// cannot name event-stream holds for every stream that exists or is added.
 func TestSSE_IsNeverCompressedThroughServerHandler(t *testing.T) {
 	hubCtx, hubCancel := context.WithCancel(context.Background())
 	defer hubCancel()
@@ -300,5 +309,32 @@ func TestSSE_IsNeverCompressedThroughServerHandler(t *testing.T) {
 			cancel()
 			<-done
 		})
+	}
+}
+
+// The allowlist is the single thing standing between every SSE stream and a
+// compressor, including the six no route test reaches. Two shapes would
+// silently re-enable compression on text/event-stream, so both are rejected
+// here by construction rather than one route at a time:
+//
+//   - a literal text/event-stream entry;
+//   - any "family/*" entry. chi's NewCompressor sorts those into
+//     allowedWildcards and matches the whole family, so "text/*" would sweep
+//     in event-stream without ever naming it — and would read, to a hurried
+//     editor shortening the list, like a tidy-up.
+//
+// This cannot drift as routes are added, which is the property the route
+// tests do not have.
+func TestCompressibleTypes_CannotCoverSSE(t *testing.T) {
+	if len(compressibleTypes) == 0 {
+		t.Fatal("compressibleTypes is empty")
+	}
+	for _, ct := range compressibleTypes {
+		if ct == "text/event-stream" {
+			t.Errorf("compressibleTypes contains %q — a compressor buffers, and a buffered SSE stream never arrives", ct)
+		}
+		if strings.HasSuffix(ct, "/*") {
+			t.Errorf("compressibleTypes contains the wildcard %q — chi matches the whole family, which sweeps in text/event-stream", ct)
+		}
 	}
 }
