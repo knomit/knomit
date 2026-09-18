@@ -20,7 +20,9 @@ const APIBase = "/api/v1"
 //
 // Middleware order:
 //  1. Recoverer — catch panics, return 500 problem+json
-//  2. Compress(5) — mandatory per design spec §3 rule 6
+//  2. compressor() — the shared allowlist from compress.go. It MUST be the
+//     shared one: chi's built-in list has no application/hal+json, so the
+//     bare middleware.Compress(5) that stood here compressed nothing at all.
 //  3. NotFound / MethodNotAllowed handlers — return problem+json
 //
 // Per-route middleware (BranchMiddleware, RepoMiddleware) is attached at
@@ -37,7 +39,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Use(middleware.Recoverer)                    // produces the 500 response
 	r.Use(reportPanic)                             // captures a crash bundle, re-panics
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default
-	r.Use(middleware.Compress(5))
+	r.Use(compressor())
 	if s.ReadOnly {
 		r.Use(readOnlyGate)
 	}
