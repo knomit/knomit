@@ -89,13 +89,14 @@ type indexPublisher struct {
 // announce it, the same reason every branch-ref mutation goes through
 // notifyCommit rather than each mutation emitting its own.
 //
-// NOT covered, and deliberately so: the manual rebuild endpoint
-// (handleStartRebuild) calls IndexManager().Rebuild directly and never touches
-// index state at all, so IndexStatus reads "ready" throughout one. That is a
-// separate defect — the state lying, not the event missing — and bracketing the
-// rebuild with these same marks is its own change. Do not read this chokepoint
-// as covering a rebuild; it covers every place the state actually changes, and
-// a rebuild is not one of them yet.
+// A SIXTH site now exists, outside this package: the manual rebuild endpoint
+// (handleStartRebuild) brackets its rebuild with MarkIndexRebuildStart and
+// MarkIndexRebuildDone, which are exported aliases for these same marks. It
+// used to touch index state not at all, so IndexStatus read "ready" throughout
+// a rebuild; that was a separate defect and is fixed. The chokepoint still
+// holds — the rebuild publishes only by marking — but the single-writer
+// property it relies on is now enforced by that endpoint's 409, not by there
+// being only one code path. Read handleStartRebuild before adding a seventh.
 //
 // It also inherits the stuck-indexing incident's guarantee for free. That
 // incident was a heal exit path that reached neither markIndexReady nor

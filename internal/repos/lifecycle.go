@@ -688,6 +688,19 @@ const (
 // the state. A "ready" on the first read therefore means a heal that is
 // genuinely finished — which is the ordinary answer under
 // DisableBackgroundSync, where openOne heals inline.
+//
+// THAT ORDERING IS NO LONGER THE WHOLE ARGUMENT. It establishes that the heal
+// has claimed the state before this loop first reads it; it does NOT establish
+// that the heal is the only thing that can change it afterwards. Since the
+// manual rebuild endpoint began marking the same cell, what makes "state left
+// indexing" mean "the heal finished" is a POLICY — a rebuild is refused with
+// 409 while the state is indexing (internal/web/handlers_jobs.go), so the two
+// never overlap — and not a fact about which code paths write. Without that
+// refusal a rebuild could finish first and flip the cell to ready, and this
+// function would return ready, and the create job would report done at 100%
+// over a half-built index. A THIRD writer of this cell breaks the inference
+// again unless it is serialised the same way; do not add one on the strength
+// of the ordering paragraph above.
 func mirrorIndexing(ctx context.Context, ri *RepoInstance, emit func(Event)) string {
 	for {
 		state, done, total := ri.IndexStatus()
