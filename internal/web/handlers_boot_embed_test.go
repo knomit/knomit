@@ -259,10 +259,27 @@ func TestLensGET_SubscriptionWriteMemberHasNoWriteBranchKey(t *testing.T) {
 
 	// Swap the write member for a subscription carrying the SAME uid, so lens
 	// membership still resolves but the instance has no agent branch.
-	uid := m.Get("alpha").UID()
+	//
+	// RESTORE IT AFTERWARDS, and not for tidiness. Manager.Set drops the
+	// instance it replaces WITHOUT closing it, and Manager.Close only tears
+	// down what is in the map when it runs — so leaving the stand-in in place
+	// orphans the real instance's open .db handle. Linux unlinks an open file
+	// happily; Windows refuses, and t.TempDir's RemoveAll fails the test after
+	// every assertion in it has passed.
+	//
+	// Restoring rather than closing by hand keeps Manager.Close as the single
+	// teardown path: t.Cleanup is LIFO and newTestLensManager registered its
+	// Close first, so this runs before it and the manager shuts the REAL
+	// instance down exactly as it always does.
+	orig := m.Get("alpha")
+	if orig == nil {
+		t.Fatal("fixture: alpha is not in the manager")
+	}
+	uid := orig.UID()
 	if uid == "" {
 		t.Fatal("fixture: alpha has no uid")
 	}
+	t.Cleanup(func() { m.Set("alpha", orig) })
 	m.Set("alpha", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", UID: uid, Subscribed: true, ReadBranch: "main",
 	}))
