@@ -44,19 +44,11 @@ export function BootScreen({ boot, onRetry, now = Date.now }: BootScreenProps) {
     >
       <div style={{ fontSize: 18, letterSpacing: '0.02em' }}>knomit</div>
 
-      <div
-        data-testid="boot-phase"
-        style={{ color: boot.failed ? '#f0a2a2' : '#9a9a9a' }}
-      >
-        {bootLabel(boot)}
-        {showElapsed && !boot.failed && (
-          <span data-testid="boot-elapsed" style={{ color: '#6f6f6f' }}>
-            {' '}· {Math.floor(elapsedMs / 1000)} s
-          </span>
-        )}
-      </div>
-
-      {/* The bar is determinate: it reports the phase, not a guess at time. */}
+      {/* The bar is determinate: it reports the phase, not a guess at time.
+          It sits ABOVE the label deliberately. The label's text changes with
+          every phase and with the elapsed counter appearing, and anything
+          below a changing element gets pushed around by it — so the two fixed
+          things, the wordmark and the bar, go first and stay put. */}
       <div
         data-testid="boot-bar"
         role="progressbar"
@@ -75,6 +67,25 @@ export function BootScreen({ boot, onRetry, now = Date.now }: BootScreenProps) {
             transition: 'width 200ms linear',
           }}
         />
+      </div>
+
+      {/* minHeight reserves the single line this always occupies. Without it
+          the block collapses to zero before the first label and grows when
+          the elapsed counter appears, which moves everything below it. */}
+      <div
+        data-testid="boot-phase"
+        style={{
+          color: boot.failed ? '#f0a2a2' : '#9a9a9a',
+          minHeight: '1.5em',
+          textAlign: 'center',
+        }}
+      >
+        {bootLabel(boot)}
+        {showElapsed && !boot.failed && (
+          <span data-testid="boot-elapsed" style={{ color: '#6f6f6f' }}>
+            {' '}· {Math.floor(elapsedMs / 1000)} s
+          </span>
+        )}
       </div>
 
       {/* Retry feedback, which used to reach only the Console. */}
