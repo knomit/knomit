@@ -20,7 +20,7 @@ LIBDIR  := $(DIST)/lib
 # RELEASE and is the single source of truth — bump it here on release.
 # GIT_COMMIT is the short SHA of the build. Both are injected into the
 # internal/platform/version package via -ldflags, so every binary (knomit,
-# knomit-bridge, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
+# kb, knomit-okf, knomit-desktop) reports e.g. 0.5.0.2a7ae9d.
 # A bare `go build` (no make) falls back to the package default "dev".
 BASE_VERSION := 0.5.3
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -203,7 +203,7 @@ endif
 # behind, and it may be read-only.
 #
 # The copies keep their .exe suffix, and .mcp.json's extensionless
-# "dist/knomit-bridge" still works: CreateProcess appends .exe to a name with
+# "dist/kb" still works: CreateProcess appends .exe to a name with
 # no extension, so both Node's spawn and Go's exec.LookPath resolve it —
 # measured, not assumed. Do not "fix" .mcp.json to name the .exe; that would
 # break the macOS and Linux entries, which have no suffix.
@@ -277,10 +277,10 @@ tokenizers-lib:
 build: web tokenizers-lib download-ort
 	mkdir -p $(DIST)
 	CGO_ENABLED=1 go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit$(EXE) .
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge$(EXE) ./tools/bridge/
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/kb$(EXE) ./tools/bridge/
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf$(EXE) ./tools/okf/
 	$(call symlink_tool,knomit)
-	$(call symlink_tool,knomit-bridge)
+	$(call symlink_tool,kb)
 	$(call symlink_tool,knomit-okf)
 	$(call dist_runtime_libs)
 
@@ -417,9 +417,9 @@ ifeq ($(GOOS),darwin)
 else
 	mkdir -p $(DIST)
 	$(DESKTOP_BUILD) -o $(DIST)/knomit-desktop$(EXE) ./tools/desktop
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-bridge$(EXE) ./tools/bridge
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/kb$(EXE) ./tools/bridge
 	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(DIST)/knomit-okf$(EXE) ./tools/okf
-	@echo "Built $(DIST)/knomit-desktop$(EXE) + knomit-bridge$(EXE) + knomit-okf$(EXE)"
+	@echo "Built $(DIST)/knomit-desktop$(EXE) + kb$(EXE) + knomit-okf$(EXE)"
 endif
 
 # Assemble the macOS .app bundle. The desktop binary is built DIRECTLY into the
@@ -434,10 +434,10 @@ desktop-app-macos:
 	rm -rf $(APP)
 	mkdir -p $(APP)/Contents/MacOS/lib $(APP)/Contents/Resources
 	$(DESKTOP_BUILD) -o $(APP)/Contents/MacOS/knomit-desktop ./tools/desktop
-	# knomit-bridge: the stdio↔HTTP MCP adapter stdio clients launch. Pure Go
+	# kb: the stdio↔HTTP MCP adapter stdio clients launch. Pure Go
 	# (no CGO/dylibs), shipped next to the desktop binary; the app symlinks it
 	# to <home>/bin on launch for a stable MCP command path.
-	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/knomit-bridge ./tools/bridge
+	go build $(GOFLAGS) -ldflags "$(VERSION_LDFLAGS)" -o $(APP)/Contents/MacOS/kb ./tools/bridge
 	# knomit-okf: the OKF export CLI. Also pure Go, and also symlinked to
 	# <home>/bin on launch — a CLI reachable only at
 	# /Applications/Knomit.app/Contents/MacOS/knomit-okf is one nobody runs.
@@ -497,7 +497,7 @@ desktop-app-macos:
 	# ad-hoc. This is the one way the default path differs from before.
 	@echo "  codesign: $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),ad-hoc)"
 	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/lib/libonnxruntime.dylib
-	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-bridge
+	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/kb
 	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-okf
 	codesign $(CODESIGN_FLAGS) $(APP)/Contents/MacOS/knomit-desktop
 	codesign $(CODESIGN_FLAGS) $(APP)
@@ -506,7 +506,7 @@ ifneq ($(CODESIGN_IDENTITY),)
 	# rather than a 20-minute round trip to Apple. Both of these were real
 	# rejection reasons on submission d7e41665.
 	@for f in $(APP)/Contents/MacOS/lib/libonnxruntime.dylib \
-	          $(APP)/Contents/MacOS/knomit-bridge \
+	          $(APP)/Contents/MacOS/kb \
 	          $(APP)/Contents/MacOS/knomit-okf \
 	          $(APP)/Contents/MacOS/knomit-desktop \
 	          $(APP); do \
@@ -591,7 +591,7 @@ endif
 # the ones the release notes and the appcast feed talk about. Commit identity
 # is NOT lost — it moved out of the filename, not out of the build. Every
 # binary still reports semver.sha from internal/platform/version: `knomit version`,
-# `knomit-bridge version`, `knomit-okf version`, `knomit-desktop --version`,
+# `kb version`, `knomit-okf version`, `knomit-desktop --version`,
 # the desktop startup log line, and GET /api/v1/version (as `full`).
 #
 # Consequence for the ROLLING dev-latest pre-release: successive dev builds at
@@ -636,7 +636,7 @@ print-semver:
 	@echo $(VERSION)
 
 # Server tarball. The per-platform dist dir already IS the runtime layout —
-# knomit + knomit-bridge resolve their ONNX libs from <exe>/lib
+# knomit + kb resolve their ONNX libs from <exe>/lib
 # (internal/embeddings/embedder.go, internal/store/vec.go) — so we just stage
 # those things under a versioned top-level dir and tar it. libtokenizers.a
 # is a build-time STATIC lib (never dlopen'd at runtime), so it is dropped.
@@ -646,7 +646,7 @@ release-server: build
 	mkdir -p $(RELEASE_DIR)
 	rm -rf $(DIST)/$(SERVER_PKG)
 	mkdir -p $(DIST)/$(SERVER_PKG)/lib
-	cp $(DIST)/knomit$(EXE) $(DIST)/knomit-bridge$(EXE) $(DIST)/knomit-okf$(EXE) $(DIST)/$(SERVER_PKG)/
+	cp $(DIST)/knomit$(EXE) $(DIST)/kb$(EXE) $(DIST)/knomit-okf$(EXE) $(DIST)/$(SERVER_PKG)/
 	cp -R $(LIBDIR)/. $(DIST)/$(SERVER_PKG)/lib/
 	rm -f $(DIST)/$(SERVER_PKG)/lib/*.a
 ifeq ($(GOOS),darwin)
@@ -662,7 +662,7 @@ ifeq ($(GOOS),darwin)
 	# only files, never a nested dir, and the .a is already gone by here.
 	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/lib/*.dylib
 	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/knomit
-	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/knomit-bridge
+	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/kb
 	codesign $(CODESIGN_FLAGS_LOOSE) $(DIST)/$(SERVER_PKG)/knomit-okf
 	@echo "  signed: $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),ad-hoc) (not notarized — see CODESIGN_FLAGS_LOOSE)"
 endif
@@ -765,7 +765,7 @@ ifeq ($(GOOS),darwin)
 else
 	rm -rf $(APPDIR)
 	mkdir -p $(APPDIR)/usr/bin/lib
-	cp $(DIST)/knomit-desktop $(DIST)/knomit-bridge $(DIST)/knomit-okf $(APPDIR)/usr/bin/
+	cp $(DIST)/knomit-desktop $(DIST)/kb $(DIST)/knomit-okf $(APPDIR)/usr/bin/
 	cp -R $(LIBDIR)/. $(APPDIR)/usr/bin/lib/
 	rm -f $(APPDIR)/usr/bin/lib/*.a
 	install -m 0755 tools/desktop/linux/AppRun $(APPDIR)/AppRun

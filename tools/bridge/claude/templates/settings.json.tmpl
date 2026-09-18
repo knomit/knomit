@@ -1,17 +1,17 @@
 {
   "hooks": {
     "SessionStart": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook session-start" }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "kb claude hook session-start" }] }
     ],
     "PostToolUse": [
-      { "matcher": "Edit|Write|MultiEdit", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-edit" }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook post-ask" }] }
+      { "matcher": "Edit|Write|MultiEdit", "hooks": [{ "type": "command", "command": "kb claude hook post-edit" }] },
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "kb claude hook post-ask" }] }
     ],
     "PreToolUse": [
-      { "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook memory-guard" }] }
+      { "matcher": "Write|Edit|MultiEdit|Bash", "hooks": [{ "type": "command", "command": "kb claude hook memory-guard" }] }
     ],
     "PreCompact": [
-      { "matcher": "", "hooks": [{ "type": "command", "command": "knomit-bridge claude hook pre-compact" }] }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "kb claude hook pre-compact" }] }
     ]
   }
 }

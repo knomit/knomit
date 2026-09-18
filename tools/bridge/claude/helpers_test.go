@@ -28,7 +28,7 @@ func TestRepoFromMCP_ValidMcpJson_ReturnsRepoArg(t *testing.T) {
 	mcp := `{
 		"mcpServers": {
 			"knomit": {
-				"command": "knomit-bridge",
+				"command": "kb",
 				"args": ["--repo", "myproject", "--profile", "code"]
 			}
 		}
@@ -60,7 +60,7 @@ func TestRepoFromMCP_SingleDashRepo(t *testing.T) {
 	mcp := `{
 		"mcpServers": {
 			"knomit": {
-				"command": "knomit-bridge",
+				"command": "kb",
 				"args": ["-repo", "singleproject"]
 			}
 		}
@@ -81,7 +81,7 @@ func TestMcpBinding_RepoConfigured_RepoMode(t *testing.T) {
 	mcp := `{
 		"mcpServers": {
 			"knomit": {
-				"command": "knomit-bridge",
+				"command": "kb",
 				"args": ["--repo", "myproject", "--source", "git", "--profile", "code"]
 			}
 		}
@@ -101,7 +101,7 @@ func TestMcpBinding_LensConfigured_LensMode(t *testing.T) {
 	mcp := `{
 		"mcpServers": {
 			"knomit": {
-				"command": "knomit-bridge",
+				"command": "kb",
 				"args": ["--lens", "mylens"]
 			}
 		}
@@ -139,7 +139,7 @@ func TestMcpBinding_BothFlags_LensWins(t *testing.T) {
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
-			mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ` + args + `}}}`
+			mcp := `{"mcpServers": {"knomit": {"command": "kb", "args": ` + args + `}}}`
 			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +157,7 @@ func TestMcpBinding_BothFlags_LensWins(t *testing.T) {
 // wrong-repo hazard B.6 removes would reappear.
 func TestMcpBinding_LensNoValue_LensModeEmptyName(t *testing.T) {
 	dir := t.TempDir()
-	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--lens"]}}}`
+	mcp := `{"mcpServers": {"knomit": {"command": "kb", "args": ["--lens"]}}}`
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestMcpBinding_EqualsForms(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ` + tc.args + `}}}`
+			mcp := `{"mcpServers": {"knomit": {"command": "kb", "args": ` + tc.args + `}}}`
 			if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -215,7 +215,7 @@ func TestMcpBinding_EqualsForms(t *testing.T) {
 // --lens config fails safe (clean skip), never a basename fallback.
 func TestResolveWriteRepo_LensNoValue_SkipsUnresolved(t *testing.T) {
 	dir := t.TempDir()
-	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--lens"]}}}`
+	mcp := `{"mcpServers": {"knomit": {"command": "kb", "args": ["--lens"]}}}`
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestResolveWriteRepo_LensNoValue_SkipsUnresolved(t *testing.T) {
 
 func TestResolveWriteRepo_RepoMode_NoServerNeeded(t *testing.T) {
 	dir := t.TempDir()
-	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--repo", "myproject"]}}}`
+	mcp := `{"mcpServers": {"knomit": {"command": "kb", "args": ["--repo", "myproject"]}}}`
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestResolveWriteRepo_LensMode_ServerDown_SkipsUnresolved(t *testing.T) {
 // matching the mcp.json.lens.tmpl shape.
 func writeLensMCP(t *testing.T, dir, lens string) {
 	t.Helper()
-	mcp := `{"mcpServers": {"knomit": {"command": "knomit-bridge", "args": ["--lens", "` + lens + `"]}}}`
+	mcp := `{"mcpServers": {"knomit": {"command": "kb", "args": ["--lens", "` + lens + `"]}}}`
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -357,17 +357,17 @@ func TestIsKnomitServer(t *testing.T) {
 		name, key, command string
 		want               bool
 	}{
-		{"plain command", "anything", "knomit-bridge", true},
-		{"absolute command", "anything", "/usr/local/bin/knomit-bridge", true},
+		{"plain command", "anything", "kb", true},
+		{"absolute command", "anything", "/usr/local/bin/kb", true},
 		// filepath.Base is OS-specific, so a backslash path only splits on
 		// Windows. The portable assertion is the .exe suffix trimming itself,
 		// which is what the GOOS=windows build needs.
-		{"windows exe", "anything", "knomit-bridge.exe", true},
-		{"windows exe with slash path", "anything", "C:/tools/knomit-bridge.exe", true},
+		{"windows exe", "anything", "kb.exe", true},
+		{"windows exe with slash path", "anything", "C:/tools/kb.exe", true},
 		{"legacy constant key", "knomit", "/opt/wrappers/kb", true},
 		{"derived key, wrapper command", "knomit-eng", "~/bin/kb-wrapper.sh", true},
 		{"unrelated server", "postgres", "/usr/bin/pg-mcp", false},
-		{"knomit-ish command but not the bridge", "db", "knomit-bridgehead", false},
+		{"kb-ish command but not the bridge", "db", "kbhead", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := isKnomitServer(tc.key, tc.command); got != tc.want {
@@ -407,7 +407,7 @@ func TestMcpBinding_LegacyConfigStillBinds(t *testing.T) {
 func TestMcpBinding_KeyMatchesNeverDiluteCommandMatches(t *testing.T) {
 	dir := t.TempDir()
 	cfg := `{"mcpServers":{
-		"knomit":{"command":"knomit-bridge","args":["--repo","real"]},
+		"knomit":{"command":"kb","args":["--repo","real"]},
 		"knomit-notes":{"command":"npx","args":["-y","some-notes-mcp"]},
 		"knomit-docs":{"command":"/usr/bin/docs-mcp"}
 	}}`
@@ -459,8 +459,8 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 	t.Run("explicit repo twice", func(t *testing.T) {
 		dir := t.TempDir()
 		cfg := `{"mcpServers":{
-			"knomit":{"command":"knomit-bridge","args":["--repo","team-kb"]},
-			"knomit-repo-team-kb":{"command":"knomit-bridge","args":["--repo=team-kb"]}
+			"knomit":{"command":"kb","args":["--repo","team-kb"]},
+			"knomit-repo-team-kb":{"command":"kb","args":["--repo=team-kb"]}
 		}}`
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 			t.Fatal(err)
@@ -480,8 +480,8 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 		dir := t.TempDir()
 		base := filepath.Base(dir)
 		cfg := `{"mcpServers":{
-			"knomit":{"command":"knomit-bridge"},
-			"knomit-repo-` + base + `":{"command":"knomit-bridge","args":["--repo","` + base + `"]}
+			"knomit":{"command":"kb"},
+			"knomit-repo-` + base + `":{"command":"kb","args":["--repo","` + base + `"]}
 		}}`
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 			t.Fatal(err)
@@ -500,8 +500,8 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 		// lens scope have no common answer even when they share a name.
 		dir := t.TempDir()
 		cfg := `{"mcpServers":{
-			"knomit-repo-eng":{"command":"knomit-bridge","args":["--repo","eng"]},
-			"knomit-lens-eng":{"command":"knomit-bridge","args":["--lens","eng"]}
+			"knomit-repo-eng":{"command":"kb","args":["--repo","eng"]},
+			"knomit-lens-eng":{"command":"kb","args":["--lens","eng"]}
 		}}`
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 			t.Fatal(err)
@@ -519,8 +519,8 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 func TestHookSessionStart_MultipleServersTellsTheUser(t *testing.T) {
 	dir := t.TempDir()
 	cfg := `{"mcpServers":{
-		"knomit-a":{"command":"knomit-bridge","args":["--repo","a"]},
-		"knomit-b":{"command":"knomit-bridge","args":["--repo","b"]}
+		"knomit-a":{"command":"kb","args":["--repo","a"]},
+		"knomit-b":{"command":"kb","args":["--repo","b"]}
 	}}`
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)

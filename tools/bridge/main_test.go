@@ -100,7 +100,7 @@ func TestSelectMode(t *testing.T) {
 }
 
 // A mistyped subcommand must not become a base URL. Session-bound mode made
-// no-flags legal, so this is the only thing standing between `knomit-bridge
+// no-flags legal, so this is the only thing standing between `kb
 // clade init` and a proxy that dials http://clade forever.
 func TestBaseURLArg(t *testing.T) {
 	cases := []struct {

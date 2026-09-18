@@ -35,9 +35,9 @@ import (
 // already has.
 //
 // The identity is the `claude hook <event>` suffix, NOT the command string.
-// knomit-bridge is deliberately never placed on $PATH outside the macOS .app, so
-// real configs invoke it by path — `${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge`,
-// `/usr/local/bin/knomit-bridge`, a `.exe` on Windows — and a string compare
+// kb is deliberately never placed on $PATH outside the macOS .app, so
+// real configs invoke it by path — `${CLAUDE_PROJECT_DIR:-.}/dist/kb`,
+// `/usr/local/bin/kb`, a `.exe` on Windows — and a string compare
 // would call every one of those a different hook and add a duplicate that then
 // runs the same hook twice per tool call. A duplicate is invisible in the diff
 // of a long settings.json, so nothing would catch it afterwards.
@@ -51,7 +51,7 @@ func hookIdentity(command string) string {
 		fields := strings.Fields(rest)
 		for i := 0; i+2 < len(fields); i++ {
 			if fields[i] == "claude" && fields[i+1] == "hook" {
-				return "knomit-bridge claude hook " + fields[i+2]
+				return "kb claude hook " + fields[i+2]
 			}
 		}
 	}
@@ -543,13 +543,13 @@ func insertHookEntry(data []byte, root *jsonNode, event string, entry json.RawMe
 //
 // An existing entry is split into the half init owns and the half the user owns.
 // `args` carry the SCOPE, which init derived, so init refreshes them. `command`
-// is DEPLOYMENT-specific and stays exactly as written: knomit-bridge is
+// is DEPLOYMENT-specific and stays exactly as written: kb is
 // deliberately never on $PATH outside the macOS .app, so a checkout pointing at
-// its own build (`${CLAUDE_PROJECT_DIR:-.}/dist/knomit-bridge`) does so on
+// its own build (`${CLAUDE_PROJECT_DIR:-.}/dist/kb`) does so on
 // purpose, and resetting it to the bare name silently stops the MCP server
 // loading. Every other key the user set is preserved for the same reason.
 //
-// conflict is true for the one case a merge cannot decide: a knomit-bridge entry
+// conflict is true for the one case a merge cannot decide: a kb entry
 // under a DIFFERENT key. Adding ours beside it would leave the project with two
 // knomit scopes, which is not a merge artefact but a configuration that disables
 // every hook — mcpBinding has no principled answer to "which repo do the hooks
@@ -614,7 +614,7 @@ func mergeMcpJSON(existing, template []byte, key string) (merged []byte, note st
 		return merged, "(" + key + " args)", false, err
 	}
 
-	// A knomit-bridge entry under another key is the two-scopes case.
+	// A kb entry under another key is the two-scopes case.
 	if otherKnomitServer(existing, servers) {
 		return nil, "", true, nil
 	}

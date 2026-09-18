@@ -17,10 +17,10 @@
 //
 // Usage:
 //
-//	knomit-bridge --repo <name> [base-url]
-//	knomit-bridge --lens <name> [base-url]
-//	knomit-bridge [base-url]
-//	knomit-bridge --repo work http://myhost:8080
+//	kb --repo <name> [base-url]
+//	kb --lens <name> [base-url]
+//	kb [base-url]
+//	kb --repo work http://myhost:8080
 //
 // --repo and --lens are mutually exclusive. With neither, the bridge connects
 // to the unscoped mount /api/v1/mcp, where the agent calls knomit_bind and
@@ -33,7 +33,7 @@
 //	{
 //	  "mcpServers": {
 //	    "work-kb": {
-//	      "command": "/path/to/knomit-bridge",
+//	      "command": "/path/to/kb",
 //	      "args": ["--repo", "work"]
 //	    }
 //	  }
@@ -141,7 +141,7 @@ func selectMode(repo, lens string, repoSet, lensSet bool) bridgeMode {
 // base URL, returning "" when there is none.
 //
 // This guard exists because session-bound mode made no-flags legal. Before it,
-// a mistyped subcommand still failed loudly: `knomit-bridge clade init` parsed
+// a mistyped subcommand still failed loudly: `kb clade init` parsed
 // no --repo and the required-flag check exited. Now the same typo would be
 // accepted as a base URL and the proxy would dial http://clade/... forever.
 //
@@ -195,14 +195,14 @@ func main() {
 	repo := flag.String("repo", "", "repository name (omit both --repo and --lens to let the agent bind via knomit_bind)")
 	lens := flag.String("lens", "", "lens name; connects to /api/v1/lenses/<lens>/mcp (mutually exclusive with --repo)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: knomit-bridge [<command> [<subcommand>]] [flags] [base-url]\n\n")
+		fmt.Fprintf(os.Stderr, "usage: kb [<command> [<subcommand>]] [flags] [base-url]\n\n")
 		fmt.Fprintf(os.Stderr, "commands:\n")
 		fmt.Fprintf(os.Stderr, "  claude init             Scaffold CC integration files in the current directory\n")
-		fmt.Fprintf(os.Stderr, "                          knomit-bridge claude init [-repo <name>]\n\n")
+		fmt.Fprintf(os.Stderr, "                          kb claude init [-repo <name>]\n\n")
 		fmt.Fprintf(os.Stderr, "  claude hook <event>     Execute a Claude Code hook (called by CC via settings.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: session-start, post-edit, post-ask, pre-compact\n\n")
 		fmt.Fprintf(os.Stderr, "  antigravity init        Scaffold the Antigravity plugin in the current directory\n")
-		fmt.Fprintf(os.Stderr, "                          knomit-bridge antigravity init [-repo <name>|-lens <name>]\n")
+		fmt.Fprintf(os.Stderr, "                          kb antigravity init [-repo <name>|-lens <name>]\n")
 		fmt.Fprintf(os.Stderr, "                          (alias: agy)\n\n")
 		fmt.Fprintf(os.Stderr, "  antigravity hook <event>  Execute an Antigravity hook (called by agy via hooks.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: pre-invocation\n\n")
@@ -211,14 +211,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
 		fmt.Fprintf(os.Stderr, "  --log <path>            log file path (default %s, lumberjack 4MB rotation)\n\n", bridgelog.DefaultPath())
 		fmt.Fprintf(os.Stderr, "examples:\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge -lens eng\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge                            (unscoped: the agent calls knomit_bind)\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge -repo work http://myhost:8080\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge --log /tmp/bridge.log claude hook post-edit\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge claude init -repo myproject\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge claude hook session-start  (typically run by CC, not interactively)\n")
-		fmt.Fprintf(os.Stderr, "  knomit-bridge antigravity init -repo myproject\n")
+		fmt.Fprintf(os.Stderr, "  kb -repo work\n")
+		fmt.Fprintf(os.Stderr, "  kb -lens eng\n")
+		fmt.Fprintf(os.Stderr, "  kb                                       (unscoped: the agent calls knomit_bind)\n")
+		fmt.Fprintf(os.Stderr, "  kb -repo work http://myhost:8080\n")
+		fmt.Fprintf(os.Stderr, "  kb --log /tmp/bridge.log claude hook post-edit\n")
+		fmt.Fprintf(os.Stderr, "  kb claude init -repo myproject\n")
+		fmt.Fprintf(os.Stderr, "  kb claude hook session-start             (typically run by CC, not interactively)\n")
+		fmt.Fprintf(os.Stderr, "  kb antigravity init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "\nflags (for the default MCP-proxy mode):\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nNote: flags accept both '-flag value' and '--flag value' styles.\n")

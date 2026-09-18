@@ -1237,7 +1237,7 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
     fireEvent.click(screen.getByTestId('lens-copy'));
-    expect(writeText).toHaveBeenCalledWith('knomit-bridge claude init --lens dev');
+    expect(writeText).toHaveBeenCalledWith('kb claude init --lens dev');
   });
 
   // The Agent access card is the only place in the product where host wiring is
@@ -1249,7 +1249,7 @@ describe('RepoManager', () => {
     await waitFor(() => expect(screen.getByTestId('repomgr-lens-dev')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('repomgr-lens-dev'));
     fireEvent.click(screen.getByTestId('lens-copy-agy'));
-    expect(writeText).toHaveBeenCalledWith('knomit-bridge antigravity init --lens dev');
+    expect(writeText).toHaveBeenCalledWith('kb antigravity init --lens dev');
   });
 
   // Without a registered workspace Antigravity silently loads nothing, and the

@@ -18,7 +18,7 @@ func writeConfig(t *testing.T, dir, body string) {
 
 func TestPluginBinding_RepoMode(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"knomit-repo-proj":{"command":"knomit-bridge","args":["--repo","proj"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"knomit-repo-proj":{"command":"kb","args":["--repo","proj"]}}}`)
 
 	repo, lens, skip := pluginBinding(dir)
 	if skip != "" || repo != "proj" || lens != "" {
@@ -28,7 +28,7 @@ func TestPluginBinding_RepoMode(t *testing.T) {
 
 func TestPluginBinding_LensMode(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"knomit-lens-eng":{"command":"knomit-bridge","args":["--lens","eng"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"knomit-lens-eng":{"command":"kb","args":["--lens","eng"]}}}`)
 
 	repo, lens, skip := pluginBinding(dir)
 	if skip != "" || repo != "" || lens != "eng" {
@@ -38,7 +38,7 @@ func TestPluginBinding_LensMode(t *testing.T) {
 
 func TestPluginBinding_EqualsForms(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"knomit-repo-proj":{"command":"knomit-bridge","args":["--repo=proj"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"knomit-repo-proj":{"command":"kb","args":["--repo=proj"]}}}`)
 	repo, _, skip := pluginBinding(dir)
 	if skip != "" || repo != "proj" {
 		t.Errorf("got (%q,%q), want (proj,\"\")", repo, skip)
@@ -47,7 +47,7 @@ func TestPluginBinding_EqualsForms(t *testing.T) {
 
 func TestPluginBinding_BothFlags_LensWins(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","proj","--lens","eng"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--repo","proj","--lens","eng"]}}}`)
 	repo, lens, skip := pluginBinding(dir)
 	if skip != "" || repo != "" || lens != "eng" {
 		t.Errorf("got (%q,%q,%q), want (\"\",eng,\"\")", repo, lens, skip)
@@ -62,8 +62,8 @@ func TestPluginBinding_BothFlags_LensWins(t *testing.T) {
 func TestPluginBinding_DegenerateLensWithSiblingRepo_SkipsNeverBindsRepo(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, `{"mcpServers":{
-		"knomit-lens-eng":{"command":"knomit-bridge","args":["--lens"]},
-		"knomit-repo-other":{"command":"knomit-bridge","args":["--repo","other"]}
+		"knomit-lens-eng":{"command":"kb","args":["--lens"]},
+		"knomit-repo-other":{"command":"kb","args":["--repo","other"]}
 	}}`)
 
 	// Run repeatedly: the old failure was map-order dependent.
@@ -80,7 +80,7 @@ func TestPluginBinding_DegenerateLensWithSiblingRepo_SkipsNeverBindsRepo(t *test
 
 func TestPluginBinding_DegenerateLensAlone_SkipsLensUnusable(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--lens"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--lens"]}}}`)
 	_, _, skip := pluginBinding(dir)
 	if skip != skipLensUnusable {
 		t.Errorf("skip = %q, want %q", skip, skipLensUnusable)
@@ -93,8 +93,8 @@ func TestPluginBinding_DegenerateLensAlone_SkipsLensUnusable(t *testing.T) {
 func TestPluginBinding_TwoDifferentScopes_AlwaysAmbiguous(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, `{"mcpServers":{
-		"knomit-repo-alpha":{"command":"knomit-bridge","args":["--repo","alpha"]},
-		"knomit-repo-beta":{"command":"knomit-bridge","args":["--repo","beta"]}
+		"knomit-repo-alpha":{"command":"kb","args":["--repo","alpha"]},
+		"knomit-repo-beta":{"command":"kb","args":["--repo","beta"]}
 	}}`)
 
 	for i := 0; i < 20; i++ {
@@ -111,8 +111,8 @@ func TestPluginBinding_TwoDifferentScopes_AlwaysAmbiguous(t *testing.T) {
 func TestPluginBinding_TwoIdenticalScopes_NotAmbiguous(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, `{"mcpServers":{
-		"knomit-repo-alpha":{"command":"knomit-bridge","args":["--repo","alpha"]},
-		"knomit-repo-alpha-dup":{"command":"knomit-bridge","args":["--repo","alpha"]}
+		"knomit-repo-alpha":{"command":"kb","args":["--repo","alpha"]},
+		"knomit-repo-alpha-dup":{"command":"kb","args":["--repo","alpha"]}
 	}}`)
 	repo, _, skip := pluginBinding(dir)
 	if skip != "" || repo != "alpha" {
@@ -124,7 +124,7 @@ func TestPluginBinding_TwoIdenticalScopes_NotAmbiguous(t *testing.T) {
 // renamed symlink, versioned binary and `go run` install silently dark.
 func TestPluginBinding_UnrecognisedCommand_FallsBackToKeyTier(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"knomit-repo-alpha":{"command":"/usr/local/bin/knomit-bridge-dev","args":["--repo","alpha"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"knomit-repo-alpha":{"command":"/usr/local/bin/kb-dev","args":["--repo","alpha"]}}}`)
 	repo, _, skip := pluginBinding(dir)
 	if skip != "" || repo != "alpha" {
 		t.Errorf("got (%q,%q), want (alpha,\"\") — key tier should rescue a wrapper command", repo, skip)
@@ -136,7 +136,7 @@ func TestPluginBinding_UnrecognisedCommand_FallsBackToKeyTier(t *testing.T) {
 func TestPluginBinding_KeyTierIgnoredWhenACommandMatches(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, `{"mcpServers":{
-		"knomit-repo-real":{"command":"knomit-bridge","args":["--repo","real"]},
+		"knomit-repo-real":{"command":"kb","args":["--repo","real"]},
 		"knomit-notes":{"command":"some-other-tool","args":["--repo","bogus"]}
 	}}`)
 	repo, _, skip := pluginBinding(dir)
@@ -174,7 +174,7 @@ func TestPluginBinding_InvalidScopeOnRead_Rejected(t *testing.T) {
 	for _, bad := range []string{"../lenses/eng", "a?b", "a#b", "UPPER", "a b", "a/b"} {
 		t.Run(bad, func(t *testing.T) {
 			dir := t.TempDir()
-			writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo",`+jsonQuote(bad)+`]}}}`)
+			writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--repo",`+jsonQuote(bad)+`]}}}`)
 			repo, _, skip := pluginBinding(dir)
 			if skip != skipInvalidScope {
 				t.Errorf("repo %q accepted (skip=%q); want %q", repo, skip, skipInvalidScope)
@@ -185,7 +185,7 @@ func TestPluginBinding_InvalidScopeOnRead_Rejected(t *testing.T) {
 
 func TestPluginBinding_InvalidLensOnRead_Rejected(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--lens","../evil"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--lens","../evil"]}}}`)
 	if _, _, skip := pluginBinding(dir); skip != skipInvalidScope {
 		t.Errorf("skip = %q, want %q", skip, skipInvalidScope)
 	}
@@ -203,7 +203,7 @@ func jsonQuote(s string) string {
 
 func TestResolveWriteRepo_RepoMode_NoServerNeeded(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--repo","proj"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--repo","proj"]}}}`)
 
 	repo, skip := resolveWriteRepo(dir)
 	if skip != "" || repo != "proj" {
@@ -213,7 +213,7 @@ func TestResolveWriteRepo_RepoMode_NoServerNeeded(t *testing.T) {
 
 func TestResolveWriteRepo_LensMode_ResolvesWriteRepo(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--lens","eng"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--lens","eng"]}}}`)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/hal+json")
@@ -232,7 +232,7 @@ func TestResolveWriteRepo_LensMode_ResolvesWriteRepo(t *testing.T) {
 // validated on the same principle as the configured names.
 func TestResolveWriteRepo_LensMode_ServerReturnsHostileName_Rejected(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--lens","eng"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--lens","eng"]}}}`)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"name":"eng","write":{"uid":"u1","name":"../../etc"},"reads":[]}`))
@@ -248,7 +248,7 @@ func TestResolveWriteRepo_LensMode_ServerReturnsHostileName_Rejected(t *testing.
 
 func TestResolveWriteRepo_LensMode_ServerDown_SkipsUnresolved(t *testing.T) {
 	dir := t.TempDir()
-	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"knomit-bridge","args":["--lens","eng"]}}}`)
+	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--lens","eng"]}}}`)
 	t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
 
 	repo, skip := resolveWriteRepo(dir)

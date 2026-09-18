@@ -43,7 +43,7 @@ docs/plans
 # named after its directory, so each tool needs an entry here — one such binary
 # is ~25 MB and is trivially committed by a `git add -A`.
 /knomit
-/knomit-bridge
+/kb
 /knomit-okf
 /knomit-desktop
 /okf

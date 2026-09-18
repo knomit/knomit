@@ -8,10 +8,10 @@ import (
 // IsKnomitCommand reports whether an MCP-config entry's COMMAND identifies the
 // knomit bridge. This is the certain signal: it names the actual process and it
 // survives the config key being derived per scope. `.exe` is trimmed because the
-// Makefile builds a GOOS=windows target, where the command is knomit-bridge.exe
+// Makefile builds a GOOS=windows target, where the command is kb.exe
 // and a bare basename comparison would miss every Windows install.
 func IsKnomitCommand(command string) bool {
-	return strings.TrimSuffix(filepath.Base(command), ".exe") == "knomit-bridge"
+	return strings.TrimSuffix(filepath.Base(command), ".exe") == "kb"
 }
 
 // IsKnomitKey reports whether an MCP-config KEY looks like a knomit server.

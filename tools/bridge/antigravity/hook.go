@@ -9,7 +9,7 @@ import (
 
 func runHook(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: knomit-bridge antigravity hook <event> (pre-invocation)")
+		return fmt.Errorf("usage: kb antigravity hook <event> (pre-invocation)")
 	}
 	event := args[0]
 	log.Info().Str("event", event).Msg("hook fired")
