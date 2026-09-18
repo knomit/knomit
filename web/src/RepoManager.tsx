@@ -1985,24 +1985,24 @@ const CheckMark = ({ color }: { color: string }) => (
 
 // ConnectBody renders the "Agent access" block for a repo or a lens. It covers
 // every client family we scaffold for, because they wire up differently:
-//   • Claude Code uses the `knomit-bridge claude init` scaffolding (skills +
+//   • Claude Code uses the `kb claude init` scaffolding (skills +
 //     hooks + .mcp.json).
-//   • Antigravity (`agy`) uses `knomit-bridge antigravity init`, which writes a
+//   • Antigravity (`agy`) uses `kb antigravity init`, which writes a
 //     single owned plugin directory (.agents/plugins/knomit/).
 //   • Claude Cowork, Claude Desktop, and any other stdio MCP client just
-//     register knomit-bridge as an mcpServers entry — no init step.
+//     register kb as an mcpServers entry — no init step.
 // This card is the only place in the product where the wiring is discoverable,
 // so a host that ships without a row here is effectively invisible.
 // The scope arg is --lens <name> for a lens, --repo <name> for a repo.
 function ConnectBody({ kind, name, agentBranch }: { kind: 'repo' | 'lens'; name: string; agentBranch?: string }) {
   const [copied, setCopied] = useState<'cc' | 'agy' | 'mcp' | null>(null);
   const arg = kind === 'lens' ? '--lens' : '--repo';
-  const initCmd = `knomit-bridge claude init ${arg} ${name}`;
-  const agyInitCmd = `knomit-bridge antigravity init ${arg} ${name}`;
+  const initCmd = `kb claude init ${arg} ${name}`;
+  const agyInitCmd = `kb antigravity init ${arg} ${name}`;
   const mcpJson = `{
   "mcpServers": {
     "knomit": {
-      "command": "knomit-bridge",
+      "command": "kb",
       "args": ["${arg}", "${name}"]
     }
   }

@@ -246,8 +246,8 @@ func emitAdditionalContext(w io.Writer, event, ctx string) error {
 
 // wiredEvent picks the event name to echo back in hookSpecificOutput. CC puts
 // hook_event_name on the stdin payload of every hook it dispatches, so echoing
-// that back is correct by construction: rewiring `knomit-bridge claude hook
-// post-edit` from PostToolUse to PostToolBatch (or Stop, or any other
+// that back is correct by construction: rewiring `kb claude hook post-edit`
+// from PostToolUse to PostToolBatch (or Stop, or any other
 // additionalContext-carrying event) in settings.json keeps working, where a
 // hardcoded literal would trip CC's expected-vs-got check and drop the nudge.
 //

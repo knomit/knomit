@@ -115,15 +115,14 @@ The bridge also wraps agent-host integration helpers (typically invoked by the
 host, not by hand):
 
 ```
-kb claude init [-repo <name>]
-                                  # scaffold Claude Code integration files here
-kb claude hook <event>       # event ∈ session-start, post-edit,
+kb claude init [-repo <name>]           # scaffold Claude Code integration files here
+kb claude hook <event>                  # event ∈ session-start, post-edit,
                                         #         post-ask, pre-compact,
                                         #         memory-guard
 
 kb antigravity init [-repo <name>|-lens <name>]
-                                  # scaffold the Antigravity plugin here
-kb antigravity hook <event>  # event ∈ pre-invocation
+                                        # scaffold the Antigravity plugin here
+kb antigravity hook <event>             # event ∈ pre-invocation
 ```
 
 `memory-guard` is a PreToolUse hook (matcher `Write|Edit|MultiEdit|Bash`). It

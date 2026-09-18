@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"github.com/rs/zerolog/log"
 )
 
 // The CLI tools shipped next to the desktop binary (Contents/MacOS in the
@@ -16,6 +18,11 @@ import (
 const (
 	// bridgeExecName is the stdio↔HTTP MCP adapter stdio clients launch.
 	bridgeExecName = "kb"
+	// legacyBridgeExecName is what bridgeExecName was called before the rename.
+	// <home>/bin is a directory this app installs into and owns, so a link or
+	// copy it left there under the old name is its own artefact to clean up —
+	// not a user configuration, which the rename deliberately does not migrate.
+	legacyBridgeExecName = "knomit-bridge"
 	// okfExecName is the OKF export CLI.
 	okfExecName = "knomit-okf"
 )
@@ -24,7 +31,34 @@ const (
 // MCP client configs can launch it by a path that survives app moves and
 // updates.
 func installBridgeTool(home string) (string, error) {
+	removeLegacyBridgeTool(filepath.Join(home, "bin"))
 	return installBundledTool(home, bridgeExecName)
+}
+
+// removeLegacyBridgeTool deletes a pre-rename bridge install from binDir.
+//
+// The remove is unconditional rather than gated on the entry being a symlink,
+// because the two platforms leave different debris and both have to go: macOS
+// linked the tool in and is left with a symlink dangling into the .app, while
+// linux and windows copied it (placeTool) and are left with a real binary that
+// goes on launching the pre-rename code forever. Only the copy has teeth, and
+// it is the one a symlink check would skip.
+//
+// Deliberately NOT part of the install's result. On Windows a client holding
+// the old .exe open makes this fail with a sharing violation — the same
+// condition replaceFile documents below — and aborting over that would trade a
+// stale extra binary for no working one. The suffix comes from exeSuffix for
+// the same reason the install's target does: without it Windows would try to
+// remove a name that never existed.
+func removeLegacyBridgeTool(binDir string) {
+	old := filepath.Join(binDir, legacyBridgeExecName+exeSuffix)
+	if err := os.Remove(old); err != nil {
+		if !os.IsNotExist(err) {
+			log.Warn().Err(err).Str("path", old).Msg("kb: pre-rename bridge install not removed")
+		}
+		return
+	}
+	log.Info().Str("path", old).Msg("kb: removed the pre-rename bridge install")
 }
 
 // installOKFTool exposes the bundled knomit-okf on the same stable path.

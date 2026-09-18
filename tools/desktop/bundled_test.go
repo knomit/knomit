@@ -476,6 +476,79 @@ func TestInstallTool_LooksForThePlatformExecutableName(t *testing.T) {
 	}
 }
 
+// The rename from knomit-bridge to kb shipped no compatibility alias, so a
+// <home>/bin entry under the old name is dead weight the moment the app
+// updates: a symlink dangling into the .app on macOS, and on linux/windows a
+// real copy that keeps launching the pre-rename binary forever. <home>/bin is
+// installed and owned by this app, so clearing it is cleanup, not compat.
+//
+// Asserted through installBridgeTool rather than the helper, because the
+// ORDERING is the property: the removal has to happen before the kb install,
+// and it must survive that install failing. It does fail here — installBundledTool
+// resolves its source against os.Executable(), which a test cannot redirect —
+// which makes this the stronger case rather than a weaker one.
+//
+// Lstat, not Stat: a dangling symlink is exactly what macOS leaves behind, and
+// Stat follows it and reports IsNotExist while the link is still sitting there.
+func TestInstallBridgeTool_RemovesThePreRenameInstall(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed func(t *testing.T, path string)
+	}{
+		{"real copy (linux, windows)", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("pre-rename binary"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"dangling symlink (macos)", func(t *testing.T, path string) {
+			if err := os.Symlink(filepath.Join(t.TempDir(), "gone", "knomit-bridge"), path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			binDir := filepath.Join(home, "bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			old := filepath.Join(binDir, "knomit-bridge"+exeSuffix)
+			tc.seed(t, old)
+			if _, err := os.Lstat(old); err != nil {
+				t.Fatalf("seed did not land: %v", err)
+			}
+
+			_, _ = installBridgeTool(home)
+
+			if _, err := os.Lstat(old); !os.IsNotExist(err) {
+				t.Errorf("pre-rename install still at %s (lstat err = %v)", old, err)
+			}
+		})
+	}
+}
+
+// Nothing to remove is the ordinary case — every install after the first, and
+// every fresh one — so it must be silent and must not disturb the install.
+func TestRemoveLegacyBridgeTool_AbsentIsFine(t *testing.T) {
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removeLegacyBridgeTool(binDir) // must not panic
+	removeLegacyBridgeTool(filepath.Join(binDir, "does", "not", "exist"))
+
+	// The current name is not the old name: a removal that caught kb itself
+	// would uninstall the tool it is about to install.
+	keep := filepath.Join(binDir, bridgeExecName+exeSuffix)
+	if err := os.WriteFile(keep, []byte("current"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removeLegacyBridgeTool(binDir)
+	if _, err := os.Lstat(keep); err != nil {
+		t.Errorf("removed the CURRENT install at %s: %v", keep, err)
+	}
+}
+
 // The suffix must be empty everywhere but Windows — appending ".exe" on macOS
 // or Linux would break the platforms that currently work.
 func TestExeSuffixIsWindowsOnly(t *testing.T) {
