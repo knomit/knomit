@@ -120,8 +120,17 @@ func (s *Server) Handler() http.Handler {
 	// identityForRangeRequests and the cache policy, and /docs sends no cache
 	// headers today. HEAD is registered too, so an uptime check that HEADs it
 	// does not see a 405; net/http discards the body for HEAD itself.
-	r.With(compressor()).Get("/docs", handleSwaggerUI())
-	r.With(compressor()).Head("/docs", handleSwaggerUI())
+	//
+	// The handler and the compressor are hoisted so BOTH verbs share one
+	// value of each, exactly as the static routes below do. Calling
+	// handleSwaggerUI() and compressor() once per verb would build two
+	// closures and two Compressors, and "GET and HEAD answer identically"
+	// would then be a coincidence maintained by hand rather than a property
+	// of the wiring.
+	docs := handleSwaggerUI()
+	docsRoute := r.With(compressor())
+	docsRoute.Method(http.MethodGet, "/docs", docs)
+	docsRoute.Method(http.MethodHead, "/docs", docs)
 
 	// Mount the API router.
 	r.Mount(APIBase, s.NewAPIRouter())
@@ -149,13 +158,19 @@ func (s *Server) Handler() http.Handler {
 			// works by hiding Accept-Encoding from it.
 			r.Use(identityForRangeRequests)
 			r.Use(compressor())
-			r.Handle(assetsPrefix+"*", newAssetHandler(fsys, staticHandler))
-			// GET and HEAD, nothing else. An uptime check that HEADs the
-			// root used to get a 405 and report the app down, because
-			// r.Get registers exactly one method while the assets route
-			// above uses r.Handle and so answers every method. Both verbs
-			// share one handler, so the headers cannot diverge;
-			// http.ServeContent omits the body for HEAD by itself.
+			// GET and HEAD on BOTH static routes. r.Handle, which this
+			// used to be, registers every method — so POST to a bundle
+			// answered 200 with the whole file. Nothing was mutable, it is
+			// a read-only file server, but it is the same asymmetry that
+			// made HEAD / a 405, pointing the other way.
+			asset := newAssetHandler(fsys, staticHandler)
+			r.Method(http.MethodGet, assetsPrefix+"*", asset)
+			r.Method(http.MethodHead, assetsPrefix+"*", asset)
+			// Same two verbs for the SPA fallback. An uptime check that
+			// HEADs the root used to get a 405 and report the app down,
+			// because r.Get registers exactly one method. Both verbs share
+			// one handler VALUE on each route, so their headers cannot
+			// diverge; http.ServeContent omits the body for HEAD itself.
 			spa := newSPAHandler(fsys, staticHandler, tags)
 			r.Get("/*", spa)
 			r.Head("/*", spa)

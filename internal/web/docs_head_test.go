@@ -163,3 +163,39 @@ func TestHead_SendsNoBodyThroughARealServer(t *testing.T) {
 		})
 	}
 }
+
+// /assets/* used to be registered with r.Handle, which answers EVERY method —
+// so POST to a bundle returned 200 with the whole file. It is a read-only
+// file server, so nothing was mutable, but it is the same method-registration
+// asymmetry that made HEAD / a 405, pointing the other way.
+func TestAssets_AreGetAndHeadOnly(t *testing.T) {
+	h := staticTestServer(t).Handler()
+	const asset = "/assets/index-abc123.js"
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(method, asset, nil))
+			if rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s: got %d, want 405", method, asset, rec.Code)
+			}
+			if rec.Body.Len() != 0 {
+				t.Errorf("%s %s: body %d bytes, want 0 — the file must not be served", method, asset, rec.Body.Len())
+			}
+		})
+	}
+
+	// The two that must keep working.
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		t.Run(method, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(method, asset, nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s %s: got %d, want 200", method, asset, rec.Code)
+			}
+			if got := rec.Header().Get("Cache-Control"); got != immutableCacheControl {
+				t.Errorf("%s Cache-Control: got %q, want %q", method, got, immutableCacheControl)
+			}
+		})
+	}
+}
