@@ -47,31 +47,51 @@ func paramParents(t *testing.T, r chi.Router) map[string]string {
 	return out
 }
 
-// paramClass records, for every `{param}` spelling the router uses, whether its
-// value is a NAME A USER CHOOSES. Only those need guarding: a static sibling
-// can only shadow something if a user could have named it that.
+// paramClass records, for every path in the router that has a `{param}` child,
+// whether that param's value is a name A USER CAN CAUSE TO EXIST. Only those
+// need guarding: a static sibling can only shadow something if a user could
+// have brought a thing of that name into being.
+//
+// THE MEMBERSHIP TEST IS "can a user cause a value with that name to exist",
+// NOT "does a user own it". Ownership tracks how BAD a collision would be; only
+// the first question decides whether one can happen at all, and that is what
+// guarding turns on. A domain tag is not owned by anyone and is still authored
+// by whoever writes `domain: [stats]` in a fact's frontmatter, so
+// `/domains/stats` would shadow something real.
+//
+// KEYED BY PARENT PREFIX, NOT BY PARAM SPELLING, because one spelling can hold
+// two truths: `{name}` is a product-shipped preset at /ontologies/presets/{name}
+// and an author-written tag at /domains/{name}. A table keyed by spelling
+// cannot state both, and an earlier version of this test hedged in prose
+// instead of deciding. If you find yourself writing a caveat into one of these
+// reasons, check first whether the key is at the wrong granularity.
 //
 // Each entry carries its reason. A bare list ages exactly the way an
 // enumeration does; one with reasons lets the next author judge whether their
-// case belongs in it.
+// case belongs.
 //
-// AN UNCLASSIFIED PARAM FAILS THIS TEST, deliberately. A new param type must
+// AN UNCLASSIFIED PARENT FAILS THIS TEST, deliberately. A new param subtree must
 // force a decision rather than defaulting either way — defaulting to guarded
-// would quietly forbid legitimate routes, and defaulting to unguarded would
-// quietly reopen the hazard. Neither silence is acceptable, so there is none.
+// would quietly forbid legitimate routes, defaulting to unguarded would quietly
+// reopen the hazard, and neither silence is acceptable.
 var paramClass = map[string]struct {
 	userNamed bool
 	reason    string
 }{
-	"repo":   {true, "repo names are chosen by the user, [a-z0-9_-] via repos.IsValidName"},
-	"lens":   {true, "lens names go through the SAME validator as repo names (validateLensLocked, CreateLens, UpdateLens all pass l.Name to isValidRepoName)"},
-	"branch": {true, "branch names are chosen by whoever creates the branch"},
+	"/repos":                 {true, "{repo}: repo names are chosen by the user, [a-z0-9_-] via repos.IsValidName"},
+	"/lenses":                {true, "{lens}: lens names go through the SAME validator as repo names (validateLensLocked, CreateLens and UpdateLens all pass l.Name to isValidRepoName)"},
+	"/repos/{repo}/branches": {true, "{branch}: branch names are chosen by whoever creates the branch"},
+	"/repos/{repo}/branches/{branch}/domains": {true, "{name}: domain tags are authored by fact writers — someone writing `domain: [stats]` in frontmatter creates one"},
+	"/repos/{repo}/branches/{branch}/motifs":  {true, "{key}: motif keys are authored by fact writers, the same way domain tags are"},
+	"/lenses/{lens}/motifs":                   {true, "{key}: the lens-scoped view of the same author-written motif keys"},
 
-	"id":        {false, "server-minted identifier (archived entries, create jobs, index rebuilds, synthesis runs) — no user picks it"},
-	"sha":       {false, "a commit hash"},
-	"sessionID": {false, "comes from the origin, not from a name chosen here"},
-	"key":       {false, "a motif key, classified not-user-named by the router survey. WEAKEST ENTRY IN THIS TABLE: motif keys are authored by fact writers, so a static sibling here could in principle shadow one. Revisit before ever adding a static route beside it."},
-	"name":      {false, "under /ontologies/presets these are OUR shipped preset names; under /domains they are authored domain tags, classified not-user-named by the same survey. See the caveat on \"key\" — the same doubt applies."},
+	"/ontologies/presets": {false, "{name}: OUR shipped preset names — the product defines this set, no user adds to it"},
+	"/archived":           {false, "{id}: a server-minted identifier"},
+	"/repo-creates":       {false, "{id}: a server-minted job id"},
+	"/repos/{repo}/branches/{branch}/commits":        {false, "{sha}: a commit hash"},
+	"/repos/{repo}/branches/{branch}/index-rebuilds": {false, "{id}: a server-minted job id"},
+	"/repos/{repo}/branches/{branch}/synthesis-runs": {false, "{id}: a server-minted job id"},
+	"/repos/{repo}/origin-sessions":                  {false, "{sessionID}: comes from the origin, not from a name chosen here"},
 }
 
 // NO STATIC ROUTE MAY SIT BESIDE A {param} THAT HOLDS A USER-CHOSEN NAME.
@@ -112,13 +132,12 @@ func TestRouter_NoStaticSiblingsOfUserNamedParams(t *testing.T) {
 
 	guarded := map[string]string{}
 	for parent, param := range parents {
-		bare := strings.Trim(param, "{}")
-		class, known := paramClass[bare]
+		class, known := paramClass[parent]
 		if !known {
-			t.Errorf("unclassified route param %q (at %q): add it to paramClass and say "+
-				"whether its value is a name a user chooses, WITH the reason. An "+
-				"unclassified param fails on purpose — it must not default to guarded "+
-				"or to unguarded.", param, parent)
+			t.Errorf("unclassified {param} subtree %q (param %s): add it to paramClass "+
+				"and say whether a user can cause a value with that name to exist, WITH "+
+				"the reason. An unclassified parent fails on purpose — it must not "+
+				"default to guarded or to unguarded.", parent, param)
 			continue
 		}
 		if class.userNamed {
@@ -130,7 +149,18 @@ func TestRouter_NoStaticSiblingsOfUserNamedParams(t *testing.T) {
 	// If a refactor renames or restructures them, the loop below would pass by
 	// guarding nothing, so these are a tripwire ON THE DERIVATION — not the
 	// definition of what is guarded, which paramClass decides.
-	for _, must := range []string{"/repos", "/lenses", "/repos/{repo}/branches"} {
+	// SIX, not five: `motifs` hangs under BOTH /repos/{repo}/branches/{branch}
+	// and /lenses/{lens}, so the lens-scoped view is its own subtree and its own
+	// entry. A tripwire that listed five would have been satisfied while one
+	// real subtree went unguarded, which is the failure this whole rule is about.
+	for _, must := range []string{
+		"/repos",
+		"/lenses",
+		"/repos/{repo}/branches",
+		"/repos/{repo}/branches/{branch}/domains",
+		"/repos/{repo}/branches/{branch}/motifs",
+		"/lenses/{lens}/motifs",
+	} {
 		if _, ok := guarded[must]; !ok {
 			t.Errorf("the derivation did not find %q as a guarded {param} parent; it "+
 				"found %v. Either the route moved or the derivation is broken — do not "+
