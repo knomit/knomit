@@ -120,10 +120,15 @@ describe('App boot', () => {
 
     await waitFor(() => expect(screen.queryByTestId('boot-screen')).toBeNull());
 
-    // beta was bootstrapped normally; the speculative alpha response was not
-    // applied to it. A speculative result must never set status for a repo the
-    // list did not confirm.
+    // THIS is the load-bearing line. The speculative response was for alpha;
+    // the list picked beta, so the bootstrap must have gone back to the server
+    // for beta rather than reusing what it already had in hand. Without the
+    // confirmation check it would reuse the alpha response and the app would
+    // boot beta on alpha's branch.
     expect(api.getRepo).toHaveBeenCalledWith('beta');
+    // Corollary, and much weaker on its own: alpha's stale branch never
+    // reaches a status call. This holds trivially on several wrong
+    // implementations, so it is a backstop, not the assertion.
     const statusCalls = api.status.mock.calls.filter((c: unknown[]) => c[1] === 'stale/branch');
     expect(statusCalls).toHaveLength(0);
   });
