@@ -204,13 +204,19 @@ const effortNormalTestFile = "review_effort_normal_test.go"
 func TestConformance_EffortNormalTestByteIdentical(t *testing.T) {
 	// ANTI-VACUITY: assert the read, rather than letting a missing file fall
 	// through as "not a matching hash". It would fail either way, but only one
-	// of those two failures tells you the file is GONE.
+	// of those two failures tells you the file is GONE. Verified reachable:
+	// deleting the file fires THIS line, because the package still compiles
+	// without it.
+	//
+	// There is deliberately no "and it is not empty" check beside it. A
+	// zero-byte .go file does not compile ("expected 'package', found 'EOF'"),
+	// so the test binary would never run to make the assertion — a guard
+	// nothing can trip reads as coverage it does not provide.
 	b, err := os.ReadFile(filepath.Clean(effortNormalTestFile))
 	require.NoError(t, err,
 		"%s could not be read. MN5 protects that file; if it was renamed or "+
 			"deleted, this test is the thing that has to be updated deliberately, "+
 			"not the thing to delete because it broke.", effortNormalTestFile)
-	require.NotEmpty(t, b, "%s is empty", effortNormalTestFile)
 
 	got := fmt.Sprintf("%x", sha256.Sum256(b))
 	require.Equal(t, effortNormalTestSHA256, got, `MN5 VIOLATION: %s has changed.
