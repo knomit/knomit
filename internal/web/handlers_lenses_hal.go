@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +69,12 @@ type lensView struct {
 	CreatedAt   int64         `json:"created_at"`
 	UpdatedAt   int64         `json:"updated_at"`
 	Links       hal.LinkMap   `json:"_links"`
+	// Embedded carries _embedded.write_branch on the single-lens GET so a
+	// booting client reaches a known branch in one hop. omitempty is
+	// load-bearing: the LIST must stay a cheap index, and a lens whose write
+	// member is a subscription has no agent branch and must carry no key at
+	// all rather than an empty one.
+	Embedded map[string]any `json:"_embedded,omitempty"`
 }
 
 // createLensRequest is the POST body for creating a lens.
@@ -300,7 +307,22 @@ func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 }
 
 // handleHALLens serves GET /api/v1/lenses/{lens}.
-func handleHALLens(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+// handleHALLens serves GET /api/v1/lenses/{lens}.
+//
+// This is the only lens response carrying _embedded.write_branch. Where the
+// lens WRITES is a write question, so it is the write member's AgentBranch()
+// — not ReadBranch(), which answers content questions. A lens whose write
+// member is a SUBSCRIPTION has no agent branch at all (subscribed is true only
+// alongside an empty agentBranch), and then the key is omitted entirely:
+// absence means "none", where an empty string would mean "unknown" and would
+// build a root for branch "".
+func handleHALLens(
+	b hal.URLBuilder,
+	m *repos.Manager,
+	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
+	agentBranch string,
+	embeddingsEnabled bool,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		reg := m.LensRegistry()
 		if reg == nil {
@@ -320,7 +342,19 @@ func handleHALLens(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 				`no lens named "`+name+`"`, r.URL.Path)
 			return
 		}
-		writeLensView(w, r, b, m.Repos(), http.StatusOK, l)
+		views, err := lensViewsOf(b, m.Repos(), []repos.Lens{l})
+		if err != nil {
+			log.Error().Err(err).Str("path", r.URL.Path).Str("lens", name).Msg("resolve lens member names failed")
+			hal.WriteProblem(w, http.StatusInternalServerError, "Lookup failed", "resolve lens member names failed", r.URL.Path)
+			return
+		}
+		v := views[0]
+		if wri := m.GetByUID(l.WriteUID); wri != nil {
+			if root := embedBranchRoot(r.Context(), b, reader, wri.Name(), wri.AgentBranch(), wri, agentBranch, embeddingsEnabled); root != nil {
+				v.Embedded = map[string]any{"write_branch": root}
+			}
+		}
+		hal.WriteHAL(w, http.StatusOK, v)
 	}
 }
 

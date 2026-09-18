@@ -219,7 +219,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(RepoMiddleware(s.Manager))
 
-			r.Get("/", handleHALRepo(b))
+			r.Get("/", handleHALRepo(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled))
 			r.Patch("/", handleHALRepoPatch(b))
 
 			// Inside the middleware group, unlike Archive: {repo} must exist
@@ -311,7 +311,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		// The lens CRUD quartet — including rename — resolves through the
 		// registry directly and reports its own errors, so it stays outside
 		// the binding group below.
-		r.Get("/", handleHALLens(b, s.Manager))
+		r.Get("/", handleHALLens(b, s.Manager, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled))
 		r.Patch("/", handleHALLensPatch(b, s.Manager))
 		r.Delete("/", handleHALLensDelete(s.Manager))
 		r.Post("/rename", handleHALLensRename(b, s.Manager))

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,11 +212,30 @@ func repoView(b hal.URLBuilder, r *http.Request, name string, ri *repos.RepoInst
 }
 
 // handleHALRepo serves GET /api/v1/repos/{repo}.
-func handleHALRepo(b hal.URLBuilder) http.HandlerFunc {
+//
+// This is the ONLY repoView caller that carries _embedded.branch. A booting
+// client needs the repo AND a known branch before it can render anything, and
+// that used to be four dependent round trips; embedding the READ branch's root
+// here collapses two of them. The other repoView callers (probe, rescan,
+// rename) are write-path responses nobody boots from, and the repo LIST stays
+// a cheap index — it is not touched at all.
+//
+// ReadBranch, not AgentBranch: what branch the repo's CONTENT comes from is a
+// content question, and a subscription has no agent branch.
+func handleHALRepo(
+	b hal.URLBuilder,
+	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
+	agentBranch string,
+	embeddingsEnabled bool,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
-		hal.WriteHAL(w, http.StatusOK, repoView(b, r, name, ri))
+		body := repoView(b, r, name, ri)
+		if root := embedBranchRoot(r.Context(), b, reader, name, ri.ReadBranch(), ri, agentBranch, embeddingsEnabled); root != nil {
+			body["_embedded"] = map[string]any{"branch": root}
+		}
+		hal.WriteHAL(w, http.StatusOK, body)
 	}
 }
 

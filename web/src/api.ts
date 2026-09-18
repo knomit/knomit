@@ -164,12 +164,35 @@ export interface RepoDetails {
   description?: string;
   license?: string;
   license_oversize?: boolean;
+  // branch is the READ branch's root, from _embedded.branch. Present only
+  // when the server embedded it: an older server, or a repo whose store is
+  // still opening, omits it and the caller falls back to a branch fetch.
+  // Its presence is what turns boot from two hops into one.
+  branch?: Status;
 }
 
-// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, and the
-// README.md description when available.
+// getRepo fetches GET /api/v1/repos/{repo} — name, agent branch, the README.md
+// description when available, and the embedded read-branch root when the
+// server sent one.
 async function getRepo(repo: string): Promise<RepoDetails> {
-  return fetchJSON<RepoDetails>(repoBase(repo));
+  const data = await fetchJSON<RepoDetails & EmbeddedBranchEnvelope>(repoBase(repo));
+  return withEmbeddedBranch<RepoDetails>(data, 'branch');
+}
+
+// withEmbeddedBranch lifts _embedded.<key> onto `branch`/`write_branch` as a
+// normalised Status, and drops the raw _embedded so callers never see two
+// shapes for the same thing.
+//
+// The branch NAME comes from the embedded body itself, not from the caller:
+// the server decides which branch it embedded (read branch for a repo, agent
+// branch for a lens) and saying so is the embed's job, not ours to guess.
+function withEmbeddedBranch<T>(data: EmbeddedBranchEnvelope, key: 'branch' | 'write_branch'): T {
+  const { _embedded, ...rest } = data ?? {};
+  const body = _embedded?.[key];
+  if (body && typeof body.name === 'string' && body.name) {
+    return { ...rest, [key]: statusFromBranchBody(body, body.name) } as T;
+  }
+  return rest as T;
 }
 
 /* Description caps, in BYTES (not characters) — mirrors of the server-side
@@ -241,6 +264,10 @@ export interface Lens {
   name: string; write: LensMember; reads: LensRead[];
   description?: string;
   created_at?: number; updated_at?: number;
+  // write_branch is the write member's AGENT branch root, from
+  // _embedded.write_branch. ABSENT when the write member is a subscription —
+  // it has no agent branch — and when the server could not read the root.
+  write_branch?: Status;
 }
 // LensSource identifies which mount a lens union row came from: the source
 // repo, its 12-char id, and the branch the row was read at (RFC §6.2).
@@ -381,6 +408,48 @@ export interface Stats {
 }
 export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
+
+// BranchRootBody is the wire shape of a branch root — what the branch GET
+// returns and what the repo and lens resources embed. Every field is optional
+// because an older server, or a partially readable one, may omit any of them.
+export interface BranchRootBody {
+  name?: string;
+  head?: string;
+  index_commit?: string;
+  embeddings_enabled?: boolean;
+  ontology_root?: string;
+  index_state?: string;
+  index_done?: number;
+  index_total?: number;
+  index_percent?: number;
+}
+
+// EmbeddedBranchEnvelope is any resource that may carry a branch root under
+// _embedded: the repo GET (`branch`) and the lens GET (`write_branch`).
+interface EmbeddedBranchEnvelope {
+  _embedded?: { branch?: BranchRootBody; write_branch?: BranchRootBody };
+}
+
+// statusFromBranchBody maps a branch-root HAL body to Status. It is the ONE
+// mapping: api.status uses it for the branch GET, and the repo and lens
+// resources use it for the branch root they embed. The server builds those
+// three bodies with one function, so the client parses them with one too —
+// otherwise the embed and the fetch drift into two subtly different Statuses
+// and the bug shows up only on whichever path the test did not take.
+export function statusFromBranchBody(data: BranchRootBody, branch: string): Status {
+  return {
+    head: data.head ?? '',
+    branch,
+    index_commit: data.index_commit ?? '',
+    embeddings_enabled: data.embeddings_enabled ?? false,
+    // ontology_root not in the branch response — caller preserves existing state value
+    ontology_root: data.ontology_root || '',
+    index_state: data.index_state,
+    index_done: data.index_done,
+    index_total: data.index_total,
+    index_percent: data.index_percent,
+  };
+}
 
 export interface OriginResponse {
   name: string;
@@ -1196,7 +1265,8 @@ async function listLenses(): Promise<Lens[]> {
 
 // getLens GETs /api/v1/lenses/{name} — the single lens view (200/404).
 async function getLens(name: string): Promise<Lens> {
-  return fetchJSON<Lens>(apiUrl(`/api/v1/lenses/${name}`));
+  const data = await fetchJSON<Lens & EmbeddedBranchEnvelope>(apiUrl(`/api/v1/lenses/${name}`));
+  return withEmbeddedBranch<Lens>(data, 'write_branch');
 }
 
 // createLens POSTs a new lens. fetchJSON throws on non-2xx surfacing the
@@ -1717,18 +1787,7 @@ export const api = {
     fetchJSON<ActivityStats>(`${branchBase(repo, branch)}/activity?path=${encodeURIComponent(path)}`),
 
   status: (repo: string, branch: string): Promise<Status> =>
-    fetchJSON<any>(`${branchBase(repo, branch)}`).then(data => ({
-      head: data.head,
-      branch: branch,
-      index_commit: data.index_commit,
-      embeddings_enabled: data.embeddings_enabled,
-      // ontology_root not in new response — caller preserves existing state value
-      ontology_root: data.ontology_root || '',
-      index_state: data.index_state,
-      index_done: data.index_done,
-      index_total: data.index_total,
-      index_percent: data.index_percent,
-    })),
+    fetchJSON<BranchRootBody>(`${branchBase(repo, branch)}`).then(data => statusFromBranchBody(data, branch)),
 
   synthesize: (repo: string, branch: string, recipe = ''): Promise<{ op: string; id?: string; status: string; message?: string }> =>
     fetchJSON(`${branchBase(repo, branch)}/synthesis-runs`, { method: 'POST', body: recipe }),

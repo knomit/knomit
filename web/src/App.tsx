@@ -3,12 +3,14 @@ import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
-import type { RepoInfo, Lens, Status, RepoIndexEvent } from './api';
+import type { RepoInfo, Lens, Status, RepoIndexEvent, RepoDetails } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
 import { useFactEdges } from './useFactEdges';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
+import { useBoot } from './boot';
+import { BootScreen } from './BootScreen';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { TopBar } from './TopBar';
 import { RepoManager } from './RepoManager';
@@ -108,6 +110,11 @@ export async function resolveLens(
     const broken = brokenLensMember(lens, fallbackRepos);
     if (broken !== null) throw new Error(`mount "${broken}" has no store`);
     dispatch({ type: 'SET_LENS', lens });
+    // The lens response embeds its write member's branch root, so entering a
+    // lens no longer needs a second hop to learn the branch. Absent when the
+    // write member is a subscription (it has no agent branch) or on an older
+    // server — then the ordinary bootstrap supplies it, exactly as before.
+    if (lens.write_branch) dispatch(statusAction(lens.write_branch));
   } catch (err) {
     if (!isCurrentLens(name)) return; // context drifted — a newer surface owns the app
     dispatch({ type: 'SET_NOTICE', text: `Lens "${name}" is unavailable — showing a repo instead.` });
@@ -280,6 +287,25 @@ export default function App() {
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
+  // Boot progress, so the pre-branch screen can say what it is waiting on
+  // instead of showing an undifferentiated "Loading…".
+  const { boot, dispatchBoot, retryBoot } = useBoot();
+  // bootNonce re-fires the bootstrap effect when the user presses Retry; the
+  // repo has not changed, so nothing else would.
+  const [bootNonce, setBootNonce] = useState(0);
+  // The speculative GET /repos/{remembered} fired in the same tick as the
+  // repo list. Set only once the list CONFIRMS that repo, and consumed once by
+  // the bootstrap — a later context switch must ask the server again.
+  const speculativeRef = useRef<{ repo: string; details: RepoDetails } | null>(null);
+  // The boot response for the current repo. `mode` on it is what the read-only
+  // effect reads instead of issuing its own GET during boot.
+  const [bootDetails, setBootDetails] = useState<{ repo: string; details: RepoDetails } | null>(null);
+  // Retry re-runs the boot from the top: reset the phase/attempt/error, then
+  // bump the nonce so the bootstrap effect fires again for the same repo.
+  const onBootRetry = useCallback(() => {
+    retryBoot();
+    setBootNonce(n => n + 1);
+  }, [retryBoot]);
   // Manage is a MODE, not a dialog: it replaces the browse surface rather than
   // floating over it. It lives here as component state and NOT on AppState,
   // deliberately — state.navStack is both the back stack and the time-travel
@@ -372,26 +398,62 @@ export default function App() {
   // state below, which is the ordinary first-run screen, not an error.
   useEffect(() => {
     let cancelled = false;
+
+    // The remembered context is read SYNCHRONOUSLY, before any request, so the
+    // repo it names can be fetched in the SAME TICK as the list instead of
+    // waiting a full round trip for it. localStorage is synchronous; there was
+    // never a reason to serialise these.
+    //
+    // It is SPECULATIVE: the list is what decides. If pickRepo confirms the
+    // same repo the result is used as-is; if it picks a different one (the
+    // remembered repo was archived, or the speculative call 404s) the result
+    // is discarded. Nothing here may dispatch SET_STATUS for a repo the list
+    // has not confirmed.
+    const last = loadLastContext();
+    const speculativeRepo = last?.kind === 'repo' && last.repo ? last.repo : '';
+    const speculative: Promise<RepoDetails | null> = speculativeRepo
+      ? api.getRepo(speculativeRepo).catch(() => null)
+      : Promise.resolve(null);
+
     api.repos()
-      .then(list => {
+      .then(async list => {
         if (cancelled) return;
         setRepos(list);
         setReposLoaded(true);
         // Restore the last browse context. A persisted lens is entered
         // immediately, then resolved (falling back to a repo if it's gone). A
         // repo (or no) context picks a repo from the live list as before.
-        const last = loadLastContext();
         if (last?.kind === 'lens') {
           // Resolution is owned by the lensResolutionPending effect below.
+          dispatchBoot({ type: 'PHASE', phase: 'opening', target: last.name });
           dispatch({ type: 'SET_CONTEXT', context: last });
           return;
         }
         const next = pickRepo('', list, last?.kind === 'repo' ? last.repo : null);
-        if (next) dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
+        if (!next) return;
+        dispatchBoot({ type: 'PHASE', phase: 'opening', target: next });
+        // Hand the speculative response to the bootstrap ONLY when the list
+        // confirmed the same repo.
+        if (next === speculativeRepo) {
+          const details = await speculative;
+          if (cancelled) return;
+          if (details) speculativeRef.current = { repo: next, details };
+        }
+        dispatch({ type: 'SET_CONTEXT', context: { kind: 'repo', repo: next } });
       })
       .catch(() => { if (!cancelled) setReposLoaded(true); });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Boot is over the moment a branch is known — that is choice (a): the panels
+  // below keep their own placeholders for the wave that follows, rather than
+  // holding the whole screen hostage to it. Driven off state.branch rather
+  // than the bootstrap's own `done`, because the lens path reaches a branch
+  // through SET_LENS and never calls the bootstrap at all.
+  useEffect(() => {
+    if (state.branch) dispatchBoot({ type: 'PHASE', phase: 'done' });
+  }, [state.branch, dispatchBoot]);
 
   // Lens resolution — single owner. Every surface that enters a lens context
   // (TopBar switcher, manager Browse, bootstrap restore) only dispatches
@@ -433,12 +495,23 @@ export default function App() {
   // (validateLensLocked refuses one), so the flag is cleared there.
   useEffect(() => {
     if (state.context.kind !== 'repo' || !state.repo) { dispatch({ type: 'SET_REPO_READONLY', value: false }); return; }
+    // `mode` is on the boot response this repo already fetched, so read it
+    // from there rather than racing a second GET against the bootstrap.
+    if (bootDetails?.repo === state.repo) {
+      dispatch({ type: 'SET_REPO_READONLY', value: bootDetails.details.mode === 'subscribe' });
+      return;
+    }
+    // No boot response for THIS repo yet. If one is still in flight, waiting
+    // costs nothing and the effect re-runs when it lands; the pre-existing
+    // default is writable, which is also the failure default below.
+    if (!bootDetails) return;
+    // A later context switch: the boot response belongs to a different repo.
     let alive = true;
     api.getRepo(state.repo)
       .then(d => { if (alive) dispatch({ type: 'SET_REPO_READONLY', value: d.mode === 'subscribe' }); })
       .catch(() => { /* best-effort: stay writable on failure */ });
     return () => { alive = false; };
-  }, [state.context, state.repo]);
+  }, [state.context, state.repo, bootDetails]);
 
   // Remember the user's browse context (repo | lens) so reloads land on the
   // same surface.
@@ -492,19 +565,37 @@ export default function App() {
   useEffect(() => {
     if (!state.repo) return; // wait until a repo is selected from the server list
     let cancelled = false;
+    const repo = state.repo;
+
+    // getRepo for the boot, which reuses the speculative response when the
+    // list confirmed the same repo — that is what makes a warm boot ONE
+    // request. Consumed once: a later context switch is a different question
+    // and must ask the server again.
+    const getRepo = async (name: string): Promise<RepoDetails> => {
+      const spec = speculativeRef.current;
+      speculativeRef.current = null;
+      const details = spec && spec.repo === name ? spec.details : await api.getRepo(name);
+      if (!cancelled) setBootDetails({ repo: name, details });
+      return details;
+    };
+
     bootstrapStatusWithRetry({
-      repo: state.repo,
+      repo,
       initialBranch: state.branch,
-      getAgentBranch: api.getAgentBranch,
+      getRepo,
       getStatus: api.status,
       onSuccess: (s) => { dispatch(statusAction(s)); },
+      onPhase: (phase) => { dispatchBoot({ type: 'PHASE', phase, target: repo }); },
       onAttemptFailed: (err, attempt) => {
         diag('error', `[bootstrap] attempt ${attempt + 1} failed: ${String(err)}`);
+        // The same text the Console got, now also where the user is looking.
+        dispatchBoot({ type: 'ATTEMPT_FAILED', error: String(err) });
       },
       shouldStop: () => cancelled,
     });
     return () => { cancelled = true; };
-  }, [state.repo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.repo, bootNonce]);
 
   // The indexing banner and every repo's index chip follow the index-event
   // stream — see the subscription below. There used to be a 2 s status poll
@@ -980,12 +1071,13 @@ export default function App() {
     );
   }
 
+  // Before repo AND branch are known there is nothing to render, but the user
+  // is owed an account of what is happening — which phase, how long, which
+  // attempt, and a way out when it has failed. The no-repos empty state above
+  // takes precedence: an install with nothing to browse is the ordinary first
+  // run, not a boot that is stuck.
   if (!state.branch) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', width: '100vw', background: '#141414', color: '#888', fontFamily: 'var(--k-font-body)' }}>
-        Loading…
-      </div>
-    );
+    return <BootScreen boot={boot} onRetry={onBootRetry} />;
   }
 
   return (

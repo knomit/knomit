@@ -97,50 +97,109 @@ func handleHALBranch(
 			writeStoreError(w, r, err, "Failed to read branch", branch)
 			return
 		}
-
-		idxState, idxDone, idxTotal := ri.IndexStatus()
-
-		// ALL REPOS MUST HAVE AN ONTOLOGY. When one could not be established
-		// the repo is readable but writes are refused everywhere
-		// (RepoInstance.WritableBranch), and a refusal the client cannot
-		// explain is indistinguishable from a bug. Reported here, on the branch
-		// the client is looking at, in the same payload that already says
-		// whether this is the agent branch.
-		ontologyErr := ""
-		if oerr := ri.OntologyError(); oerr != nil {
-			ontologyErr = oerr.Error()
-		}
-
-		a := hal.Anchor{Branch: branch}
-		branchURL := b.Branch(repoName, a)
-		body := map[string]any{
-			"name":               branch,
-			"head":               info.Head,
-			"index_commit":       info.IndexCommit,
-			"embeddings_enabled": embeddingsEnabled,
-			"is_agent_branch":    branch == agentBranch,
-			"writable":           ri.WritableBranch(branch),
-			"ontology_error":     ontologyErr,
-			"index_state":        idxState, // "ready" | "indexing" | "error"
-			"index_done":         idxDone,
-			"index_total":        idxTotal,
-			"index_percent":      indexPercent(idxState, idxDone, idxTotal), // 0–100; 100 when ready
-
-			"_links": hal.LinkMap{
-				"self":           {Href: branchURL},
-				"facts":          {Href: branchURL + "/facts{?path,q,topic,domain,entity,type,exclude_type,kind,exclude_kind,ep,min_confidence,limit,offset}", Templated: true},
-				"topics":         {Href: branchURL + "/topics"},
-				"commits":        {Href: branchURL + "/commits"},
-				"search":         {Href: branchURL + "/search{?q,limit,cursor}", Templated: true},
-				"domains":        {Href: branchURL + "/domains"},
-				"stats":          {Href: branchURL + "/stats"},
-				"events":         {Href: branchURL + "/events"},
-				"synthesis-runs": {Href: branchURL + "/synthesis-runs"},
-				"index-rebuilds": {Href: branchURL + "/index-rebuilds"},
-				"mcp":            {Href: branchURL + "/mcp{?profile}", Templated: true},
-				"repo":           {Href: b.Repo(repoName)},
-			},
-		}
-		hal.WriteHAL(w, http.StatusOK, body)
+		hal.WriteHAL(w, http.StatusOK, branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled))
 	}
+}
+
+// branchRootBody renders a branch root. It is the ONE construction of this
+// body: GET /repos/{repo}/branches/{branch} returns it, and the repo and lens
+// resources embed it so a booting client reaches a known branch without a
+// second round trip. Two surfaces that must agree agree by construction here,
+// never by two renderings kept in step by hand.
+//
+// The branch NAME is an explicit parameter rather than read from ri, because
+// the callers mean different branches and the difference is load-bearing: a
+// CONTENT question uses ri.ReadBranch() (a subscription has no agent branch
+// and would read from ""), a WRITE question uses ri.AgentBranch(). See
+// kb/conventions/repos/subscription/read-branch-for-content/20c4c711.md.
+//
+// agentBranch is the SERVER's configured agent branch, which is what
+// is_agent_branch has always compared against — not ri.AgentBranch(). Passing
+// anything else here would make the embed disagree with the branch GET.
+func branchRootBody(
+	b hal.URLBuilder,
+	repoName, branch string,
+	info branchRootInfo,
+	ri *repos.RepoInstance,
+	agentBranch string,
+	embeddingsEnabled bool,
+) map[string]any {
+	idxState, idxDone, idxTotal := ri.IndexStatus()
+
+	// ALL REPOS MUST HAVE AN ONTOLOGY. When one could not be established
+	// the repo is readable but writes are refused everywhere
+	// (RepoInstance.WritableBranch), and a refusal the client cannot
+	// explain is indistinguishable from a bug. Reported here, on the branch
+	// the client is looking at, in the same payload that already says
+	// whether this is the agent branch.
+	ontologyErr := ""
+	if oerr := ri.OntologyError(); oerr != nil {
+		ontologyErr = oerr.Error()
+	}
+
+	a := hal.Anchor{Branch: branch}
+	branchURL := b.Branch(repoName, a)
+	return map[string]any{
+		"name":               branch,
+		"head":               info.Head,
+		"index_commit":       info.IndexCommit,
+		"embeddings_enabled": embeddingsEnabled,
+		"is_agent_branch":    branch == agentBranch,
+		"writable":           ri.WritableBranch(branch),
+		"ontology_error":     ontologyErr,
+		"index_state":        idxState, // "ready" | "indexing" | "error"
+		"index_done":         idxDone,
+		"index_total":        idxTotal,
+		"index_percent":      indexPercent(idxState, idxDone, idxTotal), // 0–100; 100 when ready
+
+		"_links": hal.LinkMap{
+			"self":           {Href: branchURL},
+			"facts":          {Href: branchURL + "/facts{?path,q,topic,domain,entity,type,exclude_type,kind,exclude_kind,ep,min_confidence,limit,offset}", Templated: true},
+			"topics":         {Href: branchURL + "/topics"},
+			"commits":        {Href: branchURL + "/commits"},
+			"search":         {Href: branchURL + "/search{?q,limit,cursor}", Templated: true},
+			"domains":        {Href: branchURL + "/domains"},
+			"stats":          {Href: branchURL + "/stats"},
+			"events":         {Href: branchURL + "/events"},
+			"synthesis-runs": {Href: branchURL + "/synthesis-runs"},
+			"index-rebuilds": {Href: branchURL + "/index-rebuilds"},
+			"mcp":            {Href: branchURL + "/mcp{?profile}", Templated: true},
+			"repo":           {Href: b.Repo(repoName)},
+		},
+	}
+}
+
+// embedBranchRoot builds a branch root for embedding, or nil when it cannot be
+// built. nil means the key is OMITTED: the embed is an optimisation, and a
+// repo whose store is still opening must still answer its GET — the client
+// falls back to the branch call. An error here is never the response's error.
+func embedBranchRoot(
+	ctx context.Context,
+	b hal.URLBuilder,
+	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
+	repoName, branch string,
+	ri *repos.RepoInstance,
+	agentBranch string,
+	embeddingsEnabled bool,
+) map[string]any {
+	// An empty branch is "this repo has none" (a subscription has no agent
+	// branch), not "unknown" — building a root for branch "" would invent a
+	// resource. See kb/invariants/repos/subscription/flag-and-branch-paired.
+	if ri == nil || reader == nil || branch == "" {
+		return nil
+	}
+	info, err := reader(ctx, ri, branch)
+	if err != nil {
+		return nil
+	}
+	// An unopened store is NOT an error from defaultBranchRootReader: WithRead
+	// simply never runs its callback and the zero branchRootInfo comes back
+	// with a nil error. Embedding that would advertise a branch root whose
+	// head is "" as though it were known. The embed exists to save a round
+	// trip to a KNOWN branch, so with no head resolved there is nothing worth
+	// embedding and the client should ask — which the omission tells it to do.
+	if info.Head == "" {
+		return nil
+	}
+	return branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled)
 }

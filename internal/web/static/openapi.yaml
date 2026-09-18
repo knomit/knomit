@@ -2696,6 +2696,26 @@ components:
             LICENSE" — a UI that offers to Add/Edit a LICENSE it never read
             risks a save that silently destroys the original.
         _links: { $ref: "#/components/schemas/LinkMap" }
+        _embedded:
+          type: object
+          description: >
+            Present on the single-repo GET only; the repo LIST stays a cheap
+            index and never carries it.
+          properties:
+            branch:
+              allOf:
+                - $ref: "#/components/schemas/Branch"
+              description: >
+                The root of this repo's READ branch (`read_branch`: the agent
+                branch, or the followed upstream for a subscription), byte-for-
+                byte the body `GET /repos/{repo}/branches/{read_branch}`
+                returns — it is built by the same function. It lets a booting
+                client reach a known branch without a second round trip.
+
+                OMITTED, not empty, when the branch root cannot be read (the
+                store is still opening, or no head resolves). Absence means
+                "ask for it"; clients must fall back to the branch GET rather
+                than treat a missing embed as an error.
 
     BranchSummary:
       type: object
@@ -3821,6 +3841,25 @@ components:
         created_at:  { type: integer, format: int64, description: Unix seconds. }
         updated_at:  { type: integer, format: int64, description: Unix seconds. }
         _links:      { $ref: "#/components/schemas/LinkMap" }
+        _embedded:
+          type: object
+          description: >
+            Present on the single-lens GET only; the lens LIST never carries it.
+          properties:
+            write_branch:
+              allOf:
+                - $ref: "#/components/schemas/Branch"
+              description: >
+                The root of the write member's AGENT branch — where this lens
+                writes. Byte-for-byte the body the corresponding branch GET
+                returns, built by the same function, so a booting client
+                reaches a known branch in one hop.
+
+                OMITTED entirely when the write member is a SUBSCRIPTION: a
+                subscription has no agent branch, and absence means "none"
+                where an empty string would mean "unknown". Also omitted when
+                the branch root cannot be read. Clients fall back to the branch
+                GET in both cases.
 
     LensesCollection:
       allOf:
