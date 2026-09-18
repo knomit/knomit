@@ -199,3 +199,51 @@ func TestAssets_AreGetAndHeadOnly(t *testing.T) {
 		})
 	}
 }
+
+// /docs gets the same GET/HEAD parity check the SPA routes get, in BOTH
+// negotiation modes.
+//
+// Accept-Encoding is set explicitly on both verbs, never left implicit. Go's
+// http.Transport adds "Accept-Encoding: gzip" of its own accord for a GET but
+// not for a HEAD, so a probe that relied on the implicit header would compare
+// a compressed GET against an identity HEAD and manufacture a Vary/
+// Content-Encoding mismatch that the server never produced. That is a
+// property of the client, and a test that trips over it is measuring the
+// wrong thing.
+func TestDocs_HeadMatchesGetInBothEncodings(t *testing.T) {
+	h := staticTestServer(t).Handler()
+
+	for _, mode := range []struct {
+		name           string
+		acceptEncoding string
+		wantEncoding   string
+	}{
+		{"identity", "identity", ""},
+		{"gzip", "gzip", "gzip"},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			do := func(method string) *httptest.ResponseRecorder {
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(method, "/docs", nil)
+				req.Header.Set("Accept-Encoding", mode.acceptEncoding)
+				h.ServeHTTP(rec, req)
+				return rec
+			}
+			get, head := do(http.MethodGet), do(http.MethodHead)
+
+			if get.Code != http.StatusOK || head.Code != http.StatusOK {
+				t.Fatalf("status: GET %d, HEAD %d, want 200 for both", get.Code, head.Code)
+			}
+			if got := get.Header().Get("Content-Encoding"); got != mode.wantEncoding {
+				t.Errorf("GET Content-Encoding: got %q, want %q", got, mode.wantEncoding)
+			}
+			// One handler value and one compressor serve both verbs, so every
+			// negotiated header has to agree.
+			for _, hdr := range []string{"Content-Type", "Content-Encoding", "Vary"} {
+				if g, hd := get.Header().Get(hdr), head.Header().Get(hdr); g != hd {
+					t.Errorf("%s: GET %q, HEAD %q — one handler value must produce one set of headers", hdr, g, hd)
+				}
+			}
+		})
+	}
+}
