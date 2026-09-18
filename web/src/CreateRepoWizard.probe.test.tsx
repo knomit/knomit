@@ -39,7 +39,8 @@ const HOST = {
   }),
 };
 
-vi.mock('./api', () => ({
+vi.mock('./api', async importOriginal => ({
+  ...(await importOriginal<typeof import('./api')>()),
   api: {
     probeOrigin: vi.fn(),
     createRepo: vi.fn(),

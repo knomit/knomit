@@ -16,7 +16,8 @@ import { originURL } from './wizardState';
 // correct. The server trims too and is the durable fix; this is the client no
 // longer asking the wrong question.
 
-vi.mock('./api', () => ({
+vi.mock('./api', async importOriginal => ({
+  ...(await importOriginal<typeof import('./api')>()),
   api: {
     probeOrigin: vi.fn(),
     probeInitialized: vi.fn(),

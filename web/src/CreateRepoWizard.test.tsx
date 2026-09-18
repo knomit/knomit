@@ -3,7 +3,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { api } from './api';
 
-vi.mock('./api', () => ({
+vi.mock('./api', async importOriginal => ({
+  ...(await importOriginal<typeof import('./api')>()),
   api: {
     probeOrigin: vi.fn(),
     probeInitialized: vi.fn(),

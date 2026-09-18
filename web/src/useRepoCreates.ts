@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from './api';
+import { api, isTerminalCreateState } from './api';
 import type { RepoCreateStatus } from './api';
 
 // The two poll rates. ACTIVE while anything is happening, IDLE otherwise.
@@ -38,7 +38,7 @@ const subscribers = new Set<(s: RepoCreateStatus[]) => void>();
 // to the idle poll rate the moment cancel was pressed would take up to half a
 // minute to notice the outcome the user is waiting for.
 function anyRunning(list: RepoCreateStatus[]): boolean {
-  return list.some(c => c.state === 'running' || c.state === 'cancelling');
+  return list.some(c => !isTerminalCreateState(c.state));
 }
 
 function nextDelay(list: RepoCreateStatus[]): number {
@@ -136,7 +136,7 @@ export function pendingCreates(list: RepoCreateStatus[], repoNames: readonly str
 // work still to do, which includes one that is cancelling. The light answers
 // "is anything happening?", and honouring a cancel is something happening.
 export function runningCreates(list: RepoCreateStatus[]): number {
-  return list.filter(c => c.state === 'running' || c.state === 'cancelling').length;
+  return list.filter(c => !isTerminalCreateState(c.state)).length;
 }
 
 // createFlag is the ONE word a list row says about a create.

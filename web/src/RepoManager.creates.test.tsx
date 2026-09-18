@@ -158,6 +158,32 @@ describe('creates in the repo manager', () => {
     expect(screen.getByTestId('pending-create-chip-rail-newkb')).toHaveTextContent('cancelling');
   });
 
+  // A CANCELLING CREATE IS STILL A ROW. It is non-terminal — the repo is not
+  // gone yet — so the rail must keep showing it, flagged 'cancelling'. In the
+  // browser run that caught the navigation bug the rail showed NO row at all
+  // after the click, and this is the regression test for the row itself,
+  // independent of whatever made it vanish.
+  it('draws a cancelling create in the rail and in the overview', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([job({ state: 'cancelling', step: 'subscribe' })]);
+    render(<RepoManager {...baseProps} />);
+
+    const row = await screen.findByTestId('pending-create-rail-newkb');
+    expect(row).toHaveAttribute('data-create-state', 'cancelling');
+    expect(screen.getByTestId('pending-create-name-rail-newkb')).toHaveTextContent('newkb');
+    expect(screen.getByTestId('pending-create-chip-rail-newkb')).toHaveTextContent('cancelling');
+    // Still no controls on the row, and still openable by clicking it.
+    expect(screen.queryByTestId('pending-create-cancel-rail-newkb')).toBeNull();
+
+    expect(await screen.findByTestId('pending-creates')).toBeInTheDocument();
+    expect(screen.getByTestId('pending-create-chip-overview-newkb')).toHaveTextContent('cancelling');
+
+    fireEvent.click(row);
+    expect(await screen.findByTestId('create-watch')).toBeInTheDocument();
+    expect(screen.getByTestId('create-watch-flag')).toHaveTextContent('cancelling');
+    expect(screen.getByTestId('create-cancel-button')).toBeDisabled();
+    expect(screen.getByTestId('create-cancel-button')).toHaveTextContent('Cancelling…');
+  });
+
   // A CANCELLED CREATE LEAVES THE RAIL ENTIRELY. The server omits it from the
   // collection; the row must not come back even if a stale list still had one.
   it('never draws a cancelled create in the rail', async () => {

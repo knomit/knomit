@@ -5,7 +5,8 @@ import { api } from './api';
 
 vi.mock('./useRepoCreates', () => ({ refreshRepoCreates: vi.fn(async () => {}) }));
 
-vi.mock('./api', () => ({
+vi.mock('./api', async importOriginal => ({
+  ...(await importOriginal<typeof import('./api')>()),
   api: {
     probeOrigin: vi.fn(),
     probeInitialized: vi.fn(),
@@ -267,4 +268,62 @@ describe('CreateRepoWizard cancel', () => {
     expect(screen.getByTestId('create-cancel-error')).toHaveTextContent(/was not cancelled/i);
     expect(screen.queryByTestId('create-cancelled')).not.toBeInTheDocument();
   });
+
+  // NO NAVIGATION ON A NON-TERMINAL FINAL STATE.
+  //
+  // The guard in handleCreate used to be the NEGATIVE one — anything that was
+  // not 'failed' navigated — and that is what put the user on the settings
+  // page of a repository that had never been created. The upstream cause (the
+  // poll loop stopping on 'cancelling') is fixed and tested in
+  // api.createCancel.test.ts; this is the second line of defence, and it is
+  // worth having on its own: handleCreate must not treat 'not failed' as
+  // 'exists'. So this feeds it exactly what the broken loop produced — a
+  // create resolving while still cancelling.
+  it('never navigates when the create resolves in a non-terminal state', async () => {
+    const onDone = vi.fn();
+    mock(api.createRepo).mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      onStatus(status({ step: 'subscribe', pct: 10 }));
+      const final = status({ state: 'cancelling', step: 'subscribe' });
+      onStatus(final);
+      return final;
+    });
+    render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
+    await startLocalCreate();
+
+    await waitFor(() => expect(screen.getByTestId('create-cancelling-note')).toBeInTheDocument());
+    expect(onDone).not.toHaveBeenCalled();
+    // Still on review, showing the create — not navigated anywhere.
+    expect(screen.getByTestId('step-review')).toBeInTheDocument();
+  });
+
+  // And the terminal cancel still ends on the cancelled card with no
+  // navigation.
+  it('ends a cancelled create on the cancelled card without navigating', async () => {
+    const onDone = vi.fn();
+    mock(api.createRepo).mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      onStatus(status({ step: 'subscribe', pct: 10 }));
+      onStatus(status({ state: 'cancelling', step: 'subscribe' }));
+      const final = status({ state: 'cancelled', step: 'subscribe' });
+      onStatus(final);
+      return final;
+    });
+    render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
+    await startLocalCreate();
+
+    await waitFor(() => expect(screen.getByTestId('create-cancelled')).toBeInTheDocument());
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  // A create that genuinely finishes still navigates — the positive test that
+  // stops the fix above from being "never call onDone".
+  it('still navigates on a real done', async () => {
+    const onDone = vi.fn();
+    const { impl, settle } = parkedCreate();
+    mock(api.createRepo).mockImplementation(impl);
+    render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
+    await startLocalCreate();
+    settle({ state: 'done', step: 'done', pct: 100, repo: { name: 'scratch' } });
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('scratch'));
+  });
+
 });

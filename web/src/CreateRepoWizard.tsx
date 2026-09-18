@@ -1,5 +1,5 @@
 import { useReducer, useRef, useState } from 'react';
-import { api, type RepoCreateStatus, type ProbeResult } from './api';
+import { api, isTerminalCreateState, type RepoCreateStatus, type ProbeResult } from './api';
 import { refreshRepoCreates } from './useRepoCreates';
 import { wizardReducer, initialWizardState, currentStep, stepsFor, branchCheckBlocked, probeIsCurrent, createBodyFor, authFor, originURL, isValidRepoName, type WizardAction } from './wizardState';
 import { WizardStepRail } from './WizardStepRail';
@@ -91,7 +91,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   const step = currentStep(state);
 
   // adoptStatus is the ONE writer of createStatus for reports that arrive from
-  // the server, and it refuses to walk a TERMINAL state back to 'running'.
+  // the server, and it refuses to walk a TERMINAL state back to a non-terminal one.
   //
   // Two sources write this state and they are not ordered with respect to each
   // other: api.createRepo's poll loop, and the 202 body handleCancelCreate
@@ -109,7 +109,8 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   // and navigate both reset this to null first, so there is no stale terminal
   // state left to guard against.
   const adoptStatus = (s: RepoCreateStatus) =>
-    setCreateStatus(prev => (prev && prev.state !== 'running' && s.state === 'running') ? prev : s);
+    setCreateStatus(prev =>
+      (prev && isTerminalCreateState(prev.state) && !isTerminalCreateState(s.state)) ? prev : s);
 
   // `stopping` is what the button reads from, and it deliberately ORs the
   // local request flag with the server's own state.
@@ -330,15 +331,25 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
         // first status is the 202 itself, so this fires immediately.
         if (!announced) { announced = true; void refreshRepoCreates(); }
       });
-      if (final.state === 'failed') {
-        setCreateErr(final.error || 'create failed');
-      } else if (final.state !== 'cancelled') {
-        // NOT on 'cancelled'. onDone hands the app a repo name to select, and
-        // a cancelled create left no repo of that name to select — calling it
-        // here would navigate the user into a repository that does not exist,
-        // immediately after they asked for it not to be made. The wizard stays
-        // where it is and CreateProgress says what happened.
+      // NAVIGATE ONLY ON 'done', never on "not failed".
+      //
+      // onDone hands the app a repo name to select, so it is a claim that a
+      // repository of that name EXISTS. The old test was the negative one —
+      // anything that was not 'failed' navigated — and that is exactly how a
+      // cancel put the user on the settings page of a repository that had
+      // never been created: the 202 resolved the create with state
+      // 'cancelling', which is neither 'failed' nor 'cancelled', so it fell
+      // through to onDone and the app went looking for a repo that did not
+      // exist (four 404s and "could not load remote status").
+      //
+      // Stated positively, the only state that can support that claim is the
+      // one that means the repo is there. Every other state — including any
+      // added later — stays on this screen, where CreateProgress says what
+      // happened.
+      if (final.state === 'done') {
         onDone(final.repo?.name || state.name);
+      } else if (final.state === 'failed') {
+        setCreateErr(final.error || 'create failed');
       }
     } catch (e) {
       setCreateErr(e instanceof Error ? e.message : String(e));

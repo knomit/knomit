@@ -62,3 +62,52 @@ describe('api.cancelRepoCreate', () => {
     await expect(api.cancelRepoCreate('nope')).rejects.toThrow(/404/);
   });
 });
+
+// THE POLL LOOP MUST RIDE 'cancelling' THROUGH TO A TERMINAL STATE.
+//
+// This is the defect that reached a real browser. createRepo's loop tested
+// `state === 'running'`, which is not the same question as "is it over":
+// 'cancelling' is non-terminal and not 'running', so a cancel accepted
+// mid-transfer ended the loop on the 202 and resolved the create with a job
+// that was still working. The wizard read that as an outcome and navigated the
+// user to the settings page of a repository that did not exist — while the
+// server went on fetching for another 48 seconds.
+//
+// It is tested HERE, against the real fetch, because that is where the bug
+// lived. A test that mocks api.createRepo cannot see this: it replaces the
+// very loop under test, which is exactly why the earlier wizard tests were
+// green through the whole of it.
+describe('api.createRepo polling across a cancel', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('keeps polling while the job is cancelling and resolves only when terminal', async () => {
+    const polled: string[] = [];
+    // The server's answers, in order: the 202, then two 'cancelling' polls
+    // (the non-interruptible fetch still running), then the outcome.
+    const sequence = [
+      { state: 'cancelling', step: 'subscribe' },
+      { state: 'cancelling', step: 'subscribe' },
+      { state: 'cancelled', step: 'subscribe' },
+    ];
+    globalThis.fetch = vi.fn(async (url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') {
+        return { ok: true, status: 202, json: async () => ({ create_id: 'job1', name: 'kb', mode: 'subscribe', state: 'running', step: 'subscribe' }) };
+      }
+      polled.push(String(url));
+      return { ok: true, status: 200, json: async () => ({ create_id: 'job1', name: 'kb', mode: 'subscribe', ...sequence.shift() }) };
+    }) as unknown as typeof fetch;
+
+    const seen: string[] = [];
+    const final = await api.createRepo(
+      { name: 'kb', mode: 'subscribe' } as Parameters<typeof api.createRepo>[0],
+      s => seen.push(s.state));
+
+    // THE ASSERTION: it did not stop at 'cancelling'.
+    expect(final.state).toBe('cancelled');
+    expect(seen).toEqual(['running', 'cancelling', 'cancelling', 'cancelled']);
+    // Three polls, not one — the loop ran on past the two cancelling answers.
+    expect(polled).toHaveLength(3);
+    expect(polled[0]).toBe('/api/v1/repo-creates/job1');
+  });
+});

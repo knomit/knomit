@@ -851,6 +851,26 @@ async function getAgentBranch(repo: string): Promise<string> {
 // between two steps reports the earlier one, and no intermediate step is
 // guaranteed to be seen by anyone. Anything that needs every step must derive
 // it from the known pipeline, not from what it happened to observe.
+export type RepoCreateState =
+  'running' | 'cancelling' | 'done' | 'failed' | 'cancelled';
+
+// isTerminalCreateState is the ONE definition of "is this create over".
+//
+// It exists because the question was asked in four places and answered
+// differently in each, and one of those answers shipped a bug: the poll loop
+// in createRepo tested `state === 'running'`, which is not the same question.
+// 'cancelling' is non-terminal AND not 'running', so the loop exited the
+// instant a cancel was accepted, resolved with a job that was still working,
+// and the wizard read that as success and navigated the user into a repository
+// that did not exist yet and never would.
+//
+// Anything asking "is it over" must call this rather than compare against a
+// state it happens to remember. A new non-terminal state is then one edit here
+// instead of a hunt for every comparison that assumed there were only two.
+export function isTerminalCreateState(state: RepoCreateState): boolean {
+  return state !== 'running' && state !== 'cancelling';
+}
+
 export interface RepoCreateStatus {
   create_id: string;
   name: string;
@@ -871,7 +891,7 @@ export interface RepoCreateStatus {
    * The server also OMITS it from GET /repo-creates, so a list never has to
    * render one; it stays readable by id until its retention window expires.
    */
-  state: 'running' | 'cancelling' | 'done' | 'failed' | 'cancelled';
+  state: RepoCreateState;
   step?: string;
   message?: string;
   pct?: number;
@@ -1088,7 +1108,11 @@ async function createRepo(
   }
   let status = await r.json() as RepoCreateStatus;
   onStatus(status);
-  while (status.state === 'running') {
+  // UNTIL IT IS TERMINAL, not "while it is running". A cancel that is accepted
+  // mid-create answers 202 with state 'cancelling' — still working, not yet an
+  // outcome — and a loop that stopped there would hand its caller a job in
+  // flight as though it were finished.
+  while (!isTerminalCreateState(status.state)) {
     await new Promise(res => setTimeout(res, createRepoPollMs));
     // A poll that fails is NOT a create that failed — the create is on the
     // server and unaffected. Surfacing it as a create failure would report a
