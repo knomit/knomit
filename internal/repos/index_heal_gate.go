@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // indexHealGate holds the background index heal at one known point — after
@@ -38,13 +39,19 @@ import (
 // Holding the heal is the only option that makes the moment the tests already
 // describe — "provably in flight" — actually provable.
 type indexHealGate struct {
-	release chan struct{}
-	opened  sync.Once
-	passed  atomic.Bool
+	arrived    chan struct{}
+	arriveOnce sync.Once
+	release    chan struct{}
+	opened     sync.Once
+	passed     atomic.Bool
+	viaRelease atomic.Bool
 }
 
 func newIndexHealGate() *indexHealGate {
-	return &indexHealGate{release: make(chan struct{})}
+	return &indexHealGate{
+		arrived: make(chan struct{}),
+		release: make(chan struct{}),
+	}
 }
 
 // setIndexHealGate arms the gate for every repo this Manager opens from now
@@ -70,11 +77,51 @@ func (g *indexHealGate) hold(ctx context.Context) {
 	if g == nil {
 		return
 	}
+	// Announced BEFORE the select, so a test can distinguish "the heal is
+	// parked here" from "the heal goroutine has not been scheduled yet". Both
+	// leave passedThrough false, and conflating them is what made an earlier
+	// version of the preset fixture inherit the very scheduling race the gate
+	// exists to remove. See waitArrived.
+	g.arriveOnce.Do(func() { close(g.arrived) })
 	select {
 	case <-g.release:
+		g.viaRelease.Store(true)
 	case <-ctx.Done():
 	}
 	g.passed.Store(true)
+}
+
+// leftViaRelease reports whether the heal left the gate because the TEST
+// released it, rather than by teardown or by not having been held at all.
+//
+// This is the assertion that is deterministic where the others are not.
+// arrived-then-passed are two events with an instruction window between them,
+// so a fixture sampling passedThrough() at one instant can miss a hold that
+// does not block — measured at 2 escapes in 30 before this existed. The arm
+// the heal actually took has no such window: a hold that fails to block takes
+// neither case, so this stays false every time.
+func (g *indexHealGate) leftViaRelease() bool {
+	return g != nil && g.viaRelease.Load()
+}
+
+// waitArrived reports whether the heal reached the gate within d.
+//
+// BOUNDED, not a bare channel receive. If the hold is ever deleted from
+// openOne the heal never arrives, and an unbounded wait here would hang the
+// package and produce a -timeout panic instead of a named failure — which is
+// the failure mode every fixture in this file is built to avoid. It is also
+// deadlock-free by construction: a heal parked at the gate needs nothing from
+// the caller in order to have arrived.
+func (g *indexHealGate) waitArrived(d time.Duration) bool {
+	if g == nil {
+		return false
+	}
+	select {
+	case <-g.arrived:
+		return true
+	case <-time.After(d):
+		return false
+	}
 }
 
 // open lets the held heal proceed. Idempotent: the index mirror emits on a
@@ -85,8 +132,12 @@ func (g *indexHealGate) open() {
 
 // passedThrough reports whether the heal has reached the gate AND moved on,
 // by either exit. It is what lets a fixture assert that the gate is still on
-// the heal's path: if the hold is ever deleted or made non-blocking, this
-// turns the resulting flake into a deterministic failure.
+// the heal's path: if the hold is ever deleted, this turns the resulting flake
+// into a deterministic failure.
+//
+// READ IT TOGETHER WITH waitArrived. On its own, false is ambiguous — parked
+// at the gate, or not started yet — so a fixture asserting "the heal was still
+// held" must establish arrival first or it is asserting a scheduling accident.
 func (g *indexHealGate) passedThrough() bool {
 	return g != nil && g.passed.Load()
 }

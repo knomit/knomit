@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -126,9 +127,18 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 			seen = append(seen, e)
 			mu.Unlock()
 			if e.Phase == PhaseIndex {
-				// Recorded on the FIRST index event only, before the gate is
-				// opened: the heal must still be held at this instant.
 				if !sawIndex.Swap(true) {
+					// Arrival first — see the same block in create_job_test.go
+					// for why passedThrough() alone is ambiguous. This test
+					// catches the non-blocking-hold mutation either way,
+					// because its create does transfer and ActivateSync work
+					// before the mirror looks, so the heal goroutine has
+					// always been scheduled by now. That is an incidental
+					// property of this fixture, though, not a guarantee — so
+					// the wait is here too rather than relying on it.
+					require.True(t, gate.waitArrived(10*time.Second),
+						"the heal never reached the gate, so the index event "+
+							"cannot have come from the gate holding it")
 					healAlreadyPastGate.Store(gate.passedThrough())
 				}
 				// Let the heal finish so the create can reach "done".
@@ -192,6 +202,12 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	require.True(t, gate.passedThrough(),
 		"the heal never passed through the gate; if the hold was removed from "+
 			"openOne this test is racing the heal again, exactly as it was before")
+	// The deterministic half — see the same assertion in create_job_test.go.
+	// A hold that does not block takes neither select arm, so this catches it
+	// every time, where sampling passedThrough() at one instant does not.
+	require.True(t, gate.leftViaRelease(),
+		"the heal did not leave the gate by the release arm, so it was never "+
+			"actually held: the gate must BLOCK, not merely be on the path")
 	require.Equal(t, IndexStateIndexing, index.IndexState)
 	require.True(t, strings.HasPrefix(index.Message, "indexing "), "got %q", index.Message)
 	require.GreaterOrEqual(t, index.Pct, indexPctFloor)

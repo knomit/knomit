@@ -203,8 +203,17 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 			// The mirror only emits this while IndexStatus reads 'indexing',
 			// and the gate is why that state is still there to be read.
 			if !sawIndexing.Swap(true) {
-				// Recorded on the FIRST index event only, before the gate is
-				// opened: the heal must still be held. See the assert below.
+				// ARRIVAL FIRST, then the reading. passedThrough() is false in
+				// two situations a fixture must not conflate: the heal is
+				// parked at the gate (what this test means) and the heal
+				// goroutine has not been scheduled yet (what often happens).
+				// Reading it without establishing arrival asserts a scheduling
+				// accident — and it inherits the exact race the gate removes,
+				// which is why the non-blocking-hold mutation used to escape
+				// this test most of the time.
+				require.True(t, gate.waitArrived(10*time.Second),
+					"the heal never reached the gate, so the index event cannot "+
+						"have come from the gate holding it")
 				healAlreadyPastGate.Store(gate.passedThrough())
 			}
 			// Order matters. Cancel while the heal is still held, THEN release
@@ -256,6 +265,18 @@ func TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing(t *testing.T) {
 		"the heal completed without ever passing through the gate; if the hold "+
 			"was removed from openOne this test is racing the heal again, "+
 			"exactly as it was before")
+
+	// AND IT LEFT BY THE RELEASE ARM — the deterministic half. The two
+	// assertions above sample state at an instant, and arrival and passage are
+	// two events with an instruction window between them, so a hold that does
+	// not block can slip through that window (measured: 2 escapes in 30). The
+	// ARM the heal took has no window: a non-blocking hold takes neither case,
+	// so this is false every time it is broken. The heal cannot have left by
+	// the ctx arm here — the create's cancel does not touch indexCtx, which is
+	// the property this whole test exists to prove.
+	require.True(t, gate.leftViaRelease(),
+		"the heal did not leave the gate by the release arm, so it was never "+
+			"actually held: the gate must BLOCK, not merely be on the path")
 }
 
 // TestManagerClose_DrainsInFlightCreate is the third instance of an invariant
