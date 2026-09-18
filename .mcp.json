@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "knomit": {
+    "knomit-lens-knomit-dev": {
       "command": "${CLAUDE_PROJECT_DIR:-.}/dist/kb",
       "args": ["--lens", "knomit-dev"]
     }
