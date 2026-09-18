@@ -191,6 +191,9 @@ func TestRebuild_SecondRebuildIsTheHubConflict(t *testing.T) {
 	}
 	defer close(blocked)
 
+	rec, stop := openIndexStream(t, r)
+	defer stop()
+
 	// The index is READY, so the index-state check passes and the request
 	// reaches hub.Start, which refuses it.
 	resp := postRebuild(t, r, "alpha")
@@ -206,6 +209,21 @@ func TestRebuild_SecondRebuildIsTheHubConflict(t *testing.T) {
 	if problem.Title != "Job already running" {
 		t.Fatalf("409 title = %q, want %q — the index-state check swallowed the hub's conflict",
 			problem.Title, "Job already running")
+	}
+
+	// AND THE LOSER MARKED NOTHING. This is what makes the mark's placement
+	// INSIDE the task fn a tested property rather than a claim in a comment.
+	// Marking in the handler instead would flip the state to indexing here and
+	// then return 409 with no task left to ever clear it — the index pinned at
+	// "indexing" forever, which is the 2026-08 stuck-indexing failure reached
+	// by a new route. Every other test in this file passes against that
+	// rearrangement; this is the one that does not.
+	if state, _, _ := ri.IndexStatus(); state != "ready" {
+		t.Fatalf("IndexStatus after a refused rebuild = %q, want ready — the losing request marked, "+
+			"and nothing will clear it", state)
+	}
+	if frames := indexFrames(t, rec.body()); len(frames) != 0 {
+		t.Fatalf("refused rebuild emitted %d index frames, want 0: %+v", len(frames), frames)
 	}
 }
 
