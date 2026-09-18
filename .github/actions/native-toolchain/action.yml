@@ -66,9 +66,18 @@ runs:
     #
     # The diagnostics are printed on every run, not just the first: on Windows
     # they are the difference between reading a cause and bisecting for one.
-    # core.autocrlf especially — the repo has no .gitattributes, so if a future
-    # image flips it, golden-file comparisons start failing for a reason that
-    # has nothing to do with the code under test.
+    #
+    # core.autocrlf is still printed, but it is now a REPORT rather than a
+    # warning, and the difference is worth stating. When this comment was
+    # written the repo had no .gitattributes, so the runner's autocrlf decided
+    # the working-tree line endings and a future image flipping it would have
+    # broken byte comparisons for a reason unrelated to the code. There IS one
+    # now: `* text=auto eol=lf` pins LF in the working tree on every platform,
+    # which takes that decision away from both the image and the developer.
+    # Two tests depend on those bytes — internal/fact's
+    # TestCorpus_RoundTripIdentical and internal/synthesize's MN5 hash pin — so
+    # the value is logged to make a CRLF checkout legible if it ever happens,
+    # not because the outcome is in doubt.
     - name: Verify Windows CGo toolchain
       if: runner.os == 'Windows'
       shell: bash
