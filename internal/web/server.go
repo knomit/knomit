@@ -136,11 +136,14 @@ func (s *Server) Handler() http.Handler {
 			fsys = embeddedStaticFS()
 		}
 		staticHandler := staticHandlerFor(fsys)
+		tags := newETagger(fsys)
 		r.Group(func(r chi.Router) {
+			// identityForRangeRequests must sit ABOVE the compressor: it
+			// works by hiding Accept-Encoding from it.
+			r.Use(identityForRangeRequests)
 			r.Use(compressor())
-			r.Use(withCacheHeaders)
-			r.Handle("/assets/*", staticHandler)
-			r.Get("/*", newSPAHandler(fsys, staticHandler))
+			r.Handle(assetsPrefix+"*", newAssetHandler(fsys, staticHandler))
+			r.Get("/*", newSPAHandler(fsys, staticHandler, tags))
 		})
 	}
 

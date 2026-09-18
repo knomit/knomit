@@ -47,6 +47,8 @@ var compressibleTypes = []string{
 	"application/json",
 	hal.ContentType,        // application/hal+json
 	hal.ProblemContentType, // application/problem+json
+	"application/yaml",     // GET /api/v1/openapi.yaml — 173 KB of it
+	"text/yaml",            // GET /api/v1/ontologies/... (sent with a charset)
 	"image/svg+xml",
 }
 
