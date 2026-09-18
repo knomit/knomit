@@ -42,8 +42,13 @@ const truncatedNote: CSSProperties = { marginLeft: 8, color: '#facc15', fontSize
 
 export function ManageSessions({ onLiveCount }: {
   /** Reports the live count after every poll, so the Manage tab badge can
-   *  ride this page's refresh instead of running a second loop. */
-  onLiveCount?: (n: number | null) => void;
+   *  ride this page's refresh instead of running a second loop.
+   *
+   *  `truncated` travels with it because the count is computed from a BOUNDED
+   *  page: when the server cut the list, the number is a lower bound, not a
+   *  total. A consumer that rendered it as exact would be the silent
+   *  truncation this page's own note exists to prevent. */
+  onLiveCount?: (n: number | null, truncated?: boolean) => void;
 }) {
   const [rows, setRows] = useState<ClientSession[]>([]);
   // The server bounds the page. A cut list looks exactly like a complete one,
@@ -58,9 +63,9 @@ export function ManageSessions({ onLiveCount }: {
     api.listClientSessions({ includeHidden: showHidden })
       .then(r => {
         setRows(r.sessions); setPolicy(r.policy); setTruncated(r.truncated); setError(null);
-        onLiveCount?.(r.sessions.filter(s => s.state === 'live').length);
+        onLiveCount?.(r.sessions.filter(s => s.state === 'live').length, r.truncated);
       })
-      .catch(e => { setError(String(e)); onLiveCount?.(null); })
+      .catch(e => { setError(String(e)); onLiveCount?.(null, false); })
       // finally, so the clock advances on EVERY attempt, success or failure.
       // The rows on screen are the last good data either way, so their ages
       // must keep moving while the error banner is up — a frozen "2 min ago"

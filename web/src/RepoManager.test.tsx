@@ -1798,4 +1798,63 @@ describe('Manage tabs', () => {
     expect(screen.queryByTestId('repomgr-overview')).not.toBeInTheDocument();
     expect(screen.queryByTestId('repomgr-sessions')).not.toBeInTheDocument();
   });
+
+  // The badge counts from a page the server BOUNDS. When that page was cut the
+  // number is a lower bound, and a bare count beside a table that admits it is
+  // showing "N of more" would be the one dishonest number on the screen — the
+  // exact silent truncation the limit work exists to prevent.
+  describe('RepoManager live badge truncation', () => {
+    const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 };
+
+    it('marks the count when the page was truncated', async () => {
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: true, policy: POLICY, sessions: [sess('live'), sess('live'), sess('dead')],
+      });
+      render(<RepoManager {...baseProps} />);
+      const badge = await screen.findByTestId('repomgr-sessions-badge');
+      // Two live of three shown, and more exist: "at least two".
+      expect(badge).toHaveTextContent('2+');
+    });
+
+    it('renders the exact count when the list is exhausted', async () => {
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: false, policy: POLICY, sessions: [sess('live'), sess('live')],
+      });
+      render(<RepoManager {...baseProps} />);
+      const badge = await screen.findByTestId('repomgr-sessions-badge');
+      expect(badge).toHaveTextContent('2');
+      expect(badge).not.toHaveTextContent('+');
+    });
+
+    // The marker must follow the DATA. A "+" left over from an earlier truncated
+    // read would claim there is more after the condition has gone.
+    it('clears the marker when a later read is not truncated', async () => {
+      installFakeEventSource();
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: true, policy: POLICY, sessions: [sess('live')],
+      });
+      render(<RepoManager {...baseProps} />);
+      await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('1+'));
+
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: false, policy: POLICY, sessions: [sess('live')],
+      });
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).not.toHaveTextContent('+'));
+    });
+
+    // The Sessions page owns the number while it is open and reports through
+    // onLiveCount — so the marker has to travel that path too, not just the
+    // header's own read.
+    it('marks the count reported by the Sessions page', async () => {
+      installFakeEventSource();
+      vi.mocked(api.listClientSessions).mockResolvedValue({
+        truncated: true, policy: POLICY, sessions: [sess('live'), sess('live'), sess('live')],
+      });
+      render(<RepoManager {...baseProps} />);
+      fireEvent.click(await screen.findByTestId('repomgr-sessions'));
+      await screen.findByTestId('manage-sessions');
+      await waitFor(() => expect(screen.getByTestId('repomgr-sessions-badge')).toHaveTextContent('3+'));
+    });
+  });
 });
