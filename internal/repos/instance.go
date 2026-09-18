@@ -138,10 +138,10 @@ type RepoInstance struct {
 	indexState atomic.Int32 // indexReady | indexIndexing | indexFailed
 	indexDone  atomic.Int64
 	indexTotal atomic.Int64
-	// indexHub is the server-wide index-event stream; nil in tests and in any
-	// Manager built without one, which publishIndex handles.
-	indexHub *IndexHub
-	indexPub indexPublisher
+	// repoEventHub is the server-wide repo-event stream; nil in tests and in
+	// any Manager built without one, which publishIndex handles.
+	repoEventHub *RepoEventHub
+	indexPub     indexPublisher
 }
 
 // IndexStatus reports the repo's background-index readiness for the API/UI.

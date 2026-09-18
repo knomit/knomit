@@ -58,7 +58,7 @@ func openIndexStream(t *testing.T, r http.Handler) (*streamRecorder, func()) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/events", nil).WithContext(reqCtx))
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repo-events", nil).WithContext(reqCtx))
 	}()
 	rec.waitFor(t, "the ready frame", func(b string) bool { return strings.Contains(b, "event: ready") })
 	return rec, func() { cancel(); <-done }
