@@ -5,6 +5,14 @@ import (
 	"net/http"
 )
 
+// ProblemContentType is the media type for RFC 9457 problem responses.
+//
+// It is a constant so that the compression allowlist in internal/web can
+// reference the same string the writer sets: chi's compressor matches the
+// media type exactly, so a one-character drift between the two silently
+// turns compression off with every test still green.
+const ProblemContentType = "application/problem+json"
+
 // Problem is an RFC 9457 problem document.
 //
 // Type defaults to "about:blank" (RFC 9457 §4.2.1) when no more specific
@@ -29,7 +37,7 @@ func WriteProblem(w http.ResponseWriter, status int, title, detail, instance str
 		Detail:   detail,
 		Instance: instance,
 	}
-	w.Header().Set("Content-Type", "application/problem+json")
+	w.Header().Set("Content-Type", ProblemContentType)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(p)
 }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -63,6 +64,12 @@ type Server struct {
 
 	JobRegistry *JobRegistry // tracks synthesis-run and index-rebuild jobs
 
+	// staticFS overrides the embedded web UI. nil — the production zero
+	// value — means embeddedStaticFS(). Tests set it to an fstest.MapFS
+	// because web/dist holds only .gitkeep until `make web` has run, and the
+	// Go tests must not depend on the npm build.
+	staticFS fs.FS
+
 	// providers holds the test-injectable data-access seams the API router
 	// wires into handlers. The zero value means "all production defaults";
 	// NewAPIRouter materializes them via withDefaults(). Tests set only the
@@ -120,10 +127,24 @@ func (s *Server) Handler() http.Handler {
 				"no resource at "+req.URL.Path, req.URL.Path)
 		})
 	} else {
-		// Serve embedded web UI.
-		staticHandler := StaticHandler()
-		r.Handle("/assets/*", staticHandler)
-		r.Get("/*", newSPAHandler(staticHandler))
+		// Serve embedded web UI. These routes get their own compressor and
+		// cache policy in a Group rather than on the outer router: the API
+		// router mounted above already carries compressor(), and a second
+		// one wrapping it would gzip every API body twice.
+		fsys := s.staticFS
+		if fsys == nil {
+			fsys = embeddedStaticFS()
+		}
+		staticHandler := staticHandlerFor(fsys)
+		tags := newETagger(fsys)
+		r.Group(func(r chi.Router) {
+			// identityForRangeRequests must sit ABOVE the compressor: it
+			// works by hiding Accept-Encoding from it.
+			r.Use(identityForRangeRequests)
+			r.Use(compressor())
+			r.Handle(assetsPrefix+"*", newAssetHandler(fsys, staticHandler))
+			r.Get("/*", newSPAHandler(fsys, staticHandler, tags))
+		})
 	}
 
 	return r

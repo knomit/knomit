@@ -2,18 +2,8 @@
 
 package web
 
-import "net/http"
+import "io/fs"
 
-// StaticHandler returns a 404 handler when compiled without embedded assets.
-func StaticHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	})
-}
-
-// newSPAHandler returns a 404 handler when compiled without embedded assets.
-func newSPAHandler(_ http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}
-}
+// embeddedStaticFS returns nil when compiled without embedded assets; the
+// shared static handlers turn a nil FS into a 404.
+func embeddedStaticFS() fs.FS { return nil }
