@@ -69,6 +69,26 @@ export class FakeEventSource {
   }
 }
 
+/**
+ * Streams whose URL contains `substr`, oldest first.
+ *
+ * Select by URL, never by index into `instances`. The app holds SEVERAL streams
+ * at once — the branch stream, the server-wide index stream, sessions, logs —
+ * and which one is `instances[0]` depends on mount order, so an index-based
+ * test asserts on whichever stream happened to open first and breaks the day a
+ * new one is added. It did: adding the index stream moved every App stream by
+ * one.
+ */
+export function streamsMatching(substr: string): FakeEventSource[] {
+  return FakeEventSource.instances.filter(es => es.url.includes(substr));
+}
+
+/** The most recent stream whose URL contains `substr`, or undefined. */
+export function latestStream(substr: string): FakeEventSource | undefined {
+  const all = streamsMatching(substr);
+  return all[all.length - 1];
+}
+
 /** Install the fake as the global EventSource and clear recorded instances. */
 export function installFakeEventSource() {
   FakeEventSource.instances = [];

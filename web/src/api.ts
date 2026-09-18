@@ -692,6 +692,72 @@ export function subscribeClientSessions(onChange: (change: ClientSessionChange) 
   };
 }
 
+// RepoIndexEvent is one repo's index state, in the repos list's own vocabulary
+// so a consumer can patch a list entry without translating anything.
+export interface RepoIndexEvent {
+  repo: string;
+  state: 'ready' | 'indexing' | 'error';
+  done: number;
+  total: number;
+}
+
+// subscribeRepoIndex opens the SERVER-WIDE index stream and reports every
+// index-state change, plus a `reconnect` whenever the stream reopens.
+//
+// Server-wide rather than per repo: the app renders an index chip for every
+// repo it lists, and the branch stream it already holds is scoped to the ACTIVE
+// repo — so a per-repo event would reach the one chip least likely to be stale.
+//
+// `reconnect` matters as much as the events. A terminal `ready` is broadcast
+// once and never replayed, so a client disconnected across it would keep an
+// "indexing" chip forever; the consumer refetches the list on reconnect. The
+// FIRST ready is deliberately not one, because the caller has invariably just
+// read the list.
+export function subscribeRepoIndex(
+  onEvent: (ev: RepoIndexEvent | { type: 'reconnect' }) => void,
+): () => void {
+  const es = new EventSource(apiUrl('/api/v1/repos/events'));
+  const outage = createOutageLog(diagStream);
+  let seenReady = false;
+
+  const onReady = () => {
+    if (seenReady) onEvent({ type: 'reconnect' });
+    seenReady = true;
+  };
+  const onIndex = (e: unknown) => {
+    const data = (e as { data?: unknown } | undefined)?.data;
+    if (typeof data !== 'string' || data === '') return;
+    try {
+      const ev = JSON.parse(data) as RepoIndexEvent;
+      // A frame with no repo names nothing to patch. Unlike the sessions
+      // stream, where an unreadable frame is still evidence something changed
+      // and is worth a re-read, this payload IS the update — so a malformed one
+      // is dropped rather than turned into a request.
+      if (ev && typeof ev.repo === 'string' && ev.repo !== '') onEvent(ev);
+    } catch {
+      // Ignore: see above.
+    }
+  };
+  const onOpen = () => { outage.recovered('[index] reconnected'); };
+  const onError = () => {
+    outage.lost(es.readyState === EventSource.CLOSED
+      ? '[index] stream closed — index chips may be stale'
+      : '[index] connection lost — retrying');
+  };
+
+  es.addEventListener('ready', onReady);
+  es.addEventListener('index', onIndex);
+  es.addEventListener('open', onOpen);
+  es.addEventListener('error', onError);
+  return () => {
+    es.removeEventListener('ready', onReady);
+    es.removeEventListener('index', onIndex);
+    es.removeEventListener('open', onOpen);
+    es.removeEventListener('error', onError);
+    es.close();
+  };
+}
+
 // diagStream is the console reporter the outage log writes through, matching
 // App's `diag`: errors to console.error, everything else to console.info.
 function diagStream(level: 'info' | 'error', message: string): void {

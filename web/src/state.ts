@@ -128,6 +128,11 @@ export type Action =
   | { type: 'CLEAR_TASK'; op: string }
   | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string; indexState?: string; indexDone?: number; indexTotal?: number; indexPercent?: number }
   | { type: 'SET_HEAD'; head: string }
+  // SET_INDEX carries ONLY the index fields, from the index event stream. It is
+  // deliberately not SET_STATUS: that action rebuilds head, branch, ontology and
+  // embeddings from a status READ, and an index event knows none of them —
+  // reusing it would either blank those or force a fetch per event.
+  | { type: 'SET_INDEX'; indexState: string; indexDone: number; indexTotal: number }
   | { type: 'SET_REPO'; repo: string }
   | { type: 'SET_CONTEXT'; context: BrowseContext }
   | { type: 'CACHE_FACT_TITLE'; key: string; title: string }
@@ -401,6 +406,18 @@ function applyAction(s: AppState, a: Action): AppState {
     case 'SET_HEAD':
       if (s.headCommit === a.head) return s;
       return { ...s, headCommit: a.head };
+    case 'SET_INDEX': {
+      // indexPercent is DERIVED here rather than carried, because the server
+      // computes it in the status payload and an event that carried its own
+      // could disagree with the counts beside it. 100 at ready, so the banner
+      // does not sit at 97% after the terminal event.
+      const pct = a.indexState === 'ready'
+        ? 100
+        : a.indexTotal > 0 ? Math.round((a.indexDone / a.indexTotal) * 100) : 0;
+      if (s.indexState === a.indexState && s.indexDone === a.indexDone
+        && s.indexTotal === a.indexTotal && s.indexPercent === pct) return s;
+      return { ...s, indexState: a.indexState, indexDone: a.indexDone, indexTotal: a.indexTotal, indexPercent: pct };
+    }
     case 'SET_REPO':
       // Thin wrapper: switching to a repo is just entering a {kind:'repo'}
       // context. Reducing through SET_CONTEXT keeps a single reset path so repo

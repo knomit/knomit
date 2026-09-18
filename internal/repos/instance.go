@@ -138,6 +138,10 @@ type RepoInstance struct {
 	indexState atomic.Int32 // indexReady | indexIndexing | indexFailed
 	indexDone  atomic.Int64
 	indexTotal atomic.Int64
+	// indexHub is the server-wide index-event stream; nil in tests and in any
+	// Manager built without one, which publishIndex handles.
+	indexHub *IndexHub
+	indexPub indexPublisher
 }
 
 // IndexStatus reports the repo's background-index readiness for the API/UI.
@@ -156,19 +160,56 @@ func (ri *RepoInstance) IndexStatus() (state string, done, total int) {
 }
 
 // markIndexing flips the repo into the indexing state (progress reset).
+//
+// This and the two mark* below are the ONLY places index state changes, and
+// each announces the change through publishIndex — see the chokepoint rationale
+// there. Do not add a fourth mutator, and do not publish from a call site.
 func (ri *RepoInstance) markIndexing() {
 	ri.indexDone.Store(0)
 	ri.indexTotal.Store(0)
 	ri.indexState.Store(indexIndexing)
+	ri.publishIndex(false)
 }
 
+// setIndexProgress records heal progress. Its event is THROTTLED (one per repo
+// per second); the state itself is not, so a reader polling IndexStatus always
+// sees the latest counts.
 func (ri *RepoInstance) setIndexProgress(done, total int) {
 	ri.indexDone.Store(int64(done))
 	ri.indexTotal.Store(int64(total))
+	ri.publishIndex(true)
 }
 
-func (ri *RepoInstance) markIndexReady()  { ri.indexState.Store(indexReady) }
-func (ri *RepoInstance) markIndexFailed() { ri.indexState.Store(indexFailed) }
+func (ri *RepoInstance) markIndexReady() {
+	ri.indexState.Store(indexReady)
+	ri.publishIndex(false)
+}
+
+func (ri *RepoInstance) markIndexFailed() {
+	ri.indexState.Store(indexFailed)
+	ri.publishIndex(false)
+}
+
+// TestSetIndexProgress, TestMarkIndexReady and TestMarkIndexFailed drive the
+// index-state chokepoint from a sibling package's test.
+//
+// They exist because two properties of the event path cannot be reached
+// through a real heal with any reliability: the progress THROTTLE's behaviour
+// at its window boundary, and the `error` terminal, which needs a heal that
+// fails. Inducing either by timing or by corrupting a store would test the
+// inducement rather than the property. They are thin aliases — no separate
+// logic to drift from production — so what they exercise IS the production
+// path.
+func (ri *RepoInstance) TestSetIndexProgress(done, total int) { ri.setIndexProgress(done, total) }
+
+// TestMarkIndexing enters the indexing state, publishing as production does.
+func (ri *RepoInstance) TestMarkIndexing() { ri.markIndexing() }
+
+// TestMarkIndexReady marks the index ready, publishing as production does.
+func (ri *RepoInstance) TestMarkIndexReady() { ri.markIndexReady() }
+
+// TestMarkIndexFailed marks the index failed, publishing as production does.
+func (ri *RepoInstance) TestMarkIndexFailed() { ri.markIndexFailed() }
 
 // Acquire returns the current store service together with a release func the
 // caller MUST invoke when it is done with the service (idempotent). Between

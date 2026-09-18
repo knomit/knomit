@@ -103,6 +103,9 @@ func (s *Server) NewAPIRouter() chi.Router {
 	r.Get("/openapi.yaml", handleOpenAPISpec())
 	r.Get("/sessions", handleHALClientSessions(b, s.Manager, s.ClientSessions, s.ReadOnly))
 	r.Get("/sessions/events", handleHALClientSessionEvents(s.ClientSessions))
+	// Server-wide index-state stream. Outside the /repos/{repo} subtree on
+	// purpose: it is about every repo, and the UI holds exactly one.
+	r.Get("/repos/events", handleRepoIndexEvents(s.Manager))
 	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))

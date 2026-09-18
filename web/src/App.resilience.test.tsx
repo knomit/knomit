@@ -130,12 +130,12 @@ async function primeApi() {
 async function mountApp(): Promise<FakeEventSource> {
   const App = (await import('./App')).default;
   render(<App />);
-  await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+  await waitFor(() => expect(FakeEventSource.instances.filter(e => e.url.includes('/branches/')).length).toBe(1));
   await screen.findByTestId('status-footer');
   // Let the mount-time effect cascade settle so the counters start from a
   // quiescent tree rather than mid-bootstrap.
   await act(async () => { await Promise.resolve(); });
-  return FakeEventSource.instances[0];
+  return FakeEventSource.instances.filter(e => e.url.includes('/branches/'))[0];
 }
 
 let errorSpy: ReturnType<typeof vi.spyOn>;
