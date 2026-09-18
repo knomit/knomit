@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -81,23 +83,42 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	// origin goes away.
 	t.Cleanup(func() { _ = m.Close() })
 
-	// EVERY event, not a sample of them.
+	// TWO SEPARATE WINDOWS WERE CLOSED HERE, and conflating them is what left
+	// this test flaky after the first fix.
 	//
-	// This used to poll job.Status() every 25 ms. That reads a LATEST-VALUE
-	// snapshot, so an index phase shorter than one poll interval is invisible
-	// and `require.NotNil(t, index, …)` fails — which is the reviewer's
-	// diagnosis of a single unreproducible failure of this test (F4). The
-	// window is real: mirrorIndexing emits once immediately and then sleeps
-	// 250 ms, so a heal that finishes in under 25 ms produces exactly one index
-	// status that a poller can step over.
+	// (1) THE OBSERVER. This used to poll job.Status() every 25 ms. That reads
+	// a LATEST-VALUE snapshot, so an index phase shorter than one poll interval
+	// is invisible and `require.NotNil(t, index, …)` fails — the reviewer's
+	// diagnosis of a single unreproducible failure (F4). Collecting from the
+	// emit callback removes that window by construction: every event is seen.
 	//
-	// Collecting from the emit callback removes the window by construction
-	// rather than making it less likely — every event is seen, and the test no
-	// longer has a timing assumption to violate. Create is called directly for
-	// that reason; StartCreate's own job/poll path is covered by
-	// TestStartCreate_* in create_job_test.go and by the web list tests.
+	// (2) THE EMIT ITSELF, which the fix for (1) did not touch and the comment
+	// here used to get wrong. It claimed "mirrorIndexing emits once immediately
+	// and then sleeps 250 ms". The sleep is real; the "emits once immediately"
+	// is not. mirrorIndexing reads IndexStatus ONCE and returns WITHOUT
+	// EMITTING ANYTHING if the heal has already left the 'indexing' state
+	// (lifecycle.go). openOne marks indexing and starts the heal, and Create
+	// does RecordRepoID and ActivateSync before it ever calls the mirror — so
+	// with a 40-fact fixture the heal can finish in that gap and no index event
+	// is produced at all. Seeing every event does not help when zero are
+	// emitted. That is CI job 105665517180.
+	//
+	// indexHealGate closes (2) the same way the callback closed (1): by
+	// construction rather than by probability. The heal blocks between
+	// markIndexing() and healIndexBranches until this test opens the gate, so
+	// the heal is still 'indexing' when the mirror looks. The fixture stays at
+	// 40 facts on purpose — enlarging it would only move the race, which is a
+	// measured environment and not a property. See index_heal_gate.go.
+	//
+	// Create is called directly for reason (1); StartCreate's own job/poll path
+	// is covered by TestStartCreate_* in create_job_test.go and by the web list
+	// tests.
+	gate := newIndexHealGate()
+	m.setIndexHealGate(gate)
+
 	var mu sync.Mutex
 	var seen []Event
+	var sawIndex, healAlreadyPastGate atomic.Bool
 	var indexAtDone string
 	ri, err := m.Create(context.Background(),
 		CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}},
@@ -105,6 +126,24 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 			mu.Lock()
 			seen = append(seen, e)
 			mu.Unlock()
+			if e.Phase == PhaseIndex {
+				if !sawIndex.Swap(true) {
+					// Arrival first — see the same block in create_job_test.go
+					// for why passedThrough() alone is ambiguous. This test
+					// catches the non-blocking-hold mutation either way,
+					// because its create does transfer and ActivateSync work
+					// before the mirror looks, so the heal goroutine has
+					// always been scheduled by now. That is an incidental
+					// property of this fixture, though, not a guarantee — so
+					// the wait is here too rather than relying on it.
+					require.True(t, gate.waitArrived(10*time.Second),
+						"the heal never reached the gate, so the index event "+
+							"cannot have come from the gate holding it")
+					healAlreadyPastGate.Store(gate.passedThrough())
+				}
+				// Let the heal finish so the create can reach "done".
+				gate.open()
+			}
 			if e.Step == "done" {
 				// The repo's ACTUAL index state at the moment the create says
 				// done — read from the manager, not from the event. The job's
@@ -151,6 +190,26 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 		}
 	}
 	require.NotNil(t, index, "the create never reported an index phase; saw %s", summarize(seen))
+	// THE GATE IS WHY THAT EVENT EXISTS, and these two turn "the gate stopped
+	// being honoured" from a returning flake into a named failure. The first:
+	// the heal was still held when the mirror emitted, so the event is not a
+	// race won. The second: the heal did reach the gate at all — delete the
+	// hold from openOne and this fails by name rather than the test going back
+	// to passing on fast machines and failing on loaded runners.
+	require.False(t, healAlreadyPastGate.Load(),
+		"the heal was already past the gate when the mirror emitted, so this "+
+			"index event was luck rather than the gate holding the heal in place")
+	require.True(t, gate.passedThrough(),
+		"the heal never passed through the gate; if the hold was removed from "+
+			"openOne this test is racing the heal again, exactly as it was before")
+	// The stronger evidence — see the same assertion in create_job_test.go. A
+	// hold that does not block normally takes neither select arm, so this
+	// catches it where sampling passedThrough() at one instant need not:
+	// measured 30 detections in 30 on this fixture, 119 in 120 on the preset
+	// one. leftViaRelease documents the single path that escapes.
+	require.True(t, gate.leftViaRelease(),
+		"the heal did not leave the gate by the release arm, so it was never "+
+			"actually held: the gate must BLOCK, not merely be on the path")
 	require.Equal(t, IndexStateIndexing, index.IndexState)
 	require.True(t, strings.HasPrefix(index.Message, "indexing "), "got %q", index.Message)
 	require.GreaterOrEqual(t, index.Pct, indexPctFloor)
