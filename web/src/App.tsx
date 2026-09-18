@@ -2,7 +2,7 @@ import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, 
 import type { Dispatch } from 'react';
 import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
-import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoIndex } from './api';
+import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
 import type { RepoInfo, Lens, Status, RepoIndexEvent } from './api';
 import { pageview, track } from './telemetry';
 import { useNavigationManager } from './useNavigationManager';
@@ -614,7 +614,7 @@ export default function App() {
   // mechanism meant to clear it.
   const repoListGen = useRef(0);
   useEffect(() => {
-    const stop = subscribeRepoIndex((ev: RepoIndexEvent | { type: 'reconnect' }) => {
+    const stop = subscribeRepoEvents((ev: RepoIndexEvent | { type: 'reconnect' }) => {
       if ('type' in ev) {
         // Reconnected: a terminal event is broadcast once and never replayed,
         // so anything that healed while we were disconnected is unrepresented.
