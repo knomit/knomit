@@ -114,7 +114,14 @@ func (s *Server) Handler() http.Handler {
 		r.Mount("/git", s.GitHandler)
 	}
 
-	r.Get("/docs", handleSwaggerUI())
+	// /docs is 8 KB of text/html and sits on the OUTER router, which carries
+	// no compressor — so it needs the shared one attached per route. It stays
+	// out of the static Group below on purpose: that group also carries
+	// identityForRangeRequests and the cache policy, and /docs sends no cache
+	// headers today. HEAD is registered too, so an uptime check that HEADs it
+	// does not see a 405; net/http discards the body for HEAD itself.
+	r.With(compressor()).Get("/docs", handleSwaggerUI())
+	r.With(compressor()).Head("/docs", handleSwaggerUI())
 
 	// Mount the API router.
 	r.Mount(APIBase, s.NewAPIRouter())
@@ -143,7 +150,15 @@ func (s *Server) Handler() http.Handler {
 			r.Use(identityForRangeRequests)
 			r.Use(compressor())
 			r.Handle(assetsPrefix+"*", newAssetHandler(fsys, staticHandler))
-			r.Get("/*", newSPAHandler(fsys, staticHandler, tags))
+			// GET and HEAD, nothing else. An uptime check that HEADs the
+			// root used to get a 405 and report the app down, because
+			// r.Get registers exactly one method while the assets route
+			// above uses r.Handle and so answers every method. Both verbs
+			// share one handler, so the headers cannot diverge;
+			// http.ServeContent omits the body for HEAD by itself.
+			spa := newSPAHandler(fsys, staticHandler, tags)
+			r.Get("/*", spa)
+			r.Head("/*", spa)
 		})
 	}
 
