@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/rs/zerolog/log"
+	"github.com/ysmood/goob"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/client/sessions"
@@ -56,6 +57,12 @@ type Manager struct {
 	// Start hasn't been called — the reaper itself is never disabled (see
 	// parseSessionReaperConfig).
 	sessionReaperStop func()
+
+	// indexHub fans every repo's index-state changes into one server-wide
+	// stream. Per-repo TaskHubs cannot serve the fleet-wide index chip: the web
+	// app holds one events stream, for the ACTIVE repo, while rendering a chip
+	// for every repo it lists. Created by New so it is available before Start.
+	indexHub *IndexHub
 
 	// registry is the lens registry (first tenant of <home>/control.db).
 	// Opened by Start, closed by Close; nil before Start.
@@ -166,7 +173,17 @@ func New(ctx context.Context, deps Deps) *Manager {
 		deps:            deps,
 		creating:        make(map[string]struct{}),
 		creatingOrigins: make(map[string]struct{}),
+		// Created here rather than in Start: openOne can run before Start on
+		// some paths, and a nil hub would silently drop those repos' events.
+		indexHub: NewIndexHub(goob.New(ctx)),
 	}
+}
+
+// IndexEvents subscribes to the server-wide index-event stream until ctx ends.
+// One stream for every repo — see IndexHub for why the per-repo TaskHub cannot
+// serve the fleet-wide chip.
+func (m *Manager) IndexEvents(ctx context.Context) goob.Events {
+	return m.indexHub.Subscribe(ctx)
 }
 
 // ErrReplicaInLens rejects a lens mounting two replicas (same root-commit ID)
@@ -1021,6 +1038,7 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		embedder:              m.deps.Embedder,
 		keyPath:               m.deps.KeyPath,
 		ctx:                   m.ctx,
+		indexHub:              m.indexHub,
 		disableBackgroundSync: m.deps.DisableBackgroundSync,
 		// The ontology gate, wired in so the sync-activation path can enforce
 		// it without the builder knowing about the Manager. Every path that

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App, { HEAD_POLL_MS } from './App';
-import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource , streamsMatching, latestStream } from './testEventSource';
 
 // Characterization tests for the SSE wiring in App (the effect keyed on
 // [state.repo, state.branch]). These pin CURRENT behavior — the diagnostics the
@@ -116,9 +116,11 @@ function errorLines(): string[] {
 /** Render App and wait until the SSE subscription for the bootstrapped branch exists. */
 async function mountApp(): Promise<FakeEventSource> {
   render(<App />);
-  await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
+  // Selected by URL, not by index: the app also holds the server-wide index
+  // stream, and which one opens first is not this test's subject.
+  await waitFor(() => expect(streamsMatching('/branches/')).toHaveLength(1));
   await screen.findByTestId('status-footer');
-  return FakeEventSource.instances[0];
+  return latestStream('/branches/') as FakeEventSource;
 }
 
 beforeEach(async () => {
@@ -144,7 +146,7 @@ describe('App SSE subscription', () => {
   it('subscribes once the bootstrapped branch is known, on the repo/branch URL', async () => {
     const es = await mountApp();
     expect(es.url).toContain('/api/v1/repos/alpha/branches/machine:test/events');
-    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(streamsMatching('/branches/')).toHaveLength(1);
   });
 
   it('logs "[events] reconnected" only after an outage it actually reported', async () => {
@@ -600,9 +602,9 @@ describe('App SSE — teardown and resubscribe', () => {
       fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
     });
 
-    await waitFor(() => expect(FakeEventSource.instances.length).toBe(2));
+    await waitFor(() => expect(streamsMatching('/branches/')).toHaveLength(2));
     expect(es.closeCount).toBe(1);
-    expect(FakeEventSource.instances[1].url).toContain('/repos/beta/branches/machine:test/events');
+    expect(streamsMatching('/branches/')[1].url).toContain('/repos/beta/branches/machine:test/events');
   });
 
   it('after a resubscribe the new stream drives the app and the old one is dead', async () => {
@@ -611,20 +613,24 @@ describe('App SSE — teardown and resubscribe', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('toknomitr-repo-option-beta'));
     });
-    await waitFor(() => expect(FakeEventSource.instances.length).toBe(2));
+    await waitFor(() => expect(streamsMatching('/branches/')).toHaveLength(2));
 
     // The closed stream delivers nothing (see FakeEventSource.emit).
     act(() => { es.emit('task', { op: 'stale', status: 'running', message: 'from-old' }); });
     expect(screen.queryByText('[stale] from-old')).toBeNull();
 
-    act(() => { FakeEventSource.instances[1].emit('task', { op: 'sync', status: 'running', message: 'from-new' }); });
+    act(() => { streamsMatching('/branches/')[1].emit('task', { op: 'sync', status: 'running', message: 'from-new' }); });
     expect(screen.getByText('[sync] from-new')).toBeTruthy();
   });
 
   it('unmounting closes the stream', async () => {
     const { unmount } = render(<App />);
-    await waitFor(() => expect(FakeEventSource.instances.length).toBe(1));
-    const es = FakeEventSource.instances[0];
+    await waitFor(() => expect(streamsMatching('/branches/')).toHaveLength(1));
+    // The BRANCH stream specifically. instances[0] happens to be closed by
+    // unmount too — the app closes every stream — so taking it would leave the
+    // test passing whichever stream it grabbed, which is not what its name
+    // claims.
+    const es = latestStream('/branches/') as FakeEventSource;
     unmount();
     expect(es.closeCount).toBe(1);
   });
