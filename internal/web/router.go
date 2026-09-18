@@ -126,10 +126,12 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	// The poll target for the 202 that POST /repos answers with. A SIBLING
 	// collection rather than "/repos/creates/{id}", and the precedent for a
-	// rule this router now holds to: NOTHING STATIC LIVES UNDER /repos/.
+	// rule this router now holds to: NO STATIC ROUTE SITS BESIDE A {param}
+	// THAT HOLDS A USER-CHOSEN NAME — today {repo}, {lens} and {branch}.
 	//
-	// Repo names are [a-z0-9_-] (repos.IsValidName), so every static segment
-	// under /repos/ is also a legal repo name and shadows a repo called that.
+	// Such a segment is also a legal value for that param, so it shadows the
+	// entity called that. Repo and lens names share one validator
+	// (repos.IsValidName), and branch names are chosen too.
 	// The cost was measured against the vendored chi rather than assumed — an
 	// earlier version of this comment blamed the absence of backtracking and
 	// was wrong, in a way that mispredicted which static routes are safe:
@@ -148,7 +150,8 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// difference is invisible from "static beats param" alone — which is why
 	// the rule is the blunt one rather than a judgement per route.
 	//
-	// TestRouter_NoStaticChildrenUnderRepos enforces it.
+	// TestRouter_NoStaticSiblingsOfUserNamedParams enforces it, deriving the
+	// guarded prefixes from the route table rather than from a list here.
 	r.Get("/repo-creates/{id}", handleHALRepoCreateStatus(b, s.Manager))
 	// The collection: a client that lost the id from its 202 finds its create
 	// here. DELETE forgets a FINISHED job so a failed row can be dismissed
