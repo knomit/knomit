@@ -62,17 +62,24 @@ name: Tests
 #     job's first run died on it: #212's Windows build worked because that one
 #     machine happened to carry the package. The Makefile's setup target and
 #     README now say so too.
-#   - A cache for dist/windows-amd64/lib. daulet/tokenizers publishes no
-#     Windows artifact (darwin/linux only through v1.27.0), so fetchlibs BUILDS
-#     libtokenizers.a from source there — clone the pinned tag, run cargo —
-#     before a single test executes. MEASURED on this image: the whole Windows
-#     bootstrap is ~2m40s cold (cargo itself 2m28s of it, so the ~5 minutes
-#     this used to estimate is pessimistic here) and 51s-2m45s warm across
-#     three runs, leaving a 15.6 MiB cache entry. Note what warm does NOT mean:
-#     `make setup` still costs ~50s of that, because it compiles and runs
-#     fetchlibs before it decides both libs are already there. The cache saves
-#     the download and the cargo build, not the step. See .github/actions/
-#     native-toolchain, which also explains why the key has no restore-keys.
+#   - A cache for dist/<goos>-<goarch>/lib, on ALL THREE platforms. On Windows
+#     it is there because daulet/tokenizers publishes no Windows artifact
+#     (darwin/linux only through v1.27.0), so fetchlibs BUILDS libtokenizers.a
+#     from source there — clone the pinned tag, run cargo — before a single
+#     test executes. MEASURED on this image: the whole Windows bootstrap is
+#     ~2m40s cold (cargo itself 2m28s of it, so the ~5 minutes this used to
+#     estimate is pessimistic here) and 51s-2m45s warm across three runs,
+#     leaving a 15.6 MiB cache entry.
+#     On ubuntu and macos the motive is RELIABILITY, not time. Both libs came
+#     down from the GitHub release CDN on every single job, which is two
+#     chances per job for a 5xx to red the build — job 105443136472 is one of
+#     them. fetchlibs now retries transient failures too (tools/fetchlibs), so
+#     a blip has to survive both a warm cache and four attempts to reach you.
+#     Note what warm does NOT mean: `make setup` still costs ~50s on Windows,
+#     because it compiles and runs fetchlibs before it decides both libs are
+#     already there. The cache saves the download and the cargo build, not the
+#     step. See .github/actions/native-toolchain, which also explains why the
+#     key has no restore-keys and why extending it cost the Windows entry once.
 #   - `-timeout 40m`, on the WINDOWS slow-tests legs only — ubuntu and macos
 #     take 10m from the same matrix. On a Windows laptop internal/synthesize
 #     (1776s) and internal/store (816s) exceed go test's 10-minute per-package

@@ -1,11 +1,12 @@
 package synthesize
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -154,69 +155,111 @@ func TestConformance_NoConfigSurface(t *testing.T) {
 	}
 }
 
-// TestConformance_BridgeFilesUntouched enforces two roadmap constraints that
-// only a DIFF can see: no change under internal/synthesize/bridge*.go, and the
-// EffortNormal contract test left byte-identical (MN5).
+// effortNormalTestSHA256 is the SHA-256 of review_effort_normal_test.go, the
+// EffortNormal contract test. MN5 says that file stays byte-identical, and
+// this constant is how that is enforced.
 //
-// It runs git, because that is what the constraint is about. An earlier version
-// of this test replaced the diff with identifier greps over the source — which
-// reads like the same check and is not one: greps cannot see an edit to the
-// EffortNormal test at all, so MN5 was being enforced by nothing.
-func TestConformance_BridgeFilesUntouched(t *testing.T) {
-	base := baseRefOrSkip(t)
-	// Diff the WORKING TREE against the merge base, not HEAD against it. The
-	// first attempt used base...HEAD and let an uncommitted edit to a bridge
-	// file pass — which is the state the check most needs to catch, since that
-	// is what a developer is looking at when they run the suite.
-	mergeBase, err := exec.Command("git", "merge-base", base, "HEAD").Output()
-	require.NoError(t, err, "git merge-base %s HEAD", base)
-	out, err := exec.Command("git", "diff", "--name-only", strings.TrimSpace(string(mergeBase))).Output()
-	require.NoError(t, err, "git diff against %s", base)
+// UPDATING IT IS A DELIBERATE ACT. See the failure message below for what has
+// to be true before you do.
+//
+// THE BYTES ARE STABLE ACROSS PLATFORMS because .gitattributes pins
+// `* text=auto eol=lf`, so a Windows checkout gets LF in the working tree like
+// everywhere else. That pin exists for exactly this class of problem — see the
+// file's own comment, and the autocrlf history in .github/workflows/tests.yml.
+// A CRLF checkout WOULD change this hash, and that is the correct outcome
+// rather than a bug to paper over: the protected file would genuinely not be
+// the bytes this pin names.
+const effortNormalTestSHA256 = "bb8f8964828fcfe89f5f24029ae7f92752e4c5d1757a2a8895c56c962919a0e4"
 
-	// A conformance check that examines an empty list is not a check. This work
-	// touches many files, so an empty diff means the base ref is wrong, not
-	// that the constraint holds.
-	changed := 0
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.TrimSpace(line) != "" {
-			changed++
-		}
-	}
-	require.Positive(t, changed,
-		"diff against %s is empty — this check would pass vacuously", base)
+// effortNormalTestFile is the one file MN5 protects.
+const effortNormalTestFile = "review_effort_normal_test.go"
 
-	for _, line := range strings.Split(string(out), "\n") {
-		name := strings.TrimSpace(line)
-		if name == "" {
-			continue
-		}
-		// The phase-0 clause that also lived here — "no internal/synthesize/
-		// bridge*.go may differ from the merge base" — was removed by Phase 3
-		// (designer ruling 2026-08-23,
-		// .claude/plans/motif/2026-08-23-phase3-rulings-1.md Q1). Its premise
-		// was that phase 0 is independent of the bridge engine; Phase 3 IS the
-		// bridge-engine phase, so the premise expired rather than the
-		// constraint being waived. MN5 below is the load-bearing half and is
-		// unaffected.
-		require.NotEqual(t, "internal/synthesize/review_effort_normal_test.go", name,
-			"MN5: the EffortNormal contract test stays byte-identical")
-	}
-}
+// TestConformance_EffortNormalTestByteIdentical enforces MN5: the EffortNormal
+// contract test stays byte-identical.
+//
+// WHY THIS IS A HASH AND NOT A GIT DIFF. It used to be
+// TestConformance_BridgeFilesUntouched, which diffed the working tree against
+// a dev/master merge base. That check could not run where it mattered and
+// could not pass where it ran:
+//
+//   - On a PUSH TO DEV, actions/checkout makes `dev` point at HEAD, so the
+//     merge base IS HEAD, the diff is empty, and the anti-vacuity guard failed
+//     the test. 11 of 11 dev runs went red on all three synthesize legs.
+//   - On a PULL REQUEST, the depth-1 checkout is detached and carries no
+//     dev/master ref at all, so the test SKIPPED and `go test` reported ok.
+//
+// So it was red exactly where it was meaningless and absent exactly where it
+// was meaningful. The guard's premise was wrong: an empty diff means "HEAD is
+// the base" as often as it means "wrong base ref". A pinned hash has neither
+// failure mode — it runs identically on dev, on a PR, and on a laptop, because
+// it asks a question about the FILE rather than about the checkout.
+//
+// (The phase-0 clause that also lived in the old test — "no
+// internal/synthesize/bridge*.go may differ from the merge base" — was removed
+// by Phase 3, designer ruling 2026-08-23,
+// .claude/plans/motif/2026-08-23-phase3-rulings-1.md Q1: its premise was that
+// phase 0 is independent of the bridge engine, and Phase 3 IS the bridge-engine
+// phase, so the premise expired rather than the constraint being waived. MN5
+// was always the load-bearing half, and it is what survives here.)
+func TestConformance_EffortNormalTestByteIdentical(t *testing.T) {
+	// ANTI-VACUITY: assert the read, rather than letting a missing file fall
+	// through as "not a matching hash". It would fail either way, but only one
+	// of those two failures tells you the file is GONE. Verified reachable:
+	// deleting the file fires THIS line, because the package still compiles
+	// without it.
+	//
+	// There is deliberately no "and it is not empty" check beside it. A
+	// zero-byte .go file does not compile ("expected 'package', found 'EOF'"),
+	// so the test binary would never run to make the assertion — a guard
+	// nothing can trip reads as coverage it does not provide.
+	b, err := os.ReadFile(filepath.Clean(effortNormalTestFile))
+	require.NoError(t, err,
+		"%s could not be read. MN5 protects that file; if it was renamed or "+
+			"deleted, this test is the thing that has to be updated deliberately, "+
+			"not the thing to delete because it broke.", effortNormalTestFile)
 
-// baseRefOrSkip resolves the branch this work sits on top of. It SKIPS with a
-// loud reason when the ref is genuinely absent (a shallow CI clone, a fork
-// without the upstream ref) rather than passing silently — a conformance test
-// that cannot run must say so, not report success.
-func baseRefOrSkip(t *testing.T) string {
-	t.Helper()
-	for _, ref := range []string{"dev", "origin/dev", "master", "origin/master"} {
-		if err := exec.Command("git", "rev-parse", "--verify", "--quiet", ref).Run(); err == nil {
-			return ref
-		}
-	}
-	t.Skip("no base ref (dev/master) available in this checkout: the diff-based " +
-		"bridge/MN5 conformance check cannot run here and is NOT being enforced")
-	return ""
+	got := fmt.Sprintf("%x", sha256.Sum256(b))
+	require.Equal(t, effortNormalTestSHA256, got, `MN5 VIOLATION: %s has changed.
+
+  observed: %s
+  pinned:   %s
+
+WHAT THIS PROTECTS. That file is the contract test for effort=normal, and the
+invariant it enforces is kb/invariants/synthesize/effort-normal-byte-identical:
+at effort=normal the pipeline must spend NOTHING on emergent-fact discovery —
+bridgeSeeds returns nil, zero discover work items are enqueued, no
+origin=discovered facts are written.
+
+WHAT IT DOES NOT PROTECT, and read the invariant itself before acting on this,
+because it names this misreading by name. MN5 is NOT a freeze on normal-effort
+pipeline behaviour. A change applied UNIFORMLY at every effort level does not
+violate the invariant, even one that changes the work-item queue — an earlier,
+broader wording of the fact blocked a legitimate uniform fix, which is why the
+fact now says so explicitly. What MN5 protects is narrower and is about THIS
+FILE: that nobody quietly weakens the test doing the enforcing. Editing the
+pipeline is often fine. Editing its enforcing test is what needs an argument.
+
+DID YOU MEAN TO EDIT IT?
+
+  NO  — you have found an accidental change. Revert the file; leave the
+        constant alone.
+
+  YES — then updating the pin is part of your change, not a workaround for it.
+        The commonest legitimate case is exactly the one above: a change applied
+        uniformly at every effort level that moves this contract's expected
+        output. Do all three:
+          1. Put the observed hash above into effortNormalTestSHA256 in this
+             file. (Or recompute it:
+                 shasum -a 256 internal/synthesize/%s
+             — sha256sum on Linux.)
+          2. Say in the PR what the contract now is and why it is still the
+             contract. This sentence is the entire point of the mechanism; a
+             pin nobody has to argue past protects nothing.
+          3. Check the change really is uniform across effort levels. If it is
+             not, you are changing what normal effort SPENDS, and that is the
+             invariant itself rather than MN5 — a different and much larger
+             conversation.`,
+		effortNormalTestFile, got, effortNormalTestSHA256, effortNormalTestFile)
 }
 
 // TestConformance_ShortlistDoesNotBranchOnEffort — consolidation is not
