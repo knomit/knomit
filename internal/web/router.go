@@ -128,10 +128,35 @@ func (s *Server) NewAPIRouter() chi.Router {
 
 	// The poll target for the 202 that POST /repos answers with. A SIBLING
 	// collection rather than "/repos/creates/{id}", and the precedent for a
-	// rule this router now holds to: NOTHING STATIC LIVES UNDER /repos/.
+	// rule this router now holds to: NO STATIC ROUTE SITS BESIDE A {param}
+	// WHOSE VALUE A USER CAN CAUSE TO EXIST.
 	//
-	// Repo names are [a-z0-9_-] (repos.IsValidName), so every static segment
-	// under /repos/ is also a legal repo name and shadows a repo called that.
+	// Such a segment is also a legal value for that param, so it shadows the
+	// thing named that. SIX subtrees qualify today, and the prohibition covers
+	// all of them:
+	//
+	//   /repos                                    {repo}
+	//   /lenses                                   {lens}
+	//   /repos/{repo}/branches                    {branch}
+	//   /repos/{repo}/branches/{branch}/domains   {name}
+	//   /repos/{repo}/branches/{branch}/motifs    {key}
+	//   /lenses/{lens}/motifs                     {key}
+	//
+	// Repo and lens names share one validator (repos.IsValidName); branch names
+	// are chosen too; domain tags and motif keys are AUTHORED — someone writing
+	// `domain: [stats]` in a fact's frontmatter creates one, so /domains/stats
+	// would shadow it. The test is "can a user cause a value with that name to
+	// exist", not "does a user own it": ownership tracks how bad a collision
+	// would be, not whether it can happen.
+	//
+	// The two /motifs entries are DISTINCT parents, not one — a lens-scoped and
+	// a branch-scoped view, each shadowable in its own scope. Counting by last
+	// segment gives five and silently drops one.
+	//
+	// /ontologies/presets/{name} is deliberately NOT in the set: those are our
+	// shipped preset names, which no user adds to. It shares the {name} spelling
+	// with /domains/{name} and has the opposite answer, which is why the test
+	// classifies by parent prefix rather than by param name.
 	// The cost was measured against the vendored chi rather than assumed — an
 	// earlier version of this comment blamed the absence of backtracking and
 	// was wrong, in a way that mispredicted which static routes are safe:
@@ -150,7 +175,8 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// difference is invisible from "static beats param" alone — which is why
 	// the rule is the blunt one rather than a judgement per route.
 	//
-	// TestRouter_NoStaticChildrenUnderRepos enforces it.
+	// TestRouter_NoStaticSiblingsOfUserNamedParams enforces it, deriving the
+	// guarded prefixes from the route table rather than from a list here.
 	r.Get("/repo-creates/{id}", handleHALRepoCreateStatus(b, s.Manager))
 	// The collection: a client that lost the id from its 202 finds its create
 	// here. DELETE forgets a FINISHED job so a failed row can be dismissed
