@@ -307,7 +307,11 @@ func awaitCreateID(t *testing.T, r http.Handler, id string) map[string]any {
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 			t.Fatalf("bad poll body: %v", err)
 		}
-		if st, _ := body["state"].(string); st != "running" {
+		// BOTH non-terminal states keep polling. `cancelling` is not an
+		// outcome — the repo is not gone yet — so returning on it would hand
+		// the caller a snapshot of work still in flight and make every
+		// assertion after it a race.
+		if st, _ := body["state"].(string); st != "running" && st != "cancelling" {
 			return body
 		}
 		if time.Now().After(deadline) {

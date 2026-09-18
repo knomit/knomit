@@ -1106,6 +1106,17 @@ async function listRepoCreates(): Promise<RepoCreateStatus[]> {
   return data._embedded?.creates ?? [];
 }
 
+// getRepoCreate reads ONE create job by id.
+//
+// It exists for the job the collection no longer carries. A cancelled create
+// is omitted from GET /repo-creates — a repository list has nothing left to
+// say about it — but it stays readable here until the server's retention
+// window expires, which is what lets the page watching that create show the
+// outcome instead of falling off the list the instant it succeeds.
+async function getRepoCreate(id: string): Promise<RepoCreateStatus> {
+  return fetchJSON<RepoCreateStatus>(apiUrl(`/api/v1/repo-creates/${encodeURIComponent(id)}`));
+}
+
 // dismissRepoCreate forgets a FINISHED job, so a failed row leaves the list
 // without waiting out the server's retention window.
 //
@@ -1559,6 +1570,7 @@ export const api = {
 
   createRepo,
   listRepoCreates,
+  getRepoCreate,
   dismissRepoCreate,
   cancelRepoCreate,
   archiveRepo,

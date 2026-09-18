@@ -35,28 +35,46 @@ func TestPostRepoCreateCancel_DoneJobIs202AndTheRepoIsGone(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("bad cancel body: %v", err)
 	}
-	if body["state"] != "cancelled" {
-		t.Fatalf("state = %v, want cancelled: %v", body["state"], body)
-	}
-	if _, ok := body["error"]; ok {
-		t.Fatalf("a cancelled job must not carry an error: %v", body)
-	}
-	if _, ok := body["repo"]; ok {
-		t.Fatalf("a cancelled job must not offer a repo link: %v", body)
+	// `cancelling`, NOT `cancelled`: the handler returns before the delete it
+	// authorised has run. A 202 that already claimed `cancelled` would be the
+	// response promising an outcome it has not observed.
+	if body["state"] != "cancelling" {
+		t.Fatalf("state = %v, want cancelling: %v", body["state"], body)
 	}
 	if body["create_id"] != id {
 		t.Fatalf("cancel body is not the job's own snapshot: %v", body)
 	}
 
-	// The poll agrees with the 202.
-	poll := httptest.NewRecorder()
-	r.ServeHTTP(poll, httptest.NewRequest(http.MethodGet, "/repo-creates/"+id, nil))
-	var polled map[string]any
-	if err := json.Unmarshal(poll.Body.Bytes(), &polled); err != nil {
-		t.Fatalf("bad poll body: %v", err)
+	// A SECOND cancel while the first is still being honoured is 202 again,
+	// not 409. The request is idempotent, and a control whose own label reads
+	// "Cancelling…" must not fail when pressed twice.
+	dup := httptest.NewRecorder()
+	r.ServeHTTP(dup, httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil))
+	if dup.Code != http.StatusAccepted {
+		t.Fatalf("second cancel while cancelling = %d, want 202, body=%s", dup.Code, dup.Body.String())
 	}
+
+	// The poll carries it to the terminal state.
+	polled := awaitCreateID(t, r, id)
 	if polled["state"] != "cancelled" {
 		t.Fatalf("poll state = %v, want cancelled", polled["state"])
+	}
+	if _, ok := polled["error"]; ok {
+		t.Fatalf("a cancelled job must not carry an error: %v", polled)
+	}
+	if _, ok := polled["repo"]; ok {
+		t.Fatalf("a cancelled job must not offer a repo link: %v", polled)
+	}
+
+	// ...and it is GONE from the collection, while still readable by id above.
+	// A repository list has nothing left to say about a create whose outcome
+	// is the one the user asked for.
+	list := httptest.NewRecorder()
+	r.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/repo-creates", nil))
+	for _, c := range embeddedCreates(t, list.Body.Bytes()) {
+		if c["create_id"] == id {
+			t.Fatalf("a cancelled job must not be listed: %s", list.Body.String())
+		}
 	}
 
 	// Gone, not archived.
@@ -98,6 +116,15 @@ func TestPostRepoCreateCancel_RunningJobEndsCancelled(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repo-creates/"+id+":cancel", nil))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("cancel status = %d, want 202, body=%s", rec.Code, rec.Body.String())
+	}
+	var accepted map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("bad cancel body: %v", err)
+	}
+	// Never still `running` once the request is recorded: that stale report is
+	// what made the UI look frozen after the click.
+	if st := accepted["state"]; st != "cancelling" && st != "cancelled" {
+		t.Fatalf("state = %v, want cancelling (or already cancelled): %v", st, accepted)
 	}
 	final := awaitCreateID(t, r, id)
 	if final["state"] != "cancelled" {

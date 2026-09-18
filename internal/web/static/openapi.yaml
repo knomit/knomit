@@ -226,18 +226,22 @@ paths:
         archive row is left behind. Either way the job's terminal state is
         `cancelled`, which promises the repo is not there.
 
-        Answers 202 with the job's current snapshot rather than waiting: a
-        transfer in flight is not interruptible, so the caller polls
-        `/repo-creates/{id}` until `state` reads `cancelled`. For a job that
-        had already finished the deletion is synchronous and the 202 body
-        already reads `cancelled`.
+        Answers 202 IMMEDIATELY, and the body reads `cancelling`, not
+        `cancelled`: nothing has been undone when this returns. A transfer in
+        flight is not interruptible, and a finished create's repo still has
+        to be deleted, so both happen after the response. The caller polls
+        `/repo-creates/{id}` until `state` reads `cancelled`.
+
+        Because the work happens after the response, its failures land on the
+        JOB rather than on this request: a finished create whose repo has
+        since been taken into a lens ends `failed`, carrying that reason,
+        instead of answering 409 here.
 
         An action on the job, not a deletion of its row: `DELETE
         /repo-creates/{id}` (dismiss) refuses a running job, this is exactly
-        for one. A job that already failed or was cancelled answers 409 —
-        there is nothing to undo; dismiss it instead. A finished create whose
-        repo has since been taken into a lens answers 409 as well, because
-        the delete underneath refuses a lens member.
+        for one. Cancelling a job that is already `cancelling` answers 202
+        again — the request is idempotent. A job that already failed or was
+        cancelled answers 409: there is nothing to undo; dismiss it instead.
       operationId: cancelRepoCreate
       parameters:
         - name: id
@@ -3368,15 +3372,28 @@ components:
           description: Requested create mode.
         state:
           type: string
-          enum: [running, done, failed, cancelled]
+          enum: [running, cancelling, done, failed, cancelled]
           description: |
-            `running` is the only non-terminal value. `failed` means the repo
-            does NOT exist — the partial database and registry row were rolled
-            back before the job became terminal. `cancelled` also means the
-            repo does not exist: a caller stopped the create
-            (`POST /repo-creates/{id}:cancel`), and whatever it had produced —
-            a partial database, or a finished, registered repo — was removed
-            without leaving an archive row. No `error` accompanies it.
+            `running` and `cancelling` are the two non-terminal values.
+            `cancelling` means a cancel has been recorded but the repo is not
+            gone yet — a running create has still to reach its next step
+            boundary, and a finished one still has its repo to delete — so a
+            client should report "cancelling" rather than the last progress
+            line the job emitted. `failed` means the repo does NOT exist: the
+            partial database and registry row were rolled back before the job
+            became terminal. `cancelled` also means the repo does not exist: a
+            caller stopped the create (`POST /repo-creates/{id}:cancel`), and
+            whatever it had produced — a partial database, or a finished,
+            registered repo — was removed without leaving an archive row. No
+            `error` accompanies it.
+
+            A `cancelled` job is OMITTED from the `GET /repo-creates`
+            collection: there is nothing left for a repository list to show,
+            and the outcome is the one the caller asked for. It remains
+            readable at `GET /repo-creates/{id}` until its retention window
+            expires, so the client that requested the cancel can poll through
+            to the terminal state. `failed` jobs stay in the collection —
+            their `error` is the only place that explanation lives.
         step:
           type: string
           description: Machine-readable step identifier (e.g. "clone", "register").

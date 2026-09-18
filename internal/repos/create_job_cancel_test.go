@@ -35,6 +35,29 @@ func requireNoTrace(t *testing.T, m *Manager, home, name string) {
 	require.Empty(t, dbs, "the database file must be removed, not left on disk")
 }
 
+// awaitCancelled polls a job to the CreateCancelled terminal state.
+//
+// POLLING, not <-job.Done(): a job that had already finished closed that
+// channel when it finished, so waiting on it would return instantly and every
+// assertion after it would race the delete goroutine. The state is the only
+// thing that moves on this path.
+func awaitCancelled(t *testing.T, job *CreateJob) CreateStatus {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		st := job.Status()
+		if st.State != CreateRunning && st.State != CreateCancelling {
+			require.Equal(t, CreateCancelled, st.State,
+				"the job left cancelling for something other than cancelled: %v", st.Err)
+			return st
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job never left %s", st.State)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestCancelCreate_DoneJobDeletesTheRepoWithoutATrace is the case the user
 // actually hits: the create landed, they realise it was the wrong mode, and
 // cancel must undo it — not archive it, DELETE it. The job then reports
@@ -57,12 +80,21 @@ func TestCancelCreate_DoneJobDeletesTheRepoWithoutATrace(t *testing.T) {
 
 	require.NoError(t, m.CancelCreate(job.ID()))
 
-	st := job.Status()
-	require.Equal(t, CreateCancelled, st.State)
+	// THE CALL RETURNED BEFORE THE DELETE HAPPENED. That is the contract, not
+	// an accident of timing: CancelCreate records the request and comes back,
+	// so an HTTP caller is never held for it. The job reports `cancelling`
+	// until the goroutine it started is done.
+	require.Equal(t, CreateCancelling, job.Status().State)
+
+	// A second cancel WHILE CANCELLING is idempotent, not an error — a button
+	// reading "Cancelling…" must not fail when pressed twice.
+	require.NoError(t, m.CancelCreate(job.ID()))
+
+	st := awaitCancelled(t, job)
 	require.ErrorIs(t, st.Err, ErrCreateCancelled)
 	requireNoTrace(t, m, home, "work")
 
-	// Cancelling twice has nothing left to undo.
+	// Cancelling once it is CANCELLED has nothing left to undo.
 	require.ErrorIs(t, m.CancelCreate(job.ID()), ErrCreateFinished)
 
 	// And the name is genuinely free again — the whole reason to cancel a
@@ -240,7 +272,9 @@ func TestCancelCreate_LeavesNoOriginOrSubscriptionRow(t *testing.T) {
 		"a subscribe create must persist a subscription row to begin with")
 
 	require.NoError(t, m.CancelCreate(job.ID()))
-	require.Equal(t, CreateCancelled, job.Status().State)
+	require.Equal(t, CreateCancelling, job.Status().State,
+		"CancelCreate must record and return, not delete inline")
+	awaitCancelled(t, job)
 
 	org, err = m.Origins().Get(uid)
 	require.NoError(t, err)
@@ -255,4 +289,101 @@ func TestCancelCreate_LeavesNoOriginOrSubscriptionRow(t *testing.T) {
 	require.Empty(t, claimed, "a deleted repo still claims its origin URL")
 
 	requireNoTrace(t, m, home, "sub")
+}
+
+// TestCancelCreate_RunningJobReportsCancellingBeforeCancelled pins the state a
+// client draws between the click and the outcome.
+//
+// The gap is the whole reason this state exists. A running create stops at its
+// next STEP BOUNDARY, and the step in flight may be a clone taking minutes;
+// with no cancelling state the job kept reporting whatever progress line it
+// last emitted, so the UI went on drawing "Reading the remote, 40%" after the
+// user pressed Cancel and read as frozen.
+func TestCancelCreate_RunningJobReportsCancellingBeforeCancelled(t *testing.T) {
+	home := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: home},
+		AgentBranch: "machine/test",
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	job := m.StartCreate(CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"})
+	require.NoError(t, m.CancelCreate(job.ID()))
+
+	// Recorded synchronously: the state has already moved by the time the
+	// call returns, so a client that re-reads immediately sees `cancelling`
+	// rather than the stale progress line.
+	st := job.Status()
+	require.Contains(t, []CreateState{CreateCancelling, CreateCancelled}, st.State,
+		"a cancelled create must never still report `running`")
+
+	<-job.Done()
+	require.Equal(t, CreateCancelled, job.Status().State)
+	requireNoTrace(t, m, home, "work")
+}
+
+// TestCreateJobs_OmitsCancelledButKeepsFailed is the list contract behind the
+// user's "what's the point, I KNOW it was cancelled".
+//
+// A cancelled job has nothing left to tell a repository list: the repo is
+// gone and the outcome is the one that was asked for, so a row saying
+// "cancelled — dismiss" is the UI reporting the user's own decision back to
+// them and then asking them to acknowledge it. A FAILED job is the opposite —
+// it carries an error nobody has read yet, and its row is the only place that
+// explanation exists.
+//
+// The omission is LIST-LEVEL. CreateJobByID still answers, which is what lets
+// the wizard that asked for the cancel poll through to the terminal state
+// instead of falling off a 404 the moment it succeeds.
+func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
+	home := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: home},
+		AgentBranch: "machine/test",
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	job := m.StartCreate(CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"})
+	_, err := job.Result()
+	require.NoError(t, err)
+
+	// Listed while it is live...
+	require.Len(t, m.CreateJobs(), 1)
+
+	require.NoError(t, m.CancelCreate(job.ID()))
+	// ...and STILL listed while cancelling: the work is in flight, and a row
+	// that vanished on the click would lose the "cancelling" report that the
+	// rail is supposed to show.
+	found := false
+	for _, st := range m.CreateJobs() {
+		if st.ID == job.ID() {
+			found = true
+			require.Equal(t, CreateCancelling, st.State)
+		}
+	}
+	require.True(t, found, "a cancelling job must stay in the list")
+
+	awaitCancelled(t, job)
+
+	require.Empty(t, m.CreateJobs(), "a cancelled job must not be listed")
+	// But it is still READABLE by id, which is what the wizard polls.
+	byID, ok := m.CreateJobByID(job.ID())
+	require.True(t, ok, "a cancelled job must remain readable by id until its TTL")
+	require.Equal(t, CreateCancelled, byID.Status().State)
+
+	// A FAILED job stays in the list: its error is the only place the reason
+	// for it lives.
+	fm := New(context.Background(), Deps{
+		Cfg:           config.Config{Home: t.TempDir()},
+		AgentBranch:   "machine/test",
+		CreateTimeout: time.Nanosecond,
+	})
+	require.NoError(t, fm.Start())
+	t.Cleanup(func() { _ = fm.Close() })
+	failed := fm.StartCreate(CreateSpec{Name: "work", Mode: "preset", OntologyPreset: "default"})
+	_, err = failed.Result()
+	require.Error(t, err)
+	require.Len(t, fm.CreateJobs(), 1, "a failed job must stay listed — it carries an error worth reading")
 }

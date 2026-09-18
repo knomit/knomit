@@ -116,6 +116,25 @@ const (
 	// renders the two differently: a failure is something to read and retry,
 	// a cancellation is the outcome the user asked for.
 	CreateCancelled CreateState = "cancelled"
+	// CreateCancelling means a cancel has been RECORDED but the repo is not
+	// gone yet. Non-terminal, like CreateRunning — and it exists because
+	// cancelling is not instantaneous and pretending otherwise is what the
+	// UI got wrong.
+	//
+	// A running create stops at its next STEP BOUNDARY, and the step in
+	// flight may be a clone that takes minutes; a finished create's repo has
+	// to be archived and purged, which is quick but not free. In both cases
+	// the honest report between the click and the outcome is "cancelling",
+	// not the last progress line the job happened to emit — a wizard that
+	// kept drawing "Reading the remote, 40%" after the user pressed Cancel is
+	// the report this state replaces. The user's words: "everything is
+	// frozen, stuck in the current stage".
+	//
+	// CancelCreate NEVER BLOCKS to reach this state's successor. It records
+	// the request, returns, and the work of honouring it happens on the
+	// job's own goroutine — so the HTTP caller is never held for a transfer
+	// it cannot interrupt.
+	CreateCancelling CreateState = "cancelling"
 )
 
 // ErrCreateCancelled is the error a cancelled job reports through Result. It
@@ -324,11 +343,21 @@ func (j *CreateJob) finishLocked(ri *RepoInstance, err error, timedOut bool) {
 //
 // A DONE job — the create already finished and its repo is live — is the
 // case the user actually hits: "I picked the wrong mode and realised the
-// moment it landed". Cancel here IS the delete, done synchronously so the
-// caller learns whether the repo is gone. The repo is deleted only if it is
-// the very instance this job registered: a repo of the same name created
-// later by someone else is not this job's to remove, and answers
-// ErrCreateFinished.
+// moment it landed". The job flips to CreateCancelling and the delete runs on
+// a goroutine, so this call returns at once here too. The repo is deleted
+// only if it is the very instance this job registered: a repo of the same
+// name created later by someone else is not this job's to remove, and
+// answers ErrCreateFinished.
+//
+// NOTHING HERE BLOCKS, and that is the contract. An earlier version deleted
+// synchronously so the caller "learns whether the repo is gone", which sounds
+// like candour and reads, through an HTTP handler, as a request that hangs.
+// The job is the thing that knows; the caller polls it. That is also why
+// every path below returns before the work it authorised has happened.
+//
+// A CANCELLING job answers nil — IDEMPOTENT, not an error. Pressing a button
+// whose own label says "Cancelling…" must not produce a failure, and the
+// second request asks for exactly what the first one did.
 //
 // FAILED and CANCELLED jobs answer ErrCreateFinished: there is nothing to
 // undo. An unknown id answers ErrCreateUnknown, indistinguishable from an
@@ -342,26 +371,49 @@ func (m *Manager) CancelCreate(id string) error {
 	switch j.state {
 	case CreateRunning:
 		j.cancelRequested = true
+		j.state = CreateCancelling
 		cancel := j.cancel
 		j.mu.Unlock()
 		if cancel != nil {
 			cancel()
 		}
 		return nil
+	case CreateCancelling:
+		// Already asked, already being honoured. Saying so as an error would
+		// make a double-click a failure.
+		j.mu.Unlock()
+		return nil
 	case CreateDone:
 		created := j.ri
-		j.mu.Unlock()
 		if created == nil || m.Get(j.name) != created {
+			j.mu.Unlock()
 			return ErrCreateFinished
 		}
-		if err := m.DeleteRepo(j.name); err != nil {
-			return err
-		}
-		j.mu.Lock()
-		j.ri, j.err, j.state = nil, ErrCreateCancelled, CreateCancelled
+		j.state = CreateCancelling
 		j.mu.Unlock()
-		log.Info().Str("repo", j.name).Str("create_id", j.id).
-			Msg("repo create cancelled after completion; the repo was deleted")
+		// Registered with the drain BEFORE the goroutine starts, exactly as
+		// StartCreate does: this delete touches the control database, and
+		// Close must not release those handles out from under it.
+		m.createWg.Add(1)
+		go func() {
+			defer m.createWg.Done()
+			if derr := m.DeleteRepo(j.name); derr != nil {
+				// The one outcome cancel cannot make good on: the repo exists
+				// and would not go. Reported as a FAILURE with the reason,
+				// never as cancelled — "cancelled" promises the repo is gone.
+				log.Error().Err(derr).Str("repo", j.name).Str("create_id", j.id).
+					Msg("repo create cancelled after it completed, but the repo could not be deleted")
+				j.mu.Lock()
+				j.finishLocked(created, fmt.Errorf("cancel: the repo was created but could not be deleted: %w", derr), false)
+				j.mu.Unlock()
+				return
+			}
+			j.mu.Lock()
+			j.finishLocked(nil, ErrCreateCancelled, false)
+			j.mu.Unlock()
+			log.Info().Str("repo", j.name).Str("create_id", j.id).
+				Msg("repo create cancelled after completion; the repo was deleted")
+		}()
 		return nil
 	default:
 		j.mu.Unlock()
@@ -418,7 +470,26 @@ func (m *Manager) CreateJobs() []CreateStatus {
 	m.reapCreateJobsLocked(time.Now().UTC())
 	out := make([]CreateStatus, 0, len(m.createJobs))
 	for _, j := range m.createJobs {
-		out = append(out, j.Status())
+		st := j.Status()
+		// CANCELLED JOBS ARE NOT LISTED. The list is what the repo rail draws
+		// from, and a cancelled create has nothing left to say there: the
+		// repo is gone, the outcome is the one the user asked for, and a row
+		// reading "cancelled — dismiss" is the UI telling them what they
+		// already know and then asking them to acknowledge it. Their words:
+		// "what's the point, I KNOW it was cancelled".
+		//
+		// FAILED jobs stay listed, and the difference is not arbitrary: a
+		// failure carries an error the reader has not seen yet, so its row is
+		// the only place that explanation exists.
+		//
+		// This is a LIST-level omission, not a deletion. The job survives in
+		// the map until its TTL and GET /repo-creates/{id} still answers with
+		// it — which is what lets the wizard that asked for the cancel poll
+		// through to the terminal state instead of falling off a 404.
+		if st.State == CreateCancelled {
+			continue
+		}
+		out = append(out, st)
 	}
 	m.createJobsMu.Unlock()
 	// Newest first, then id ascending — a TOTAL order, not merely a primary
@@ -474,7 +545,10 @@ func (m *Manager) DismissCreateJob(id string) error {
 	if !ok {
 		return ErrCreateUnknown
 	}
-	if j.Status().State == CreateRunning {
+	// Both non-terminal states refuse: a cancelling job is still doing work
+	// (a step boundary to reach, or a repo to delete) and its outcome still
+	// has to land somewhere, exactly as a running one's does.
+	if st := j.Status().State; st == CreateRunning || st == CreateCancelling {
 		return ErrCreateRunning
 	}
 	delete(m.createJobs, id)
@@ -491,7 +565,14 @@ func (m *Manager) DismissCreateJob(id string) error {
 func (m *Manager) reapCreateJobsLocked(now time.Time) {
 	for id, j := range m.createJobs {
 		st := j.Status()
-		if st.State == CreateRunning {
+		// Neither NON-TERMINAL state is ever reaped. Cancelling matters as
+		// much as running here and is easier to get wrong: a job that reached
+		// CreateDone already stamped FinishedAt, so a done→cancelling job
+		// carries a timestamp that may already be older than the TTL while
+		// its delete goroutine is still working. Testing the state rather
+		// than the timestamp is what keeps that job in the map until it has
+		// actually finished.
+		if st.State == CreateRunning || st.State == CreateCancelling {
 			continue
 		}
 		if now.Sub(st.FinishedAt) > CreateJobTTL {

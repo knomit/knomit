@@ -173,6 +173,44 @@ describe('CreateRepoWizard cancel', () => {
     await waitFor(() => expect(onDone).toHaveBeenCalledWith('scratch'));
   });
 
+  // THE CLICK IS ACKNOWLEDGED IMMEDIATELY, before the server has answered.
+  //
+  // This is the whole of the reported bug. The user pressed Cancel and the
+  // screen went on showing the same step and the same percent — "everything is
+  // frozen, stuck in the current stage" — because nothing changed until the
+  // 202 came back, and on a slow step that is a long time to wonder whether
+  // the click registered at all.
+  it('says Cancelling… the moment the button is pressed, before the 202 lands', async () => {
+    const { impl } = parkedCreate();
+    mock(api.createRepo).mockImplementation(impl);
+    // A cancel request that has NOT come back yet.
+    let release: (s: unknown) => void = () => {};
+    mock(api.cancelRepoCreate).mockReturnValue(new Promise(res => { release = res; }));
+    render(<CreateRepoWizard onDone={() => {}} onCancel={() => {}} />);
+    await startLocalCreate();
+
+    await waitFor(() => expect(screen.getByTestId('create-cancel-button')).toBeInTheDocument());
+    expect(screen.getByTestId('create-cancel-button')).toHaveTextContent('Cancel create');
+
+    fireEvent.click(screen.getByTestId('create-cancel-button'));
+
+    // Disabled, relabelled, and saying what the wait is for — with the server
+    // still to answer.
+    await waitFor(() =>
+      expect(screen.getByTestId('create-cancel-button')).toHaveTextContent('Cancelling…'));
+    expect(screen.getByTestId('create-cancel-button')).toBeDisabled();
+    expect(screen.getByTestId('create-cancelling-note'))
+      .toHaveTextContent('Waiting for the current step to finish, then rolling back.');
+    // The abandoned progress line is gone rather than left up to look stuck.
+    expect(screen.getByTestId('create-progress-headline')).toHaveTextContent('Cancelling…');
+
+    // And it STAYS saying so once the 202 lands reading 'cancelling', rather
+    // than flicking back to "Cancel create" between the two sources.
+    await act(async () => { release(status({ state: 'cancelling' })); });
+    expect(screen.getByTestId('create-cancel-button')).toHaveTextContent('Cancelling…');
+    expect(screen.getByTestId('create-cancel-button')).toBeDisabled();
+  });
+
   // A TERMINAL STATE NEVER GOES BACK TO RUNNING.
   //
   // Two writers race here and are not ordered with respect to each other: the

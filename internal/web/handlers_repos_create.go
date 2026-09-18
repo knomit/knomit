@@ -172,12 +172,23 @@ func handleHALRepoCreates(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // handleHALRepoCreateCancel serves POST /api/v1/repo-creates/{id}:cancel: stop
 // a create and remove everything it produced.
 //
-// 202, not 200, and the status body rather than 204: a running create stops
-// at its next step boundary, not on this request, so the honest answer is
-// "accepted — poll the job to `cancelled`". The body is the same snapshot the
-// poll returns, so a client that already renders it needs nothing new. A
-// job that had already FINISHED is deleted synchronously (Manager.CancelCreate)
-// and the same body then already reads `cancelled`.
+// 202, not 200, and the status body rather than 204: NOTHING is finished when
+// this returns. Manager.CancelCreate records the request and comes straight
+// back, so the body reads `cancelling` — a running create still has to reach
+// its next step boundary, and a finished one still has a repo to delete on a
+// goroutine. The honest answer is "accepted — poll the job to `cancelled`",
+// and the body is the same snapshot the poll returns, so a client that
+// already renders one needs nothing new.
+//
+// `cancelling` is why this handler has no synchronous failure to report any
+// more. The delete's own errors — a repo held by a lens, most of all — land
+// on the JOB, which ends `failed` carrying the reason, because by the time
+// they happen this response is long since written.
+//
+// Cancelling a job that is ALREADY cancelling is 202 again, not 409: the
+// request is idempotent, and a button labelled "Cancelling…" that answers a
+// second press with an error would be reporting a failure for asking twice
+// for the thing already under way.
 //
 // A FAILED or already-cancelled job is 409: there is nothing left to undo,
 // and DELETE (dismiss) is the operation for making its row go away. Unknown
@@ -202,8 +213,10 @@ func handleHALRepoCreateCancel(b hal.URLBuilder, m *repos.Manager) http.HandlerF
 		case errors.Is(err, repos.ErrCreateFinished):
 			hal.WriteProblem(w, http.StatusConflict, "Create already finished",
 				"this create already failed or was cancelled; there is nothing to undo — dismiss it instead", r.URL.Path)
-		case errors.Is(err, repos.ErrRepoInUseByLens):
-			hal.WriteProblem(w, http.StatusConflict, "Repo in use by a lens", err.Error(), r.URL.Path)
+		// No ErrRepoInUseByLens case: the delete that raises it now runs on the
+		// job's goroutine, after this response is written, and surfaces as the
+		// job ending `failed` with that reason. A case here would be a branch
+		// that cannot be reached and a promise to clients that cannot be kept.
 		default:
 			hal.WriteProblem(w, http.StatusInternalServerError, "Cancel failed", err.Error(), r.URL.Path)
 		}

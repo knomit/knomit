@@ -111,6 +111,18 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
   const adoptStatus = (s: RepoCreateStatus) =>
     setCreateStatus(prev => (prev && prev.state !== 'running' && s.state === 'running') ? prev : s);
 
+  // `stopping` is what the button reads from, and it deliberately ORs the
+  // local request flag with the server's own state.
+  //
+  // The local flag alone is too short: it clears when the 202 lands, and the
+  // job is still cancelling for however long the step in flight takes, so the
+  // button would go back to saying "Cancel create" while a cancel was under
+  // way. The server state alone is too late: nothing says "cancelling" until
+  // the 202 comes back, leaving the click with no acknowledgement — which is
+  // the "everything is frozen" the user reported. Together they cover the
+  // whole span from the press to the outcome.
+  const stopping = cancelling || createStatus?.state === 'cancelling';
+
   // Navigating retires the last attempt's report.
   //
   // createErr and the event log describe ONE press of Create. They were
@@ -416,7 +428,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
           <div style={errNote}>No repository was added. You can change something and try again.</div>
         </div>
       )}
-      {step === 'review' && <CreateProgress status={createStatus} />}
+      {step === 'review' && <CreateProgress status={createStatus} cancelling={stopping} />}
       {/* Red, unlike every other report on this screen: a cancel that was
           refused is the one outcome here where something may EXIST that the
           reader asked not to exist, and they have to go and look. */}
@@ -487,10 +499,10 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
             the two are distinguishable only by the noun, so the wizard's own
             Cancel stays disabled for the whole of a create (btn(creating)),
             which leaves exactly one enabled cancel on screen at a time. */}
-        {step === 'review' && createStatus?.state === 'running' && (
-          <button type="button" data-testid="create-cancel-button" style={btn(cancelling)}
-            disabled={cancelling} onClick={() => { void handleCancelCreate(); }}>
-            {cancelling ? 'Cancelling…' : 'Cancel create'}
+        {step === 'review' && (createStatus?.state === 'running' || createStatus?.state === 'cancelling') && (
+          <button type="button" data-testid="create-cancel-button" style={btn(stopping)}
+            disabled={stopping} onClick={() => { void handleCancelCreate(); }}>
+            {stopping ? 'Cancelling…' : 'Cancel create'}
           </button>
         )}
         {onCancel && (

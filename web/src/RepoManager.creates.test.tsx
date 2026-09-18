@@ -22,6 +22,8 @@ vi.mock('./api', async importOriginal => ({
     listBranchNames: vi.fn().mockResolvedValue([]),
     listRepoCreates: vi.fn().mockResolvedValue([]),
     dismissRepoCreate: vi.fn().mockResolvedValue(undefined),
+    cancelRepoCreate: vi.fn().mockResolvedValue(undefined),
+    getRepoCreate: vi.fn().mockRejectedValue(new Error('not found')),
   },
 }));
 
@@ -43,24 +45,31 @@ beforeEach(() => { __resetRepoCreatesForTest(); vi.clearAllMocks(); });
 afterEach(() => { __resetRepoCreatesForTest(); });
 
 describe('creates in the repo manager', () => {
-  it('shows a running create as a rail row and in the overview, with live progress', async () => {
+  it('shows a running create as a repo-shaped rail row and in the overview', async () => {
     vi.mocked(api.listRepoCreates).mockResolvedValue([job({
       step: 'subscribe', phase: 'transfer', indeterminate: true, message: 'knomit: sent 5 MiB', pct: 40,
     })]);
     render(<RepoManager {...baseProps} />);
 
     // The rail: the create sits alongside the repositories, not hidden until
-    // it succeeds.
+    // it succeeds, and drawn as one of them — name, flag, nothing else.
     const railRow = await screen.findByTestId('pending-create-rail-newkb');
     expect(railRow).toHaveAttribute('data-create-state', 'creating');
+    expect(screen.getByTestId('pending-create-chip-rail-newkb')).toHaveTextContent('creating');
     expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
 
-    // The overview block, with the remote's own progress line and a bar that
-    // claims no percentage.
-    const block = await screen.findByTestId('pending-creates');
-    expect(block).toBeInTheDocument();
-    expect(screen.getByTestId('pending-create-message-overview-newkb')).toHaveTextContent('knomit: sent 5 MiB');
-    expect(screen.getByTestId('create-bar-indeterminate-overview-newkb')).toBeInTheDocument();
+    // NO inline controls in the rail. The progress line and the operations
+    // live on the create's own page; a row with buttons on it is what read as
+    // "all jumbled up and squished".
+    expect(screen.queryByTestId('pending-create-open-rail-newkb')).toBeNull();
+    expect(screen.queryByTestId('pending-create-cancel-rail-newkb')).toBeNull();
+    expect(screen.queryByTestId('pending-create-dismiss-rail-newkb')).toBeNull();
+    expect(screen.queryByTestId('pending-create-message-rail-newkb')).toBeNull();
+    expect(screen.queryByTestId('create-bar-indeterminate-rail-newkb')).toBeNull();
+
+    // The overview lists it the same way.
+    expect(await screen.findByTestId('pending-creates')).toBeInTheDocument();
+    expect(screen.getByTestId('pending-create-chip-overview-newkb')).toHaveTextContent('creating');
   });
 
   // A create whose repo has ALREADY landed leaves the rail. The job record
@@ -79,37 +88,85 @@ describe('creates in the repo manager', () => {
     expect(screen.getByTestId('repomgr-item-core')).toBeInTheDocument();
   });
 
-  it('opens a running create in its own watch page', async () => {
+  // CLICKING THE ROW OPENS THE PAGE — the row IS the control, exactly as a
+  // repository row is. The user: clicking the row MUST open details.
+  it('opens a running create in its own page when the row is clicked', async () => {
     vi.mocked(api.listRepoCreates).mockResolvedValue([job({ message: 'cloning' })]);
     render(<RepoManager {...baseProps} />);
 
-    const open = await screen.findByTestId('pending-create-open-rail-newkb');
-    fireEvent.click(open);
+    fireEvent.click(await screen.findByTestId('pending-create-rail-newkb'));
 
     expect(await screen.findByTestId('create-watch')).toBeInTheDocument();
     // The WATCH page, not the wizard: re-entering the form would ask the user
     // to re-answer questions the running create already has answers for.
     expect(screen.queryByTestId('create-repo-wizard')).not.toBeInTheDocument();
     expect(screen.getByTestId('create-progress')).toBeInTheDocument();
+    // Shaped like a repository page: the name is the heading, and the flag
+    // sits where a repository's subtitle does.
+    expect(screen.getByTestId('create-watch-flag')).toHaveTextContent('creating');
   });
 
-  it('dismisses a finished create through the API and refreshes the list', async () => {
+  // DISMISS MOVED TO THE PAGE, with every other operation on a create. The
+  // rail row flags the failure; the page is where the reason is read and the
+  // row is disposed of.
+  it('dismisses a failed create from its page and refreshes the list', async () => {
     vi.mocked(api.listRepoCreates)
-      .mockResolvedValueOnce([job({ state: 'failed', error: 'remote is not a knowledge base' })])
-      .mockResolvedValue([]);
+      .mockResolvedValue([job({ state: 'failed', error: 'remote is not a knowledge base' })]);
     render(<RepoManager {...baseProps} />);
 
     const row = await screen.findByTestId('pending-create-rail-newkb');
-    expect(row).toHaveAttribute('data-create-state', 'create-failed');
-    expect(screen.getByTestId('pending-create-error-rail-newkb'))
-      .toHaveTextContent('remote is not a knowledge base');
+    expect(row).toHaveAttribute('data-create-state', 'failed');
+    // The error is NOT on the row.
+    expect(screen.queryByTestId('pending-create-error-rail-newkb')).toBeNull();
 
+    fireEvent.click(row);
+    await screen.findByTestId('create-watch');
+    expect(screen.getByTestId('create-watch-flag')).toHaveTextContent('create failed');
+    expect(screen.getByTestId('create-progress')).toHaveTextContent('remote is not a knowledge base');
+    // A failed create offers no cancel: there is nothing left to stop.
+    expect(screen.queryByTestId('create-cancel-button')).toBeNull();
+
+    vi.mocked(api.listRepoCreates).mockResolvedValue([]);
     await act(async () => {
-      fireEvent.click(screen.getByTestId('pending-create-dismiss-rail-newkb'));
+      fireEvent.click(screen.getByTestId('create-watch-dismiss'));
     });
-
     expect(api.dismissRepoCreate).toHaveBeenCalledWith('c1');
-    await waitFor(() => expect(screen.queryByTestId('pending-create-rail-newkb')).not.toBeInTheDocument());
+  });
+
+  // CANCEL LIVES ON THE PAGE TOO, and says "Cancelling…" while the server is
+  // honouring it rather than leaving the last progress line up — the
+  // "everything is frozen, stuck in the current stage" the user reported.
+  it('cancels from the create page and reports cancelling', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([job()]);
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('pending-create-rail-newkb'));
+    await screen.findByTestId('create-watch');
+
+    vi.mocked(api.listRepoCreates).mockResolvedValue([job({ state: 'cancelling' })]);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-cancel-button'));
+    });
+    expect(api.cancelRepoCreate).toHaveBeenCalledWith('c1');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('create-cancel-button')).toBeDisabled());
+    expect(screen.getByTestId('create-cancel-button')).toHaveTextContent('Cancelling…');
+    expect(screen.getByTestId('create-cancelling-note'))
+      .toHaveTextContent('Waiting for the current step to finish, then rolling back.');
+    expect(screen.getByTestId('create-watch-flag')).toHaveTextContent('cancelling');
+    // The rail says the same word, and still has no controls on it.
+    expect(screen.getByTestId('pending-create-chip-rail-newkb')).toHaveTextContent('cancelling');
+  });
+
+  // A CANCELLED CREATE LEAVES THE RAIL ENTIRELY. The server omits it from the
+  // collection; the row must not come back even if a stale list still had one.
+  it('never draws a cancelled create in the rail', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([job({ state: 'cancelled' })]);
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('manage-overview');
+    await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
+    expect(screen.queryByTestId('pending-create-rail-newkb')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('pending-creates')).not.toBeInTheDocument();
   });
 
   // No creates, no block. An empty "Being created" heading would be the

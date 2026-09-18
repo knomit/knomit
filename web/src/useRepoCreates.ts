@@ -33,8 +33,12 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
 const subscribers = new Set<(s: RepoCreateStatus[]) => void>();
 
+// Both NON-TERMINAL states count as activity. A cancelling job is still
+// working — a step to finish, or a repo to delete — so a list that fell back
+// to the idle poll rate the moment cancel was pressed would take up to half a
+// minute to notice the outcome the user is waiting for.
 function anyRunning(list: RepoCreateStatus[]): boolean {
-  return list.some(c => c.state === 'running');
+  return list.some(c => c.state === 'running' || c.state === 'cancelling');
 }
 
 function nextDelay(list: RepoCreateStatus[]): number {
@@ -117,10 +121,50 @@ export function useRepoCreates(): RepoCreateStatus[] {
 // Applied by every repo-list surface, from here rather than per surface, so
 // the rail and the overview cannot disagree about which rows exist.
 export function pendingCreates(list: RepoCreateStatus[], repoNames: readonly string[]): RepoCreateStatus[] {
-  return list.filter(c => !repoNames.includes(c.name));
+  // CANCELLED JOBS ARE DROPPED HERE TOO, not only by the server.
+  //
+  // The server omits them from the collection, so this is belt and braces —
+  // but it is the brace that matters: the row component returns null for a
+  // cancelled job, so a surface that counted the list rather than the rows it
+  // would draw showed an empty "Being created" block with a heading and
+  // nothing under it. Filtering where both surfaces already filter keeps the
+  // count and the rows the same fact.
+  return list.filter(c => c.state !== 'cancelled' && !repoNames.includes(c.name));
 }
 
-// runningCreates is the count the top-bar indicator shows.
+// runningCreates is the count the top-bar indicator shows — every create with
+// work still to do, which includes one that is cancelling. The light answers
+// "is anything happening?", and honouring a cancel is something happening.
 export function runningCreates(list: RepoCreateStatus[]): number {
-  return list.filter(c => c.state === 'running').length;
+  return list.filter(c => c.state === 'running' || c.state === 'cancelling').length;
+}
+
+// createFlag is the ONE word a list row says about a create.
+//
+// A create in a repository list is a repository that is not finished yet, so
+// the row says which repository it is and flags the state it is in — nothing
+// more. Everything else about the job (the step, the percent, the error, the
+// controls) belongs on the create's own page, exactly as a repository's own
+// details belong on its page rather than in the rail.
+//
+// `null` means DO NOT RENDER THIS ROW AT ALL. A cancelled create has nothing
+// left to say in a list: the repository is gone and the outcome is the one the
+// user asked for. The server already omits cancelled jobs from the collection;
+// this is the same rule stated where the drawing happens, so a stale list
+// cannot put the row back.
+//
+// It lives HERE, beside pendingCreates and runningCreates, rather than in
+// PendingCreateRow.tsx: that file exports components, and a non-component
+// export from it breaks fast refresh for every component in it.
+export function createFlag(state: string): string | null {
+  switch (state) {
+    case 'running': return 'creating';
+    case 'cancelling': return 'cancelling';
+    case 'failed': return 'failed';
+    case 'cancelled': return null;
+    // 'done' is the brief window between the job finishing and its repo
+    // appearing in the list that replaces this row. 'created' rather than
+    // 'creating', because it is neither a lie nor a state anyone acts on.
+    default: return 'created';
+  }
 }

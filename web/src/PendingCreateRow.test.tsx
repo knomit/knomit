@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { PendingCreateRow } from './PendingCreateRow';
+import { PendingCreateRow, CreateBar } from './PendingCreateRow';
+import { createFlag } from './useRepoCreates';
 import { RepoIndexChip } from './RepoIndexChip';
 import { CreateProgress } from './CreateProgress';
 import type { RepoCreateStatus } from './api';
@@ -9,53 +10,96 @@ function job(over: Partial<RepoCreateStatus> = {}): RepoCreateStatus {
   return { create_id: 'c1', name: 'kb', mode: 'subscribe', state: 'running', ...over };
 }
 
+// A CREATE ROW IS A REPOSITORY ROW WITH A FLAG ON IT.
+//
+// The first version of this row carried its own progress bar, its own message
+// line and three inline buttons, which made it the only row in the rail that
+// looked like a control panel. The user's report was "all jumbled up and
+// squished", reading "knomit [creating] [details] [cancel]". The row now says
+// which repository it is and what state it is in, and everything else lives on
+// the create's own page — the same division a repository row and its settings
+// page already have.
 describe('PendingCreateRow', () => {
-  it('renders a running create with its chip, message and a details control', () => {
-    const onOpen = vi.fn();
+  it('renders as a repo-shaped row: name, one flag, and no controls', () => {
     render(<PendingCreateRow status={job({
       step: 'subscribe', phase: 'transfer', indeterminate: true,
       message: 'knomit: sent 3 MiB', pct: 40,
-    })} onOpen={onOpen} onDismiss={vi.fn()} />);
+    })} onOpen={vi.fn()} />);
 
     expect(screen.getByTestId('pending-create-kb')).toHaveAttribute('data-create-state', 'creating');
+    expect(screen.getByTestId('pending-create-name-kb')).toHaveTextContent('kb');
     expect(screen.getByTestId('pending-create-chip-kb')).toHaveTextContent('creating');
-    expect(screen.getByTestId('pending-create-message-kb')).toHaveTextContent('knomit: sent 3 MiB');
 
-    fireEvent.click(screen.getByTestId('pending-create-open-kb'));
-    expect(onOpen).toHaveBeenCalledWith('c1');
-  });
-
-  // A RUNNING create offers no dismiss: the server refuses it (409), and a
-  // control that is guaranteed to fail is worse than no control.
-  it('offers no dismiss while the create is running', () => {
-    render(<PendingCreateRow status={job()} onOpen={vi.fn()} onDismiss={vi.fn()} />);
+    // NOTHING else. Not a bar, not a message, and above all not a button: a
+    // row with buttons on it is the row that overflowed the rail.
+    expect(screen.queryByTestId('create-bar-kb')).toBeNull();
+    expect(screen.queryByTestId('create-bar-indeterminate-kb')).toBeNull();
+    expect(screen.queryByTestId('pending-create-message-kb')).toBeNull();
+    expect(screen.queryByTestId('pending-create-open-kb')).toBeNull();
+    expect(screen.queryByTestId('pending-create-cancel-kb')).toBeNull();
     expect(screen.queryByTestId('pending-create-dismiss-kb')).toBeNull();
   });
 
-  it('renders a failed create with its error and a dismiss that calls back', () => {
-    const onDismiss = vi.fn();
-    render(<PendingCreateRow
-      status={job({ state: 'failed', error: 'this knowledge base is already registered locally: held by repo "kept"' })}
-      onOpen={vi.fn()} onDismiss={onDismiss} />);
-
-    expect(screen.getByTestId('pending-create-kb')).toHaveAttribute('data-create-state', 'create-failed');
-    expect(screen.getByTestId('pending-create-chip-kb')).toHaveTextContent('create failed');
-    expect(screen.getByTestId('pending-create-error-kb')).toHaveTextContent('already registered locally');
-    // A failed row shows the reason instead of a bar: there is no progress to
-    // draw, and a bar frozen at some percentage would suggest otherwise.
-    expect(screen.queryByTestId('create-bar-kb')).toBeNull();
-    expect(screen.queryByTestId('pending-create-open-kb')).toBeNull();
-
-    fireEvent.click(screen.getByTestId('pending-create-dismiss-kb'));
-    expect(onDismiss).toHaveBeenCalledWith('c1');
+  // THE ROW ITSELF IS THE CLICK TARGET, exactly as a repository row is. The
+  // user's words: clicking the row MUST open details.
+  it('opens the create when the row is clicked', () => {
+    const onOpen = vi.fn();
+    render(<PendingCreateRow status={job()} onOpen={onOpen} />);
+    fireEvent.click(screen.getByTestId('pending-create-kb'));
+    expect(onOpen).toHaveBeenCalledWith('c1');
   });
 
-  // THE BAR REFUSES TO INVENT A PERCENT. This is the incident in one
-  // assertion: during the transfer the server sends no percentage and says so,
-  // and a bar that filled to a made-up number there is what left the wizard
-  // apparently frozen.
+  it('flags cancelling and failed on the same one chip', () => {
+    const { unmount } = render(<PendingCreateRow status={job({ state: 'cancelling' })} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('pending-create-chip-kb')).toHaveTextContent('cancelling');
+    expect(screen.getByTestId('pending-create-kb')).toHaveAttribute('data-create-state', 'cancelling');
+    unmount();
+
+    render(<PendingCreateRow status={job({ state: 'failed', error: 'already registered locally' })} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('pending-create-chip-kb')).toHaveTextContent('failed');
+    // The error belongs on the page, not on the row — a rail row is not where
+    // a reader goes to read a sentence.
+    expect(screen.queryByTestId('pending-create-error-kb')).toBeNull();
+  });
+
+  // A CANCELLED CREATE IS NOT A ROW AT ALL.
+  //
+  // The repository is gone and the outcome is the one the user asked for, so a
+  // row saying "cancelled — dismiss" is the UI reporting their own decision
+  // back to them and then asking them to acknowledge it: "what's the point, I
+  // KNOW it was cancelled". The server omits these from the collection; this
+  // is the same rule where the drawing happens, so a stale list cannot put the
+  // row back.
+  it('renders nothing for a cancelled create', () => {
+    const { container } = render(
+      <PendingCreateRow status={job({ state: 'cancelled' })} onOpen={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
+    expect(createFlag('cancelled')).toBeNull();
+  });
+
+  it('maps every state to at most one word', () => {
+    expect(createFlag('running')).toBe('creating');
+    expect(createFlag('cancelling')).toBe('cancelling');
+    expect(createFlag('failed')).toBe('failed');
+    expect(createFlag('done')).toBe('created');
+  });
+
+  // The name yields and the flag never does, so a long repository name cannot
+  // push the chip out of the rail — the "squished" half of the report.
+  it('lets the name ellipsize while the flag holds its size', () => {
+    render(<PendingCreateRow status={job({ name: 'a-very-long-repository-name-indeed' })} onOpen={vi.fn()} />);
+    const name = screen.getByTestId('pending-create-name-a-very-long-repository-name-indeed');
+    expect(name).toHaveStyle({ textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+    const chip = screen.getByTestId('pending-create-chip-a-very-long-repository-name-indeed');
+    expect(chip).toHaveStyle({ flexShrink: '0', whiteSpace: 'nowrap' });
+  });
+});
+
+// CreateBar moved to the create's PAGE, but its contract is unchanged and is
+// still the thing that refuses to invent a percentage.
+describe('CreateBar', () => {
   it('draws an indeterminate bar with no aria percentage during transfer', () => {
-    render(<PendingCreateRow status={job({ phase: 'transfer', indeterminate: true, pct: 40 })} />);
+    render(<CreateBar status={job({ phase: 'transfer', indeterminate: true, pct: 40 })} />);
     const bar = screen.getByTestId('create-bar-indeterminate-kb');
     expect(bar).toHaveAttribute('aria-busy', 'true');
     expect(bar).not.toHaveAttribute('aria-valuenow');
@@ -76,25 +120,49 @@ describe('PendingCreateRow', () => {
     };
     expect(status.pct).toBeUndefined();
 
-    const { container } = render(<PendingCreateRow status={status} />);
+    const { container } = render(<CreateBar status={status} />);
     expect(screen.getByTestId('create-bar-indeterminate-kb')).toBeInTheDocument();
     expect(screen.queryByTestId('create-bar-kb')).toBeNull();
-    // No percentage anywhere in the row — not '0%', not '40%'.
     expect(container.textContent).not.toMatch(/\d+\s*%/);
 
     // And the same in the wizard's own progress view, which has its own
-    // headline and could disagree with the row.
+    // headline and could disagree with the bar.
     const progress = render(<CreateProgress status={status} />);
     expect(progress.getByTestId('create-progress-headline').textContent).toBe('knomit: sent 3 MiB');
     expect(progress.container.textContent).not.toMatch(/\d+\s*%/);
   });
 
   it('draws a real percentage during indexing, which HAS one', () => {
-    render(<PendingCreateRow status={job({ phase: 'index', pct: 97, message: 'indexing 40/60' })} />);
+    render(<CreateBar status={job({ phase: 'index', pct: 97, message: 'indexing 40/60' })} />);
     const bar = screen.getByTestId('create-bar-kb');
     expect(bar).toHaveAttribute('aria-valuenow', '97');
     expect(screen.queryByTestId('create-bar-indeterminate-kb')).toBeNull();
-    expect(screen.getByTestId('pending-create-message-kb')).toHaveTextContent('indexing 40/60');
+  });
+});
+
+// The progress card is where a create's detail lives now. Cancelling replaces
+// the headline there rather than sitting beside it: a percent and a step
+// message describe work that is being abandoned, and leaving them up is what
+// read as "everything is frozen, stuck in the current stage".
+describe('CreateProgress cancelling', () => {
+  it('replaces the progress line with Cancelling… and says what it waits for', () => {
+    render(<CreateProgress status={job({ state: 'cancelling', step: 'subscribe', pct: 40, message: 'knomit: sent 3 MiB' })} />);
+    expect(screen.getByTestId('create-progress-headline')).toHaveTextContent('Cancelling…');
+    expect(screen.getByTestId('create-cancelling-note'))
+      .toHaveTextContent('Waiting for the current step to finish, then rolling back.');
+    expect(screen.getByTestId('create-progress-headline')).not.toHaveTextContent('40%');
+    expect(screen.queryByTestId('create-bar-kb')).toBeNull();
+    // WHERE it stopped is still true, so the step list stays.
+    expect(screen.getByTestId('create-step-subscribe')).toBeInTheDocument();
+  });
+
+  // The wizard sets this the instant the button is pressed, before the 202 has
+  // come back. Without it the click has no acknowledgement on a screen whose
+  // progress line has already stopped moving.
+  it('honours the cancelling override before the server confirms', () => {
+    render(<CreateProgress status={job({ state: 'running', step: 'subscribe', pct: 40 })} cancelling />);
+    expect(screen.getByTestId('create-progress-headline')).toHaveTextContent('Cancelling…');
+    expect(screen.getByTestId('create-cancelling-note')).toBeInTheDocument();
   });
 });
 
@@ -124,46 +192,5 @@ describe('RepoIndexChip', () => {
     expect(container).toBeEmptyDOMElement();
     rerender(<RepoIndexChip repo={{}} />);
     expect(container).toBeEmptyDOMElement();
-  });
-});
-
-describe('PendingCreateRow cancel', () => {
-  // The exact complement of dismiss: dismiss is refused for a running job and
-  // never touches a repo; cancel is ONLY for a running job and the repo going
-  // away is the point. The two are therefore never offered at the same time.
-  it('offers cancel while running, and never alongside dismiss', () => {
-    const onCancel = vi.fn();
-    render(<PendingCreateRow status={job()} onOpen={vi.fn()} onDismiss={vi.fn()} onCancel={onCancel} />);
-
-    fireEvent.click(screen.getByTestId('pending-create-cancel-kb'));
-    expect(onCancel).toHaveBeenCalledWith('c1');
-    expect(screen.queryByTestId('pending-create-dismiss-kb')).toBeNull();
-  });
-
-  it('offers no cancel once the job is terminal', () => {
-    for (const state of ['done', 'failed', 'cancelled'] as const) {
-      const { unmount } = render(
-        <PendingCreateRow status={job({ state })} onDismiss={vi.fn()} onCancel={vi.fn()} />);
-      expect(screen.queryByTestId('pending-create-cancel-kb')).toBeNull();
-      unmount();
-    }
-  });
-
-  // A cancelled row is drawn as neither a success nor a failure: no error to
-  // read, no progress bar for work that stopped, and no 'created' chip over a
-  // repo that does not exist. It is there to be dismissed.
-  it('renders a cancelled create plainly, and dismissably', () => {
-    const onDismiss = vi.fn();
-    render(<PendingCreateRow status={job({ state: 'cancelled', step: 'clone', pct: 40 })}
-      onOpen={vi.fn()} onDismiss={onDismiss} onCancel={vi.fn()} />);
-
-    expect(screen.getByTestId('pending-create-kb')).toHaveAttribute('data-create-state', 'create-cancelled');
-    expect(screen.getByTestId('pending-create-chip-kb')).toHaveTextContent('cancelled');
-    expect(screen.getByTestId('pending-create-cancelled-kb')).toHaveTextContent('No repository was added.');
-    expect(screen.queryByTestId('pending-create-error-kb')).toBeNull();
-    expect(screen.queryByTestId('create-bar-kb')).toBeNull();
-
-    fireEvent.click(screen.getByTestId('pending-create-dismiss-kb'));
-    expect(onDismiss).toHaveBeenCalledWith('c1');
   });
 });

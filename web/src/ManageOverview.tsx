@@ -3,7 +3,7 @@ import { api, repoAvailable } from './api';
 import type { Lens, OriginResponse, RepoInfo } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { PendingCreateRow } from './PendingCreateRow';
-import { useRepoCreates, refreshRepoCreates, pendingCreates } from './useRepoCreates';
+import { useRepoCreates, pendingCreates } from './useRepoCreates';
 import { RepoIndexChip } from './RepoIndexChip';
 import { LENS, repoHue } from './utils';
 import { btn, cardLabel } from './manageStyles';
@@ -66,27 +66,14 @@ function PendingCreates({ repos, onOpenCreate, surface }: {
       <div style={cardLabel}>Being created</div>
       <div style={{ border: '1px solid #222', borderRadius: 4, overflow: 'hidden' }}>
         {creates.map(c => (
+          // No controls here either: the row opens the create's page, which is
+          // where every operation on a create lives — the same division a
+          // repository row and its settings page already have.
           <PendingCreateRow
             key={c.create_id}
             status={c}
             surface={surface}
             onOpen={onOpenCreate}
-            onDismiss={async id => {
-              // Optimism is wrong here: the server refuses to dismiss a
-              // RUNNING job (409), and a row that vanished and came back would
-              // be worse than one that waits a moment. Refresh from the server
-              // and let the list say what happened.
-              try { await api.dismissRepoCreate(id); } catch { /* the refresh below tells the truth */ }
-              await refreshRepoCreates();
-            }}
-            onCancel={async id => {
-              // Same refusal of optimism as dismiss above, and for a stronger
-              // reason: cancel is ACCEPTED (202), not done — a running create
-              // stops at its next step boundary. A row flipped to 'cancelled'
-              // here would claim an outcome the server has not reached yet.
-              try { await api.cancelRepoCreate(id); } catch { /* the refresh below tells the truth */ }
-              await refreshRepoCreates();
-            }}
           />
         ))}
       </div>

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
+import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef, type RepoCreateStatus } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { PendingCreateRow } from './PendingCreateRow';
-import { useRepoCreates, refreshRepoCreates, pendingCreates } from './useRepoCreates';
+import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag } from './useRepoCreates';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateProgress } from './CreateProgress';
 import { markdownPlugins, markdownComponents } from './markdown';
@@ -370,15 +370,14 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 Hiding a create until it succeeds is what made one vanish. */}
             {railCreates.map(c => (
               <PendingCreateRow key={c.create_id} status={c} surface="rail"
-                onOpen={id => setSel({ kind: 'create', id })}
-                onDismiss={async id => {
-                  try { await api.dismissRepoCreate(id); } catch { /* the refresh tells the truth */ }
-                  await refreshRepoCreates();
-                }}
-                onCancel={async id => {
-                  try { await api.cancelRepoCreate(id); } catch { /* the refresh tells the truth */ }
-                  await refreshRepoCreates();
-                }} />
+                // listItem — the SAME style the repository rows below use, not
+                // a lookalike. A create is a repository being made, so its row
+                // is a repository row with a flag on it; passing the style in
+                // rather than copying it is what stops the two drifting.
+                style={listItem(view.kind === 'create' && view.id === c.create_id)}
+                active={view.kind === 'create' && view.id === c.create_id}
+                disabled={connectBusy}
+                onOpen={id => setSel({ kind: 'create', id })} />
             ))}
             {repos.map(r => (
               <button
@@ -1508,30 +1507,136 @@ function CreateWatch({ createId, onClose, onOpenRepo }: {
   onOpenRepo: (name: string) => void;
 }) {
   const creates = useRepoCreates();
-  const status = creates.find(c => c.create_id === createId) ?? null;
+  const listed = creates.find(c => c.create_id === createId) ?? null;
+  // The job the LIST no longer carries, read by id.
+  //
+  // A cancelled create is omitted from the collection on purpose — a
+  // repository list has nothing left to say about it — so a page that read
+  // only the list would lose the job at the exact moment the user is waiting
+  // to be told what happened to it. The single-job resource outlives the
+  // collection entry for this reason, and this is the client half of that
+  // bargain. A job that is genuinely gone (dismissed, or aged past the
+  // server's retention) fails this fetch and falls through to the "gone" card.
+  const [byId, setById] = useState<RepoCreateStatus | null>(null);
+  const inList = listed !== null;
+  useEffect(() => {
+    if (inList) return;
+    let cancelled = false;
+    api.getRepoCreate(createId).then(s => { if (!cancelled) setById(s); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [inList, createId]);
+  // The fetched job is MATCHED BY ID rather than cleared when the page
+  // switches creates. Clearing it would be a setState inside the effect above,
+  // and — worse — a render between the switch and that clear would show the
+  // previous create's status under the new create's name. Carrying the id with
+  // the answer makes the staleness impossible to render instead of merely
+  // brief.
+  const status = listed ?? (byId?.create_id === createId ? byId : null);
+
+  const [cancelErr, setCancelErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // DONE MEANS THIS PAGE IS OVER. The repository it was making now exists and
+  // has a real page of its own, with everything this one was standing in for;
+  // keeping the reader on a progress view of finished work would be the same
+  // "where did it go" the pending row was introduced to fix, one screen later.
+  const doneRepo = status?.state === 'done' ? status.repo?.name : undefined;
+  useEffect(() => {
+    if (doneRepo) onOpenRepo(doneRepo);
+  }, [doneRepo, onOpenRepo]);
+
+  const cancel = async () => {
+    setCancelErr(''); setBusy(true);
+    try {
+      await api.cancelRepoCreate(createId);
+      await refreshRepoCreates();
+    } catch (e) {
+      setCancelErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dismiss = async () => {
+    try { await api.dismissRepoCreate(createId); } catch { /* the list tells the truth */ }
+    await refreshRepoCreates();
+    onClose();
+  };
+
+  const flag = status ? createFlag(status.state) : null;
+  const nameOf = status?.name ?? '';
 
   return (
     <div data-testid="create-watch">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
-          {status ? `Creating ${status.name}` : 'Create'}
-        </h3>
-        <button type="button" className="k-bare" data-testid="create-watch-close"
-          style={{ marginLeft: 'auto', color: '#7a9ab5', fontSize: 12, background: 'none', border: 'none', cursor: 'pointer' }}
-          onClick={onClose}>Back to overview</button>
+      {/* THE REPOSITORY PAGE'S OWN HEADER, not a variant of it: same icon box
+          in the repo's hue, same name treatment, and the flag sitting exactly
+          where a repository's subtitle sits. The user asked for "the exact
+          same UI paradigm, EXCEPT mark the repo as creating" — so the only
+          difference between this header and a real repository's is the word
+          under the name. */}
+      <div style={detailHead}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span style={repoIconBox(nameOf)}><BookIcon color={repoHue(nameOf)} size={16} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>{nameOf || 'Create'}</h3>
+            <div data-testid="create-watch-flag" style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
+              {status?.state === 'cancelling' ? 'cancelling'
+                : status?.state === 'failed' ? 'create failed'
+                  : status?.state === 'cancelled' ? 'create cancelled'
+                    : flag ?? 'create'}
+            </div>
+          </div>
+        </div>
+        <div style={headActions}>
+          <button type="button" className="k-bare" data-testid="create-watch-close"
+            style={btnLink} onClick={onClose}>Back to overview</button>
+        </div>
       </div>
+
       {!status ? (
-        <div data-testid="create-watch-gone" style={{ color: '#888', fontSize: 12 }}>
+        <div data-testid="create-watch-gone" style={{ color: '#888', fontSize: 12, marginTop: 12 }}>
           This create is no longer listed — it was dismissed, or it finished long enough ago
           that the server has forgotten it. The repository list is the authoritative answer
           to whether it exists.
         </div>
+      ) : status.state === 'cancelled' ? (
+        <div style={{ marginTop: 12 }}>
+          <div data-testid="create-cancelled" style={{ fontSize: 13, color: '#9c9' }}>
+            Create cancelled. No repository was added.
+          </div>
+          <button type="button" data-testid="create-watch-back" style={{ ...btnLink, marginTop: 10 }}
+            onClick={onClose}>Back to overview</button>
+        </div>
       ) : (
         <>
           <CreateProgress status={status} />
-          {status.state === 'done' && status.repo && (
-            <button type="button" data-testid="create-watch-open-repo" style={{ ...btnLink, marginTop: 10 }}
-              onClick={() => onOpenRepo(status.repo!.name)}>Open {status.repo.name}</button>
+
+          {/* THE OPERATIONS THAT APPLY, and only those — the same rule a
+              repository's page follows. A control that the server would refuse
+              is worse than no control: `cancel` is refused once the job is
+              terminal, `dismiss` is refused while it is not. */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+            {(status.state === 'running' || status.state === 'cancelling') && (
+              <button type="button" data-testid="create-cancel-button"
+                style={btn(busy || status.state === 'cancelling')}
+                disabled={busy || status.state === 'cancelling'}
+                onClick={() => { void cancel(); }}>
+                {status.state === 'cancelling' ? 'Cancelling…' : 'Cancel create'}
+              </button>
+            )}
+            {status.state === 'failed' && (
+              <button type="button" data-testid="create-watch-dismiss" style={btn(false)}
+                onClick={() => { void dismiss(); }}>Dismiss</button>
+            )}
+          </div>
+
+          {/* The "cancelling" copy is NOT repeated here: CreateProgress above
+              already replaces its own headline with it, so this page and the
+              wizard say it once, in the same words, from one place. */}
+          {cancelErr && (
+            <div data-testid="create-cancel-error" style={{ fontSize: 12, color: '#e29a9a', marginTop: 8 }}>
+              {cancelErr}
+            </div>
           )}
         </>
       )}
