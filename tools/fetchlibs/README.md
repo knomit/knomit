@@ -24,6 +24,15 @@ go run ./tools/fetchlibs [-only ort,tokenizers] [dest-dir]
 Each library is skipped if its target file is already present, so the command is
 idempotent and safe to re-run.
 
+## When a download fails
+
+Transport errors and 5xx responses are retried — four attempts, doubling from
+2s, 14s of waiting in the worst case — and each retry prints a line to stderr,
+so a CI log shows a flaky release CDN as what it was rather than as a pause.
+
+A **4xx is not retried**. A 404 means [`spec.go`](spec.go) pins a release that
+does not exist; retrying a wrong pin only delays the message that says so.
+
 Normally you don't call it directly — `make setup` does:
 
 ```sh
