@@ -36,21 +36,33 @@ var (
 //
 // What makes this fiddlier than "attach a console and print" is that
 // AttachConsole SUCCEEDS in cases where nothing is wrong, and acting on that
-// success is how you break redirection. Measured, on this binary, across three
-// launches:
+// success is how you break redirection. Measured on this binary, bytes landing
+// in the destination over 3 runs each:
 //
-//	launch              STD_OUTPUT_HANDLE  GetFileType   AttachConsole
-//	no redirection      0x0                0 (UNKNOWN)   succeeds
-//	`... > out.txt`     valid              1 (DISK)      succeeds
-//	`... | something`   valid              3 (PIPE)      succeeds
+//	launch                          handle       AttachConsole   bytes
+//	bare, no redirection            0x0 UNKNOWN  succeeds        n/a (console)
+//	cmd.exe   `... > out.txt`       valid DISK   succeeds        15, 15, 15
+//	PowerShell `... | Set-Content`  valid PIPE   succeeds        16, 16, 16
+//	PowerShell `... > out.txt`      valid PIPE   succeeds        0, 0, 0
 //
-// Only the first row is broken: a GUI-subsystem process DOES inherit a working
-// stdout when the shell redirects one, and it is the same AttachConsole success
-// in every row. So the signal to act on is the HANDLE, not the attach — an
-// unconditional switch to CONOUT$ sends `--version > out.txt` to a console
-// nobody is looking at and leaves the file empty, which is a silent wrong answer
-// rather than a visible failure. Hence the per-stream guard: a stream that
-// already works is left exactly as it is.
+// Two separate things are going on, and conflating them is how this gets
+// written wrong:
+//
+// THE ATTACH IS NOT THE SIGNAL. AttachConsole succeeds in every row, because
+// the parent shell has a console in every row. Only the bare row has an
+// unusable stdout. So the per-stream guard keys on the HANDLE: an
+// unconditional switch to CONOUT$ would send cmd's `> out.txt` to a console
+// nobody is looking at and leave the file empty — a silent wrong answer rather
+// than a visible failure. A stream that already works is left exactly as it is.
+//
+// THE LAST ROW IS NOT OURS TO FIX. PowerShell (both 5.1 and 7.x) does not wait
+// on a GUI-subsystem child: it gives it a PIPE rather than the file handle and
+// closes the read end without draining, so the bytes are discarded whether or
+// not the write reports success. CONOUT$ would not put them in the file either,
+// and the same shells redirect a CONSOLE-subsystem binary (knomit-okf.exe)
+// to a file correctly — so this is PowerShell's process handling of GUI
+// children, not a defect in the guard below. Documented in README.md as
+// "use a pipe or cmd /c, not `>`"; there is deliberately no code here for it.
 //
 // AttachConsole alone would not be enough for the broken row either. It gives
 // the process a console but does not repair the handles Go captured at startup,

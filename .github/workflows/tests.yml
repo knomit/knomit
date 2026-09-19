@@ -213,6 +213,27 @@ jobs:
       - name: Build (CGo) — proves libtokenizers.a links + cloud is Wails-free
         run: CGO_ENABLED=1 go build $(go list -f '{{if .GoFiles}}{{.ImportPath}}{{end}}' ./...)
 
+      # The ONLY job in CI that compiles tools/desktop's Windows-tagged files.
+      # The `desktop` job below runs on macos-latest, and the step above drops
+      # tools/desktop entirely (no -tags desktop, so the package has no GoFiles),
+      # which left `//go:build desktop && windows` files — console_windows.go,
+      # reveal_windows.go — compiled by NOTHING. They are the files most likely
+      # to rot unnoticed: both reach kernel32 through lazy procs and syscall
+      # structs that no other platform type-checks, so a bad signature is a
+      # runtime surprise on the one platform nobody's compiler was checking.
+      # Same argument as the Windows leg itself (see the header).
+      #
+      # COMPILE AND VET ONLY — no desktop tests here. This leg already costs
+      # ~30 minutes, and the desktop tests themselves run on macOS in `desktop`.
+      # It rides this job because the CGo toolchain, libtokenizers.a and the ORT
+      # dir are already set up above by ./.github/actions/native-toolchain.
+      # `-o NUL` is Windows' /dev/null, mirroring the macOS job's `-o /dev/null`.
+      - name: Desktop app compiles on Windows (-tags desktop)
+        if: matrix.os == 'windows-2025'
+        run: |
+          CGO_ENABLED=1 go build -tags desktop -o NUL ./tools/desktop
+          CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
+
       - name: Unit tests (no model download)
         run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
 

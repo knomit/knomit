@@ -388,10 +388,14 @@ e2e-report:
 # Consequence: a GUI-subsystem process gets no console, so its stdout/stderr go
 # nowhere. `knomit-desktop.exe --version` re-attaches to the launching console
 # itself to stay usable from cmd/PowerShell (tools/desktop/console_windows.go).
+# Recursively expanded (`=`, not `:=`) so it keeps tracking VERSION_LDFLAGS. A
+# `:=` here would snapshot that variable at parse time, and a later
+# `release: VERSION_LDFLAGS += -s -w` would then reach the CLIs but silently
+# miss the desktop binary.
 ifeq ($(GOOS),windows)
-DESKTOP_LDFLAGS := $(VERSION_LDFLAGS) -H windowsgui
+DESKTOP_LDFLAGS = $(VERSION_LDFLAGS) -H windowsgui
 else
-DESKTOP_LDFLAGS := $(VERSION_LDFLAGS)
+DESKTOP_LDFLAGS = $(VERSION_LDFLAGS)
 endif
 DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "$(DESKTOP_LDFLAGS)"
 
@@ -571,21 +575,37 @@ desktop-icons:
 # outputs are COMMITTED (the Go linker picks up any *_windows_<arch>.syso sitting
 # next to package main automatically), so this only needs rerunning when the logo
 # changes. Needs go-winres, which is deliberately NOT a build dependency, exactly
-# because the artifacts are checked in:
-#   go install github.com/tc-hib/go-winres@latest
+# because the artifacts are checked in. PINNED, not @latest: this target
+# regenerates a COMMITTED artifact, so an unpinned generator would let the .syso
+# change because someone's toolchain drifted rather than because the logo did.
+# Bump GO_WINRES_VERSION deliberately, the same way any other dependency moves.
 #
-# --manifest none is deliberate, and the reason is not "we do not want one". Go
-# already embeds a default manifest (asInvoker + supportedOS), and Wails v3 sets
-# per-monitor-v2 DPI awareness itself at runtime — application_windows.go's
-# setupDPIAwareness explicitly detects a manifest that has already set it,
-# because Windows allows DPI awareness to be set ONCE per process and doing it
-# both ways fails with "Access is denied". A manifest here would be a second
-# author for a setting that already has one.
+# --manifest none is deliberate, and the reason is not "we do not want one".
+# The binary already carries one: because the desktop build is CGO, it links
+# EXTERNALLY through MinGW, and mingw-w64 contributes its default-manifest.o
+# (asInvoker + five supportedOS GUIDs) to every binary it links. Verified: a
+# pure-Go -H windowsgui binary has no .rsrc and no manifest at all, while a
+# minimal CGO one carries the byte-identical 710-byte manifest this binary has.
+# So the manifest is a property of the TOOLCHAIN, not of Go, and it would
+# disappear if the desktop app ever stopped needing cgo.
+#
+# That manifest has no dpiAware element, which is what makes adding one
+# unnecessary: Wails v3 sets per-monitor-v2 DPI awareness itself at runtime, and
+# application_windows.go's setupDPIAwareness explicitly detects a manifest that
+# has already set it, because Windows allows DPI awareness to be set ONCE per
+# process and doing it both ways fails with "Access is denied". A manifest here
+# would be a second author for a setting that already has one.
 #
 # No version resource either: it would have to bake in a version that
 # VERSION_LDFLAGS injects at BUILD time, so a committed .syso would start lying
 # the moment BASE_VERSION moves.
+GO_WINRES_VERSION := v0.3.3
 desktop-winres:
+	@command -v go-winres >/dev/null 2>&1 || { \
+	  echo "go-winres not found on PATH. Install the pinned version with:"; \
+	  echo "  go install github.com/tc-hib/go-winres@$(GO_WINRES_VERSION)"; \
+	  echo "then make sure the directory 'go env GOPATH' names, plus /bin, is on your PATH."; \
+	  exit 1; }
 	go-winres simply --icon tools/desktop/appicon.png --manifest none \
 	  --arch amd64,arm64 --out tools/desktop/rsrc
 	@echo "Regenerated tools/desktop/rsrc_windows_{amd64,arm64}.syso from appicon.png"
