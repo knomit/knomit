@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from './api';
+import { api, isTerminalCreateState } from './api';
 import type { RepoCreateStatus } from './api';
 
 // The two poll rates. ACTIVE while anything is happening, IDLE otherwise.
@@ -31,10 +31,15 @@ export const CREATES_POLL_IDLE_MS = 30000;
 let cache: RepoCreateStatus[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
+let generation = 0;
 const subscribers = new Set<(s: RepoCreateStatus[]) => void>();
 
+// Both NON-TERMINAL states count as activity. A cancelling job is still
+// working — a step to finish, or a repo to delete — so a list that fell back
+// to the idle poll rate the moment cancel was pressed would take up to half a
+// minute to notice the outcome the user is waiting for.
 function anyRunning(list: RepoCreateStatus[]): boolean {
-  return list.some(c => c.state === 'running');
+  return list.some(c => !isTerminalCreateState(c.state));
 }
 
 function nextDelay(list: RepoCreateStatus[]): number {
@@ -49,8 +54,15 @@ function publish(list: RepoCreateStatus[]) {
 async function poll() {
   if (inFlight) return;
   inFlight = true;
+  // The reset generation this poll belongs to. A request that is already in
+  // flight when the store is reset must not publish its answer into the store
+  // that replaced it — between tests that resurrects the previous test's jobs
+  // after the reset, which is a flake; in the app it would let a poll from
+  // before a teardown write into a fresh store.
+  const gen = generation;
   try {
-    publish(await api.listRepoCreates());
+    const list = await api.listRepoCreates();
+    if (gen === generation) publish(list);
   } catch {
     // A failed poll is NOT an empty list. Publishing [] here would make every
     // pending row vanish on one dropped request and reappear on the next,
@@ -86,6 +98,8 @@ export function __resetRepoCreatesForTest() {
   inFlight = false;
   cache = [];
   subscribers.clear();
+  // Retires any request already in flight — see poll().
+  generation++;
 }
 
 // useRepoCreates subscribes to the shared list. Every caller sees the same
@@ -117,10 +131,97 @@ export function useRepoCreates(): RepoCreateStatus[] {
 // Applied by every repo-list surface, from here rather than per surface, so
 // the rail and the overview cannot disagree about which rows exist.
 export function pendingCreates(list: RepoCreateStatus[], repoNames: readonly string[]): RepoCreateStatus[] {
-  return list.filter(c => !repoNames.includes(c.name));
+  // CANCELLED JOBS ARE DROPPED HERE TOO, not only by the server.
+  //
+  // The server omits them from the collection, so this is belt and braces —
+  // but it is the brace that matters: the row component returns null for a
+  // cancelled job, so a surface that counted the list rather than the rows it
+  // would draw showed an empty "Being created" block with a heading and
+  // nothing under it. Filtering where both surfaces already filter keeps the
+  // count and the rows the same fact.
+  return list.filter(c => c.state !== 'cancelled' && !repoNames.includes(c.name));
 }
 
-// runningCreates is the count the top-bar indicator shows.
+// runningCreates is the count the top-bar indicator shows — every create with
+// work still to do, which includes one that is cancelling. The light answers
+// "is anything happening?", and honouring a cancel is something happening.
 export function runningCreates(list: RepoCreateStatus[]): number {
-  return list.filter(c => c.state === 'running').length;
+  return list.filter(c => !isTerminalCreateState(c.state)).length;
+}
+
+// createFlag is the ONE word a list row says about a create.
+//
+// A create in a repository list is a repository that is not finished yet, so
+// the row says which repository it is and flags the state it is in — nothing
+// more. Everything else about the job (the step, the percent, the error, the
+// controls) belongs on the create's own page, exactly as a repository's own
+// details belong on its page rather than in the rail.
+//
+// `null` means DO NOT RENDER THIS ROW AT ALL. A cancelled create has nothing
+// left to say in a list: the repository is gone and the outcome is the one the
+// user asked for. The server already omits cancelled jobs from the collection;
+// this is the same rule stated where the drawing happens, so a stale list
+// cannot put the row back.
+//
+// It lives HERE, beside pendingCreates and runningCreates, rather than in
+// PendingCreateRow.tsx: that file exports components, and a non-component
+// export from it breaks fast refresh for every component in it.
+export function createFlag(state: string): string | null {
+  switch (state) {
+    case 'running': return 'creating';
+    case 'cancelling': return 'cancelling';
+    case 'failed': return 'failed';
+    case 'cancelled': return null;
+    // 'done' is the brief window between the job finishing and its repo
+    // appearing in the list that replaces this row. 'created' rather than
+    // 'creating', because it is neither a lie nor a state anyone acts on.
+    default: return 'created';
+  }
+}
+
+// activeCreateByRepo maps a repo NAME to the create job still working on it.
+//
+// It exists because a create does not stop mattering the moment its repo is
+// registered. From m.Add onwards the repo is real and listable — so every
+// repository surface started drawing it as an ordinary repo — while the job
+// behind it was still indexing, and, if the user had pressed Cancel, still on
+// its way to deleting that very repo. The reader saw a normal repository with
+// a normal "Indexing…" line while it was being removed underneath them.
+//
+// Only NON-TERMINAL jobs are included. A finished job has nothing left to say
+// about a repo that now stands on its own, and a cancelled one's repo is gone.
+//
+// The user's paradigm, applied one step further than the rail: the repo
+// exists, so flag the REPO rather than hiding the job or inventing a second
+// row for it.
+export function activeCreateByRepo(list: RepoCreateStatus[]): Map<string, RepoCreateStatus> {
+  const out = new Map<string, RepoCreateStatus>();
+  for (const c of list) {
+    if (!isTerminalCreateState(c.state)) out.set(c.name, c);
+  }
+  return out;
+}
+
+// createRepoIsRegistered reports whether the job's REPO now exists.
+//
+// A create passes through a point — m.Add — after which the repository is
+// real, listable and browsable, while the job behind it goes on indexing and
+// then activating sync. Waiting for the job's terminal state before letting
+// anyone in means waiting out the whole index for a repo that has been
+// browsable for minutes; the user's words were that on reaching "Building the
+// search index" the only way to see the repo was to reload the page.
+//
+// The test is on what the server has REPORTED, not on a step name alone:
+// index_state is only ever set once the mirror has read the repo's index,
+// which it can only do after m.Add. The step names are the belt to that
+// braces, for a status that arrives between the register step and the mirror's
+// first read.
+//
+// It is NOT a claim that the repo is ready — the index is still building, and
+// the caller is expected to show the "Creating…" banner. Callers must also
+// confirm the name against the repo list before navigating: this says the job
+// believes it registered, and only the list can say the repo is really there.
+export function createRepoIsRegistered(s: RepoCreateStatus): boolean {
+  if (s.index_state) return true;
+  return s.step === 'index' || s.step === 'sync' || s.step === 'done';
 }

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef } from './api';
+import { api, repoAvailable, brokenLensMember, isTerminalCreateState, MAX_LENS_DESCRIPTION_BYTES, MAX_REPO_DESCRIPTION_BYTES, type ArchivedRepo, type RepoInfo, type Lens, type LensReadRef, type RepoCreateStatus } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { PendingCreateRow } from './PendingCreateRow';
-import { useRepoCreates, refreshRepoCreates, pendingCreates } from './useRepoCreates';
+import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag, activeCreateByRepo, createRepoIsRegistered } from './useRepoCreates';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateProgress } from './CreateProgress';
 import { markdownPlugins, markdownComponents } from './markdown';
@@ -106,6 +106,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // rail life itself rather than wait for the server to forget it.
   const creates = useRepoCreates();
   const railCreates = pendingCreates(creates, repos.map(r => r.name));
+  // The jobs whose repo ALREADY EXISTS and is still being worked on. These are
+  // exactly the ones pendingCreates drops, and dropping them was right for the
+  // row (two rows for one name read as two repositories) but wrong for the
+  // flag: from m.Add onwards the repo is listable, so the rail drew it as an
+  // ordinary repository while it was still indexing — or, after a late cancel,
+  // while it was being deleted underneath the reader. Flag the repo instead.
+  const activeCreates = activeCreateByRepo(creates);
 
   // Set by the connect sub-page while its commit is in flight. Selecting
   // anything unmounts that page, and the commit stream has no abort and no
@@ -370,23 +377,43 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 Hiding a create until it succeeds is what made one vanish. */}
             {railCreates.map(c => (
               <PendingCreateRow key={c.create_id} status={c} surface="rail"
-                onOpen={id => setSel({ kind: 'create', id })}
-                onDismiss={async id => {
-                  try { await api.dismissRepoCreate(id); } catch { /* the refresh tells the truth */ }
-                  await refreshRepoCreates();
-                }} />
+                // listItem — the SAME style the repository rows below use, not
+                // a lookalike. A create is a repository being made, so its row
+                // is a repository row with a flag on it; passing the style in
+                // rather than copying it is what stops the two drifting.
+                style={listItem(view.kind === 'create' && view.id === c.create_id)}
+                active={view.kind === 'create' && view.id === c.create_id}
+                disabled={connectBusy}
+                onOpen={id => setSel({ kind: 'create', id })} />
             ))}
-            {repos.map(r => (
+            {repos.map(r => {
+              // The create still working on THIS repo, if any.
+              const job = activeCreates.get(r.name);
+              const jobFlag = job ? createFlag(job.state) : null;
+              return (
               <button
                 key={r.name}
                 type="button"
                 data-testid={`repomgr-item-${r.name}`}
+                data-create-state={jobFlag ?? undefined}
                 onMouseDown={noMouseFocus}
                 // Lit for the repo's connect sub-page too: the reader is still
                 // inside that repository, and a rail that went dark mid-flow
                 // would be the takeover's context loss in miniature.
-                style={listItem((view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
+                style={listItem(
+                  job
+                    ? view.kind === 'create' && view.id === job.create_id
+                    : (view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
                 disabled={connectBusy}
+                // WHILE A CREATE IS STILL WORKING ON IT, the row opens the
+                // CREATE page, not the settings page. The settings page offers
+                // rename, archive and remote configuration for a repository
+                // that is still being made — or, after a cancel, unmade — and
+                // the thing the reader actually needs is the job's status and
+                // its Cancel button.
+                // The merged page: a repository being created IS a repository
+                // page, gated by state. There is no separate create view for a
+                // repo that exists.
                 onClick={() => setSel({ kind: 'repo', name: r.name })}
               >
                 {/* The repo's own deterministic hue, as in the top-bar switcher,
@@ -404,14 +431,23 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                     leave the user reading about a repository with nowhere to
                     go. The chip replaces "viewing", which cannot be true of a
                     repo the browse surface refuses to open. */}
-                {!repoAvailable(r)
-                  ? <RepoStateChip repo={r} />
-                  : <>
-                      <RepoIndexChip repo={r} />
-                      {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
-                    </>}
+                {/* THE CREATE FLAG WINS over the index chip and "viewing".
+                    While a job is still working on this repo, "creating" and
+                    "cancelling" are the truth about it, and an index chip
+                    beside them would be reporting a detail of work whose
+                    outcome is not settled — at worst "indexing" on a repo that
+                    is being deleted. One row, one flag. */}
+                {jobFlag
+                  ? <span data-testid={`repomgr-create-chip-${r.name}`} style={createChip}>{jobFlag}</span>
+                  : !repoAvailable(r)
+                    ? <RepoStateChip repo={r} />
+                    : <>
+                        <RepoIndexChip repo={r} />
+                        {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
+                      </>}
               </button>
-            ))}
+              );
+            })}
 
             {/* Archived belongs UNDER Repositories, not beside it: an archived
                 repo is a repository in a state, not a third kind of thing next
@@ -511,6 +547,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 canArchive={!readOnly}
                 readOnly={readOnly}
                 hideRemoteConfig={hideRemoteConfig}
+                createJob={activeCreates.get(view.name) ?? null}
+                onCancelCreate={async () => {
+                  const job = activeCreates.get(view.name);
+                  if (!job) return;
+                  try { await api.cancelRepoCreate(job.create_id); } catch { /* the refresh tells the truth */ }
+                  await refreshRepoCreates();
+                }}
                 onArchived={() => { onChanged(); refresh(); setSel(null); }}
                 onConnect={() => setSel({ kind: 'connect', name: view.name })}
                 onChanged={onChanged}
@@ -558,16 +601,26 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               />
             )}
             {view.kind === 'create' && (
-              <CreateWatch
+              <CreatingRepoPage
                 createId={view.id}
                 onClose={() => setSel({ kind: 'overview' })}
+                // BROWSE it, do not open its settings. The reader asked for a
+                // repository and the thing to do with one is read it — which is
+                // also what a page reload gave them, and the reason they were
+                // reloading. Leaving Manage is the point.
+                // Hands over to the MERGED repo page — this is the manage
+                // surface, and the reader came here for the job. The wizard's
+                // own flow browses instead; it is a different arrival.
                 onOpenRepo={name => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
               />
             )}
             {view.kind === 'new' && readOnly && <CreateBlocked what="repository" />}
             {view.kind === 'new' && !readOnly && (
               <CreateRepoWizard
-                onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
+                // Fires the moment the repo EXISTS, not when the job ends — see
+                // maybeEnterRepo. Browse rather than settings, for the same
+                // reason: this is the reader arriving at their new repository.
+                onDone={(name) => { onChanged(); refresh(); onBrowse({ kind: 'repo', repo: name }); }}
                 // With no repos the fallback selection IS this form and Manage is
                 // the whole window, so there is nothing to back out TO: clearing
                 // the selection would re-render the form unchanged, and leaving
@@ -707,8 +760,12 @@ function CreateBlocked({ what }: { what: 'repository' | 'lens' }) {
   );
 }
 
-function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, onArchived, onConnect, onChanged, onRenamed, onBrowse, onSelectLens, onError }: {
+function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, createJob, onCancelCreate, onArchived, onConnect, onChanged, onRenamed, onBrowse, onSelectLens, onError }: {
   name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
+  /** The create still working on this repo, if any. Puts the page in CREATING
+   *  MODE — see the `creating` flag below. */
+  createJob?: RepoCreateStatus | null;
+  onCancelCreate?: () => void;
   // Every lens, so the Mounted-in block can be derived rather than fetched —
   // it is the reverse of a lens's read mounts, and the list is already here.
   lenses: Lens[];
@@ -863,15 +920,61 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // needs in place of a nav to reorganise.
   const sections: Section[] = [];
 
+  // CREATING MODE. The repository exists and is readable, but the job that
+  // made it is still working — indexing, then activating sync — and after a
+  // late cancel it is on its way out again.
+  //
+  // This is ONE PAGE gated by state, not a second page beside this one. A
+  // create used to get a bespoke view with its own header and its own idea of
+  // what a repository looks like; the user's paradigm is the opposite —
+  // "reuse the exact same UI paradigm, EXCEPT mark the repo as creating". So
+  // the reader gets the repository page they already know, with the progress
+  // on top and the parts that cannot honestly be offered yet withheld.
+  //
+  // WHAT IS WITHHELD AND WHY: every edit control (a README written into a repo
+  // whose index is mid-build, or whose delete is pending, is a write with
+  // nowhere to land), Rebuild (the index is already being built), the Remote
+  // block (sync activation has not happened yet — the origin the page would
+  // show is not yet the origin the repo has), and the Danger zone (rename and
+  // archive on a half-made repository, one of which is a delete racing
+  // another delete). Everything that is only READ stays: description,
+  // licence, agent branch, agent access, the index chip, and Browse — the
+  // repo is readable from the index phase on, which is the whole point.
+  const creating = !!createJob && !isTerminalCreateState(createJob.state);
+  // Edits are locked by creating exactly as they are by read-only, so every
+  // control that already asks "may I write?" needs no new question.
+  const lockEdits = readOnly || creating;
+
+  if (creating && createJob) {
+    sections.push({
+      id: 'create',
+      title: 'Being created',
+      hint: 'this repository is still being made; some of its settings are unavailable until it finishes',
+      body: (
+        <div>
+          <CreateProgress status={createJob} />
+          <div style={{ marginTop: 12 }}>
+            <button type="button" data-testid="create-cancel-button"
+              style={btn(createJob.state === 'cancelling')}
+              disabled={createJob.state === 'cancelling'}
+              onClick={onCancelCreate}>
+              {createJob.state === 'cancelling' ? 'Cancelling…' : 'Cancel create'}
+            </button>
+          </div>
+        </div>
+      ),
+    });
+  }
+
   // Shown whenever there is something to read OR the user could write one; a
   // read-only repo with no manifest has neither.
-  if (description || !readOnly) {
+  if (description || !lockEdits) {
     sections.push({
       id: 'description',
       title: 'Description',
       hint: `README.md, committed to the agent branch · up to ${Math.round(MAX_REPO_DESCRIPTION_BYTES / 1024)} KiB`,
-      action: readOnly ? undefined : <DescriptionActions editor={descEditor} label="Edit description" />,
-      body: <DescriptionBody editor={descEditor} readOnly={readOnly} />,
+      action: lockEdits ? undefined : <DescriptionActions editor={descEditor} label="Edit description" />,
+      body: <DescriptionBody editor={descEditor} readOnly={lockEdits} />,
     });
   }
 
@@ -880,7 +983,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // LICENSE gets no block: nothing to read, nothing to offer. An oversize
   // LICENSE counts as "something to read" even though its content did not
   // come down the wire — there IS a file, and the block must say so.
-  if (license || licenseOversize || !readOnly) {
+  if (license || licenseOversize || !lockEdits) {
     sections.push({
       id: 'license',
       title: 'License',
@@ -891,7 +994,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       // saved over it is exactly the silent-destruction bug this state
       // exists to prevent; the server refuses the write too, but the control
       // must not be there to invite it).
-      action: readOnly || licenseOversize ? undefined : (
+      action: lockEdits || licenseOversize ? undefined : (
         <DescriptionActions editor={licEditor} label={license ? 'Edit license' : 'Add license'} testIdPrefix="repo-license" />
       ),
       body: licenseOversize ? (
@@ -961,7 +1064,10 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // action that changes it. A load FAILURE stays distinct from "not connected":
   // "we could not read this" is state, and collapsing the two would invite you
   // to overwrite a remote that is merely unreadable.
-  if (!hideRemoteConfig) {
+  // Not while creating: sync activation is the LAST thing a remote create
+  // does, so until the job ends the origin this block would show is not yet
+  // the origin the repository has.
+  if (!hideRemoteConfig && !creating) {
     const connected = remote.loading || remote.origin || remote.err;
     sections.push({
       id: 'remote',
@@ -1062,7 +1168,9 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     id: 'index',
     title: 'Index',
     hint: 'the search and recall index for this branch',
-    action: (
+    // No Rebuild while creating: the index is already being built, and a
+    // second build queued behind it answers a question nobody asked.
+    action: creating ? undefined : (
       <button type="button" data-testid="repo-rebuild" style={btn(readOnly || rebuilding)} disabled={readOnly || rebuilding} onClick={rebuild}>
         {rebuilding ? 'Rebuilding…' : 'Rebuild'}
       </button>
@@ -1079,7 +1187,11 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // Every repo is archivable, including
   // the last one — no repo is privileged, and an empty knomit is a valid state
   // (it is how a fresh install starts).
-  sections.push({
+  //
+  // Withheld while creating: rename and archive on a repository that is still
+  // being made are operations against a moving target, and archive during a
+  // cancel is a delete racing another delete.
+  if (!creating) sections.push({
     id: 'danger',
     title: 'Danger zone',
     danger: true,
@@ -1145,7 +1257,11 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
           <span style={repoIconBox(name)}><BookIcon color={repoHue(name)} size={16} /></span>
           <div style={{ minWidth: 0 }}>
             <h3 style={{ margin: 0, fontSize: 16 }}>{name}</h3>
-            <div style={{ fontSize: 12, color: '#777', marginTop: 1 }}>repository settings</div>
+            {/* The flag goes exactly where the subtitle goes — the only
+                difference between this header and an ordinary repository's. */}
+            <div data-testid="repo-detail-subtitle" style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
+              {creating && createJob ? createFlag(createJob.state) : 'repository settings'}
+            </div>
           </div>
         </div>
         {/* Browse is the only action left in the header, and the only place the
@@ -1491,43 +1607,180 @@ function ArchivedDetail({ info, readOnly, activeNames, onRestored, onPurged, onE
 // CreateLensForm (checkbox rows, LENS tokens) rather than importing its row
 // component: that form's rows are tightly coupled to its own reads/branchData
 // state, so extraction would force a risky refactor for no shared behavior.
-// CreateWatch is the page a pending row opens: one create, observed.
+// CreatingRepoPage is the PRE-REGISTRATION page: a create that has no
+// repository yet.
+//
+// Once the repo exists there is no separate page for it — the repository's
+// own details page renders in creating mode (see RepoDetail), which is the
+// user's paradigm: one page gated by state, not a second page beside it. This
+// one covers the window before m.Add, where there is genuinely nothing to show
+// a repository page OF, and it hands over the moment there is.
 //
 // It reads the SHARED list rather than polling the single-job endpoint, so it
 // cannot disagree with the rail and the indicator about the same job, and
 // costs no extra requests. A job the list no longer has — dismissed elsewhere,
 // or aged out of the server's retention window — says so rather than spinning
 // on a resource that is gone.
-function CreateWatch({ createId, onClose, onOpenRepo }: {
+function CreatingRepoPage({ createId, onClose, onOpenRepo }: {
   createId: string;
   onClose: () => void;
   onOpenRepo: (name: string) => void;
 }) {
   const creates = useRepoCreates();
-  const status = creates.find(c => c.create_id === createId) ?? null;
+  const listed = creates.find(c => c.create_id === createId) ?? null;
+  // The job the LIST no longer carries, read by id.
+  //
+  // A cancelled create is omitted from the collection on purpose — a
+  // repository list has nothing left to say about it — so a page that read
+  // only the list would lose the job at the exact moment the user is waiting
+  // to be told what happened to it. The single-job resource outlives the
+  // collection entry for this reason, and this is the client half of that
+  // bargain. A job that is genuinely gone (dismissed, or aged past the
+  // server's retention) fails this fetch and falls through to the "gone" card.
+  const [byId, setById] = useState<RepoCreateStatus | null>(null);
+  const inList = listed !== null;
+  useEffect(() => {
+    if (inList) return;
+    let cancelled = false;
+    api.getRepoCreate(createId).then(s => { if (!cancelled) setById(s); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [inList, createId]);
+  // The fetched job is MATCHED BY ID rather than cleared when the page
+  // switches creates. Clearing it would be a setState inside the effect above,
+  // and — worse — a render between the switch and that clear would show the
+  // previous create's status under the new create's name. Carrying the id with
+  // the answer makes the staleness impossible to render instead of merely
+  // brief.
+  const status = listed ?? (byId?.create_id === createId ? byId : null);
+
+  const [cancelErr, setCancelErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // THE PAGE IS OVER WHEN THE REPOSITORY EXISTS, not when the job ends.
+  //
+  // The job's terminal state now arrives only after the whole index and the
+  // sync activation — minutes, on a real repository, after the repo became
+  // browsable. Waiting for it stranded the reader on a progress view of a
+  // repository they could already open: "the only way to view the repo is to
+  // refresh the page".
+  //
+  // Guarded by the repo LIST, not by the status alone, for the same reason the
+  // wizard is: this leaves the create surface for the repository, and that is
+  // a claim the job's own word cannot support. Never while cancelling — that
+  // job is deleting the very repo this would open.
+  // The "already entered" latch is read in the EFFECT, never during render:
+  // a ref's value is not a render input, and reading one here would make this
+  // component's output depend on something React does not track.
+  const enteredRepo = useRef(false);
+  const registered = status !== null
+    && status.state !== 'cancelling' && status.state !== 'cancelled' && status.state !== 'failed'
+    && createRepoIsRegistered(status);
+  const registeredName = registered ? (status.repo?.name || status.name) : undefined;
+  useEffect(() => {
+    if (!registeredName || enteredRepo.current) return;
+    let abandoned = false;
+    void api.repos().then(list => {
+      if (abandoned || enteredRepo.current) return;
+      if (!list.some(r => r.name === registeredName)) return;
+      enteredRepo.current = true;
+      onOpenRepo(registeredName);
+    }).catch(() => { /* a failed listing is not evidence the repo is there */ });
+    return () => { abandoned = true; };
+  }, [registeredName, onOpenRepo]);
+
+  const cancel = async () => {
+    setCancelErr(''); setBusy(true);
+    try {
+      await api.cancelRepoCreate(createId);
+      await refreshRepoCreates();
+    } catch (e) {
+      setCancelErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dismiss = async () => {
+    try { await api.dismissRepoCreate(createId); } catch { /* the list tells the truth */ }
+    await refreshRepoCreates();
+    onClose();
+  };
+
+  const flag = status ? createFlag(status.state) : null;
+  const nameOf = status?.name ?? '';
 
   return (
     <div data-testid="create-watch">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
-          {status ? `Creating ${status.name}` : 'Create'}
-        </h3>
-        <button type="button" className="k-bare" data-testid="create-watch-close"
-          style={{ marginLeft: 'auto', color: '#7a9ab5', fontSize: 12, background: 'none', border: 'none', cursor: 'pointer' }}
-          onClick={onClose}>Back to overview</button>
+      {/* THE REPOSITORY PAGE'S OWN HEADER, not a variant of it: same icon box
+          in the repo's hue, same name treatment, and the flag sitting exactly
+          where a repository's subtitle sits. The user asked for "the exact
+          same UI paradigm, EXCEPT mark the repo as creating" — so the only
+          difference between this header and a real repository's is the word
+          under the name. */}
+      <div style={detailHead}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <span style={repoIconBox(nameOf)}><BookIcon color={repoHue(nameOf)} size={16} /></span>
+          <div style={{ minWidth: 0 }}>
+            <h3 style={{ margin: 0, fontSize: 16 }}>{nameOf || 'Create'}</h3>
+            <div data-testid="create-watch-flag" style={{ fontSize: 12, color: '#777', marginTop: 1 }}>
+              {status?.state === 'cancelling' ? 'cancelling'
+                : status?.state === 'failed' ? 'create failed'
+                  : status?.state === 'cancelled' ? 'create cancelled'
+                    : flag ?? 'create'}
+            </div>
+          </div>
+        </div>
+        <div style={headActions}>
+          <button type="button" className="k-bare" data-testid="create-watch-close"
+            style={btnLink} onClick={onClose}>Back to overview</button>
+        </div>
       </div>
+
       {!status ? (
-        <div data-testid="create-watch-gone" style={{ color: '#888', fontSize: 12 }}>
+        <div data-testid="create-watch-gone" style={{ color: '#888', fontSize: 12, marginTop: 12 }}>
           This create is no longer listed — it was dismissed, or it finished long enough ago
           that the server has forgotten it. The repository list is the authoritative answer
           to whether it exists.
         </div>
+      ) : status.state === 'cancelled' ? (
+        <div style={{ marginTop: 12 }}>
+          {/* One way back, not two. The header already carries "Back to
+              overview"; a second copy of the same link under the card was the
+              page asking twice. */}
+          <div data-testid="create-cancelled" style={{ fontSize: 13, color: '#9c9' }}>
+            Create cancelled. No repository was added.
+          </div>
+        </div>
       ) : (
         <>
           <CreateProgress status={status} />
-          {status.state === 'done' && status.repo && (
-            <button type="button" data-testid="create-watch-open-repo" style={{ ...btnLink, marginTop: 10 }}
-              onClick={() => onOpenRepo(status.repo!.name)}>Open {status.repo.name}</button>
+
+          {/* THE OPERATIONS THAT APPLY, and only those — the same rule a
+              repository's page follows. A control that the server would refuse
+              is worse than no control: `cancel` is refused once the job is
+              terminal, `dismiss` is refused while it is not. */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+            {(status.state === 'running' || status.state === 'cancelling') && (
+              <button type="button" data-testid="create-cancel-button"
+                style={btn(busy || status.state === 'cancelling')}
+                disabled={busy || status.state === 'cancelling'}
+                onClick={() => { void cancel(); }}>
+                {status.state === 'cancelling' ? 'Cancelling…' : 'Cancel create'}
+              </button>
+            )}
+            {status.state === 'failed' && (
+              <button type="button" data-testid="create-watch-dismiss" style={btn(false)}
+                onClick={() => { void dismiss(); }}>Dismiss</button>
+            )}
+          </div>
+
+          {/* The "cancelling" copy is NOT repeated here: CreateProgress above
+              already replaces its own headline with it, so this page and the
+              wizard say it once, in the same words, from one place. */}
+          {cancelErr && (
+            <div data-testid="create-cancel-error" style={{ fontSize: 12, color: '#e29a9a', marginTop: 8 }}>
+              {cancelErr}
+            </div>
           )}
         </>
       )}
@@ -2248,3 +2501,13 @@ const editCheckbox = (on: boolean): React.CSSProperties => ({
   background: on ? LENS.accent : 'transparent', border: '1.5px solid ' + (on ? LENS.accent : '#444'),
   cursor: 'pointer',
 });
+
+// createChip flags a repository row whose create is still working. Same shape
+// as the rail's other chips; blue, like PendingCreateRow's, because it is the
+// same fact about the same job seen from the repository's side.
+const createChip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center',
+  fontSize: 9.5, lineHeight: 1.7, padding: '0 5px', borderRadius: 3,
+  fontFamily: 'var(--k-font-mono)', whiteSpace: 'nowrap', flexShrink: 0,
+  color: '#8ab6d6', background: '#131d26', border: '1px solid #244056',
+};

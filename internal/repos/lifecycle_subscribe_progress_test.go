@@ -218,11 +218,45 @@ func TestCreate_SubscribeNarratesTransferAndIndexPhases(t *testing.T) {
 	// And the phases happened in that order.
 	require.Less(t, indexOfPhase(seen, PhaseTransfer), indexOfPhase(seen, PhaseIndex))
 	require.Less(t, indexOfPhase(seen, PhaseIndex), indexOfPhase(seen, PhaseDone))
+
+	// SYNC IS ACTIVATED AFTER THE INDEX, NEVER BEFORE IT. ActivateSync's
+	// synchronous reconcile takes the upstream branch lock that the heal
+	// holds while it indexes, so a "sync" step emitted before the index
+	// phase parks the job at "activating sync" for the whole index — the
+	// user-visible hang this ordering exists to remove. The step must still
+	// be there (sync IS activated), between the last index event and done,
+	// and must not drag the percent backwards past what the index reported.
+	syncAt := indexOfStep(seen, "sync")
+	require.NotEqual(t, -1, syncAt, "the create never activated sync; saw %s", summarize(seen))
+	require.Less(t, lastIndexOfPhase(seen, PhaseIndex), syncAt,
+		"sync was activated before the index finished narrating; saw %s", summarize(seen))
+	require.Less(t, syncAt, indexOfPhase(seen, PhaseDone))
+	require.GreaterOrEqual(t, seen[syncAt].Pct, seen[lastIndexOfPhase(seen, PhaseIndex)].Pct,
+		"the sync step must not step the bar backwards")
 }
 
 func indexOfPhase(seen []Event, phase string) int {
 	for i, e := range seen {
 		if e.Phase == phase {
+			return i
+		}
+	}
+	return -1
+}
+
+func lastIndexOfPhase(seen []Event, phase string) int {
+	last := -1
+	for i, e := range seen {
+		if e.Phase == phase {
+			last = i
+		}
+	}
+	return last
+}
+
+func indexOfStep(seen []Event, step string) int {
+	for i, e := range seen {
+		if e.Step == step {
 			return i
 		}
 	}

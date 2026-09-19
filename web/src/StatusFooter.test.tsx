@@ -7,12 +7,14 @@
 // rendered it only when a fact was open AND the view was anchored, so during
 // ordinary reading there was no commit on screen at all.
 
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { StatusFooter } from './StatusFooter';
 import { init } from './state';
 import type { AppState, AsOf } from './state';
+import { api } from './api';
 import type { Lens } from './api';
+import { __resetRepoCreatesForTest } from './useRepoCreates';
 
 const lens: Lens = { name: 'all', write: { uid: 'uid-test', name: 'test' }, reads: [{ uid: 'uid-core', name: 'core' }, { uid: 'uid-docs', name: 'docs' }] };
 
@@ -156,5 +158,62 @@ describe('StatusFooter — the history key', () => {
     render(<StatusFooter state={repoState} searchKey={false} historyKey={false} />);
     expect(footer().textContent).not.toContain('now');
     expect(footer().textContent).not.toContain('search');
+  });
+});
+
+// THE CREATE COUNT BELONGS ON THE READOUT RAIL, in words.
+//
+// It used to be a chip in the TOP BAR showing a bare number beside the
+// settings and exit icons, which read as an unexplained badge — "that weird
+// '1' icon at the top… that is not needed, or at least not like that". The
+// footer is where the app states what is true without asking anything of you,
+// and a sentence says what a numeral could not.
+describe('StatusFooter — creates in flight', () => {
+  beforeEach(() => { __resetRepoCreatesForTest(); });
+  afterEach(() => { __resetRepoCreatesForTest(); });
+
+  const job = (over: Record<string, unknown> = {}) => ({
+    create_id: 'c1', name: 'kb', mode: 'subscribe', state: 'running', ...over,
+  });
+
+  const withCreates = async (list: Record<string, unknown>[]) => {
+    vi.spyOn(api, 'listRepoCreates').mockResolvedValue(list as never);
+    render(<StatusFooter state={repoState} version="1.2.3" onOpenCreates={() => {}} />);
+  };
+
+  it('says nothing when nothing is being created', async () => {
+    await withCreates([]);
+    await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
+    expect(screen.queryByTestId('footer-creates')).toBeNull();
+  });
+
+  it('counts one create, in words and without naming it', async () => {
+    await withCreates([job()]);
+    const item = await screen.findByTestId('footer-creates');
+    expect(item).toHaveTextContent('1 repository being created');
+    // NO repository names: several creates can run at once, and naming one of
+    // them would be picking a favourite.
+    expect(item).not.toHaveTextContent('kb');
+  });
+
+  it('counts several, and folds cancelling into the same count', async () => {
+    await withCreates([job(), job({ create_id: 'c2', name: 'other', state: 'cancelling' })]);
+    const item = await screen.findByTestId('footer-creates');
+    expect(item).toHaveTextContent('2 repositories being created');
+    expect(item).toHaveAttribute('data-count', '2');
+  });
+
+  it('ignores finished creates', async () => {
+    await withCreates([job({ state: 'done' }), job({ create_id: 'c2', state: 'failed' })]);
+    await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
+    expect(screen.queryByTestId('footer-creates')).toBeNull();
+  });
+
+  it('opens the manage surface when clicked', async () => {
+    const onOpenCreates = vi.fn();
+    vi.spyOn(api, 'listRepoCreates').mockResolvedValue([job()] as never);
+    render(<StatusFooter state={repoState} version="1.2.3" onOpenCreates={onOpenCreates} />);
+    fireEvent.click(await screen.findByTestId('footer-creates'));
+    expect(onOpenCreates).toHaveBeenCalled();
   });
 });

@@ -169,12 +169,67 @@ func handleHALRepoCreates(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
+// handleHALRepoCreateCancel serves POST /api/v1/repo-creates/{id}:cancel: stop
+// a create and remove everything it produced.
+//
+// 202, not 200, and the status body rather than 204: NOTHING is finished when
+// this returns. Manager.CancelCreate records the request and comes straight
+// back, so the body reads `cancelling` — a running create still has to reach
+// its next step boundary, and a finished one still has a repo to delete on a
+// goroutine. The honest answer is "accepted — poll the job to `cancelled`",
+// and the body is the same snapshot the poll returns, so a client that
+// already renders one needs nothing new.
+//
+// `cancelling` is why this handler has no synchronous failure to report any
+// more. The delete's own errors — a repo held by a lens, most of all — land
+// on the JOB, which ends `failed` carrying the reason, because by the time
+// they happen this response is long since written.
+//
+// Cancelling a job that is ALREADY cancelling is 202 again, not 409: the
+// request is idempotent, and a button labelled "Cancelling…" that answers a
+// second press with an error would be reporting a failure for asking twice
+// for the thing already under way.
+//
+// A FAILED or already-cancelled job is 409: there is nothing left to undo,
+// and DELETE (dismiss) is the operation for making its row go away. Unknown
+// and expired are one 404, as everywhere else on this collection.
+func handleHALRepoCreateCancel(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		switch err := m.CancelCreate(id); {
+		case err == nil:
+			job, ok := m.CreateJobByID(id)
+			if !ok {
+				hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+					"no create job with that id (it may have expired)", r.URL.Path)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(createStatusBody(b, job.Status()))
+		case errors.Is(err, repos.ErrCreateUnknown):
+			hal.WriteProblem(w, http.StatusNotFound, "Unknown create",
+				"no create job with that id (it may have expired)", r.URL.Path)
+		case errors.Is(err, repos.ErrCreateFinished):
+			hal.WriteProblem(w, http.StatusConflict, "Create already finished",
+				"this create already failed or was cancelled; there is nothing to undo — dismiss it instead", r.URL.Path)
+		// No ErrRepoInUseByLens case: the delete that raises it now runs on the
+		// job's goroutine, after this response is written, and surfaces as the
+		// job ending `failed` with that reason. A case here would be a branch
+		// that cannot be reached and a promise to clients that cannot be kept.
+		default:
+			hal.WriteProblem(w, http.StatusInternalServerError, "Cancel failed", err.Error(), r.URL.Path)
+		}
+	}
+}
+
 // handleHALRepoCreateDismiss serves DELETE /api/v1/repo-creates/{id}: forget a
 // FINISHED job so its row leaves the list without waiting out CreateJobTTL.
 //
 // A RUNNING job answers 409, not 204 and not a cancel. Dismissing a row is a
 // list operation; cancelling a create is a different act with a half-clone to
-// roll back, and no client asked for that by clicking a dismiss control.
+// roll back, and no client asked for that by clicking a dismiss control —
+// POST /repo-creates/{id}:cancel is where that act lives.
 func handleHALRepoCreateDismiss(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch err := m.DismissCreateJob(chi.URLParam(r, "id")); {

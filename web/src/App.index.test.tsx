@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import App from './App';
 import { installFakeEventSource, uninstallFakeEventSource, latestStream } from './testEventSource';
+import { __resetRepoCreatesForTest } from './useRepoCreates';
 
 // The index chip and the indexing banner used to go stale for hours: a server
 // restart heals every repo in the background, the flip to ready published
@@ -24,6 +25,7 @@ vi.mock('./api', async (importOriginal) => {
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),
       fact: vi.fn(), factCommits: vi.fn(), commitDetail: vi.fn(), getRepo: vi.fn(), listBranchNames: vi.fn(),
+      listRepoCreates: vi.fn().mockResolvedValue([]),
     },
   };
 });
@@ -53,6 +55,7 @@ async function primeApi(repos: unknown[]) {
   api.completions.mockResolvedValue([]);
   api.getRepo.mockResolvedValue({ name: 'alpha', description: '' });
   api.listBranchNames.mockResolvedValue(['main', 'machine/test']);
+  api.listRepoCreates.mockResolvedValue([]);
   return api;
 }
 
@@ -229,5 +232,61 @@ describe('the indexing banner follows the event', () => {
     // nothing about this one, and a banner that cleared on it would be lying.
     await act(async () => { await Promise.resolve(); });
     expect(screen.queryByTestId('indexing-banner')).toBeInTheDocument();
+  });
+});
+
+// THE BROWSE BANNER MUST SPEAK FOR THE CREATE, not for the index.
+//
+// A create's repo is browsable from m.Add onwards, long before the job behind
+// it finishes — and, after a late cancel, while it is being deleted. Until
+// this, browsing such a repo showed the ordinary "Indexing…" banner: true
+// about the index, and badly misleading about the whole. A reader reloaded
+// into a repository that was being removed and was told search results might
+// be incomplete.
+describe('the create banner speaks for a repo still being made', () => {
+  beforeEach(() => { __resetRepoCreatesForTest(); });
+  afterEach(() => { __resetRepoCreatesForTest(); });
+
+  const creating = (over: Record<string, unknown> = {}) => ({
+    create_id: 'c1', name: 'alpha', mode: 'subscribe', state: 'running', ...over,
+  });
+
+  it('says Creating… instead of Indexing… while the create is running', async () => {
+    const api = await primeApi([repoRow('alpha', { index_state: 'indexing', index_done: 3, index_total: 10 })]);
+    api.listRepoCreates.mockResolvedValue([creating()]);
+    render(<App />);
+
+    const banner = await screen.findByTestId('repo-create-banner');
+    expect(banner).toHaveAttribute('data-create-state', 'running');
+    expect(banner).toHaveTextContent('Creating…');
+    expect(banner).toHaveTextContent('search and lists may be incomplete until this finishes');
+    // It REPLACES the index banner rather than stacking with it.
+    expect(screen.queryByTestId('indexing-banner')).toBeNull();
+  });
+
+  it('says the repository is being removed while the create is cancelling', async () => {
+    const api = await primeApi([repoRow('alpha', { index_state: 'indexing', index_done: 3, index_total: 10 })]);
+    api.listRepoCreates.mockResolvedValue([creating({ state: 'cancelling' })]);
+    render(<App />);
+
+    const banner = await screen.findByTestId('repo-create-banner');
+    expect(banner).toHaveAttribute('data-create-state', 'cancelling');
+    expect(banner).toHaveTextContent('Cancelling…');
+    expect(banner).toHaveTextContent('this repository is being removed');
+    expect(screen.queryByTestId('indexing-banner')).toBeNull();
+  });
+
+  // A create for ANOTHER repo says nothing about this one, and a finished one
+  // says nothing at all — the repo now stands on its own.
+  it('ignores a create for a different repo, and a finished create', async () => {
+    const api = await primeApi([repoRow('alpha', { index_state: 'indexing', index_done: 3, index_total: 10 })]);
+    api.listRepoCreates.mockResolvedValue([
+      creating({ name: 'beta' }),
+      creating({ create_id: 'c2', state: 'done' }),
+    ]);
+    render(<App />);
+
+    await screen.findByTestId('indexing-banner');
+    expect(screen.queryByTestId('repo-create-banner')).toBeNull();
   });
 });

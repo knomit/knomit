@@ -19,9 +19,16 @@ import type { RepoCreateStatus } from './api';
 const CREATE_STEPS: Record<string, string[]> = {
   preset: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
   custom: ['validate', 'ontology', 'init-git', 'register', 'index', 'done'],
-  clone: ['validate', 'clone', 'persist-origin', 'register', 'sync', 'index', 'done'],
-  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'sync', 'index', 'done'],
-  subscribe: ['validate', 'subscribe', 'persist-origin', 'register', 'sync', 'index', 'done'],
+  // INDEX BEFORE SYNC on every remote mode, and the order is not cosmetic.
+  // ActivateSync runs a synchronous reconcile that takes the branch lock the
+  // background index heal already holds, so with sync first the job sat on
+  // "Activating sync" for the whole of the index — narrating a step that was
+  // not the work being done, under a repo that was in fact already indexing.
+  // lifecycle.go now emits the index before the sync step; this list mirrors
+  // that, and a mirror that disagrees is how the wizard lies about the phase.
+  clone: ['validate', 'clone', 'persist-origin', 'register', 'index', 'sync', 'done'],
+  initialize: ['validate', 'probe', 'ontology', 'clone', 'ontology-write', 'push', 'persist-origin', 'register', 'index', 'sync', 'done'],
+  subscribe: ['validate', 'subscribe', 'persist-origin', 'register', 'index', 'sync', 'done'],
 };
 
 const LABELS: Record<string, string> = {
@@ -44,7 +51,17 @@ const LABELS: Record<string, string> = {
 // CreateRepoForm did inline, pulled out so the wizard shell can drop it under
 // whichever step is showing (only ever 'review', but kept presentational per
 // the step-component convention).
-export function CreateProgress({ status }: { status: RepoCreateStatus | null }) {
+export function CreateProgress({ status, cancelling }: {
+  status: RepoCreateStatus | null;
+  // Forces the cancelling presentation before the server has confirmed it.
+  //
+  // The wizard sets this the instant the button is pressed. Without it the
+  // click has no acknowledgement until the 202 comes back, and an
+  // unacknowledged click on a screen whose progress line has stopped moving is
+  // exactly what "everything is frozen" described. The SERVER state takes over
+  // once it says 'cancelling', so this only ever covers the round trip.
+  cancelling?: boolean;
+}) {
   if (!status) return null;
 
   if (status.state === 'failed') {
@@ -55,6 +72,23 @@ export function CreateProgress({ status }: { status: RepoCreateStatus | null }) 
     );
   }
 
+  // A cancellation is the outcome the user ASKED for, so it is not drawn as a
+  // failure and carries no error to read: the step list, the bar and the
+  // percent all describe work that is no longer happening and that nobody is
+  // waiting on. The one thing worth saying is what the state of the world is
+  // now — no repository — because that is the reader's actual question after
+  // stopping something halfway.
+  if (status.state === 'cancelled') {
+    return (
+      <div data-testid="create-cancelled" style={box}>
+        <div style={{ color: '#9c9' }}>Create cancelled. No repository was added.</div>
+      </div>
+    );
+  }
+
+  // Either source puts the card in its cancelling presentation.
+  const stopping = cancelling || status.state === 'cancelling';
+
   const steps = CREATE_STEPS[status.mode] ?? CREATE_STEPS.preset;
   // -1 for a step this list does not know: everything then reads as pending
   // rather than as spuriously complete, which is the safe direction to drift.
@@ -62,16 +96,36 @@ export function CreateProgress({ status }: { status: RepoCreateStatus | null }) 
 
   return (
     <div data-testid="create-progress" style={box}>
-      {/* The headline refuses to say a percent the server did not give.
-          During the transfer nothing on the wire knows how many bytes a clone
-          will move, so the server reports `indeterminate` and sends the
-          remote's own progress line as the message — which MOVES, while a
-          number invented to fill the gap does not. A wizard stuck at a
-          constant "40%" for minutes is the incident this replaces. */}
-      <div data-testid="create-progress-headline" style={{ color: '#9c9', marginBottom: 6 }}>
-        {status.indeterminate ? '' : `${status.pct ?? 0}% `}{status.message || ''}
-      </div>
-      <div style={{ marginBottom: 6 }}><CreateBar status={status} /></div>
+      {/* CANCELLING REPLACES THE PROGRESS LINE, it does not sit beside it.
+          Once a cancel is recorded the percent and the step message describe
+          work that is being abandoned, and leaving them as the headline is
+          precisely what made the UI read as "everything is frozen, stuck in
+          the current stage" — the reader saw "40% Reading the remote" going
+          nowhere and had no way to know their click had landed.
+
+          The step list below stays, because WHERE it stopped is still true and
+          still worth seeing; only the claim about what is happening changes. */}
+      {stopping ? (
+        <div style={{ marginBottom: 6 }}>
+          <div data-testid="create-progress-headline" style={{ color: '#e2c07a' }}>Cancelling…</div>
+          <div data-testid="create-cancelling-note" style={{ color: '#9a9a9a', marginTop: 3 }}>
+            Waiting for the current step to finish, then rolling back.
+          </div>
+        </div>
+      ) : (
+        // The headline refuses to say a percent the server did not give.
+        // During the transfer nothing on the wire knows how many bytes a clone
+        // will move, so the server reports `indeterminate` and sends the
+        // remote's own progress line as the message — which MOVES, while a
+        // number invented to fill the gap does not. A wizard stuck at a
+        // constant "40%" for minutes is the incident this replaces.
+        <div data-testid="create-progress-headline" style={{ color: '#9c9', marginBottom: 6 }}>
+          {status.indeterminate ? '' : `${status.pct ?? 0}% `}{status.message || ''}
+        </div>
+      )}
+      {!stopping && (
+        <div style={{ marginBottom: 6 }}><CreateBar status={status} /></div>
+      )}
       {status.index_state === 'error' && (
         <div data-testid="create-index-error" style={{ color: '#e2c07a', marginBottom: 6 }}>
           The repository is ready, but its search index did not finish building.

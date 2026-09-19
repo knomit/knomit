@@ -422,3 +422,20 @@ describe('TopBar lens-context chips', () => {
     }
   });
 });
+
+// THE CREATE COUNT IS NOT IN THE TOP BAR ANY MORE.
+//
+// It was a chip showing a bare number next to the settings and exit icons, and
+// it read as an unexplained badge rather than as information: "there is this
+// weird '1' icon at the top… that is not needed, or at least not like that".
+// The count moved to the status footer, in words. The top bar is controls
+// only — everything in it opens something — and a readout had no business
+// there.
+describe('TopBar — no create indicator', () => {
+  it('renders no create count, however many creates are running', () => {
+    const state: AppState = { ...init, repo: 'alpha', branch: 'agent/test', headCommit: 'head0001234' };
+    render(<TopBar state={state} repos={[]} dispatch={vi.fn()} onManageRepos={vi.fn()} leftWidth={300} />);
+    expect(screen.queryByTestId('create-indicator')).toBeNull();
+    expect(screen.getByTestId('toknomitr-bar').textContent).not.toMatch(/create/i);
+  });
+});

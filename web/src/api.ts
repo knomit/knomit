@@ -920,11 +920,47 @@ async function getAgentBranch(repo: string): Promise<string> {
 // between two steps reports the earlier one, and no intermediate step is
 // guaranteed to be seen by anyone. Anything that needs every step must derive
 // it from the known pipeline, not from what it happened to observe.
+export type RepoCreateState =
+  'running' | 'cancelling' | 'done' | 'failed' | 'cancelled';
+
+// isTerminalCreateState is the ONE definition of "is this create over".
+//
+// It exists because the question was asked in four places and answered
+// differently in each, and one of those answers shipped a bug: the poll loop
+// in createRepo tested `state === 'running'`, which is not the same question.
+// 'cancelling' is non-terminal AND not 'running', so the loop exited the
+// instant a cancel was accepted, resolved with a job that was still working,
+// and the wizard read that as success and navigated the user into a repository
+// that did not exist yet and never would.
+//
+// Anything asking "is it over" must call this rather than compare against a
+// state it happens to remember. A new non-terminal state is then one edit here
+// instead of a hunt for every comparison that assumed there were only two.
+export function isTerminalCreateState(state: RepoCreateState): boolean {
+  return state !== 'running' && state !== 'cancelling';
+}
+
 export interface RepoCreateStatus {
   create_id: string;
   name: string;
   mode: string;
-  state: 'running' | 'done' | 'failed';
+  /**
+   * 'running' and 'cancelling' are the two NON-TERMINAL states.
+   *
+   * 'cancelling' means a cancel has been recorded but the repo is not gone
+   * yet: a running create has still to reach its next step boundary, and a
+   * finished one still has its repo to delete. Draw it as "cancelling" rather
+   * than as the last progress line the job emitted — leaving the old step and
+   * percent up is what read as the create being frozen.
+   *
+   * 'cancelled' is its own terminal state rather than a flavour of 'failed'
+   * because the two are read differently: a failure is something to read and
+   * retry, a cancellation is the outcome the user asked for. It carries
+   * NEITHER `error` nor `repo` — nothing went wrong, and nothing was kept.
+   * The server also OMITS it from GET /repo-creates, so a list never has to
+   * render one; it stays readable by id until its retention window expires.
+   */
+  state: RepoCreateState;
   step?: string;
   message?: string;
   pct?: number;
@@ -1113,10 +1149,15 @@ const createRepoPollMs = 400;
 // create that is already under way. This function is an OBSERVER, and if it
 // stops observing the create still lands.
 //
-// Resolves with the terminal status (state 'done' or 'failed'); a failed
-// create resolves rather than throwing, because "the create failed" is an
-// outcome the caller renders, not an exception. It throws only when the
+// Resolves with the terminal status ('done', 'failed' or 'cancelled'); a
+// failed create resolves rather than throwing, because "the create failed" is
+// an outcome the caller renders, not an exception. It throws only when the
 // request itself was refused (problem+json) or the job became unreadable.
+//
+// A create cancelled mid-flight (api.cancelRepoCreate) resolves here too: the
+// poll loop below runs while the state is 'running', and 'cancelled' is
+// terminal, so cancelling needs nothing of this function beyond the state it
+// already waits on.
 async function createRepo(
   body: CreateRepoBody,
   onStatus: (s: RepoCreateStatus) => void,
@@ -1136,7 +1177,11 @@ async function createRepo(
   }
   let status = await r.json() as RepoCreateStatus;
   onStatus(status);
-  while (status.state === 'running') {
+  // UNTIL IT IS TERMINAL, not "while it is running". A cancel that is accepted
+  // mid-create answers 202 with state 'cancelling' — still working, not yet an
+  // outcome — and a loop that stopped there would hand its caller a job in
+  // flight as though it were finished.
+  while (!isTerminalCreateState(status.state)) {
     await new Promise(res => setTimeout(res, createRepoPollMs));
     // A poll that fails is NOT a create that failed — the create is on the
     // server and unaffected. Surfacing it as a create failure would report a
@@ -1162,6 +1207,17 @@ async function listRepoCreates(): Promise<RepoCreateStatus[]> {
   return data._embedded?.creates ?? [];
 }
 
+// getRepoCreate reads ONE create job by id.
+//
+// It exists for the job the collection no longer carries. A cancelled create
+// is omitted from GET /repo-creates — a repository list has nothing left to
+// say about it — but it stays readable here until the server's retention
+// window expires, which is what lets the page watching that create show the
+// outcome instead of falling off the list the instant it succeeds.
+async function getRepoCreate(id: string): Promise<RepoCreateStatus> {
+  return fetchJSON<RepoCreateStatus>(apiUrl(`/api/v1/repo-creates/${encodeURIComponent(id)}`));
+}
+
 // dismissRepoCreate forgets a FINISHED job, so a failed row leaves the list
 // without waiting out the server's retention window.
 //
@@ -1170,6 +1226,38 @@ async function listRepoCreates(): Promise<RepoCreateStatus[]> {
 async function dismissRepoCreate(id: string): Promise<void> {
   const r = await fetch(apiUrl(`/api/v1/repo-creates/${id}`), { method: 'DELETE' });
   if (!r.ok) throw new Error(`dismiss create → ${r.status}`);
+}
+
+// cancelRepoCreate stops a create and removes everything it produced — the
+// repo included, deleted outright rather than archived, so a cancelled create
+// leaves no row anywhere to find, restore or wonder about.
+//
+// It answers 202, NOT 204, and returns the job's own status body: a running
+// create stops at its next step boundary rather than on this request, so the
+// honest answer is "accepted — keep polling". The body is the same shape every
+// poll returns, which is why callers can feed it straight back into whatever
+// already renders a RepoCreateStatus. A job that had already finished is
+// deleted synchronously and the body then already reads 'cancelled'.
+//
+// This is the OPPOSITE of dismissRepoCreate on both counts: dismiss refuses a
+// running job and never touches the repo, cancel is exactly for a running job
+// and the repo going away is the point.
+async function cancelRepoCreate(id: string): Promise<RepoCreateStatus> {
+  // The colon is part of the route spelling (`{id}:cancel`, as
+  // /repos:probe-origin), so only the id itself is escaped — encoding the
+  // colon would address a different, non-existent route.
+  const r = await fetch(apiUrl(`/api/v1/repo-creates/${encodeURIComponent(id)}:cancel`), {
+    method: 'POST',
+  });
+  if (!r.ok) {
+    let detail = r.statusText;
+    try {
+      const b = await r.json();
+      detail = b?.detail || b?.title || detail;
+    } catch { /* ignore */ }
+    throw new Error(`cancel create → ${r.status} ${detail}`);
+  }
+  return await r.json() as RepoCreateStatus;
 }
 
 async function archiveRepo(repo: string): Promise<ArchivedRepo> {
@@ -1584,7 +1672,9 @@ export const api = {
 
   createRepo,
   listRepoCreates,
+  getRepoCreate,
   dismissRepoCreate,
+  cancelRepoCreate,
   archiveRepo,
   listArchived,
   restoreRepo,
