@@ -639,9 +639,7 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 	// who refreshed saw the repo already indexing under a wizard that said
 	// otherwise. Now the job narrates the index while the heal holds the lock,
 	// and activates sync once the lock is free, which is also when the call
-	// is quick. mirrorIndexing returning early (the job's deadline, shutdown)
-	// still falls through to activation: sync is never skipped on account of
-	// how the narration ended.
+	// is quick.
 	indexState := IndexStateReady
 	message := "repo ready"
 	if ri != nil {
@@ -651,13 +649,41 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 		}
 	}
 
+	// A DEAD CONTEXT SKIPS SYNC ACTIVATION.
+	//
+	// This is the one place past m.Add where the context still buys anything,
+	// and it is worth the check because ActivateSync is the LONGEST-BLOCKING
+	// call in the whole function: its synchronous reconcile takes
+	// lockBranch(upstream), which the background heal holds for the entire
+	// index. So a cancel arriving during the index used to have no effect for
+	// as long as the index ran — mirrorIndexing returned promptly on
+	// ctx.Done(), then Create parked in ActivateSync behind the heal's lock,
+	// and the worker goroutine could not run DeleteRepo until it came back.
+	// Observed live: a job reading state=cancelling, step=sync, pct=99 for
+	// many minutes while its repo sat at index 32/697.
+	//
+	// An earlier comment here said the opposite — that sync is never skipped
+	// on account of how the narration ended — and it was wrong for the
+	// cancelled case specifically. Activating sync on a repo that is about to
+	// be deleted configures a remote for something that will not exist: at
+	// best wasted, at worst a reconcile loop started against a repo being
+	// purged underneath it.
+	//
+	// Only the sync step is skipped — "done" is still emitted and ri is still
+	// returned. ri MUST come back non-nil: the repo IS registered, and the
+	// worker goroutine can only delete what it is handed.
 	if spec.hasRemote() && ri != nil {
-		// Pct is the index band's ceiling, not 95: the mirror has already
-		// reported up to indexPctCeil, and a bar that steps backwards for the
-		// sync activation would read as the create losing ground.
-		emit(Event{Step: "sync", Phase: PhaseRegister, Message: "activating sync", Pct: indexPctCeil, IndexState: indexState})
-		if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
-			log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
+		if cerr := ctx.Err(); cerr != nil {
+			log.Debug().Err(cerr).Str("repo", spec.Name).
+				Msg("create: context ended before sync activation; skipping it")
+		} else {
+			// Pct is the index band's ceiling, not 95: the mirror has already
+			// reported up to indexPctCeil, and a bar that steps backwards for
+			// the sync activation would read as the create losing ground.
+			emit(Event{Step: "sync", Phase: PhaseRegister, Message: "activating sync", Pct: indexPctCeil, IndexState: indexState})
+			if serr := ri.ActivateSync(spec.Origin.URL); serr != nil {
+				log.Warn().Err(serr).Str("repo", spec.Name).Msg("create: activate sync failed")
+			}
 		}
 	}
 

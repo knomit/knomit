@@ -184,6 +184,67 @@ describe('creates in the repo manager', () => {
     expect(screen.getByTestId('create-cancel-button')).toHaveTextContent('Cancelling…');
   });
 
+  // ONCE THE REPO EXISTS, FLAG THE REPO — do not hide the job.
+  //
+  // A create's repo is registered (m.Add) well before the job finishes, so
+  // from that moment every repository surface listed it as an ordinary repo.
+  // pendingCreates drops a create whose name matches a repo, which is right
+  // for the ROW — two rows for one name read as two repositories — but it left
+  // the repo itself unflagged for the whole register/index/sync window, and
+  // for the entire late-cancel window after that. The reader saw a normal
+  // repository with a normal index chip while it was being deleted underneath
+  // them.
+  it('flags the repo row itself when a create is still working on it', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'core', state: 'running', step: 'index' }),
+    ]);
+    render(<RepoManager {...baseProps} />);
+
+    const row = await screen.findByTestId('repomgr-item-core');
+    await waitFor(() => expect(row).toHaveAttribute('data-create-state', 'creating'));
+    expect(screen.getByTestId('repomgr-create-chip-core')).toHaveTextContent('creating');
+
+    // ONE row, not two: the repo's row carries the flag and no separate
+    // pending-create row appears beside it.
+    expect(screen.queryByTestId('pending-create-rail-core')).not.toBeInTheDocument();
+    expect(screen.getAllByTestId('repomgr-item-core')).toHaveLength(1);
+    // The create flag WINS: an index chip beside it would report a detail of
+    // work whose outcome is not settled.
+    expect(screen.queryByTestId('repo-index-indexing')).not.toBeInTheDocument();
+  });
+
+  it('says cancelling on the repo row, and opens the create page rather than settings', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'core', state: 'cancelling', step: 'index' }),
+    ]);
+    render(<RepoManager {...baseProps} />);
+
+    const row = await screen.findByTestId('repomgr-item-core');
+    await waitFor(() => expect(screen.getByTestId('repomgr-create-chip-core')).toHaveTextContent('cancelling'));
+
+    // Clicking goes to the CREATE page. The settings page offers rename,
+    // archive and remote config for a repository that is on its way out; what
+    // the reader needs is the job's status and its Cancel button.
+    fireEvent.click(row);
+    expect(await screen.findByTestId('create-watch')).toBeInTheDocument();
+    expect(screen.queryByTestId('repo-settings')).not.toBeInTheDocument();
+    expect(screen.getByTestId('create-watch-flag')).toHaveTextContent('cancelling');
+  });
+
+  // A FINISHED job stops flagging the repo: it now stands on its own.
+  it('leaves the repo row alone once its create is done', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'core', state: 'done', repo: { name: 'core' } }),
+    ]);
+    render(<RepoManager {...baseProps} />);
+    const row = await screen.findByTestId('repomgr-item-core');
+    await waitFor(() => expect(api.listRepoCreates).toHaveBeenCalled());
+    expect(row).not.toHaveAttribute('data-create-state');
+    expect(screen.queryByTestId('repomgr-create-chip-core')).not.toBeInTheDocument();
+    fireEvent.click(row);
+    expect(screen.queryByTestId('create-watch')).not.toBeInTheDocument();
+  });
+
   // A CANCELLED CREATE LEAVES THE RAIL ENTIRELY. The server omits it from the
   // collection; the row must not come back even if a stale list still had one.
   it('never draws a cancelled create in the rail', async () => {

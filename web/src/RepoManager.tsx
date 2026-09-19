@@ -4,7 +4,7 @@ import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_R
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { PendingCreateRow } from './PendingCreateRow';
-import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag } from './useRepoCreates';
+import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag, activeCreateByRepo } from './useRepoCreates';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateProgress } from './CreateProgress';
 import { markdownPlugins, markdownComponents } from './markdown';
@@ -106,6 +106,13 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
   // rail life itself rather than wait for the server to forget it.
   const creates = useRepoCreates();
   const railCreates = pendingCreates(creates, repos.map(r => r.name));
+  // The jobs whose repo ALREADY EXISTS and is still being worked on. These are
+  // exactly the ones pendingCreates drops, and dropping them was right for the
+  // row (two rows for one name read as two repositories) but wrong for the
+  // flag: from m.Add onwards the repo is listable, so the rail drew it as an
+  // ordinary repository while it was still indexing — or, after a late cancel,
+  // while it was being deleted underneath the reader. Flag the repo instead.
+  const activeCreates = activeCreateByRepo(creates);
 
   // Set by the connect sub-page while its commit is in flight. Selecting
   // anything unmounts that page, and the commit stream has no abort and no
@@ -379,18 +386,32 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 disabled={connectBusy}
                 onOpen={id => setSel({ kind: 'create', id })} />
             ))}
-            {repos.map(r => (
+            {repos.map(r => {
+              // The create still working on THIS repo, if any.
+              const job = activeCreates.get(r.name);
+              const jobFlag = job ? createFlag(job.state) : null;
+              return (
               <button
                 key={r.name}
                 type="button"
                 data-testid={`repomgr-item-${r.name}`}
+                data-create-state={jobFlag ?? undefined}
                 onMouseDown={noMouseFocus}
                 // Lit for the repo's connect sub-page too: the reader is still
                 // inside that repository, and a rail that went dark mid-flow
                 // would be the takeover's context loss in miniature.
-                style={listItem((view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
+                style={listItem(
+                  job
+                    ? view.kind === 'create' && view.id === job.create_id
+                    : (view.kind === 'repo' || view.kind === 'connect') && view.name === r.name)}
                 disabled={connectBusy}
-                onClick={() => setSel({ kind: 'repo', name: r.name })}
+                // WHILE A CREATE IS STILL WORKING ON IT, the row opens the
+                // CREATE page, not the settings page. The settings page offers
+                // rename, archive and remote configuration for a repository
+                // that is still being made — or, after a cancel, unmade — and
+                // the thing the reader actually needs is the job's status and
+                // its Cancel button.
+                onClick={() => setSel(job ? { kind: 'create', id: job.create_id } : { kind: 'repo', name: r.name })}
               >
                 {/* The repo's own deterministic hue, as in the top-bar switcher,
                     the Overview table and every RepoDot in the detail panes.
@@ -407,14 +428,23 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                     leave the user reading about a repository with nowhere to
                     go. The chip replaces "viewing", which cannot be true of a
                     repo the browse surface refuses to open. */}
-                {!repoAvailable(r)
-                  ? <RepoStateChip repo={r} />
-                  : <>
-                      <RepoIndexChip repo={r} />
-                      {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
-                    </>}
+                {/* THE CREATE FLAG WINS over the index chip and "viewing".
+                    While a job is still working on this repo, "creating" and
+                    "cancelling" are the truth about it, and an index chip
+                    beside them would be reporting a detail of work whose
+                    outcome is not settled — at worst "indexing" on a repo that
+                    is being deleted. One row, one flag. */}
+                {jobFlag
+                  ? <span data-testid={`repomgr-create-chip-${r.name}`} style={createChip}>{jobFlag}</span>
+                  : !repoAvailable(r)
+                    ? <RepoStateChip repo={r} />
+                    : <>
+                        <RepoIndexChip repo={r} />
+                        {r.name === currentRepo && <span style={viewingTag} title="the web UI is currently browsing this repo">viewing</span>}
+                      </>}
               </button>
-            ))}
+              );
+            })}
 
             {/* Archived belongs UNDER Repositories, not beside it: an archived
                 repo is a repository in a state, not a third kind of thing next
@@ -1601,11 +1631,12 @@ function CreateWatch({ createId, onClose, onOpenRepo }: {
         </div>
       ) : status.state === 'cancelled' ? (
         <div style={{ marginTop: 12 }}>
+          {/* One way back, not two. The header already carries "Back to
+              overview"; a second copy of the same link under the card was the
+              page asking twice. */}
           <div data-testid="create-cancelled" style={{ fontSize: 13, color: '#9c9' }}>
             Create cancelled. No repository was added.
           </div>
-          <button type="button" data-testid="create-watch-back" style={{ ...btnLink, marginTop: 10 }}
-            onClick={onClose}>Back to overview</button>
         </div>
       ) : (
         <>
@@ -2357,3 +2388,13 @@ const editCheckbox = (on: boolean): React.CSSProperties => ({
   background: on ? LENS.accent : 'transparent', border: '1.5px solid ' + (on ? LENS.accent : '#444'),
   cursor: 'pointer',
 });
+
+// createChip flags a repository row whose create is still working. Same shape
+// as the rail's other chips; blue, like PendingCreateRow's, because it is the
+// same fact about the same job seen from the repository's side.
+const createChip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center',
+  fontSize: 9.5, lineHeight: 1.7, padding: '0 5px', borderRadius: 3,
+  fontFamily: 'var(--k-font-mono)', whiteSpace: 'nowrap', flexShrink: 0,
+  color: '#8ab6d6', background: '#131d26', border: '1px solid #244056',
+};

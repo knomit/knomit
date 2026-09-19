@@ -31,6 +31,7 @@ export const CREATES_POLL_IDLE_MS = 30000;
 let cache: RepoCreateStatus[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 let inFlight = false;
+let generation = 0;
 const subscribers = new Set<(s: RepoCreateStatus[]) => void>();
 
 // Both NON-TERMINAL states count as activity. A cancelling job is still
@@ -53,8 +54,15 @@ function publish(list: RepoCreateStatus[]) {
 async function poll() {
   if (inFlight) return;
   inFlight = true;
+  // The reset generation this poll belongs to. A request that is already in
+  // flight when the store is reset must not publish its answer into the store
+  // that replaced it — between tests that resurrects the previous test's jobs
+  // after the reset, which is a flake; in the app it would let a poll from
+  // before a teardown write into a fresh store.
+  const gen = generation;
   try {
-    publish(await api.listRepoCreates());
+    const list = await api.listRepoCreates();
+    if (gen === generation) publish(list);
   } catch {
     // A failed poll is NOT an empty list. Publishing [] here would make every
     // pending row vanish on one dropped request and reappear on the next,
@@ -90,6 +98,8 @@ export function __resetRepoCreatesForTest() {
   inFlight = false;
   cache = [];
   subscribers.clear();
+  // Retires any request already in flight — see poll().
+  generation++;
 }
 
 // useRepoCreates subscribes to the shared list. Every caller sees the same
@@ -167,4 +177,27 @@ export function createFlag(state: string): string | null {
     // 'creating', because it is neither a lie nor a state anyone acts on.
     default: return 'created';
   }
+}
+
+// activeCreateByRepo maps a repo NAME to the create job still working on it.
+//
+// It exists because a create does not stop mattering the moment its repo is
+// registered. From m.Add onwards the repo is real and listable — so every
+// repository surface started drawing it as an ordinary repo — while the job
+// behind it was still indexing, and, if the user had pressed Cancel, still on
+// its way to deleting that very repo. The reader saw a normal repository with
+// a normal "Indexing…" line while it was being removed underneath them.
+//
+// Only NON-TERMINAL jobs are included. A finished job has nothing left to say
+// about a repo that now stands on its own, and a cancelled one's repo is gone.
+//
+// The user's paradigm, applied one step further than the rail: the repo
+// exists, so flag the REPO rather than hiding the job or inventing a second
+// row for it.
+export function activeCreateByRepo(list: RepoCreateStatus[]): Map<string, RepoCreateStatus> {
+  const out = new Map<string, RepoCreateStatus>();
+  for (const c of list) {
+    if (!isTerminalCreateState(c.state)) out.set(c.name, c);
+  }
+  return out;
 }

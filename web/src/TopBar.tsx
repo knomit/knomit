@@ -7,6 +7,7 @@ import { repoAvailable, brokenLensMember } from './api';
 import type { RepoInfo, Lens } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
+import { useRepoCreates, activeCreateByRepo, createFlag } from './useRepoCreates';
 import { CreateIndicator } from './CreateIndicator';
 import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
@@ -53,6 +54,10 @@ interface Props {
 // the StatusFooter, which is the readout rail. What is left is the same shape in
 // both contexts: the switcher, then the scope picker, then search.
 export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false, leftWidth, search }: Props) {
+  // The creates still working on listed repos, so the switcher flags them the
+  // same way the manage rail does. The poller is already mounted here for
+  // CreateIndicator below, so this reads a list that is being fetched anyway.
+  const activeCreates = activeCreateByRepo(useRepoCreates());
   const [menuOpen, setMenuOpen] = useState(false);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -383,8 +388,18 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                   flexShrink: 0, opacity: available ? 1 : 0.4,
                 }} />
                 <span>{r.name}</span>
-                {!available && <RepoStateChip repo={r} />}
-                {available && <RepoIndexChip repo={r} />}
+                {/* Same precedence as the manage rail: while a create is still
+                    working on this repo, that is the truth about it, and an
+                    index chip beside it would report a detail of unsettled
+                    work — at worst "indexing" on a repo being deleted. */}
+                {activeCreates.get(r.name)
+                  ? <span data-testid={`toknomitr-create-chip-${r.name}`} style={createChip}>
+                      {createFlag(activeCreates.get(r.name)!.state)}
+                    </span>
+                  : <>
+                      {!available && <RepoStateChip repo={r} />}
+                      {available && <RepoIndexChip repo={r} />}
+                    </>}
               </div>
             );
           })}
@@ -446,3 +461,12 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
     </div>
   );
 });
+
+// createChip flags a repo the switcher lists while a create is still working
+// on it. Mirrors the manage rail's chip — one fact, one rendering.
+const createChip: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center',
+  fontSize: 9.5, lineHeight: 1.7, padding: '0 5px', borderRadius: 3,
+  fontFamily: 'var(--k-font-mono)', whiteSpace: 'nowrap', flexShrink: 0,
+  color: '#8ab6d6', background: '#131d26', border: '1px solid #244056',
+};

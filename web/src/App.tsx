@@ -10,6 +10,7 @@ import { useFactEdges } from './useFactEdges';
 import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
+import { useRepoCreates, activeCreateByRepo } from './useRepoCreates';
 import { TopBar } from './TopBar';
 import { RepoManager } from './RepoManager';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -289,6 +290,16 @@ export default function App() {
   // It is also not persisted: a reload landing in a settings screen is the wrong
   // default for a knowledge browser, and the gear is one click away.
   const [manageOpen, setManageOpen] = useState(false);
+  // The create still working on the repo being browsed, if any.
+  //
+  // A create's repo becomes listable and browsable at m.Add, well before the
+  // job behind it is finished — and if the user has cancelled, before it is
+  // deleted. Until this, browsing such a repo showed the ordinary "Indexing…"
+  // banner, which is true of the index and silent about the thing that
+  // matters: that this repository is still being made, or is being removed.
+  // The poller is already running app-wide for the top bar's CreateIndicator,
+  // so reading it here costs no extra requests.
+  const repoCreate = activeCreateByRepo(useRepoCreates()).get(state.repo ?? '');
   // Raised by Manage while a connect commit is in flight. Closing Manage
   // unmounts the wizard, and the commit stream has no abort and no undo: the
   // store swap and index rebuild run on with nothing listening for the result.
@@ -1008,7 +1019,37 @@ export default function App() {
             </ErrorBoundary>
           ) : undefined} />
       </ErrorBoundary>
-      {state.indexState === 'indexing' && (
+      {/* THE CREATE BANNER REPLACES THE INDEX BANNER, it does not stack with
+          it. While a job is still working on this repo, "Indexing…" is a true
+          statement about a detail and a misleading one about the whole: the
+          repository is not finished being made, and if the create is being
+          cancelled it is on its way out. Reporting the index instead is how a
+          reader ended up watching a progress bar for a repository that was
+          being deleted underneath them. */}
+      {repoCreate && (
+        <div data-testid="repo-create-banner"
+          data-create-state={repoCreate.state}
+          style={{
+            background: repoCreate.state === 'cancelling' ? '#2a200e' : '#1c2b1c',
+            color: repoCreate.state === 'cancelling' ? '#f5c47a' : '#9c9',
+            fontSize: 12, padding: '4px 14px',
+            borderBottom: '1px solid ' + (repoCreate.state === 'cancelling' ? '#a36a18' : '#2a3a2a'),
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+          {repoCreate.state === 'cancelling' ? (
+            <>
+              <span>⟳ Cancelling…</span>
+              <span style={{ color: '#a08a54' }}>this repository is being removed</span>
+            </>
+          ) : (
+            <>
+              <span>⟳ Creating…</span>
+              <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>
+            </>
+          )}
+        </div>
+      )}
+      {!repoCreate && state.indexState === 'indexing' && (
         <div data-testid="indexing-banner" style={{ background: '#1c2b1c', color: '#9c9', fontSize: 12, padding: '4px 14px', borderBottom: '1px solid #2a3a2a', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <span>⟳ Indexing{state.indexTotal > 0 ? ` ${state.indexPercent}% (${state.indexDone}/${state.indexTotal})` : '…'}</span>
           <span style={{ color: '#6a8a6a' }}>search and lists may be incomplete until this finishes</span>

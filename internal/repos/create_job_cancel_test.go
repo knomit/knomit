@@ -3,6 +3,7 @@ package repos
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -386,4 +387,167 @@ func TestCreateJobs_OmitsCancelledButKeepsFailed(t *testing.T) {
 	_, err = failed.Result()
 	require.Error(t, err)
 	require.Len(t, fm.CreateJobs(), 1, "a failed job must stay listed — it carries an error worth reading")
+}
+
+// TestCreate_CancelledDuringIndexSkipsSyncActivation is the UNIT half of the
+// late-cancel fix, and it names the exact call that made a cancel take minutes.
+//
+// ActivateSync runs one SYNCHRONOUS reconcile, and that reconcile takes
+// lockBranch(upstream) — the lock the background heal holds for the whole of
+// the index. So a cancel arriving DURING the index used to do nothing visible:
+// mirrorIndexing returned promptly on ctx.Done(), Create then parked in
+// ActivateSync behind the heal's lock, and the worker goroutine could not run
+// DeleteRepo until the entire index had finished. Observed live on a 697-fact
+// repo: state=cancelling, step=sync, pct=99, for minutes.
+//
+// The assertion is on the STEP, not on elapsed time: a create whose context
+// died before sync activation must never emit "sync" at all. That is a
+// property, not a race, so it cannot flake — whereas timing the call would.
+// The cancel is fired from inside an index-phase emit, the same trick
+// TestStartCreate_JobDeadlineDoesNotPinTheIndexAtIndexing uses, because that
+// is the one moment the heal is PROVABLY in flight and therefore holding the
+// lock this test is about.
+func TestCreate_CancelledDuringIndexSkipsSyncActivation(t *testing.T) {
+	url := servedKnomitOrigin(t, 3)
+
+	home := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
+		AgentBranch: "agent/test",
+		KeyPath:     filepath.Join(home, "agent.key"),
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var steps []string
+	var sawIndex bool
+	ri, err := m.Create(ctx, CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}},
+		func(e Event) {
+			mu.Lock()
+			steps = append(steps, e.Step)
+			mu.Unlock()
+			if e.Phase == PhaseIndex {
+				// The heal is in flight right now, holding the branch lock.
+				mu.Lock()
+				sawIndex = true
+				mu.Unlock()
+				cancel()
+			}
+		})
+	require.NoError(t, err)
+	// The repo IS registered, and Create must hand it back — the worker
+	// goroutine can only delete what it is given.
+	require.NotNil(t, ri, "a cancelled create past m.Add must still return its repo to be deleted")
+
+	mu.Lock()
+	defer mu.Unlock()
+	// ANTI-VACUITY: without an index event the cancel never landed at a
+	// discriminating moment and this test proves nothing.
+	require.True(t, sawIndex,
+		"no index phase was reported, so the context was never cancelled while the "+
+			"heal held the branch lock; this test cannot detect the regression")
+	require.NotContains(t, steps, "sync",
+		"a create cancelled before sync activation must not activate sync on a repo "+
+			"that is about to be deleted: %v", steps)
+}
+
+// TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex is the end-to-end
+// half: the user's actual complaint, which was that a late cancel appeared to
+// do nothing at all.
+//
+// It asserts the cancel lands FAST RELATIVE TO THE INDEX rather than against a
+// wall-clock constant. The comparison is what makes it meaningful and what
+// keeps it honest on a slow machine: the same manager then indexes a second
+// repo from the same fixture, and the cancel must complete in well under that.
+// A fixed "under 5 seconds" would be a machine-speed assertion, and on the
+// broken code a fast enough box could satisfy it.
+func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
+	// TWO fixtures, not one. A repo already subscribed to an origin URL makes
+	// a second subscribe to the same URL refuse, so a baseline create against
+	// the same remote would starve the measured one of an index entirely.
+	refURL := servedKnomitOrigin(t, 200)
+	url := servedKnomitOrigin(t, 200)
+
+	home := t.TempDir()
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: home, OntologyRoot: "kb"},
+		AgentBranch: "agent/test",
+		KeyPath:     filepath.Join(home, "agent.key"),
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	// A create we let run to completion, to measure what a full index costs on
+	// THIS machine with THIS fixture.
+	baseline := time.Now()
+	ref := m.StartCreate(CreateSpec{Name: "ref", Mode: "subscribe", Origin: &OriginSpec{URL: refURL}})
+	_, err := ref.Result()
+	require.NoError(t, err)
+	fullCreate := time.Since(baseline)
+	t.Logf("uncancelled create with a full index: %s", fullCreate)
+
+	// Now the same create again, cancelled once it reaches the index phase.
+	job := m.StartCreate(CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}})
+	// THE LATE WINDOW, taken from the JOB rather than from the registry.
+	//
+	// CreateStatus.IndexState is STICKY — record() keeps the last non-empty
+	// value — so once the mirror has reported 'indexing' this stays true and a
+	// poll cannot step over it. The job's own status is also the thing a client
+	// watches, which makes it the honest trigger: this is the state the user
+	// was looking at when they pressed Cancel.
+	require.Eventually(t, func() bool {
+		st := job.Status()
+		return st.IndexState == IndexStateIndexing && st.State == CreateRunning
+	}, 120*time.Second, 5*time.Millisecond,
+		"the create never reported an in-flight index while still running")
+
+	start := time.Now()
+	require.NoError(t, m.CancelCreate(job.ID()))
+
+	// Poll to terminal, WATCHING THE STEP.
+	//
+	// The step is what discriminates, not the clock. Under the bug the job
+	// parks on step "sync" — Create sits in ActivateSync behind the heal's
+	// branch lock — and stays there for the whole remaining index; that is
+	// precisely what was observed live (state=cancelling, step=sync, pct=99,
+	// for minutes). So a cancelled job that ever reports "sync" has waited on
+	// the lock, whatever the wall clock happened to say on this machine.
+	//
+	// The elapsed time is logged and bounded too, but loosely: a timing
+	// assertion alone is a machine-speed assertion, and on a fixture whose
+	// index is nearly finished by the time the cancel lands it passes under
+	// the broken code as readily as under the fixed code.
+	var sawSync bool
+	for {
+		st := job.Status()
+		if st.Step == "sync" {
+			sawSync = true
+		}
+		if st.State != CreateRunning && st.State != CreateCancelling {
+			require.Equal(t, CreateCancelled, st.State)
+			break
+		}
+		require.Less(t, time.Since(start), 120*time.Second, "the cancel never landed")
+		time.Sleep(5 * time.Millisecond)
+	}
+	elapsed := time.Since(start)
+	t.Logf("cancel during the index landed in %s (a full create takes %s)", elapsed, fullCreate)
+
+	require.False(t, sawSync,
+		"the cancelled job activated sync, so it waited on the branch lock the "+
+			"index heal holds — the whole reason a late cancel appeared to do nothing")
+	require.Less(t, elapsed, fullCreate,
+		"a cancel during the index took as long as a full create (%s)", elapsed)
+
+	require.Nil(t, m.Get("sub"))
+	archived, aerr := m.ListArchived()
+	require.NoError(t, aerr)
+	require.Empty(t, archived, "cancel must leave no archive row behind")
+	_, found, rerr := m.Repos().ByName("sub")
+	require.NoError(t, rerr)
+	require.False(t, found, "the registry row must be gone")
 }
