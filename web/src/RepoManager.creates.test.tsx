@@ -213,22 +213,76 @@ describe('creates in the repo manager', () => {
     expect(screen.queryByTestId('repo-index-indexing')).not.toBeInTheDocument();
   });
 
-  it('says cancelling on the repo row, and opens the create page rather than settings', async () => {
+  // ONE PAGE, GATED BY STATE. A repository being created IS a repository, so
+  // the rail row opens the repository's own details page — rendered in
+  // creating mode — and not a bespoke create view beside it.
+  it('opens the merged repo page from the rail, flagged and with the parts that cannot be offered withheld', async () => {
     vi.mocked(api.listRepoCreates).mockResolvedValue([
-      job({ name: 'core', state: 'cancelling', step: 'index' }),
+      job({ name: 'core', state: 'cancelling', step: 'index', index_state: 'indexing' }),
     ]);
     render(<RepoManager {...baseProps} />);
 
     const row = await screen.findByTestId('repomgr-item-core');
     await waitFor(() => expect(screen.getByTestId('repomgr-create-chip-core')).toHaveTextContent('cancelling'));
-
-    // Clicking goes to the CREATE page. The settings page offers rename,
-    // archive and remote config for a repository that is on its way out; what
-    // the reader needs is the job's status and its Cancel button.
     fireEvent.click(row);
-    expect(await screen.findByTestId('create-watch')).toBeInTheDocument();
-    expect(screen.queryByTestId('repo-settings')).not.toBeInTheDocument();
-    expect(screen.getByTestId('create-watch-flag')).toHaveTextContent('cancelling');
+
+    // The REPOSITORY page, not a create page.
+    expect(await screen.findByTestId('repo-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('create-watch')).not.toBeInTheDocument();
+    // Flagged where the subtitle goes — the only difference from an ordinary
+    // repository's header.
+    expect(screen.getByTestId('repo-detail-subtitle')).toHaveTextContent('cancelling');
+
+    // The progress block, with the one action this state allows.
+    expect(screen.getByTestId('create-progress')).toBeInTheDocument();
+    const cancel = screen.getByTestId('create-cancel-button');
+    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveTextContent('Cancelling…');
+
+    // WITHHELD: nothing here can honestly be offered on a half-made repo.
+    expect(screen.queryAllByText('Danger zone')).toHaveLength(0);
+    expect(screen.queryAllByText('Remote')).toHaveLength(0);
+    expect(screen.queryByTestId('repo-rebuild')).not.toBeInTheDocument();
+    // SHOWN, read-only: the repo is readable from the index phase on.
+    expect(screen.getByTestId('repo-browse')).toBeInTheDocument();
+  });
+
+  it('offers Cancel create on the merged page while the job is running', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'core', state: 'running', step: 'index', index_state: 'indexing' }),
+    ]);
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    await screen.findByTestId('repo-settings');
+
+    expect(screen.getByTestId('repo-detail-subtitle')).toHaveTextContent('creating');
+    const cancel = screen.getByTestId('create-cancel-button');
+    expect(cancel).toBeEnabled();
+    expect(cancel).toHaveTextContent('Cancel create');
+    await act(async () => { fireEvent.click(cancel); });
+    expect(api.cancelRepoCreate).toHaveBeenCalledWith('c1');
+  });
+
+  // THE BLOCK DISAPPEARS IN PLACE. No navigation: the reader is already on the
+  // repository's page, and it simply becomes the ordinary one.
+  it('turns into the normal settings page when the job finishes, without navigating', async () => {
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'core', state: 'running', step: 'index', index_state: 'indexing' }),
+    ]);
+    render(<RepoManager {...baseProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    await screen.findByTestId('repo-settings');
+    expect(screen.getByTestId('create-progress')).toBeInTheDocument();
+
+    // The job ends. Same page, same scroll, no route change.
+    vi.mocked(api.listRepoCreates).mockResolvedValue([
+      job({ name: 'core', state: 'done', repo: { name: 'core' } }),
+    ]);
+    await waitFor(() => expect(screen.queryByTestId('create-progress')).not.toBeInTheDocument(), { timeout: 5000 });
+    expect(screen.getByTestId('repo-settings')).toBeInTheDocument();
+    expect(screen.getByTestId('repo-detail-subtitle')).toHaveTextContent('repository settings');
+    expect(screen.queryAllByText('Danger zone').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('repo-rebuild')).toBeInTheDocument();
   });
 
   // A FINISHED job stops flagging the repo: it now stands on its own.
