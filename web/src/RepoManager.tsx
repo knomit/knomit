@@ -4,7 +4,7 @@ import { api, repoAvailable, brokenLensMember, MAX_LENS_DESCRIPTION_BYTES, MAX_R
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { PendingCreateRow } from './PendingCreateRow';
-import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag, activeCreateByRepo } from './useRepoCreates';
+import { useRepoCreates, refreshRepoCreates, pendingCreates, createFlag, activeCreateByRepo, createRepoIsRegistered } from './useRepoCreates';
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { CreateProgress } from './CreateProgress';
 import { markdownPlugins, markdownComponents } from './markdown';
@@ -594,13 +594,20 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
               <CreateWatch
                 createId={view.id}
                 onClose={() => setSel({ kind: 'overview' })}
-                onOpenRepo={name => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
+                // BROWSE it, do not open its settings. The reader asked for a
+                // repository and the thing to do with one is read it — which is
+                // also what a page reload gave them, and the reason they were
+                // reloading. Leaving Manage is the point.
+                onOpenRepo={name => { onChanged(); refresh(); onBrowse({ kind: 'repo', repo: name }); }}
               />
             )}
             {view.kind === 'new' && readOnly && <CreateBlocked what="repository" />}
             {view.kind === 'new' && !readOnly && (
               <CreateRepoWizard
-                onDone={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
+                // Fires the moment the repo EXISTS, not when the job ends — see
+                // maybeEnterRepo. Browse rather than settings, for the same
+                // reason: this is the reader arriving at their new repository.
+                onDone={(name) => { onChanged(); refresh(); onBrowse({ kind: 'repo', repo: name }); }}
                 // With no repos the fallback selection IS this form and Manage is
                 // the whole window, so there is nothing to back out TO: clearing
                 // the selection would re-render the form unchanged, and leaving
@@ -1566,14 +1573,37 @@ function CreateWatch({ createId, onClose, onOpenRepo }: {
   const [cancelErr, setCancelErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // DONE MEANS THIS PAGE IS OVER. The repository it was making now exists and
-  // has a real page of its own, with everything this one was standing in for;
-  // keeping the reader on a progress view of finished work would be the same
-  // "where did it go" the pending row was introduced to fix, one screen later.
-  const doneRepo = status?.state === 'done' ? status.repo?.name : undefined;
+  // THE PAGE IS OVER WHEN THE REPOSITORY EXISTS, not when the job ends.
+  //
+  // The job's terminal state now arrives only after the whole index and the
+  // sync activation — minutes, on a real repository, after the repo became
+  // browsable. Waiting for it stranded the reader on a progress view of a
+  // repository they could already open: "the only way to view the repo is to
+  // refresh the page".
+  //
+  // Guarded by the repo LIST, not by the status alone, for the same reason the
+  // wizard is: this leaves the create surface for the repository, and that is
+  // a claim the job's own word cannot support. Never while cancelling — that
+  // job is deleting the very repo this would open.
+  // The "already entered" latch is read in the EFFECT, never during render:
+  // a ref's value is not a render input, and reading one here would make this
+  // component's output depend on something React does not track.
+  const enteredRepo = useRef(false);
+  const registered = status !== null
+    && status.state !== 'cancelling' && status.state !== 'cancelled' && status.state !== 'failed'
+    && createRepoIsRegistered(status);
+  const registeredName = registered ? (status.repo?.name || status.name) : undefined;
   useEffect(() => {
-    if (doneRepo) onOpenRepo(doneRepo);
-  }, [doneRepo, onOpenRepo]);
+    if (!registeredName || enteredRepo.current) return;
+    let abandoned = false;
+    void api.repos().then(list => {
+      if (abandoned || enteredRepo.current) return;
+      if (!list.some(r => r.name === registeredName)) return;
+      enteredRepo.current = true;
+      onOpenRepo(registeredName);
+    }).catch(() => { /* a failed listing is not evidence the repo is there */ });
+    return () => { abandoned = true; };
+  }, [registeredName, onOpenRepo]);
 
   const cancel = async () => {
     setCancelErr(''); setBusy(true);

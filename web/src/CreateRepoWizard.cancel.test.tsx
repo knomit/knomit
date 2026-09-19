@@ -3,7 +3,12 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { CreateRepoWizard } from './CreateRepoWizard';
 import { api } from './api';
 
-vi.mock('./useRepoCreates', () => ({ refreshRepoCreates: vi.fn(async () => {}) }));
+// Only refreshRepoCreates is stubbed; the rest of the module is real, so the
+// wizard's registration predicate is the one the app actually runs.
+vi.mock('./useRepoCreates', async importOriginal => ({
+  ...(await importOriginal<typeof import('./useRepoCreates')>()),
+  refreshRepoCreates: vi.fn(async () => {}),
+}));
 
 vi.mock('./api', async importOriginal => ({
   ...(await importOriginal<typeof import('./api')>()),
@@ -11,6 +16,11 @@ vi.mock('./api', async importOriginal => ({
     probeOrigin: vi.fn(),
     probeInitialized: vi.fn(),
     createRepo: vi.fn(),
+    // The wizard confirms a create's repo against the LIST before it takes
+    // anyone there — the job saying 'registered' is not the same as the repo
+    // being listable, and navigating on the job's word alone once sent a user
+    // to a repository that did not exist.
+    repos: vi.fn(async () => [{ name: 'kb' }, { name: 'scratch' }]),
     cancelRepoCreate: vi.fn(),
     ontologyPresets: vi.fn(async () => [
       { name: 'default', id: 'general', title: 'General', description: 'd', topics: ['people'] },
@@ -69,7 +79,12 @@ function parkedCreate() {
 }
 
 describe('CreateRepoWizard cancel', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // clearAllMocks clears CALLS, not implementations, so a mockResolvedValue
+    // set by one test would otherwise be the repo list every later test sees.
+    mock(api.repos).mockResolvedValue([{ name: 'kb' }, { name: 'scratch' }]);
+  });
 
   // THE CONTROL EXISTS ONLY WHILE THE CREATE IS RUNNING.
   //
@@ -317,6 +332,75 @@ describe('CreateRepoWizard cancel', () => {
     await startLocalCreate();
 
     await waitFor(() => expect(screen.getByTestId('create-cancelled')).toBeInTheDocument());
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  // BROWSE AS SOON AS THE REPO EXISTS, not when the job ends.
+  //
+  // The job's terminal state now arrives only after the whole index and the
+  // sync activation — minutes, on a real repository. The user reached
+  // "Building the search index", which is when a repo becomes browsable, and
+  // the UI stayed on the manage page: "the only way to view the repo is to
+  // refresh the page".
+  it('enters the repo at the index status, and not before', async () => {
+    const onDone = vi.fn();
+    const seen: Array<Record<string, unknown>> = [
+      status({ step: 'subscribe', pct: 10 }),
+      status({ step: 'register', pct: 60 }),
+      status({ step: 'index', pct: 95, index_state: 'indexing' }),
+    ];
+    let onStatusRef: ((s: unknown) => void) | null = null;
+    mock(api.createRepo).mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      onStatusRef = onStatus;
+      onStatus(seen[0]);
+      onStatus(seen[1]);
+      // Nothing yet: neither status says the repo exists.
+      await new Promise(r => setTimeout(r, 0));
+      return new Promise(() => {}) as Promise<never>; // never resolves: the job runs on
+    });
+    render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
+    await startLocalCreate();
+
+    await waitFor(() => expect(onStatusRef).not.toBeNull());
+    await new Promise(r => setTimeout(r, 20));
+    expect(onDone).not.toHaveBeenCalled();
+
+    // The index status is the first that says the repo is registered.
+    await act(async () => { onStatusRef!(seen[2]); });
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith('scratch'));
+    // ONCE, however many further statuses arrive.
+    await act(async () => { onStatusRef!(status({ step: 'sync', index_state: 'ready' })); });
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  // The repo LIST is the authority, not the job. Navigating on the job's word
+  // alone is how a user once landed on the settings page of a repository that
+  // never existed.
+  it('does not enter a repo the list does not have', async () => {
+    const onDone = vi.fn();
+    mock(api.repos).mockResolvedValue([{ name: 'somethingelse' }]);
+    mock(api.createRepo).mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      onStatus(status({ step: 'index', pct: 95, index_state: 'indexing' }));
+      return new Promise(() => {}) as Promise<never>;
+    });
+    render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
+    await startLocalCreate();
+
+    await new Promise(r => setTimeout(r, 50));
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  // A cancelling job is on its way to DELETING the repo it registered.
+  it('never enters the repo for a cancelling job', async () => {
+    const onDone = vi.fn();
+    mock(api.createRepo).mockImplementation(async (_b: unknown, onStatus: (s: unknown) => void) => {
+      onStatus(status({ step: 'index', index_state: 'indexing', state: 'cancelling' }));
+      return new Promise(() => {}) as Promise<never>;
+    });
+    render(<CreateRepoWizard onDone={onDone} onCancel={() => {}} />);
+    await startLocalCreate();
+
+    await new Promise(r => setTimeout(r, 50));
     expect(onDone).not.toHaveBeenCalled();
   });
 

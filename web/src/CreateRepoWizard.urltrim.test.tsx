@@ -22,6 +22,11 @@ vi.mock('./api', async importOriginal => ({
     probeOrigin: vi.fn(),
     probeInitialized: vi.fn(),
     createRepo: vi.fn(),
+    // The wizard confirms a create's repo against the LIST before it takes
+    // anyone there — the job saying 'registered' is not the same as the repo
+    // being listable, and navigating on the job's word alone once sent a user
+    // to a repository that did not exist.
+    repos: vi.fn(async () => [{ name: 'kb' }, { name: 'scratch' }]),
     ontologyPresets: vi.fn(async () => [
       { name: 'default', id: 'general', title: 'General', description: 'd', topics: ['people'] },
     ]),

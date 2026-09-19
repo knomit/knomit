@@ -201,3 +201,27 @@ export function activeCreateByRepo(list: RepoCreateStatus[]): Map<string, RepoCr
   }
   return out;
 }
+
+// createRepoIsRegistered reports whether the job's REPO now exists.
+//
+// A create passes through a point — m.Add — after which the repository is
+// real, listable and browsable, while the job behind it goes on indexing and
+// then activating sync. Waiting for the job's terminal state before letting
+// anyone in means waiting out the whole index for a repo that has been
+// browsable for minutes; the user's words were that on reaching "Building the
+// search index" the only way to see the repo was to reload the page.
+//
+// The test is on what the server has REPORTED, not on a step name alone:
+// index_state is only ever set once the mirror has read the repo's index,
+// which it can only do after m.Add. The step names are the belt to that
+// braces, for a status that arrives between the register step and the mirror's
+// first read.
+//
+// It is NOT a claim that the repo is ready — the index is still building, and
+// the caller is expected to show the "Creating…" banner. Callers must also
+// confirm the name against the repo list before navigating: this says the job
+// believes it registered, and only the list can say the repo is really there.
+export function createRepoIsRegistered(s: RepoCreateStatus): boolean {
+  if (s.index_state) return true;
+  return s.step === 'index' || s.step === 'sync' || s.step === 'done';
+}

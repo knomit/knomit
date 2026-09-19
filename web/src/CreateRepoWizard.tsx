@@ -1,6 +1,6 @@
 import { useReducer, useRef, useState } from 'react';
 import { api, isTerminalCreateState, type RepoCreateStatus, type ProbeResult } from './api';
-import { refreshRepoCreates } from './useRepoCreates';
+import { refreshRepoCreates, createRepoIsRegistered } from './useRepoCreates';
 import { wizardReducer, initialWizardState, currentStep, stepsFor, branchCheckBlocked, probeIsCurrent, createBodyFor, authFor, originURL, isValidRepoName, type WizardAction } from './wizardState';
 import { WizardStepRail } from './WizardStepRail';
 import { StepSource } from './StepSource';
@@ -315,6 +315,44 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
     }
   };
 
+  // Set once the reader has been sent into the new repository, so the several
+  // statuses that all report "registered" cannot navigate several times.
+  const enteredRepo = useRef(false);
+
+  // maybeEnterRepo takes the reader into the repository THE MOMENT IT EXISTS,
+  // rather than when the job finishes.
+  //
+  // The job's terminal state now comes only after the whole index and the sync
+  // activation, which on a real repository is minutes after the repo became
+  // browsable. The user hit exactly that: on reaching "Building the search
+  // index" — "which is the place when you can start browsing" — the UI stayed
+  // on the manage page, and reloading was the only way in.
+  //
+  // TWO CONDITIONS, because the job's own word is not enough. The status must
+  // say the repo was registered, AND the repo list must actually contain it:
+  // onDone is a claim that a repository of that name exists, and the last time
+  // this component made that claim on the job's say-so alone it sent someone
+  // to the settings page of a repo that never existed. The list is the
+  // authority; the status only says where to look.
+  //
+  // NEVER while cancelling. That job is on its way to deleting the very repo
+  // this would navigate to.
+  const maybeEnterRepo = async (s: RepoCreateStatus) => {
+    if (enteredRepo.current) return;
+    if (s.state === 'cancelling' || s.state === 'cancelled' || s.state === 'failed') return;
+    if (!createRepoIsRegistered(s)) return;
+    const name = s.repo?.name || s.name;
+    try {
+      const repos = await api.repos();
+      if (!repos.some(r => r.name === name)) return;
+    } catch {
+      return; // a failed listing is not evidence the repo is there
+    }
+    if (enteredRepo.current) return;
+    enteredRepo.current = true;
+    onDone(name);
+  };
+
   const handleCreate = async () => {
     setCreateErr(''); setCancelErr(''); setCreateStatus(null); setCreating(true);
     const body = createBodyFor(state);
@@ -330,6 +368,7 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
         // leaves the wizard rather than up to one poll interval later. The
         // first status is the 202 itself, so this fires immediately.
         if (!announced) { announced = true; void refreshRepoCreates(); }
+        void maybeEnterRepo(s);
       });
       // NAVIGATE ONLY ON 'done', never on "not failed".
       //
@@ -347,7 +386,12 @@ export function CreateRepoWizard({ onDone, onCancel }: { onDone: (name: string) 
       // added later — stays on this screen, where CreateProgress says what
       // happened.
       if (final.state === 'done') {
-        onDone(final.repo?.name || state.name);
+        // A fallback, not the usual path: maybeEnterRepo has almost always
+        // taken the reader in already, minutes earlier. This covers a create
+        // whose statuses never reported a registered repo — a very fast local
+        // create polled once, say — and it cannot double-navigate, because
+        // enteredRepo.current gates both.
+        void maybeEnterRepo(final);
       } else if (final.state === 'failed') {
         setCreateErr(final.error || 'create failed');
       }
