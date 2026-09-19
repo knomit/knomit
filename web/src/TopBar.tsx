@@ -8,7 +8,6 @@ import type { RepoInfo, Lens } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { useRepoCreates, activeCreateByRepo, createFlag } from './useRepoCreates';
-import { CreateIndicator } from './CreateIndicator';
 import { useDismiss } from './hooks';
 import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { LENS, repoHue, shortBranch, noMouseFocus } from './utils';
@@ -304,7 +303,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
             so a subscribe could run for minutes with nothing anywhere on
             screen saying so. It renders nothing when nothing is running. */}
         <div data-nodrag style={{ ...noDrag, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-          <CreateIndicator onOpen={manageOpen ? undefined : onManageRepos} />
+
         </div>
         {/* One control, one anchor. In browse it is the gear that opens Manage;
             in Manage it is the step-out that leaves. Same handler, same pixel —

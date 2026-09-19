@@ -1180,7 +1180,8 @@ export default function App() {
               from and no filter field to focus. */}
           <StatusFooter state={state} version={version}
             searchKey={isLive(state) && !manageOpen}
-            historyKey={!isLive(state) && !manageOpen} />
+            historyKey={!isLive(state) && !manageOpen}
+            onOpenCreates={manageOpen ? undefined : toggleRepoMgr} />
         </ErrorBoundary>
       </div>
     </div>

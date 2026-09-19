@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import type { AppState, AsOf } from './state';
 import { selectTrail } from './state';
+import { useRepoCreates, runningCreates } from './useRepoCreates';
 
 interface Props {
   state: AppState;
@@ -26,6 +27,8 @@ interface Props {
    *  Both are false in Manage, which has no time axis to leave and no filter
    *  field to focus. */
   historyKey?: boolean;
+  /** Opens the manage surface, where the flagged rows are. */
+  onOpenCreates?: () => void;
 }
 
 // The mode is signalled by the dot color alone (green = live HEAD, amber =
@@ -83,7 +86,9 @@ function Kbd({ children }: { children: string }) {
  * three slices it uses — App re-renders on every reducer action, and the
  * identity of `state` is already the correct staleness signal.
  */
-export const StatusFooter = memo(function StatusFooter({ state, version, searchKey = false, historyKey = false }: Props) {
+export const StatusFooter = memo(function StatusFooter({ state, version, searchKey = false, historyKey = false, onOpenCreates }: Props) {
+  // Every create with work still to do, cancelling included.
+  const createCount = runningCreates(useRepoCreates());
   const p = pillContent(state.asOf);
   const trailHops = selectTrail(state).length - 1; // number of hops (N)
 
@@ -188,6 +193,34 @@ export const StatusFooter = memo(function StatusFooter({ state, version, searchK
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             minWidth: 0,
           }}>[{activeTask.op}] {activeTask.message}</span>
+        )}
+        {/* CREATES IN FLIGHT, as words in the readout rail rather than as a
+            bare number in the top bar. The old indicator was a chip showing
+            "1" beside the settings and exit icons, which read as an unexplained
+            badge: "that weird '1' icon at the top… that is not needed, or at
+            least not like that".
+
+            NO REPOSITORY NAMES. Several creates can run at once, and naming
+            one of them would be picking a favourite; the count is the honest
+            summary and the manage surface is one click away for the detail.
+            Cancelling counts too — it is still work in progress. */}
+        {createCount > 0 && (
+          <button
+            type="button"
+            className="k-bare"
+            data-testid="footer-creates"
+            data-count={createCount}
+            title="open the repositories being created"
+            onClick={onOpenCreates}
+            style={{
+              color: '#8ab6d6', fontFamily: 'var(--k-font-mono)', fontSize: 'inherit',
+              background: 'none', border: 'none', padding: 0,
+              cursor: onOpenCreates ? 'pointer' : 'default',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+            }}
+          >
+            {createCount === 1 ? '1 repository being created' : `${createCount} repositories being created`}
+          </button>
         )}
       </span>
 
