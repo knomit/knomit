@@ -93,6 +93,29 @@ things that are not on a stock machine:
   server dies at embedder init. knomit checks the installed version and says so
   by name when it is too old.
 
+On **Windows** the binary is linked into the **GUI subsystem** (`-H windowsgui`,
+added to the desktop binary's ldflags only — see `DESKTOP_LDFLAGS` in the
+Makefile). Go's default is the CONSOLE subsystem, and a console-subsystem binary
+is not a desktop app: Windows allocates a console for it, and the terminal that
+launched it then **owns its lifetime**, so closing that window kills the tray
+app. The CLIs (`knomit`, `kb`, `knomit-okf`) stay console-subsystem on purpose.
+
+The trade is that a GUI-subsystem process gets no console, so `fmt.Println` has
+nowhere to go. That only matters for one thing, and it is handled:
+
+```powershell
+.\knomit-desktop.exe --version   # prints to the console you ran it from
+```
+
+`tools/desktop/console_windows.go` re-attaches to the launching console
+(`AttachConsole(ATTACH_PARENT_PROCESS)` + `CONOUT$`) on the `version` path only,
+and *only* for a stream that has no usable handle — redirection and pipes already
+work on their own, and clobbering them would silently empty
+`--version > out.txt`. Run from Explorer or the tray there is no parent console
+and the call is a no-op. The `knomit-desktop: logging to ...` stderr line at
+startup is simply discarded when there is no console; the same text goes to the
+log file.
+
 Artifacts are written under `dist/<goos>-<goarch>/` (Wails can't cross-compile,
 so each platform is built natively). The desktop app/binary lives **only** under
 that platform dir — there is no top-level symlink for it. Launch the macOS bundle
@@ -131,6 +154,15 @@ committed (the binary `//go:embed`s them; regen only when a logo changes):
   the two-tone mark — nor `SetDarkModeIcon`, which is a no-op on macOS in Wails
   v3.) Linux/Windows keep the colored `icon.png` via `trayicon_others.go`.
 - **`macos/icon.icns`** — the `.app` bundle icon (Dock + Finder).
+- **`rsrc_windows_amd64.syso` / `rsrc_windows_arm64.syso`** — the **Windows**
+  application icon (Explorer, taskbar, Alt-Tab). Not embedded by Go code: the
+  linker picks up any `*_windows_<arch>.syso` next to `package main`
+  automatically. Generated from `appicon.png` by `make desktop-winres` (needs
+  `go install github.com/tc-hib/go-winres@latest`) and committed like the rest.
+  Icon only — no manifest, because Go already embeds a default one and Wails v3
+  sets per-monitor-v2 DPI awareness at runtime, which Windows permits only once
+  per process; and no version resource, which would bake in a version that
+  `-ldflags` injects at build time.
 
 ## MCP integration
 
