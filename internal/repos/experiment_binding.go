@@ -106,9 +106,7 @@ func ResolveSessionBindingOnExperiment(ctx context.Context, m *Manager, pin, bra
 			return ResolveSessionBinding(WithLapsedExperiment(ctx, experiment), m, pin, branch)
 		}
 		// The experiment REPLACES the handle's read branch. A handle cannot
-		// hold both today (knomit_bind mints "" and knomit_experiment open
-		// does not touch it), and if it ever could, the experiment is the
-		// more specific of the two.
+		// hold both: the guard above refuses the combination outright.
 		b := NewBindingOfRepo(ri, expBranch)
 		ctx = WithBinding(ctx, b)
 		ctx = WithRepoInstance(ctx, b.Write())
