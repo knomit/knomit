@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test as base, expect, type APIRequestContext } from '@playwright/test';
 import getPort from 'get-port';
+import { knomitModelsDir } from '../helpers/appdirs.js';
 import { createRepo, discoverAgentBranch } from './seed.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..', '..');
@@ -106,7 +107,7 @@ export const test = base.extend<{
     const knomitHome = mkdtempSync(join(tmpdir(), 'knomit-e2e-fresh-'));
 
     // Copy ONNX model cache if available
-    const userModelsDir = join(process.env.HOME || '~', '.knomit', 'models');
+    const userModelsDir = knomitModelsDir();
     const targetModelsDir = join(knomitHome, 'models');
     if (existsSync(userModelsDir)) {
       cpSync(userModelsDir, targetModelsDir, { recursive: true });

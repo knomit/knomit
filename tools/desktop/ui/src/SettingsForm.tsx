@@ -236,7 +236,16 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
 
   // A path is shown home-collapsed so it fits without widening the window; the
   // full value stays on `title`, so nothing is actually lost.
-  const short = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, '~')
+  //
+  // Windows gets its own rule rather than the `~` one. Now that the data root
+  // lives under %LOCALAPPDATA%\knomit\home, every path shown here carries ~30
+  // characters of profile boilerplate — and `~` would be actively misleading,
+  // because the root is no longer inside the user's home directory. The
+  // variable name is what a Windows user would type to get back there.
+  const short = (path: string) =>
+    path
+      .replace(/^[A-Za-z]:\\Users\\[^\\]+\\AppData\\Local/, '%LOCALAPPDATA%')
+      .replace(/^\/(Users|home)\/[^/]+/, '~')
 
   return (
     // Three regions, not one scrolling column. The window is DisableResize, so

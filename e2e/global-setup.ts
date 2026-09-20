@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import getPort from 'get-port';
+import { knomitModelsDir } from './helpers/appdirs.js';
 import { createRepo, seedFixture } from './fixtures/seed.js';
 
 const PROJECT_ROOT = resolve(import.meta.dirname, '..');
@@ -37,7 +38,7 @@ async function globalSetup() {
   console.log(`[e2e] KNOMIT_HOME: ${knomitHome}`);
 
   // 4. Copy ONNX model cache if available
-  const userModelsDir = join(process.env.HOME || '~', '.knomit', 'models');
+  const userModelsDir = knomitModelsDir();
   const targetModelsDir = join(knomitHome, 'models');
   if (existsSync(userModelsDir)) {
     console.log('[e2e] Copying ONNX model cache...');

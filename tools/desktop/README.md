@@ -199,12 +199,33 @@ without a separate `make build`:
   `Knomit.app/Contents/MacOS/kb` on macOS, next to the binary in
   `dist/<platform>/` elsewhere. It is pure Go (no CGO/dylibs).
 - On launch the app symlinks it to **`<home>/bin/kb`** (`home` =
-  `config.Home`, default `~/.knomit`, overridable via `KNOMIT_HOME`) — a stable
-  path that survives the app being moved or updated. The symlink is refreshed
-  idempotently each launch; failure is logged but never blocks startup
-  ([bridge.go](bridge.go)).
+  `config.Home`, overridable via `KNOMIT_HOME`) — a stable path that survives
+  the app being moved or updated. The symlink is refreshed idempotently each
+  launch; failure is logged but never blocks startup ([bridge.go](bridge.go)).
 
-Point an MCP client at that stable path, e.g.:
+### Where `<home>` is
+
+`config.Home` is the knomit data root — `control.db`, `repos/`, `models/`, the
+SSH keypair, `bin/` and `knomit.toml`. The default is per-OS and is the **same
+for all three binaries**: `knomit serve`, `kb` and the desktop app resolve it
+through `internal/apppaths`, so it cannot matter which one starts first.
+
+| OS | default `config.Home` |
+| --- | --- |
+| macOS, Linux | `~/.knomit` |
+| Windows | `%LOCALAPPDATA%\knomit\home` |
+
+On Windows the data root sits one level below `%LOCALAPPDATA%\knomit`, which is
+the desktop app's *state* directory (`server.json`, logs, `update.json` — the
+folder "Reveal log" opens). Nothing on Windows reads `%USERPROFILE%\.knomit`.
+
+`KNOMIT_HOME` overrides the default everywhere. If it is unset and the OS
+cannot say where your profile is, startup **fails with an error naming
+`KNOMIT_HOME`** rather than choosing a fallback: a writable-but-wrong root
+looks like a fresh install, so the models download again and a second identity
+is generated somewhere nobody would think to look.
+
+Point an MCP client at that stable path, e.g. on macOS/Linux:
 
 ```json
 {
@@ -217,8 +238,12 @@ Point an MCP client at that stable path, e.g.:
 }
 ```
 
+On Windows the same path is `%LOCALAPPDATA%\knomit\home\bin\kb.exe`.
+
 Or scaffold a project's integration files with
-`~/.knomit/bin/kb claude init --source <slug>`.
+`<home>/bin/kb claude init --source <slug>`. (`kb claude init` itself writes
+`"command": "kb"` and relies on `PATH`, so the absolute path is only needed for
+clients you configure by hand.)
 
 Run **either** the app **or** `knomit serve`, not both — the app falls back to
 an ephemeral port when `:19278` is taken, leaving two servers and an ambiguous
