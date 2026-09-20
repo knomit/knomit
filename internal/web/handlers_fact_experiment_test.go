@@ -105,3 +105,69 @@ func TestHandleFactCreate_RefusesForeignExperimentBranch(t *testing.T) {
 		}
 	}
 }
+
+// TestLensGET_EmbedsTheExperimentWhenTheWriteMemberIsPinnedThere is the
+// falsifiable half of resolving _embedded.write_branch through the binding.
+//
+// It is written so it CANNOT pass against the previous implementation: that
+// one embedded the write member's AgentBranch(), and the assertion below
+// demands the experiment's branch and explicitly rejects the agent branch.
+// The write_branch key answers "where does this lens write", so when the lens
+// pins its write member at an experiment it may author on, it has to name the
+// branch a write actually lands on.
+func TestLensGET_EmbedsTheExperimentWhenTheWriteMemberIsPinnedThere(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	write := m.Get("alpha")
+	agent := write.AgentBranch()
+	if agent == "" {
+		t.Fatal("fixture: alpha has no agent branch")
+	}
+
+	var branch string
+	if err := write.WithRead(func(svc *store.Service) {
+		exp, err := svc.Experiments().OpenExperiment(context.Background(), "lens-pinned", "", agent)
+		if err != nil {
+			t.Fatalf("open experiment: %v", err)
+		}
+		branch = exp.Branch()
+	}); err != nil {
+		t.Fatalf("with read: %v", err)
+	}
+
+	lens, err := m.LensRegistry().Create(repos.Lens{
+		Name:     "eng",
+		WriteUID: write.UID(),
+		Reads: []repos.LensRead{
+			{RepoUID: write.UID(), Branch: branch},
+			{RepoUID: m.Get("beta").UID()},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create lens: %v", err)
+	}
+
+	// Precondition, so a fixture that never pinned cannot make this vacuous.
+	lb, err := repos.NewBindingOfLens(m, lens)
+	if err != nil {
+		t.Fatalf("resolve lens: %v", err)
+	}
+	if got := lb.WriteBranch(); got != branch {
+		t.Fatalf("precondition: the lens must write to the experiment, got %q want %q", got, branch)
+	}
+
+	s := &Server{Manager: m, AgentBranch: "machine/test"}
+	code, body := getJSON(t, s.NewAPIRouter(), "/lenses/eng")
+	if code != http.StatusOK {
+		t.Fatalf("lens GET status: got %d, want 200", code)
+	}
+	embedded, ok := embeddedBranchOf(t, body, "write_branch")
+	if !ok {
+		t.Fatalf("lens GET has no _embedded.write_branch: %v", body)
+	}
+	if got := embedded["name"]; got != branch {
+		t.Errorf("embedded write_branch name: got %v, want the pinned experiment %q", got, branch)
+	}
+	if got := embedded["name"]; got == agent {
+		t.Errorf("embedded write_branch names the AGENT branch %q — the lens does not write there", agent)
+	}
+}

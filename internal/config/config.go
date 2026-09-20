@@ -211,14 +211,12 @@ type ExperimentsConfig struct {
 	//
 	// Days, not a Duration, because this is a human-scale retention policy a
 	// person sets in the settings UI, and "30" is what they mean.
+	//
+	// This is the ONLY experiment setting. How often the sweeper looks is not
+	// a policy question and is not exposed: it is a package default in
+	// internal/repos, passed as a parameter so the loop's error path stays
+	// testable. One control, one decision.
 	ExpiryDays int `toml:"expiry_days"`
-	// SweepInterval is how often the sweeper looks. It is separate from
-	// ExpiryDays because the two answer different questions — how stale is
-	// too stale, versus how promptly we notice — and because the loop needs a
-	// cadence a test can drive. Default 1h: expiry is measured in days, so a
-	// tick that is an hour late costs nothing, and a quiet tick is one
-	// indexed query.
-	SweepInterval time.Duration `toml:"sweep_interval"`
 }
 
 // Config is the root configuration, composed of section structs.
@@ -307,10 +305,7 @@ func Defaults() Config {
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
 		},
-		Experiments: ExperimentsConfig{
-			ExpiryDays:    30,
-			SweepInterval: time.Hour,
-		},
+		Experiments: ExperimentsConfig{ExpiryDays: 30},
 		Git: GitConfig{
 			Serve:                  true,
 			NetworkTimeout:         120 * time.Second,
@@ -389,9 +384,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := envIntOr("KNOMIT_EXPERIMENTS_EXPIRY_DAYS", &cfg.Experiments.ExpiryDays); err != nil {
-		return Config{}, err
-	}
-	if err := envDurationOr("KNOMIT_EXPERIMENTS_SWEEP_INTERVAL", &cfg.Experiments.SweepInterval); err != nil {
 		return Config{}, err
 	}
 	envOr("KNOMIT_REMOTE_TOKEN", &cfg.Remote.Token)
@@ -482,11 +474,6 @@ func (c Config) Validate() error {
 	// rather than on the first tick.
 	if c.Experiments.ExpiryDays < 0 {
 		return fmt.Errorf("config: experiments.expiry_days must be >= 0 (0 means never expire), got %d", c.Experiments.ExpiryDays)
-	}
-	// A non-positive sweep interval would spin a ticker as fast as the
-	// scheduler allows. 0 is not a disable switch here — expiry_days = 0 is.
-	if c.Experiments.ExpiryDays > 0 && c.Experiments.SweepInterval <= 0 {
-		return fmt.Errorf("config: experiments.sweep_interval must be > 0 when expiry_days is set, got %v", c.Experiments.SweepInterval)
 	}
 	// discovery.effort_default is consumed raw by the MCP review/hypothesize
 	// handlers (it is NOT coerced like discovery.bridge), so an unknown value

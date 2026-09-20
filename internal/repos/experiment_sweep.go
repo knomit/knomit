@@ -10,6 +10,19 @@ import (
 	"knomit/internal/store"
 )
 
+// defaultExperimentSweepInterval is how often the sweeper looks.
+//
+// Deliberately NOT a setting. How stale is too stale is a policy the operator
+// owns (experiments.expiry_days); how promptly we notice is an
+// implementation detail, and exposing it would be a second control that can
+// only be set wrong. Expiry is measured in DAYS, so a tick an hour late costs
+// nothing and a quiet tick is one indexed query.
+//
+// It is still a PARAMETER of runExperimentSweep rather than a constant read
+// inside it, because the loop's error path — a transient failure must not
+// stop the loop — is untestable at an hour per tick.
+const defaultExperimentSweepInterval = time.Hour
+
 // runExperimentSweepLoop drops experiments nobody has committed to in
 // expiry_days, so an abandoned fork does not sit in the ref database and the
 // UI forever.
@@ -23,6 +36,9 @@ import (
 // without waiting an interval — the same reason runLocalReconcileLoop ticks
 // immediately.
 func runExperimentSweepLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo string, expiryDays int, interval time.Duration) {
+	if interval <= 0 {
+		interval = defaultExperimentSweepInterval
+	}
 	defer wg.Done()
 	runExperimentSweep(ctx, repo, expiryDays, interval,
 		func(cutoff time.Time) ([]string, error) {

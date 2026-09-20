@@ -52,6 +52,18 @@ var (
 	// so the caller gets "no such experiment" rather than a missing-ref error
 	// from deep inside the merge.
 	ErrNoSuchExperiment = errors.New("no such experiment")
+	// ErrStaleExperimentParent is returned by commit/sync when the
+	// experiment's recorded parent is no longer the agent branch this
+	// database records as its owner — the repo was taken over between the
+	// fork and now. Rollback is still allowed: throwing away orphaned work is
+	// always safe, and it is the only way out of the state.
+	ErrStaleExperimentParent = errors.New("experiment's parent is no longer this database's agent branch")
+	// ErrOrphanExperimentRef is returned when an exp/<name> ref exists with no
+	// experiments row behind it. Refused rather than adopted: the ref's
+	// content is unknown, and its parentage is unknowable (that is what the
+	// missing row means), so adopting it would present someone else's commits
+	// as a fresh fork of the agent branch.
+	ErrOrphanExperimentRef = errors.New("an experiment branch with no record already exists")
 )
 
 // Experiment is one row of the `experiments` table: an `exp/<name>` branch
@@ -143,6 +155,11 @@ var _ ExperimentIndex = (*repoHandler)(nil)
 // On resume, a non-empty description replaces the stored one and an empty one
 // leaves it — clearing a note is not something an unrelated reconnect should
 // do by omission.
+//
+// A name whose ref exists with NO row is neither: it is refused with
+// ErrOrphanExperimentRef. "Resume" means resuming a recorded experiment, and
+// a ref without a record is precisely the case where we cannot say what we
+// would be resuming.
 func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, parent string) (Experiment, error) {
 	if err := validateExperimentName(name); err != nil {
 		return Experiment{}, err
@@ -166,12 +183,30 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 	}
 
 	branch := ExperimentBranch(name)
-	forkCommit, err := rh.HeadCommit(ctx, parent)
-	if err != nil {
-		return Experiment{}, fmt.Errorf("OpenExperiment %q: resolve parent %q: %w", name, parent, err)
+	// REFUSE an orphan ref rather than adopt it. We are past the resume path,
+	// so there is no record for this name — and CreateBranch NO-OPS when the
+	// ref already exists, which would leave the caller holding a branch that
+	// carries whatever that ref pointed at while the row claims a fresh fork
+	// of the parent. Reachable two ways: a previous open that died between
+	// CreateBranch and the INSERT, and a hand-made ref. Both want a human,
+	// not a silent adoption.
+	if existing, err := rh.HeadCommit(ctx, branch); err == nil && existing != "" {
+		return Experiment{}, fmt.Errorf("%w: %q already exists at %s with no experiments row; "+
+			"delete that ref or pick another name", ErrOrphanExperimentRef, branch, shortHash(existing))
 	}
 	if err := rh.CreateBranch(ctx, branch, parent); err != nil {
 		return Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
+	}
+	// The fork point is read from the NEW BRANCH, after it exists — never
+	// from the parent beforehand. CreateBranch resolves the parent itself and
+	// neither step holds the parent's lock, so a commit landing on the parent
+	// in between would make a fork point read here an ANCESTOR of where the
+	// branch actually starts. fork_commit is the only anchor a "changed since
+	// the fork" view has, so an ancestor there shows a delta that includes
+	// work the experiment never did.
+	forkCommit, err := rh.HeadCommit(ctx, branch)
+	if err != nil {
+		return Experiment{}, fmt.Errorf("OpenExperiment %q: resolve new branch %q: %w", name, branch, err)
 	}
 	// Inherit every tool's watermark, not just review's: hypothesize keys its
 	// own row under the same branch and would otherwise full-scan too.
@@ -258,15 +293,45 @@ func (rh *repoHandler) ListExperiments(ctx context.Context) ([]Experiment, error
 	return out, nil
 }
 
+// checkExperimentParentCurrent refuses an experiment whose recorded parent is
+// no longer the agent branch this database records as its owner.
+//
+// This is the STORE's half of a two-layer refusal, the same shape as the
+// subscription write refusal: RepoInstance.WritableBranch answers the client
+// from the live instance's agent branch, and this answers from the record, so
+// an in-process caller that never passed through a binding gate cannot merge
+// an orphaned experiment into a branch this database has stopped writing.
+// The record is the right authority here because the store has no instance to
+// ask (kb/invariants/store/branch-roles: the role comes from the record).
+//
+// An EMPTY owner is UNKNOWN, not a mismatch. AgentBranchOwner's contract says
+// so explicitly — a database created before the key existed, or one that has
+// never completed a boot, reports "" — and reading it as "no previous branch"
+// would refuse every commit on such a database. Same guard verify.go applies
+// to the same value. So the check bites only on a KNOWN, different owner.
+func (rh *repoHandler) checkExperimentParentCurrent(ctx context.Context, exp Experiment) error {
+	owner, err := rh.AgentBranchOwner(ctx)
+	if err != nil {
+		return fmt.Errorf("experiment %q: read agent branch owner: %w", exp.Name, err)
+	}
+	if owner == "" || owner == exp.Parent {
+		return nil
+	}
+	return fmt.Errorf("%w: experiment %q was forked from %q, but this database is now written by %q "+
+		"(roll it back, or re-open it from the current branch)",
+		ErrStaleExperimentParent, exp.Name, exp.Parent, owner)
+}
+
 // CommitExperiment merges the experiment into its RECORDED parent and, on
 // success, deletes the experiment.
 //
-// The parent comes from the row, not from the caller and not from the
-// instance's current agent branch — the store does not know the latter, and
-// re-deriving it would be exactly the ref-shape inference the branch-roles
-// invariant forbids. An experiment whose parent is no longer this instance's
-// agent branch is refused one layer up, by write eligibility, before it gets
-// here.
+// The parent comes from the row, not from the caller — re-deriving it would
+// be exactly the ref-shape inference the branch-roles invariant forbids. But
+// it is not trusted blindly either: checkExperimentParentCurrent first
+// compares it against the agent branch this database RECORDS as its owner,
+// and refuses with ErrStaleExperimentParent when the repo was taken over
+// between the fork and now. Write eligibility refuses the same case one layer
+// up for a client; this one also covers an in-process caller.
 //
 // On CONFLICT it returns a *MergeConflictError and changes nothing: the
 // refuse strategy collects the paths inside the tree merge, which runs before
@@ -279,6 +344,9 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string) (Agent
 	}
 	if !ok {
 		return AgentReconcileResult{}, fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
+	}
+	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
+		return AgentReconcileResult{}, err
 	}
 
 	// mergeIntoBranch takes the DST lock — the parent's — which is what
@@ -313,6 +381,9 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 	}
 	if !ok {
 		return AgentReconcileResult{}, fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
+	}
+	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
+		return AgentReconcileResult{}, err
 	}
 	res, err := rh.mergeIntoBranch(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins)
 	if err != nil {

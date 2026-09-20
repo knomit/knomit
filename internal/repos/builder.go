@@ -951,7 +951,7 @@ func (b *repoBuilder) startExperimentSweep(ctx context.Context, wg *sync.WaitGro
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
 	go runExperimentSweepLoop(ctx, wg, b.svc, b.name,
-		b.cfg.Experiments.ExpiryDays, b.cfg.Experiments.SweepInterval)
+		b.cfg.Experiments.ExpiryDays, defaultExperimentSweepInterval)
 }
 
 // close releases resources opened so far. Safe to call at any point during

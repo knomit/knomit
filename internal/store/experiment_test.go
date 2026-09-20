@@ -571,3 +571,177 @@ func TestReconcile_DoesNotTouchExperiments(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, landed.Content, "ready")
 }
+
+// TestCommitExperiment_RefusesStaleParent: an experiment whose recorded
+// parent is no longer this database's agent branch must not land. The binding
+// gate one layer up already refuses such a write, but an IN-PROCESS caller
+// does not pass through it, so the store checks the record too — the same
+// two-layer shape as the subscription write refusal.
+//
+// Falsifiable on both tips: a merge that happened and was then reported as an
+// error would move one of them.
+func TestCommitExperiment_RefusesStaleParent(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	// Forked from agent/test, which this database owned at the time.
+	_, err := svc.Experiments().OpenExperiment(ctx, "orphaned", "", testAgentBranch)
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/orphaned", "kb/from-orphan.md", "from orphan", "body")
+
+	// The database is taken over by a different agent branch.
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/successor", testAgentBranch))
+	require.NoError(t, svc.Branches().SetAgentBranchOwner(ctx, "agent/successor"))
+
+	oldParentBefore, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	require.NoError(t, err)
+	newOwnerBefore, err := svc.Branches().HeadCommit(ctx, "agent/successor")
+	require.NoError(t, err)
+	expBefore, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
+	require.NoError(t, err)
+
+	_, err = svc.Experiments().CommitExperiment(ctx, "orphaned")
+	require.ErrorIs(t, err, ErrStaleExperimentParent)
+	require.Contains(t, err.Error(), testAgentBranch, "the error names the recorded parent")
+	require.Contains(t, err.Error(), "agent/successor", "and the branch that owns the database now")
+
+	oldParentAfter, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	require.NoError(t, err)
+	require.Equal(t, oldParentBefore, oldParentAfter, "the stale parent must not move")
+	newOwnerAfter, err := svc.Branches().HeadCommit(ctx, "agent/successor")
+	require.NoError(t, err)
+	require.Equal(t, newOwnerBefore, newOwnerAfter, "and the current owner must not absorb it either")
+	expAfter, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
+	require.NoError(t, err)
+	require.Equal(t, expBefore, expAfter, "the experiment is untouched")
+
+	_, ok, err := svc.Experiments().GetExperiment(ctx, "orphaned")
+	require.NoError(t, err)
+	require.True(t, ok, "and still present — a refusal is not a rollback")
+}
+
+// TestSyncExperiment_RefusesStaleParent: the same gate on the other
+// direction. Syncing FROM a branch this database no longer writes would pull
+// another agent's consensus into a local experiment.
+func TestSyncExperiment_RefusesStaleParent(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	_, err := svc.Experiments().OpenExperiment(ctx, "orphaned", "", testAgentBranch)
+	require.NoError(t, err)
+	writeMergeFact(t, svc, testAgentBranch, "kb/moved-on.md", "moved on", "body")
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/successor", testAgentBranch))
+	require.NoError(t, svc.Branches().SetAgentBranchOwner(ctx, "agent/successor"))
+
+	expBefore, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
+	require.NoError(t, err)
+
+	_, err = svc.Experiments().SyncExperiment(ctx, "orphaned")
+	require.ErrorIs(t, err, ErrStaleExperimentParent)
+
+	expAfter, err := svc.Branches().HeadCommit(ctx, "exp/orphaned")
+	require.NoError(t, err)
+	require.Equal(t, expBefore, expAfter, "a refused sync must not move the experiment")
+}
+
+// TestCommitExperiment_OwnerMatchesIsAllowed is the positive control: with the
+// owner recorded and matching, the same commit lands. Without it the refusal
+// test above would pass against an implementation that refused everything.
+func TestCommitExperiment_OwnerMatchesIsAllowed(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+	require.NoError(t, svc.Branches().SetAgentBranchOwner(ctx, testAgentBranch))
+
+	_, err := svc.Experiments().OpenExperiment(ctx, "current", "", testAgentBranch)
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/current", "kb/landing.md", "landing", "body")
+
+	_, err = svc.Experiments().CommitExperiment(ctx, "current")
+	require.NoError(t, err, "a recorded owner that MATCHES the parent must not block the commit")
+
+	content := readExperimentFact(t, svc, testAgentBranch, "kb/landing.md")
+	require.Contains(t, content, "landing")
+}
+
+// TestCommitExperiment_UnrecordedOwnerIsAllowed: AgentBranchOwner's contract
+// says an empty value means UNKNOWN — a database created before the key
+// existed, or one that has never completed a boot — and that callers must not
+// read it as "no previous branch" (the same guard verify.go applies). Treating
+// unknown as a mismatch would refuse every commit on such a database, so the
+// check bites only on a KNOWN different owner.
+func TestCommitExperiment_UnrecordedOwnerIsAllowed(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	owner, err := svc.Branches().AgentBranchOwner(ctx)
+	require.NoError(t, err)
+	require.Empty(t, owner, "fixture precondition: this database has no recorded owner")
+
+	_, err = svc.Experiments().OpenExperiment(ctx, "unstamped", "", testAgentBranch)
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/unstamped", "kb/unstamped.md", "unstamped", "body")
+
+	_, err = svc.Experiments().CommitExperiment(ctx, "unstamped")
+	require.NoError(t, err, "an UNKNOWN owner is not a mismatch")
+}
+
+// TestOpenExperiment_RefusesOrphanRef: an exp/<name> ref with no experiments
+// row is NOT adopted. It can exist — a prior open that died between
+// CreateBranch and the INSERT, or a hand-made ref — and adopting it would
+// hand the user a branch they believe is a fresh fork of the parent while it
+// actually carries whatever that ref already pointed at. Every one of those
+// commits then becomes committable into the agent branch under a name that
+// says "new experiment".
+func TestOpenExperiment_RefusesOrphanRef(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	// An orphan ref, forked from the parent at an OLD point...
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "exp/orphan", testAgentBranch))
+	writeMergeFact(t, svc, "exp/orphan", "kb/smuggled.md", "smuggled", "content nobody asked for")
+	orphanTip, err := svc.Branches().HeadCommit(ctx, "exp/orphan")
+	require.NoError(t, err)
+
+	// ...and a parent that has since moved on.
+	writeMergeFact(t, svc, testAgentBranch, "kb/newer.md", "newer", "body")
+
+	_, err = svc.Experiments().OpenExperiment(ctx, "orphan", "", testAgentBranch)
+	require.ErrorIs(t, err, ErrOrphanExperimentRef)
+	require.Contains(t, err.Error(), "exp/orphan", "the error names the ref standing in the way")
+
+	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM experiments WHERE name = ?`, "orphan"),
+		"a refused open writes no row")
+	after, err := svc.Branches().HeadCommit(ctx, "exp/orphan")
+	require.NoError(t, err)
+	require.Equal(t, orphanTip, after, "and does not touch the ref it refused")
+}
+
+// TestOpenExperiment_ForkCommitIsTheNewBranchTip closes the TOCTOU: the
+// recorded fork point is read from the NEW branch after it exists, not from
+// the parent before it does. Neither read holds the parent's lock, so a
+// commit landing on the parent in between would otherwise leave fork_commit
+// an ancestor of the branch's real starting point — and fork_commit is the
+// only anchor a "changed since the fork" view has.
+func TestOpenExperiment_ForkCommitIsTheNewBranchTip(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	exp, err := svc.Experiments().OpenExperiment(ctx, "anchored", "", testAgentBranch)
+	require.NoError(t, err)
+
+	branchTip, err := svc.Branches().HeadCommit(ctx, exp.Branch())
+	require.NoError(t, err)
+	require.Equal(t, branchTip, exp.ForkCommit,
+		"the recorded fork point is the branch's own starting tip")
+
+	parentTip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	require.NoError(t, err)
+	require.Equal(t, parentTip, exp.ForkCommit,
+		"which, with nothing racing, is also the parent's tip at creation")
+
+	// The stored row agrees with what the call returned.
+	got, ok, err := svc.Experiments().GetExperiment(ctx, "anchored")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, branchTip, got.ForkCommit)
+}
