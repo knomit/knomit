@@ -47,18 +47,26 @@ export function useDismiss(
 }
 
 /**
- * Fetches the running server's build version once on mount and returns its
- * full string (e.g. "0.5.6.8a0f0e44"), or null until/unless it resolves. A
- * failed fetch stays null so callers can render nothing rather than noise.
+ * Fetches the running server's build version once the server is reachable and
+ * returns its full string (e.g. "0.5.6.8a0f0e44"), or null until/unless it
+ * resolves. A failed fetch stays null so callers can render nothing rather than
+ * noise.
+ *
+ * `enabled` exists for the desktop, where the page can load minutes before the
+ * API does. Firing early is not merely wasted: with no API base the URL
+ * resolves against the webview origin, and the catch below would swallow the
+ * result — so the version would stay null for the whole session with nothing
+ * anywhere to say why. It re-fires when `enabled` flips, which is the point.
  */
-export function useVersion(): string | null {
+export function useVersion(enabled = true): string | null {
   const [full, setFull] = useState<string | null>(null);
   useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     fetchVersion()
       .then(v => { if (alive) setFull(v.full); })
       .catch(() => { /* best-effort: no version on failure */ });
     return () => { alive = false; };
-  }, []);
+  }, [enabled]);
   return full;
 }

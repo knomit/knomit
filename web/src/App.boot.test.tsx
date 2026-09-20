@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { setBootPollIntervalForTests } from './bootStatus';
+import type { BootStatus } from './bootStatus';
 
 // Boot used to take four dependent round trips before anything rendered, and
 // the third (a second GET /repos/{repo} purely for agent_branch) was waste the
@@ -37,6 +39,28 @@ async function apiMock() {
 }
 
 const repoRow = (name: string) => ({ name, index_state: 'ready', index_done: 0, index_total: 0 });
+
+// Every stream the page has opened so far. installFakeEventSource clears the
+// list per test, so this is a per-test record of what was constructed — and
+// construction is the moment that matters: an EventSource fixes its URL then.
+const eventSourceURLs = () => FakeEventSource.instances.map((es) => es.url);
+
+// Which functions on the mocked api module have been called, and how often.
+//
+// This iterates the module rather than naming calls, and the difference is not
+// cosmetic. vi.mock('./api') REPLACES the module, so an ungated `api.anything()`
+// never reaches a fetch spy — a test that checks `api.repos` and `api.listLenses`
+// by name says nothing about the call added next week. Measured: an ungated
+// api.listArchived() on mount left this suite completely green until the check
+// below counted every entry instead.
+//
+// Returns names, not a bare total, so a failure says WHICH call escaped.
+function calledApiFns(api: Record<string, ReturnType<typeof vi.fn>>): string[] {
+  return Object.entries(api)
+    .filter(([, fn]) => (fn?.mock?.calls.length ?? 0) > 0)
+    .map(([name, fn]) => `${name} x${fn.mock.calls.length}`)
+    .sort();
+}
 
 async function primeApi(repos: unknown[]) {
   const api = await apiMock();
@@ -158,6 +182,136 @@ describe('App boot', () => {
 
     expect(screen.getByTestId('boot-screen')).toBeInTheDocument();
     expect(screen.getByTestId('boot-phase')).toHaveTextContent('Connecting…');
+  });
+
+  // DESKTOP FIRST LAUNCH. /config.js sets __KNOMIT_BOOTING__ because the
+  // knomit server does not exist yet — on a cold install it is minutes away,
+  // fetching model artifacts. Two things must hold, and the second is the bug
+  // this replaced: the screen has to NAME what it is waiting on, and the app
+  // must not touch the API until there is one. A request issued now resolves
+  // against the webview origin, where the desktop's SPA fallback rewrites to
+  // /index.html and http.FileServer 301s that to "./" — which for a NESTED path
+  // (every /api/v1/... there is) resolves to its own parent and repeats until
+  // the client gives up. That is indistinguishable from a server that is merely
+  // unwell, so the app retried forever and never recovered, even once the
+  // server came up. See the measured table in tools/desktop/app.go.
+  describe('desktop, server still booting', () => {
+    let statuses: BootStatus[] = [];
+    let restorePoll: () => void;
+    beforeEach(() => {
+      // A few milliseconds instead of the production second: these tests assert
+      // ORDER, never duration, and waiting out the real interval on the wall
+      // clock is what made this suite flaky under load.
+      restorePoll = setBootPollIntervalForTests(5);
+      (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__ = true;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        const next = statuses.length > 1 ? statuses.shift()! : statuses[0];
+        return { ok: true, json: async () => next } as Response;
+      });
+    });
+    afterEach(() => {
+      restorePoll();
+      delete (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__;
+      delete (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__;
+    });
+
+    it('names the phase and asks the API for NOTHING until the server is up', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      statuses = [{ ready: false, phase: 'downloading-models' }];
+
+      render(<App />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('boot-phase')).toHaveTextContent('Downloading models…'));
+      // The whole point. Before the gate this was called immediately, against
+      // the webview origin, where a nested path redirect-loops until the client
+      // gives up.
+      expect(api.repos).not.toHaveBeenCalled();
+    });
+
+    it('adopts the reported API base and continues the boot, with no reload', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      statuses = [
+        { ready: false, phase: 'downloading-models' },
+        { ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' },
+      ];
+
+      render(<App />);
+
+      // The poll interval is 5 ms here (see beforeEach), so waitFor's default
+      // is ample and no test waits out a production second.
+      await waitFor(() => expect(api.repos).toHaveBeenCalled());
+      expect((window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__)
+        .toBe('http://127.0.0.1:54321');
+      await waitFor(() => expect(screen.queryByTestId('boot-screen')).toBeNull());
+    });
+
+    // THE CLASS, not the three instances. Gating api.repos was not enough: a
+    // review found listLenses, two fetchVersions and an EventSource still
+    // leaving during the boot window. Counting only the calls someone thought
+    // to name is how the next one gets missed, so this counts EVERYTHING that
+    // can reach the network and asserts the total is zero — then that each
+    // fires exactly once, and no more, after the base is adopted.
+    //
+    // The EventSource is the one that cannot be fixed later: it resolves its
+    // URL at construction, so one built against the webview origin stays broken
+    // for the session however healthy the server becomes.
+    it('lets NOTHING leave the page while booting, then exactly once after', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      const { fetchVersion } = await import('./api');
+      api.getRepo.mockResolvedValue({ name: 'alpha', read_branch: 'machine/test', branch: EMBEDDED });
+      // The poll re-reads statuses[0] every tick, so flipping it below is what
+      // brings the server up — no gate promise, which would also block the
+      // first status and leave the screen on a generic "Starting…".
+      statuses = [{ ready: false, phase: 'downloading-models' }];
+
+      // Every network exit the page has: fetch (the boot poll plus anything
+      // else), and EventSource construction.
+      const nonBootFetches: string[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/boot/status')) {
+          return { ok: true, json: async () => statuses[0] } as Response;
+        }
+        nonBootFetches.push(url);
+        return { ok: true, json: async () => ({}) } as Response;
+      });
+
+      render(<App />);
+      await waitFor(() =>
+        expect(screen.getByTestId('boot-phase')).toHaveTextContent('Downloading models…'));
+
+      // NOTHING, across all four ways out of the page: any function on the api
+      // module, fetchVersion (which the mock exposes separately), a raw fetch,
+      // or an EventSource. The first of those is the one that makes this a
+      // PROPERTY rather than a checklist — see calledApiFns.
+      expect(calledApiFns(api)).toEqual([]);
+      expect(fetchVersion).not.toHaveBeenCalled();
+      expect(nonBootFetches).toEqual([]);
+      expect(eventSourceURLs()).toEqual([]);
+
+      // Server up: the next poll reports ready and hands over the base.
+      statuses = [{ ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' }];
+
+      await waitFor(() => expect(api.repos).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(api.listLenses).toHaveBeenCalledTimes(1));
+      // Two distinct callers (useVersion and the read-only effect), one call each.
+      await waitFor(() => expect(fetchVersion).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(eventSourceURLs().filter((u) => u.includes('/repo-events'))).toHaveLength(1));
+    });
+
+    it('shows a failed desktop boot as a failure, not an endless retry', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      statuses = [{ ready: false, phase: 'failed', error: 'embedder init failed' }];
+
+      render(<App />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('boot-phase')).toHaveTextContent('Could not start knomit'));
+      expect(screen.getByTestId('boot-error')).toHaveTextContent('embedder init failed');
+      expect(api.repos).not.toHaveBeenCalled();
+    });
   });
 
   it('still renders the no-repos empty state, never the boot screen', async () => {

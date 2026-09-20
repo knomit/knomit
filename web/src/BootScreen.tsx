@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import type { BootState } from './boot';
-import { bootLabel, bootProgress } from './boot';
+import { bootLabel, bootProgress, isIndeterminate } from './boot';
 
 // Elapsed appears only after this long. Below it the number is noise: every
 // healthy boot would flash a counter that says nothing.
@@ -31,6 +31,11 @@ export function BootScreen({ boot, onRetry, now = Date.now }: BootScreenProps) {
 
   const showElapsed = elapsedMs >= ELAPSED_AFTER_MS;
   const pct = Math.round(bootProgress(boot.phase) * 100);
+  // An indeterminate phase has no width to report, so the bar sweeps instead.
+  // The keyframe matches the pre-React splash in index.html (same 220x2 track,
+  // same 40% sweep) so the handover from splash to boot screen shows no seam —
+  // on the desktop those two now cover consecutive halves of the same wait.
+  const indeterminate = isIndeterminate(boot.phase) && !boot.failed;
 
   return (
     <div
@@ -42,6 +47,11 @@ export function BootScreen({ boot, onRetry, now = Date.now }: BootScreenProps) {
         font: '14px/1.5 system-ui, -apple-system, Segoe UI, sans-serif',
       }}
     >
+      {/* Kept OUT of the bar element: the bar's first child is its fill, and
+          tests (and any future reader) read it as such. A <style> tag smuggled
+          in there is an invisible extra child that breaks that reading. */}
+      <style>{'@keyframes knomit-boot-sweep{0%{transform:translateX(-100%)}100%{transform:translateX(350%)}}'}</style>
+
       <div style={{ fontSize: 18, letterSpacing: '0.02em' }}>knomit</div>
 
       {/* The bar is determinate: it reports the phase, not a guess at time.
@@ -52,19 +62,26 @@ export function BootScreen({ boot, onRetry, now = Date.now }: BootScreenProps) {
       <div
         data-testid="boot-bar"
         role="progressbar"
-        aria-valuenow={pct}
+        // An indeterminate progressbar omits aria-valuenow entirely — that is
+        // what tells a screen reader the length is unknown. Reporting 0 would
+        // claim "no progress yet", which is a different and wrong statement.
+        aria-valuenow={indeterminate ? undefined : pct}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label="Startup progress"
         style={{ width: 220, height: 2, background: '#2a2a2a', overflow: 'hidden' }}
       >
         <div
+          data-testid="boot-bar-fill"
+          data-indeterminate={indeterminate ? 'true' : undefined}
           style={{
-            width: `${pct}%`, height: '100%',
+            width: indeterminate ? '40%' : `${pct}%`, height: '100%',
             // Warning styling is reserved for failures, so the bar stays
             // neutral while it is merely slow.
             background: boot.failed ? '#b45454' : '#4a7c9b',
-            transition: 'width 200ms linear',
+            ...(indeterminate
+              ? { animation: 'knomit-boot-sweep 1.1s ease-in-out infinite' }
+              : { transition: 'width 200ms linear' }),
           }}
         />
       </div>

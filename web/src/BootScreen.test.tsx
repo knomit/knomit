@@ -99,6 +99,30 @@ describe('BootScreen', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
+  // The desktop's server boot has no denominator in this tier, so the bar
+  // sweeps instead of claiming a width. aria-valuenow must be ABSENT, not 0:
+  // omitting it is how a progressbar says "length unknown", whereas 0 asserts
+  // "no progress yet" — a different and false claim during a running download.
+  it('sweeps, and reports no value, while the desktop server is still booting', () => {
+    render(<BootScreen boot={stateAt('server', { serverPhase: 'downloading-models' })} onRetry={vi.fn()} now={() => 0} />);
+
+    expect(screen.getByTestId('boot-phase')).toHaveTextContent('Downloading models…');
+    const bar = screen.getByTestId('boot-bar');
+    expect(bar.hasAttribute('aria-valuenow')).toBe(false);
+    const fill = screen.getByTestId('boot-bar-fill');
+    expect(fill.getAttribute('data-indeterminate')).toBe('true');
+    expect(fill.style.animation).toContain('knomit-boot-sweep');
+  });
+
+  it('goes back to a determinate width once past the server phase', () => {
+    render(<BootScreen boot={stateAt('opening', { target: 'alpha' })} onRetry={vi.fn()} now={() => 0} />);
+
+    expect(screen.getByTestId('boot-bar')).toHaveAttribute('aria-valuenow', '60');
+    const fill = screen.getByTestId('boot-bar-fill');
+    expect(fill.hasAttribute('data-indeterminate')).toBe(false);
+    expect(fill.style.width).toBe('60%');
+  });
+
   it('keeps warning styling for failures only', () => {
     const { rerender } = render(
       <BootScreen boot={stateAt('opening', { target: 'alpha', attempt: 2, lastError: 'blip' })} onRetry={vi.fn()} now={() => 0} />,

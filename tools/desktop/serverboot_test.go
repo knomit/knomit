@@ -18,7 +18,7 @@ func TestStartServerBootDoesNotBlockTheCaller(t *testing.T) {
 
 	returned := make(chan struct{})
 	go func() {
-		startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+		startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 			<-release
 			return "", nil, nil
 		})
@@ -33,7 +33,7 @@ func TestStartServerBootDoesNotBlockTheCaller(t *testing.T) {
 }
 
 func TestServerBootWaitReturnsTheAPIBase(t *testing.T) {
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		return "http://127.0.0.1:19278", func() {}, nil
 	})
 
@@ -50,7 +50,7 @@ func TestServerBootWaitReturnsTheAPIBase(t *testing.T) {
 
 func TestServerBootWaitSurfacesTheBootError(t *testing.T) {
 	want := errors.New("embedder init failed")
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		return "", nil, want
 	})
 
@@ -61,12 +61,13 @@ func TestServerBootWaitSurfacesTheBootError(t *testing.T) {
 	}
 }
 
-// wait is reached from a /config.js request. A boot that never settles must not
-// pin that request forever — the caller's context has to win.
+// A boot that never settles must not pin its caller forever — the caller's
+// context has to win. (/config.js no longer waits on this at all; it asks
+// status() and answers immediately. run()'s badge goroutine is the caller now.)
 func TestServerBootWaitHonoursTheCallersContext(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		<-release
 		return "", nil, nil
 	})
@@ -82,7 +83,7 @@ func TestServerBootWaitHonoursTheCallersContext(t *testing.T) {
 // server down twice would double-close the listener and re-run app cleanup.
 func TestServerBootStopTearsDownExactlyOnce(t *testing.T) {
 	var stops atomic.Int32
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		return "http://127.0.0.1:19278", func() { stops.Add(1) }, nil
 	})
 
@@ -100,7 +101,7 @@ func TestServerBootStopTearsDownExactlyOnce(t *testing.T) {
 func TestServerBootStopWaitsForAnInFlightBoot(t *testing.T) {
 	release := make(chan struct{})
 	var stopped atomic.Bool
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		<-release
 		return "http://127.0.0.1:19278", func() { stopped.Store(true) }, nil
 	})
@@ -128,7 +129,7 @@ func TestServerBootStopWaitsForAnInFlightBoot(t *testing.T) {
 // A boot that failed started nothing, so there is nothing to tear down — and
 // stop must not panic on the nil teardown it was handed.
 func TestServerBootStopIsSafeAfterAFailedBoot(t *testing.T) {
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		return "", nil, errors.New("boom")
 	})
 	b.stop() // must not panic
@@ -158,7 +159,7 @@ func TestServerBootStopGivesUpOnAWedgedBoot(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) }) // let the boot goroutine exit with the test
 	var tornDown atomic.Bool
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		<-release
 		return "http://127.0.0.1:19278", func() { tornDown.Store(true) }, nil
 	})
@@ -187,7 +188,7 @@ func TestServerBootStopStaysSpentAfterGivingUp(t *testing.T) {
 
 	settle := make(chan struct{})
 	var teardowns atomic.Int32
-	b := startServerBoot(context.Background(), func(context.Context) (string, func(), error) {
+	b := startServerBoot(context.Background(), func(context.Context, func(bootPhase)) (string, func(), error) {
 		<-settle
 		return "http://127.0.0.1:19278", func() { teardowns.Add(1) }, nil
 	})

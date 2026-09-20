@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { bootReducer, initialBootState, bootProgress, bootLabel } from './boot';
+import {
+  bootReducer, initialBootState, bootProgress, bootLabel,
+  isIndeterminate, serverPhaseLabel,
+} from './boot';
 
 const at0 = () => initialBootState(0);
+// A desktop page that loaded while its server was still booting. It STARTS at
+// 'server' because the reducer is monotonic and 'server' sorts before
+// 'connecting', so a state that began at 'connecting' can never be moved back
+// to it — see the test pinning exactly that at the bottom of this file.
+const atServer = () => initialBootState(0, 'server');
 
 describe('bootProgress', () => {
   // Master/reviewer call, pinned: progress is a FRACTION PER PHASE, never an
@@ -17,9 +25,37 @@ describe('bootProgress', () => {
   });
 
   it('increases monotonically through the phase order', () => {
+    expect(bootProgress('server')).toBeLessThan(bootProgress('connecting'));
     expect(bootProgress('connecting')).toBeLessThan(bootProgress('opening'));
     expect(bootProgress('opening')).toBeLessThan(bootProgress('branch'));
     expect(bootProgress('branch')).toBeLessThan(bootProgress('done'));
+  });
+
+  // `server` is the desktop's own boot, which in this tier has no byte counts
+  // to divide by — a first-launch model fetch takes minutes and nothing here
+  // knows how much is left. A determinate width would be an invented number,
+  // and inventing one is what the frozen 25% bar did before.
+  it('marks only the desktop server phase indeterminate', () => {
+    expect(isIndeterminate('server')).toBe(true);
+    for (const p of ['connecting', 'opening', 'branch', 'done'] as const) {
+      expect(isIndeterminate(p)).toBe(false);
+    }
+  });
+});
+
+describe('serverPhaseLabel', () => {
+  it('names the phase the desktop reported', () => {
+    expect(serverPhaseLabel('downloading-models')).toBe('Downloading models…');
+    expect(serverPhaseLabel('installing-tools')).toBe('Installing command-line tools…');
+    expect(serverPhaseLabel('starting-server')).toBe('Starting the server…');
+  });
+
+  // The desktop and this bundle ship independently, so a phase this map has
+  // never heard of is a version skew, not a bug. Showing the raw slug would put
+  // "starting-engine" in front of the user; a generic sentence is still true.
+  it('falls back to a generic sentence for an unknown phase', () => {
+    expect(serverPhaseLabel('some-future-phase')).toBe('Starting…');
+    expect(serverPhaseLabel('')).toBe('Starting…');
   });
 });
 
@@ -98,5 +134,55 @@ describe('bootLabel', () => {
     const s = bootReducer(at0(), { type: 'PHASE', phase: 'opening', target: 'alpha' });
     expect(bootLabel({ ...s, failed: true })).toBe('Could not open alpha');
     expect(bootLabel({ ...at0(), failed: true })).toBe('Could not connect');
+  });
+
+  it('speaks the desktop server phase while waiting on it', () => {
+    const s = bootReducer(atServer(), { type: 'SERVER_PHASE', serverPhase: 'downloading-models' });
+    expect(bootLabel(s)).toBe('Downloading models…');
+  });
+
+  // A desktop boot that died never reached a repo, so "Could not open alpha" /
+  // "Could not connect" would both be accounts of the wrong thing — nothing was
+  // ever connected TO. The detail lives in lastError, rendered separately.
+  it('blames the server, not the repo, when the desktop boot failed', () => {
+    const s = bootReducer(atServer(), { type: 'SERVER_PHASE', serverPhase: 'downloading-models' });
+    expect(bootLabel({ ...s, failed: true })).toBe('Could not start knomit');
+  });
+});
+
+describe('bootReducer SERVER_PHASE', () => {
+  it('enters the server phase and records what the desktop said', () => {
+    const s = bootReducer(atServer(), { type: 'SERVER_PHASE', serverPhase: 'installing-tools' });
+    expect(s.phase).toBe('server');
+    expect(s.serverPhase).toBe('installing-tools');
+  });
+
+  // The poll is asynchronous, so its last answer can land after the server came
+  // up and the app moved on to connecting/opening. Letting it back in would
+  // replace a real repo label with a stale "Downloading models…".
+  it('ignores a late server phase once the boot has moved on', () => {
+    const connected = bootReducer(
+      bootReducer(atServer(), { type: 'SERVER_PHASE', serverPhase: 'starting-server' }),
+      { type: 'PHASE', phase: 'opening', target: 'alpha' },
+    );
+    const late = bootReducer(connected, { type: 'SERVER_PHASE', serverPhase: 'downloading-models' });
+    expect(late).toBe(connected);
+    expect(late.phase).toBe('opening');
+  });
+
+  // The trap this cost an hour to find, pinned so the next reader does not pay
+  // it again. The monotonic guard makes SERVER_PHASE a NO-OP on a state that
+  // started at 'connecting' — the browser's default — so a desktop page must be
+  // constructed at 'server' (useBoot's initialPhase) or it will sit on
+  // "Connecting…" for the whole download with every poll result dropped in
+  // silence. Nothing throws; the screen is just wrong.
+  it('is a NO-OP from a browser-default start, which is why the desktop starts at server', () => {
+    const fromConnecting = bootReducer(at0(), { type: 'SERVER_PHASE', serverPhase: 'downloading-models' });
+    expect(fromConnecting.phase).toBe('connecting');
+    expect(fromConnecting.serverPhase).toBe('');
+
+    const fromServer = bootReducer(atServer(), { type: 'SERVER_PHASE', serverPhase: 'downloading-models' });
+    expect(fromServer.phase).toBe('server');
+    expect(fromServer.serverPhase).toBe('downloading-models');
   });
 });

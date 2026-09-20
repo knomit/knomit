@@ -11,6 +11,7 @@ import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { useBoot } from './boot';
 import { BootScreen } from './BootScreen';
+import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo } from './useRepoCreates';
 import { TopBar } from './TopBar';
@@ -284,13 +285,33 @@ export default function App() {
   const isCurrentLens = useCallback((name: string) =>
     stateRef.current.context.kind === 'lens' && stateRef.current.context.name === name, []);
   const { navigate } = useNavigationManager(state, dispatch);
-  const version = useVersion();
+  // DESKTOP ONLY, and declared FIRST because almost everything below is gated
+  // on it. True when this page loaded while knomit-desktop was still booting
+  // its server, which on a first launch means a multi-minute model download
+  // with no API in existence.
+  //
+  // NOTHING may leave the page while this is true. There is no API base yet, so
+  // a request resolves against the webview origin, where the desktop's SPA
+  // fallback rewrites to /index.html and http.FileServer 301s that to "./" —
+  // which for any NESTED path (every /api/v1/... there is) resolves to the same
+  // parent and redirects again, until the client gives up. Measured: a Go
+  // client stops after 10 hops. The request does not fail in a way any of these
+  // best-effort catches can distinguish from "the server said no", so the
+  // damage is silent and permanent for the session: an EventSource fixes its
+  // URL at construction and never re-resolves, and a one-shot useEffect([])
+  // never runs again.
+  //
+  // Initialised from the flag /config.js set, so the very first render already
+  // knows and no effect can win the race. In the browser the flag is never set,
+  // this is false forever, and every gate below is a no-op.
+  const [serverBooting, setServerBooting] = useState(isDesktopBooting);
+  const version = useVersion(!serverBooting);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [reposLoaded, setReposLoaded] = useState(false);
   // Boot progress, so the pre-branch screen can say what it is waiting on
   // instead of showing an undifferentiated "Loading…".
-  const { boot, dispatchBoot, retryBoot } = useBoot();
+  const { boot, dispatchBoot, retryBoot } = useBoot(isDesktopBooting() ? 'server' : 'connecting');
   // bootNonce re-fires the bootstrap effect when the user presses Retry; the
   // repo has not changed, so nothing else would.
   const [bootNonce, setBootNonce] = useState(0);
@@ -407,7 +428,38 @@ export default function App() {
   // from the live list, preferring the user's last explicit choice and falling
   // back to the first available repo. reposLoaded gates the "no repos" empty
   // state below, which is the ordinary first-run screen, not an error.
+  // DESKTOP ONLY: wait out the desktop's own server boot before asking the API
+  // anything, narrating it meanwhile. /boot/status is served by the desktop
+  // process itself, so it answers during exactly the window when the knomit
+  // server does not yet exist. See bootStatus.ts.
   useEffect(() => {
+    if (!serverBooting) return;
+    let cancelled = false;
+    void pollBootStatus({
+      shouldStop: () => cancelled,
+      onStatus: (s) => {
+        if (s.error) {
+          dispatchBoot({ type: 'FAILED', error: s.error });
+          return;
+        }
+        if (s.ready) {
+          // Order matters: install the base BEFORE clearing the gate, or the
+          // repo effect can fire in the same commit with no base to use.
+          adoptAPIBase(s.api_base ?? '');
+          dispatchBoot({ type: 'PHASE', phase: 'connecting' });
+          setServerBooting(false);
+          return;
+        }
+        dispatchBoot({ type: 'SERVER_PHASE', serverPhase: s.phase });
+      },
+    });
+    return () => { cancelled = true; };
+  }, [serverBooting, dispatchBoot]);
+
+  useEffect(() => {
+    // Held until the desktop's server is up. Re-runs when that flips, which is
+    // why serverBooting is in the dependency list below.
+    if (serverBooting) return;
     let cancelled = false;
 
     // The remembered context is read SYNCHRONOUSLY, before any request, so the
@@ -455,7 +507,7 @@ export default function App() {
       .catch(() => { if (!cancelled) setReposLoaded(true); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [serverBooting]);
 
   // Boot is over the moment a branch is known — that is choice (a): the panels
   // below keep their own placeholders for the wave that follows, rather than
@@ -485,21 +537,26 @@ export default function App() {
   // reports a change (lens create/delete). Best-effort: an empty list just hides
   // the Lenses group.
   useEffect(() => {
+    if (serverBooting) return;
     let cancelled = false;
     api.listLenses()
       .then(list => { if (!cancelled) setLenses(list); })
       .catch(() => { /* best-effort: no Lenses group on failure */ });
     return () => { cancelled = true; };
-  }, []);
+  }, [serverBooting]);
 
-  // Fetch server read-only flag once on mount and propagate to global state.
+  // Fetch server read-only flag once the server exists and propagate to global
+  // state. Gated like the rest: failing early would silently leave the app
+  // WRITABLE on a read-only server, because the catch treats any failure as
+  // "stay writable".
   useEffect(() => {
+    if (serverBooting) return;
     let alive = true;
     fetchVersion()
       .then(v => { if (alive) dispatch({ type: 'SET_SERVER_READONLY', value: v.readOnly }); })
       .catch(() => { /* best-effort: stay writable on failure */ });
     return () => { alive = false; };
-  }, []);
+  }, [serverBooting]);
 
   // The browsed repo's own read-only state (a subscription). Lens browsing
   // writes to the lens's write repo, which can never be a subscription
@@ -716,6 +773,14 @@ export default function App() {
   // mechanism meant to clear it.
   const repoListGen = useRef(0);
   useEffect(() => {
+    // Not before the API exists. This one is the worst of the gated calls to
+    // get wrong: an EventSource resolves its URL ONCE, at construction, and
+    // this effect is mounted once — so a stream opened against the webview
+    // origin stays pointed there for the whole session. The visible cost is
+    // that index chips freeze in whatever state the first /repos carried and
+    // the `reconnect` refetch below never fires, with nothing on screen to say
+    // the app stopped listening.
+    if (serverBooting) return;
     const stop = subscribeRepoEvents((ev: RepoIndexEvent | { type: 'reconnect' }) => {
       if ('type' in ev) {
         // Reconnected: a terminal event is broadcast once and never replayed,
@@ -744,8 +809,10 @@ export default function App() {
       }
     });
     return stop;
-    // Mounted once. dispatch is stable; the active repo is read from the ref.
-  }, [dispatch]);
+    // Mounted once PER SERVER: dispatch is stable and the active repo is read
+    // from the ref, so serverBooting flipping is the only thing that re-runs
+    // this — which is exactly when the stream must finally be opened.
+  }, [dispatch, serverBooting]);
 
   // SSE for task and status events — reconnects when repo/branch changes.
   useEffect(() => {
