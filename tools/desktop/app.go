@@ -495,9 +495,26 @@ const wailsPrefix = "/wails/"
 // the document, and the user watches a static splash with no way to learn what
 // is happening. Worse, the wait was capped — past the cap config.js 503'd, the
 // page loaded with no API base at all, and every later request resolved against
-// the webview origin instead, where the SPA fallback below answers 200 with
-// index.html. A UI that cannot tell that from data is a UI that never recovers,
-// even once the server is up.
+// the webview origin instead, where the SPA fallback below takes it.
+//
+// What that fallback does to an API path is worth stating exactly, because the
+// obvious guess ("it answers 200 with index.html") is wrong and leads to the
+// wrong fix. Measured against this handler:
+//
+//	/                     200, the app
+//	/toplevel             301 -> "./" -> "/" -> 200 in one hop
+//	/api/v1/repos         301 -> "./" -> "/api/v1/" -> 301 -> ... a LOOP
+//
+// The rewrite to /index.html hands the request to http.FileServer, which 301s
+// any path ending in index.html to "./" — and "./" resolves against the REQUEST
+// path, so a NESTED path lands on its own parent and does it again. A Go client
+// gives up after 10 hops; a browser reports a redirect error. Every /api/v1/...
+// path is nested, so every API call taken by this fallback dies that way. See
+// kb/gotchas/web/spa/fileserver-index-redirect-loop, which is the same trap the
+// server-side handler already fixed with http.ServeContent.
+//
+// Either way the UI cannot tell it from a server that is merely unwell, so it
+// retried forever and never recovered, even once the server was up.
 //
 // So it answers immediately, and says which of the two worlds the client is in:
 // a base when there is one, __KNOMIT_BOOTING__ when there is not. The client

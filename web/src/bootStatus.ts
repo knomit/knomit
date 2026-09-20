@@ -22,6 +22,23 @@
 // and encodes three fields.
 export const BOOT_POLL_MS = 1000;
 
+// bootPollIntervalMs is the interval App actually uses. It is a mutable module
+// value, not the constant above, so tests can shrink it to a few milliseconds
+// instead of spending a real second per transition: waiting out the production
+// interval on the wall clock is what made these suites flaky ~1 run in 10 under
+// load, and a test that sleeps for a second is also a test nobody reruns.
+//
+// Deliberately NOT a React prop or context: the interval is a property of the
+// transport, not of the view, and threading it through App would put a test
+// seam in the component's public shape.
+let bootPollIntervalMs = BOOT_POLL_MS;
+
+export function setBootPollIntervalForTests(ms: number): () => void {
+  const prev = bootPollIntervalMs;
+  bootPollIntervalMs = ms;
+  return () => { bootPollIntervalMs = prev; };
+}
+
 export const BOOT_STATUS_PATH = '/boot/status';
 
 // BootStatus mirrors the Go bootStatus struct in tools/desktop/serverboot.go.
@@ -83,7 +100,7 @@ const realSleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms)
 export async function pollBootStatus(deps: PollDeps): Promise<void> {
   const fetchStatus = deps.fetchStatus ?? realFetchStatus;
   const sleep = deps.sleep ?? realSleep;
-  const interval = deps.intervalMs ?? BOOT_POLL_MS;
+  const interval = deps.intervalMs ?? bootPollIntervalMs;
   while (!deps.shouldStop()) {
     try {
       const s = await fetchStatus();

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import App from './App';
-import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
-import { BOOT_POLL_MS } from './bootStatus';
+import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { setBootPollIntervalForTests } from './bootStatus';
 import type { BootStatus } from './bootStatus';
 
 // Boot used to take four dependent round trips before anything rendered, and
@@ -39,6 +39,11 @@ async function apiMock() {
 }
 
 const repoRow = (name: string) => ({ name, index_state: 'ready', index_done: 0, index_total: 0 });
+
+// Every stream the page has opened so far. installFakeEventSource clears the
+// list per test, so this is a per-test record of what was constructed — and
+// construction is the moment that matters: an EventSource fixes its URL then.
+const eventSourceURLs = () => FakeEventSource.instances.map((es) => es.url);
 
 async function primeApi(repos: unknown[]) {
   const api = await apiMock();
@@ -172,7 +177,12 @@ describe('App boot', () => {
   // so the app retried forever and never recovered, even once the server came up.
   describe('desktop, server still booting', () => {
     let statuses: BootStatus[] = [];
+    let restorePoll: () => void;
     beforeEach(() => {
+      // A few milliseconds instead of the production second: these tests assert
+      // ORDER, never duration, and waiting out the real interval on the wall
+      // clock is what made this suite flaky under load.
+      restorePoll = setBootPollIntervalForTests(5);
       (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__ = true;
       vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
         const next = statuses.length > 1 ? statuses.shift()! : statuses[0];
@@ -180,6 +190,7 @@ describe('App boot', () => {
       });
     });
     afterEach(() => {
+      restorePoll();
       delete (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__;
       delete (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__;
     });
@@ -206,14 +217,66 @@ describe('App boot', () => {
 
       render(<App />);
 
-      // One BOOT_POLL_MS has to elapse before the second status arrives, and
-      // that is longer than waitFor's 1 s default — so this waits for the real
-      // interval rather than pretending the transition is instant.
-      const afterOnePoll = { timeout: BOOT_POLL_MS + 2000 };
-      await waitFor(() => expect(api.repos).toHaveBeenCalled(), afterOnePoll);
+      // The poll interval is 5 ms here (see beforeEach), so waitFor's default
+      // is ample and no test waits out a production second.
+      await waitFor(() => expect(api.repos).toHaveBeenCalled());
       expect((window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__)
         .toBe('http://127.0.0.1:54321');
       await waitFor(() => expect(screen.queryByTestId('boot-screen')).toBeNull());
+    });
+
+    // THE CLASS, not the three instances. Gating api.repos was not enough: a
+    // review found listLenses, two fetchVersions and an EventSource still
+    // leaving during the boot window. Counting only the calls someone thought
+    // to name is how the next one gets missed, so this counts EVERYTHING that
+    // can reach the network and asserts the total is zero — then that each
+    // fires exactly once, and no more, after the base is adopted.
+    //
+    // The EventSource is the one that cannot be fixed later: it resolves its
+    // URL at construction, so one built against the webview origin stays broken
+    // for the session however healthy the server becomes.
+    it('lets NOTHING leave the page while booting, then exactly once after', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      const { fetchVersion } = await import('./api');
+      api.getRepo.mockResolvedValue({ name: 'alpha', read_branch: 'machine/test', branch: EMBEDDED });
+      // The poll re-reads statuses[0] every tick, so flipping it below is what
+      // brings the server up — no gate promise, which would also block the
+      // first status and leave the screen on a generic "Starting…".
+      statuses = [{ ready: false, phase: 'downloading-models' }];
+
+      // Every network exit the page has: fetch (the boot poll plus anything
+      // else), and EventSource construction.
+      const nonBootFetches: string[] = [];
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes('/boot/status')) {
+          return { ok: true, json: async () => statuses[0] } as Response;
+        }
+        nonBootFetches.push(url);
+        return { ok: true, json: async () => ({}) } as Response;
+      });
+
+      render(<App />);
+      await waitFor(() =>
+        expect(screen.getByTestId('boot-phase')).toHaveTextContent('Downloading models…'));
+
+      // NOTHING. Not the repo list, not the lens list, not the version (twice),
+      // not the repo-events stream.
+      expect(nonBootFetches).toEqual([]);
+      expect(api.repos).not.toHaveBeenCalled();
+      expect(api.listLenses).not.toHaveBeenCalled();
+      expect(fetchVersion).not.toHaveBeenCalled();
+      expect(eventSourceURLs()).toEqual([]);
+
+      // Server up: the next poll reports ready and hands over the base.
+      statuses = [{ ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' }];
+
+      await waitFor(() => expect(api.repos).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(api.listLenses).toHaveBeenCalledTimes(1));
+      // Two distinct callers (useVersion and the read-only effect), one call each.
+      await waitFor(() => expect(fetchVersion).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(eventSourceURLs().filter((u) => u.includes('/repo-events'))).toHaveLength(1));
     });
 
     it('shows a failed desktop boot as a failure, not an endless retry', async () => {
