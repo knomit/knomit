@@ -18,12 +18,14 @@ import (
 // need a real parent console and would make this untrustworthy under CI, where
 // there is none. What is left is the one decision the guard actually makes.
 //
-// NOTE ON COVERAGE: until the Windows compile gate in tests.yml, nothing in CI
-// compiled this file at all — the `desktop` job is macos-latest. That gate is
-// build+vet only, so this test still runs only on a developer's Windows box.
-// That is the intended arrangement, not an oversight: it is cheap to run by
-// hand and the file it guards cannot even be compiled on the platform that
-// would run the test suite.
+// NOTE ON COVERAGE: the `desktop` job is macos-latest, so nothing there can
+// compile this file, let alone run it. The Windows leg of `tests.yml` now runs
+// these two by name — `go test -tags desktop -run TestWritable ./tools/desktop/`
+// — after its build+vet step. That scoping is the contract: the rest of the
+// desktop suite has never run on Windows, so anything added to this file
+// outside the TestWritable prefix is compiled in CI but NOT executed there.
+// Name a new test TestWritable… to have it gated, or widen the -run pattern in
+// tests.yml along with it.
 
 // TestWritableRejectsTheNullHandle pins the broken case. Handle 0 is what
 // GetStdHandle(STD_OUTPUT_HANDLE) actually returns in a -H windowsgui process
