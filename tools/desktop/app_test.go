@@ -81,7 +81,8 @@ func TestConfigInjectingHandler_AnswersImmediatelyWhileBooting(t *testing.T) {
 		}
 		// The ABSENCE of a base is what forces the client through the boot gate.
 		// An empty string here would let a careless caller build a same-origin
-		// URL and get index.html back with a 200.
+		// URL, which the SPA fallback below turns into a redirect loop for any
+		// nested path — see the table on configInjectingHandler.
 		if strings.Contains(body, "__KNOMIT_API_BASE__") {
 			t.Errorf("config.js set an API base before the server was up; got %q", body)
 		}

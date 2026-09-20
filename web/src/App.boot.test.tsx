@@ -45,6 +45,23 @@ const repoRow = (name: string) => ({ name, index_state: 'ready', index_done: 0, 
 // construction is the moment that matters: an EventSource fixes its URL then.
 const eventSourceURLs = () => FakeEventSource.instances.map((es) => es.url);
 
+// Which functions on the mocked api module have been called, and how often.
+//
+// This iterates the module rather than naming calls, and the difference is not
+// cosmetic. vi.mock('./api') REPLACES the module, so an ungated `api.anything()`
+// never reaches a fetch spy — a test that checks `api.repos` and `api.listLenses`
+// by name says nothing about the call added next week. Measured: an ungated
+// api.listArchived() on mount left this suite completely green until the check
+// below counted every entry instead.
+//
+// Returns names, not a bare total, so a failure says WHICH call escaped.
+function calledApiFns(api: Record<string, ReturnType<typeof vi.fn>>): string[] {
+  return Object.entries(api)
+    .filter(([, fn]) => (fn?.mock?.calls.length ?? 0) > 0)
+    .map(([name, fn]) => `${name} x${fn.mock.calls.length}`)
+    .sort();
+}
+
 async function primeApi(repos: unknown[]) {
   const api = await apiMock();
   api.repos.mockResolvedValue(repos);
@@ -172,9 +189,12 @@ describe('App boot', () => {
   // fetching model artifacts. Two things must hold, and the second is the bug
   // this replaced: the screen has to NAME what it is waiting on, and the app
   // must not touch the API until there is one. A request issued now resolves
-  // against the webview origin, whose SPA fallback answers 200 with index.html,
-  // and HTML-where-JSON-was-expected is indistinguishable from a real failure —
-  // so the app retried forever and never recovered, even once the server came up.
+  // against the webview origin, where the desktop's SPA fallback rewrites to
+  // /index.html and http.FileServer 301s that to "./" — which for a NESTED path
+  // (every /api/v1/... there is) resolves to its own parent and repeats until
+  // the client gives up. That is indistinguishable from a server that is merely
+  // unwell, so the app retried forever and never recovered, even once the
+  // server came up. See the measured table in tools/desktop/app.go.
   describe('desktop, server still booting', () => {
     let statuses: BootStatus[] = [];
     let restorePoll: () => void;
@@ -203,8 +223,9 @@ describe('App boot', () => {
 
       await waitFor(() =>
         expect(screen.getByTestId('boot-phase')).toHaveTextContent('Downloading models…'));
-      // The whole point. Before the gate this was called immediately and got
-      // index.html back with a 200.
+      // The whole point. Before the gate this was called immediately, against
+      // the webview origin, where a nested path redirect-loops until the client
+      // gives up.
       expect(api.repos).not.toHaveBeenCalled();
     });
 
@@ -260,12 +281,13 @@ describe('App boot', () => {
       await waitFor(() =>
         expect(screen.getByTestId('boot-phase')).toHaveTextContent('Downloading models…'));
 
-      // NOTHING. Not the repo list, not the lens list, not the version (twice),
-      // not the repo-events stream.
-      expect(nonBootFetches).toEqual([]);
-      expect(api.repos).not.toHaveBeenCalled();
-      expect(api.listLenses).not.toHaveBeenCalled();
+      // NOTHING, across all four ways out of the page: any function on the api
+      // module, fetchVersion (which the mock exposes separately), a raw fetch,
+      // or an EventSource. The first of those is the one that makes this a
+      // PROPERTY rather than a checklist — see calledApiFns.
+      expect(calledApiFns(api)).toEqual([]);
       expect(fetchVersion).not.toHaveBeenCalled();
+      expect(nonBootFetches).toEqual([]);
       expect(eventSourceURLs()).toEqual([]);
 
       // Server up: the next poll reports ready and hands over the base.

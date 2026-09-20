@@ -33,8 +33,9 @@ describe('adoptAPIBase', () => {
   });
 
   // An empty base would resolve every API call against the webview origin,
-  // where the SPA fallback answers 200 with index.html. Refusing to adopt it
-  // keeps the gate closed instead of opening it onto nonsense.
+  // where the desktop's SPA fallback redirect-loops any nested path — which is
+  // every /api/v1/... call there is. Refusing to adopt it keeps the gate closed
+  // instead of opening it onto nonsense.
   it('refuses an empty base rather than pointing the app at the webview origin', () => {
     (window as W).__KNOMIT_BOOTING__ = true;
     adoptAPIBase('');
