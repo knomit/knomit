@@ -11,6 +11,7 @@ import { useTimeTravel } from './useTimeTravel';
 import { bootstrapStatusWithRetry } from './bootstrap';
 import { useBoot } from './boot';
 import { BootScreen } from './BootScreen';
+import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo } from './useRepoCreates';
 import { TopBar } from './TopBar';
@@ -290,10 +291,22 @@ export default function App() {
   const [reposLoaded, setReposLoaded] = useState(false);
   // Boot progress, so the pre-branch screen can say what it is waiting on
   // instead of showing an undifferentiated "Loading…".
-  const { boot, dispatchBoot, retryBoot } = useBoot();
+  const { boot, dispatchBoot, retryBoot } = useBoot(isDesktopBooting() ? 'server' : 'connecting');
   // bootNonce re-fires the bootstrap effect when the user presses Retry; the
   // repo has not changed, so nothing else would.
   const [bootNonce, setBootNonce] = useState(0);
+  // DESKTOP ONLY. True when this page loaded while knomit-desktop was still
+  // booting its server, which on a first launch means a multi-minute model
+  // download with no API in existence. It gates every first request below: a
+  // fetch issued now would resolve against the webview origin, whose SPA
+  // fallback answers 200 with index.html, and "HTML where JSON was expected" is
+  // not a failure the retry logic can tell from a real one.
+  //
+  // Initialised from the flag /config.js set, so the very first render already
+  // knows — there is no window in which the repo effect could fire first. In
+  // the browser the flag is never set and this is false forever, which is what
+  // keeps that path byte-for-byte what it was.
+  const [serverBooting, setServerBooting] = useState(isDesktopBooting);
   // The speculative GET /repos/{remembered} fired in the same tick as the
   // repo list. Set only once the list CONFIRMS that repo, and consumed once by
   // the bootstrap — a later context switch must ask the server again.
@@ -407,7 +420,38 @@ export default function App() {
   // from the live list, preferring the user's last explicit choice and falling
   // back to the first available repo. reposLoaded gates the "no repos" empty
   // state below, which is the ordinary first-run screen, not an error.
+  // DESKTOP ONLY: wait out the desktop's own server boot before asking the API
+  // anything, narrating it meanwhile. /boot/status is served by the desktop
+  // process itself, so it answers during exactly the window when the knomit
+  // server does not yet exist. See bootStatus.ts.
   useEffect(() => {
+    if (!serverBooting) return;
+    let cancelled = false;
+    void pollBootStatus({
+      shouldStop: () => cancelled,
+      onStatus: (s) => {
+        if (s.error) {
+          dispatchBoot({ type: 'FAILED', error: s.error });
+          return;
+        }
+        if (s.ready) {
+          // Order matters: install the base BEFORE clearing the gate, or the
+          // repo effect can fire in the same commit with no base to use.
+          adoptAPIBase(s.api_base ?? '');
+          dispatchBoot({ type: 'PHASE', phase: 'connecting' });
+          setServerBooting(false);
+          return;
+        }
+        dispatchBoot({ type: 'SERVER_PHASE', serverPhase: s.phase });
+      },
+    });
+    return () => { cancelled = true; };
+  }, [serverBooting, dispatchBoot]);
+
+  useEffect(() => {
+    // Held until the desktop's server is up. Re-runs when that flips, which is
+    // why serverBooting is in the dependency list below.
+    if (serverBooting) return;
     let cancelled = false;
 
     // The remembered context is read SYNCHRONOUSLY, before any request, so the
@@ -455,7 +499,7 @@ export default function App() {
       .catch(() => { if (!cancelled) setReposLoaded(true); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [serverBooting]);
 
   // Boot is over the moment a branch is known — that is choice (a): the panels
   // below keep their own placeholders for the wave that follows, rather than

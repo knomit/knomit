@@ -55,17 +55,14 @@ var downloadClient = &http.Client{
 // "model_fp16.onnx_data"); renaming would break that resolution.
 // Returns (modelPath, tokenizerPath, error).
 func EnsureModel(ctx context.Context, m Model, cacheDir string) (string, string, error) {
-	dir := filepath.Join(cacheDir, m.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	modelPath, dataPath, tokPath := modelPaths(m, cacheDir)
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
 		return "", "", fmt.Errorf("create cache dir: %w", err)
 	}
-	modelPath := filepath.Join(dir, path.Base(m.ModelURL))
-	tokPath := filepath.Join(dir, path.Base(m.TokenizerURL))
 	if err := downloadIfMissing(ctx, modelPath, m.ModelURL, m.ModelSHA256, m.ID+" ONNX model"); err != nil {
 		return "", "", err
 	}
-	if m.DataURL != "" {
-		dataPath := filepath.Join(dir, path.Base(m.DataURL))
+	if dataPath != "" {
 		if err := downloadIfMissing(ctx, dataPath, m.DataURL, m.DataSHA256, m.ID+" ONNX external data"); err != nil {
 			return "", "", err
 		}
@@ -74,6 +71,48 @@ func EnsureModel(ctx context.Context, m Model, cacheDir string) (string, string,
 		return "", "", err
 	}
 	return modelPath, tokPath, nil
+}
+
+// modelPaths returns the on-disk locations of m's artifacts under cacheDir.
+// dataPath is "" for a model with no external-weights file.
+//
+// It exists so EnsureModel and ModelCached cannot disagree about where a file
+// lives: "is it cached?" answered from a second copy of this arithmetic is a
+// question that starts returning the wrong answer the moment either side is
+// edited.
+func modelPaths(m Model, cacheDir string) (modelPath, dataPath, tokPath string) {
+	dir := filepath.Join(cacheDir, m.ID)
+	modelPath = filepath.Join(dir, path.Base(m.ModelURL))
+	tokPath = filepath.Join(dir, path.Base(m.TokenizerURL))
+	if m.DataURL != "" {
+		dataPath = filepath.Join(dir, path.Base(m.DataURL))
+	}
+	return modelPath, dataPath, tokPath
+}
+
+// ModelCached reports whether every artifact EnsureModel would fetch for m is
+// already on disk, i.e. whether a NewEmbedder for m will download anything.
+//
+// It is a LABELLING aid, not a gate: knomit-desktop asks it before app.New so
+// the boot screen can say "Downloading models…" only when that is true, instead
+// of claiming a download on every warm start. EnsureModel remains the authority
+// and re-checks each file itself.
+//
+// Presence only, deliberately — it does not verify size or hash. A partially
+// written file cannot be observed here anyway: downloads land through an atomic
+// rename from a .part-* temp file, so a path either does not exist or holds a
+// fully verified artifact (see downloadIfMissing).
+func ModelCached(m Model, cacheDir string) bool {
+	modelPath, dataPath, tokPath := modelPaths(m, cacheDir)
+	for _, p := range []string{modelPath, dataPath, tokPath} {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // downloadIfMissing fetches url to dst unless dst already exists.

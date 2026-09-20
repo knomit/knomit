@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,7 +14,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -22,6 +22,7 @@ import (
 
 	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
+	"knomit/internal/embeddings"
 	"knomit/internal/platform/version"
 	webui "knomit/web"
 
@@ -111,8 +112,8 @@ func run(ctx context.Context) error {
 	// and populating each repo's commit log). Running it inline is what used to
 	// keep the tray icon off the menu bar until it finished. Now it overlaps
 	// Wails' own startup, and the tray appears wearing the amber boot badge.
-	boot := startServerBoot(ctx, func(ctx context.Context) (string, func(), error) {
-		return bootKnomit(ctx, cfg, lockPath)
+	boot := startServerBoot(ctx, func(ctx context.Context, setPhase func(bootPhase)) (string, func(), error) {
+		return bootKnomit(ctx, cfg, lockPath, setPhase)
 	})
 	// Wails calls os.Exit on quit, so Go defers in run() do not fire. Cleanup
 	// runs via Wails' OnShutdown hook instead; serverBoot.stop is idempotent, so
@@ -166,7 +167,7 @@ func run(ctx context.Context) error {
 		Name: "Knomit",
 		Icon: appIcon,
 		Assets: application.AssetOptions{
-			Handler: configInjectingHandler(uiFS, desktopFS, boot.wait),
+			Handler: configInjectingHandler(uiFS, desktopFS, boot.status),
 		},
 		Services:   services,
 		OnShutdown: shutdown,
@@ -399,7 +400,8 @@ func (g *appStartGate) open() {
 //
 // This is the slow half of startup and it runs on a goroutine (see
 // startServerBoot), so it must not touch Wails — nothing here does.
-func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string, func(), error) {
+func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhase func(bootPhase)) (string, func(), error) {
+	setPhase(phaseInstallingTools)
 	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
 	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
 	// lives. Best-effort: a failure must not block the app from starting.
@@ -417,6 +419,24 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string
 		log.Info().Str("path", link).Msg("knomit-okf available on the command line")
 	}
 
+	// Which phase app.New is about to spend its time in. On a FIRST launch it is
+	// dominated by fetching ~640 MB of model artifacts; on every launch after
+	// that those are on disk and the same call is seconds of loading weights and
+	// opening repos. Saying "Downloading models…" in the second case would be a
+	// label that lies on all but one launch in the app's life, so ask before
+	// claiming it. embeddings.ModelCached is presence-only and cheap (three
+	// os.Stat calls); a lookup failure is not fatal here, since the phase is a
+	// caption and app.New will report the real error moments later.
+	downloading := false
+	if m, lerr := embeddings.Lookup(cfg.Embeddings.Model); lerr == nil {
+		downloading = !embeddings.ModelCached(m, filepath.Join(cfg.Home, "models"))
+	}
+	if downloading {
+		setPhase(phaseDownloadingModels)
+	} else {
+		setPhase(phaseStartingEngine)
+	}
+
 	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
 	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
 		APIOnly:     true,
@@ -431,6 +451,7 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string
 		return "", nil, err
 	}
 
+	setPhase(phaseStartingServer)
 	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String(), cfg.Port)
 	if err != nil {
 		a.Close()
@@ -441,11 +462,11 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string) (string
 	return apiBase, func() { srv.shutdown(); a.Close() }, nil
 }
 
-// apiBaseWaitTimeout caps how long a /config.js request will wait for the
-// server to finish booting. Generous, because the alternative is a UI wired to
-// no API at all: a boot that has not settled in this long is not slow, it is
-// broken, and the 503 says so.
-const apiBaseWaitTimeout = 90 * time.Second
+// bootStatusPath is the endpoint the boot screen polls while the server is
+// still coming up. It is served by THIS handler, in the desktop process, which
+// is the whole point: during a first launch the knomit server does not exist
+// yet, so the only thing that can answer is the process that is booting it.
+const bootStatusPath = "/boot/status"
 
 // desktopPrefix is where the desktop-only UI bundle (Settings, Logs) lives.
 // Everything outside it belongs to the shared knowledge app, which owns the
@@ -457,20 +478,35 @@ const desktopPrefix = "/desktop/"
 // see the guard in configInjectingHandler for why we refuse it anyway.
 const wailsPrefix = "/wails/"
 
-// configInjectingHandler serves /config.js with the live API base, serves the
-// embedded UI assets, falls back to index.html for client-side routes, and
-// serves the desktop-only bundle under /desktop/.
+// configInjectingHandler serves /config.js with the live API base, answers
+// GET /boot/status while the server is still booting, serves the embedded UI
+// assets, falls back to index.html for client-side routes, and serves the
+// desktop-only bundle under /desktop/.
 //
-// apiBase blocks until the server is up (see serverBoot.wait) rather than
-// taking a fixed string, because the window can be opened before the server
-// has finished booting. Holding this one request is what makes that harmless:
-// the webview takes a moment longer to paint instead of loading against an
-// address that does not exist yet.
+// status is non-blocking and is asked PER REQUEST, never captured: the answer
+// changes underneath this handler as the boot progresses, which is the only
+// reason /boot/status can say anything useful.
+//
+// /config.js USED TO BLOCK until the server was up, on the reasoning that the
+// webview should take a moment longer to paint rather than load against an
+// address that does not exist. That is a good trade for a two-second boot and a
+// bad one for a first launch, which spends MINUTES fetching model artifacts:
+// index.html loads config.js with a plain <script> tag, so blocking it blocks
+// the document, and the user watches a static splash with no way to learn what
+// is happening. Worse, the wait was capped — past the cap config.js 503'd, the
+// page loaded with no API base at all, and every later request resolved against
+// the webview origin instead, where the SPA fallback below answers 200 with
+// index.html. A UI that cannot tell that from data is a UI that never recovers,
+// even once the server is up.
+//
+// So it answers immediately, and says which of the two worlds the client is in:
+// a base when there is one, __KNOMIT_BOOTING__ when there is not. The client
+// polls /boot/status and picks the base up from there (see web/src/bootStatus.ts).
 //
 // desktopFS may be nil, which disables the /desktop/ tree entirely. run always
 // passes a real one; the nil case is what lets a test exercise the shared-UI
 // half without standing up a second filesystem.
-func configInjectingHandler(uiFS, desktopFS fs.FS, apiBase func(context.Context) (string, error)) http.Handler {
+func configInjectingHandler(uiFS, desktopFS fs.FS, status func() bootStatus) http.Handler {
 	fileServer := http.FileServer(http.FS(uiFS))
 	var desktopServer http.Handler
 	if desktopFS != nil {
@@ -497,22 +533,37 @@ func configInjectingHandler(uiFS, desktopFS fs.FS, apiBase func(context.Context)
 			http.NotFound(w, r)
 			return
 		}
-		if r.URL.Path == "/config.js" {
-			ctx, cancel := context.WithTimeout(r.Context(), apiBaseWaitTimeout)
-			defer cancel()
-			base, err := apiBase(ctx)
-			if err != nil {
-				log.Warn().Err(err).Msg("config.js: server not available")
-				w.Header().Set("Retry-After", "2")
-				http.Error(w, "knomit server is not available", http.StatusServiceUnavailable)
-				return
+		// The boot screen's only source of truth until the API exists. Always
+		// 200, including for a FAILED boot: the failure is data the boot screen
+		// renders, not a transport error, and an HTTP error status here would
+		// just make the client guess at what went wrong.
+		if r.URL.Path == bootStatusPath {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "no-store")
+			if err := json.NewEncoder(w).Encode(status()); err != nil {
+				log.Warn().Err(err).Msg("boot status: encode failed")
 			}
+			return
+		}
+		if r.URL.Path == "/config.js" {
+			st := status()
 			w.Header().Set("Content-Type", "application/javascript")
 			// Never cache: the API base embeds the chosen port, which can differ
 			// between launches (ephemeral fallback when 19278 is taken). A cached
-			// copy would point the UI at a dead port.
+			// copy would point the UI at a dead port — and while booting there is
+			// no base at all, which is the last thing to let a cache remember.
 			w.Header().Set("Cache-Control", "no-store")
-			fmt.Fprintf(w, "window.__KNOMIT_API_BASE__ = %q;\nwindow.__KNOMIT_DESKTOP__ = true;\n", base)
+			fmt.Fprint(w, "window.__KNOMIT_DESKTOP__ = true;\n")
+			if !st.Ready {
+				// Deliberately no __KNOMIT_API_BASE__. Leaving it UNSET is what
+				// makes the client's gate unmissable: any code that skips the
+				// boot gate and calls the API anyway resolves against the
+				// webview origin, and the SPA fallback answers HTML — so the
+				// flag has to be the thing consulted, not the base's emptiness.
+				fmt.Fprint(w, "window.__KNOMIT_BOOTING__ = true;\n")
+				return
+			}
+			fmt.Fprintf(w, "window.__KNOMIT_API_BASE__ = %q;\n", st.APIBase)
 			return
 		}
 		// SPA fallback: serve index.html when the path is not a real asset.

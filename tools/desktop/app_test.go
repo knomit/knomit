@@ -3,8 +3,7 @@
 package main
 
 import (
-	"context"
-	"errors"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,9 +13,16 @@ import (
 	"time"
 )
 
-// staticBase is an apiBase resolver for a server that is already up.
-func staticBase(base string) func(context.Context) (string, error) {
-	return func(context.Context) (string, error) { return base, nil }
+// staticBase is a bootStatus source for a server that is already up.
+func staticBase(base string) func() bootStatus {
+	return func() bootStatus {
+		return bootStatus{Ready: true, Phase: string(phaseReady), APIBase: base}
+	}
+}
+
+// bootingAt is a bootStatus source for a boot still in flight at phase p.
+func bootingAt(p bootPhase) func() bootStatus {
+	return func() bootStatus { return bootStatus{Phase: string(p)} }
 }
 
 func testUIFS() fstest.MapFS {
@@ -50,16 +56,12 @@ func TestConfigInjectingHandler_ServesLiveBase(t *testing.T) {
 // The window can be opened before the server has finished booting — the whole
 // point of moving the boot off the startup path. config.js must HOLD until the
 // port is known rather than serve an address that does not exist yet.
-func TestConfigInjectingHandler_WaitsForABootingServer(t *testing.T) {
-	release := make(chan struct{})
-	h := configInjectingHandler(testUIFS(), nil, func(ctx context.Context) (string, error) {
-		select {
-		case <-release:
-			return "http://127.0.0.1:54321", nil
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-	})
+// /config.js must answer IMMEDIATELY even mid-boot. It is loaded by a blocking
+// <script> tag in index.html, so a handler that waits here holds the whole
+// document — and on a first launch that wait is minutes of model downloads.
+// The page is owed enough to render its boot screen and start polling.
+func TestConfigInjectingHandler_AnswersImmediatelyWhileBooting(t *testing.T) {
+	h := configInjectingHandler(testUIFS(), nil, bootingAt(phaseDownloadingModels))
 
 	served := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
@@ -70,37 +72,111 @@ func TestConfigInjectingHandler_WaitsForABootingServer(t *testing.T) {
 
 	select {
 	case rec := <-served:
-		t.Fatalf("config.js answered before the server was up: %q", rec.Body.String())
-	case <-time.After(20 * time.Millisecond):
-	}
-
-	close(release)
-	select {
-	case rec := <-served:
-		if !strings.Contains(rec.Body.String(), "http://127.0.0.1:54321") {
-			t.Errorf("config.js missing the API base once booted; got %q", rec.Body.String())
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d while booting, want 200", rec.Code)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, "__KNOMIT_BOOTING__ = true") {
+			t.Errorf("config.js did not flag the boot; got %q", body)
+		}
+		// The ABSENCE of a base is what forces the client through the boot gate.
+		// An empty string here would let a careless caller build a same-origin
+		// URL and get index.html back with a 200.
+		if strings.Contains(body, "__KNOMIT_API_BASE__") {
+			t.Errorf("config.js set an API base before the server was up; got %q", body)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("config.js never answered after the server came up")
+		t.Fatal("config.js blocked on a booting server instead of answering")
 	}
 }
 
-// A server that never comes up must produce a 503, not a config.js pointing at
-// an empty base — the UI would otherwise issue every request against the Wails
-// origin and fail in a way that looks like a broken app, not a broken server.
+// A boot that FAILED is still reported through the same immediate config.js —
+// the failure is data for the boot screen (which reads it from /boot/status),
+// not a transport error. The old handler 503'd here, which left the page with
+// no API base and no way to learn why.
 func TestConfigInjectingHandler_ReportsAFailedBoot(t *testing.T) {
-	h := configInjectingHandler(testUIFS(), nil, func(context.Context) (string, error) {
-		return "", errors.New("embedder init failed")
-	})
+	failed := func() bootStatus {
+		return bootStatus{Phase: string(phaseFailed), Error: "embedder init failed"}
+	}
+	h := configInjectingHandler(testUIFS(), nil, failed)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/config.js", nil))
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), "__KNOMIT_API_BASE__") {
-		t.Errorf("a failed boot still served config.js: %q", rec.Body.String())
+		t.Errorf("a failed boot still served an API base: %q", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bootStatusPath, nil))
+	var got bootStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode boot status: %v", err)
+	}
+	if got.Ready {
+		t.Error("a failed boot reported ready")
+	}
+	if got.Error != "embedder init failed" {
+		t.Errorf("error = %q, want the boot's own message", got.Error)
+	}
+}
+
+// The endpoint the boot screen lives on. It must answer during the window when
+// the knomit server does not exist, which is the whole reason it is served from
+// the desktop process rather than the API.
+func TestBootStatus_WalksThePhasesAndCarriesTheBaseWhenReady(t *testing.T) {
+	var boot serverBoot
+	boot.done = make(chan struct{})
+	boot.phase.Store(phaseStarting)
+	h := configInjectingHandler(testUIFS(), nil, boot.status)
+
+	ask := func() bootStatus {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bootStatusPath, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", bootStatusPath, rec.Code)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store: a cached boot status is a boot screen that never moves", cc)
+		}
+		var s bootStatus
+		if err := json.Unmarshal(rec.Body.Bytes(), &s); err != nil {
+			t.Fatalf("decode boot status: %v", err)
+		}
+		return s
+	}
+
+	for _, p := range []bootPhase{phaseInstallingTools, phaseDownloadingModels, phaseStartingServer} {
+		boot.setPhase(p)
+		got := ask()
+		if got.Ready {
+			t.Errorf("phase %s reported ready", p)
+		}
+		if got.Phase != string(p) {
+			t.Errorf("phase = %q, want %q", got.Phase, p)
+		}
+		if got.APIBase != "" {
+			t.Errorf("phase %s carried an API base %q before the server existed", p, got.APIBase)
+		}
+	}
+
+	// Settle the boot exactly as the goroutine does: write, then close.
+	boot.apiBase = "http://127.0.0.1:54321"
+	close(boot.done)
+
+	got := ask()
+	if !got.Ready {
+		t.Fatal("a settled boot did not report ready")
+	}
+	if got.APIBase != "http://127.0.0.1:54321" {
+		t.Errorf("api_base = %q, want the booted address", got.APIBase)
+	}
+	if got.Error != "" {
+		t.Errorf("a successful boot carried error %q", got.Error)
 	}
 }
 
@@ -108,10 +184,7 @@ func TestConfigInjectingHandler_ReportsAFailedBoot(t *testing.T) {
 // boot is still in flight, or the window would be blank rather than merely
 // waiting for its API address.
 func TestConfigInjectingHandler_ServesAssetsWhileBooting(t *testing.T) {
-	h := configInjectingHandler(testUIFS(), nil, func(ctx context.Context) (string, error) {
-		<-ctx.Done() // never comes up
-		return "", ctx.Err()
-	})
+	h := configInjectingHandler(testUIFS(), nil, bootingAt(phaseDownloadingModels))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))

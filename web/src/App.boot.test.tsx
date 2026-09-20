@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import App from './App';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { BOOT_POLL_MS } from './bootStatus';
+import type { BootStatus } from './bootStatus';
 
 // Boot used to take four dependent round trips before anything rendered, and
 // the third (a second GET /repos/{repo} purely for agent_branch) was waste the
@@ -158,6 +160,73 @@ describe('App boot', () => {
 
     expect(screen.getByTestId('boot-screen')).toBeInTheDocument();
     expect(screen.getByTestId('boot-phase')).toHaveTextContent('Connecting…');
+  });
+
+  // DESKTOP FIRST LAUNCH. /config.js sets __KNOMIT_BOOTING__ because the
+  // knomit server does not exist yet — on a cold install it is minutes away,
+  // fetching model artifacts. Two things must hold, and the second is the bug
+  // this replaced: the screen has to NAME what it is waiting on, and the app
+  // must not touch the API until there is one. A request issued now resolves
+  // against the webview origin, whose SPA fallback answers 200 with index.html,
+  // and HTML-where-JSON-was-expected is indistinguishable from a real failure —
+  // so the app retried forever and never recovered, even once the server came up.
+  describe('desktop, server still booting', () => {
+    let statuses: BootStatus[] = [];
+    beforeEach(() => {
+      (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__ = true;
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        const next = statuses.length > 1 ? statuses.shift()! : statuses[0];
+        return { ok: true, json: async () => next } as Response;
+      });
+    });
+    afterEach(() => {
+      delete (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__;
+      delete (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__;
+    });
+
+    it('names the phase and asks the API for NOTHING until the server is up', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      statuses = [{ ready: false, phase: 'downloading-models' }];
+
+      render(<App />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('boot-phase')).toHaveTextContent('Downloading models…'));
+      // The whole point. Before the gate this was called immediately and got
+      // index.html back with a 200.
+      expect(api.repos).not.toHaveBeenCalled();
+    });
+
+    it('adopts the reported API base and continues the boot, with no reload', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      statuses = [
+        { ready: false, phase: 'downloading-models' },
+        { ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' },
+      ];
+
+      render(<App />);
+
+      // One BOOT_POLL_MS has to elapse before the second status arrives, and
+      // that is longer than waitFor's 1 s default — so this waits for the real
+      // interval rather than pretending the transition is instant.
+      const afterOnePoll = { timeout: BOOT_POLL_MS + 2000 };
+      await waitFor(() => expect(api.repos).toHaveBeenCalled(), afterOnePoll);
+      expect((window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__)
+        .toBe('http://127.0.0.1:54321');
+      await waitFor(() => expect(screen.queryByTestId('boot-screen')).toBeNull());
+    });
+
+    it('shows a failed desktop boot as a failure, not an endless retry', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      statuses = [{ ready: false, phase: 'failed', error: 'embedder init failed' }];
+
+      render(<App />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId('boot-phase')).toHaveTextContent('Could not start knomit'));
+      expect(screen.getByTestId('boot-error')).toHaveTextContent('embedder init failed');
+      expect(api.repos).not.toHaveBeenCalled();
+    });
   });
 
   it('still renders the no-repos empty state, never the boot screen', async () => {
