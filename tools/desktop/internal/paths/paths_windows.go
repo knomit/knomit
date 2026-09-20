@@ -2,16 +2,16 @@
 
 package paths
 
-import "knomit/internal/apppaths"
+import "knomit/internal/config"
 
-// stateDir is %LOCALAPPDATA%\knomit, resolved by internal/apppaths.
+// stateDir is %LOCALAPPDATA%\knomit, resolved by internal/config.
 //
 // It is NOT spelled here. tools/bridge needs the same directory to find
 // server.json, and it cannot import this package — tools/desktop/internal/ is
 // importable only from under tools/desktop/ — so a copy lived in the bridge
 // and drifted: it had no Windows case at all and fell back to a default port
 // while the desktop wrote the lockfile here. One owner, no second spelling.
-func stateDir() (string, error) { return apppaths.StateDir() }
+func stateDir() (string, error) { return config.StateDir() }
 
 // logsDir is the state directory, as on Linux. Windows has no per-user
 // equivalent of macOS's ~/Library/Logs, and a separate subdirectory would mean

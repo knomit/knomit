@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/apppaths"
+	"knomit/internal/config"
 	"knomit/tools/desktop/internal/paths"
 )
 
@@ -44,12 +44,12 @@ func TestLogsDir_ReturnsKnomitSubdir(t *testing.T) {
 
 // The desktop WRITES server.json; the bridge READS it. They are separate
 // binaries and the bridge cannot import this package — tools/desktop/internal/
-// is importable only from under tools/desktop/ — so before internal/apppaths
+// is importable only from under tools/desktop/ — so before internal/config
 // each carried its own copy of the per-OS switch, and they drifted: the
 // bridge's had no Windows case at all and fell back to a default port while
 // the desktop's lockfile sat unread in %LOCALAPPDATA%\knomit.
 //
-// Both now delegate to apppaths, and tools/bridge has the mirror of this test.
+// Both now delegate to config, and tools/bridge has the mirror of this test.
 // Pinning it in both places is deliberate: either package could be "fixed"
 // locally by someone who does not know the other exists, which is exactly how
 // the divergence happened the first time.
@@ -59,29 +59,29 @@ func TestLogsDir_ReturnsKnomitSubdir(t *testing.T) {
 // TestLockfilePath_ResolvesOnThisPlatform: it fails on a platform that has no
 // case at all, which is the shape the original bug actually had.
 func TestLockfilePath_AgreesWithAppPaths(t *testing.T) {
-	want, err := apppaths.LockfilePath()
+	want, err := config.LockfilePath()
 	if err != nil {
-		t.Fatalf("apppaths.LockfilePath: %v", err)
+		t.Fatalf("config.LockfilePath: %v", err)
 	}
 	got, err := paths.LockfilePath()
 	if err != nil {
 		t.Fatalf("paths.LockfilePath: %v", err)
 	}
 	if got != want {
-		t.Errorf("paths.LockfilePath = %q, apppaths.LockfilePath = %q — the desktop and the bridge would look in different places", got, want)
+		t.Errorf("paths.LockfilePath = %q, config.LockfilePath = %q — the desktop and the bridge would look in different places", got, want)
 	}
 }
 
 func TestStateDir_AgreesWithAppPaths(t *testing.T) {
-	want, err := apppaths.StateDir()
+	want, err := config.StateDir()
 	if err != nil {
-		t.Fatalf("apppaths.StateDir: %v", err)
+		t.Fatalf("config.StateDir: %v", err)
 	}
 	got, err := paths.StateDir()
 	if err != nil {
 		t.Fatalf("paths.StateDir: %v", err)
 	}
 	if got != want {
-		t.Errorf("paths.StateDir = %q, apppaths.StateDir = %q", got, want)
+		t.Errorf("paths.StateDir = %q, config.StateDir = %q", got, want)
 	}
 }

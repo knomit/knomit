@@ -58,7 +58,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/apppaths"
+	"knomit/internal/config"
 	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
@@ -634,8 +634,8 @@ func readLockfileBaseURL() (string, error) {
 // Debug and falls back to the default base URL, so `kb` silently talked to the
 // wrong port while the desktop's lockfile sat in %LOCALAPPDATA%\knomit
 // unread. The bridge cannot import tools/desktop/internal/paths (Go's internal
-// rule), which is why the copy existed at all — internal/apppaths is the
+// rule), which is why the copy existed at all — internal/config is the
 // shared owner both of them can reach.
 func lockfilePath() (string, error) {
-	return apppaths.LockfilePath()
+	return config.LockfilePath()
 }

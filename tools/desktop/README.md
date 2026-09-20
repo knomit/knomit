@@ -208,7 +208,10 @@ without a separate `make build`:
 `config.Home` is the knomit data root — `control.db`, `repos/`, `models/`, the
 SSH keypair, `bin/` and `knomit.toml`. The default is per-OS and is the **same
 for all three binaries**: `knomit serve`, `kb` and the desktop app resolve it
-through `internal/apppaths`, so it cannot matter which one starts first.
+through `internal/config` (`config.DefaultHome`, `config.StateDir`), so it
+cannot matter which one starts first. The OS half of that — which directory an
+OS designates for per-user state, and the refusal to guess one when nothing
+resolves — is `internal/platform/userdirs`, which knows no application name.
 
 | OS | default `config.Home` |
 | --- | --- |

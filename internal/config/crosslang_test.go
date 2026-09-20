@@ -1,4 +1,4 @@
-package apppaths_test
+package config_test
 
 import (
 	"os"
@@ -14,7 +14,7 @@ import (
 // which is how the previous version (process.env.HOME, unset on Windows) went
 // unnoticed.
 //
-// A comment saying "keep in step with internal/apppaths" enforces nothing, so
+// A comment saying "keep in step with internal/config" enforces nothing, so
 // this reads the file and pins the literals. It is a TEXT check, not a
 // behavioural one — it cannot prove the two agree, only that nobody changed one
 // side's spelling without touching the other. That is the failure worth
@@ -35,13 +35,13 @@ func TestAppDirsTS_MatchesThisPackage(t *testing.T) {
 	for _, want := range []string{
 		`'knomit', 'home'`,         // Windows: <LOCALAPPDATA>\knomit\home — appDir + homeSubdir
 		`'.knomit'`,                // non-Windows: ~/.knomit
-		`process.env.LOCALAPPDATA`, // same variable apppaths_windows.go reads
+		`process.env.LOCALAPPDATA`, // same variable paths_windows.go reads
 		`'AppData', 'Local'`,       // same reconstruction when it is unset
 		`homedir()`,                // os.UserHomeDir's Node equivalent
 		`=== 'win32'`,              // the branch itself
 	} {
 		if !strings.Contains(src, want) {
-			t.Errorf("%s does not contain %q — it has drifted from internal/apppaths", path, want)
+			t.Errorf("%s does not contain %q — it has drifted from internal/config", path, want)
 		}
 	}
 
@@ -49,6 +49,6 @@ func TestAppDirsTS_MatchesThisPackage(t *testing.T) {
 	// relative "knomit\home". The Go side treats empty as absent; so must this.
 	if strings.Contains(src, "process.env.LOCALAPPDATA ??") {
 		t.Error("appdirs.ts uses `??` on LOCALAPPDATA: an empty-but-set value would " +
-			"resolve to a relative path. Use `||`, as apppaths_windows.go does.")
+			"resolve to a relative path. Use `||`, as paths_windows.go does.")
 	}
 }

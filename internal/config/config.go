@@ -13,7 +13,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/apppaths"
 	"knomit/internal/embeddings/params"
 )
 
@@ -319,7 +318,7 @@ func Load() (Config, error) {
 	} else if v := os.Getenv("KNOMIT_REPO"); v != "" {
 		cfg.Home = v
 	} else {
-		home, err := apppaths.DefaultHome()
+		home, err := DefaultHome()
 		if err != nil {
 			return Config{}, fmt.Errorf("config: cannot determine the knomit data root: %w", err)
 		}

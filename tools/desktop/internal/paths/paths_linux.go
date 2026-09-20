@@ -2,8 +2,8 @@
 
 package paths
 
-import "knomit/internal/apppaths"
+import "knomit/internal/config"
 
-func stateDir() (string, error) { return apppaths.StateDir() }
+func stateDir() (string, error) { return config.StateDir() }
 
 func logsDir() (string, error) { return stateDir() }

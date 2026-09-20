@@ -1,11 +1,11 @@
 //go:build !windows
 
-package apppaths
+package config
 
 import (
-	"fmt"
-	"os"
 	"path/filepath"
+
+	"knomit/internal/platform/userdirs"
 )
 
 // defaultHome is ~/.knomit on every non-Windows platform.
@@ -16,15 +16,12 @@ import (
 // ~/Library/Application Support or $XDG_DATA_HOME is a separate decision with
 // a migration attached, and this is not it.
 //
-// The error is returned rather than swallowed for the same reason as on
-// Windows: a home that cannot be resolved must stop startup with something the
-// operator can act on, not resolve to "/.knomit".
+// Note it hangs off the HOME directory, not off userdirs.StateDir() as Windows
+// does — which is exactly the policy this file exists to hold.
 func defaultHome() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userdirs.HomeDir()
 	if err != nil {
-		return "", fmt.Errorf(
-			"cannot locate your home directory: %w. Set KNOMIT_HOME to the directory "+
-				"knomit should use, or run from a session where $HOME is set", err)
+		return "", withHomeHint(err)
 	}
 	return filepath.Join(home, "."+appDir), nil
 }

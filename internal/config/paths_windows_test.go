@@ -1,6 +1,6 @@
 //go:build windows
 
-package apppaths_test
+package config_test
 
 import (
 	"os"
@@ -8,18 +8,29 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/apppaths"
+	"knomit/internal/config"
+	"knomit/internal/platform/userdirs"
 )
 
 const testLocal = `C:\Users\test\AppData\Local`
 
-func TestStateDir_UsesLocalAppData(t *testing.T) {
+// THE NAME PIN. The OS resolution itself is internal/platform/userdirs'
+// business and is tested there; what config owns is that the knomit folder is
+// joined onto whatever userdirs answered, spelled exactly once.
+//
+// Deriving `want` from userdirs rather than restating the path is deliberate: a
+// test that hardcodes both halves still passes when the two sides disagree.
+func TestStateDir_IsTheOSStateDirPlusTheAppName(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", testLocal)
-	got, err := apppaths.StateDir()
+	base, err := userdirs.StateDir()
+	if err != nil {
+		t.Fatalf("userdirs.StateDir: %v", err)
+	}
+	got, err := config.StateDir()
 	if err != nil {
 		t.Fatalf("StateDir: %v", err)
 	}
-	if want := filepath.Join(testLocal, "knomit"); got != want {
+	if want := filepath.Join(base, "knomit"); got != want {
 		t.Errorf("StateDir = %q, want %q", got, want)
 	}
 }
@@ -29,11 +40,11 @@ func TestStateDir_UsesLocalAppData(t *testing.T) {
 // desktop's "reveal log" menu item opens, next to server.json and the logs.
 func TestDefaultHome_IsHomeSubdirOfStateDir(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", testLocal)
-	state, err := apppaths.StateDir()
+	state, err := config.StateDir()
 	if err != nil {
 		t.Fatalf("StateDir: %v", err)
 	}
-	got, err := apppaths.DefaultHome()
+	got, err := config.DefaultHome()
 	if err != nil {
 		t.Fatalf("DefaultHome: %v", err)
 	}
@@ -45,16 +56,16 @@ func TestDefaultHome_IsHomeSubdirOfStateDir(t *testing.T) {
 	}
 }
 
-// LOCALAPPDATA is set in any normal interactive session but can be absent
-// under a service account or a stripped environment. Reconstructing the
-// documented default beats failing while the information is still available.
+// End to end through both packages. The reconstruction lives in userdirs, but
+// what a knomit binary actually resolves to is this one's answer, and that is
+// what the C:\.knomit incident was about.
 func TestDefaultHome_ReconstructsWhenLocalAppDataUnset(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", "")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skipf("no user profile on this machine: %v", err)
 	}
-	got, err := apppaths.DefaultHome()
+	got, err := config.DefaultHome()
 	if err != nil {
 		t.Fatalf("DefaultHome: %v", err)
 	}
@@ -63,28 +74,28 @@ func TestDefaultHome_ReconstructsWhenLocalAppDataUnset(t *testing.T) {
 	}
 }
 
-// THE REGRESSION. With neither variable set, the old code produced "/.knomit",
-// which Windows resolves against the current drive as C:\.knomit — a writable,
-// plausible-looking directory that a real aborted launch actually populated
-// with an SSH keypair and a partial model download.
+// The APPLICATION half of the never-guess rule: userdirs refuses to invent a
+// directory, and config must turn that refusal into a message naming the
+// override an operator can act on. userdirs cannot say KNOMIT_HOME — it does
+// not know this application has one — so if the wrapping is dropped the error
+// degrades to "%LOCALAPPDATA% is unset" with no way out.
 //
 // Two separate assertions on purpose: that an error is returned, and that
-// nothing path-shaped comes back with it. A future refactor that returns a
-// "best effort" path alongside a non-nil error would satisfy the first and
-// reintroduce the bug for any caller that logs the error and continues.
+// nothing path-shaped comes back with it. A "best effort" path alongside a
+// non-nil error would satisfy the first and reintroduce C:\.knomit for any
+// caller that logs the error and continues.
 func TestDefaultHome_ErrorsRatherThanReturningADriveRoot(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", "")
 	t.Setenv("USERPROFILE", "")
 	t.Setenv("HOME", "") // ignored by os.UserHomeDir on Windows; scrubbed anyway
 
-	got, err := apppaths.DefaultHome()
+	got, err := config.DefaultHome()
 	if err == nil {
 		t.Fatalf("DefaultHome = %q with no error; want an error when nothing resolves", got)
 	}
 	if got != "" {
 		t.Errorf("DefaultHome returned %q alongside its error; want \"\"", got)
 	}
-	// The message has to tell the operator what to do about it.
 	if !strings.Contains(err.Error(), "KNOMIT_HOME") {
 		t.Errorf("error %q does not mention KNOMIT_HOME, the documented way out", err)
 	}
@@ -92,11 +103,11 @@ func TestDefaultHome_ErrorsRatherThanReturningADriveRoot(t *testing.T) {
 
 func TestLockfilePath_IsServerJSONInStateDir(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", testLocal)
-	state, err := apppaths.StateDir()
+	state, err := config.StateDir()
 	if err != nil {
 		t.Fatalf("StateDir: %v", err)
 	}
-	got, err := apppaths.LockfilePath()
+	got, err := config.LockfilePath()
 	if err != nil {
 		t.Fatalf("LockfilePath: %v", err)
 	}

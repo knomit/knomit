@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/apppaths"
 	"knomit/internal/config"
 )
 
@@ -71,7 +70,7 @@ func TestLoad_NeverYieldsADriveRootHome(t *testing.T) {
 	}
 }
 
-// The Windows default is whatever apppaths says, with no second spelling in
+// The Windows default is whatever config says, with no second spelling in
 // config. If these two ever disagree, `knomit serve` and the desktop resolve
 // different data roots from the same machine.
 func TestLoad_WindowsDefaultComesFromAppPaths(t *testing.T) {
@@ -80,16 +79,16 @@ func TestLoad_WindowsDefaultComesFromAppPaths(t *testing.T) {
 	}
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 
-	want, err := apppaths.DefaultHome()
+	want, err := config.DefaultHome()
 	if err != nil {
-		t.Fatalf("apppaths.DefaultHome: %v", err)
+		t.Fatalf("config.DefaultHome: %v", err)
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if cfg.Home != want {
-		t.Errorf("Load().Home = %q, want apppaths.DefaultHome() = %q", cfg.Home, want)
+		t.Errorf("Load().Home = %q, want config.DefaultHome() = %q", cfg.Home, want)
 	}
 	if filepath.Base(cfg.Home) != "home" {
 		t.Errorf("Load().Home = %q, want it to end in the 'home' subdir", cfg.Home)

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"knomit/internal/apppaths"
 	"knomit/internal/config"
 )
 
@@ -42,16 +41,16 @@ func TestLoad_DefaultIsDotKnomitFromAppPaths(t *testing.T) {
 	t.Setenv("KNOMIT_REPO", "")
 	t.Setenv("HOME", dir)
 
-	want, err := apppaths.DefaultHome()
+	want, err := config.DefaultHome()
 	if err != nil {
-		t.Fatalf("apppaths.DefaultHome: %v", err)
+		t.Fatalf("config.DefaultHome: %v", err)
 	}
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if cfg.Home != want {
-		t.Errorf("Load().Home = %q, want apppaths.DefaultHome() = %q", cfg.Home, want)
+		t.Errorf("Load().Home = %q, want config.DefaultHome() = %q", cfg.Home, want)
 	}
 	if cfg.Home != filepath.Join(dir, ".knomit") {
 		t.Errorf("Load().Home = %q, want %q — the unix default must not have moved",

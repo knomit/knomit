@@ -2,9 +2,9 @@
 
 package paths
 
-import "knomit/internal/apppaths"
+import "knomit/internal/config"
 
-// stateDir has no answer off the three desktop platforms; apppaths says so.
-func stateDir() (string, error) { return apppaths.StateDir() }
+// stateDir has no answer off the three desktop platforms; config says so.
+func stateDir() (string, error) { return config.StateDir() }
 
 func logsDir() (string, error) { return stateDir() }

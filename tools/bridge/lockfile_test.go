@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"knomit/internal/apppaths"
+	"knomit/internal/config"
 )
 
 // The bridge finds a running server by reading the lockfile the DESKTOP wrote.
@@ -24,9 +24,9 @@ import (
 // the load-bearing one: it fails on a platform with no case at all, which is
 // the shape the original bug had.
 func TestLockfilePath_DelegatesToAppPaths(t *testing.T) {
-	want, err := apppaths.LockfilePath()
+	want, err := config.LockfilePath()
 	if err != nil {
-		t.Fatalf("apppaths.LockfilePath: %v", err)
+		t.Fatalf("config.LockfilePath: %v", err)
 	}
 	got, err := lockfilePath()
 	if err != nil {
