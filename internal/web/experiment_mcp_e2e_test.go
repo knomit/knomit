@@ -66,6 +66,30 @@ func apiPath(clientURL string) string {
 	return strings.TrimPrefix(clientURL, APIBase)
 }
 
+// initExperimentSession performs the initialize handshake and returns the
+// session id the SERVER minted. mcp-go validates the id, so an invented one
+// is answered "Invalid session ID" — a test that made one up would fail
+// before reaching anything it meant to assert.
+func initExperimentSession(t *testing.T, h http.Handler) string {
+	t.Helper()
+	_, sid := rpcAt(t, h, unscopedMount, "",
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"experiments","version":"1.0"}}}`)
+	require.NotEmpty(t, sid, "server must mint a session id")
+	return sid
+}
+
+// initAt is initExperimentSession for an arbitrary mount. Every mount needs
+// its own handshake — a URL-scoped endpoint is still an MCP connection, and
+// mcp-go answers a call with no established session id "Invalid session ID"
+// before the handler is reached.
+func initAt(t *testing.T, h http.Handler, mount string) string {
+	t.Helper()
+	_, sid := rpcAt(t, h, mount, "",
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"experiments","version":"1.0"}}}`)
+	require.NotEmpty(t, sid, "server must mint a session id at %s", mount)
+	return sid
+}
+
 // experimentEnvelope is the part of a knomit_experiment result these tests
 // read.
 type experimentEnvelope struct {
@@ -121,11 +145,20 @@ func factPathsOn(t *testing.T, m *repos.Manager, repo, branch string) []string {
 // ontology by construction, so nothing would catch it.
 func TestExperiment_IsPerHandleNotPerSession(t *testing.T) {
 	h, m := experimentServer(t)
-	const sid = "one-shared-connection"
 
-	// One connection, one session id, two independent jobs.
+	// ONE initialize, ONE session id, for both jobs — the shared Claude
+	// Desktop connection. The id is the SERVER's; mcp-go rejects an invented
+	// one, so this cannot be faked by passing a string.
+	//
+	// The complementary hostile case — the session id being a LIVE HANDLE's
+	// own value, the most favourable input a session-keyed lookup could get —
+	// is not reachable through the transport for that same reason, so it
+	// lives one layer down in
+	// TestSessionBindingMiddleware_ResolvesNoExperimentFromTheSessionID.
+	sid := initExperimentSession(t, h)
 	handleA := bindHandle(t, h, sid, "jobA-repo")
 	handleB := bindHandle(t, h, sid, "jobB-repo")
+	require.NotEqual(t, handleA, handleB, "each bind mints its own handle")
 
 	// Job A moves itself into an experiment.
 	envA, textA, isErr := callExperiment(t, h, unscopedMount, sid,
@@ -172,7 +205,7 @@ func TestExperiment_URLScopedOpenReturnsTheReconnectURL(t *testing.T) {
 	h, _ := experimentServer(t)
 	mount := "/repos/jobA-repo/branches/agent:test/mcp"
 
-	env, text, isErr := callExperiment(t, h, mount, "",
+	env, text, isErr := callExperiment(t, h, mount, initAt(t, h, mount),
 		`{"action":"open","name":"from-a-url"}`)
 	require.False(t, isErr, "open on a URL-scoped mount: %s", text)
 
@@ -184,7 +217,8 @@ func TestExperiment_URLScopedOpenReturnsTheReconnectURL(t *testing.T) {
 	// The URL it names must actually be a mount, not a plausible-looking
 	// string. This is the half that makes the hardcoded /api/v1 prefix in
 	// internal/mcp safe.
-	text2, isErr2 := callToolAt(t, h, apiPath(env.ReconnectURL), "", "knomit_experiment", `{"action":"list"}`)
+	back := apiPath(env.ReconnectURL)
+	text2, isErr2 := callToolAt(t, h, back, initAt(t, h, back), "knomit_experiment", `{"action":"list"}`)
 	require.False(t, isErr2, "the reconnect URL must resolve: %s", text2)
 	var listed experimentEnvelope
 	require.NoError(t, json.Unmarshal([]byte(text2), &listed))
@@ -196,7 +230,7 @@ func TestExperiment_URLScopedOpenReturnsTheReconnectURL(t *testing.T) {
 // session, so re-entry after a reconnect has to be one call.
 func TestExperiment_BindResumesAnExistingExperiment(t *testing.T) {
 	h, _ := experimentServer(t)
-	const sid = "resume-session"
+	sid := initExperimentSession(t, h)
 
 	first := bindHandle(t, h, sid, "jobA-repo")
 	_, text, isErr := callExperiment(t, h, unscopedMount, sid,
@@ -242,7 +276,7 @@ func TestExperiment_BindResumesAnExistingExperiment(t *testing.T) {
 // branch and saying so.
 func TestExperiment_LazyHealAfterAnOutOfBandRollback(t *testing.T) {
 	h, m := experimentServer(t)
-	const sid = "healing-session"
+	sid := initExperimentSession(t, h)
 
 	handle := bindHandle(t, h, sid, "jobA-repo")
 	_, text, isErr := callExperiment(t, h, unscopedMount, sid,
@@ -264,11 +298,113 @@ func TestExperiment_LazyHealAfterAnOutOfBandRollback(t *testing.T) {
 	require.Equal(t, "agent/test", env.Branch, "and is back on the agent branch")
 
 	// knomit_repos says what happened, rather than moving the caller silently.
-	reposText, isErr := callToolAt(t, h, unscopedMount, sid, "knomit_repos",
-		fmt.Sprintf(`{"binding":%q}`, handle))
-	require.False(t, isErr, "%s", reposText)
-	require.Contains(t, reposText, "lapsed_experiment")
-	require.Contains(t, reposText, "doomed")
+	// Decoded, not substring-matched: "no error returned" is not the
+	// assertion, and neither is the word appearing somewhere in the blob.
+	require.Equal(t, "doomed", lapsedExperimentOf(t, h, sid, handle),
+		"the caller must be TOLD its experiment is gone, not just moved off it")
+
+	// And the fallback really is the agent branch, read off the mount table
+	// rather than inferred from the list result.
+	require.Equal(t, "agent/test", writeBranchOf(t, h, sid, handle))
+}
+
+// TestExperiment_LazyHealWhenEligibilityLapses is the OTHER half of the heal,
+// and it is a different case from the one above: the experiments row still
+// EXISTS. What changed is that the repo's agent branch moved out from under
+// it — a takeover — so its recorded parent no longer matches and
+// WritableBranch says false.
+//
+// Existence and eligibility are separate conditions, so a test that only
+// deletes the row exercises one of them and leaves the other unguarded.
+func TestExperiment_LazyHealWhenEligibilityLapses(t *testing.T) {
+	h, m := experimentServer(t)
+
+	sid := initExperimentSession(t, h)
+	handle := bindHandle(t, h, sid, "jobA-repo")
+	_, text, isErr := callExperiment(t, h, unscopedMount, sid,
+		fmt.Sprintf(`{"binding":%q,"action":"open","name":"orphaned"}`, handle))
+	require.False(t, isErr, "open: %s", text)
+
+	// The repo is taken over by a different agent branch, keeping its uid and
+	// its store — so the handle still resolves to this repo, and only the
+	// eligibility answer changes. The experiments row is untouched.
+	old := m.Get("jobA-repo")
+	m.Set("jobA-repo", repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "jobA-repo", UID: old.UID(), Svc: serviceOf(t, old),
+		AgentBranch: "agent/successor", Ontology: old.Ontology(), OntologyRoot: "kb",
+	}))
+	require.NoError(t, m.Get("jobA-repo").WithRead(func(svc *store.Service) {
+		_, ok, err := svc.Experiments().GetExperiment(context.Background(), "orphaned")
+		require.NoError(t, err)
+		require.True(t, ok, "precondition: the row still EXISTS — only eligibility changed")
+	}))
+
+	env, text, isErr := callExperiment(t, h, unscopedMount, sid,
+		fmt.Sprintf(`{"binding":%q,"action":"list"}`, handle))
+	require.False(t, isErr, "the call must still run: %s", text)
+	require.Empty(t, env.Active, "an experiment whose parent moved is no longer active")
+	require.Equal(t, "agent/successor", env.Branch, "the caller falls back to the CURRENT agent branch")
+	require.Equal(t, "orphaned", lapsedExperimentOf(t, h, sid, handle))
+}
+
+// TestExperiment_SyncDoesNotLeaveTheExperiment: commit and rollback clear the
+// caller's handle; sync must not. Syncing is how you STAY in an experiment
+// after a refused commit, so a sync that dropped you out would send the next
+// write to the agent branch precisely when the two have diverged.
+func TestExperiment_SyncDoesNotLeaveTheExperiment(t *testing.T) {
+	h, _ := experimentServer(t)
+	sid := initExperimentSession(t, h)
+	handle := bindHandle(t, h, sid, "jobA-repo")
+
+	_, text, isErr := callExperiment(t, h, unscopedMount, sid,
+		fmt.Sprintf(`{"binding":%q,"action":"open","name":"staying"}`, handle))
+	require.False(t, isErr, "open: %s", text)
+
+	env, text, isErr := callExperiment(t, h, unscopedMount, sid,
+		fmt.Sprintf(`{"binding":%q,"action":"sync"}`, handle))
+	require.False(t, isErr, "sync: %s", text)
+	require.Equal(t, "staying", env.Active, "sync reports you are still inside")
+
+	// And the next call agrees — the handle itself was not cleared.
+	after, _, _ := callExperiment(t, h, unscopedMount, sid,
+		fmt.Sprintf(`{"binding":%q,"action":"list"}`, handle))
+	require.Equal(t, "staying", after.Active, "sync must not clear the handle's experiment")
+	require.Equal(t, "exp/staying", writeBranchOf(t, h, sid, handle))
+
+	// Commit, by contrast, DOES clear it.
+	_, text, isErr = callExperiment(t, h, unscopedMount, sid,
+		fmt.Sprintf(`{"binding":%q,"action":"commit"}`, handle))
+	require.False(t, isErr, "commit: %s", text)
+	gone, _, _ := callExperiment(t, h, unscopedMount, sid,
+		fmt.Sprintf(`{"binding":%q,"action":"list"}`, handle))
+	require.Empty(t, gone.Active, "commit clears the caller's handle eagerly")
+	require.Equal(t, "agent/test", writeBranchOf(t, h, sid, handle))
+}
+
+// TestLensExperimentMount_RefusesABindingArgument: the new route is
+// URL-scoped, so a `binding` argument is refused ON PRESENCE — empty string
+// included. Ignoring it would be worse than failing: the caller believes it
+// selected a base while the URL serves another.
+func TestLensExperimentMount_RefusesABindingArgument(t *testing.T) {
+	h, m := experimentServer(t)
+	write := m.Get("jobA-repo")
+	require.NoError(t, write.WithRead(func(svc *store.Service) {
+		_, err := svc.Experiments().OpenExperiment(context.Background(), "url-bound", "", write.AgentBranch())
+		require.NoError(t, err)
+	}))
+	_, err := m.LensRegistry().Create(repos.Lens{
+		Name: "urlbound", WriteUID: write.UID(),
+		Reads: []repos.LensRead{{RepoUID: write.UID()}},
+	})
+	require.NoError(t, err)
+
+	mount := "/lenses/urlbound/experiments/url-bound/mcp"
+	sid := initAt(t, h, mount)
+	for _, args := range []string{`{"binding":"anything","action":"list"}`, `{"binding":"","action":"list"}`} {
+		text, isErr := callToolAt(t, h, mount, sid, "knomit_experiment", args)
+		require.True(t, isErr, "a binding on a URL-scoped mount must be refused: %s", args)
+		require.Contains(t, text, "bound by its URL", args)
+	}
 }
 
 // TestLensExperimentMount_RePinsOnlyTheWriteMember: the lens twin of the
@@ -290,7 +426,7 @@ func TestLensExperimentMount_RePinsOnlyTheWriteMember(t *testing.T) {
 	require.NoError(t, err)
 
 	mount := "/lenses/pair/experiments/lens-side/mcp"
-	reposText, isErr := callToolAt(t, h, mount, "", "knomit_repos", `{}`)
+	reposText, isErr := callToolAt(t, h, mount, initAt(t, h, mount), "knomit_repos", `{}`)
 	require.False(t, isErr, "%s", reposText)
 
 	var resp struct {
@@ -358,11 +494,62 @@ func TestExperiment_SubscriptionRefusesOpen(t *testing.T) {
 	h, m := experimentServer(t)
 	newE2EMount(t, m, "followed", true)
 
-	const sid = "sub-session"
+	sid := initExperimentSession(t, h)
 	handle := bindHandle(t, h, sid, "followed")
 	_, text, isErr := callExperiment(t, h, unscopedMount, sid,
 		fmt.Sprintf(`{"binding":%q,"action":"open","name":"wishful"}`, handle))
 	require.True(t, isErr, "a subscription must refuse open, got: %s", text)
 	require.Contains(t, text, "subscription")
 	require.Contains(t, text, "no agent branch")
+}
+
+// lapsedExperimentOf decodes bound.lapsed_experiment from knomit_repos.
+func lapsedExperimentOf(t *testing.T, h http.Handler, sid, handle string) string {
+	t.Helper()
+	return boundOfHandle(t, h, sid, handle).LapsedExperiment
+}
+
+// writeBranchOf decodes the write mount's write_branch from knomit_repos —
+// where a write would actually land, which is the claim the heal tests need.
+func writeBranchOf(t *testing.T, h http.Handler, sid, handle string) string {
+	t.Helper()
+	for _, mt := range boundOfHandle(t, h, sid, handle).Mounts {
+		if mt.Role == "read+write" {
+			return mt.WriteBranch
+		}
+	}
+	return ""
+}
+
+type boundView struct {
+	LapsedExperiment string `json:"lapsed_experiment"`
+	Mounts           []struct {
+		Name        string `json:"name"`
+		Branch      string `json:"branch"`
+		Role        string `json:"role"`
+		WriteBranch string `json:"write_branch"`
+		Experiment  string `json:"experiment"`
+	} `json:"mounts"`
+}
+
+func boundOfHandle(t *testing.T, h http.Handler, sid, handle string) boundView {
+	t.Helper()
+	text, isErr := callToolAt(t, h, unscopedMount, sid, "knomit_repos",
+		fmt.Sprintf(`{"binding":%q}`, handle))
+	require.False(t, isErr, "knomit_repos: %s", text)
+	var resp struct {
+		Bound boundView `json:"bound"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(text), &resp), "repos result: %s", text)
+	return resp.Bound
+}
+
+// serviceOf reaches an instance's live store so a fixture can re-register the
+// same repo under a different agent branch — the takeover shape.
+func serviceOf(t *testing.T, ri *repos.RepoInstance) *store.Service {
+	t.Helper()
+	svc, release, err := ri.Acquire()
+	require.NoError(t, err)
+	t.Cleanup(release)
+	return svc
 }

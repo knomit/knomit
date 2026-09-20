@@ -4,6 +4,7 @@ package repos
 
 import (
 	"context"
+	"fmt"
 
 	"knomit/internal/store"
 )
@@ -73,6 +74,19 @@ func ActiveExperiment(b *Binding) string {
 func ResolveSessionBindingOnExperiment(ctx context.Context, m *Manager, pin, branch, experiment string) (context.Context, error) {
 	if experiment == "" {
 		return ResolveSessionBinding(ctx, m, pin, branch)
+	}
+	// The read-side half of the same rule the store enforces on write: a
+	// handle carrying BOTH a branch pin and an experiment is corrupt, not a
+	// precedence question. Unreachable — SetHandleExperiment refuses to
+	// create the pair — and that is exactly why it fails loudly rather than
+	// quietly preferring one, the same treatment the lens arm of
+	// ResolveSessionBinding gives its own unreachable case.
+	if branch != "" {
+		return nil, &SessionBindingError{
+			Kind: BindingMalformed, Pin: pin,
+			Err: fmt.Errorf("binding names both branch %q and experiment %q, which cannot both be the write target — call knomit_bind again",
+				branch, experiment),
+		}
 	}
 	kind, uid, err := ParsePin(pin)
 	if err != nil {

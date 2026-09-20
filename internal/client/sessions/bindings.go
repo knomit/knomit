@@ -136,6 +136,27 @@ func (s *Store) SetHandleExperiment(ctx context.Context, handle, experiment stri
 	if handle == "" || experiment == "" {
 		return errors.New("set handle experiment: empty handle or experiment")
 	}
+	// TWO MECHANISMS, ONE ANSWER. binding_handles.branch and this table both
+	// say "where does this handle point" for a repo pin. Rather than rank
+	// them, the pair is made UNREPRESENTABLE at the write: an experiment may
+	// only be set on a handle whose branch is empty, which is every handle
+	// knomit_bind mints today. If per-handle branch switching ever lands, it
+	// collides here loudly instead of silently losing to a precedence rule
+	// nobody remembers.
+	var branch string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT branch FROM binding_handles WHERE handle = ?`, handle).Scan(&branch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("set handle experiment: no such handle")
+	}
+	if err != nil {
+		return fmt.Errorf("set handle experiment: read handle: %w", err)
+	}
+	if branch != "" {
+		return fmt.Errorf(
+			"set handle experiment: handle is pinned to branch %q; a handle cannot carry both a branch pin and an experiment",
+			branch)
+	}
 	if _, err := s.db.ExecContext(ctx, `
 INSERT INTO handle_experiments (handle, experiment, set_at) VALUES (?, ?, ?)
 ON CONFLICT(handle) DO UPDATE SET experiment = excluded.experiment, set_at = excluded.set_at`,

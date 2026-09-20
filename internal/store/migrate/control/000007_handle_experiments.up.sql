@@ -26,8 +26,13 @@
 -- have no way to alter later.
 --
 -- One row per handle at most, so the handle is the primary key: a handle is
--- inside one experiment or none. Absence means none; there is no empty-string
--- row to distinguish from a missing one.
+-- inside one experiment or none. Absence means none, and there is no
+-- empty-string row to distinguish from a missing one.
+--
+-- NOTE, the same one 000005 carries: the idempotency guard splits this file on
+-- the semicolon BEFORE it strips comments, so a semicolon anywhere in this
+-- prose reads as a statement break and fails
+-- TestControl_UpMigrationsAreIdempotentDDL. Do not put one here.
 CREATE TABLE IF NOT EXISTS handle_experiments (
     handle     TEXT PRIMARY KEY,
     experiment TEXT NOT NULL,

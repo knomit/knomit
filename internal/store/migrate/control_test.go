@@ -116,7 +116,7 @@ func TestControl_FreshDatabase(t *testing.T) {
 		require.True(t, objectExists(t, db, name), "expected %q to exist", name)
 	}
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 6, v)
+	require.Equal(t, 7, v)
 	require.False(t, dirty)
 }
 
@@ -160,7 +160,7 @@ CREATE TABLE lens_reads (
 	require.NoError(t, Control(db))
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 6, v)
+	require.Equal(t, 7, v)
 	require.False(t, dirty)
 
 	var name string
@@ -383,7 +383,7 @@ func TestControl_RecoversDirtyVersion(t *testing.T) {
 	require.NoError(t, Control(db), "a dirty control.db must self-heal")
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 6, v)
+	require.Equal(t, 7, v)
 	require.False(t, dirty)
 	require.True(t, objectExists(t, db, "repos"))
 }
@@ -414,7 +414,7 @@ func TestControl_BindingHandlesUpDown(t *testing.T) {
 	require.NoError(t, Control(db))
 	require.True(t, objectExists(t, db, "binding_handles"))
 	v, dirty = controlVersion(t, db)
-	require.Equal(t, 6, v)
+	require.Equal(t, 7, v)
 	require.False(t, dirty)
 }
 
