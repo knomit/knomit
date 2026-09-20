@@ -2441,6 +2441,54 @@ paths:
     put: *lensMcpSub
     delete: *lensMcpSub
 
+  /lenses/{lens}/experiments/{name}/mcp:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+      - { name: name, in: path, required: true, description: "Experiment name (kebab-case), without the `exp/` prefix.", schema: { type: string } }
+    get: &lensExperimentMcp
+      tags: [lenses, mcp]
+      summary: MCP server proxy, lens-scoped, inside an experiment
+      description: |
+        As `/lenses/{lens}/mcp`, but the lens's WRITE MEMBER is re-pinned to
+        `exp/{name}` — it reads and writes the experiment, while every other
+        mount stays on its own branch.
+
+        The lens twin of `/repos/{repo}/branches/exp:{name}/mcp`. A lens pins a
+        branch per member and so has no single branch segment to carry an
+        experiment; it gets its own. The experiment is named by the URL rather
+        than held per session, because this mount is URL-scoped and a `binding`
+        handle is refused on it.
+
+        404 when no such experiment exists on the write member, or when this
+        instance may not write it (its recorded parent is not this instance's
+        agent branch). It is not silently served from the agent branch: the
+        experiment IS the endpoint here.
+      operationId: lensExperimentMcpDispatch
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+    post: *lensExperimentMcp
+    put: *lensExperimentMcp
+    delete: *lensExperimentMcp
+
+  /lenses/{lens}/experiments/{name}/mcp/{path}:
+    parameters:
+      - $ref: "#/components/parameters/Lens"
+      - { name: name, in: path, required: true, schema: { type: string } }
+      - { name: path, in: path, required: true, schema: { type: string } }
+    get: &lensExperimentMcpSub
+      tags: [lenses, mcp]
+      summary: MCP server proxy, lens-scoped, inside an experiment (sub-path)
+      operationId: lensExperimentMcpDispatchSub
+      responses:
+        "200": { description: MCP response (shape varies) }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+    post: *lensExperimentMcpSub
+    put: *lensExperimentMcpSub
+    delete: *lensExperimentMcpSub
+
   /mcp:
     get: &sessionMcp
       tags: [mcp]

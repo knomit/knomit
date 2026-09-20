@@ -54,6 +54,18 @@ func experimentServer(t *testing.T) (http.Handler, *repos.Manager) {
 	return s.NewAPIRouter(), m
 }
 
+// apiPath strips the APIBase prefix from a client-facing URL.
+//
+// These tests drive s.NewAPIRouter() directly, and the real server mounts
+// that router UNDER APIBase (server.go: r.Mount(APIBase, s.NewAPIRouter())).
+// So a path a client would use — which is what knomit_experiment returns in
+// reconnect_url — carries a /api/v1 prefix the bare router does not expect.
+// Asserting the full client form and then calling the stripped one keeps both
+// halves honest: the string the agent is handed, and that it resolves.
+func apiPath(clientURL string) string {
+	return strings.TrimPrefix(clientURL, APIBase)
+}
+
 // experimentEnvelope is the part of a knomit_experiment result these tests
 // read.
 type experimentEnvelope struct {
@@ -158,7 +170,7 @@ func TestExperiment_IsPerHandleNotPerSession(t *testing.T) {
 // "created" keeps writing to the agent branch believing otherwise.
 func TestExperiment_URLScopedOpenReturnsTheReconnectURL(t *testing.T) {
 	h, _ := experimentServer(t)
-	mount := "/api/v1/repos/jobA-repo/branches/agent:test/mcp"
+	mount := "/repos/jobA-repo/branches/agent:test/mcp"
 
 	env, text, isErr := callExperiment(t, h, mount, "",
 		`{"action":"open","name":"from-a-url"}`)
@@ -172,7 +184,7 @@ func TestExperiment_URLScopedOpenReturnsTheReconnectURL(t *testing.T) {
 	// The URL it names must actually be a mount, not a plausible-looking
 	// string. This is the half that makes the hardcoded /api/v1 prefix in
 	// internal/mcp safe.
-	text2, isErr2 := callToolAt(t, h, env.ReconnectURL, "", "knomit_experiment", `{"action":"list"}`)
+	text2, isErr2 := callToolAt(t, h, apiPath(env.ReconnectURL), "", "knomit_experiment", `{"action":"list"}`)
 	require.False(t, isErr2, "the reconnect URL must resolve: %s", text2)
 	var listed experimentEnvelope
 	require.NoError(t, json.Unmarshal([]byte(text2), &listed))
@@ -277,7 +289,7 @@ func TestLensExperimentMount_RePinsOnlyTheWriteMember(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	mount := "/api/v1/lenses/pair/experiments/lens-side/mcp"
+	mount := "/lenses/pair/experiments/lens-side/mcp"
 	reposText, isErr := callToolAt(t, h, mount, "", "knomit_repos", `{}`)
 	require.False(t, isErr, "%s", reposText)
 
@@ -329,7 +341,7 @@ func TestLensExperimentMount_UnknownExperimentIs404(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/lenses/solo/experiments/never-opened/mcp",
+	req := httptest.NewRequest(http.MethodPost, "/lenses/solo/experiments/never-opened/mcp",
 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
