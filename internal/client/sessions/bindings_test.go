@@ -145,3 +145,78 @@ func TestPurge_HandleSurvivesItsSessionsDeath(t *testing.T) {
 		t.Fatal("a live handle died with the session row it was minted under")
 	}
 }
+
+// A handle with no experiment is "" and not an error: "not in an experiment"
+// is the ordinary state, not a missing row to complain about.
+func TestHandleExperiment_AbsentIsEmpty(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.MintBindingHandle(ctx, "h1", "repo:u1", "", t0); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	got, err := s.HandleExperiment(ctx, "h1")
+	if err != nil || got != "" {
+		t.Fatalf("HandleExperiment = %q, %v; want \"\", nil", got, err)
+	}
+	// A handle nobody minted is also "" — the gate has already refused it by
+	// the time this would be asked.
+	if got, err := s.HandleExperiment(ctx, "never-minted"); err != nil || got != "" {
+		t.Fatalf("unknown handle = %q, %v; want \"\", nil", got, err)
+	}
+}
+
+// Set, read back, clear — and the clear is idempotent, because commit and
+// rollback both call it and a caller repeating one is asking for a state it
+// is already in.
+func TestHandleExperiment_SetReadClear(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.MintBindingHandle(ctx, "h1", "repo:u1", "", t0); err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	if err := s.SetHandleExperiment(ctx, "h1", "widen-gate", t0); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got, _ := s.HandleExperiment(ctx, "h1"); got != "widen-gate" {
+		t.Fatalf("after set = %q, want widen-gate", got)
+	}
+	// Switching experiments is an UPDATE, not a collision: unlike a handle's
+	// target, its experiment is a working context its own holder moves.
+	if err := s.SetHandleExperiment(ctx, "h1", "second-try", t0); err != nil {
+		t.Fatalf("re-set: %v", err)
+	}
+	if got, _ := s.HandleExperiment(ctx, "h1"); got != "second-try" {
+		t.Fatalf("after re-set = %q, want second-try", got)
+	}
+	if err := s.ClearHandleExperiment(ctx, "h1"); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if got, _ := s.HandleExperiment(ctx, "h1"); got != "" {
+		t.Fatalf("after clear = %q, want empty", got)
+	}
+	if err := s.ClearHandleExperiment(ctx, "h1"); err != nil {
+		t.Fatalf("clear twice: %v", err)
+	}
+}
+
+// Two handles on ONE session id hold INDEPENDENT experiments. This is the
+// storage-level statement of what the end-to-end incident test asserts
+// through the router: there is no session id here to collide on, by design.
+func TestHandleExperiment_TwoHandlesAreIndependent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, h := range []string{"hA", "hB"} {
+		if err := s.MintBindingHandle(ctx, h, "repo:u1", "", t0); err != nil {
+			t.Fatalf("mint %s: %v", h, err)
+		}
+	}
+	if err := s.SetHandleExperiment(ctx, "hA", "a-work", t0); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got, _ := s.HandleExperiment(ctx, "hA"); got != "a-work" {
+		t.Fatalf("hA = %q, want a-work", got)
+	}
+	if got, _ := s.HandleExperiment(ctx, "hB"); got != "" {
+		t.Fatalf("hB = %q, want empty: one handle's experiment must not reach another", got)
+	}
+}

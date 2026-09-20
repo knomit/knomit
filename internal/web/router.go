@@ -335,6 +335,20 @@ func (s *Server) NewAPIRouter() chi.Router {
 			r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
 			r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
 		})
+
+		// The lens twin of /repos/{repo}/branches/exp:<name>/mcp. A lens pins
+		// a branch per member, so it has no single branch segment to carry an
+		// experiment; it gets its own, and only the WRITE member moves.
+		//
+		// MCP only, deliberately. The HAL reads under /lenses/{lens} federate
+		// across members at their own pinned branches, and an experiment
+		// belongs to exactly one of them — there is no coherent whole-lens
+		// read "inside" an experiment to serve here.
+		r.Route("/experiments/{name}", func(r chi.Router) {
+			r.Use(LensExperimentMiddleware(s.Manager))
+			r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+			r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+		})
 	})
 
 	return r

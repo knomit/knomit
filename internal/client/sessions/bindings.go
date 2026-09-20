@@ -99,3 +99,63 @@ func (s *Store) BindingHandle(ctx context.Context, handle string, now time.Time)
 	}
 	return pin, branch, true, nil
 }
+
+// HandleExperiment returns the experiment this handle is working inside, or ""
+// when it is on the ordinary write branch. Absence of a row IS "", so there is
+// no ok return: "not in an experiment" and "never set one" are the same state
+// and nothing downstream distinguishes them.
+//
+// A read failure returns the error rather than "", because "" is a routing
+// ANSWER here — it means "write to the agent branch" — and a caller that got
+// it from a failed query would silently leave the experiment its user is
+// working in. The gate turns the error into a tool error instead.
+func (s *Store) HandleExperiment(ctx context.Context, handle string) (string, error) {
+	if handle == "" {
+		return "", nil
+	}
+	var name string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT experiment FROM handle_experiments WHERE handle = ?`, handle).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("handle experiment: %w", err)
+	}
+	return name, nil
+}
+
+// SetHandleExperiment records that handle is now working inside experiment.
+//
+// UPSERT, unlike MintBindingHandle's deliberate plain INSERT. The reasoning
+// that makes an overwrite wrong there makes it right here: a handle's TARGET
+// must never be silently rewritten, but a handle's experiment is a working
+// context its own holder moves in and out of, and opening a second experiment
+// from one session is a switch, not a collision.
+func (s *Store) SetHandleExperiment(ctx context.Context, handle, experiment string, now time.Time) error {
+	if handle == "" || experiment == "" {
+		return errors.New("set handle experiment: empty handle or experiment")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO handle_experiments (handle, experiment, set_at) VALUES (?, ?, ?)
+ON CONFLICT(handle) DO UPDATE SET experiment = excluded.experiment, set_at = excluded.set_at`,
+		handle, experiment, now.Unix()); err != nil {
+		return fmt.Errorf("set handle experiment: %w", err)
+	}
+	return nil
+}
+
+// ClearHandleExperiment puts handle back on its ordinary write branch. A
+// handle that was not in an experiment is not an error: commit and rollback
+// both call this, and a caller repeating one is asking for a state it is
+// already in.
+func (s *Store) ClearHandleExperiment(ctx context.Context, handle string) error {
+	if handle == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM handle_experiments WHERE handle = ?`, handle); err != nil {
+		return fmt.Errorf("clear handle experiment: %w", err)
+	}
+	return nil
+}

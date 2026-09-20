@@ -239,6 +239,25 @@ func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
 // loudly here (RFC §9.1): a lens must never silently shrink its read set. Empty
 // read branches default to each member's own agent branch at resolve time.
 func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
+	return newBindingOfLens(m, l, "")
+}
+
+// NewBindingOfLensOnExperiment is NewBindingOfLens with the WRITE MEMBER's
+// read mount re-pinned to exp/<experiment>. Every other mount is untouched:
+// an experiment belongs to one repo, and a lens that federates five bases
+// does not fork the other four.
+//
+// The caller is responsible for having checked that the write member may
+// actually write that experiment; an experiment this repo may not write is
+// not applied here, it is simply absent, and the binding is the ordinary one.
+// That keeps the eligibility question in ONE place (WritableBranch) rather
+// than splitting it across the two constructors.
+func NewBindingOfLensOnExperiment(m *Manager, l Lens, experiment string) (*Binding, error) {
+	return newBindingOfLens(m, l, experiment)
+}
+
+// newBindingOfLens is the shared body. experiment is "" for the ordinary case.
+func newBindingOfLens(m *Manager, l Lens, experiment string) (*Binding, error) {
 	write := m.GetByUID(l.WriteUID)
 	if write == nil {
 		return nil, fmt.Errorf("lens %q references unavailable repo %q", l.Name, m.RepoLabel(l.WriteUID))
@@ -264,6 +283,20 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 	// while membership stays uid-keyed. Names are unique among ACTIVE repos and
 	// every member here is active, so the order is total.
 	sort.Slice(reads, func(i, j int) bool { return reads[i].RI.Name() < reads[j].RI.Name() })
+	// Re-pin ONLY the write member. Applied after the sort so the mount order
+	// — a real contract, since mount 0 wins an RRF tie — cannot depend on
+	// whether an experiment is active.
+	if experiment != "" {
+		expBranch := store.ExperimentBranch(experiment)
+		if write.WritableBranch(expBranch) {
+			for i := range reads {
+				if reads[i].RI == write {
+					reads[i].Branch = expBranch
+					break
+				}
+			}
+		}
+	}
 	// A lens writes to the write member's OWN agent branch — which is
 	// precisely why this asks the same question every other write path asks,
 	// rather than asserting the answer. A repo whose ontology could not be

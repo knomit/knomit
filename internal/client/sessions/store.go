@@ -345,6 +345,13 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 		`DELETE FROM client_session_bindings WHERE session_id NOT IN (SELECT id FROM client_sessions)`); err != nil {
 		return n, fmt.Errorf("purge client_session_bindings: %w", err)
 	}
+	// A handle's experiment dies with the handle. No foreign key, for the same
+	// reason as above, so the orphans are collected here — and this runs AFTER
+	// the binding_handles delete so one pass is enough.
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM handle_experiments WHERE handle NOT IN (SELECT handle FROM binding_handles)`); err != nil {
+		return n, fmt.Errorf("purge handle_experiments: %w", err)
+	}
 	// No id: a purge is not about one row, and the consumer re-reads the
 	// whole list anyway.
 	if n > 0 {

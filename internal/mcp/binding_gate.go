@@ -171,10 +171,29 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle string) (cont
 	if !ok {
 		return ctx, errors.New(errUnknownHandle)
 	}
-	bctx, rerr := repos.ResolveSessionBinding(ctx, mgr, pin, branch)
+	// The experiment this handle is working inside, if any. Read here rather
+	// than deeper because this is where the handle is known, and the handle
+	// is the key — the MCP session id is NOT, and must never become one
+	// (kb/invariants/mcp/session-binding/handle-is-the-only-router).
+	//
+	// A FAILED read is a hard error, not an empty answer: "" means "write to
+	// the agent branch", so swallowing the error would silently take a caller
+	// out of the experiment it is working in and land its next fact somewhere
+	// it did not choose.
+	experiment, eerr := store.HandleExperiment(ctx, handle)
+	if eerr != nil {
+		log.Warn().Err(eerr).Msg("binding gate: handle experiment lookup failed")
+		return ctx, errors.New("binding handle lookup failed — retry, or call knomit_bind again")
+	}
+	bctx, rerr := repos.ResolveSessionBindingOnExperiment(ctx, mgr, pin, branch, experiment)
 	if rerr != nil {
 		return ctx, rerr
 	}
+	// The handle rides in the context so the experiment tools can clear the
+	// caller's OWN experiment on commit and rollback. Nothing routes off it —
+	// routing was decided above — and only the tool that already holds the
+	// handle can use it.
+	bctx = withBindingHandle(bctx, handle)
 	// Observational only: the client_sessions row and the session's binding SET
 	// record what this session was seen doing. Routing was already decided, by
 	// the handle. The handle rides along because the set is keyed by it.
@@ -182,4 +201,26 @@ func resolveHandle(ctx context.Context, mgr *repos.Manager, handle string) (cont
 		rec.Record(repos.ResolvedBinding{Handle: handle, Pin: pin, Branch: branch})
 	}
 	return bctx, nil
+}
+
+// bindingHandleKey is the private context key for the handle that resolved
+// this request.
+type bindingHandleKey struct{}
+
+// withBindingHandle stores the resolving handle. Set only on the
+// session-scoped mount, where a handle exists at all.
+func withBindingHandle(ctx context.Context, handle string) context.Context {
+	return context.WithValue(ctx, bindingHandleKey{}, handle)
+}
+
+// bindingHandleFromContext returns the handle that resolved this request, or
+// "" on a URL-scoped mount — where there is no handle by design, and where an
+// experiment is named by the URL instead.
+//
+// This is NOT a routing input. It exists so knomit_experiment can clear the
+// caller's own experiment eagerly at commit and rollback; every other handle
+// pointing at the same experiment heals on its next resolution instead.
+func bindingHandleFromContext(ctx context.Context) string {
+	h, _ := ctx.Value(bindingHandleKey{}).(string)
+	return h
 }

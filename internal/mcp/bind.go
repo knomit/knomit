@@ -29,6 +29,7 @@ func bindTool() mcpgo.Tool {
 		mcpgo.WithDescription("Only on the unscoped /api/v1/mcp endpoint (a bridge started with neither --repo nor --lens); on a URL-scoped endpoint this always fails. Bind a repo or lens by name (see knomit_repos for the names) and receive an opaque `binding` handle. EVERY other tool requires that handle as its `binding` argument — keep it for the rest of your work and pass it on every call. Required before any other tool works; call again for a different base, which mints a SECOND handle and leaves the first one valid. Writes go to the repo's agent branch; a subscribed (read-only follower) repo binds at the branch it follows and refuses writes. Returns the handle, the mounts table and the knowledge base's instructions — treat them as session instructions."),
 		mcpgo.WithString("repo", mcpgo.Description("Name of the repo to bind to. Mutually exclusive with lens.")),
 		mcpgo.WithString("lens", mcpgo.Description("Name of the lens to bind to. Mutually exclusive with repo.")),
+		mcpgo.WithString("experiment", mcpgo.Description("Optional: RESUME an existing experiment, so the new handle starts inside it. Does not create one — use knomit_experiment {action: \"open\"} for that. This is how you get back into an experiment after reconnecting, since a handle does not outlive its session.")),
 	)
 }
 
@@ -64,6 +65,7 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 
 		repoName := req.GetString("repo", "")
 		lensName := req.GetString("lens", "")
+		experiment := req.GetString("experiment", "")
 		switch {
 		case repoName == "" && lensName == "":
 			return mcpgo.NewToolResultError(
@@ -89,6 +91,18 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
+		// RESUME ONLY. Binding is not where experiments are created: an
+		// agent that mistypes a name here should be told so, not handed a
+		// fresh branch it did not ask for and will not find its work on.
+		// Checked BEFORE the handle is minted, so a refusal leaves nothing
+		// behind.
+		if experiment != "" {
+			resumed, rerr := resumeExperimentBinding(ctx, mgr, b, experiment)
+			if rerr != nil {
+				return mcpgo.NewToolResultError(rerr.Error()), nil
+			}
+			b = resumed
+		}
 		handle, err := sessions.NewBindingHandle()
 		if err != nil {
 			log.Error().Err(err).Msg("knomit_bind: minting a handle failed")
@@ -106,6 +120,16 @@ func BindHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest
 				Msg("knomit_bind: recording the binding handle failed")
 			return mcpgo.NewToolResultError(
 				"the binding could not be recorded, so nothing was bound; ask the operator to check the server log"), nil
+		}
+
+		// The experiment goes on the handle only after the handle exists, and
+		// a failure here is reported rather than swallowed: a caller told it
+		// is inside an experiment that is not would write its next fact to
+		// the agent branch.
+		if experiment != "" {
+			if serr := setHandleExperiment(ctx, mgr, handle, experiment); serr != nil {
+				return mcpgo.NewToolResultError(serr.Error()), nil
+			}
 		}
 
 		out, err := json.MarshalIndent(bindResultOf(handle, b), "", "  ")
@@ -160,4 +184,53 @@ func bindTarget(mgr *repos.Manager, repoName, lensName string) (*repos.Binding, 
 		return nil, "", err
 	}
 	return b, repos.PinForLens(l), nil
+}
+
+// resumeExperimentBinding re-binds b onto an EXISTING experiment, or explains
+// why it cannot.
+//
+// The three refusals are distinct because the repairs are: a name nobody
+// opened wants knomit_experiment open, an experiment forked from a branch this
+// instance no longer writes wants a rollback, and a subscription wants neither
+// because it can never hold one.
+func resumeExperimentBinding(ctx context.Context, mgr *repos.Manager, b *repos.Binding, experiment string) (*repos.Binding, error) {
+	ri := b.Write()
+	if ri.Subscribed() {
+		return nil, fmt.Errorf("repo %q is a subscription and can hold no experiment", ri.Name())
+	}
+	svc, release, err := ri.Acquire()
+	if err != nil {
+		return nil, errStoreUnavailable
+	}
+	defer release()
+
+	exp, ok, err := svc.Experiments().GetExperiment(ctx, experiment)
+	if err != nil {
+		return nil, fmt.Errorf("could not read experiment %q: %w", experiment, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf(
+			"no experiment named %q on repo %q — knomit_bind RESUMES an experiment, it does not create one; "+
+				"call knomit_experiment {action: \"open\", name: %q} to start it, or {action: \"list\"} to see what exists",
+			experiment, ri.Name(), experiment)
+	}
+	if !ri.WritableBranch(exp.Branch()) {
+		return nil, fmt.Errorf(
+			"experiment %q was forked from %q, which is not this instance's agent branch %q — "+
+				"roll it back, or work on it from the instance that owns that branch",
+			experiment, exp.Parent, ri.AgentBranch())
+	}
+
+	if b.FromLens() {
+		reg := mgr.LensRegistry()
+		if reg == nil {
+			return nil, fmt.Errorf("lens registry not started")
+		}
+		l, found, lerr := reg.Get(b.Name())
+		if lerr != nil || !found {
+			return nil, fmt.Errorf("lens %q is no longer available", b.Name())
+		}
+		return repos.NewBindingOfLensOnExperiment(mgr, l, experiment)
+	}
+	return repos.NewBindingOfRepo(ri, exp.Branch()), nil
 }
