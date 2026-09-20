@@ -310,10 +310,17 @@ func handleHALLenses(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 // handleHALLens serves GET /api/v1/lenses/{lens}.
 //
 // This is the only lens response carrying _embedded.write_branch. Where the
-// lens WRITES is a write question, so it is the write member's AgentBranch()
-// — not ReadBranch(), which answers content questions. A lens whose write
-// member is a SUBSCRIPTION has no agent branch at all (subscribed is true only
-// alongside an empty agentBranch), and then the key is omitted entirely:
+// lens WRITES is a write question, so it is resolved through the lens's own
+// BINDING — not ReadBranch(), which answers content questions, and no longer
+// the write member's AgentBranch() directly: a lens that pins its write
+// member at an experiment it may author on writes to the experiment, and this
+// response would otherwise name a branch the lens does not write to. Binding
+// resolution is the single definition of that rule (repos.Binding.WriteBranch),
+// so this cannot drift from what a write through the lens actually does.
+//
+// A lens whose write member is a SUBSCRIPTION has no agent branch at all
+// (subscribed is true only alongside an empty agentBranch) and no writable
+// branch either, so WriteBranch is "" and the key is omitted entirely:
 // absence means "none", where an empty string would mean "unknown" and would
 // build a root for branch "".
 func handleHALLens(
@@ -349,9 +356,14 @@ func handleHALLens(
 			return
 		}
 		v := views[0]
-		if wri := m.GetByUID(l.WriteUID); wri != nil {
-			if root := embedBranchRoot(r.Context(), b, reader, wri.Name(), wri.AgentBranch(), wri, agentBranch, embeddingsEnabled); root != nil {
-				v.Embedded = map[string]any{"write_branch": root}
+		// A lens that cannot resolve (a member with no live instance) has no
+		// write branch to report; the view still renders without the embed,
+		// which is the same shape as the subscription case below.
+		if lb, berr := repos.NewBindingOfLens(m, l); berr == nil {
+			if wri, wb := lb.Write(), lb.WriteBranch(); wri != nil && wb != "" {
+				if root := embedBranchRoot(r.Context(), b, reader, wri.Name(), wb, wri, agentBranch, embeddingsEnabled); root != nil {
+					v.Embedded = map[string]any{"write_branch": root}
+				}
 			}
 		}
 		hal.WriteHAL(w, http.StatusOK, v)

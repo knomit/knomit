@@ -392,24 +392,76 @@ func (ri *RepoInstance) ShortID() string {
 
 // WritableBranch reports whether facts may be authored on branch through
 // this repo. This is the branch write-eligibility classification of the
-// lenses RFC (decision 19): in v1 only the repo's own agent branch is
-// writable. The consensus branch (authoring there bypasses reconciliation
-// and the watermark model) and other machines' agent/* branches (authoring
-// there corrupts their watermarks) are never writable. Future experiment
-// branches widen this classification — extend HERE, not at call sites.
+// lenses RFC (decision 19). Two classes are writable: the repo's own agent
+// branch, and an experiment forked from it. The consensus branch (authoring
+// there bypasses reconciliation and the watermark model) and other machines'
+// agent/* branches (authoring there corrupts their watermarks) are never
+// writable. Widen HERE, not at call sites — binding.go derives writeOK from
+// this one function, so every write path inherits whatever it says.
 func (ri *RepoInstance) WritableBranch(branch string) bool {
 	// ALL REPOS MUST HAVE AN ONTOLOGY. Without one, no branch is writable —
-	// not even the agent branch. Facts are validated against the repo's
-	// ontology on write, so authoring while it is unestablished either
-	// validates against a taxonomy nobody chose or skips validation entirely,
-	// and both write data the repo cannot vouch for.
-	//
-	// Extended HERE rather than at call sites, per the note above: binding.go
-	// derives writeOK from this one function, so every write path inherits it.
+	// not even the agent branch, and not an experiment either. Facts are
+	// validated against the repo's ontology on write, so authoring while it
+	// is unestablished either validates against a taxonomy nobody chose or
+	// skips validation entirely, and both write data the repo cannot vouch
+	// for.
 	if ri.ontologyErr != nil {
 		return false
 	}
-	return branch != "" && branch == ri.agentBranch
+	// Both sides must be non-empty, and that is load-bearing rather than
+	// defensive. A subscription has NO agent branch and the empty string as
+	// its value (kb/invariants/repos/subscription/flag-and-branch-paired), so
+	// any comparison of "the recorded parent" against ri.agentBranch would
+	// find "" == "" and make every experiment writable on a repo that accepts
+	// no writes on any branch at all.
+	if branch == "" || ri.agentBranch == "" {
+		return false
+	}
+	if branch == ri.agentBranch {
+		return true
+	}
+	return ri.writableExperiment(branch)
+}
+
+// writableExperiment answers the experiment half of the classification: this
+// branch is writable iff an experiments RECORD says it was forked from this
+// instance's current agent branch.
+//
+// The record, never the ref name. A branch holds a role only because an
+// explicit record says so (kb/invariants/store/branch-roles) — inferring it
+// from the `exp/` prefix would hand write access to any ref that landed in
+// the namespace, including one whose parent is another machine's agent branch
+// or a fork whose parent this instance has since stopped using.
+//
+// FAILS CLOSED. A store that is unavailable, or a read that errors, is not an
+// answer: it returns false, so the write is refused with the read-only-view
+// error rather than admitted on a shrug.
+//
+// The shape test comes first, so the common case — a write gate asking about
+// an ordinary branch — costs a prefix compare and no query at all.
+func (ri *RepoInstance) writableExperiment(branch string) bool {
+	if !store.IsExperimentBranch(branch) {
+		return false
+	}
+	name, ok := store.ExperimentNameOf(branch)
+	if !ok {
+		return false
+	}
+	writable := false
+	if err := ri.WithRead(func(svc *store.Service) {
+		exp, found, err := svc.Experiments().GetExperiment(context.Background(), name)
+		if err != nil {
+			log.Warn().Err(err).Str("repo", ri.Name()).Str("branch", branch).
+				Msg("write eligibility: experiment lookup failed; refusing the write")
+			return
+		}
+		writable = found && exp.Parent == ri.agentBranch
+	}); err != nil {
+		log.Warn().Err(err).Str("repo", ri.Name()).Str("branch", branch).
+			Msg("write eligibility: store unavailable; refusing the write")
+		return false
+	}
+	return writable
 }
 
 // Ontology returns the ontology loaded from this repo's git store at open time,

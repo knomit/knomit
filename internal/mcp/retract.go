@@ -40,9 +40,7 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if !b.WriteOK() {
-			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"read-only view: branch %q is not writable; facts are authored on %q",
-				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+			return mcpgo.NewToolResultError(readOnlyViewMessage(b)), nil
 		}
 		ri := b.Write()
 		s, release, err := storeIndices(ri)
@@ -50,7 +48,12 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		defer release()
-		agentBranch := ri.AgentBranch()
+		// WHERE this write lands, and therefore also what it reads while
+		// deciding: dedup, existence and ref resolution must all see the
+		// branch the fact will be committed to. Inside an experiment that is
+		// the experiment — an isolated world, not a diff against the agent
+		// branch — so every one of them asks the binding, not the repo.
+		writeBranch := b.WriteBranch()
 		ontologyRoot := ri.OntologyRoot()
 
 		// 1. Get arguments.
@@ -77,7 +80,7 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		}
 
 		// 3. Check file exists.
-		exists, err := s.facts.FactExists(ctx, agentBranch, file)
+		exists, err := s.facts.FactExists(ctx, writeBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
 		}
@@ -87,7 +90,7 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 
 		// 4. Delete the file.
 		commitMsg := fmt.Sprintf("retract(%s): %s", momentName, file)
-		hash, err := s.facts.DeleteFact(ctx, agentBranch, file, commitMsg)
+		hash, err := s.facts.DeleteFact(ctx, writeBranch, file, commitMsg)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("delete error: %v", err)), nil
 		}

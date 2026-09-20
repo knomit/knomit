@@ -146,9 +146,13 @@ func TestLensInstructions_BuildsMountTableAndConventions(t *testing.T) {
 }
 
 // TestLensInstructions_NotesWriteBranch verifies the mount table is followed by
-// the M-4 note: writes always commit to the write repo's agent branch, and the
-// branch column shows READ branches (RFC decision 19). Guards agents against
-// reading the read+write row's branch cell as their write target.
+// the M-4 note: the branch column shows READ branches, and the write target is
+// named separately (RFC decision 19). Guards agents against reading the
+// read+write row's branch cell as their write target.
+//
+// The note no longer says writes go there "always": a session pinned at an
+// experiment writes to the experiment, and the sentence has to name whichever
+// it is — see TestLensInstructions_NamesTheExperimentAsWriteTarget.
 func TestLensInstructions_NotesWriteBranch(t *testing.T) {
 	writeRepo := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
 	readRepo := newLearnTestRepo(t, ontologyWithTopic(t, "other"))
@@ -160,8 +164,32 @@ func TestLensInstructions_NotesWriteBranch(t *testing.T) {
 	out := lensInstructions(lens)
 	require.Contains(t, out, "The branch column shows the READ branch of each mount",
 		"the note must clarify the branch column is read branches")
-	require.Contains(t, out, "Your writes always commit to",
-		"the note must state writes go to the write repo's agent branch")
+	require.Contains(t, out, "Your writes commit to",
+		"the note must state where writes go")
 	require.Contains(t, out, "`"+writeRepo.AgentBranch()+"`",
 		"the note must name the concrete write-target agent branch")
+}
+
+// TestLensInstructions_NamesTheExperimentAsWriteTarget: the note is what the
+// agent is TOLD about its write target, so inside an experiment it has to name
+// the experiment. Naming the agent branch there would be an instruction the
+// tools then contradict — the write would land somewhere the agent was told it
+// would not.
+func TestLensInstructions_NamesTheExperimentAsWriteTarget(t *testing.T) {
+	writeRepo := newLearnTestRepo(t, ontologyWithTopic(t, "decisions"))
+	readRepo := newLearnTestRepo(t, ontologyWithTopic(t, "other"))
+	branch := openTestExperiment(t, writeRepo, "note-target")
+
+	// Two mounts, because lensInstructions returns "" for a lens-of-one — a
+	// single-mount fixture would make this test vacuous.
+	lens := repos.NewBindingForTest(writeRepo,
+		repos.ReadTarget{RI: writeRepo, Branch: branch},
+		repos.ReadTarget{RI: readRepo, Branch: "agent/test", Source: "core-src"},
+	)
+	require.Equal(t, branch, lens.WriteBranch(), "precondition: the binding writes to the experiment")
+
+	out := lensInstructions(lens)
+	require.Contains(t, out, "`"+branch+"`", "the note must name the experiment as the write target")
+	require.NotContains(t, out, "commit to the write repo's branch `"+writeRepo.AgentBranch()+"`",
+		"and must NOT tell the agent its writes go to the agent branch")
 }

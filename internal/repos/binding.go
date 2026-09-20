@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"knomit/internal/store"
 )
 
 // ReadTarget is one read mount of a binding: a repo at a pinned branch, with
@@ -25,7 +27,13 @@ type ReadTarget struct {
 type Binding struct {
 	write   *RepoInstance
 	writeOK bool
-	name    string
+	// writeBranch OVERRIDES the default write target, and is non-empty ONLY
+	// when the write repo is pinned at an experiment it may write. Empty
+	// means "the write repo's agent branch", which is what every binding
+	// meant before experiments existed — so an absent override reproduces the
+	// old behaviour exactly rather than approximating it.
+	writeBranch string
+	name        string
 	// pinID is the binding's STABLE identity — see PinID for the contract.
 	pinID string
 	reads []ReadTarget
@@ -34,16 +42,48 @@ type Binding struct {
 // Write returns the single write repo.
 func (b *Binding) Write() *RepoInstance { return b.write }
 
-// WriteOK reports whether write tools may operate on this binding. Writes
-// always target the write repo's own agent branch (RFC decision 19); a
-// lens-of-one bound to a non-writable branch is a read-only view.
+// WriteOK reports whether write tools may operate on this binding. A
+// lens-of-one bound to a non-writable branch is a read-only view. Where an
+// allowed write LANDS is WriteBranch's question, not this one.
 func (b *Binding) WriteOK() bool { return b.writeOK }
 
+// WriteBranch is the branch a write through this binding commits to: the
+// experiment the write repo is pinned at, or — the ordinary case, and every
+// case before experiments — that repo's own agent branch.
+//
+// It returns "" on a read-only view, deliberately. A caller that skipped the
+// WriteOK gate then gets a value that cannot be mistaken for a destination,
+// instead of a plausible branch name it would happily commit to.
+func (b *Binding) WriteBranch() string {
+	if !b.writeOK {
+		return ""
+	}
+	if b.writeBranch != "" {
+		return b.writeBranch
+	}
+	return b.write.AgentBranch()
+}
+
+// experimentPin returns branch when it is an experiment ri may write, and ""
+// otherwise. The two binding constructors share it so "pinned at a writable
+// experiment" has ONE definition; a second copy would be free to disagree
+// about, say, whether an unrecorded exp/* ref counts.
+func experimentPin(ri *RepoInstance, branch string) string {
+	if store.IsExperimentBranch(branch) && ri.WritableBranch(branch) {
+		return branch
+	}
+	return ""
+}
+
 // WriteMountBranch returns the branch the write repo is READ at in this
-// binding (its read mount's pinned branch). Writes never target it — writes
-// always go to the write repo's agent branch (RFC decision 19) — but the
-// read-only-view error names it, cursor sessions pin it, and the write
-// repo's read fan-out searches it.
+// binding (its read mount's pinned branch). It is a READ question and stays
+// one: the read-only-view error names it, cursor sessions pin it, and the
+// write repo's read fan-out searches it. Where a write LANDS is
+// WriteBranch — the two agree when the pin is an experiment and differ
+// whenever it is anything else the repo cannot write.
+//
+// The AgentBranch fallback is for a binding with no read mount for its own
+// write repo, which production never builds; NewBindingForTest can.
 func (b *Binding) WriteMountBranch() string {
 	for _, rt := range b.reads {
 		if rt.RI == b.write {
@@ -139,8 +179,8 @@ func (b *Binding) ByID(id string) (ReadTarget, bool) {
 }
 
 // NewBindingOfRepo synthesizes the lens-of-one for a single repo bound to
-// branch: write = repo, reads = [repo@branch], writable iff branch is the
-// repo's own agent branch.
+// branch: write = repo, reads = [repo@branch], writable iff branch is one the
+// repo may author on — its own agent branch, or an experiment forked from it.
 func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
 	// An empty branch defaults to the repo's own READ branch — the agent
 	// branch, or the upstream for a subscription, which has no agent branch to
@@ -148,12 +188,18 @@ func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
 	if branch == "" {
 		branch = ri.ReadBranch()
 	}
+	// writeOK stays STRICTLY the bound branch's classification: a mount bound
+	// to main is a read-only view, and always was. The only thing experiments
+	// change here is that WritableBranch now says yes to one more class, and
+	// when that class is what we are bound to, the write goes there rather
+	// than to the agent branch.
 	return &Binding{
-		write:   ri,
-		writeOK: ri.WritableBranch(branch),
-		name:    ri.Name(),
-		pinID:   pinOf("repo:", ri.UID()),
-		reads:   []ReadTarget{{RI: ri, Branch: branch}},
+		write:       ri,
+		writeOK:     ri.WritableBranch(branch),
+		writeBranch: experimentPin(ri, branch),
+		name:        ri.Name(),
+		pinID:       pinOf("repo:", ri.UID()),
+		reads:       []ReadTarget{{RI: ri, Branch: branch}},
 	}
 }
 
@@ -163,12 +209,26 @@ func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
 // up a full Manager — mirrors NewTestInstanceWithDeps. Production code must
 // use NewBindingOfRepo or NewBindingOfLens.
 func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
+	// writeOK stays unconditionally true — that is this constructor's whole
+	// point, and tightening it would silently turn existing federation
+	// fixtures into read-only views. The write BRANCH is still derived the
+	// way NewBindingOfLens derives it, so a fixture that pins its write
+	// member at an experiment gets a binding that writes there; otherwise it
+	// is the agent branch, exactly as before.
+	writeBranch := ""
+	for _, rt := range reads {
+		if rt.RI == write {
+			writeBranch = experimentPin(write, rt.Branch)
+			break
+		}
+	}
 	return &Binding{
-		write:   write,
-		writeOK: true,
-		name:    write.Name(),
-		pinID:   pinOf("repo:", write.UID()),
-		reads:   reads,
+		write:       write,
+		writeOK:     true,
+		writeBranch: writeBranch,
+		name:        write.Name(),
+		pinID:       pinOf("repo:", write.UID()),
+		reads:       reads,
 	}
 }
 
@@ -204,17 +264,32 @@ func NewBindingOfLens(m *Manager, l Lens) (*Binding, error) {
 	// while membership stays uid-keyed. Names are unique among ACTIVE repos and
 	// every member here is active, so the order is total.
 	sort.Slice(reads, func(i, j int) bool { return reads[i].RI.Name() < reads[j].RI.Name() })
+	// A lens writes to the write member's OWN agent branch — which is
+	// precisely why this asks the same question every other write path asks,
+	// rather than asserting the answer. A repo whose ontology could not be
+	// established accepts no writes through any door, and a lens that
+	// hardcoded `true` was a door.
+	//
+	// The read pin does NOT override that rule in general, and must not start
+	// to. A lens may legitimately pin its write member at the consensus
+	// branch FOR READS while writing to that member's agent branch; deriving
+	// writeOK from the pin unconditionally would turn every such lens
+	// silently read-only. The ONE pin that redirects the write is an
+	// experiment the member may write — the case experiments exist for.
+	writeBranch := ""
+	for _, rt := range reads {
+		if rt.RI == write {
+			writeBranch = experimentPin(write, rt.Branch)
+			break
+		}
+	}
 	return &Binding{
-		write: write,
-		// Lens writes always target the write repo's OWN agent branch — which is
-		// precisely why this asks the same question every other write path
-		// asks, rather than asserting the answer. A repo whose ontology could
-		// not be established accepts no writes through any door, and a lens
-		// that hardcoded `true` was a door.
-		writeOK: write.WritableBranch(write.AgentBranch()),
-		name:    l.Name,
-		pinID:   pinOf("lens:", l.UID),
-		reads:   reads,
+		write:       write,
+		writeOK:     writeBranch != "" || write.WritableBranch(write.AgentBranch()),
+		writeBranch: writeBranch,
+		name:        l.Name,
+		pinID:       pinOf("lens:", l.UID),
+		reads:       reads,
 	}, nil
 }
 

@@ -54,7 +54,11 @@ type writeDestination struct {
 // better than a field the caller would read as an id.
 func describeWriteDestination(b *repos.Binding) writeDestination {
 	ri := b.Write()
-	d := writeDestination{Repo: ri.Name(), RepoID: ri.ShortID(), Branch: ri.AgentBranch()}
+	// Branch comes from the BINDING, not from the repo. The whole point of
+	// this stamp is that the caller can see where the bytes went, and a
+	// session bound to an experiment that was told "agent/host" would be
+	// misinformed by exactly the field that exists to prevent that.
+	d := writeDestination{Repo: ri.Name(), RepoID: ri.ShortID(), Branch: b.WriteBranch()}
 	// FromLens, not IsLens. IsLens asks about federation BREADTH — whether the
 	// binding reads more than its own write repo — which a lens mounting a
 	// single member does not. But that caller still connected THROUGH a lens,
@@ -93,4 +97,33 @@ func pluralFacts(n int) string {
 		return "1 fact"
 	}
 	return fmt.Sprintf("%d facts", n)
+}
+
+// readOnlyViewMessage is the single wording of a refused write across every
+// write tool. One definition because the five call sites were five copies of
+// the same sentence, and because the sentence has to name a branch the caller
+// could actually use — a refusal that points at a branch that does not exist,
+// or at the agent branch of a repo that cannot write anywhere, teaches the
+// caller the wrong next move.
+//
+// Every arm is a real case: a subscription has no agent branch at all, an
+// ontology-less repo has one but may not write to it, and the ordinary case
+// is a session pointed at some other branch of a writable repo.
+func readOnlyViewMessage(b *repos.Binding) string {
+	ri := b.Write()
+	bound := b.WriteMountBranch()
+	switch {
+	case ri.Subscribed():
+		return fmt.Sprintf("read-only view: repo %q is a subscription — it follows a remote branch "+
+			"and accepts no fact writes on any branch, including %q", ri.Name(), bound)
+	case ri.OntologyError() != nil:
+		return fmt.Sprintf("read-only view: repo %q has no established ontology, so no branch "+
+			"accepts fact writes (%v)", ri.Name(), ri.OntologyError())
+	case ri.AgentBranch() != "":
+		return fmt.Sprintf("read-only view: branch %q is not writable; facts are authored on %q, "+
+			"or on an experiment forked from it", bound, ri.AgentBranch())
+	default:
+		return fmt.Sprintf("read-only view: repo %q has no writable branch, so %q accepts no fact writes",
+			ri.Name(), bound)
+	}
 }

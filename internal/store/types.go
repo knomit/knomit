@@ -104,6 +104,16 @@ type ConflictStrategy string
 const (
 	StrategyLocalWins  ConflictStrategy = "local_wins"
 	StrategyRemoteWins ConflictStrategy = "remote_wins"
+	// StrategyRefuse resolves nothing: it collects every conflicting path and
+	// aborts the merge with a *MergeConflictError before a ref is touched.
+	// For a merge a human has to adjudicate — landing an experiment on the
+	// agent branch — where picking either side silently would discard work
+	// nobody chose to discard.
+	//
+	// The VALUE is non-empty on purpose. mergeIntoBranchLocked rewrites an
+	// empty strategy to StrategyLocalWins, so a zero-value "refuse" would be
+	// silently downgraded to the very resolution it exists to prevent.
+	StrategyRefuse ConflictStrategy = "refuse"
 )
 
 // ReplayConfig controls replay behavior.

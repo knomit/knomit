@@ -68,9 +68,7 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if !b.WriteOK() {
-			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"read-only view: branch %q is not writable; facts are authored on %q",
-				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+			return mcpgo.NewToolResultError(readOnlyViewMessage(b)), nil
 		}
 		ri := b.Write()
 
@@ -93,7 +91,12 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// call, which creates none — the handle is read only by StartSession
 		// (knomit#123).
 		ctx = withActor(ctx, req)
-		reviewer := synthesize.NewReviewerWithOptions(ri, logProgress, effort, scope)
+		// The session is opened against the BINDING's write branch: a review
+		// inside an experiment reviews the experiment and advances the
+		// experiment's watermark, not the agent branch's. The engine still
+		// reads it exactly once, in StartSession, onto the session row
+		// (invariants/synthesize/session-branch-binding).
+		reviewer := synthesize.NewReviewerOnBranch(ri, logProgress, effort, scope, b.WriteBranch())
 
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")

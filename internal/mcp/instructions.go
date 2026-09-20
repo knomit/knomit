@@ -47,12 +47,16 @@ func lensInstructions(b *repos.Binding) string {
 			rt.RI.Name(), federate.ID12(rt.RI.ID()), rt.Branch, role, src))
 	}
 
-	// The branch column is the READ branch of each mount. Writes never go there:
-	// they always commit to the write repo's agent branch (RFC decision 19 / M-4).
+	// The branch column is the READ branch of each mount; the write target is
+	// its own question (RFC decision 19 / M-4). It is the write repo's agent
+	// branch unless that mount is pinned at an experiment, and this sentence
+	// is what TELLS the agent which — naming the agent branch while the
+	// session is writing to an experiment would be an instruction that
+	// contradicts what the tools then do.
 	sb.WriteString(fmt.Sprintf(
-		"\nThe branch column shows the READ branch of each mount. Your writes always commit to "+
+		"\nThe branch column shows the READ branch of each mount. Your writes commit to "+
 			"the write repo's branch `%s`, regardless of the branch it is read at above.\n",
-		b.Write().AgentBranch()))
+		b.WriteBranch()))
 
 	sb.WriteString("\n### Addressing (qualified paths)\n\n")
 	sb.WriteString(

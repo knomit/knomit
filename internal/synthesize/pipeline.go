@@ -50,11 +50,34 @@ type Pipeline struct {
 	effort   Effort
 	scope    ScopeFilter
 	strategy Strategy
+	// branch OVERRIDES the branch a session is opened against. Empty means
+	// "this repo's agent branch", which is what every caller meant before
+	// experiments existed. It is set from the caller's BINDING — a session
+	// opened inside an experiment reviews the experiment — and it does not
+	// weaken the session-branch-binding invariant: StartSession still reads
+	// the branch exactly once and everything below still takes it off the
+	// session row.
+	branch string
 }
 
-// NewPipeline builds an engine around a strategy. A nil onProgress is
-// replaced with a no-op so neither the engine nor any strategy has to guard.
+// NewPipeline builds an engine around a strategy, operating on the repo's own
+// agent branch. A nil onProgress is replaced with a no-op so neither the
+// engine nor any strategy has to guard.
 func NewPipeline(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter, strategy Strategy) *Pipeline {
+	return NewPipelineOnBranch(ri, onProgress, effort, scope, strategy, "")
+}
+
+// NewPipelineOnBranch is NewPipeline with an explicit branch — the caller's
+// resolved WRITE branch, which is the repo's agent branch in the ordinary
+// case and an experiment when the session is bound to one. Empty means "ask
+// the repo for its agent branch at StartSession", which is what NewPipeline
+// passes and what the engine did unconditionally before experiments.
+//
+// The branch is taken here rather than at StartSession because the caller is
+// the only party that knows the binding; it is still READ once, in
+// StartSession, onto the session row (invariants/synthesize/
+// session-branch-binding).
+func NewPipelineOnBranch(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter, strategy Strategy, branch string) *Pipeline {
 	if onProgress == nil {
 		onProgress = func(ProgressEvent) {}
 	}
@@ -64,6 +87,7 @@ func NewPipeline(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort 
 		effort:     NormalizeEffort(effort),
 		scope:      scope,
 		strategy:   strategy,
+		branch:     branch,
 	}
 }
 
@@ -122,16 +146,23 @@ func (p *Pipeline) deps() Deps {
 // StartSession creates a session, scans for seed facts, asks the strategy to
 // plan work over them, and returns the first item.
 //
-// This is the ONLY place the engine reads ri.AgentBranch(). The value becomes
-// sess.Branch and travels with the session for the rest of its lifetime; every
-// method below reads it back off the row
+// This is the ONLY place the engine resolves the session's branch, and still
+// the ONLY place it can reach ri.AgentBranch(). The value becomes sess.Branch
+// and travels with the session for the rest of its lifetime; every method
+// below reads it back off the row
 // (invariants/synthesize/session-branch-binding). The caller's correlation
 // handle is bound at the same moment and for the same reason — see actor.go.
+//
+// A caller that knows its binding supplies the branch (an experiment, say);
+// one that does not gets the repo's agent branch, unchanged.
 func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	totalStart := time.Now()
 	d := p.deps()
-	branch := p.ri.AgentBranch()
+	branch := p.branch
+	if branch == "" {
+		branch = p.ri.AgentBranch()
+	}
 	// Read ONCE, here, for the same reason the branch is: the value describes
 	// the call that opened the session, and the MCP handler builds a fresh
 	// engine per continue call, so a later read would see a different request
