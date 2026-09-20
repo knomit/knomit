@@ -84,6 +84,7 @@ var paramClass = map[string]struct {
 	"/repos/{repo}/branches/{branch}/domains": {true, "{name}: domain tags are authored by fact writers — someone writing `domain: [stats]` in frontmatter creates one"},
 	"/repos/{repo}/branches/{branch}/motifs":  {true, "{key}: motif keys are authored by fact writers, the same way domain tags are"},
 	"/lenses/{lens}/motifs":                   {true, "{key}: the lens-scoped view of the same author-written motif keys"},
+	"/lenses/{lens}/experiments":              {true, "{name}: experiment names are chosen by whoever calls knomit_experiment open — kebab-case, validated but not drawn from any set the product defines"},
 
 	"/ontologies/presets": {false, "{name}: OUR shipped preset names — the product defines this set, no user adds to it"},
 	"/archived":           {false, "{id}: a server-minted identifier"},

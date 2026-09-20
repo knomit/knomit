@@ -46,6 +46,16 @@ type reposMount struct {
 	// Mode is "subscribe" for a read-only follower of a remote branch; absent
 	// otherwise.
 	Mode string `json:"mode,omitempty"`
+	// Experiment names the experiment this mount is writing inside, absent
+	// when it is on the ordinary write branch.
+	//
+	// The NAME only. Its description, fork point and age are what
+	// knomit_experiment {action: "list"} is for, and putting them here would
+	// cost this tool the cheap-index property its doc claims — one store read
+	// per call, on the one tool an agent calls when it is lost.
+	// WriteBranch above already carries the branch, so this adds the name a
+	// caller passes to commit/rollback/sync and nothing else.
+	Experiment string `json:"experiment,omitempty"`
 }
 
 // boundSection is the `bound` key: what a call's binding points at, present
@@ -72,6 +82,17 @@ type boundSection struct {
 	Kind   string `json:"kind,omitempty"`   // repo | lens, from the dead pin's prefix
 	Status string `json:"status,omitempty"` // "unresolvable"
 	Error  string `json:"error,omitempty"`
+
+	// LapsedExperiment names an experiment this caller was working inside
+	// that no longer exists or is no longer writable — committed by another
+	// session, rolled back from the UI, or swept for inactivity. The call
+	// still ran, on the ordinary write branch.
+	//
+	// Reported rather than raised, and reported HERE, because this is the
+	// tool an agent calls to find out where it is. An agent that returns to a
+	// session after the sweeper ran has been moved, and being moved silently
+	// is how it would attribute the next write to the wrong branch.
+	LapsedExperiment string `json:"lapsed_experiment,omitempty"`
 }
 
 // bindResult is what knomit_bind returns: the HANDLE first, then what it names.
@@ -191,6 +212,10 @@ func boundFor(b *repos.Binding) *boundSection {
 			// which is where the mount READS (RFC decision 19 / M-4).
 			writeBranch = b.WriteBranch()
 		}
+		experiment := ""
+		if rt.RI == b.Write() {
+			experiment = repos.ActiveExperiment(b)
+		}
 		mode := ""
 		if rt.RI.Subscribed() {
 			mode = "subscribe"
@@ -203,6 +228,7 @@ func boundFor(b *repos.Binding) *boundSection {
 			Source:      rt.Source,
 			WriteBranch: writeBranch,
 			Mode:        mode,
+			Experiment:  experiment,
 		})
 	}
 	return out
@@ -212,13 +238,13 @@ func boundFor(b *repos.Binding) *boundSection {
 // the reason a stored pin will not resolve, or nothing at all.
 func boundOf(ctx context.Context, mgr *repos.Manager) *boundSection {
 	if b, ok := repos.BindingFromContextOpt(ctx); ok {
-		return boundFor(b)
+		return withLapsed(ctx, boundFor(b))
 	}
 	if ri, ok := repos.RepoFromContextOpt(ctx); ok {
 		// A URL-scoped mount carries only a RepoInstance; synthesize the
 		// lens-of-one exactly as the tool handlers do.
 		branch, _ := repos.BranchFromContextOpt(ctx)
-		return boundFor(repos.NewBindingOfRepo(ri, branch))
+		return withLapsed(ctx, boundFor(repos.NewBindingOfRepo(ri, branch)))
 	}
 	if err, ok := repos.BindingErrorFromContext(ctx); ok {
 		return unresolvableBound(mgr, err)
@@ -430,5 +456,18 @@ func unresolvableBound(mgr *repos.Manager, err error) *boundSection {
 			}
 		}
 	}
+	return out
+}
+
+// withLapsed stamps the bound section when the caller's experiment could not
+// be honoured on this request. Set by the binding gate during resolution,
+// which is the only place that knows an experiment was ASKED for and not
+// applied — by the time the section is built, the binding looks like any
+// other binding on the agent branch.
+func withLapsed(ctx context.Context, out *boundSection) *boundSection {
+	if out == nil {
+		return nil
+	}
+	out.LapsedExperiment = repos.LapsedExperimentFromContext(ctx)
 	return out
 }

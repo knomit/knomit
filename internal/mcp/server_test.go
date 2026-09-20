@@ -24,8 +24,18 @@ func TestEnabledTools_ReadOnly_OmitsWriteTools(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
-func TestEnabledTools_Writable_IncludesAllNine(t *testing.T) {
-	if n := len(enabledTools(toolRegistrations(nil), false)); n != 9 {
-		t.Fatalf("writable tool count = %d, want 9", n)
+func TestEnabledTools_Writable_IncludesAllTen(t *testing.T) {
+	if n := len(enabledTools(toolRegistrations(nil), false)); n != 10 {
+		t.Fatalf("writable tool count = %d, want 10", n)
 	}
+}
+
+// knomit_experiment is a WRITE tool even though it authors no fact: open
+// forks a branch, commit merges one into the agent branch, rollback deletes
+// one. A read-only demo instance must not expose it, and the read-only list
+// above is where that is asserted — this names the reason so the pairing is
+// not mistaken for an oversight.
+func TestEnabledTools_ReadOnly_OmitsExperiment(t *testing.T) {
+	require.NotContains(t, toolNames(enabledTools(toolRegistrations(nil), true)), "knomit_experiment")
+	require.Contains(t, toolNames(enabledTools(toolRegistrations(nil), false)), "knomit_experiment")
 }

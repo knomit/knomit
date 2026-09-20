@@ -199,3 +199,44 @@ func TestSessionBindingMiddleware_BodyUntouched(t *testing.T) {
 		})
 	}
 }
+
+// TestSessionBindingMiddleware_ResolvesNoExperimentFromTheSessionID extends
+// the sibling above to the thing PR 2 added.
+//
+// The active experiment is keyed on the BINDING HANDLE, and the reason is the
+// 2026-09-17 incident: two logical jobs can share one connection and
+// therefore one Mcp-Session-Id, so anything keyed on that id serves whichever
+// job acted last. This asserts the negative directly, under the most
+// favourable input a session-keyed lookup could possibly get — a LIVE handle
+// that is genuinely inside an experiment, whose own value is then used AS the
+// session id.
+//
+// It lives at the middleware rather than end-to-end on purpose: mcp-go
+// validates session ids, so the transport refuses an invented one before any
+// lookup could happen, and a test that went through it would pass for the
+// wrong reason.
+func TestSessionBindingMiddleware_ResolvesNoExperimentFromTheSessionID(t *testing.T) {
+	m := newTestManagerWithUIDRepo(t, "alpha", "u-alpha")
+	store := newClientSessionsStore(t)
+	m.SetClientSessions(store)
+
+	ctx := context.Background()
+	require.NoError(t, store.MintBindingHandle(ctx, "sid-1", "repo:u-alpha", "", time.Now()))
+	require.NoError(t, store.SetHandleExperiment(ctx, "sid-1", "in-an-experiment", time.Now()))
+	got, err := store.HandleExperiment(ctx, "sid-1")
+	require.NoError(t, err)
+	require.Equal(t, "in-an-experiment", got,
+		"precondition: the handle really is inside an experiment, so a session-keyed lookup would have something to find")
+
+	for _, sid := range []string{"", "sid-1", "sid-unknown"} {
+		reqCtx, code := probeCtx(t, m, sid)
+		require.Equal(t, http.StatusOK, code, "sid=%q", sid)
+		// No binding at all means no experiment either — the experiment
+		// travels on the binding, and the binding comes from the handle
+		// ARGUMENT, which the middleware never sees.
+		_, ok := repos.BindingFromContextOpt(reqCtx)
+		require.False(t, ok, "sid=%q must not resolve a Binding, and so cannot carry an experiment", sid)
+		require.Empty(t, repos.LapsedExperimentFromContext(reqCtx),
+			"sid=%q must not even decide an experiment LAPSED — nothing experiment-shaped is read from the session id", sid)
+	}
+}

@@ -132,6 +132,10 @@ func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []t
 		{retractTool(), RetractHandler(), true, gateRequired},
 		{hypothesizeTool(), HypothesizeHandler(), true, gateRequired},
 		{reviewTool(), ReviewHandler(), true, gateRequired},
+		// A WRITE tool, though it authors no fact: open forks a branch,
+		// commit merges one into the agent branch and rollback deletes one.
+		// A read-only server must not expose it.
+		{experimentTool(), ExperimentHandler(mgr), true, gateRequired},
 		// Neither is a write tool, and knomit_repos needs no handle: a
 		// read-only server still needs both, or nothing on the unscoped mount
 		// could be discovered, bound, and therefore read.
