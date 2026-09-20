@@ -2,15 +2,9 @@
 
 package paths
 
-import (
-	"fmt"
-	"runtime"
-)
+import "knomit/internal/apppaths"
 
-func stateDir() (string, error) {
-	return "", fmt.Errorf("paths: unsupported platform %s (phase 1 is macOS only)", runtime.GOOS)
-}
+// stateDir has no answer off the three desktop platforms; apppaths says so.
+func stateDir() (string, error) { return apppaths.StateDir() }
 
-func logsDir() (string, error) {
-	return "", fmt.Errorf("paths: unsupported platform %s (phase 1 is macOS only)", runtime.GOOS)
-}
+func logsDir() (string, error) { return stateDir() }

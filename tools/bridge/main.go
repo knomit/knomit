@@ -52,14 +52,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/apppaths"
 	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
@@ -627,19 +626,16 @@ func readLockfileBaseURL() (string, error) {
 	return fmt.Sprintf("http://127.0.0.1:%d", info.Port), nil
 }
 
+// lockfilePath is <state dir>/server.json — the same file the desktop writes.
+//
+// It delegates rather than re-deriving. This function used to carry its own
+// copy of the per-OS switch with cases for darwin and linux only, so on
+// Windows it returned "unsupported platform windows"; the caller logs that at
+// Debug and falls back to the default base URL, so `kb` silently talked to the
+// wrong port while the desktop's lockfile sat in %LOCALAPPDATA%\knomit
+// unread. The bridge cannot import tools/desktop/internal/paths (Go's internal
+// rule), which is why the copy existed at all — internal/apppaths is the
+// shared owner both of them can reach.
 func lockfilePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", "knomit", "server.json"), nil
-	case "linux":
-		if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-			return filepath.Join(xdg, "knomit", "server.json"), nil
-		}
-		return filepath.Join(home, ".local", "state", "knomit", "server.json"), nil
-	}
-	return "", fmt.Errorf("lockfile path: unsupported platform %s", runtime.GOOS)
+	return apppaths.LockfilePath()
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/apppaths"
 	"knomit/internal/embeddings/params"
 )
 
@@ -238,10 +239,19 @@ type RuntimeConfig struct {
 }
 
 // Defaults returns a Config populated with default values.
+//
+// Home is deliberately EMPTY here, and Load fills it in. Resolving the data
+// root can fail — no %LOCALAPPDATA%, no %USERPROFILE%, no $HOME — and this
+// function cannot report that, which is precisely how the old version went
+// wrong: it wrote `home, _ := os.UserHomeDir()` and concatenated, so a failed
+// lookup produced "/.knomit" and the OS resolved it against the current drive
+// as C:\.knomit. A zero value that Load must resolve cannot silently become a
+// real directory the way a concatenated empty string can.
+//
+// Callers that build a Config without Load (tests, tools that only want
+// .Discovery) must set Home themselves if they use it.
 func Defaults() Config {
-	home, _ := os.UserHomeDir()
 	return Config{
-		Home:                home + "/.knomit",
 		Host:                "localhost",
 		Port:                "19278",
 		OntologyRoot:        "kb",
@@ -298,10 +308,22 @@ func Load() (Config, error) {
 
 	// Resolve Home from env first (needed for TOML file discovery).
 	// KNOMIT_HOME takes precedence; KNOMIT_REPO is a backward-compatible alias.
+	//
+	// Only when neither is set does the per-OS default apply, and a default
+	// that cannot be resolved STOPS startup. Writing to a wrong-but-writable
+	// path is the worse failure: it looks like a fresh install, so the models
+	// download again and a second SSH identity is generated under a root
+	// nobody will think to look in.
 	if v := os.Getenv("KNOMIT_HOME"); v != "" {
 		cfg.Home = v
 	} else if v := os.Getenv("KNOMIT_REPO"); v != "" {
 		cfg.Home = v
+	} else {
+		home, err := apppaths.DefaultHome()
+		if err != nil {
+			return Config{}, fmt.Errorf("config: cannot determine the knomit data root: %w", err)
+		}
+		cfg.Home = home
 	}
 
 	// Find and decode TOML file.
@@ -382,11 +404,17 @@ func Load() (Config, error) {
 	}
 
 	// Expand tildes in path fields.
-	expandTilde(&cfg.Home)
-	expandTilde(&cfg.ONNXLibPath)
-	expandTilde(&cfg.Remote.SSHKey)
-	expandTilde(&cfg.Remote.KnownHosts)
-	expandTilde(&cfg.LocalOriginRoot)
+	for _, p := range []*string{
+		&cfg.Home,
+		&cfg.ONNXLibPath,
+		&cfg.Remote.SSHKey,
+		&cfg.Remote.KnownHosts,
+		&cfg.LocalOriginRoot,
+	} {
+		if err := expandTilde(p); err != nil {
+			return Config{}, fmt.Errorf("config: %w", err)
+		}
+	}
 
 	// Default known_hosts to <Home>/known_hosts. Resolved after tilde expansion
 	// so it inherits the already-expanded Home, and only when unset so an
@@ -577,9 +605,24 @@ func envDurationOr(key string, target *time.Duration) error {
 	return nil
 }
 
-func expandTilde(s *string) {
-	if strings.HasPrefix(*s, "~/") {
-		home, _ := os.UserHomeDir()
-		*s = home + (*s)[1:]
+// expandTilde rewrites a leading "~/" to the user's home directory.
+//
+// This is the OPERATING SYSTEM's notion of home, not Config.Home: a "~/" a
+// person typed into knomit.toml means their home directory, and on Windows
+// the data root no longer lives there at all.
+//
+// A "~/" that cannot be expanded is an error, not a no-op and not an empty
+// prefix. Dropping the error here turned "~/.ssh/known_hosts" into
+// "/.ssh/known_hosts" — the current drive's root on Windows — which is the
+// same class of bug as the one that created C:\.knomit.
+func expandTilde(s *string) error {
+	if !strings.HasPrefix(*s, "~/") {
+		return nil
 	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot expand %q: %w", *s, err)
+	}
+	*s = home + (*s)[1:]
+	return nil
 }
