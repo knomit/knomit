@@ -129,25 +129,6 @@ func TestExperimentSweep_DisabledByZeroExpiry(t *testing.T) {
 	}
 }
 
-// TestExperimentSweep_RefusesNonPositiveInterval: a zero interval is a
-// misconfiguration, not a second disable switch, and time.NewTicker panics on
-// one. The loop declines to start instead.
-func TestExperimentSweep_RefusesNonPositiveInterval(t *testing.T) {
-	called := make(chan struct{}, 1)
-	expire := func(time.Time) ([]string, error) {
-		called <- struct{}{}
-		return nil, nil
-	}
-	require.NotPanics(t, func() {
-		runExperimentSweep(context.Background(), "repo", 30, 0, expire)
-	})
-	select {
-	case <-called:
-		t.Fatal("a non-positive interval must not sweep")
-	default:
-	}
-}
-
 // TestExperimentSweep_EndToEndDropsOldKeepsYoung drives the real store through
 // one tick: the aged experiment is gone, ref and all, and the fresh one is
 // untouched. This is what proves the loop's cutoff and the store's comparison

@@ -745,3 +745,78 @@ func TestOpenExperiment_ForkCommitIsTheNewBranchTip(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, branchTip, got.ForkCommit)
 }
+
+// TestRollbackExperiment_CleansAnOrphanRef: rollback is the RECOVERY for the
+// state OpenExperiment refuses to adopt. An orphan ref — a prior open that
+// died between CreateBranch and the INSERT — would otherwise be removable
+// only from a shell, and the person hitting this in the UI does not have one.
+func TestRollbackExperiment_CleansAnOrphanRef(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	// Exactly the shape a half-finished open leaves behind: the branch and
+	// the copied watermarks exist, the experiments row does not.
+	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", testAgentBranch, "aaaa1111"))
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "exp/half-open", testAgentBranch))
+	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", "exp/half-open", "aaaa1111"))
+	writeMergeFact(t, svc, "exp/half-open", "kb/partial.md", "partial", "body")
+
+	var branchID int64
+	require.NoError(t, svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, "exp/half-open").Scan(&branchID))
+	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM experiments WHERE name = ?`, "half-open"),
+		"fixture precondition: there is no record, only a ref")
+
+	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "half-open"),
+		"rollback must clean an orphan ref rather than refuse it")
+
+	_, err := svc.Branches().HeadCommit(ctx, "exp/half-open")
+	require.Error(t, err, "the ref is gone")
+	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM branches WHERE name = ?`, "exp/half-open"))
+	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM branch_facts WHERE branch_id = ?`, branchID))
+	wm, err := svc.Pipeline().GetPipelineWatermark(ctx, "review", "exp/half-open")
+	require.NoError(t, err)
+	require.Empty(t, wm, "the leftover watermark goes too — same cleanup as a recorded experiment")
+	require.Equal(t, 0, countRows(t, svc, `SELECT count(*) FROM meta WHERE key LIKE ?`, "%:exp/half-open"))
+
+	// The parent is untouched.
+	parentWM, err := svc.Pipeline().GetPipelineWatermark(ctx, "review", testAgentBranch)
+	require.NoError(t, err)
+	require.Equal(t, "aaaa1111", parentWM)
+}
+
+// TestRollbackExperiment_OrphanThenReopenSucceeds is the whole point of the
+// previous test: the recovery has to leave the name USABLE, from the UI,
+// without anyone touching a shell.
+func TestRollbackExperiment_OrphanThenReopenSucceeds(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "exp/retry-me", testAgentBranch))
+	writeMergeFact(t, svc, "exp/retry-me", "kb/stale.md", "stale", "work from the dead open")
+
+	// Refused while the orphan stands...
+	_, err := svc.Experiments().OpenExperiment(ctx, "retry-me", "", testAgentBranch)
+	require.ErrorIs(t, err, ErrOrphanExperimentRef)
+
+	// ...rolled back, then it opens cleanly.
+	require.NoError(t, svc.Experiments().RollbackExperiment(ctx, "retry-me"))
+
+	parentTip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	require.NoError(t, err)
+	exp, err := svc.Experiments().OpenExperiment(ctx, "retry-me", "second try", testAgentBranch)
+	require.NoError(t, err)
+	require.Equal(t, parentTip, exp.ForkCommit, "the reopened experiment forks from the parent's tip")
+	require.Equal(t, "second try", exp.Description)
+
+	// And it does NOT carry the dead open's work.
+	_, err = svc.Facts().ReadFact(ctx, exp.Branch(), "kb/stale.md", nil)
+	require.Error(t, err, "the orphan's content must not survive into the fresh fork")
+}
+
+// TestRollbackExperiment_NeitherRefNorRowIsStillNotFound: the orphan path must
+// not swallow the genuine not-found case into a silent success.
+func TestRollbackExperiment_NeitherRefNorRowIsStillNotFound(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+	require.ErrorIs(t, svc.Experiments().RollbackExperiment(ctx, "nope"), ErrNoSuchExperiment)
+}

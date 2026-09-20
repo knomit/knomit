@@ -36,6 +36,10 @@ const defaultExperimentSweepInterval = time.Hour
 // without waiting an interval — the same reason runLocalReconcileLoop ticks
 // immediately.
 func runExperimentSweepLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo string, expiryDays int, interval time.Duration) {
+	// The ONE place a non-positive interval is resolved. runExperimentSweep
+	// below therefore never sees one and does not re-check: time.NewTicker
+	// panics on a non-positive duration, so a second guard there would be
+	// unreachable code standing in for a contract this line already keeps.
 	if interval <= 0 {
 		interval = defaultExperimentSweepInterval
 	}
@@ -72,11 +76,6 @@ func runExperimentSweep(
 	lg := log.With().Str("repo", repo).Logger()
 	if expiryDays <= 0 {
 		lg.Info().Msg("experiment sweep disabled: experiments.expiry_days is 0 (never expire)")
-		return
-	}
-	if interval <= 0 {
-		lg.Warn().Dur("interval", interval).
-			Msg("experiment sweep not started: experiments.sweep_interval must be positive")
 		return
 	}
 	window := time.Duration(expiryDays) * 24 * time.Hour

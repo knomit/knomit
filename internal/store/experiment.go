@@ -62,7 +62,8 @@ var (
 	// experiments row behind it. Refused rather than adopted: the ref's
 	// content is unknown, and its parentage is unknowable (that is what the
 	// missing row means), so adopting it would present someone else's commits
-	// as a fresh fork of the agent branch.
+	// as a fresh fork of the agent branch. RollbackExperiment clears it — the
+	// refusal is only reasonable because the recovery needs no shell.
 	ErrOrphanExperimentRef = errors.New("an experiment branch with no record already exists")
 )
 
@@ -192,7 +193,8 @@ func (rh *repoHandler) OpenExperiment(ctx context.Context, name, description, pa
 	// not a silent adoption.
 	if existing, err := rh.HeadCommit(ctx, branch); err == nil && existing != "" {
 		return Experiment{}, fmt.Errorf("%w: %q already exists at %s with no experiments row; "+
-			"delete that ref or pick another name", ErrOrphanExperimentRef, branch, shortHash(existing))
+			"roll back %q and open it again, or pick another name",
+			ErrOrphanExperimentRef, branch, shortHash(existing), name)
 	}
 	if err := rh.CreateBranch(ctx, branch, parent); err != nil {
 		return Experiment{}, fmt.Errorf("OpenExperiment %q: %w", name, err)
@@ -396,18 +398,50 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 
 // RollbackExperiment discards the experiment: the branch and every trace of
 // it. There is no archive — the decision was to leave the hook, not build it.
+//
+// It also cleans an ORPHAN ref — an `exp/<name>` branch with no record, which
+// OpenExperiment refuses to adopt. That refusal is only safe because this is
+// the way out of it: the state is reachable from an ordinary failure (an open
+// that died between CreateBranch and the INSERT), and the person who hits it
+// is working in a UI, where "delete the ref by hand" is not an instruction
+// anyone can follow. Rolling back work whose provenance is unknown is the
+// same safe direction as rolling back work whose provenance is known.
+//
+// Genuinely absent — no ref AND no row — is still ErrNoSuchExperiment. The
+// orphan path must not turn "there was never anything here" into a silent
+// success.
 func (rh *repoHandler) RollbackExperiment(ctx context.Context, name string) error {
 	exp, ok, err := rh.GetExperiment(ctx, name)
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if ok {
+		if err := rh.dropExperiment(ctx, exp); err != nil {
+			return fmt.Errorf("RollbackExperiment %q: %w", name, err)
+		}
+		log.Info().Str("experiment", name).Msg("experiment rolled back")
+		return nil
+	}
+
+	// No record. Validate before constructing a ref name from caller input:
+	// every RECORDED name passed this gate at open time, so this costs
+	// nothing real, and it keeps a name that is not an experiment name from
+	// reaching the ref database at all.
+	if err := validateExperimentName(name); err != nil {
+		return err
+	}
+	branch := ExperimentBranch(name)
+	head, herr := rh.HeadCommit(ctx, branch)
+	if herr != nil || head == "" {
 		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
 	}
-	if err := rh.dropExperiment(ctx, exp); err != nil {
-		return fmt.Errorf("RollbackExperiment %q: %w", name, err)
+	// Same teardown as a recorded experiment — the leftovers are the same
+	// leftovers, and the delete of the (absent) experiments row is a no-op.
+	if err := rh.dropExperiment(ctx, Experiment{Name: name}); err != nil {
+		return fmt.Errorf("RollbackExperiment %q: clean orphan ref: %w", name, err)
 	}
-	log.Info().Str("experiment", name).Msg("experiment rolled back")
+	log.Info().Str("experiment", name).Str("was_at", shortHash(head)).
+		Msg("orphan experiment ref rolled back (no record existed)")
 	return nil
 }
 
