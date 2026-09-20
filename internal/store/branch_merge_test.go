@@ -297,3 +297,89 @@ func TestMergeIntoBranch_DivergentCreatesOneMergeCommit(t *testing.T) {
 	require.Equal(t, preAgentTip, newTip.ParentHashes[0], "first parent is previous agent tip (ours)")
 	require.Equal(t, preMainTip, newTip.ParentHashes[1], "second parent is local main (theirs)")
 }
+
+// TestMergeBranch_RefuseCleanMergeStillLands: refuse aborts on CONFLICTS, it
+// does not decline clean work. Without this the "refuse" arm could be
+// implemented as "never merge" and every conflict test would still pass.
+func TestMergeBranch_RefuseCleanMergeStillLands(t *testing.T) {
+	ctx := context.Background()
+	svc := newMergeTestStore(t)
+	writeMergeFact(t, svc, "main", "kb/base.md", "base", "base body")
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+
+	// Divergent, but on disjoint paths.
+	writeMergeFact(t, svc, "feature", "kb/from-feature.md", "from feature", "body")
+	writeMergeFact(t, svc, "main", "kb/from-main.md", "from main", "body")
+
+	require.NoError(t, svc.Branches().MergeBranch(ctx, "feature", "main", StrategyRefuse))
+
+	got, err := svc.Facts().ReadFact(ctx, "main", "kb/from-feature.md", nil)
+	require.NoError(t, err)
+	require.Contains(t, got.Content, "from feature", "a conflict-free refuse merge must still apply src's changes")
+	verifyMergeClean(t, svc, "main")
+}
+
+// TestMergeBranch_RefuseReportsEveryConflictAndWritesNothing: the three
+// conflict shapes refuse must catch, all in one merge, with the dst ref
+// unmoved afterwards.
+//
+// The dual-ADD case is the one that separates refuse from the other two
+// strategies: mergeTreesWithStrategy treats a pure Insert as non-conflicting
+// for LocalWins and RemoteWins alike, so a refuse implemented by adding a
+// third arm only to the Modify/Delete branches would silently overwrite it.
+func TestMergeBranch_RefuseReportsEveryConflictAndWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	svc := newMergeTestStore(t)
+	writeMergeFact(t, svc, "main", "kb/both-modify.md", "both modify", "base body")
+	writeMergeFact(t, svc, "main", "kb/src-deletes.md", "src deletes", "base body")
+	require.NoError(t, svc.Branches().CreateBranch(ctx, "feature", "main"))
+
+	// src side.
+	writeMergeFact(t, svc, "feature", "kb/both-modify.md", "both modify", "feature rewrite")
+	_, err := svc.Facts().DeleteFact(ctx, "feature", "kb/src-deletes.md", "drop it")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "feature", "kb/both-add.md", "both add", "feature version")
+
+	// dst side: touches all three of the same paths.
+	writeMergeFact(t, svc, "main", "kb/both-modify.md", "both modify", "main rewrite")
+	writeMergeFact(t, svc, "main", "kb/src-deletes.md", "src deletes", "main rewrite")
+	writeMergeFact(t, svc, "main", "kb/both-add.md", "both add", "main version")
+
+	before, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+
+	err = svc.Branches().MergeBranch(ctx, "feature", "main", StrategyRefuse)
+	require.Error(t, err)
+	var conflict *MergeConflictError
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, []string{"kb/both-add.md", "kb/both-modify.md", "kb/src-deletes.md"}, conflict.Paths,
+		"all three conflict shapes are reported in one pass, sorted")
+	require.Equal(t, "feature", conflict.Src)
+	require.Equal(t, "main", conflict.Dst)
+
+	after, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, before, after, "a refused merge must not move the dst ref")
+
+	// And dst still holds its own versions of every contested path.
+	for path, want := range map[string]string{
+		"kb/both-modify.md": "main rewrite",
+		"kb/src-deletes.md": "main rewrite",
+		"kb/both-add.md":    "main version",
+	} {
+		got, err := svc.Facts().ReadFact(ctx, "main", path, nil)
+		require.NoError(t, err, path)
+		require.Contains(t, got.Content, want, path)
+	}
+	verifyMergeClean(t, svc, "main")
+}
+
+// TestMergeBranch_RefuseIsNotDowngradedToLocalWins guards the empty-strategy
+// rewrite at the top of mergeIntoBranchLocked: StrategyRefuse has to be a
+// distinct non-empty value, or it becomes StrategyLocalWins and resolves the
+// conflict it was asked to refuse.
+func TestMergeBranch_RefuseIsNotDowngradedToLocalWins(t *testing.T) {
+	require.NotEmpty(t, string(StrategyRefuse))
+	require.NotEqual(t, StrategyLocalWins, StrategyRefuse)
+	require.NotEqual(t, StrategyRemoteWins, StrategyRefuse)
+}

@@ -6,7 +6,9 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -140,6 +142,16 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 
 	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, strategy)
 	if err != nil {
+		// A refusal is not a malfunction: name the branches on the typed
+		// error and return it UNWRAPPED in shape, so errors.As reaches it and
+		// the caller can render the paths rather than a nested string.
+		var conflict *MergeConflictError
+		if errors.As(err, &conflict) {
+			conflict.Src, conflict.Dst = src, dst
+			log.Info().Str("src", src).Str("dst", dst).
+				Strs("paths", conflict.Paths).Msg("mergeIntoBranch: refused (conflicting paths)")
+			return AgentReconcileResult{}, conflict
+		}
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: three-way merge: %w", err)
 	}
 
@@ -209,8 +221,16 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 //     Apply every change from src unconditionally. This is the exact
 //     behavior of the old remoteIndex.threeWayMerge.
 //
-// Non-conflicting changes are applied in both strategies: additions and
-// modifications where dst didn't touch the path, and deletions where dst
+//   - StrategyRefuse: resolve NOTHING. Every conflicting path is collected
+//     and the merge aborts with a *MergeConflictError, before the caller
+//     writes any ref. Stricter than the other two on one case: a path SRC
+//     adds that DST has already added with different content is a conflict
+//     here, where LocalWins/RemoteWins both treat a pure Insert as
+//     non-conflicting. A strategy whose contract is "make no choice" cannot
+//     make that one silently.
+//
+// Non-conflicting changes are applied in both resolving strategies: additions
+// and modifications where dst didn't touch the path, and deletions where dst
 // didn't modify the file.
 //
 // Returns the hash of the merged tree.
@@ -242,6 +262,11 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 	}
 
 	currentTree := dstTree
+	// Under StrategyRefuse this collects every conflicting path so the caller
+	// is told all of them at once; the other strategies never append to it.
+	// Sorted at the end so the reported set — and any test asserting it — does
+	// not depend on DiffTree's walk order.
+	var conflicts []string
 
 	for _, change := range changes {
 		action, err := change.Action()
@@ -251,13 +276,24 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 
 		switch action {
 		case merkletrie.Insert:
-			// Pure addition in src relative to base. Not a conflict — apply
-			// in both strategies. (If dst independently added the same path
-			// with a different blob, RemoteWins overwrites and LocalWins
-			// would also overwrite per the current semantics; the spec
-			// treats pure Insert as non-conflicting.)
+			// Pure addition in src relative to base. Not a conflict for the
+			// resolving strategies — apply in both. (If dst independently
+			// added the same path with a different blob, RemoteWins
+			// overwrites and LocalWins would also overwrite per the current
+			// semantics; the spec treats pure Insert as non-conflicting.)
 			path := change.To.Name
 			blobHash := change.To.TreeEntry.Hash
+			if strategy == StrategyRefuse {
+				// The one case refuse judges differently: dst already holds
+				// this path with different bytes, so applying src's addition
+				// would overwrite an edit nobody adjudicated. A non-clashing
+				// addition falls through and is applied like anywhere else —
+				// refuse aborts on conflicts, it does not decline clean work.
+				if dstBlob, dstHas := treeBlobHash(dstTree, path); dstHas && dstBlob != blobHash {
+					conflicts = append(conflicts, path)
+					continue
+				}
+			}
 			newRootHash, err := buildTree(rh.gits, currentTree, path, blobHash)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("apply insert %q: %w", path, err)
@@ -283,6 +319,10 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				conflict = true
 			}
 
+			if conflict && strategy == StrategyRefuse {
+				conflicts = append(conflicts, path)
+				continue
+			}
 			if conflict && strategy == StrategyLocalWins {
 				log.Debug().Str("path", path).Msg("merge: LocalWins skips src modify (dst wins)")
 				continue
@@ -312,6 +352,10 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 			}
 
 			conflict := baseHas && dstHashAtPath != baseHash
+			if conflict && strategy == StrategyRefuse {
+				conflicts = append(conflicts, path)
+				continue
+			}
 			if conflict && strategy == StrategyLocalWins {
 				log.Debug().Str("path", path).Msg("merge: LocalWins skips src delete (dst modified)")
 				continue
@@ -336,6 +380,16 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				return plumbing.ZeroHash, fmt.Errorf("reload tree after delete %q: %w", path, err)
 			}
 		}
+	}
+
+	if len(conflicts) > 0 {
+		// The tree built above is discarded unwritten: only loose objects were
+		// created, no ref was moved, and the caller returns before it would
+		// have been. Sorted so the reported set is deterministic.
+		sort.Strings(conflicts)
+		// Src/Dst are filled in by the caller, which is where the branch names
+		// live; this layer knows only commits.
+		return plumbing.ZeroHash, &MergeConflictError{Paths: conflicts}
 	}
 
 	return currentTree.Hash, nil

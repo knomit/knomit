@@ -78,6 +78,14 @@ func (rh *repoHandler) notifyCommit(ctx context.Context, branch string, hash plu
 			return fmt.Errorf("notifyCommit: im.Sync(%s): %w", branch, err)
 		}
 	}
+	// An experiment's "last activity" is defined as any commit on it, and this
+	// is the one place every ref mutation passes through — so hanging it here
+	// is what makes the two definitions the same definition. It short-circuits
+	// on the branch-name prefix before touching SQL, so the cost on every
+	// other branch's every commit is one string compare.
+	if err := rh.touchExperimentActivity(ctx, branch); err != nil {
+		return fmt.Errorf("notifyCommit: %w", err)
+	}
 	if rh.onCommit != nil {
 		rh.onCommit(branch, hash.String())
 	}
