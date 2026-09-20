@@ -93,6 +93,48 @@ things that are not on a stock machine:
   server dies at embedder init. knomit checks the installed version and says so
   by name when it is too old.
 
+On **Windows** the binary is linked into the **GUI subsystem** (`-H windowsgui`,
+added to the desktop binary's ldflags only — see `DESKTOP_LDFLAGS` in the
+Makefile). Go's default is the CONSOLE subsystem, and a console-subsystem binary
+is not a desktop app: Windows allocates a console for it, and the terminal that
+launched it then **owns its lifetime**, so closing that window kills the tray
+app. The CLIs (`knomit`, `kb`, `knomit-okf`) stay console-subsystem on purpose.
+
+The trade is that a GUI-subsystem process gets no console, so `fmt.Println` has
+nowhere to go. That only matters for one thing, and it is handled:
+
+```powershell
+.\knomit-desktop.exe --version   # prints to the console you ran it from
+```
+
+`tools/desktop/console_windows.go` re-attaches to the launching console
+(`AttachConsole(ATTACH_PARENT_PROCESS)` + `CONOUT$`) on the `version` path only,
+and *only* for a stream that has no usable handle — a stream the shell already
+redirected is left alone, since clobbering it would send the output to a console
+nobody is watching. Run from Explorer or the tray there is no parent console and
+the call is a no-op. The `knomit-desktop: logging to ...` stderr line at startup
+is simply discarded when there is no console; the same text goes to the log file.
+
+**Capturing the version in PowerShell: use a pipe, not `>`.** PowerShell does not
+wait on a GUI-subsystem child — it hands it a pipe instead of the file handle and
+closes the read end without draining it, so the bytes are dropped. Measured, 3
+runs each:
+
+| command | PowerShell 5.1 | PowerShell 7 | cmd.exe |
+| --- | --- | --- | --- |
+| `knomit-desktop.exe --version > v.txt` | **0 bytes** | **0 bytes** | 15 bytes |
+| `knomit-desktop.exe --version \| Set-Content v.txt` | 16 bytes | 16 bytes | — |
+
+```powershell
+.\knomit-desktop.exe --version | Set-Content v.txt   # works
+cmd /c ".\knomit-desktop.exe --version > v.txt"      # also works
+```
+
+This is not something the app can fix: `CONOUT$` would not put the bytes in the
+file either, and the same shells redirect a *console*-subsystem binary
+(`knomit-okf.exe`) to a file correctly. It is PowerShell's handling of GUI
+children, and it applies to any `-H windowsgui` program.
+
 Artifacts are written under `dist/<goos>-<goarch>/` (Wails can't cross-compile,
 so each platform is built natively). The desktop app/binary lives **only** under
 that platform dir — there is no top-level symlink for it. Launch the macOS bundle
@@ -131,6 +173,20 @@ committed (the binary `//go:embed`s them; regen only when a logo changes):
   the two-tone mark — nor `SetDarkModeIcon`, which is a no-op on macOS in Wails
   v3.) Linux/Windows keep the colored `icon.png` via `trayicon_others.go`.
 - **`macos/icon.icns`** — the `.app` bundle icon (Dock + Finder).
+- **`rsrc_windows_amd64.syso` / `rsrc_windows_arm64.syso`** — the **Windows**
+  application icon (Explorer, taskbar, Alt-Tab). Not embedded by Go code: the
+  linker picks up any `*_windows_<arch>.syso` next to `package main`
+  automatically. Generated from `appicon.png` by `make desktop-winres` (needs
+  `go install github.com/tc-hib/go-winres@v0.3.3`, pinned) and committed like
+  the rest. Icon only — **no manifest**, because the binary already has one from
+  an unexpected source: the desktop build is CGO, so it links externally through
+  MinGW, and mingw-w64 adds its `default-manifest.o` (asInvoker + supportedOS) to
+  everything it links. (A pure-Go `-H windowsgui` binary has no manifest at all;
+  this is the toolchain's doing, not Go's — it would vanish if the desktop app
+  ever stopped needing cgo.) That manifest sets no `dpiAware`, which is exactly
+  what lets Wails v3 set per-monitor-v2 DPI awareness at runtime — Windows
+  permits that only once per process. No version resource either: it would bake
+  in a version that `-ldflags` injects at build time.
 
 ## MCP integration
 

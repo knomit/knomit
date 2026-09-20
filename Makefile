@@ -1,4 +1,4 @@
-.PHONY: build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop desktop-notarize print-version print-semver
+.PHONY: build web desktop-ui test clean run dev setup dist docker docker-amd64 desktop desktop-deps desktop-app-macos desktop-icons desktop-winres desktop-install desktop-run download-ort tokenizers-lib e2e e2e-ui e2e-setup e2e-report release release-server release-desktop desktop-notarize print-version print-semver
 
 # All build artifacts are written under a per-platform directory,
 # dist/<goos>-<goarch> (e.g. dist/darwin-arm64, dist/linux-arm64), so builds for
@@ -378,7 +378,26 @@ e2e-report:
 
 # ---- knomit-desktop (Wails v3) ----------------------------------------------
 # Desktop shares the unified version scheme (VERSION.GIT_COMMIT via internal/platform/version).
-DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "$(VERSION_LDFLAGS)"
+# The desktop binary alone gets -H windowsgui on Windows. Go's default PE
+# subsystem is CONSOLE, and a console subsystem binary is not a desktop app: the
+# terminal it was launched from OWNS ITS LIFETIME, so closing that window kills
+# the tray app, and launching it any other way pops up a console nobody asked
+# for. Wails' own Windows build passes the same flag. The CLIs (knomit, kb,
+# knomit-okf) must STAY console — they are meant to write to the terminal that
+# ran them.
+# Consequence: a GUI-subsystem process gets no console, so its stdout/stderr go
+# nowhere. `knomit-desktop.exe --version` re-attaches to the launching console
+# itself to stay usable from cmd/PowerShell (tools/desktop/console_windows.go).
+# Recursively expanded (`=`, not `:=`) so it keeps tracking VERSION_LDFLAGS. A
+# `:=` here would snapshot that variable at parse time, and a later
+# `release: VERSION_LDFLAGS += -s -w` would then reach the CLIs but silently
+# miss the desktop binary.
+ifeq ($(GOOS),windows)
+DESKTOP_LDFLAGS = $(VERSION_LDFLAGS) -H windowsgui
+else
+DESKTOP_LDFLAGS = $(VERSION_LDFLAGS)
+endif
+DESKTOP_BUILD = CGO_ENABLED=1 go build $(GOFLAGS) -tags desktop -ldflags "$(DESKTOP_LDFLAGS)"
 
 # Install the OS deps the desktop app (Wails v3, CGO) needs to BUILD. macOS and
 # Windows use system frameworks (Cocoa/WebKit, WebView2) — nothing to install;
@@ -410,6 +429,10 @@ endif
 #   - macOS:        ONLY a real $(DIST)/Knomit.app bundle (the binary is built
 #                   straight into it — no loose executable left behind).
 #   - Linux/Windows: the standalone $(DIST)/knomit-desktop binary (no bundle).
+#                   On Windows it is linked GUI-subsystem (see DESKTOP_LDFLAGS),
+#                   so it opens no console and outlives the terminal that
+#                   started it; `knomit-desktop.exe --version` still prints to
+#                   the console it was launched from.
 desktop: web desktop-ui download-ort tokenizers-lib
 ifeq ($(GOOS),darwin)
 	@$(MAKE) --no-print-directory desktop-app-macos
@@ -546,6 +569,46 @@ desktop-icons:
 	done
 	iconutil -c icns /tmp/knomit.iconset -o tools/desktop/macos/icon.icns
 	@echo "Regenerated tools/desktop/{icon,appicon,icon-tray-light,icon-tray-dark}.png and tools/desktop/macos/icon.icns"
+
+# Regenerate the Windows resource object that gives knomit-desktop.exe its
+# application icon in Explorer, the taskbar and Alt-Tab. Like desktop-icons, the
+# outputs are COMMITTED (the Go linker picks up any *_windows_<arch>.syso sitting
+# next to package main automatically), so this only needs rerunning when the logo
+# changes. Needs go-winres, which is deliberately NOT a build dependency, exactly
+# because the artifacts are checked in. PINNED, not @latest: this target
+# regenerates a COMMITTED artifact, so an unpinned generator would let the .syso
+# change because someone's toolchain drifted rather than because the logo did.
+# Bump GO_WINRES_VERSION deliberately, the same way any other dependency moves.
+#
+# --manifest none is deliberate, and the reason is not "we do not want one".
+# The binary already carries one: because the desktop build is CGO, it links
+# EXTERNALLY through MinGW, and mingw-w64 contributes its default-manifest.o
+# (asInvoker + five supportedOS GUIDs) to every binary it links. Verified: a
+# pure-Go -H windowsgui binary has no .rsrc and no manifest at all, while a
+# minimal CGO one carries the byte-identical 710-byte manifest this binary has.
+# So the manifest is a property of the TOOLCHAIN, not of Go, and it would
+# disappear if the desktop app ever stopped needing cgo.
+#
+# That manifest has no dpiAware element, which is what makes adding one
+# unnecessary: Wails v3 sets per-monitor-v2 DPI awareness itself at runtime, and
+# application_windows.go's setupDPIAwareness explicitly detects a manifest that
+# has already set it, because Windows allows DPI awareness to be set ONCE per
+# process and doing it both ways fails with "Access is denied". A manifest here
+# would be a second author for a setting that already has one.
+#
+# No version resource either: it would have to bake in a version that
+# VERSION_LDFLAGS injects at BUILD time, so a committed .syso would start lying
+# the moment BASE_VERSION moves.
+GO_WINRES_VERSION := v0.3.3
+desktop-winres:
+	@command -v go-winres >/dev/null 2>&1 || { \
+	  echo "go-winres not found on PATH. Install the pinned version with:"; \
+	  echo "  go install github.com/tc-hib/go-winres@$(GO_WINRES_VERSION)"; \
+	  echo "then make sure the directory 'go env GOPATH' names, plus /bin, is on your PATH."; \
+	  exit 1; }
+	go-winres simply --icon tools/desktop/appicon.png --manifest none \
+	  --arch amd64,arm64 --out tools/desktop/rsrc
+	@echo "Regenerated tools/desktop/rsrc_windows_{amd64,arm64}.syso from appicon.png"
 
 # Install the Linux desktop launcher: copies the built binary, a hicolor app
 # icon, and a .desktop entry into the user's XDG dirs so Knomit appears in the

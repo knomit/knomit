@@ -33,6 +33,10 @@ func wantsVersion(args []string) bool {
 
 func main() {
 	if wantsVersion(os.Args[1:]) {
+		// On Windows this binary is linked into the GUI subsystem, so it has no
+		// console of its own and stdout goes nowhere; borrow the caller's for
+		// the one line we are about to print. No-op on every other OS.
+		attachParentConsole()
 		fmt.Println(version.String())
 		return
 	}
