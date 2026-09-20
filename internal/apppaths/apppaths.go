@@ -1,5 +1,11 @@
 // Package apppaths owns the per-user, per-OS locations knomit installs itself
-// into, and it is the ONLY place the "knomit" directory name is spelled.
+// into: it is the only place the DATA ROOT and the STATE DIRECTORY are spelled.
+//
+// Not the only place the word appears in a path — tools/desktop's paths_darwin
+// spells ~/Library/Logs/knomit, and tools/bridge/antigravity has its own plugin
+// directory name. Those are different locations that nothing else has to agree
+// with. The two this package owns are the ones three binaries must resolve
+// identically.
 //
 // It exists because three binaries have to agree. `knomit serve` resolves the
 // data root through internal/config, `kb` resolves the lockfile to find a
@@ -10,12 +16,20 @@
 // which binary started first re-downloads 617MB of models and gets a second
 // identity, so the agreement is load-bearing rather than tidy.
 //
-// It is NOT under internal/platform. That tier is pinned by
-// TestPlatformKnowsNothingAboutKnomit to know "the OS and the binary, and
-// nothing about this application", and the string "knomit" is exactly the
-// application knowledge it excludes — a helper there would have to take the
-// app name as a parameter, which would put the literal back at the call sites
-// and defeat the point of the package.
+// It is NOT under internal/platform, and to be precise about why: the archtest
+// would NOT have caught it. TestPlatformKnowsNothingAboutKnomit only forbids
+// IMPORTS of knomit packages outside the tier, and this package imports nothing
+// but the standard library, so it would have passed there.
+//
+// The placement rests on the tier's documented property instead — internal/
+// platform "knows the OS and the binary; nothing about this application" — and
+// the constant below is exactly that application knowledge. The tempting
+// workaround, taking the app name as a parameter the way logging.Options takes
+// its config values, is what makes this the wrong tier rather than a fixable
+// fit: logging.Options parameterises a value the caller already owns, whereas
+// parameterising the app name would put the literal back at every call site and
+// give the three binaries three chances to disagree, which is the one thing
+// this package exists to prevent.
 //
 // KNOMIT_HOME overrides the data root and is layered in internal/config, not
 // here: this package answers "where does knomit go by default", and config

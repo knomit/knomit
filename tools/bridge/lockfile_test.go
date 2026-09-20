@@ -18,6 +18,11 @@ import (
 // The mirror of this test lives in tools/desktop/internal/paths. Both sides
 // pin the agreement because either one could be "fixed" in isolation by
 // someone unaware of the other.
+//
+// While both sides delegate this assertion is tautological, and it is kept for
+// the day one of them stops. TestLockfilePath_ResolvesOnThisPlatform below is
+// the load-bearing one: it fails on a platform with no case at all, which is
+// the shape the original bug had.
 func TestLockfilePath_DelegatesToAppPaths(t *testing.T) {
 	want, err := apppaths.LockfilePath()
 	if err != nil {

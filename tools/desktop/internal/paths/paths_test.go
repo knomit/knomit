@@ -2,7 +2,6 @@ package paths_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"knomit/internal/apppaths"
@@ -14,8 +13,8 @@ func TestStateDir_ReturnsKnomitSubdir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StateDir: %v", err)
 	}
-	if !strings.HasSuffix(dir, filepath.Join("knomit")) {
-		t.Errorf("StateDir = %q, want suffix 'knomit'", dir)
+	if base := filepath.Base(dir); base != "knomit" {
+		t.Errorf("StateDir = %q, last element %q, want knomit", dir, base)
 	}
 }
 
@@ -38,8 +37,8 @@ func TestLogsDir_ReturnsKnomitSubdir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LogsDir: %v", err)
 	}
-	if !strings.HasSuffix(dir, filepath.Join("knomit")) {
-		t.Errorf("LogsDir = %q, want suffix 'knomit'", dir)
+	if base := filepath.Base(dir); base != "knomit" {
+		t.Errorf("LogsDir = %q, last element %q, want knomit", dir, base)
 	}
 }
 
@@ -54,6 +53,11 @@ func TestLogsDir_ReturnsKnomitSubdir(t *testing.T) {
 // Pinning it in both places is deliberate: either package could be "fixed"
 // locally by someone who does not know the other exists, which is exactly how
 // the divergence happened the first time.
+//
+// While both sides delegate this assertion is tautological, and it is kept for
+// the day one of them stops. The load-bearing test is the bridge's
+// TestLockfilePath_ResolvesOnThisPlatform: it fails on a platform that has no
+// case at all, which is the shape the original bug actually had.
 func TestLockfilePath_AgreesWithAppPaths(t *testing.T) {
 	want, err := apppaths.LockfilePath()
 	if err != nil {

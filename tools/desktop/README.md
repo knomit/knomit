@@ -225,6 +225,15 @@ cannot say where your profile is, startup **fails with an error naming
 looks like a fresh install, so the models download again and a second identity
 is generated somewhere nobody would think to look.
 
+**Windows data from a pre-release build is NOT migrated.** Windows has never
+shipped, so there is no automatic move and nothing reads
+`%USERPROFILE%\.knomit` any more. If you have one from an earlier local build
+and want to keep using it, set `KNOMIT_HOME` to it; otherwise delete it — it
+holds an SSH identity, so it is not inert. A `C:\.knomit` (or any `.knomit` at
+a drive root) is debris from a launch whose environment had no `%USERPROFILE%`
+and can be deleted outright; that path is the bug this layout fixed, and
+nothing creates it now.
+
 Point an MCP client at that stable path, e.g. on macOS/Linux:
 
 ```json

@@ -246,8 +246,15 @@ jobs:
           CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
           CGO_ENABLED=1 go test -tags desktop -run TestWritable -count=1 ./tools/desktop/
 
+      # apppaths belongs in THIS step, not the bridge/platform one below, because
+      # it is per-OS code whose branches only the matching runner reaches. The
+      # Windows reconstruction path (LOCALAPPDATA unset, USERPROFILE set) is
+      # covered by apppaths_windows_test.go and by nothing else in the tree — no
+      # config test reaches it — so it needs the windows-2025 leg of this matrix.
+      # This step carries no `if:`, so it runs on every platform in the matrix;
+      # config is already here and resolves its data root through apppaths.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/apppaths/
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no

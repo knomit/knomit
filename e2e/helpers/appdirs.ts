@@ -26,7 +26,12 @@ import { join } from 'node:path';
  */
 export function knomitHome(): string {
   if (process.platform === 'win32') {
-    const local = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local');
+    // `||`, not `??`. An empty-but-set LOCALAPPDATA is ABSENT, not a value:
+    // `?? ` would keep the empty string and join() would return the relative
+    // `knomit\home`, silently missing the cache — the same "empty string
+    // treated as an answer" shape as the C:\.knomit bug this file came from.
+    // The Go side spells it the same way (apppaths_windows.go).
+    const local = process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local');
     return join(local, 'knomit', 'home');
   }
   return join(homedir(), '.knomit');

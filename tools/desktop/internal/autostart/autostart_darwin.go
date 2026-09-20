@@ -53,15 +53,21 @@ type darwin struct {
 	resolveErr error
 }
 
-// newToggler resolves the LaunchAgents plist path.
+// newToggler resolves the two paths a launch agent needs: the plist to write,
+// and the program for it to run.
 //
-// An unresolvable home is recorded, not swallowed. filepath.Join("", "Library",
-// …) yields the RELATIVE path "Library/LaunchAgents/…", so dropping the error
-// would have Enable() write a launch agent into the process's working
-// directory and report success, leaving a checkbox that is on and does
-// nothing.
+// NEITHER failure is swallowed, and each is silent in its own way. An empty
+// home makes filepath.Join("", "Library", …) a RELATIVE path, so Enable() would
+// write the agent into the process's working directory and report success. An
+// empty os.Executable() renders a plist whose ProgramArguments is an empty
+// string — a well-formed file launchd accepts and can never start. Both leave a
+// checkbox that is on and does nothing, which is the failure this toggle is
+// least able to show the user.
 func newToggler() Toggler {
-	self, _ := os.Executable()
+	self, err := os.Executable()
+	if err != nil {
+		return &darwin{resolveErr: fmt.Errorf("locate this executable for the launch agent: %w", err)}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return &darwin{resolveErr: fmt.Errorf("locate home directory for the launch agent: %w", err)}
