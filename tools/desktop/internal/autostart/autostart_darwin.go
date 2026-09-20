@@ -47,11 +47,31 @@ type darwin struct {
 	binaryPath string
 	plistPath  string
 	loader     launcher
+	// resolveErr is the failure from newToggler, carried rather than dropped.
+	// Toggler is constructed by New() Toggler, which has nowhere to return an
+	// error, so every method reports it instead.
+	resolveErr error
 }
 
+// newToggler resolves the two paths a launch agent needs: the plist to write,
+// and the program for it to run.
+//
+// NEITHER failure is swallowed, and each is silent in its own way. An empty
+// home makes filepath.Join("", "Library", …) a RELATIVE path, so Enable() would
+// write the agent into the process's working directory and report success. An
+// empty os.Executable() renders a plist whose ProgramArguments is an empty
+// string — a well-formed file launchd accepts and can never start. Both leave a
+// checkbox that is on and does nothing, which is the failure this toggle is
+// least able to show the user.
 func newToggler() Toggler {
-	self, _ := os.Executable()
-	home, _ := os.UserHomeDir()
+	self, err := os.Executable()
+	if err != nil {
+		return &darwin{resolveErr: fmt.Errorf("locate this executable for the launch agent: %w", err)}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return &darwin{resolveErr: fmt.Errorf("locate home directory for the launch agent: %w", err)}
+	}
 	return &darwin{
 		binaryPath: self,
 		plistPath:  filepath.Join(home, "Library", "LaunchAgents", plistLabel+".plist"),
@@ -60,6 +80,9 @@ func newToggler() Toggler {
 }
 
 func (d *darwin) Enabled() (bool, error) {
+	if d.resolveErr != nil {
+		return false, d.resolveErr
+	}
 	_, err := os.Stat(d.plistPath)
 	if os.IsNotExist(err) {
 		return false, nil
@@ -68,6 +91,9 @@ func (d *darwin) Enabled() (bool, error) {
 }
 
 func (d *darwin) Enable() error {
+	if d.resolveErr != nil {
+		return d.resolveErr
+	}
 	if err := os.MkdirAll(filepath.Dir(d.plistPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir LaunchAgents: %w", err)
 	}
@@ -89,6 +115,9 @@ func (d *darwin) Enable() error {
 }
 
 func (d *darwin) Disable() error {
+	if d.resolveErr != nil {
+		return d.resolveErr
+	}
 	_ = d.loader.unload(d.plistPath)
 	if err := os.Remove(d.plistPath); err != nil && !os.IsNotExist(err) {
 		return err

@@ -345,6 +345,20 @@ describe('SettingsForm', () => {
     expect(screen.queryByText(base.configPath)).toBeNull()
   })
 
+  // The Windows data root is %LOCALAPPDATA%\knomit\home, which is NOT inside
+  // the user's home directory, so it collapses to the variable name rather
+  // than to `~`. Before this the POSIX-only regex matched nothing on Windows
+  // and the whole path rendered — which is what widened the fixed-size window
+  // that collapsing exists to protect.
+  it('collapses a Windows config path to %LOCALAPPDATA%', () => {
+    const configPath = 'C:\\Users\\u\\AppData\\Local\\knomit\\home\\knomit.toml'
+    renderForm({ configPath })
+
+    expect(screen.getByTitle(configPath)).toBeInTheDocument()
+    expect(screen.getByText('%LOCALAPPDATA%\\knomit\\home\\knomit.toml')).toBeInTheDocument()
+    expect(screen.queryByText(configPath)).toBeNull()
+  })
+
   // resolveLogFile (logging.go) returns "" when there is no `[log] file` and no
   // resolvable logs directory. The form used to render its Reveal button anyway,
   // wired to a RevealLogFile that would run `open -R ""` — a control that fails

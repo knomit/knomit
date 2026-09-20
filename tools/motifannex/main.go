@@ -231,7 +231,15 @@ func copyFile(src, dst string) error {
 // The lab guard runs FIRST — before the stat, and before store.Open, because
 // store.Open migrates the schema of whatever it is handed. See refuseLivePath.
 func open(ctx context.Context, corpus, scratch string) (*store.Service, *repos.RepoInstance, string, func(), error) {
-	home, _ := os.UserHomeDir()
+	// NOT `home, _ :=`. refuseLivePath derives the live repos root from this
+	// value, so an empty home does not weaken the guard — it aims it at the
+	// wrong directory, nothing matches, and every path is waved through,
+	// including the user's real knowledge base. Fail closed.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil, "", nil, fmt.Errorf(
+			"cannot resolve your home directory, so the live-corpus guard cannot be applied: %w", err)
+	}
 	path := copyPath(scratch, corpus)
 	if err := refuseLivePath(path, home); err != nil {
 		return nil, nil, "", nil, err

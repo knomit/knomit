@@ -246,6 +246,18 @@ jobs:
           CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
           CGO_ENABLED=1 go test -tags desktop -run TestWritable -count=1 ./tools/desktop/
 
+      # internal/config owns the data-root resolution, and it is per-OS code
+      # whose branches only the matching runner reaches: the Windows
+      # reconstruction (LOCALAPPDATA unset, USERPROFILE set) is exercised by
+      # config's paths_windows_test.go and by nothing else in the tree, so it
+      # needs the windows-2025 leg of this matrix. This step carries no `if:`,
+      # so it runs on every platform.
+      #
+      # The OS half of that resolution lives in internal/platform/userdirs and
+      # has per-OS tests of its own. They run in the "bridge/platform" step
+      # below, via ./internal/platform/... — also on every matrix platform, so
+      # the Windows branch is reached there too. BOTH halves are covered, and
+      # each by a different step; if either moves, check the other still is.
       - name: Unit tests (no model download)
         run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
 

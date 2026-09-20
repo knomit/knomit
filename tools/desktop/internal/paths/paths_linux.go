@@ -2,22 +2,8 @@
 
 package paths
 
-import (
-	"os"
-	"path/filepath"
-)
+import "knomit/internal/config"
 
-func stateDir() (string, error) {
-	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
-		return filepath.Join(xdg, "knomit"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "state", "knomit"), nil
-}
+func stateDir() (string, error) { return config.StateDir() }
 
-func logsDir() (string, error) {
-	return stateDir()
-}
+func logsDir() (string, error) { return stateDir() }

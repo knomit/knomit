@@ -59,6 +59,12 @@ ORT_LIB_PATH=dist/lib/libonnxruntime.dylib DYLD_LIBRARY_PATH=dist/lib \
 
 On Linux use `libonnxruntime.so` and `LD_LIBRARY_PATH` instead.
 
+The `~/.knomit` above is the data root on macOS and Linux. On Windows it is
+`%LOCALAPPDATA%\knomit\home` — see
+[tools/desktop/README.md](../desktop/README.md). `KNOMIT_HOME` overrides it
+everywhere, so `$KNOMIT_HOME/models` and `$KNOMIT_HOME/repos` are the portable
+spellings when you have it set.
+
 ### Flags
 
 | flag | default | meaning |
