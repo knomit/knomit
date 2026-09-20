@@ -904,6 +904,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	if b.disableBackgroundSync {
 		return
 	}
+	b.startExperimentSweep(ctx, wg)
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).
@@ -926,6 +927,31 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
 	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly)
+}
+
+// startExperimentSweep launches the expiry sweeper for this repo.
+//
+// Started alongside the sync loops rather than inside either of them: both
+// are chosen by whether the repo has an origin, and the sweeper does not care
+// — an experiment is local-only either way. It shares their ctx and
+// WaitGroup so a repo that is archived, swapped or shut down takes the
+// sweeper with it.
+//
+// A SUBSCRIPTION is skipped. It has no agent branch, so it can hold no
+// experiment forked from one, and a loop that can never find anything is
+// noise in the log with a timer behind it.
+func (b *repoBuilder) startExperimentSweep(ctx context.Context, wg *sync.WaitGroup) {
+	if b.subscribed {
+		return
+	}
+	if b.cfg.Experiments.ExpiryDays <= 0 {
+		return
+	}
+	b.syncLoopMu.Lock()
+	wg.Add(1)
+	b.syncLoopMu.Unlock()
+	go runExperimentSweepLoop(ctx, wg, b.svc, b.name,
+		b.cfg.Experiments.ExpiryDays, b.cfg.Experiments.SweepInterval)
 }
 
 // close releases resources opened so far. Safe to call at any point during

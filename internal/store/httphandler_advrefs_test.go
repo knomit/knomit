@@ -152,3 +152,47 @@ func TestService_UpstreamBranch_DefaultsToMainWithoutOrigin(t *testing.T) {
 	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
 	require.Equal(t, "main", svc.UpstreamBranch())
 }
+
+// TestGitHandler_DoesNotAdvertiseExperiments: an experiment is local-only and
+// must never appear in the served advertisement, so a peer can neither see it
+// nor fetch it.
+//
+// buildAdvRefs is an ALLOWLIST (upstream + refs/heads/agent/), so this holds
+// by construction today — which is exactly why the fixture has to contain a
+// real exp/* ref with a real commit on it. Without one the test passes on an
+// empty repo and says nothing. The exact line count is the second half: a
+// "not contains" alone would still pass if the ref were advertised under some
+// other spelling.
+func TestGitHandler_DoesNotAdvertiseExperiments(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	svc, err := Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "main", "agent/host-1"))
+
+	ctx := context.Background()
+	_, err = svc.Facts().WriteFact(ctx, "agent/host-1", "kb/a.md", testFactBody("a", 0.9, nil), "a", "")
+	require.NoError(t, err)
+
+	exp, err := svc.Experiments().OpenExperiment(ctx, "hidden", "", "agent/host-1")
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, exp.Branch(), "kb/secret.md", testFactBody("secret", 0.9, nil), "s", "")
+	require.NoError(t, err)
+	expTip, err := svc.Branches().HeadCommit(ctx, exp.Branch())
+	require.NoError(t, err)
+	require.NotEmpty(t, expTip, "fixture precondition: the experiment ref really exists")
+
+	srv := httptest.NewServer(svc.Handler())
+	defer srv.Close()
+
+	out, err := exec.Command("git", "ls-remote", "--symref", srv.URL).CombinedOutput()
+	require.NoError(t, err, string(out))
+	s := string(out)
+	require.Contains(t, s, "\trefs/heads/agent/host-1\n", "sanity: the agent branch IS advertised")
+	require.NotContains(t, s, "refs/heads/exp/", "no experiment ref is advertised")
+	require.NotContains(t, s, expTip, "and its tip is not reachable under any other name")
+	require.Equal(t, 4, strings.Count(s, "\n"),
+		"exactly the symref line, HEAD, main and one agent branch — the experiment adds none:\n%s", s)
+}

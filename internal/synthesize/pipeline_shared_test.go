@@ -175,3 +175,73 @@ func TestFactFromSearchResult_PropagatesOrigin(t *testing.T) {
 	require.Equal(t, 0.9, discovered.Confidence)
 	require.Equal(t, 1, discovered.Sources)
 }
+
+// TestPipeline_OnBranch_SessionIsBoundToThatBranch: the explicit branch is
+// what lands on the session row, for every strategy. Without it a session
+// opened inside an experiment would review — and advance the watermark of —
+// the agent branch instead.
+func TestPipeline_OnBranch_SessionIsBoundToThatBranch(t *testing.T) {
+	for _, tool := range allTools {
+		t.Run(tool, func(t *testing.T) {
+			svc, ri := newHypothesizeTestRepo(t)
+			ctx := context.Background()
+
+			exp, err := svc.Experiments().OpenExperiment(ctx, "bound-here", "", ri.AgentBranch())
+			require.NoError(t, err)
+			require.NotEqual(t, ri.AgentBranch(), exp.Branch())
+
+			p := enginePipelineOnBranchFor(t, tool, ri, exp.Branch())
+			res, err := p.StartSession(ctx)
+			require.NoError(t, err)
+			require.NotEmpty(t, res.SessionID, "a session row was created")
+
+			sess, err := svc.Pipeline().GetPipelineSession(ctx, res.SessionID)
+			require.NoError(t, err)
+			require.Equal(t, exp.Branch(), sess.Branch,
+				"the session is bound to the branch the caller named, not to ri.AgentBranch()")
+
+			// And the watermark it advances is the experiment's.
+			wm, err := svc.Pipeline().GetPipelineWatermark(ctx, tool, exp.Branch())
+			require.NoError(t, err)
+			require.NotEmpty(t, wm, "an unscoped completed run records HEAD on the experiment")
+			agentWM, err := svc.Pipeline().GetPipelineWatermark(ctx, tool, ri.AgentBranch())
+			require.NoError(t, err)
+			require.Empty(t, agentWM, "and leaves the agent branch's watermark alone")
+		})
+	}
+}
+
+// TestPipeline_DefaultsToAgentBranch is the other half: an engine built the
+// old way still binds the agent branch, so nothing that does not know about
+// experiments changes behaviour.
+func TestPipeline_DefaultsToAgentBranch(t *testing.T) {
+	for _, tool := range allTools {
+		t.Run(tool, func(t *testing.T) {
+			svc, ri := newHypothesizeTestRepo(t)
+			ctx := context.Background()
+
+			p := enginePipelineFor(t, tool, ri, EffortNormal, ScopeFilter{})
+			res, err := p.StartSession(ctx)
+			require.NoError(t, err)
+
+			sess, err := svc.Pipeline().GetPipelineSession(ctx, res.SessionID)
+			require.NoError(t, err)
+			require.Equal(t, ri.AgentBranch(), sess.Branch)
+		})
+	}
+}
+
+// enginePipelineOnBranchFor builds each strategy's engine against an explicit
+// branch, through the constructor production uses.
+func enginePipelineOnBranchFor(t *testing.T, tool string, ri *repos.RepoInstance, branch string) *Pipeline {
+	t.Helper()
+	switch tool {
+	case reviewTool:
+		return NewReviewerOnBranch(ri, nil, EffortNormal, ScopeFilter{}, branch).p
+	case hypothesizeTool:
+		return NewHypothesizerOnBranch(ri, nil, EffortNormal, ScopeFilter{}, branch)
+	default:
+		t.Fatalf("no on-branch engine constructor for tool %q", tool)
+		return nil
+	}
+}

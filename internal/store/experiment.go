@@ -439,3 +439,30 @@ func shortHash(h string) string {
 	}
 	return h[:8]
 }
+
+// SetExperimentActivityForTest backdates an experiment's last_activity_at.
+//
+// TEST SEAM, and exported only because the sweeper's tests live in
+// internal/repos and cannot reach this table any other way. Expiry is
+// measured in days, so the alternative is a test that either sleeps for days
+// or asserts nothing; backdating the row makes the assertion about WHICH
+// experiment the cutoff selects, which is the part that can be wrong.
+//
+// Not part of ExperimentIndex: production code records activity through
+// notifyCommit, which is what keeps "activity" meaning exactly "a commit
+// landed here".
+func (s *Service) SetExperimentActivityForTest(ctx context.Context, name string, when time.Time) error {
+	res, err := conn(ctx, s.rh.db).ExecContext(ctx,
+		`UPDATE experiments SET last_activity_at = ? WHERE name = ?`, when.Unix(), name)
+	if err != nil {
+		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("SetExperimentActivityForTest %q: %w", name, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %q", ErrNoSuchExperiment, name)
+	}
+	return nil
+}

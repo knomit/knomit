@@ -100,9 +100,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if !b.WriteOK() {
-			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"read-only view: branch %q is not writable; facts are authored on %q",
-				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+			return mcpgo.NewToolResultError(readOnlyViewMessage(b)), nil
 		}
 		ri := b.Write()
 
@@ -130,7 +128,12 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			}
 			// Attribute the session this call is about to open (knomit#123).
 			// Only the start path needs it: StartSession is the sole reader.
-			result, err = synthesize.NewHypothesizer(ri, logProgress, effort, scope).
+			//
+			// The branch comes from the BINDING for the same reason review's
+			// does: inside an experiment the session belongs to the
+			// experiment. Only this path passes it — the continue path opens
+			// no session, and its branch comes off the session row.
+			result, err = synthesize.NewHypothesizerOnBranch(ri, logProgress, effort, scope, b.WriteBranch()).
 				StartSession(withActor(ctx, req))
 		} else {
 			// Effort and scope are deliberately NOT parsed on the continue path:

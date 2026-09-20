@@ -69,9 +69,17 @@ func NewReviewerWithEffort(ri *repos.RepoInstance, onProgress func(ProgressEvent
 	return NewReviewerWithOptions(ri, onProgress, effort, ScopeFilter{})
 }
 
-// NewReviewerWithOptions is the full form: effort + optional scope filter.
+// NewReviewerWithOptions is the full form: effort + optional scope filter,
+// reviewing the repo's own agent branch.
 func NewReviewerWithOptions(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter) *Reviewer {
-	return &Reviewer{ri: ri, p: NewPipeline(ri, onProgress, effort, scope, reviewStrategy{})}
+	return NewReviewerOnBranch(ri, onProgress, effort, scope, "")
+}
+
+// NewReviewerOnBranch reviews an explicit branch — the caller's resolved write
+// branch, so a session bound to an experiment reviews the experiment and
+// advances the experiment's watermark. Empty means the repo's agent branch.
+func NewReviewerOnBranch(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter, branch string) *Reviewer {
+	return &Reviewer{ri: ri, p: NewPipelineOnBranch(ri, onProgress, effort, scope, reviewStrategy{}, branch)}
 }
 
 // Effort returns the discovery dial this Reviewer was constructed with.
@@ -81,10 +89,11 @@ func (r *Reviewer) Effort() Effort { return r.p.Effort() }
 // StartSession creates a new review session, identifies dirty facts, clusters
 // them, stores work items, and returns the first item to review.
 //
-// This is the boundary at which the agent branch is bound to the session: the
-// value of ri.AgentBranch() at this moment becomes sess.Branch and travels
-// with the session for the rest of its lifetime. Nothing downstream reads
-// ri.AgentBranch() again (invariants/synthesize/session-branch-binding).
+// This is the boundary at which the BRANCH is bound to the session: whatever
+// the constructor was given, or ri.AgentBranch() when it was given nothing,
+// becomes sess.Branch at this moment and travels with the session for the
+// rest of its lifetime. Nothing downstream reads either source again
+// (invariants/synthesize/session-branch-binding).
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	return reviewResult(r.p.StartSession(ctx))
 }

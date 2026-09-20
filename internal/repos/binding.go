@@ -209,12 +209,26 @@ func NewBindingOfRepo(ri *RepoInstance, branch string) *Binding {
 // up a full Manager — mirrors NewTestInstanceWithDeps. Production code must
 // use NewBindingOfRepo or NewBindingOfLens.
 func NewBindingForTest(write *RepoInstance, reads ...ReadTarget) *Binding {
+	// writeOK stays unconditionally true — that is this constructor's whole
+	// point, and tightening it would silently turn existing federation
+	// fixtures into read-only views. The write BRANCH is still derived the
+	// way NewBindingOfLens derives it, so a fixture that pins its write
+	// member at an experiment gets a binding that writes there; otherwise it
+	// is the agent branch, exactly as before.
+	writeBranch := ""
+	for _, rt := range reads {
+		if rt.RI == write {
+			writeBranch = experimentPin(write, rt.Branch)
+			break
+		}
+	}
 	return &Binding{
-		write:   write,
-		writeOK: true,
-		name:    write.Name(),
-		pinID:   pinOf("repo:", write.UID()),
-		reads:   reads,
+		write:       write,
+		writeOK:     true,
+		writeBranch: writeBranch,
+		name:        write.Name(),
+		pinID:       pinOf("repo:", write.UID()),
+		reads:       reads,
 	}
 }
 

@@ -90,9 +90,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if !b.WriteOK() {
-			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"read-only view: branch %q is not writable; facts are authored on %q",
-				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+			return mcpgo.NewToolResultError(readOnlyViewMessage(b)), nil
 		}
 		ri := b.Write()
 		s, release, err := storeIndices(ri)
@@ -100,7 +98,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		defer release()
-		agentBranch := ri.AgentBranch()
+		// WHERE this write lands, and therefore also what it reads while
+		// deciding: dedup, existence and ref resolution must all see the
+		// branch the fact will be committed to. Inside an experiment that is
+		// the experiment — an isolated world, not a diff against the agent
+		// branch — so every one of them asks the binding, not the repo.
+		writeBranch := b.WriteBranch()
 		ontologyRoot := ri.OntologyRoot()
 		ontology := ri.Ontology()
 
@@ -134,7 +137,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		// 3. Check file exists.
-		exists, err := s.facts.FactExists(ctx, agentBranch, file)
+		exists, err := s.facts.FactExists(ctx, writeBranch, file)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("file exists check error: %v", err)), nil
 		}
@@ -143,7 +146,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		// 4. Read and parse existing fact.
-		readResult, err := s.facts.ReadFact(ctx, agentBranch, file, nil)
+		readResult, err := s.facts.ReadFact(ctx, writeBranch, file, nil)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 		}
@@ -240,7 +243,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// writing a fact clean and then updating its refs to garbage.
 		//
 		// The batch is this one fact, so its own path satisfies a self-reference.
-		gate := refs.New(factpkg.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, agentBranch))
+		gate := refs.New(factpkg.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, writeBranch))
 		canon, _, err := gate.Apply(ctx, file, fact.Refs, priorRefs)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
@@ -253,7 +256,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(fmt.Sprintf("serialize error: %v", err)), nil
 		}
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		writeRes, err := s.facts.WriteFact(ctx, agentBranch, file, serialized, commitMsg, "update")
+		writeRes, err := s.facts.WriteFact(ctx, writeBranch, file, serialized, commitMsg, "update")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

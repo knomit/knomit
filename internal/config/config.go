@@ -199,6 +199,28 @@ type SessionConfig struct {
 	ClientRetention   string `toml:"client_retention"`
 }
 
+// ExperimentsConfig configures the experiment lifecycle: an `exp/<name>`
+// branch forked from this instance's agent branch, worked on in isolation,
+// then committed back or thrown away.
+type ExperimentsConfig struct {
+	// ExpiryDays is how long an experiment may sit with no commit on it
+	// before the sweeper rolls it back. Default 30. 0 means NEVER EXPIRE, and
+	// then the sweeper does not run at all — an experiment nobody can lose is
+	// a legitimate choice, and a loop that ticks forever to decide nothing is
+	// not.
+	//
+	// Days, not a Duration, because this is a human-scale retention policy a
+	// person sets in the settings UI, and "30" is what they mean.
+	ExpiryDays int `toml:"expiry_days"`
+	// SweepInterval is how often the sweeper looks. It is separate from
+	// ExpiryDays because the two answer different questions — how stale is
+	// too stale, versus how promptly we notice — and because the loop needs a
+	// cadence a test can drive. Default 1h: expiry is measured in days, so a
+	// tick that is an hour late costs nothing, and a quiet tick is one
+	// indexed query.
+	SweepInterval time.Duration `toml:"sweep_interval"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home         string `toml:"repo"`
@@ -222,6 +244,7 @@ type Config struct {
 	ClusterCache        ClusterCacheConfig `toml:"cluster_cache"`
 	Session             SessionConfig      `toml:"session"`
 	Discovery           DiscoveryConfig    `toml:"discovery"`
+	Experiments         ExperimentsConfig  `toml:"experiments"`
 	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
@@ -283,6 +306,10 @@ func Defaults() Config {
 		LLM: LLMConfig{
 			Model:    "gemini-2.5-flash",
 			Provider: "gemini",
+		},
+		Experiments: ExperimentsConfig{
+			ExpiryDays:    30,
+			SweepInterval: time.Hour,
 		},
 		Git: GitConfig{
 			Serve:                  true,
@@ -359,6 +386,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := envDurationOr("KNOMIT_GIT_LOCAL_RECONCILE_INTERVAL", &cfg.Git.LocalReconcileInterval); err != nil {
+		return Config{}, err
+	}
+	if err := envIntOr("KNOMIT_EXPERIMENTS_EXPIRY_DAYS", &cfg.Experiments.ExpiryDays); err != nil {
+		return Config{}, err
+	}
+	if err := envDurationOr("KNOMIT_EXPERIMENTS_SWEEP_INTERVAL", &cfg.Experiments.SweepInterval); err != nil {
 		return Config{}, err
 	}
 	envOr("KNOMIT_REMOTE_TOKEN", &cfg.Remote.Token)
@@ -441,6 +474,19 @@ func (c Config) Validate() error {
 	// — fail at boot instead.
 	if math.IsNaN(c.MethodologyMinScore) || c.MethodologyMinScore < 0 || c.MethodologyMinScore > 1 {
 		return fmt.Errorf("config: methodology_min_score must be in [0, 1], got %v", c.MethodologyMinScore)
+	}
+	// experiments.expiry_days is a retention policy: 0 means never expire and
+	// is a real choice, but a NEGATIVE value would make every cutoff lie in
+	// the future and the first sweep would roll back every experiment in the
+	// repo. That is unrecoverable (there is no archive), so it fails at boot
+	// rather than on the first tick.
+	if c.Experiments.ExpiryDays < 0 {
+		return fmt.Errorf("config: experiments.expiry_days must be >= 0 (0 means never expire), got %d", c.Experiments.ExpiryDays)
+	}
+	// A non-positive sweep interval would spin a ticker as fast as the
+	// scheduler allows. 0 is not a disable switch here — expiry_days = 0 is.
+	if c.Experiments.ExpiryDays > 0 && c.Experiments.SweepInterval <= 0 {
+		return fmt.Errorf("config: experiments.sweep_interval must be > 0 when expiry_days is set, got %v", c.Experiments.SweepInterval)
 	}
 	// discovery.effort_default is consumed raw by the MCP review/hypothesize
 	// handlers (it is NOT coerced like discovery.bridge), so an unknown value

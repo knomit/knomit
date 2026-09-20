@@ -524,3 +524,50 @@ func TestExperimentOps_UnknownNameIsTyped(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoSuchExperiment)
 	require.ErrorIs(t, svc.Experiments().RollbackExperiment(ctx, "ghost"), ErrNoSuchExperiment)
 }
+
+// TestReconcile_DoesNotTouchExperiments: an experiment is local work in
+// progress and the consensus branch must never absorb it, nor the reconcile
+// move its ref.
+//
+// The fixture has to CONTAIN an exp/* ref and the reconcile has to actually
+// DO something in the same tick, or this is theatre: reconcile only ever
+// names the agent branch and the upstream, so the guard is true by
+// construction and an empty-repo version of this test passes against any
+// implementation. The agent-tip assertion is what makes it reachable.
+func TestReconcile_DoesNotTouchExperiments(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	_, err := svc.Experiments().OpenExperiment(ctx, "in-progress", "", testAgentBranch)
+	require.NoError(t, err)
+	writeMergeFact(t, svc, "exp/in-progress", "kb/wip.md", "wip", "not ready for anyone")
+	expBefore, err := svc.Branches().HeadCommit(ctx, "exp/in-progress")
+	require.NoError(t, err)
+
+	// Give the reconcile real work: the agent branch must move THIS tick.
+	writeMergeFact(t, svc, testAgentBranch, "kb/landed.md", "landed", "ready")
+	agentTip, err := svc.Branches().HeadCommit(ctx, testAgentBranch)
+	require.NoError(t, err)
+	mainBefore, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.NotEqual(t, agentTip, mainBefore, "precondition: there is something to reconcile")
+
+	res, err := svc.AdvanceLocalUpstream(ctx, testAgentBranch, "main")
+	require.NoError(t, err)
+	require.Equal(t, ModeFF, res.Mode, "precondition: the tick did real work")
+
+	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, agentTip, mainAfter, "the consensus branch DID move in this tick")
+
+	expAfter, err := svc.Branches().HeadCommit(ctx, "exp/in-progress")
+	require.NoError(t, err)
+	require.Equal(t, expBefore, expAfter, "and the experiment's ref did not")
+
+	// And the experiment's work did not leak into the consensus branch.
+	_, err = svc.Facts().ReadFact(ctx, "main", "kb/wip.md", nil)
+	require.Error(t, err, "an experiment's facts must not reach the consensus branch")
+	landed, err := svc.Facts().ReadFact(ctx, "main", "kb/landed.md", nil)
+	require.NoError(t, err)
+	require.Contains(t, landed.Content, "ready")
+}

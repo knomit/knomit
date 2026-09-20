@@ -517,7 +517,7 @@ func dedupEmbed(ctx context.Context, batchEmb store.BatchEmbedder, facts []fact.
 func applyDedupMerge(
 	ctx context.Context,
 	s mcpStore,
-	agentBranch string,
+	writeBranch string,
 	ontology *fact.Ontology,
 	batchEmb store.BatchEmbedder,
 	dedupVecs [][]float32,
@@ -606,7 +606,7 @@ func applyDedupMerge(
 		if dedupVecs != nil && i < len(dedupVecs) && len(dedupVecs[i]) > 0 {
 			sq.QueryVec = dedupVecs[i]
 		}
-		results, err := s.factQuery.Search(ctx, agentBranch, sq)
+		results, err := s.factQuery.Search(ctx, writeBranch, sq)
 		if err != nil || len(results) == 0 {
 			continue
 		}
@@ -617,7 +617,7 @@ func applyDedupMerge(
 			continue
 		}
 		// Read existing fact to get its full metadata (refs, etc.)
-		readResult, readErr := s.facts.ReadFact(ctx, agentBranch, match.Path, nil)
+		readResult, readErr := s.facts.ReadFact(ctx, writeBranch, match.Path, nil)
 		if readErr != nil {
 			continue
 		}
@@ -703,7 +703,7 @@ func applyDedupMerge(
 // non-authored origins so ordinary learn calls are unaffected — only
 // previewed-then-saved pipeline output gets a weight. Mutates facts and files
 // in place.
-func computeEvidenceWeights(ctx context.Context, s mcpStore, agentBranch, localRepoID string, facts []fact.Fact, paths []string, files map[string]string) error {
+func computeEvidenceWeights(ctx context.Context, s mcpStore, writeBranch, localRepoID string, facts []fact.Fact, paths []string, files map[string]string) error {
 	for i := range facts {
 		f := facts[i]
 		if f.Origin != fact.Distilled && f.Origin != fact.Discovered {
@@ -713,7 +713,7 @@ func computeEvidenceWeights(ctx context.Context, s mcpStore, agentBranch, localR
 		if len(localRefs) == 0 {
 			continue
 		}
-		w := synthesize.ComputeEvidenceWeight(ctx, s.facts, agentBranch, localRepoID, localRefs)
+		w := synthesize.ComputeEvidenceWeight(ctx, s.facts, writeBranch, localRepoID, localRefs)
 		if w <= 0 || w == f.EvidenceWeight {
 			continue
 		}
@@ -742,9 +742,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if !b.WriteOK() {
-			return mcpgo.NewToolResultError(fmt.Sprintf(
-				"read-only view: branch %q is not writable; facts are authored on %q",
-				b.WriteMountBranch(), b.Write().AgentBranch())), nil
+			return mcpgo.NewToolResultError(readOnlyViewMessage(b)), nil
 		}
 		ri := b.Write()
 		s, release, err := storeIndices(ri)
@@ -752,7 +750,12 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		defer release()
-		agentBranch := ri.AgentBranch()
+		// WHERE this write lands, and therefore also what it reads while
+		// deciding: dedup, existence and ref resolution must all see the
+		// branch the fact will be committed to. Inside an experiment that is
+		// the experiment — an isolated world, not a diff against the agent
+		// branch — so every one of them asks the binding, not the repo.
+		writeBranch := b.WriteBranch()
 		ontologyRoot := ri.OntologyRoot()
 		ontology := ri.Ontology()
 
@@ -760,7 +763,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// what the stored form is. Built once and threaded, because the repo id
 		// it carries is also what tells a kb://<own-id>/… ref (a local edge)
 		// from a foreign one everywhere below — evidence weight included.
-		gate := refs.New(fact.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, agentBranch))
+		gate := refs.New(fact.ID12(ri.ID()), refs.FromFactQuery(s.factQuery, writeBranch))
 
 		// 1. Parse arguments.
 		momentName := req.GetString("moment_name", "")
@@ -812,7 +815,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			if fi.Path == "" {
 				continue
 			}
-			exists, eerr := s.facts.FactExists(ctx, agentBranch, paths[i])
+			exists, eerr := s.facts.FactExists(ctx, writeBranch, paths[i])
 			if eerr != nil {
 				return mcpgo.NewToolResultError(fmt.Sprintf("fact %d: exists check: %v", i, eerr)), nil
 			}
@@ -830,7 +833,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Embedding happens HERE, once, because two stages need the same
 		// vectors: the dedup merge below and the same-subject gate after it.
 		dedupVecs := dedupEmbed(ctx, batchEmb, facts)
-		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, agentBranch, ontology, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID())
+		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, writeBranch, ontology, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID())
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -840,11 +843,11 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, agentBranch, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
+		if err := checkSameSubjectCollisions(ctx, s, writeBranch, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
-		if err := computeEvidenceWeights(ctx, s, agentBranch, gate.LocalRepoID(), facts, paths, files); err != nil {
+		if err := computeEvidenceWeights(ctx, s, writeBranch, gate.LocalRepoID(), facts, paths, files); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
@@ -888,7 +891,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// 4. BatchWrite all facts — and any subsumed hypotheses' retractions —
 		// in one commit, so a learn call is all-or-nothing.
 		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := s.facts.BatchWriteFacts(ctx, agentBranch, files, retract, commitMsg, "learn")
+		hash, _, err := s.facts.BatchWriteFacts(ctx, writeBranch, files, retract, commitMsg, "learn")
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}

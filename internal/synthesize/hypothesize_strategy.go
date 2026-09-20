@@ -52,7 +52,14 @@ const hypothesizeTool = "hypothesize"
 // layer projects PipelineResult straight onto the HypothesizeResult wire shape,
 // so there is nothing for a facade to add. Callers drive *Pipeline directly.
 func NewHypothesizer(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter) *Pipeline {
-	return NewPipeline(ri, onProgress, effort, scope, hypothesizeStrategy{})
+	return NewHypothesizerOnBranch(ri, onProgress, effort, scope, "")
+}
+
+// NewHypothesizerOnBranch is NewHypothesizer against an explicit branch — the
+// caller's resolved write branch, so a session bound to an experiment
+// hypothesizes there. Empty means the repo's agent branch.
+func NewHypothesizerOnBranch(ri *repos.RepoInstance, onProgress func(ProgressEvent), effort Effort, scope ScopeFilter, branch string) *Pipeline {
+	return NewPipelineOnBranch(ri, onProgress, effort, scope, hypothesizeStrategy{}, branch)
 }
 
 func (hypothesizeStrategy) Tool() string { return hypothesizeTool }

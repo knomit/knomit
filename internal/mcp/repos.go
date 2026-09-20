@@ -186,8 +186,10 @@ func boundFor(b *repos.Binding) *boundSection {
 		var writeBranch string
 		if rt.RI == b.Write() && b.WriteOK() {
 			role = "read+write"
-			// Writes commit here, not to rt.Branch (RFC decision 19 / M-4).
-			writeBranch = b.Write().AgentBranch()
+			// Where writes actually commit — the agent branch, or the
+			// experiment this mount is pinned at. Not necessarily rt.Branch,
+			// which is where the mount READS (RFC decision 19 / M-4).
+			writeBranch = b.WriteBranch()
 		}
 		mode := ""
 		if rt.RI.Subscribed() {
@@ -322,6 +324,15 @@ func listRepos(mgr *repos.Manager) []reposRepo {
 // repoMode names what a binding to this repo could do. "read-only" is the
 // ontology-less case: writable only if the repo's own agent branch is one it
 // may author on.
+//
+// Deliberately asks about the AGENT BRANCH and not about any experiment. This
+// row is the repo CATALOGUE — one line per repo, listed before anything is
+// bound — so the question it answers is "could a session write here at all",
+// which the agent branch settles: a repo whose agent branch is writable can
+// always open an experiment, and one whose is not (a subscription, an
+// ontology-less repo) can never write on any branch. What the CURRENT binding
+// writes to is a different question, answered by the bound section's
+// write_branch via Binding.WriteBranch.
 func repoMode(ri *repos.RepoInstance) string {
 	switch {
 	case ri.Subscribed():
