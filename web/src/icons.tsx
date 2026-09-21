@@ -21,6 +21,21 @@ export const GitBranchIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// FlaskIcon marks an experiment. It exists so the in-experiment chip can say
+// WHICH experiment without also saying the word "experiment" — the name is the
+// information, and a branch glyph beside it would read as an ordinary branch.
+// Everything that names an experiment uses this glyph, so the icon carries the
+// meaning the removed word used to.
+export const FlaskIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10 2v7.31"/>
+    <path d="M14 9.3V2"/>
+    <path d="M8.5 2h7"/>
+    <path d="M14 9.3a6.5 6.5 0 1 1-4 0"/>
+    <path d="M5.52 16h12.96"/>
+  </svg>
+);
+
 export const GlobeIcon = ({ color, size = 14 }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10"/>

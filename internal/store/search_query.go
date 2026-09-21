@@ -244,6 +244,16 @@ type SearchOptions struct {
 	// Used by principles-style "what scopes apply to this subarea?" lookups.
 	DomainAncestor []string
 	Path           string
+	// PathsIn restricts the result to an EXPLICIT set of fact paths, in
+	// addition to every other filter. It is for callers that computed the set
+	// outside the index — the since-fork view computes it from a git diff —
+	// and it is deliberately not reachable from a query string as a raw list.
+	//
+	// Empty means NO path-set restriction, so a caller whose computed set is
+	// empty must not pass it and expect nothing back: it has to short-circuit
+	// its own answer. Making emptiness mean "match nothing" here would turn
+	// every unset field into a silent zero-result filter.
+	PathsIn        []string
 	MinConfidence  float64
 	MinSimilarity  float64 // cosine similarity threshold (0–1); 0 uses the active model's recall floor
 	Limit          int
@@ -341,6 +351,14 @@ func newFactFilter(q SearchOptions) *factFilter {
 	}
 	if q.Path != "" {
 		f.add(" AND f.path LIKE ?", q.Path+"%")
+	}
+	if len(q.PathsIn) > 0 {
+		ph := strings.Repeat("?,", len(q.PathsIn))
+		args := make([]any, len(q.PathsIn))
+		for i, p := range q.PathsIn {
+			args[i] = p
+		}
+		f.add(" AND f.path IN ("+ph[:len(ph)-1]+")", args...)
 	}
 	if len(q.IncludeTypes) > 0 {
 		ph := strings.Repeat("?,", len(q.IncludeTypes))

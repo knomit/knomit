@@ -19,6 +19,7 @@ import { ManageSessions } from './ManageSessions';
 import { ManageLogs } from './ManageLogs';
 import { useClientSessionChanges } from './useClientSessionChanges';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
+import { ExperimentsPanel } from './ExperimentsPanel';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
 import type { BrowseContext } from './state';
@@ -43,6 +44,12 @@ interface Props {
   // same repo, just renamed, is not the same case as one that vanished.
   onChanged: (renamed?: { from: string; to: string }) => void;  // parent re-fetches the repo list
   onBrowse: (ctx: BrowseContext) => void;  // switch the app to browse a repo/lens
+  /** Switch the app to a BRANCH of the current repo — how entering an
+   *  experiment works. Optional so a test harness can mount without it. */
+  onEnterBranch?: (branch: string) => void;
+  /** The branch the app is currently showing, so an experiment row can say
+   *  "you are here". Empty before the status bootstrap resolves one. */
+  currentBranch?: string;
   // True while a connect commit is in flight. Withholding the rail is not
   // enough on its own: the app's own exits (Escape, the top bar's step-out)
   // unmount this whole pane, and the wizard's contract is that nothing may
@@ -91,7 +98,7 @@ function isServerPage(v: Selection): boolean {
   return v?.kind === 'sessions' || v?.kind === 'logs';
 }
 
-export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConfig, onChanged, onBrowse, onBusyChange }: Props) {
+export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly, hideRemoteConfig, onChanged, onBrowse, onEnterBranch, onBusyChange }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
@@ -564,6 +571,8 @@ export function RepoManager({ open, repos, currentRepo, readOnly, hideRemoteConf
                 // selection to the new name (see the Props.onChanged doc).
                 onRenamed={newName => { onChanged({ from: view.name, to: newName }); refresh(); setSel({ kind: 'repo', name: newName }); }}
                 onBrowse={onBrowse}
+                onEnterBranch={onEnterBranch}
+                currentBranch={currentBranch}
                 onError={setErr}
               />
             )}
@@ -760,7 +769,7 @@ function CreateBlocked({ what }: { what: 'repository' | 'lens' }) {
   );
 }
 
-function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, createJob, onCancelCreate, onArchived, onConnect, onChanged, onRenamed, onBrowse, onSelectLens, onError }: {
+function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, createJob, onCancelCreate, onArchived, onConnect, onChanged, onRenamed, onBrowse, onEnterBranch, currentBranch, onSelectLens, onError }: {
   name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
   /** The create still working on this repo, if any. Puts the page in CREATING
    *  MODE — see the `creating` flag below. */
@@ -778,6 +787,8 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // addressing it by the old one.
   onRenamed: (newName: string) => void;
   onBrowse: (ctx: BrowseContext) => void; onSelectLens: (name: string) => void;
+  onEnterBranch?: (branch: string) => void;
+  currentBranch?: string;
   onError: (m: string) => void;
 }) {
   const [agentBranch, setAgentBranch] = useState('');
@@ -1056,6 +1067,29 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       </div>
     ),
   });
+
+  // Experiments sit immediately below the branch block, because that is the
+  // question they answer: the block above says where new facts are written,
+  // and this one is how you write somewhere else for a while. Not shown while
+  // creating — the repo has no agent branch to fork from yet.
+  if (!creating) {
+    sections.push({
+      id: 'experiments',
+      title: 'Experiments',
+      hint: 'work on a private branch, then commit or throw it away',
+      body: (
+        <ExperimentsPanel
+          repo={name}
+          currentBranch={currentBranch ?? ''}
+          agentBranch={agentBranch}
+          onEnterBranch={onEnterBranch ?? (() => {})}
+          disabledReason={subscribed
+            ? 'This repository is a subscription: it follows a remote branch read-only and has no agent branch to fork an experiment from.'
+            : undefined}
+        />
+      ),
+    });
+  }
 
   // The Remote block always exists (unless the server hides remote config), and
   // says which of THREE states it is in. "Not connected" now renders as content

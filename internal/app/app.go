@@ -210,6 +210,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		ReadOnly:          cfg.ReadOnly,
 		SlowRequestMS:     cfg.Log.SlowRequestMS,
 		Logs:              opts.LogTap,
+		// 0 means experiments never expire, and the API then OMITS
+		// expires_at rather than computing a date nobody set.
+		ExperimentExpiryDays: cfg.Experiments.ExpiryDays,
 	}
 
 	// Start the manager (opens repos, launches background cluster

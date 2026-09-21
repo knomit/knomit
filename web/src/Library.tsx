@@ -313,7 +313,14 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // facet looked like, a chip in the bar above an unchanged list of topics. A
   // filter needs a flat list to be a filter OF, so it borrows Recent. Nothing
   // is written to librarySort, so removing the chip returns to the tree.
-  const hasContentFilters = state.filters.some(f => f.category !== 'path');
+  // SINCE-FORK IS A CONTENT FILTER and belongs in this test, not beside it.
+  // It was originally wired only into the Recent and Relevance effects, which
+  // made it dead in the DEFAULT mode: librarySort starts at 'path', the tree
+  // walk cannot honour it, and the toggle changed the chip's colour while the
+  // list below it kept every fact and issued no request at all. That is the
+  // same failure this comment already describes for facet chips, one flag
+  // over — so it takes the same cure rather than a second mechanism.
+  const hasContentFilters = state.filters.some(f => f.category !== 'path') || state.sinceFork;
   const effectiveSort = searchActive ? 'relevance'
     : hasContentFilters && state.librarySort === 'path' ? 'recent'
     : state.librarySort;
@@ -417,6 +424,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
       eps: eps.length ? eps : undefined,
+      // The reducer will not hold sinceFork outside an experiment, so this
+      // reads the one flag rather than re-checking state.experiment here —
+      // two guards on the same condition is how they drift apart.
+      sinceFork: state.sinceFork || undefined,
       ...motifOpts,
     }).then(r => {
       if (stale()) return;
@@ -429,7 +440,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: loaded[0].path });
       }
     }).catch(() => { if (!stale()) { setFacts([]); setLoading(false); } });
-  }, [path, state.headCommit, state.freeText, state.repo, state.branch, filtersKey, effectiveSort, isLens]);
+  }, [path, state.headCommit, state.freeText, state.repo, state.branch, filtersKey, effectiveSort, isLens, state.sinceFork]);
 
   // Recent mode highlights by index only (path/relevance sync inside their
   // fetch). Keep the highlighted row tied to the open fact so any factPath
@@ -457,6 +468,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       eps: eps.length ? eps : undefined,
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
+      sinceFork: state.sinceFork || undefined,
       ...motifOpts,
     }).then(r => {
       if (stale()) return;
@@ -476,7 +488,7 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
         dispatch({ type: 'AMEND_NAV', factPath: items[0].fullPath });
       }
     }).catch(() => { if (!stale()) { setChildren([]); dispatch({ type: 'SET_SEARCHING', value: false }); } });
-  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, isLens]);
+  }, [path, state.headCommit, state.freeText, effectiveSort, state.repo, state.branch, filtersKey, isLens, state.sinceFork]);
 
   // ── Lens union list: api.listLensFacts (recent/path) or api.lensSearch
   // (relevance). `lensSources` narrows the fan-out: null = all mounts (no repos
@@ -706,12 +718,13 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       domains: domains.length ? domains : undefined,
       entities: entities.length ? entities : undefined,
       eps: eps.length ? eps : undefined,
+      sinceFork: state.sinceFork || undefined,
       ...motifOpts,
     }).then(r => {
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
     }).catch(() => setLoading(false));
-  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, types, kinds, origins, domains, entities, eps]);
+  }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, types, kinds, origins, domains, entities, eps, state.sinceFork]);
 
   // The observer calls loadMore through a ref, and depends only on `paged`.
   // Depending on `loadMore` itself re-created the observer on every input to its

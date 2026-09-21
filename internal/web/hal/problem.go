@@ -41,3 +41,41 @@ func WriteProblem(w http.ResponseWriter, status int, title, detail, instance str
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(p)
 }
+
+// WriteProblemWithExtra is WriteProblem plus RFC 9457 EXTENSION MEMBERS —
+// additional top-level keys alongside type/title/status/detail/instance,
+// which §3.2 explicitly allows.
+//
+// It exists for failures whose repair depends on DATA, not only on prose. A
+// refused experiment commit is the case it was added for: the client's next
+// move is sync or rollback, and which one is chosen by looking at WHICH paths
+// conflicted. Putting that list in the detail string would make every
+// consumer parse English.
+//
+// Extension keys that collide with a standard member are DROPPED rather than
+// allowed to overwrite it: a caller that shadowed "status" with a different
+// value would produce a document whose two statuses disagree, and silently
+// winning is worse than silently missing.
+func WriteProblemWithExtra(w http.ResponseWriter, status int, title, detail, instance string, extra map[string]any) {
+	doc := map[string]any{
+		"type":   "about:blank",
+		"title":  title,
+		"status": status,
+	}
+	if detail != "" {
+		doc["detail"] = detail
+	}
+	if instance != "" {
+		doc["instance"] = instance
+	}
+	for k, v := range extra {
+		switch k {
+		case "type", "title", "status", "detail", "instance":
+			continue
+		}
+		doc[k] = v
+	}
+	w.Header().Set("Content-Type", ProblemContentType)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(doc)
+}

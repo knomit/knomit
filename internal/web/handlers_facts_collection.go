@@ -126,10 +126,39 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 			MotifMatch:     motifMatch,
 		}
 
-		entries, total, err := provider.RecentFacts(r.Context(), ri, branch, opts)
-		if err != nil {
-			writeStoreError(w, r, err, "Failed to list facts", branch)
-			return
+		// `since_fork` narrows the list to what THIS EXPERIMENT changed.
+		//
+		// It is a git diff from the recorded fork commit, never a timestamp
+		// comparison: syncing an experiment merges the agent branch's later
+		// commits into it, so "committed after the fork" would report the
+		// parent's work as the experiment's — the exact reading the filter
+		// exists to prevent.
+		var empty bool
+		if qp.Get("since_fork") == "true" || qp.Get("since_fork") == "1" {
+			paths, ok := experimentChangedPaths(w, r, ri, branch)
+			if !ok {
+				return
+			}
+			// An experiment that has changed nothing yet must render as an
+			// EMPTY list, not as every fact on the branch, so the store is
+			// not asked at all rather than asked with an inert filter.
+			if len(paths) == 0 {
+				empty = true
+			}
+			opts.PathsIn = paths
+		}
+
+		var (
+			entries []store.RecentFactEntry
+			total   int
+			err     error
+		)
+		if !empty {
+			entries, total, err = provider.RecentFacts(r.Context(), ri, branch, opts)
+			if err != nil {
+				writeStoreError(w, r, err, "Failed to list facts", branch)
+				return
+			}
 		}
 		if entries == nil {
 			entries = []store.RecentFactEntry{}
@@ -186,4 +215,57 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 		}
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
+}
+
+// experimentChangedPaths returns the fact paths this experiment branch has
+// added, modified or deleted since its fork commit. It writes a problem
+// document and returns ok=false when the branch is not an experiment this
+// instance knows — asking for "since the fork" off an experiment is a client
+// error, not an empty answer, because an empty answer reads as "nothing has
+// changed" and would be believed.
+//
+// Deleted paths are included in the set even though a retracted fact is no
+// longer on the branch to be listed: the set is what CHANGED, and filtering
+// deletes out here would make the caller's filter quietly differ from the
+// diff it names.
+func experimentChangedPaths(w http.ResponseWriter, r *http.Request, ri *repos.RepoInstance, branch string) ([]string, bool) {
+	name, isExp := store.ExperimentNameOf(branch)
+	if !isExp {
+		hal.WriteProblem(w, http.StatusBadRequest, "Not an experiment",
+			"since_fork narrows a list to what an experiment changed since it forked; branch "+
+				strconv.Quote(branch)+" is not an experiment",
+			r.URL.Path)
+		return nil, false
+	}
+
+	var (
+		exp   store.Experiment
+		found bool
+		paths []string
+		err   error
+	)
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		exp, found, err = svc.Experiments().GetExperiment(r.Context(), name)
+		if err != nil || !found {
+			return
+		}
+		var added, modified, deleted []string
+		added, modified, deleted, err = svc.Facts().DiffFiles(r.Context(), branch, exp.ForkCommit)
+		paths = append(append(append(paths, added...), modified...), deleted...)
+	}); aerr != nil {
+		hal.WriteProblem(w, http.StatusServiceUnavailable, "Store unavailable", aerr.Error(), r.URL.Path)
+		return nil, false
+	}
+	if err != nil {
+		hal.WriteProblem(w, http.StatusInternalServerError, "Failed to diff the experiment",
+			err.Error(), r.URL.Path)
+		return nil, false
+	}
+	if !found {
+		hal.WriteProblem(w, http.StatusNotFound, "Experiment not found",
+			"branch "+strconv.Quote(branch)+" has no experiment record, so there is no fork point to compare against",
+			r.URL.Path)
+		return nil, false
+	}
+	return paths, true
 }

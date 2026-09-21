@@ -129,3 +129,18 @@ func (b URLBuilder) FactCommits(repo string, a Anchor, path string) string {
 	head := Anchor{Branch: a.Branch} // strip commit pin
 	return b.Fact(repo, head, path) + "/commits"
 }
+
+// Experiments is the experiment collection for a repo.
+//
+// A TOP-LEVEL child of the repo, not of a branch: an experiment is a branch
+// of its own, so nesting it under /branches/{branch} would make its URL
+// depend on which branch the client happened to be looking at.
+func (b URLBuilder) Experiments(repo string) string {
+	return b.Repo(repo) + "/experiments"
+}
+
+// Experiment is one experiment by its bare name — no `exp/` prefix, which
+// lives in the branch namespace and would need escaping here.
+func (b URLBuilder) Experiment(repo, name string) string {
+	return b.Experiments(repo) + "/" + name
+}

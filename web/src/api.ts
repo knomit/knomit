@@ -406,7 +406,57 @@ export interface Stats {
   highlights: Highlight[];
   default_axis: Exclude<RankAxis, 'recent'>;
 }
-export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number }
+export interface Status { head: string; branch: string; index_commit: string; embeddings_enabled: boolean; ontology_root: string; index_state?: string; index_done?: number; index_total?: number; index_percent?: number; writable?: boolean; experiment?: ExperimentInfo | null }
+
+/**
+ * ExperimentInfo is the branch row's `experiment` object, present only when
+ * the branch IS an experiment. Its PRESENCE is the in-experiment test — the
+ * UI must not infer one from the `exp/` prefix, for the same reason the
+ * server does not: the prefix is a naming convention and the record is the
+ * fact (kb/invariants/store/branch-roles).
+ *
+ * expires_at is absent when expiry is disabled. Absent means never; it is
+ * never a far-future date.
+ */
+/** One row of the experiments collection. */
+export interface ExperimentRow {
+  name: string;
+  description?: string;
+  branch: string;
+  parent: string;
+  fork_commit: string;
+  created_at?: string;
+  last_activity?: string;
+  expires_at?: string;
+  /** This instance's eligibility answer: an orphaned experiment lists but cannot be written or committed. */
+  writable?: boolean;
+}
+
+export interface ExperimentsResponse {
+  experiments: ExperimentRow[];
+  /** 0 means experiments never expire. */
+  expiryDays: number;
+}
+
+/** Thrown for a refused commit, carrying the paths that decide the repair. */
+export class ExperimentConflictError extends Error {
+  readonly paths: string[];
+  constructor(message: string, paths: string[]) {
+    super(message);
+    this.name = 'ExperimentConflictError';
+    this.paths = paths;
+  }
+}
+
+export interface ExperimentInfo {
+  name: string;
+  description?: string;
+  parent: string;
+  fork_commit: string;
+  created_at?: string;
+  last_activity?: string;
+  expires_at?: string;
+}
 export interface ActivityStats { last_commit: string; total: number; changes_7d: number; changes_30d: number; changes_90d: number }
 
 // BranchRootBody is the wire shape of a branch root — what the branch GET
@@ -422,6 +472,8 @@ export interface BranchRootBody {
   index_done?: number;
   index_total?: number;
   index_percent?: number;
+  writable?: boolean;
+  experiment?: ExperimentInfo | null;
 }
 
 // EmbeddedBranchEnvelope is any resource that may carry a branch root under
@@ -448,6 +500,11 @@ export function statusFromBranchBody(data: BranchRootBody, branch: string): Stat
     index_done: data.index_done,
     index_total: data.index_total,
     index_percent: data.index_percent,
+    // DEFAULTS TO TRUE, deliberately. An older server omits the key, and
+    // reading absence as "not writable" would make every mutating control
+    // disappear against it. A server that means "not writable" says so.
+    writable: data.writable ?? true,
+    experiment: data.experiment ?? null,
   };
 }
 
@@ -1803,7 +1860,7 @@ export const api = {
 
   search: (repo: string, branch: string, q: string, path = '', minConfidence = 0,
     opts?: { types?: string[]; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; eps?: string[]; domains?: string[]; entities?: string[];
-             motifs?: string[]; motifMatch?: MotifMatch }
+             motifs?: string[]; motifMatch?: MotifMatch; sinceFork?: boolean }
   ): Promise<{ results: SearchResult[] }> => {
     const { text, domains, entities } = parseSearchQuery(q);
     const allDomains = [...domains, ...(opts?.domains || [])];
@@ -1819,6 +1876,10 @@ export const api = {
     if (opts?.excludeKinds?.length) p.set('exclude_kind', opts.excludeKinds.join(','));
     if (opts?.origins?.length) p.set('origin', opts.origins.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
+    // since_fork is only ever sent from inside an experiment. The server
+    // answers 400 off one rather than ignoring it, so this must not be set
+    // speculatively — the caller's own state decides, not this function.
+    if (opts?.sinceFork) p.set('since_fork', '1');
     setMotifParams(p, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/search?${p}`).then(data => {
       // HAL CollectionView: {_embedded: {results: [...]}}
@@ -1887,7 +1948,7 @@ export const api = {
 
   recent: (repo: string, branch: string, path: string, query = '', limit = 50, offset = 0,
     opts?: { types?: string[]; excludeType?: string; kinds?: string[]; excludeKinds?: string[]; origins?: string[]; domains?: string[]; entities?: string[]; eps?: string[];
-             motifs?: string[]; motifMatch?: MotifMatch }
+             motifs?: string[]; motifMatch?: MotifMatch; sinceFork?: boolean }
   ): Promise<RecentResponse> => {
     const p = new URLSearchParams({ sort: 'recent', path, limit: String(limit), offset: String(offset) });
     if (query) p.set('q', query);
@@ -1904,6 +1965,7 @@ export const api = {
     if (opts?.domains?.length) p.set('domain', opts.domains.join(','));
     if (opts?.entities?.length) p.set('entities', opts.entities.join(','));
     if (opts?.eps?.length) p.set('ep', opts.eps.join(','));
+    if (opts?.sinceFork) p.set('since_fork', '1');
     setMotifParams(p, opts);
     return fetchJSON<any>(`${branchBase(repo, branch)}/facts?${p}`).then(data => ({
       // HAL CollectionView: count = total, _embedded.facts = items
@@ -1945,6 +2007,52 @@ export const api = {
     const branches: Array<{ name: string }> =
       (data._embedded?.branches as Array<{ name: string }>) || [];
     return branches.map(b => b.name);
+  },
+
+  // ── Experiments ────────────────────────────────────────────────────────
+  //
+  // The collection hangs off the REPO, not off a branch: an experiment IS a
+  // branch, so nesting it under one would make its URL depend on which branch
+  // the client happened to be showing. Names are bare — the `exp/` prefix
+  // lives in the branch namespace.
+
+  listExperiments: async (repo: string): Promise<ExperimentsResponse> => {
+    const data = await fetchJSON<{
+      expiry_days?: number;
+      _embedded?: { experiments?: ExperimentRow[] };
+    }>(`${repoBase(repo)}/experiments`);
+    return {
+      experiments: data._embedded?.experiments || [],
+      // 0 means NEVER expire, and it is a real answer rather than a missing
+      // one, so it must not fall through to a default.
+      expiryDays: typeof data.expiry_days === 'number' ? data.expiry_days : 0,
+    };
+  },
+
+  openExperiment: (repo: string, name: string, description: string): Promise<ExperimentRow> =>
+    fetchJSON<ExperimentRow>(`${repoBase(repo)}/experiments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description }),
+    }),
+
+  // experimentAction runs commit | rollback | sync.
+  //
+  // A refused COMMIT is not a generic failure: the server answers 409 with
+  // `conflicting_paths`, and the caller's next move (sync, or rollback) is
+  // chosen by looking at which paths. So the rejection is rethrown as a typed
+  // error carrying them rather than flattened into a message.
+  experimentAction: async (repo: string, name: string, action: 'commit' | 'rollback' | 'sync'): Promise<void> => {
+    const r = await fetch(`${repoBase(repo)}/experiments/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+    if (r.ok) return;
+    // Only the two members this function branches on. A problem document may
+    // carry more; nothing here reads them, so nothing here has to name them.
+    let body: { title?: string; detail?: string; conflicting_paths?: unknown } = {};
+    try { body = await r.json(); } catch { /* a non-JSON error body is still a failure */ }
+    if (r.status === 409 && Array.isArray(body.conflicting_paths)) {
+      throw new ExperimentConflictError(body.detail || 'experiment has conflicting changes', body.conflicting_paths);
+    }
+    throw new Error(body.detail || body.title || `${action} → ${r.status} ${r.statusText}`);
   },
 
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>

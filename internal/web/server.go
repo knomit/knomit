@@ -50,6 +50,12 @@ type Server struct {
 	// milliseconds at WARN. Wired from config ([log].slow_request_ms).
 	SlowRequestMS int
 
+	// ExperimentExpiryDays mirrors [experiments].expiry_days. It is carried
+	// here only so a branch row and the experiments collection can render
+	// expires_at; 0 means experiments never expire, and then the field is
+	// OMITTED rather than computed.
+	ExperimentExpiryDays int
+
 	// APIOnly omits the embedded web UI routes (SPA + /assets). The desktop
 	// build sets this; the UI is served in-process by Wails. Unknown routes
 	// then return an API-consistent problem+json 404. Zero value (false) keeps

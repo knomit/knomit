@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -87,6 +88,7 @@ func handleHALBranch(
 	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
 	agentBranch string,
 	embeddingsEnabled bool,
+	experimentExpiryDays int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
@@ -97,7 +99,7 @@ func handleHALBranch(
 			writeStoreError(w, r, err, "Failed to read branch", branch)
 			return
 		}
-		hal.WriteHAL(w, http.StatusOK, branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled))
+		hal.WriteHAL(w, http.StatusOK, branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled, experimentExpiryDays))
 	}
 }
 
@@ -123,6 +125,7 @@ func branchRootBody(
 	ri *repos.RepoInstance,
 	agentBranch string,
 	embeddingsEnabled bool,
+	experimentExpiryDays int,
 ) map[string]any {
 	idxState, idxDone, idxTotal := ri.IndexStatus()
 
@@ -146,11 +149,17 @@ func branchRootBody(
 		"embeddings_enabled": embeddingsEnabled,
 		"is_agent_branch":    branch == agentBranch,
 		"writable":           ri.WritableBranch(branch),
-		"ontology_error":     ontologyErr,
-		"index_state":        idxState, // "ready" | "indexing" | "error"
-		"index_done":         idxDone,
-		"index_total":        idxTotal,
-		"index_percent":      indexPercent(idxState, idxDone, idxTotal), // 0–100; 100 when ready
+		// Present ONLY when this branch is a recorded experiment. The UI
+		// keys its in-experiment marker and its since-fork filter on the
+		// key's presence, and its read-only gate on `writable` above —
+		// NOT on is_agent_branch, which is false for every experiment and
+		// would gate a branch the user may legitimately write.
+		"experiment":     branchExperiment(ri, branch, experimentExpiryDays),
+		"ontology_error": ontologyErr,
+		"index_state":    idxState, // "ready" | "indexing" | "error"
+		"index_done":     idxDone,
+		"index_total":    idxTotal,
+		"index_percent":  indexPercent(idxState, idxDone, idxTotal), // 0–100; 100 when ready
 
 		"_links": hal.LinkMap{
 			"self":           {Href: branchURL},
@@ -181,6 +190,7 @@ func embedBranchRoot(
 	ri *repos.RepoInstance,
 	agentBranch string,
 	embeddingsEnabled bool,
+	experimentExpiryDays int,
 ) map[string]any {
 	// An empty branch is "this repo has none" (a subscription has no agent
 	// branch), not "unknown" — building a root for branch "" would invent a
@@ -201,5 +211,48 @@ func embedBranchRoot(
 	if info.Head == "" {
 		return nil
 	}
-	return branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled)
+	return branchRootBody(b, repoName, branch, info, ri, agentBranch, embeddingsEnabled, experimentExpiryDays)
+}
+
+// branchExperiment returns the experiment record for branch, or nil when the
+// branch is not one. nil marshals as null and the client tests presence.
+//
+// fork_commit is what the "changed since the fork" fact filter anchors on, so
+// it is part of the branch's own payload rather than something the UI has to
+// fetch from the experiments collection before it can render a filter.
+//
+// expires_at is OMITTED when expiry is disabled. Absence means never; a
+// computed far-future date would be a claim nobody made, and a null would be
+// indistinguishable from "not yet calculated".
+func branchExperiment(ri *repos.RepoInstance, branch string, expiryDays int) map[string]any {
+	name, ok := store.ExperimentNameOf(branch)
+	if !ok {
+		return nil
+	}
+	var (
+		exp   store.Experiment
+		found bool
+	)
+	// A read failure is reported as "not an experiment" rather than failing
+	// the branch GET: the rest of this body is still correct and useful, and
+	// the writable flag above — which is what actually gates the UI — has
+	// already been answered by the same classification.
+	if err := ri.WithRead(func(svc *store.Service) {
+		exp, found, _ = svc.Experiments().GetExperiment(context.Background(), name)
+	}); err != nil || !found {
+		return nil
+	}
+	out := map[string]any{
+		"name":          exp.Name,
+		"description":   exp.Description,
+		"parent":        exp.Parent,
+		"fork_commit":   exp.ForkCommit,
+		"created_at":    exp.CreatedAt.UTC().Format(time.RFC3339),
+		"last_activity": exp.LastActivityAt.UTC().Format(time.RFC3339),
+	}
+	if expiryDays > 0 {
+		out["expires_at"] = exp.LastActivityAt.
+			Add(time.Duration(expiryDays) * 24 * time.Hour).UTC().Format(time.RFC3339)
+	}
+	return out
 }
