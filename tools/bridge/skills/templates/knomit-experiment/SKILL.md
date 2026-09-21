@@ -111,42 +111,69 @@ Before `{action: "commit"}`:
 
 `commit` refuses whenever the agent branch and the experiment both changed the
 same fact since the fork. Nothing is merged and nothing changes — a refusal is
-free and is the ONLY reliable signal that your edits collide.
+free, and it is the ONLY reliable signal that your edits collide.
 
-**Do not sync pre-emptively to avoid a refusal.** `sync` resolves every
-collision in the agent branch's favour, silently: it overwrites the
-experiment's version of exactly the facts under dispute. Syncing first turns a
-question you would have been asked into an answer given on your behalf, and
-you never learn which facts you lost. Attempt the commit and let it refuse.
+**Do not sync to avoid a refusal.** `sync` resolves every collision in the
+agent branch's favour, silently: it overwrites the experiment's version of
+exactly the facts under dispute. Syncing first answers on your behalf a
+question you would otherwise have been asked, and you never learn which facts
+you lost. Attempt the commit and let it refuse.
 
-On a refusal, for each conflicting path:
+The refusal names each conflicting path and, for each, the commits to read it
+at. Then:
 
-1. **Read YOUR version first, before anything else** — `knomit_explain` at the
-   experiment's head. After a sync it is reachable only through the
-   experiment's git history, and this window is when it is still cheap.
-2. **Read the agent branch's version** — `knomit_explain` at the agent branch
-   head — and the **fork-point version** at the experiment's `fork_commit`.
-   Three versions, which is what makes the decision a merge rather than a
-   guess.
-3. **Decide per fact**, and say which you chose and why:
-   - the agent branch's version is better or subsumes yours → nothing to carry
-   - yours is better → keep the text you read in step 1, to re-apply
-   - both say something → compose the merged body now, while all three are in
-     front of you
-4. `{action: "sync"}` — this takes the agent branch's version of the
-   conflicting paths.
-5. **Re-apply** your kept or merged bodies with `knomit_update`.
-6. `{action: "commit"}` again.
+1. **Read all three versions of each path** with
+   `knomit_explain {file, commit}`, using the commits the refusal gave you —
+   the merge base, the experiment's, and the agent branch's. Use those exact
+   commits: the base is the real merge base, which after a sync is NOT the
+   experiment's `fork_commit`.
+
+   For a path the refusal marks **NO BASE VERSION**, both sides added it
+   independently and there is no third version. Do not go looking for one:
+   `knomit_explain` at a commit where the path does not exist does not fail,
+   it answers with the nearest earlier version — a different fact, with
+   nothing to tell you it substituted.
+
+2. **Decide per path**, and say which you chose and why:
+   - the agent branch's version subsumes yours → `"theirs"`
+   - yours subsumes it → `"ours"`
+   - both say something → compose the merged text and send it as
+     `{"body": "<the full fact>"}`
+
+   Remember which way round these words go here: `commit` merges the
+   experiment INTO the agent branch, so **"ours" is the experiment** — the
+   opposite of git's convention, where "ours" is the branch you merge into.
+
+3. **Retry with the resolutions**, all in one call:
+
+   ```
+   knomit_experiment {action: "commit", resolutions: {
+     "kb/a/….md": "ours",
+     "kb/b/….md": "theirs",
+     "kb/c/….md": {"body": "---\ntype: observation\n---\n# …\n\n…"}
+   }}
+   ```
+
+   It stays ONE merge: everything you did not mention merges exactly as it
+   would have. Every path the refusal listed needs an entry — leave one out
+   and it refuses again, naming only what is still unresolved. A path that did
+   NOT conflict is an error, not a no-op.
+
+   A `{body}` is judged exactly as `knomit_update` judges a rewrite — parsed,
+   validated against the ontology, refs gated — and what lands is the
+   serialized fact, not your raw bytes. Send the whole fact, frontmatter
+   included.
+
+**If every path resolves to `"theirs"`**, the result is identical to the agent
+branch: no commit is written and the branch does not move. The experiment is
+still deleted, and the summary says so rather than claiming a merge. That is
+correct, not a failure.
 
 The alternative exit is `rollback`, which discards the whole experiment.
 
-> **PR 5 replaces steps 1–6.** `commit` will return, per conflicting path, the
-> three commits to read the fact at, and accept
-> `commit {resolutions: {<path>: "ours" | "theirs" | {body}}}` applied inside
-> the same merge. Once that ships, the sync-and-re-apply dance above is
-> obsolete and this section should be rewritten to use resolutions. Until
-> then it is the only correct sequence, and the read-before-sync step is what
-> keeps it lossless.
+**`sync` is for the plain catch-up case** — you want the agent branch's recent
+work inside your experiment and nothing is in dispute. It is not a conflict
+tool, and it is never the first move after a refusal.
 
 **Auto vs interactive is your judgement, not a flag.** Resolving a conflict in
 a fact you wrote this session, where the merge is obvious, is auto. Resolving

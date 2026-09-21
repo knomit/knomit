@@ -12,15 +12,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
 
-	factpkg "knomit/internal/fact"
 	"knomit/internal/repos"
+	"knomit/internal/resolutions"
 	"knomit/internal/store"
 )
 
@@ -147,41 +146,6 @@ func conflictReadingGuide(c *store.MergeConflictError) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// validateResolutionBodies judges every {body} resolution exactly as
-// knomit_update judges a rewrite: parsed, then run through the ontology's
-// rules for the topic its PATH places it in.
-//
-// The topic is derived from the path the resolution is keyed by — the same
-// TrimPrefix/path.Dir derivation update.go uses — because that is where the
-// fact is going to live, and a body that would be refused there must not slip
-// in through a merge. Private state is skipped wholesale, as every other write
-// path skips it: a .knomit/<area>/ path has no ontology placement, and
-// ValidateFact runs the ROOT rules unconditionally.
-func validateResolutionBodies(ri *repos.RepoInstance, resolutions map[string]store.Resolution) error {
-	ontology := ri.Ontology()
-	if ontology == nil {
-		return nil
-	}
-	ontologyRoot := ri.OntologyRoot()
-	for file, res := range resolutions {
-		if res.Body == nil {
-			continue
-		}
-		parsed, err := factpkg.ParseFact(file, string(res.Body))
-		if err != nil {
-			return fmt.Errorf("resolution body for %q is not a valid fact: %w", file, err)
-		}
-		if factpkg.IsWritablePrivatePath(file) {
-			continue
-		}
-		topicCategory := path.Dir(strings.TrimPrefix(file, ontologyRoot+"/"))
-		if err := factpkg.ValidateFact(ontology, topicCategory, parsed); err != nil {
-			return fmt.Errorf("resolution body for %q: %w", file, err)
-		}
-	}
-	return nil
-}
-
 // experimentView is one row of `list`.
 type experimentView struct {
 	Name         string `json:"name"`
@@ -226,19 +190,22 @@ func ExperimentHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolR
 		case "open":
 			res, rerr = experimentOpen(ctx, mgr, svc, b, name, req.GetString("description", ""), active)
 		case "commit":
-			resolutions, perr := parseResolutions(req.GetArguments()["resolutions"])
+			adjudications, perr := parseResolutions(req.GetArguments()["resolutions"])
 			if perr != nil {
 				return mcpgo.NewToolResultError(perr.Error()), nil
 			}
-			// A {body} resolution is a fact WRITE and is judged like one. The
-			// store's merge sees bytes and has no ontology, so validating
-			// below this point is impossible; skipping it would make a
-			// resolution the one way to land a fact that knomit_update would
-			// have refused.
-			if verr := validateResolutionBodies(b.Write(), resolutions); verr != nil {
-				return mcpgo.NewToolResultError(verr.Error()), nil
+			// A {body} resolution is a fact WRITE and is judged like one —
+			// through the SAME function the REST endpoint calls, so the two
+			// doors onto this action cannot disagree about what is acceptable.
+			// The bytes that land are what it returns, never the caller's raw
+			// body.
+			expName := pickExperiment(name, active)
+			adjudications, nerr := resolutions.Normalize(ctx, b.Write(),
+				b.Write().AgentBranch(), store.ExperimentBranch(expName), adjudications)
+			if nerr != nil {
+				return mcpgo.NewToolResultError(nerr.Error()), nil
 			}
-			res, rerr = experimentCommit(ctx, mgr, svc, b, pickExperiment(name, active), resolutions)
+			res, rerr = experimentCommit(ctx, mgr, svc, b, expName, adjudications)
 		case "rollback":
 			res, rerr = experimentRollback(ctx, mgr, svc, b, pickExperiment(name, active))
 		case "sync":

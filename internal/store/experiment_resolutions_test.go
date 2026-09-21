@@ -571,3 +571,100 @@ func TestResolvedCommit_ReachesNotifyCommitOnDst(t *testing.T) {
 	require.Equal(t, 1, logged,
 		"the merge commit must be in dst's commit log — that row is what notifyCommit appends")
 }
+
+// The three conflict arms are not one code path. reviewer2 probed all four
+// resolution shapes by hand and found them correct; these close the gap so the
+// next change cannot quietly break Insert or Delete while Modify keeps passing.
+
+// TestCommitExperiment_ResolveInsertArm: both sides ADDED the same path. The
+// Insert arm is the one the resolving strategies treat as non-conflicting, so
+// it is the easiest to get wrong — and it has no base version to fall back on.
+func TestCommitExperiment_ResolveInsertArm(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  Resolution
+		want string
+		gone string
+	}{
+		{"ours takes the experiment's addition", Resolution{Side: ResolveSrc}, "experiment version", "agent version"},
+		{"theirs keeps the parent's addition", Resolution{Side: ResolveDst}, "agent version", "experiment version"},
+		{"body lands neither", Resolution{Body: []byte("---\ntype: observation\n---\n# new\n\nthird version\n")}, "third version", "agent version"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc := newExperimentTestStore(t)
+
+			_, err := svc.Experiments().OpenExperiment(ctx, "insertarm", "", testAgentBranch)
+			require.NoError(t, err)
+			// Neither side had kb/new.md at the fork point.
+			writeMergeFact(t, svc, "exp/insertarm", "kb/new.md", "new", "experiment version")
+			writeMergeFact(t, svc, testAgentBranch, "kb/new.md", "new", "agent version")
+
+			_, err = svc.Experiments().CommitExperiment(ctx, "insertarm", map[string]Resolution{
+				"kb/new.md": tc.res,
+			})
+			require.NoError(t, err)
+
+			got := readExperimentFact(t, svc, testAgentBranch, "kb/new.md")
+			require.Contains(t, got, tc.want)
+			require.NotContains(t, got, tc.gone)
+		})
+	}
+}
+
+// TestCommitExperiment_ResolveDeleteArm: the experiment DELETED a path the
+// parent modified. "ours" here means absence — the delete — which is the one
+// case where taking the source's version is not a blob to write.
+func TestCommitExperiment_ResolveDeleteArm(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	// Seed, fork, then delete on the experiment and modify on the parent.
+	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "original")
+	_, err := svc.Experiments().OpenExperiment(ctx, "deletearm", "", testAgentBranch)
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, "exp/deletearm", "kb/doomed.md", "retract on the experiment")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "agent rewrite")
+
+	// Unresolved, this refuses.
+	_, err = svc.Experiments().CommitExperiment(ctx, "deletearm", nil)
+	var conflict *MergeConflictError
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, []string{"kb/doomed.md"}, conflict.Paths)
+	require.True(t, conflict.HasBase("kb/doomed.md"),
+		"a delete conflict requires a base version, so it is never baseless")
+
+	// "ours" is the experiment's version, and the experiment's version is that
+	// the fact is GONE.
+	_, err = svc.Experiments().CommitExperiment(ctx, "deletearm", map[string]Resolution{
+		"kb/doomed.md": {Side: ResolveSrc},
+	})
+	require.NoError(t, err)
+
+	paths, err := svc.Facts().ListAll(ctx, testAgentBranch)
+	require.NoError(t, err)
+	require.NotContains(t, paths, "kb/doomed.md",
+		"resolving a delete conflict to the experiment's side must delete the path")
+}
+
+// TestCommitExperiment_ResolveDeleteArm_TheirsKeepsTheFact is the other half:
+// the parent's modification survives and the experiment's delete is discarded.
+func TestCommitExperiment_ResolveDeleteArm_TheirsKeepsTheFact(t *testing.T) {
+	ctx := context.Background()
+	svc := newExperimentTestStore(t)
+
+	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "original")
+	_, err := svc.Experiments().OpenExperiment(ctx, "keepit", "", testAgentBranch)
+	require.NoError(t, err)
+	_, err = svc.Facts().DeleteFact(ctx, "exp/keepit", "kb/doomed.md", "retract on the experiment")
+	require.NoError(t, err)
+	writeMergeFact(t, svc, testAgentBranch, "kb/doomed.md", "doomed", "agent rewrite")
+
+	_, err = svc.Experiments().CommitExperiment(ctx, "keepit", map[string]Resolution{
+		"kb/doomed.md": {Side: ResolveDst},
+	})
+	require.NoError(t, err)
+
+	require.Contains(t, readExperimentFact(t, svc, testAgentBranch, "kb/doomed.md"), "agent rewrite")
+}

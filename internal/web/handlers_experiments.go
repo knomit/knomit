@@ -8,6 +8,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"knomit/internal/repos"
+	"knomit/internal/resolutions"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
@@ -193,15 +195,41 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 		// REST takes the same resolutions as the MCP tool — the mirrored
 		// surfaces must not disagree about what commit MEANS. It is a body on
 		// a POST, optional and absent for an ordinary commit.
-		resolutions, perr := decodeResolutions(r)
+		adjudications, perr := decodeResolutions(r)
 		if perr != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid resolutions", perr.Error(), r.URL.Path)
 			return
 		}
-		if len(resolutions) > 0 && action != "commit" {
+		if len(adjudications) > 0 && action != "commit" {
 			hal.WriteProblem(w, http.StatusBadRequest, "Invalid resolutions",
 				"resolutions settle a refused commit and are meaningless to "+action, r.URL.Path)
 			return
+		}
+
+		// decodeResolutions checked the SHAPE of the request. A {body} is a
+		// fact write and is judged like one, through the same function the MCP
+		// tool calls — and what gets committed is what that returns, never the
+		// caller's raw bytes. Without this, REST was the one door into the
+		// corpus that accepted prose with no frontmatter, an empty title, and
+		// refs that no other write path would have let through.
+		if len(adjudications) > 0 {
+			exp, ok, gerr := experimentForResolutions(r.Context(), ri, name)
+			if gerr != nil {
+				writeExperimentError(w, r, "Could not read experiment", gerr)
+				return
+			}
+			if !ok {
+				hal.WriteProblem(w, http.StatusNotFound, "Experiment not found",
+					"no such experiment: "+name, r.URL.Path)
+				return
+			}
+			normalized, nerr := resolutions.Normalize(r.Context(), ri, exp.Parent, exp.Branch(), adjudications)
+			if nerr != nil {
+				hal.WriteProblem(w, http.StatusUnprocessableEntity, "Invalid resolution body",
+					nerr.Error(), r.URL.Path)
+				return
+			}
+			adjudications = normalized
 		}
 
 		var (
@@ -211,7 +239,7 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			switch action {
 			case "commit":
-				res, err = svc.Experiments().CommitExperiment(r.Context(), name, resolutions)
+				res, err = svc.Experiments().CommitExperiment(r.Context(), name, adjudications)
 			case "sync":
 				res, err = svc.Experiments().SyncExperiment(r.Context(), name)
 			case "rollback":
@@ -264,6 +292,22 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 // that the experiment's version of exactly these facts be overwritten
 // unseen — which is why the UI has no sync control at all. Resolution needs
 // all three versions, and that is an agent's job through knomit_experiment.
+// experimentForResolutions reads the experiment record, for the two branch
+// names the ref gate needs.
+func experimentForResolutions(ctx context.Context, ri *repos.RepoInstance, name string) (store.Experiment, bool, error) {
+	var (
+		exp store.Experiment
+		ok  bool
+		err error
+	)
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		exp, ok, err = svc.Experiments().GetExperiment(ctx, name)
+	}); aerr != nil {
+		return store.Experiment{}, false, aerr
+	}
+	return exp, ok, err
+}
+
 // decodeResolutions reads the optional resolutions body of a commit.
 //
 // "ours"/"theirs" mean the same thing here as on the MCP tool — ours is the
