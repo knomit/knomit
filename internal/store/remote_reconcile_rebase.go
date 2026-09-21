@@ -231,7 +231,7 @@ func (rh *repoHandler) replayCommit(
 	// Three-way merge: base = baseCommit (orig's parent or empty),
 	//                  src  = orig (what orig adds),
 	//                  dst  = ontoCommit (what we're replaying on top of).
-	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy)
+	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy, nil)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: three-way merge: %w", err)
 	}

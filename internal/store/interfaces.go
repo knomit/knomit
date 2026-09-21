@@ -205,7 +205,9 @@ type ExperimentIndex interface {
 	// CommitExperiment merges the experiment into its recorded parent and
 	// deletes it. Returns *MergeConflictError, having changed nothing, when
 	// both sides edited the same path.
-	CommitExperiment(ctx context.Context, name string) (AgentReconcileResult, error)
+	// resolutions adjudicates paths that would otherwise be refused, keyed by
+	// fact path. Nil is the ordinary commit: any conflict refuses.
+	CommitExperiment(ctx context.Context, name string, resolutions map[string]Resolution) (AgentReconcileResult, error)
 	// SyncExperiment merges the recorded parent into the experiment,
 	// parent-wins on conflicting paths.
 	SyncExperiment(ctx context.Context, name string) (AgentReconcileResult, error)

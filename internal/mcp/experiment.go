@@ -12,11 +12,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/rs/zerolog/log"
 
+	factpkg "knomit/internal/fact"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -29,11 +32,13 @@ import (
 // which is a state it has to know how to leave.
 func experimentTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_experiment",
-		mcpgo.WithDescription("Work on an isolated branch of this knowledge base. `open` forks exp/<name> from the agent branch and MOVES THIS SESSION onto it: every later call — learn, update, retract, query, review — reads and writes the experiment until you commit or roll back. `commit` merges it into the agent branch and deletes it; if both sides changed the same fact it is REFUSED with the conflicting paths and nothing changes — call `sync` (which brings the agent branch's version onto the experiment, agent wins) and commit again, or `rollback` to throw the work away. `list` shows this repo's experiments and marks the one you are in. Experiments are local: never pushed, never fetched, never visible to a peer. An experiment with no commits for the configured expiry is rolled back automatically."),
+		mcpgo.WithDescription("Work on an isolated branch of this knowledge base. `open` forks exp/<name> from the agent branch and MOVES THIS SESSION onto it: every later call — learn, update, retract, query, review — reads and writes the experiment until you commit or roll back. `commit` merges it into the agent branch and deletes it. If both sides changed the same fact the commit is REFUSED, nothing changes, and you are told the conflicting paths plus THREE COMMITS for each: the fork point, the experiment's version, and the agent branch's version. Read the fact at all three with knomit_explain {file, commit}, decide per path, and retry `commit` with `resolutions`. `rollback` throws the work away. `list` shows this repo's experiments and marks the one you are in. Experiments are local: never pushed, never fetched, never visible to a peer. An experiment with no commits for the configured expiry is rolled back automatically.\n\nOURS AND THEIRS: `commit` merges the EXPERIMENT INTO the agent branch, so the experiment is the merge SOURCE. From where you are sitting — inside the experiment — \"ours\" is the experiment's version and \"theirs\" is the agent branch's. That is the OPPOSITE of git's own merge convention, where \"ours\" is the branch being merged into. If you are used to git, read these two words carefully.\n\nRESOLVING: when the merge is obvious — a fact you wrote this session, or two edits that plainly compose — resolve it yourself and commit. When the two versions disagree about a CLAIM rather than its wording, or the other version is someone else's work, show the human ours, theirs and your proposed merge, and commit with their picks. That choice is yours to make; there is no flag for it."),
 		mcpgo.WithString("action", mcpgo.Required(),
 			mcpgo.Description("One of: list, open, commit, rollback, sync.")),
 		mcpgo.WithString("name",
 			mcpgo.Description("The experiment name: kebab-case, unique in this repo (e.g. \"widen-the-gate\"). Required for open; for commit/rollback/sync it defaults to the experiment you are currently in.")),
+		mcpgo.WithObject("resolutions",
+			mcpgo.Description("Only for `commit`, and only after one was refused: how to settle each conflicting path, keyed by the fact path exactly as the refusal listed it. Each value is \"ours\" (keep THIS EXPERIMENT's version — it is the merge source, the opposite of git's \"ours\"), \"theirs\" (take the agent branch's version), or {\"body\": \"<full merged fact text>\"} to land content that is neither. Every path in the refusal needs an entry — one left out is refused again, and a path that did not conflict is an error rather than a no-op. The merge is still ONE merge: everything else merges exactly as it would have.")),
 		mcpgo.WithString("description",
 			mcpgo.Description("Free text saying what this experiment is for. Only used by `open`; stored locally, never committed to git. Re-opening with a new description replaces it; re-opening with none keeps it.")),
 		bindingArg(true),
@@ -62,6 +67,119 @@ type experimentResult struct {
 	// error's text alongside the two ways out. A success-shaped result
 	// carrying a "conflicts" list would be read as "committed, with notes".
 	Summary string `json:"summary"`
+}
+
+// parseResolutions turns the tool's `resolutions` argument into store
+// resolutions, keyed by fact path.
+//
+// OURS AND THEIRS ARE TRANSLATED HERE, once, and this is the only place in the
+// codebase entitled to use those words. Commit merges the experiment INTO the
+// parent, so the experiment is the merge SOURCE: "ours" (the agent's own work,
+// in the experiment it is sitting in) is src, and "theirs" (the agent branch
+// it is landing on) is dst. Git's own convention for a merge is the opposite —
+// "ours" is what you are merging into — which is exactly why the store below
+// this line speaks only of src and dst and refuses to guess.
+//
+// An unusable entry is an ERROR, never a skipped path: silently dropping one
+// would refuse the commit for a path the caller believes it resolved.
+func parseResolutions(raw any) (map[string]store.Resolution, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("`resolutions` must be an object keyed by fact path, got %T", raw)
+	}
+	out := make(map[string]store.Resolution, len(m))
+	for file, v := range m {
+		switch val := v.(type) {
+		case string:
+			switch val {
+			case "ours":
+				out[file] = store.Resolution{Side: store.ResolveSrc}
+			case "theirs":
+				out[file] = store.Resolution{Side: store.ResolveDst}
+			default:
+				return nil, fmt.Errorf("resolution for %q must be \"ours\", \"theirs\", or {\"body\": \"...\"}, got %q", file, val)
+			}
+		case map[string]any:
+			body, ok := val["body"].(string)
+			if !ok {
+				return nil, fmt.Errorf("resolution object for %q needs a string `body`", file)
+			}
+			// An empty body is a real instruction — "this fact becomes
+			// empty" — but it is almost never what anyone means, and a fact
+			// file with no frontmatter fails validation later with a message
+			// that does not mention resolutions. Refused here instead.
+			if body == "" {
+				return nil, fmt.Errorf("resolution body for %q is empty; to drop the fact, retract it instead", file)
+			}
+			out[file] = store.Resolution{Body: []byte(body)}
+		default:
+			return nil, fmt.Errorf("resolution for %q must be \"ours\", \"theirs\", or {\"body\": \"...\"}, got %T", file, v)
+		}
+	}
+	return out, nil
+}
+
+// conflictReadingGuide names, per conflicting path, the commits to read it at.
+//
+// A path both sides ADDED has no version at the merge base, and that is said
+// rather than glossed: knomit_explain for a path absent at a commit does not
+// fail, it falls back to the nearest earlier version and returns a DIFFERENT
+// fact with no indication. An agent told to read "the base version" of a dual
+// add would be shown something unrelated and take it for the original.
+//
+// The hashes are FULL and never abbreviated: they are passed straight back as
+// knomit_explain's `commit`, and a shortened one may not resolve.
+func conflictReadingGuide(c *store.MergeConflictError) string {
+	var b strings.Builder
+	b.WriteString("Read each path with knomit_explain {file, commit}:\n")
+	for _, p := range c.Paths {
+		if c.HasBase(p) {
+			fmt.Fprintf(&b, "  %s — base %s | %s %s | %s %s\n",
+				p, c.BaseCommit, c.Src, c.SrcCommit, c.Dst, c.DstCommit)
+			continue
+		}
+		fmt.Fprintf(&b, "  %s — NO BASE VERSION (both sides added it) | %s %s | %s %s\n",
+			p, c.Src, c.SrcCommit, c.Dst, c.DstCommit)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// validateResolutionBodies judges every {body} resolution exactly as
+// knomit_update judges a rewrite: parsed, then run through the ontology's
+// rules for the topic its PATH places it in.
+//
+// The topic is derived from the path the resolution is keyed by — the same
+// TrimPrefix/path.Dir derivation update.go uses — because that is where the
+// fact is going to live, and a body that would be refused there must not slip
+// in through a merge. Private state is skipped wholesale, as every other write
+// path skips it: a .knomit/<area>/ path has no ontology placement, and
+// ValidateFact runs the ROOT rules unconditionally.
+func validateResolutionBodies(ri *repos.RepoInstance, resolutions map[string]store.Resolution) error {
+	ontology := ri.Ontology()
+	if ontology == nil {
+		return nil
+	}
+	ontologyRoot := ri.OntologyRoot()
+	for file, res := range resolutions {
+		if res.Body == nil {
+			continue
+		}
+		parsed, err := factpkg.ParseFact(file, string(res.Body))
+		if err != nil {
+			return fmt.Errorf("resolution body for %q is not a valid fact: %w", file, err)
+		}
+		if factpkg.IsWritablePrivatePath(file) {
+			continue
+		}
+		topicCategory := path.Dir(strings.TrimPrefix(file, ontologyRoot+"/"))
+		if err := factpkg.ValidateFact(ontology, topicCategory, parsed); err != nil {
+			return fmt.Errorf("resolution body for %q: %w", file, err)
+		}
+	}
+	return nil
 }
 
 // experimentView is one row of `list`.
@@ -108,7 +226,19 @@ func ExperimentHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolR
 		case "open":
 			res, rerr = experimentOpen(ctx, mgr, svc, b, name, req.GetString("description", ""), active)
 		case "commit":
-			res, rerr = experimentCommit(ctx, mgr, svc, b, pickExperiment(name, active))
+			resolutions, perr := parseResolutions(req.GetArguments()["resolutions"])
+			if perr != nil {
+				return mcpgo.NewToolResultError(perr.Error()), nil
+			}
+			// A {body} resolution is a fact WRITE and is judged like one. The
+			// store's merge sees bytes and has no ontology, so validating
+			// below this point is impossible; skipping it would make a
+			// resolution the one way to land a fact that knomit_update would
+			// have refused.
+			if verr := validateResolutionBodies(b.Write(), resolutions); verr != nil {
+				return mcpgo.NewToolResultError(verr.Error()), nil
+			}
+			res, rerr = experimentCommit(ctx, mgr, svc, b, pickExperiment(name, active), resolutions)
 		case "rollback":
 			res, rerr = experimentRollback(ctx, mgr, svc, b, pickExperiment(name, active))
 		case "sync":
@@ -239,22 +369,32 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 }
 
 // experimentCommit merges into the agent branch and leaves the experiment.
-func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name string) (experimentResult, error) {
+func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Service, b *repos.Binding, name string, resolutions map[string]store.Resolution) (experimentResult, error) {
 	if name == "" {
 		return experimentResult{}, errors.New(
 			"knomit_experiment commit needs a `name`, or a session that is inside an experiment")
 	}
-	result, err := svc.Experiments().CommitExperiment(ctx, name)
+	result, err := svc.Experiments().CommitExperiment(ctx, name, resolutions)
 	if err != nil {
 		// A refused commit is a STATE, not a malfunction, so it comes back as
-		// the paths plus the two ways out rather than as a bare error string.
+		// the paths plus what to do about them rather than as a bare error.
+		//
+		// It names THE THREE COMMITS per path, because resolving means reading
+		// the fact at each of them: the fork point, what this experiment made
+		// of it, and what the parent made of it. Telling an agent only that a
+		// path conflicted leaves it to guess at a merge it cannot see.
 		var conflict *store.MergeConflictError
 		if errors.As(err, &conflict) {
 			return experimentResult{}, fmt.Errorf(
-				"commit refused: %s and %s both changed %d path(s) since the fork, and nothing was changed. "+
-					"Paths: %v. Run knomit_experiment {action: \"sync\"} to take the agent branch's version of them "+
-					"onto the experiment, then commit again — or rollback to discard the experiment",
-				conflict.Src, conflict.Dst, len(conflict.Paths), conflict.Paths)
+				"commit refused: %s and %s both changed %d path(s) since the fork, and nothing was changed.\n"+
+					"%s\n"+
+					"Then retry with knomit_experiment {action: \"commit\", resolutions: {\"<path>\": \"ours\" | \"theirs\" | {\"body\": \"<merged text>\"}}} "+
+					"— one entry per path listed above, and no entry for anything else. "+
+					"\"ours\" keeps %s's version, \"theirs\" takes %s's. "+
+					"Or rollback to discard the experiment",
+				conflict.Src, conflict.Dst, len(conflict.Paths),
+				conflictReadingGuide(conflict),
+				conflict.Src, conflict.Dst)
 		}
 		return experimentResult{}, err
 	}
@@ -263,11 +403,22 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 	// this experiment heals on its next resolution instead — see
 	// repos.ResolveSessionBindingOnExperiment.
 	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
+	agent := b.Write().AgentBranch()
+	// A commit whose every conflict was resolved to the PARENT's side produces
+	// a tree identical to the parent's: no merge commit is written and the
+	// branch does not move. The experiment is still deleted, so the action did
+	// happen — but saying "merged into" would credit it with changes it did
+	// not make, and someone would go looking for a commit that never existed.
+	summary := fmt.Sprintf("experiment %q merged into %q (%s) and deleted; this session is back on %q",
+		name, agent, result.Mode, agent)
+	if result.Mode == store.ModeNoop {
+		summary = fmt.Sprintf(
+			"experiment %q added nothing to %q — the merged result was identical to it, so no commit was written and %q did not move. The experiment is deleted and this session is back on %q",
+			name, agent, agent, agent)
+	}
 	return experimentResult{
-		Branch: b.Write().AgentBranch(),
-		Summary: fmt.Sprintf(
-			"experiment %q merged into %q (%s) and deleted; this session is back on %q",
-			name, b.Write().AgentBranch(), result.Mode, b.Write().AgentBranch()),
+		Branch:  agent,
+		Summary: summary,
 	}, nil
 }
 

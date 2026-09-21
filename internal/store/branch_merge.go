@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -33,9 +34,24 @@ func (rh *repoHandler) mergeIntoBranch(
 	src, dst string,
 	strategy ConflictStrategy,
 ) (AgentReconcileResult, error) {
+	return rh.mergeIntoBranchResolved(ctx, src, dst, strategy, nil)
+}
+
+// mergeIntoBranchResolved is mergeIntoBranch with adjudications for paths that
+// would otherwise be refused. Everything else merges exactly as before: a
+// resolution is per-path and says nothing about any other path.
+//
+// It takes the DST lock, like mergeIntoBranch, and carries it through
+// notifyCommit (invariants/store/branch-lock-spans-notify).
+func (rh *repoHandler) mergeIntoBranchResolved(
+	ctx context.Context,
+	src, dst string,
+	strategy ConflictStrategy,
+	resolutions map[string]Resolution,
+) (AgentReconcileResult, error) {
 	unlock := rh.lockBranch(dst)
 	defer unlock()
-	return rh.mergeIntoBranchLocked(ctx, src, dst, strategy)
+	return rh.mergeIntoBranchLockedResolved(ctx, src, dst, strategy, resolutions)
 }
 
 // mergeIntoBranchLocked merges src into dst using the given conflict strategy
@@ -63,6 +79,15 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 	src, dst string,
 	strategy ConflictStrategy,
 ) (AgentReconcileResult, error) {
+	return rh.mergeIntoBranchLockedResolved(ctx, src, dst, strategy, nil)
+}
+
+func (rh *repoHandler) mergeIntoBranchLockedResolved(
+	ctx context.Context,
+	src, dst string,
+	strategy ConflictStrategy,
+	resolutions map[string]Resolution,
+) (AgentReconcileResult, error) {
 	if strategy == "" {
 		strategy = StrategyLocalWins
 	}
@@ -89,6 +114,12 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 	dstHash := dstRef.Hash()
 
 	if srcHash == dstHash {
+		// Nothing to merge means nothing conflicted, so every resolution the
+		// caller sent adjudicated nothing. This return never reaches the tree
+		// walk, which is why the check is repeated here rather than left to it.
+		if err := noLeftoverResolutions(resolutions, nil); err != nil {
+			return AgentReconcileResult{}, err
+		}
 		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
 	}
 
@@ -106,6 +137,11 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: check src ancestor: %w", err)
 	}
 	if isSrcAncestor {
+		// src is already contained in dst: nothing to merge, so nothing
+		// conflicted and any resolution adjudicated nothing.
+		if err := noLeftoverResolutions(resolutions, nil); err != nil {
+			return AgentReconcileResult{}, err
+		}
 		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
 	}
 
@@ -114,6 +150,12 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: check dst ancestor: %w", err)
 	}
 	if isDstAncestor {
+		// A fast-forward takes src wholesale: nothing conflicted, so a
+		// resolution here adjudicated nothing. Checked BEFORE the ref moves —
+		// a rejected call must leave the branch exactly where it was.
+		if err := noLeftoverResolutions(resolutions, nil); err != nil {
+			return AgentReconcileResult{}, err
+		}
 		newRef := plumbing.NewHashReference(dstRefName, srcHash)
 		if err := rh.gits.SetReference(newRef); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward ref: %w", err)
@@ -140,7 +182,22 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 	}
 	baseCommit := bases[0]
 
-	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, strategy)
+	// EVERY resolution is checked against the real conflict set BEFORE the
+	// merge that consumes them. Doing it inside the walk cannot be complete:
+	// a path only DST changed never appears in DiffTree(base, src), so the
+	// walk never sees it and a resolution naming it would be silently
+	// dropped — leaving the caller believing it settled something it did not.
+	if len(resolutions) > 0 {
+		detected, derr := rh.detectConflicts(ctx, baseCommit, srcCommit, dstCommit)
+		if derr != nil {
+			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: detect conflicts: %w", derr)
+		}
+		if err := noLeftoverResolutions(resolutions, detected); err != nil {
+			return AgentReconcileResult{}, err
+		}
+	}
+
+	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, strategy, resolutions)
 	if err != nil {
 		// A refusal is not a malfunction: name the branches on the typed
 		// error and return it UNWRAPPED in shape, so errors.As reaches it and
@@ -148,6 +205,13 @@ func (rh *repoHandler) mergeIntoBranchLocked(
 		var conflict *MergeConflictError
 		if errors.As(err, &conflict) {
 			conflict.Src, conflict.Dst = src, dst
+			// The three commits the caller reads each conflicting fact at.
+			// Attached here rather than deeper because this is the frame that
+			// knows all three, and a refusal without them leaves the caller
+			// unable to see the versions that made the path a conflict.
+			conflict.BaseCommit = baseCommit.Hash.String()
+			conflict.SrcCommit = srcCommit.Hash.String()
+			conflict.DstCommit = dstCommit.Hash.String()
 			log.Info().Str("src", src).Str("dst", dst).
 				Strs("paths", conflict.Paths).Msg("mergeIntoBranch: refused (conflicting paths)")
 			return AgentReconcileResult{}, conflict
@@ -238,7 +302,15 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 	ctx context.Context,
 	baseCommit, srcCommit, dstCommit *object.Commit,
 	strategy ConflictStrategy,
+	resolutions map[string]Resolution,
 ) (plumbing.Hash, error) {
+	// Resolutions adjudicate paths that StrategyRefuse would otherwise refuse.
+	// They are meaningless to a strategy that already picks a side, and
+	// accepting them there would quietly imply an adjudication the caller did
+	// not get.
+	if len(resolutions) > 0 && strategy != StrategyRefuse {
+		return plumbing.ZeroHash, fmt.Errorf("merge: resolutions are only valid with %q, got %q", StrategyRefuse, strategy)
+	}
 	baseTree, err := baseCommit.Tree()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("base tree: %w", err)
@@ -267,6 +339,10 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 	// Sorted at the end so the reported set — and any test asserting it — does
 	// not depend on DiffTree's walk order.
 	var conflicts []string
+	// Conflicting paths with NO version at the merge base — both sides added
+	// them. Tracked separately because a reader must not be sent to read a
+	// base version that does not exist (see MergeConflictError.PathsWithoutBase).
+	var noBase []string
 
 	for _, change := range changes {
 		action, err := change.Action()
@@ -290,7 +366,18 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 				// addition falls through and is applied like anywhere else —
 				// refuse aborts on conflicts, it does not decline clean work.
 				if dstBlob, dstHas := treeBlobHash(dstTree, path); dstHas && dstBlob != blobHash {
-					conflicts = append(conflicts, path)
+					res, ok := resolutions[path]
+					if !ok {
+						conflicts = append(conflicts, path)
+						// A dual add: src and dst both created this path, so
+						// the base has no version of it.
+						noBase = append(noBase, path)
+						continue
+					}
+					currentTree, err = rh.applyResolution(currentTree, path, res, blobHash, false)
+					if err != nil {
+						return plumbing.ZeroHash, err
+					}
 					continue
 				}
 			}
@@ -320,7 +407,18 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 			}
 
 			if conflict && strategy == StrategyRefuse {
-				conflicts = append(conflicts, path)
+				res, ok := resolutions[path]
+				if !ok {
+					conflicts = append(conflicts, path)
+					if !baseHas {
+						noBase = append(noBase, path)
+					}
+					continue
+				}
+				currentTree, err = rh.applyResolution(currentTree, path, res, blobHash, false)
+				if err != nil {
+					return plumbing.ZeroHash, err
+				}
 				continue
 			}
 			if conflict && strategy == StrategyLocalWins {
@@ -353,7 +451,18 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 
 			conflict := baseHas && dstHashAtPath != baseHash
 			if conflict && strategy == StrategyRefuse {
-				conflicts = append(conflicts, path)
+				res, ok := resolutions[path]
+				if !ok {
+					conflicts = append(conflicts, path)
+					// A Delete conflict requires baseHas, so the base always
+					// has a version here — nothing to record.
+					continue
+				}
+				// src DELETED this path, so "take src" means delete it.
+				currentTree, err = rh.applyResolution(currentTree, path, res, plumbing.ZeroHash, true)
+				if err != nil {
+					return plumbing.ZeroHash, err
+				}
 				continue
 			}
 			if conflict && strategy == StrategyLocalWins {
@@ -387,12 +496,113 @@ func (rh *repoHandler) mergeTreesWithStrategy(
 		// created, no ref was moved, and the caller returns before it would
 		// have been. Sorted so the reported set is deterministic.
 		sort.Strings(conflicts)
+		sort.Strings(noBase)
 		// Src/Dst are filled in by the caller, which is where the branch names
 		// live; this layer knows only commits.
-		return plumbing.ZeroHash, &MergeConflictError{Paths: conflicts}
+		//
+		// Note the set is only what is STILL unresolved: a retry that
+		// adjudicates two of three paths is told about the third alone, not
+		// about all three again. Being re-told about work already done is how
+		// a caller concludes its resolutions were ignored.
+		return plumbing.ZeroHash, &MergeConflictError{Paths: conflicts, PathsWithoutBase: noBase}
 	}
 
 	return currentTree.Hash, nil
+}
+
+// detectConflicts runs the refusing walk with NO resolutions to learn which
+// paths actually conflict. It writes nothing: the tree it builds is discarded,
+// exactly as a refused merge discards its own.
+func (rh *repoHandler) detectConflicts(
+	ctx context.Context,
+	baseCommit, srcCommit, dstCommit *object.Commit,
+) (map[string]bool, error) {
+	_, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, StrategyRefuse, nil)
+	if err == nil {
+		return map[string]bool{}, nil // clean merge: nothing conflicts
+	}
+	var conflict *MergeConflictError
+	if !errors.As(err, &conflict) {
+		return nil, err
+	}
+	set := make(map[string]bool, len(conflict.Paths))
+	for _, p := range conflict.Paths {
+		set[p] = true
+	}
+	return set, nil
+}
+
+// noLeftoverResolutions rejects resolutions for paths that did not conflict.
+//
+// A caller that resolves a path which is not in conflict believes the merge is
+// something other than it is. Ignoring the entry would let it conclude it had
+// settled that path — so it is an error naming exactly which ones.
+func noLeftoverResolutions(resolutions map[string]Resolution, conflicts map[string]bool) error {
+	var leftover []string
+	for path := range resolutions {
+		if !conflicts[path] {
+			leftover = append(leftover, path)
+		}
+	}
+	if len(leftover) == 0 {
+		return nil
+	}
+	sort.Strings(leftover)
+	return fmt.Errorf("merge: resolution given for %d path(s) that did not conflict: %s",
+		len(leftover), strings.Join(leftover, ", "))
+}
+
+// applyResolution writes one adjudicated path into the tree being built.
+//
+// srcBlob is what src made of the path and srcDeleted says src removed it, so
+// "take src" means the same thing in every arm — including the one where src's
+// version is absence.
+//
+// An empty Resolution is an ERROR, never a default. A caller that names a path
+// without naming an answer has not adjudicated it, and picking a side for them
+// is precisely the silent resolution StrategyRefuse exists to prevent.
+func (rh *repoHandler) applyResolution(
+	currentTree *object.Tree,
+	path string,
+	res Resolution,
+	srcBlob plumbing.Hash,
+	srcDeleted bool,
+) (*object.Tree, error) {
+	switch {
+	case res.Body != nil:
+		blobHash, err := writeBlobToStore(rh.gits, res.Body)
+		if err != nil {
+			return nil, fmt.Errorf("resolution body for %q: %w", path, err)
+		}
+		return rh.setPath(currentTree, path, blobHash)
+
+	case res.Side == ResolveSrc:
+		if srcDeleted {
+			newRoot, err := deleteFromTree(rh.gits, currentTree, path)
+			if err != nil {
+				return nil, fmt.Errorf("resolution src-delete %q: %w", path, err)
+			}
+			return object.GetTree(rh.gits, newRoot)
+		}
+		return rh.setPath(currentTree, path, srcBlob)
+
+	case res.Side == ResolveDst:
+		// dst's version is already what currentTree holds — the resolution is
+		// to leave it alone. Returning the tree unchanged is the whole action.
+		return currentTree, nil
+
+	default:
+		return nil, fmt.Errorf("resolution for %q names neither a side nor a body", path)
+	}
+}
+
+// setPath puts blobHash at path in the tree and reloads it.
+func (rh *repoHandler) setPath(currentTree *object.Tree, path string, blobHash plumbing.Hash) (*object.Tree, error) {
+	newRoot, err := buildTree(rh.gits, currentTree, path, blobHash)
+	if err != nil {
+		return nil, fmt.Errorf("apply resolution %q: %w", path, err)
+	}
+	return object.GetTree(rh.gits, newRoot)
 }
 
 // treeBlobHash looks up path in tree. Returns (hash, true) if the path

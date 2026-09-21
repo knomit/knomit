@@ -1261,6 +1261,12 @@ func TestRunInit_ExistingClaudeMd_OlderMarker_ReplacedInPlace(t *testing.T) {
 		// every string — and the check would pass while testing nothing.
 		t.Fatalf("template marker %q carries no version token", blockMarkerCurrent)
 	}
+	if target == "v3" {
+		// The fixture above is v3. If the template ever regressed to v3 the
+		// loop would assert the same token twice and pass without the block
+		// having been upgraded at all.
+		t.Fatalf("template marker is %q, the same version as the stale fixture: this test cannot detect an upgrade", target)
+	}
 	for _, want := range []string{"v3", target} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary %q does not name version %q", out, want)

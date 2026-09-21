@@ -10,6 +10,8 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -188,6 +190,20 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 		name := chi.URLParam(r, "name")
 		ri := repos.RepoFromContext(r.Context())
 
+		// REST takes the same resolutions as the MCP tool — the mirrored
+		// surfaces must not disagree about what commit MEANS. It is a body on
+		// a POST, optional and absent for an ordinary commit.
+		resolutions, perr := decodeResolutions(r)
+		if perr != nil {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid resolutions", perr.Error(), r.URL.Path)
+			return
+		}
+		if len(resolutions) > 0 && action != "commit" {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid resolutions",
+				"resolutions settle a refused commit and are meaningless to "+action, r.URL.Path)
+			return
+		}
+
 		var (
 			res store.AgentReconcileResult
 			err error
@@ -195,7 +211,7 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			switch action {
 			case "commit":
-				res, err = svc.Experiments().CommitExperiment(r.Context(), name)
+				res, err = svc.Experiments().CommitExperiment(r.Context(), name, resolutions)
 			case "sync":
 				res, err = svc.Experiments().SyncExperiment(r.Context(), name)
 			case "rollback":
@@ -248,6 +264,57 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 // that the experiment's version of exactly these facts be overwritten
 // unseen — which is why the UI has no sync control at all. Resolution needs
 // all three versions, and that is an agent's job through knomit_experiment.
+// decodeResolutions reads the optional resolutions body of a commit.
+//
+// "ours"/"theirs" mean the same thing here as on the MCP tool — ours is the
+// EXPERIMENT (the merge source), theirs is the agent branch it lands on — for
+// the reason the store's ResolutionSide doc gives: the two surfaces are one
+// feature, and a client that learned the vocabulary from one must not be
+// surprised by the other.
+func decodeResolutions(r *http.Request) (map[string]store.Resolution, error) {
+	if r.Body == nil {
+		return nil, nil
+	}
+	var body struct {
+		Resolutions map[string]json.RawMessage `json:"resolutions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil // no body at all: an ordinary commit
+		}
+		return nil, fmt.Errorf("body is not JSON: %w", err)
+	}
+	if len(body.Resolutions) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]store.Resolution, len(body.Resolutions))
+	for path, raw := range body.Resolutions {
+		var side string
+		if err := json.Unmarshal(raw, &side); err == nil {
+			switch side {
+			case "ours":
+				out[path] = store.Resolution{Side: store.ResolveSrc}
+			case "theirs":
+				out[path] = store.Resolution{Side: store.ResolveDst}
+			default:
+				return nil, fmt.Errorf("resolution for %q must be \"ours\", \"theirs\", or {\"body\": \"...\"}, got %q", path, side)
+			}
+			continue
+		}
+		var obj struct {
+			Body *string `json:"body"`
+		}
+		if err := json.Unmarshal(raw, &obj); err != nil || obj.Body == nil {
+			return nil, fmt.Errorf("resolution for %q must be \"ours\", \"theirs\", or {\"body\": \"...\"}", path)
+		}
+		if *obj.Body == "" {
+			return nil, fmt.Errorf("resolution body for %q is empty; to drop the fact, retract it instead", path)
+		}
+		out[path] = store.Resolution{Body: []byte(*obj.Body)}
+	}
+	return out, nil
+}
+
 func writeExperimentError(w http.ResponseWriter, r *http.Request, title string, err error) {
 	var conflict *store.MergeConflictError
 	if errors.As(err, &conflict) {
