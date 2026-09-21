@@ -264,6 +264,31 @@ describe('TopBar desktop window drag', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it('the branch chip joins the no-drag set ONLY once it opens the picker', () => {
+    // The chip used to be inline text and had to drag (the test above still
+    // pins that for the label form). Given onEnterBranch it becomes a real
+    // control, and an interactive element inside the title bar must be
+    // excluded from the drag region or its click is swallowed by the drag.
+    // Asserting BOTH directions is the point: a chip that always dragged
+    // would have an unclickable picker, and one that never dragged would
+    // punch a dead hole in the title bar for everyone without a picker.
+    const { unmount } = render(
+      <TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300}
+        onEnterBranch={vi.fn()} />,
+    );
+    const chip = screen.getByTestId('toknomitr-branch');
+    expect(chip.tagName).toBe('BUTTON');
+    fireEvent.mouseDown(chip);
+    expect(post).not.toHaveBeenCalled();
+    unmount();
+
+    render(<TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);
+    const label = screen.getByTestId('toknomitr-branch');
+    expect(label.tagName).toBe('SPAN');
+    fireEvent.mouseDown(label);
+    expect(post).toHaveBeenCalledWith('wails:drag');
+  });
+
   it('does nothing outside desktop mode', () => {
     delete w.__KNOMIT_DESKTOP__;
     render(<TopBar state={baseState} repos={repos} dispatch={vi.fn()} onManageRepos={() => {}} leftWidth={300} />);

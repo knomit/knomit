@@ -15,6 +15,7 @@ import { adoptAPIBase, isDesktopBooting, pollBootStatus } from './bootStatus';
 import { pickRepo, loadLastContext, saveLastContext } from './repoSelection';
 import { useRepoCreates, activeCreateByRepo } from './useRepoCreates';
 import { TopBar } from './TopBar';
+import { ExperimentBand } from './ExperimentBand';
 import { RepoManager } from './RepoManager';
 import { ErrorBoundary } from './ErrorBoundary';
 import { FilterBar } from './FilterBar';
@@ -1204,6 +1205,23 @@ export default function App() {
             </ErrorBoundary>
           ) : undefined} />
       </ErrorBoundary>
+      {/* The experiment band. Hidden while Manage owns the window: the
+          experiments panel is on screen there with the same three actions,
+          and a band above it would offer them twice for the same experiment.
+          Its presence is keyed on state.experiment — the branch row's own
+          object — never on an `exp/` prefix, for the reason the server gives:
+          the record is what makes a branch an experiment, the name is only a
+          convention. */}
+      {state.experiment && !manageOpen && (
+        <ErrorBoundary variant="inline" label="The experiment band hit an error">
+          <ExperimentBand
+            repo={state.repo}
+            branch={state.branch}
+            experiment={state.experiment}
+            onEnterBranch={enterBranch}
+          />
+        </ErrorBoundary>
+      )}
       {/* THE CREATE BANNER REPLACES THE INDEX BANNER, it does not stack with
           it. While a job is still working on this repo, "Indexing…" is a true
           statement about a detail and a misleading one about the whole: the

@@ -9,7 +9,7 @@ import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { useRepoCreates, activeCreateByRepo, createFlag } from './useRepoCreates';
 import { useDismiss } from './hooks';
-import { BookIcon, GitBranchIcon, ChevronDownIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
+import { BookIcon, GitBranchIcon, ChevronDownIcon, FlaskIcon, GearIcon, ExitIcon, LayersIcon } from './icons';
 import { LENS, repoHue, shortBranch, noMouseFocus } from './utils';
 import { MountsPicker } from './MountsPicker';
 
@@ -316,40 +316,67 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                  target" in this UI (the Agent-branch card, the write mount
                  tag), and inside an experiment that is exactly what this
                  branch is — so the marker is a change of state on the chip
-                 the user already reads, not a second badge somewhere else. */
-              <button
-                ref={branchBtnRef}
-                data-testid="toknomitr-branch"
-                data-experiment={state.experiment ? state.experiment.name : undefined}
-                onClick={onEnterBranch ? toggleBranchMenu : undefined}
-                aria-haspopup={onEnterBranch ? 'listbox' : undefined}
-                aria-expanded={onEnterBranch ? branchOpen : undefined}
-                title={state.experiment
-                  ? `Experiment ${state.experiment.name} — forked from ${state.experiment.parent}`
-                  : state.branch}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5, minWidth: 0,
-                  fontSize: 12, fontFamily: 'inherit', lineHeight: 1.5,
-                  color: state.experiment ? '#7c9' : '#8af',
-                  background: state.experiment ? '#11201a' : 'transparent',
-                  border: '1px solid ' + (state.experiment ? '#2a4a3a' : 'transparent'),
-                  borderRadius: 3, padding: state.experiment ? '1px 6px' : '1px 2px',
-                  cursor: onEnterBranch ? 'pointer' : 'default',
-                  ...noDrag,
-                }}
-              >
-                <GitBranchIcon color="currentColor" size={13} />
-                {state.experiment && (
-                  <span data-testid="toknomitr-experiment-marker" style={{
-                    fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 1,
-                    border: '1px solid #2a4a3a', borderRadius: 2, padding: '0 3px',
-                  }}>exp</span>
-                )}
-                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {state.experiment ? state.experiment.name : shortBranch(state.branch)}
-                </span>
-                <ChevronDownIcon color="currentColor" size={11} />
-              </button>
+                 the user already reads, not a second badge somewhere else.
+
+                 The chip does NOT say the word "experiment" (user ruling
+                 2026-09-20): while browsing, the name is the information and
+                 the label was noise on every screen. The FLASK carries that
+                 meaning instead — which is why the glyph swaps rather than
+                 sitting beside the branch icon, and why the word stays in
+                 title/aria-label, where a hover or a screen reader still
+                 reaches it. */
+              /* A BUTTON only when it actually opens the picker. Without
+                 onEnterBranch the chip is a passive label, and a <button>
+                 there would be a control that does nothing — and, because
+                 interactive elements are excluded from the window drag
+                 region, it would also punch a dead hole in the desktop
+                 title bar exactly where the old inline label used to drag.
+                 So the element and the no-drag tag follow the behaviour. */
+              (() => {
+                const interactive = Boolean(onEnterBranch);
+                const label = state.experiment ? state.experiment.name : shortBranch(state.branch);
+                const common = {
+                  'data-testid': 'toknomitr-branch',
+                  // BOTH are required and they are not redundant: the CSS var
+                  // tells wails, but startWindowDrag bails on
+                  // closest('[data-nodrag]') — the ATTRIBUTE. With the var
+                  // alone the mousedown starts a window drag and eats the
+                  // click, so the picker barely opens on desktop.
+                  'data-nodrag': interactive ? '' : undefined,
+                  'data-experiment': state.experiment ? state.experiment.name : undefined,
+                  title: state.experiment
+                    ? `Experiment ${state.experiment.name} — forked from ${state.experiment.parent}`
+                    : state.branch,
+                  'aria-label': state.experiment
+                    ? `Experiment ${state.experiment.name}, forked from ${state.experiment.parent}`
+                    : undefined,
+                  style: {
+                    display: 'flex', alignItems: 'center', gap: 5, minWidth: 0,
+                    fontSize: 12, fontFamily: 'inherit', lineHeight: 1.5,
+                    color: state.experiment ? '#7c9' : '#8af',
+                    background: state.experiment ? '#11201a' : 'transparent',
+                    border: '1px solid ' + (state.experiment ? '#2a4a3a' : 'transparent'),
+                    borderRadius: 3, padding: state.experiment ? '1px 6px' : '1px 2px',
+                    cursor: interactive ? 'pointer' : 'default',
+                    ...(interactive ? noDrag : {}),
+                  } as CSSProperties,
+                };
+                const inner = (
+                  <>
+                    {state.experiment
+                      ? <FlaskIcon color="currentColor" size={13} />
+                      : <GitBranchIcon color="currentColor" size={13} />}
+                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                    {/* The caret predates the picker on purpose: the affordance
+                        shipped with the layout so switching branches became a
+                        behaviour change rather than a visual one. */}
+                    <ChevronDownIcon color="currentColor" size={11} />
+                  </>
+                );
+                return interactive
+                  ? <button ref={branchBtnRef} onClick={toggleBranchMenu} aria-haspopup="listbox" aria-expanded={branchOpen} {...common}>{inner}</button>
+                  : <span {...common}>{inner}</span>;
+              })()
             )}
           </>
         )}
@@ -443,7 +470,7 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
 
           {branchRows.length > 0 && (
             <div style={groupHeaderStyle}>
-              <GitBranchIcon color="#6a8" size={11} /> Experiments
+              <FlaskIcon color="#6a8" size={11} /> Experiments
             </div>
           )}
           {branchRows.map(row => {
@@ -475,19 +502,14 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
             );
           })}
 
-          <div style={{ borderTop: '1px solid #262626', marginTop: 4, paddingTop: 4 }}>
-            <div
-              role="option" aria-selected={false}
-              data-testid="toknomitr-branch-new"
-              onClick={() => { setBranchOpen(false); onManageRepos(); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, color: '#6ea8fe' }}
-              onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-            >
-              <span style={{ width: 10 }} />
-              <span>New experiment…</span>
+          {/* No "New experiment" entry: creation is MCP-only (user ruling
+              2026-09-20). An agent opens one with knomit_experiment; this
+              picker only moves between the branches that already exist. */}
+          {branchRows.length === 0 && (
+            <div data-testid="toknomitr-branch-no-experiments" style={{ padding: '6px 12px', fontSize: 11, color: '#6a7078', maxWidth: 260, lineHeight: 1.45 }}>
+              No experiments. Agents open them with knomit_experiment.
             </div>
-          </div>
+          )}
         </div>,
         document.body,
       )}
