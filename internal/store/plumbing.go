@@ -17,6 +17,30 @@ import (
 	storegit "knomit/internal/store/git"
 )
 
+// writeBlobToStore stores content as a loose blob and returns its hash.
+//
+// Split out of writeFileToStore because a merge resolution needs the BLOB
+// only: the tree is being assembled entry by entry by the merge itself, and
+// there is no commit until every path has been decided.
+func writeBlobToStore(s *storegit.Storer, content []byte) (plumbing.Hash, error) {
+	obj := s.NewEncodedObject()
+	obj.SetType(plumbing.BlobObject)
+	w, err := obj.Writer()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("writeBlobToStore: blob writer: %w", err)
+	}
+	if _, err := w.Write(content); err != nil {
+		w.Close()
+		return plumbing.ZeroHash, fmt.Errorf("writeBlobToStore: blob write: %w", err)
+	}
+	w.Close()
+	hash, err := s.SetEncodedObject(obj)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("writeBlobToStore: store blob: %w", err)
+	}
+	return hash, nil
+}
+
 // writeFileToStore creates a blob+tree+commit for path/content.
 // parentCommitHash is ZeroHash for the initial commit (no parent).
 // Returns (commitHash, blobHash, error).

@@ -122,16 +122,88 @@ func validateExperimentName(name string) error {
 // resolving a conflict: the full set of paths both sides changed relative to
 // the merge base, with NOTHING written. It is a typed error because the caller
 // has to render the paths — "there was a conflict" is not actionable, and the
-// only two exits (sync, or rollback) are chosen by looking at which paths.
+// resolution is chosen by looking at which paths.
+//
+// It also carries the THREE COMMITS the caller needs to read each fact at.
+// Without them a caller is told a path conflicted and has no way to see the
+// three versions that made it one: the fork point, what the experiment made of
+// it, and what the parent made of it. An agent resolving this reads the fact
+// at each (knomit_explain takes a commit), which is the whole difference
+// between adjudicating a merge and guessing at one.
 type MergeConflictError struct {
 	Src   string
 	Dst   string
 	Paths []string
+
+	// BaseCommit is the ACTUAL merge base — dst.MergeBase(src) — and not the
+	// experiment's recorded fork_commit. After a sync the two differ, and the
+	// recorded fork would hand the reader a base version the merge did not
+	// use, which is worse than no base at all: it looks authoritative.
+	//
+	// SrcCommit and DstCommit are the two tips as they stood when the merge
+	// was refused. All three are full hashes, empty only if the merge failed
+	// before they were resolved.
+	BaseCommit string
+	SrcCommit  string
+	DstCommit  string
+
+	// PathsWithoutBase are the conflicting paths that DO NOT EXIST at the
+	// merge base — both sides added them independently. There is no third
+	// version to read for these, and saying so matters: knomit_explain for a
+	// path absent at a commit does not error, it falls back to the nearest
+	// earlier version and answers with a DIFFERENT fact. A reader told to
+	// "read the base version" of a dual-add would be shown something
+	// unrelated and have no way to tell.
+	PathsWithoutBase []string
+}
+
+// HasBase reports whether the given conflicting path has a base version worth
+// reading.
+func (e *MergeConflictError) HasBase(path string) bool {
+	for _, p := range e.PathsWithoutBase {
+		if p == path {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *MergeConflictError) Error() string {
 	return fmt.Sprintf("merge %s into %s refused: %d conflicting path(s): %s",
 		e.Src, e.Dst, len(e.Paths), strings.Join(e.Paths, ", "))
+}
+
+// ResolutionSide names which side of a conflicting path survives.
+//
+// DELIBERATELY "src"/"dst" AND NOT "ours"/"theirs". Which branch is "ours"
+// depends on who is asking: an agent committing an experiment means the
+// EXPERIMENT by "ours", while git's own convention means the branch you are
+// merging INTO — and for an experiment commit those are opposite sides. The
+// translation happens once, at the tool boundary where the asker is known,
+// and everything below here says src and dst, which cannot be read two ways.
+// This is the same trap conventions/store/sync/strategy-local-wins records for
+// RemoteWins ("src wins", not "the remote wins").
+type ResolutionSide string
+
+const (
+	// ResolveSrc takes the merge SOURCE's version. For an experiment commit
+	// (exp -> parent) that is the experiment's.
+	ResolveSrc ResolutionSide = "src"
+	// ResolveDst keeps the merge DESTINATION's version. For an experiment
+	// commit that is the parent branch's.
+	ResolveDst ResolutionSide = "dst"
+)
+
+// Resolution adjudicates ONE conflicting path.
+//
+// Body wins over Side when set, and is how a caller lands content that is
+// neither side — the merged text. A nil Body with an empty Side is not a
+// resolution and is rejected rather than defaulted: silently picking a side
+// for a caller who named a path but not an answer is exactly the adjudication
+// StrategyRefuse exists to refuse.
+type Resolution struct {
+	Side ResolutionSide
+	Body []byte
 }
 
 // Experiments returns the experiment lifecycle sub-service.
@@ -339,7 +411,7 @@ func (rh *repoHandler) checkExperimentParentCurrent(ctx context.Context, exp Exp
 // refuse strategy collects the paths inside the tree merge, which runs before
 // any ref write. The only two exits from that state are SyncExperiment and
 // RollbackExperiment.
-func (rh *repoHandler) CommitExperiment(ctx context.Context, name string) (AgentReconcileResult, error) {
+func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolutions map[string]Resolution) (AgentReconcileResult, error) {
 	exp, ok, err := rh.GetExperiment(ctx, name)
 	if err != nil {
 		return AgentReconcileResult{}, err
@@ -354,7 +426,12 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string) (Agent
 	// mergeIntoBranch takes the DST lock — the parent's — which is what
 	// serialises this against a concurrent fact write on the agent branch, and
 	// it carries that lock through notifyCommit.
-	res, err := rh.mergeIntoBranch(ctx, exp.Branch(), exp.Parent, StrategyRefuse)
+	// STILL ONE MERGE. Resolutions are an input to it, not a second pass over
+	// the tree afterwards: a path the caller adjudicated is decided inside the
+	// same three-way walk that would otherwise have refused it, so everything
+	// else merges exactly as it did before and a path with no resolution is
+	// refused by construction rather than by falling through to a default.
+	res, err := rh.mergeIntoBranchResolved(ctx, exp.Branch(), exp.Parent, StrategyRefuse, resolutions)
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}
