@@ -58,9 +58,6 @@ type experimentResult struct {
 	// Active is the experiment this session is in AFTER the call.
 	Active      string           `json:"active_experiment,omitempty"`
 	Experiments []experimentView `json:"experiments,omitempty"`
-	// ReconnectURL is set when the action could not move the caller because
-	// the mount is bound by its URL. Absent on the session-scoped mount.
-	ReconnectURL string `json:"reconnect_url,omitempty"`
 	// A refused commit is NOT a field here: it is a tool ERROR, because the
 	// action did not happen, and the conflicting paths are named in that
 	// error's text alongside the two ways out. A success-shaped result
@@ -306,24 +303,59 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 
 	res := experimentResult{Branch: exp.Branch(), Active: exp.Name}
 
-	// Moving the caller is only possible where the caller is named by a
-	// handle. On a URL-scoped mount the endpoint IS the selection, so the
-	// experiment exists but this session is still on the old branch — and
-	// saying so plainly matters more than the refusal would: an agent told
-	// only "created" will keep writing to the agent branch believing
-	// otherwise.
+	// WHERE THE CALLER IS NAMED decides how it gets moved. A handle names one
+	// logical caller on a shared connection; a URL-scoped mount names none, so
+	// there the session id plus the mount is the only pair available — and it
+	// is usable precisely because the URL has already fixed the repo, so the
+	// state can only choose a BRANCH within it. Migration 000008 carries that
+	// argument in full.
 	handle := bindingHandleFromContext(ctx)
 	if handle == "" {
-		res.ReconnectURL = experimentReconnectURL(b, exp.Name)
-		// Active is where this session IS, not what was just created — and on
-		// a URL-scoped mount those differ, which is the whole point of this
-		// branch. A caller already inside exp/a that opens exp/b is still in
-		// a; reporting "" would tell it it had left.
-		res.Active = active
+		sessionID, mountUID, plainMount := repos.MountSessionFromContext(ctx)
+
+		// NOT a plain-branch mount: the URL names the experiment it serves.
+		// Refused rather than silently ignored, because a caller that believed
+		// it had switched would attribute its next write to the wrong one.
+		//
+		// Decided by the MARKER, never by the binding's current branch: a
+		// session already inside an experiment on a plain mount has a binding
+		// whose write branch is an experiment, and reading that would refuse
+		// the perfectly ordinary act of opening a second one.
+		if !plainMount {
+			// Named from the ROUTE, not from b.WriteBranch(): that is "" on a
+			// mount this instance cannot write, so a URL naming `main` would
+			// otherwise produce a refusal that names no branch at all.
+			urlBranch, _ := repos.BranchFromContextOpt(ctx)
+			if urlBranch == "" {
+				urlBranch = b.WriteBranch()
+			}
+			if store.ExperimentBranch(exp.Name) == urlBranch {
+				res.Summary = fmt.Sprintf(
+					"experiment %q is open on branch %q, which is the experiment this endpoint already addresses — nothing changed.",
+					exp.Name, exp.Branch())
+				return res, nil
+			}
+			return experimentResult{}, fmt.Errorf(
+				"experiment %q was created, but this endpoint is bound to branch %q by its URL and cannot be switched. "+
+					"Only a mount that names this repo's own agent branch follows a session into an experiment: "+
+					"connect to the mount for %q, or to the agent branch's mount",
+				exp.Name, urlBranch, exp.Branch())
+		}
+		if sessionID == "" {
+			// FAIL CLOSED. Keying on an empty session id would put every
+			// anonymous caller of this mount into one shared experiment.
+			return experimentResult{}, fmt.Errorf(
+				"experiment %q was created, but this connection sent no MCP session id, so there is nothing to attach it to. "+
+					"Reconnect with a session, or bind on the unscoped mount",
+				exp.Name)
+		}
+		if err := setMountExperiment(ctx, mgr, sessionID, mountUID, exp.Name); err != nil {
+			return experimentResult{}, err
+		}
 		res.Summary = fmt.Sprintf(
-			"experiment %q is ready on branch %q, but THIS SESSION IS NOT INSIDE IT: this endpoint is bound by its URL. "+
-				"Reconnect to %s to work in it. Until then every write still goes to %q.",
-			exp.Name, exp.Branch(), res.ReconnectURL, b.WriteBranch())
+			"experiment %q is open on branch %q and THIS SESSION IS NOW INSIDE IT: every call on this connection now writes to %q, "+
+				"until you commit or roll back. No reconnect needed.",
+			exp.Name, exp.Branch(), exp.Branch())
 		return res, nil
 	}
 	if err := setHandleExperiment(ctx, mgr, handle, exp.Name); err != nil {
@@ -370,6 +402,7 @@ func experimentCommit(ctx context.Context, mgr *repos.Manager, svc *store.Servic
 	// this experiment heals on its next resolution instead — see
 	// repos.ResolveSessionBindingOnExperiment.
 	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
+	clearMountExperiment(ctx, mgr)
 	agent := b.Write().AgentBranch()
 	// A commit whose every conflict was resolved to the PARENT's side produces
 	// a tree identical to the parent's: no merge commit is written and the
@@ -399,6 +432,7 @@ func experimentRollback(ctx context.Context, mgr *repos.Manager, svc *store.Serv
 		return experimentResult{}, err
 	}
 	clearHandleExperiment(ctx, mgr, bindingHandleFromContext(ctx))
+	clearMountExperiment(ctx, mgr)
 	return experimentResult{
 		Branch: b.Write().AgentBranch(),
 		Summary: fmt.Sprintf(
@@ -428,27 +462,43 @@ func experimentSync(ctx context.Context, svc *store.Service, b *repos.Binding, n
 	}, nil
 }
 
-// experimentReconnectURL is the endpoint a URL-scoped caller should reconnect
-// to in order to work inside name.
-//
-// The two mounts are mirrored surfaces, so both spellings live here together
-// (kb/architecture/web/096bb34b): a repo mount carries the experiment as its
-// BRANCH segment, in the ":"-for-"/" form the branch middleware decodes, and a
-// lens mount carries it as its own segment because a lens pins a branch per
-// member and has no single branch to put in a path.
-// The "/api/v1" prefix is spelled here rather than imported: internal/web
-// imports internal/mcp, so the dependency cannot run the other way. Both
-// spellings are pinned against the REAL router by
-// web.TestExperiment_URLScopedOpenReturnsTheReconnectURL, which calls the URL
-// this returns and asserts it lands inside the experiment, and by
-// web.TestLensExperimentMount_RePinsOnlyTheWriteMember for the lens form. A
-// string that drifted from the route would fail there rather than in
-// production.
-func experimentReconnectURL(b *repos.Binding, name string) string {
-	if b.FromLens() {
-		return fmt.Sprintf("/api/v1/lenses/%s/experiments/%s/mcp", b.Name(), name)
+// setMountExperiment moves a URL-scoped session into an experiment. The mount
+// twin of setHandleExperiment, and it fails the same way: the experiment
+// exists either way, so a failure here must be REPORTED rather than swallowed —
+// a caller told it is inside would write its next fact to the branch the URL
+// names.
+func setMountExperiment(ctx context.Context, mgr *repos.Manager, sessionID, mountUID, name string) error {
+	if mgr == nil {
+		return errStoreUnavailable
 	}
-	return fmt.Sprintf("/api/v1/repos/%s/branches/exp:%s/mcp", b.Write().Name(), name)
+	st := mgr.ClientSessions()
+	if st == nil {
+		return errors.New("session store unavailable — the experiment exists, but this session could not be moved into it")
+	}
+	if err := st.SetMountExperiment(ctx, sessionID, mountUID, name, time.Now()); err != nil {
+		log.Warn().Err(err).Str("experiment", name).
+			Msg("knomit_experiment: recording the mount's experiment failed")
+		return errors.New("the experiment exists, but this session could not be moved into it; ask the operator to check the server log")
+	}
+	return nil
+}
+
+// clearMountExperiment puts a URL-scoped session back on the branch its URL
+// names. Best effort, like clearHandleExperiment: by the time it runs the
+// experiment is already gone from the store, so a failed clear self-corrects at
+// the next resolution, which finds nothing to apply.
+func clearMountExperiment(ctx context.Context, mgr *repos.Manager) {
+	sessionID, mountUID, ok := repos.MountSessionFromContext(ctx)
+	if !ok || mgr == nil {
+		return
+	}
+	st := mgr.ClientSessions()
+	if st == nil {
+		return
+	}
+	if err := st.ClearMountExperiment(ctx, sessionID, mountUID); err != nil {
+		log.Warn().Err(err).Msg("knomit_experiment: clearing the mount's experiment failed; it heals at the next resolution")
+	}
 }
 
 // setHandleExperiment moves the caller's handle into an experiment.

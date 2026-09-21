@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,6 +106,37 @@ var controlObjects = []string{
 	"client_session_bindings", "client_session_bindings_binding",
 	// handle_experiments has no index: it is read only by primary key.
 	"handle_experiments",
+	// mount_experiments likewise: every read is by its full (session_id,
+	// mount_uid) primary key, and the one listing is per session.
+	"mount_experiments",
+}
+
+// newestControlVersion is the highest numbered up-migration in the EMBEDDED
+// chain.
+//
+// Derived, never written as a literal. Four assertions here mean "Control left
+// the database at the newest version", and when each spelled that as a number
+// every legitimate chain bump failed all four for the wrong reason — with the
+// tempting fix, editing the literals, pinning them to a version the chain no
+// longer ends at. Same trap as the CLAUDE.md block-marker test.
+func newestControlVersion(t *testing.T) int {
+	t.Helper()
+	entries, err := controlFS.ReadDir("control")
+	require.NoError(t, err)
+	newest := 0
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".up.sql") {
+			continue
+		}
+		n, cerr := strconv.Atoi(strings.SplitN(name, "_", 2)[0])
+		require.NoError(t, cerr, "migration %q does not start with a number", name)
+		if n > newest {
+			newest = n
+		}
+	}
+	require.Greater(t, newest, 0, "no up-migrations found in the embedded control chain")
+	return newest
 }
 
 // A fresh home gets the whole control schema and lands on the newest version.
@@ -116,7 +148,7 @@ func TestControl_FreshDatabase(t *testing.T) {
 		require.True(t, objectExists(t, db, name), "expected %q to exist", name)
 	}
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 7, v)
+	require.Equal(t, newestControlVersion(t), v)
 	require.False(t, dirty)
 }
 
@@ -160,7 +192,7 @@ CREATE TABLE lens_reads (
 	require.NoError(t, Control(db))
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 7, v)
+	require.Equal(t, newestControlVersion(t), v)
 	require.False(t, dirty)
 
 	var name string
@@ -383,7 +415,7 @@ func TestControl_RecoversDirtyVersion(t *testing.T) {
 	require.NoError(t, Control(db), "a dirty control.db must self-heal")
 
 	v, dirty := controlVersion(t, db)
-	require.Equal(t, 7, v)
+	require.Equal(t, newestControlVersion(t), v)
 	require.False(t, dirty)
 	require.True(t, objectExists(t, db, "repos"))
 }
@@ -414,7 +446,7 @@ func TestControl_BindingHandlesUpDown(t *testing.T) {
 	require.NoError(t, Control(db))
 	require.True(t, objectExists(t, db, "binding_handles"))
 	v, dirty = controlVersion(t, db)
-	require.Equal(t, 7, v)
+	require.Equal(t, newestControlVersion(t), v)
 	require.False(t, dirty)
 }
 
