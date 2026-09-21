@@ -80,11 +80,13 @@ func (s *Server) NewAPIRouter() chi.Router {
 			Msg("mcp: request in")
 		h.ServeHTTP(mw, req)
 		// The PATH is what the client addressed; `branch` is what was actually
-		// served, and it is logged ONLY when the two differ — which is exactly
-		// when the path alone misleads. A session inside an experiment writes
-		// to exp/<name> while every log line still reads
-		// …/branches/agent:…/mcp, so someone reading the log to find out where
-		// a fact went is told the wrong answer with no hint that it is wrong.
+		// served, and it is logged whenever the URL does not ALREADY NAME the
+		// served branch — which is exactly when the path alone misleads. A
+		// session inside an experiment writes to exp/<name> while every log
+		// line still reads …/branches/agent:…/mcp, so someone reading the log
+		// to find out where a fact went is told the wrong answer with no hint
+		// that it is wrong. A lens mount has no branch in its URL at all, so
+		// the field is always present there.
 		//
 		// The path is never rewritten. It stays the address the caller used,
 		// because that is what they can correlate with their own config.

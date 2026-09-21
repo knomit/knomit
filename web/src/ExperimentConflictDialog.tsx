@@ -114,7 +114,7 @@ export function ExperimentConflictDialog({ name, repo, parent, paths, busy = fal
           <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <li>
               Point a bridge at this repository — in your MCP config:
-              <pre style={codeBlock}>{`"knomit": {\n  "command": "kb",\n  "args": ["--repo", "${repo}"]\n}`}</pre>
+              <pre style={codeBlock}>{`"knomit": {\n  "command": "/path/to/kb",\n  "args": ["--repo", "${repo}"]\n}`}</pre>
             </li>
             <li>
               Enter the experiment. No reconnect is needed — the session moves on the spot:
