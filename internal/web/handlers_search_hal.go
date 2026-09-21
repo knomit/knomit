@@ -138,9 +138,32 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 			Limit:          limit,
 		}
 
+		// since_fork narrows the search to what this experiment changed. It is
+		// honoured HERE as well as on the facts collection because the Library
+		// switches between the two endpoints on its sort order alone: a filter
+		// that survived "recent" and silently vanished under "relevance" would
+		// widen the result set without saying so.
+		var empty bool
+		if qp.Get("since_fork") == "true" || qp.Get("since_fork") == "1" {
+			paths, ok := experimentChangedPaths(w, r, ri, branch)
+			if !ok {
+				return
+			}
+			if len(paths) == 0 {
+				empty = true
+			}
+			q.PathsIn = paths
+		}
+
 		log.Debug().Str("q", text).Str("branch", branch).Int("limit", limit).Msg("hal search")
 
-		results, err := provider.Search(r.Context(), ri, emb, branch, q)
+		var (
+			results []store.SearchResult
+			err     error
+		)
+		if !empty {
+			results, err = provider.Search(r.Context(), ri, emb, branch, q)
+		}
 		if err != nil {
 			log.Debug().Err(err).Msg("hal search failed")
 			writeStoreError(w, r, err, "Search failed", branch)

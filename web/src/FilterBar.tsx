@@ -613,6 +613,48 @@ export const FilterBar = memo(function FilterBar({ state, dispatch, onJumpTrail,
         )}
       </div>
 
+      {/* Since-fork toggle. A TOGGLE, not a removable chip, because it is not
+          a facet of the corpus: it exists only while the app is inside an
+          experiment, and a chip the user could drag into a saved filter would
+          outlive the branch that gives it meaning. It disappears with the
+          experiment, and the reducer drops the flag at the same moment. */}
+      {state.experiment && (
+        <span
+          data-testid="since-fork-toggle"
+          role="switch"
+          aria-checked={state.sinceFork}
+          aria-label="Show only facts changed in this experiment"
+          tabIndex={0}
+          onClick={() => dispatch({ type: 'SET_SINCE_FORK', value: !state.sinceFork })}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              dispatch({ type: 'SET_SINCE_FORK', value: !state.sinceFork });
+            }
+          }}
+          title={`Only the facts ${state.experiment.name} has changed since it forked ${state.experiment.parent}`}
+          style={{
+            background: state.sinceFork ? '#11201a' : 'transparent',
+            color: state.sinceFork ? '#7c9' : '#6a7078',
+            border: '1px solid ' + (state.sinceFork ? '#2a4a3a' : '#262c35'),
+            padding: '2px 8px',
+            borderRadius: 3,
+            fontSize: 11,
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            userSelect: 'none',
+          }}
+        >
+          <span aria-hidden style={{
+            width: 7, height: 7, borderRadius: '50%',
+            background: state.sinceFork ? '#7c9' : '#3a4048',
+          }} />
+          since fork
+        </span>
+      )}
+
       {/* Chips */}
       {state.filters.map((chip, i) => {
         // chipStyle carries the per-VALUE looks: a type's own colour and glyph,

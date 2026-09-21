@@ -270,6 +270,8 @@ function statusAction(s: Status): Action {
     indexDone: s.index_done,
     indexTotal: s.index_total,
     indexPercent: s.index_percent,
+    branchWritable: s.writable,
+    experiment: s.experiment ?? null,
   };
 }
 
@@ -1102,6 +1104,26 @@ export default function App() {
       .then(({ lenses: ls, repos: rs }) => { setLenses(ls); setRepos(rs); })
       .catch(() => {});
   }, [dispatch, isCurrentLens]);
+  /**
+   * enterBranch switches the whole UI to a branch of the current repo.
+   *
+   * Entering an experiment IS this and nothing more, which is the point: the
+   * branch row it fetches carries `writable` and `experiment`, so the
+   * read-only gate, the in-experiment marker and the since-fork filter all
+   * follow from one status read rather than from three flags set by hand.
+   *
+   * It leaves Manage for the same reason the Browse button does: the action
+   * changes what you are looking at, so staying in the manager would hide the
+   * result of the thing just clicked.
+   */
+  const enterBranch = useCallback((branch: string) => {
+    if (!branch) return;
+    closeRepoMgr();
+    api.status(stateRef.current.repo, branch)
+      .then(s => dispatch(statusAction(s)))
+      .catch(() => { /* the status poll re-reads; a failed switch leaves the old branch shown */ });
+  }, [closeRepoMgr]);
+
   const onRepoMgrBrowse = useCallback((ctx: BrowseContext) => {
     // A page's Browse button does TWO things — leaves Manage *and* switches the
     // browse surface. That is what separates it from the top bar's step-out,
@@ -1132,6 +1154,7 @@ export default function App() {
       <div data-testid="no-repos" style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', background: '#141414', color: '#eee', fontFamily: 'var(--k-font-body)', overflow: 'hidden' }}>
         <ErrorBoundary variant="inline" label="The top bar hit an error">
           <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch}
+            onEnterBranch={enterBranch}
             onManageRepos={toggleRepoMgr} manageOpen manageLocked leftWidth={leftPanelWidth} />
         </ErrorBoundary>
         <ErrorBoundary variant="inline" label="Manage hit an error" onReset={closeRepoMgr}>
@@ -1143,6 +1166,8 @@ export default function App() {
             hideRemoteConfig={state.serverReadOnly}
             onChanged={onRepoMgrChanged}
             onBrowse={onRepoMgrBrowse}
+            onEnterBranch={enterBranch}
+            currentBranch={state.branch}
           />
         </ErrorBoundary>
       </div>
@@ -1171,6 +1196,7 @@ export default function App() {
             trail breadcrumb takes that job below, and there is no filtering
             while anchored. Manage passes nothing either: it does not list facts. */}
         <TopBar state={state} repos={repos} lenses={lenses} dispatch={dispatch}
+          onEnterBranch={enterBranch}
           onManageRepos={toggleRepoMgr} manageOpen={manageOpen} manageBusy={manageBusy} leftWidth={leftPanelWidth}
           search={isLive(state) && !manageOpen ? (
             <ErrorBoundary variant="inline" label="Search hit an error">
@@ -1274,6 +1300,8 @@ export default function App() {
               hideRemoteConfig={state.serverReadOnly}
               onChanged={onRepoMgrChanged}
               onBrowse={onRepoMgrBrowse}
+              onEnterBranch={enterBranch}
+              currentBranch={state.branch}
               onBusyChange={setManageBusy}
             />
           </ErrorBoundary>

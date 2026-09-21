@@ -224,7 +224,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(RepoMiddleware(s.Manager))
 
-			r.Get("/", handleHALRepo(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled))
+			r.Get("/", handleHALRepo(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
 			r.Patch("/", handleHALRepoPatch(b))
 
 			// Inside the middleware group, unlike Archive: {repo} must exist
@@ -253,10 +253,29 @@ func (s *Server) NewAPIRouter() chi.Router {
 			// the BranchMiddleware subtree.
 			r.Get("/branches", handleHALBranches(b, p.branchesLister))
 
+			// Experiments hang off the REPO, not off a branch: an experiment
+			// IS a branch, so nesting it under /branches/{branch} would make
+			// its URL depend on which branch the caller happened to be on.
+			// `{name}` is the bare experiment name — the `exp/` prefix lives
+			// in the branch namespace and would need escaping here.
+			r.Get("/experiments", handleHALExperiments(b, s.ExperimentExpiryDays))
+			r.Post("/experiments", handleExperimentOpen(b, s.ExperimentExpiryDays))
+			r.Route("/experiments/{name}", func(r chi.Router) {
+				// DELETE is rollback: the destructive verb for the
+				// destructive action, so a client that knows REST needs no
+				// table to guess it. The named actions follow the ':' action
+				// convention's spirit as path suffixes because they are
+				// transitions, not resources.
+				r.Delete("/", handleExperimentAction(b, "rollback", s.ExperimentExpiryDays))
+				r.Post("/commit", handleExperimentAction(b, "commit", s.ExperimentExpiryDays))
+				r.Post("/rollback", handleExperimentAction(b, "rollback", s.ExperimentExpiryDays))
+				r.Post("/sync", handleExperimentAction(b, "sync", s.ExperimentExpiryDays))
+			})
+
 			r.Route("/branches/{branch}", func(r chi.Router) {
 				r.Use(BranchMiddleware)
 
-				r.Get("/", handleHALBranch(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled))
+				r.Get("/", handleHALBranch(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
 
 				r.Get("/facts", handleHALFactsCollection(b, p.factsCollection))
 				r.Post("/facts", handleFactCreate(b, s.OntologyRoot, p.factWriter))
@@ -316,7 +335,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 		// The lens CRUD quartet — including rename — resolves through the
 		// registry directly and reports its own errors, so it stays outside
 		// the binding group below.
-		r.Get("/", handleHALLens(b, s.Manager, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled))
+		r.Get("/", handleHALLens(b, s.Manager, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
 		r.Patch("/", handleHALLensPatch(b, s.Manager))
 		r.Delete("/", handleHALLensDelete(s.Manager))
 		r.Post("/rename", handleHALLensRename(b, s.Manager))

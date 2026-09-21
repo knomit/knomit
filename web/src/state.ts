@@ -1,4 +1,4 @@
-import type { Lens, LensSource } from './api';
+import type { ExperimentInfo, Lens, LensSource } from './api';
 import { displayLensPath } from './utils';
 
 export type View = 'library';
@@ -99,6 +99,23 @@ export interface AppState {
   notice: string;
   searching: boolean;            // a relevance (free-text) search request is in flight
   serverReadOnly: boolean;       // instance-level read-only (demo mode)
+  // branchWritable is the CURRENT branch's own eligibility, straight from the
+  // branch row's `writable`. It is a THIRD read-only dimension, independent of
+  // the other two: the consensus branch is not writable while the anchor is
+  // live and the instance is not a demo.
+  //
+  // Keyed on `writable`, never on is_agent_branch — an experiment is writable
+  // and is NOT the agent branch, so gating on the latter would lock the user
+  // out of exactly the branch this feature exists to let them work on.
+  branchWritable: boolean;
+  // sinceFork narrows the fact list to what changed since the experiment's
+  // fork point. Only meaningful inside an experiment, and cleared on the way
+  // out (see SET_STATUS).
+  sinceFork: boolean;
+  // experiment is the branch row's experiment object, null when the current
+  // branch is not one. Presence drives the in-experiment marker and the
+  // since-fork filter; fork_commit is what that filter anchors on.
+  experiment: ExperimentInfo | null;
   repoReadOnly: boolean;         // the browsed repo is a subscription (read-only)
   // factTitles caches the human title of every fact the RightPanel has loaded,
   // keyed by factTitleKey(path, commit). The breadcrumb reads from it so it can
@@ -126,7 +143,8 @@ export type Action =
   | { type: 'NAV_BACK' }
   | { type: 'SET_TASK'; op: string; status: 'idle' | 'running' | 'done' | 'error'; message: string }
   | { type: 'CLEAR_TASK'; op: string }
-  | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string; indexState?: string; indexDone?: number; indexTotal?: number; indexPercent?: number }
+  | { type: 'SET_STATUS'; head: string; branch: string; embeddingsEnabled: boolean; ontologyRoot: string; indexState?: string; indexDone?: number; indexTotal?: number; indexPercent?: number; branchWritable?: boolean; experiment?: ExperimentInfo | null }
+  | { type: 'SET_SINCE_FORK'; value: boolean }
   | { type: 'SET_HEAD'; head: string }
   // SET_INDEX carries ONLY the index fields, from the index event stream. It is
   // deliberately not SET_STATUS: that action rebuilds head, branch, ontology and
@@ -199,6 +217,9 @@ export const init: AppState = {
   notice: '',
   searching: false,
   serverReadOnly: false,
+  branchWritable: true,
+  experiment: null,
+  sinceFork: false,
   repoReadOnly: false,
   factTitles: {},
 };
@@ -402,7 +423,22 @@ function applyAction(s: AppState, a: Action): AppState {
         indexDone: a.indexDone ?? s.indexDone,
         indexTotal: a.indexTotal ?? s.indexTotal,
         indexPercent: a.indexPercent ?? s.indexPercent,
+        // ?? not ||: `false` is a real answer here and must not fall through
+        // to the previous value. An action that omits the key entirely (an
+        // older code path) keeps what we had.
+        branchWritable: a.branchWritable ?? s.branchWritable,
+        experiment: a.experiment !== undefined ? a.experiment : s.experiment,
+        // Leaving an experiment must drop the filter with it: a "since the
+        // fork" view of a branch that has no fork point is meaningless, and
+        // silently keeping it on would filter the agent branch against a
+        // commit from somewhere else.
+        sinceFork: a.experiment ? s.sinceFork : false,
       };
+    case 'SET_SINCE_FORK':
+      // Guarded rather than trusted: nothing outside an experiment may turn
+      // this on, so a stale control cannot filter the agent branch against a
+      // fork point that does not apply to it.
+      return { ...s, sinceFork: s.experiment ? a.value : false };
     case 'SET_HEAD':
       if (s.headCommit === a.head) return s;
       return { ...s, headCommit: a.head };
@@ -752,11 +788,12 @@ export function remoteErrorText(s: AppState): string {
 }
 
 export function isReadOnly(s: AppState): boolean {
-  return s.serverReadOnly || s.repoReadOnly || !isLive(s);
+  return s.serverReadOnly || s.repoReadOnly || !s.branchWritable || !isLive(s);
 }
 
 export const READ_ONLY_TITLE = 'Read-only — anchor is not live';
 export const SUBSCRIPTION_TITLE = 'Read-only — this repo follows a remote branch';
+export const BRANCH_TITLE = 'Read-only — facts are not authored on this branch';
 
 // readOnlyTitle names WHY the surface is read-only, most specific reason first.
 // A subscription is read-only while the anchor is perfectly live, so the
@@ -764,6 +801,11 @@ export const SUBSCRIPTION_TITLE = 'Read-only — this repo follows a remote bran
 // reader cannot fix by scrubbing back to live.
 export function readOnlyTitle(s: AppState): string {
   if (s.repoReadOnly) return SUBSCRIPTION_TITLE;
+  // Ordered most-specific-first, like the subscription case above and for the
+  // same reason: a branch that cannot be authored is read-only while the
+  // anchor is perfectly live, so the temporal wording would send the reader
+  // to scrub back to a "live" they are already on.
+  if (!s.branchWritable) return BRANCH_TITLE;
   return READ_ONLY_TITLE;
 }
 

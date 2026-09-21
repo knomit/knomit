@@ -1,10 +1,10 @@
-import { memo, useState, useRef } from 'react';
+import { memo, useState, useRef, useEffect } from 'react';
 import type { Dispatch, CSSProperties, ReactNode, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { AppState, Action } from './state';
 import { isLensContext, remoteErrorText } from './state';
-import { repoAvailable, brokenLensMember } from './api';
-import type { RepoInfo, Lens } from './api';
+import { api, repoAvailable, brokenLensMember } from './api';
+import type { RepoInfo, Lens, ExperimentRow } from './api';
 import { RepoStateChip } from './RepoStateChip';
 import { RepoIndexChip } from './RepoIndexChip';
 import { useRepoCreates, activeCreateByRepo, createFlag } from './useRepoCreates';
@@ -24,6 +24,9 @@ interface Props {
    *  same anchor — a way out that appears somewhere else makes the reader hunt
    *  for a control they just clicked. */
   onManageRepos: () => void;
+  /** Switch the app to a branch of the current repo. Without it the branch
+   *  chip stays the static label it was before the picker existed. */
+  onEnterBranch?: (branch: string) => void;
   /** True while the Manage mode owns the window. The gear then renders as a
    *  step-out button, and the browse context (repo/branch chips, search) is
    *  omitted: those belong to the surface you are READING, and offering them
@@ -52,7 +55,7 @@ interface Props {
 // The two that only reported — the commit, and the lens write target — moved to
 // the StatusFooter, which is the readout rail. What is left is the same shape in
 // both contexts: the switcher, then the scope picker, then search.
-export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, manageOpen = false, manageLocked = false, manageBusy = false, leftWidth, search }: Props) {
+export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch, onManageRepos, onEnterBranch, manageOpen = false, manageLocked = false, manageBusy = false, leftWidth, search }: Props) {
   // The creates still working on listed repos, so the switcher flags them the
   // same way the manage rail does. The poller is already mounted here for
   // CreateIndicator below, so this reads a list that is being fetched anyway.
@@ -61,6 +64,15 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, minWidth: 0 });
+  // The branch picker is a SECOND menu, not a second group inside the repo
+  // one: it is anchored to a different chip and answers a different question
+  // ("which branch of this repo", not "which knowledge base"), and folding
+  // them would put two unrelated switches behind one caret.
+  const [branchOpen, setBranchOpen] = useState(false);
+  const branchBtnRef = useRef<HTMLButtonElement>(null);
+  const branchMenuRef = useRef<HTMLDivElement>(null);
+  const [branchPos, setBranchPos] = useState({ top: 0, left: 0, minWidth: 0 });
+  const [branchRows, setBranchRows] = useState<ExperimentRow[]>([]);
 
   const lensCtx = isLensContext(state);
   // The gear's red dot marks an unhealthy remote of EITHER kind — a rejected
@@ -79,6 +91,32 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
   const held = manageOpen && manageBusy;
 
   useDismiss(menuOpen, () => setMenuOpen(false), [menuBtnRef, menuRef]);
+  useDismiss(branchOpen, () => setBranchOpen(false), [branchBtnRef, branchMenuRef]);
+
+  // Fetched when the menu OPENS rather than held in app state: the list is
+  // small, it is only ever read here, and a stale one would offer a branch
+  // that a commit elsewhere has since deleted.
+  useEffect(() => {
+    if (!branchOpen || !state.repo) return;
+    let alive = true;
+    api.listExperiments(state.repo)
+      .then(res => { if (alive) setBranchRows(res.experiments); })
+      .catch(() => { if (alive) setBranchRows([]); });
+    return () => { alive = false; };
+  }, [branchOpen, state.repo]);
+
+  const toggleBranchMenu = () => {
+    if (!branchOpen && branchBtnRef.current) {
+      const rect = branchBtnRef.current.getBoundingClientRect();
+      setBranchPos({ top: rect.bottom + 6, left: rect.left, minWidth: rect.width });
+    }
+    setBranchOpen(o => !o);
+  };
+
+  const pickBranch = (branch: string) => {
+    setBranchOpen(false);
+    if (branch && branch !== state.branch) onEnterBranch?.(branch);
+  };
 
   const toggleMenu = () => {
     if (!menuOpen && menuBtnRef.current) {
@@ -273,15 +311,45 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
                 branches is coming, and adding the affordance with the layout
                 means that day is a behaviour change, not a visual one. */}
             {state.branch && (
-              <span
+              /* Inside an experiment the chip turns GREEN and names the
+                 experiment rather than the branch. Green already means "write
+                 target" in this UI (the Agent-branch card, the write mount
+                 tag), and inside an experiment that is exactly what this
+                 branch is — so the marker is a change of state on the chip
+                 the user already reads, not a second badge somewhere else. */
+              <button
+                ref={branchBtnRef}
                 data-testid="toknomitr-branch"
-                title={state.branch}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, color: '#8af', fontSize: 12, minWidth: 0 }}
+                data-experiment={state.experiment ? state.experiment.name : undefined}
+                onClick={onEnterBranch ? toggleBranchMenu : undefined}
+                aria-haspopup={onEnterBranch ? 'listbox' : undefined}
+                aria-expanded={onEnterBranch ? branchOpen : undefined}
+                title={state.experiment
+                  ? `Experiment ${state.experiment.name} — forked from ${state.experiment.parent}`
+                  : state.branch}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5, minWidth: 0,
+                  fontSize: 12, fontFamily: 'inherit', lineHeight: 1.5,
+                  color: state.experiment ? '#7c9' : '#8af',
+                  background: state.experiment ? '#11201a' : 'transparent',
+                  border: '1px solid ' + (state.experiment ? '#2a4a3a' : 'transparent'),
+                  borderRadius: 3, padding: state.experiment ? '1px 6px' : '1px 2px',
+                  cursor: onEnterBranch ? 'pointer' : 'default',
+                  ...noDrag,
+                }}
               >
                 <GitBranchIcon color="currentColor" size={13} />
-                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{shortBranch(state.branch)}</span>
+                {state.experiment && (
+                  <span data-testid="toknomitr-experiment-marker" style={{
+                    fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 1,
+                    border: '1px solid #2a4a3a', borderRadius: 2, padding: '0 3px',
+                  }}>exp</span>
+                )}
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {state.experiment ? state.experiment.name : shortBranch(state.branch)}
+                </span>
                 <ChevronDownIcon color="currentColor" size={11} />
-              </span>
+              </button>
             )}
           </>
         )}
@@ -333,6 +401,96 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
         </button>}
       </div>
       </div>
+
+      {/* ── Branch picker ── the agent branch, then this repo's experiments,
+          then the way to make one. Deliberately NOT a list of every branch:
+          the consensus branch and other machines' agent branches are not
+          writable, and offering them here would invite the user into a
+          read-only view with no way to tell why from the menu. */}
+      {branchOpen && !manageOpen && createPortal(
+        <div ref={branchMenuRef} role="listbox" data-testid="toknomitr-branch-menu" style={{
+          position: 'fixed', top: branchPos.top, left: branchPos.left,
+          minWidth: Math.max(branchPos.minWidth, 240),
+          background: '#1a1a1a', border: '1px solid #333', borderRadius: 6,
+          zIndex: 10000, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+          padding: '5px 0', maxHeight: 340, overflowY: 'auto',
+        }}>
+          <div style={groupHeaderStyle}>
+            <GitBranchIcon color="#6a8" size={11} /> Branch
+          </div>
+          {(() => {
+            // The agent branch is wherever an experiment says it forked from;
+            // outside one it is the branch we are on. Derived rather than
+            // fetched: the row we already hold names its own parent, which is
+            // the same value and one fewer request.
+            const agent = state.experiment ? state.experiment.parent : state.branch;
+            const onAgent = !state.experiment;
+            return (
+              <div
+                role="option" aria-selected={onAgent}
+                data-testid="toknomitr-branch-option-agent"
+                onClick={() => pickBranch(agent)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, color: onAgent ? '#7c9' : '#aaa' }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ width: 10, color: '#7c9' }}>{onAgent ? '✓' : ''}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shortBranch(agent)}</span>
+                <span style={{ fontSize: 10, color: '#6a7078' }}>agent branch</span>
+              </div>
+            );
+          })()}
+
+          {branchRows.length > 0 && (
+            <div style={groupHeaderStyle}>
+              <GitBranchIcon color="#6a8" size={11} /> Experiments
+            </div>
+          )}
+          {branchRows.map(row => {
+            const active = row.branch === state.branch;
+            // An orphaned experiment is listed but NOT selectable: entering it
+            // would land the user in a read-only view whose reason is not
+            // visible from here. The repository page is where it can be
+            // rolled back, which is its only remaining action.
+            const usable = row.writable !== false;
+            return (
+              <div
+                key={row.name} role="option" aria-selected={active}
+                aria-disabled={!usable || undefined}
+                data-testid={`toknomitr-branch-option-${row.name}`}
+                title={usable ? row.description || undefined : `Forked from ${row.parent}, which is not this instance's agent branch`}
+                onClick={usable ? () => pickBranch(row.branch) : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+                  cursor: usable ? 'pointer' : 'default', fontSize: 12,
+                  color: active ? '#7c9' : usable ? '#aaa' : '#6a6a6a',
+                }}
+                onMouseEnter={e => { if (usable) e.currentTarget.style.background = '#2a2a3a'; }}
+                onMouseLeave={e => { if (usable) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ width: 10, color: '#7c9' }}>{active ? '✓' : ''}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</span>
+                {!usable && <span style={{ fontSize: 10, color: '#c9a227' }}>orphaned</span>}
+              </div>
+            );
+          })}
+
+          <div style={{ borderTop: '1px solid #262626', marginTop: 4, paddingTop: 4 }}>
+            <div
+              role="option" aria-selected={false}
+              data-testid="toknomitr-branch-new"
+              onClick={() => { setBranchOpen(false); onManageRepos(); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', cursor: 'pointer', fontSize: 12, color: '#6ea8fe' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#2a2a3a'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span style={{ width: 10 }} />
+              <span>New experiment…</span>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
 
       {menuOpen && !manageOpen && createPortal(
         <div ref={menuRef} role="listbox" data-testid="toknomitr-repo-menu" style={{

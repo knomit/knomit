@@ -227,12 +227,13 @@ func handleHALRepo(
 	reader func(context.Context, *repos.RepoInstance, string) (branchRootInfo, error),
 	agentBranch string,
 	embeddingsEnabled bool,
+	experimentExpiryDays int,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 		body := repoView(b, r, name, ri)
-		if root := embedBranchRoot(r.Context(), b, reader, name, ri.ReadBranch(), ri, agentBranch, embeddingsEnabled); root != nil {
+		if root := embedBranchRoot(r.Context(), b, reader, name, ri.ReadBranch(), ri, agentBranch, embeddingsEnabled, experimentExpiryDays); root != nil {
 			body["_embedded"] = map[string]any{"branch": root}
 		}
 		hal.WriteHAL(w, http.StatusOK, body)
