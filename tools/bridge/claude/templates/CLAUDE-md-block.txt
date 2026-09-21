@@ -1,7 +1,7 @@
-<!-- knomit:integration v4 -->
+<!-- knomit:integration v5 -->
 ## Working with knomit memory
 
-This project uses knomit as long-term memory. Ten `/knomit-…` slash commands
+This project uses knomit as long-term memory. Eleven `/knomit-…` slash commands
 wrap knomit's MCP tools. Use them in these moments:
 
 **Before non-trivial work** — call `/knomit-recall <what you are about to
@@ -39,6 +39,29 @@ verification handshake.
 **After a design choice** — call `/knomit-decided <slug>` when you and the
 user resolved a tradeoff in conversation. Captures options, rationale, and
 the choice — not just what was chosen.
+
+**Facts for code going out as a PR** — open an experiment named after the git
+branch when the branch is created, and write the facts there AS THE WORK
+HAPPENS rather than reconstructing them later from a diff:
+`/knomit-experiment open <branch-name>`.
+
+- Commit the experiment AFTER the GitHub PR merges — and as part of that,
+  re-pin every `src://` ref to the merge commit and re-read each fact's own
+  claim there. Review changes code, so a fact that was true of the branch can
+  be false of what merged. A squash merge orphans every branch commit, so its
+  refs must be re-pinned, not merely checked.
+- Roll the experiment back if the PR is abandoned. Facts describing code that
+  never landed are how the corpus starts describing a world nobody is in.
+- The post-merge PR comment stays, but only as a LISTING of what was written.
+  It is no longer the gate; the experiment's commit is.
+- Requires a post-#236 lens server. If `knomit_experiment` is absent from your
+  tool list, say so and stop rather than falling back to writing on the agent
+  branch — that is the misattribution the experiment exists to prevent.
+
+This REPLACES the older rule that facts for PR'd code are written only after
+the merge. The timing of what reaches the agent branch is unchanged — nothing
+lands there until the PR merges — but the writing now happens during the work,
+inside the experiment, instead of being deferred.
 
 **When you doubt a fact** — call `/knomit-why <fact-path>` to walk the
 provenance graph and verify against current code before relying on it.

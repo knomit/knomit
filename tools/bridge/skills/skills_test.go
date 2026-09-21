@@ -16,9 +16,9 @@ import (
 // at once.
 func TestFS_ContainsAllTenSkills(t *testing.T) {
 	want := []string{
-		"knomit-decided", "knomit-harden", "knomit-hypothesize", "knomit-principle",
-		"knomit-recall", "knomit-remember", "knomit-retract", "knomit-review",
-		"knomit-update", "knomit-why",
+		"knomit-decided", "knomit-experiment", "knomit-harden", "knomit-hypothesize",
+		"knomit-principle", "knomit-recall", "knomit-remember", "knomit-retract",
+		"knomit-review", "knomit-update", "knomit-why",
 	}
 
 	var got []string

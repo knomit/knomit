@@ -1251,7 +1251,17 @@ func TestRunInit_ExistingClaudeMd_OlderMarker_ReplacedInPlace(t *testing.T) {
 		t.Errorf("summary did not report the block replacement:\n%s", out)
 	}
 	// Naming both versions is what tells the operator the bump actually landed.
-	for _, want := range []string{"v3", "v4"} {
+	// The TARGET is read off the shipped template rather than written here:
+	// hardcoding it means every legitimate block bump fails this test for the
+	// wrong reason, and the tempting fix — editing the literal — is one keypress
+	// from pinning the test to a version the template no longer ships.
+	target := blockVersion(blockMarkerCurrent)
+	if target == "" {
+		// Without this the loop below would assert Contains(out, "") — true of
+		// every string — and the check would pass while testing nothing.
+		t.Fatalf("template marker %q carries no version token", blockMarkerCurrent)
+	}
+	for _, want := range []string{"v3", target} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary %q does not name version %q", out, want)
 		}
