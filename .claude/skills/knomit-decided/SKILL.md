@@ -39,6 +39,35 @@ These thoughts mean fire the skill NOW, not later:
 - Decisions about the current conversation only (what to say next, how to format a response)
 - Re-stating a decision already captured earlier in the same session
 
+## Before you write: this base may have no `decisions` topic
+
+The topic is not universal. Every knowledge base declares its own ontology, and
+a write to a topic the base does not have is REFUSED — `validate path: unknown
+topic "decisions"`.
+
+**Check first.** The knomit server instructions for this connection list what
+the base has, under "Available topics". That list is the WRITE repo's own
+ontology, which is the one a write is validated against. If `decisions` is on
+it, proceed.
+
+If the list is not in front of you, you have no pre-check and must not invent
+one: an unscoped connection computes its instructions before you bind, so it
+shows "(no ontology loaded)", and an empty `knomit_query` under a path prefix
+cannot tell a missing topic from an empty one. Attempt the write and read the
+refusal — there, the refusal IS the check.
+
+**If `decisions` is absent, REFUSE and say so.** One line to the user: this
+knowledge base has no `decisions` topic, its topics are `<the actual list>`, so
+the decision was not recorded. Then stop.
+
+**Never substitute another topic.** Not `meta`, not `architecture`, not the
+nearest-looking one. A decision filed under a topic that does not mean
+"decision" is worse than an unrecorded decision: nobody looking for decisions
+will find it, and everyone browsing that topic is told it holds something it
+does not. A missing topic is a statement about what this base chose to keep —
+hand the choice back to the user, who can add it to the ontology if they want
+decisions recorded here.
+
 ## How
 
 Before writing the code/edit the decision authorized, summarize into three parts (plus a fourth when foreseeable):
