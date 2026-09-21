@@ -215,27 +215,124 @@ func TestMountExperiment_DifferentSessionsAreIndependent(t *testing.T) {
 // NAMES an experiment is an address of that one. Letting session state redirect
 // it would make …/exp:a/mcp serve exp/b — the misrouting this design exists to
 // prevent, arriving through the door built to prevent it.
+//
+// IT REUSES THE PLAIN MOUNT'S SESSION ID, and that is the whole test. An
+// earlier version minted a fresh id for the experiment mount, so there was no
+// session state to redirect and it passed with the guard deleted — a test that
+// could not fail for the reason it was written.
 func TestMountExperiment_ExperimentURLMountIgnoresSessionState(t *testing.T) {
 	h, m := experimentServer(t)
 	plain := repoMount(t, m, "jobA-repo")
 	sid := initAt(t, h, plain)
 
-	// Create two experiments, and leave the session inside "a".
+	// Two experiments; the session ends up inside expb.
 	for _, n := range []string{"expa", "expb"} {
-		_, _, isErr := callExperiment(t, h, plain, sid, fmt.Sprintf(`{"action":"open","name":%q}`, n))
-		require.False(t, isErr)
+		_, text, isErr := callExperiment(t, h, plain, sid, fmt.Sprintf(`{"action":"open","name":%q}`, n))
+		require.False(t, isErr, "open %s: %s", n, text)
 	}
 
-	// Now talk to the mount that names expa, on the SAME session — whose
-	// stored experiment is expb.
+	// Same session id, now talking to the mount that NAMES expa.
 	expMount := "/repos/jobA-repo/branches/exp:expa/mcp"
-	expSid := initAt(t, h, expMount)
-	learnOn(t, h, expMount, expSid, "addressed to expa")
+	learnOn(t, h, expMount, sid, "addressed to expa")
 
 	require.True(t, branchHolding(t, m, "jobA-repo", "exp/expa", "addressed to expa"),
 		"a mount that names an experiment serves THAT experiment")
 	require.False(t, branchHolding(t, m, "jobA-repo", "exp/expb", "addressed to expa"),
-		"session state must not redirect an endpoint that names its experiment by URL")
+		"without the guard this lands on expb, the session's experiment")
+}
+
+// TestMountExperiment_NonWritableURLBranchIsNotRePinned is the hole the review
+// found: the guard used to read b.WriteBranch(), which is "" on a mount this
+// instance cannot write, so a URL naming `main` looked identical to one naming
+// nothing — and session state re-pinned a READ-ONLY mount onto a writable
+// experiment.
+//
+// The assertion is that the write is REFUSED and lands on NO branch. "Not on
+// main" alone would pass on the broken build, where it landed on exp/.
+func TestMountExperiment_NonWritableURLBranchIsNotRePinned(t *testing.T) {
+	h, m := experimentServer(t)
+	plain := repoMount(t, m, "jobA-repo")
+	sid := initAt(t, h, plain)
+
+	_, text, isErr := callExperiment(t, h, plain, sid, `{"action":"open","name":"notformain"}`)
+	require.False(t, isErr, "open: %s", text)
+
+	// Same session, now on the consensus branch's mount.
+	mainMount := "/repos/jobA-repo/branches/main/mcp"
+	out, isErr := callToolAt(t, h, mainMount, sid, "knomit_learn", urlScopedLearnArgs("aimed at main"))
+	require.True(t, isErr, "a write on a non-writable mount must be REFUSED, got: %s", out)
+
+	for _, br := range []string{"main", "exp/notformain", m.Get("jobA-repo").AgentBranch()} {
+		require.False(t, branchHolding(t, m, "jobA-repo", br, "aimed at main"),
+			"the refused write must land on NO branch, and it reached %s", br)
+	}
+}
+
+// TestMountExperiment_LensMountEntersTheExperiment: /lenses/{lens}/mcp has no
+// {branch} segment, so a predicate written only for the repo route would
+// silently disable experiments for every `kb --lens` bridge — with nothing to
+// catch it, since every other test here is a repo mount.
+//
+// Only the WRITE member moves; the read mounts stay where they are.
+func TestMountExperiment_LensMountEntersTheExperiment(t *testing.T) {
+	h, m := experimentServer(t)
+	write := m.Get("jobA-repo")
+	read := m.Get("jobB-repo")
+	_, err := m.LensRegistry().Create(repos.Lens{
+		Name: "demo-lens", WriteUID: write.UID(),
+		Reads: []repos.LensRead{{RepoUID: write.UID()}, {RepoUID: read.UID()}},
+	})
+	require.NoError(t, err)
+	mount := "/lenses/demo-lens/mcp"
+	sid := initAt(t, h, mount)
+
+	_, text, isErr := callExperiment(t, h, mount, sid, `{"action":"open","name":"lensexp"}`)
+	require.False(t, isErr, "open on a lens mount: %s", text)
+
+	learnOn(t, h, mount, sid, "written through the lens")
+
+	require.True(t, branchHolding(t, m, "jobA-repo", "exp/lensexp", "written through the lens"),
+		"the write must land on the WRITE member's experiment branch")
+	require.False(t, branchHolding(t, m, "jobA-repo", m.Get("jobA-repo").AgentBranch(), "written through the lens"))
+	require.False(t, branchHolding(t, m, "jobB-repo", m.Get("jobB-repo").AgentBranch(), "written through the lens"),
+		"a read member must be untouched by the write member's experiment")
+}
+
+// TestMountExperiment_NoSessionIDFailsClosed: with no Mcp-Session-Id there is
+// nothing to key on, and ("", mount uid) would pool every anonymous caller of a
+// mount into one shared experiment.
+//
+// DRIVEN DIRECTLY, not through the router, and the reason matters: mcp-go
+// refuses a call with no session id at the transport ("Invalid session ID")
+// before any handler runs, so `open`'s own refusal is unreachable end-to-end.
+// That guard stays as depth — the transport's behaviour is not this package's
+// to rely on — but the half that is ours is the middleware, and this asserts
+// it: no session id means no binding swap, so the request stays on the branch
+// its URL names.
+func TestMountExperiment_NoSessionIDFailsClosed(t *testing.T) {
+	h, m := experimentServer(t)
+	mount := repoMount(t, m, "jobA-repo")
+	sid := initAt(t, h, mount)
+
+	// A real experiment, and a real row for a real session.
+	_, text, isErr := callExperiment(t, h, mount, sid, `{"action":"open","name":"anonymous"}`)
+	require.False(t, isErr, "open: %s", text)
+
+	ri := m.Get("jobA-repo")
+	base := repos.WithRepoInstance(
+		repos.WithBranch(context.Background(), ri.AgentBranch()), ri)
+
+	// With the session id, the binding is swapped onto the experiment.
+	got := applyMountExperiment(base, m, m.ClientSessions(), sid)
+	b, ok := repos.BindingFromContextOpt(got)
+	require.True(t, ok, "precondition: a known session IS re-pinned")
+	require.Equal(t, "exp/anonymous", b.WriteBranch())
+
+	// Without it, nothing is applied — not even the row that plainly exists.
+	got = applyMountExperiment(base, m, m.ClientSessions(), "")
+	_, ok = repos.BindingFromContextOpt(got)
+	require.False(t, ok,
+		"an anonymous caller must not inherit another session's experiment")
 }
 
 // TestMountExperiment_SessionRowNamesTheBranchItWritesTo: attribution. The

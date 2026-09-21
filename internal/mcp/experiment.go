@@ -322,16 +322,24 @@ func experimentOpen(ctx context.Context, mgr *repos.Manager, svc *store.Service,
 		// whose write branch is an experiment, and reading that would refuse
 		// the perfectly ordinary act of opening a second one.
 		if !plainMount {
-			if store.ExperimentBranch(exp.Name) == b.WriteBranch() {
+			// Named from the ROUTE, not from b.WriteBranch(): that is "" on a
+			// mount this instance cannot write, so a URL naming `main` would
+			// otherwise produce a refusal that names no branch at all.
+			urlBranch, _ := repos.BranchFromContextOpt(ctx)
+			if urlBranch == "" {
+				urlBranch = b.WriteBranch()
+			}
+			if store.ExperimentBranch(exp.Name) == urlBranch {
 				res.Summary = fmt.Sprintf(
 					"experiment %q is open on branch %q, which is the experiment this endpoint already addresses — nothing changed.",
 					exp.Name, exp.Branch())
 				return res, nil
 			}
 			return experimentResult{}, fmt.Errorf(
-				"experiment %q was created, but this endpoint addresses %q by URL and cannot be switched: "+
-					"connect to the mount for %q, or use a mount that names a plain branch",
-				exp.Name, b.WriteBranch(), exp.Branch())
+				"experiment %q was created, but this endpoint is bound to branch %q by its URL and cannot be switched. "+
+					"Only a mount that names this repo's own agent branch follows a session into an experiment: "+
+					"connect to the mount for %q, or to the agent branch's mount",
+				exp.Name, urlBranch, exp.Branch())
 		}
 		if sessionID == "" {
 			// FAIL CLOSED. Keying on an empty session id would put every

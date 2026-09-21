@@ -61,13 +61,35 @@ func applyMountExperiment(ctx context.Context, m *repos.Manager, store_ *session
 		b = repos.NewBindingOfRepo(ri, branch)
 	}
 
-	// THE URL WINS WHEN IT NAMES AN EXPERIMENT. /branches/exp:a/mcp and
-	// /lenses/{lens}/experiments/a/mcp are addresses OF an experiment: the
-	// caller asked for that one by name. Applying session state on top would
-	// let …/exp:a/mcp serve exp/b — the same misrouting this whole design
-	// exists to prevent, arriving through the door built to prevent it. The
-	// unknown-experiment 404 those mounts already return stays untouched.
-	if store.IsExperimentBranch(b.WriteBranch()) {
+	// WHICH MOUNTS TAKE SESSION STATE, decided from the ROUTE and never from
+	// the binding.
+	//
+	// `b.WriteBranch()` is unusable for this: it returns "" whenever the mount
+	// is not writable, so a URL naming `main` looks exactly like a URL naming
+	// nothing — and a read-only mount would be silently re-pinned onto a
+	// writable experiment, which is a bigger hole than the one this feature
+	// was built to close.
+	//
+	//   repo route  (/repos/{repo}/branches/{branch}/mcp): re-pin ONLY when
+	//     the URL names THIS repo's own agent branch. `main`, a foreign
+	//     `agent/*` and an `exp:` branch are all addresses of something else
+	//     and are left exactly as the URL asked — the last of those is what
+	//     stops …/exp:a/mcp serving exp/b.
+	//   lens route  (/lenses/{lens}/mcp): NO {branch} segment at all, so the
+	//     URL branch is empty and the mount is the lens's own default. Re-pin.
+	//     A predicate written only for the repo route would silently disable
+	//     experiments for every `kb --lens` bridge.
+	//
+	// /lenses/{lens}/experiments/{name}/mcp never installs this middleware, so
+	// it needs no case here and must keep not having one.
+	urlBranch, hasURLBranch := repos.BranchFromContextOpt(ctx)
+	if hasURLBranch {
+		write := b.Write()
+		if write == nil || urlBranch == "" || urlBranch != write.AgentBranch() {
+			return ctx
+		}
+	} else if !b.FromLens() {
+		// Neither a branch route nor a lens: not a mount this applies to.
 		return ctx
 	}
 
