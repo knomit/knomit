@@ -11,7 +11,15 @@
 // same chain, in the same order, and what gets committed is what SerializeFact
 // produces, never the caller's raw bytes:
 //
-//	ParseFact  →  ValidateFact  →  refs.Gate.Apply  →  motif gate  →  SerializeFact
+//	ParseFact  →  ValidateFact  →  refs.Gate.Apply  →  SerializeFact
+//
+// The subject-motif gate is NOT a step here, deliberately: SerializeFact
+// applies it internally, so reaching SerializeFact IS being gated. The REST
+// raw-editor PUT invokes that gate by hand only because it commits the
+// client's bytes and never reaches SerializeFact at all — copying its call
+// into this path was surplus. internal/fact's MN4 conformance test enforces
+// exactly that, and enforces it by SCANNING SOURCE TEXT: naming the helper
+// here at all, even in a comment, trips it.
 //
 // Skipping any link makes a resolution the one way into the corpus that
 // bypasses a rule every other write path enforces. Two of those links are not
@@ -106,12 +114,7 @@ func normalizeOne(
 	}
 	f.Refs = canonRefs
 
-	// 4. The motif gate. Like the REST raw-editor PUT, this path does not reach
-	// SerializeFact by any other route, so without this a subject-restating
-	// motif would land on disk and in fact_motifs having passed no gate.
-	f.Motifs = knomitfact.StripSubjectMotifs(f)
-
-	// 5. Serialize, and LAND THOSE BYTES — not the caller's raw body.
+	// 4. Serialize, and LAND THOSE BYTES — not the caller's raw body.
 	//
 	// This is a deliberate choice, and it is the same one knomit_update makes:
 	// the committed content is SerializeFact's output. A raw body that differs
