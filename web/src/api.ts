@@ -1361,6 +1361,12 @@ export interface ClientSession {
   // concurrent callers, so the singular field is a snapshot and the array is
   // the answer.
   binding: ClientSessionBinding; bindings: ClientSessionBindingRow[]; branch: string;
+  // `mounts` is what this session writes to on its URL-SCOPED mounts, STORED
+  // rather than inferred from the URL. A URL-scoped mount names a branch in its
+  // path, but a session that opened an experiment writes somewhere else — so a
+  // table reading the path would confidently show the wrong branch. Absent for
+  // a session that opened none.
+  mounts?: ClientSessionMount[];
   client: { name: string; version: string; initialized: boolean };
   bridge: { host: string; user: string; cwd: string; pid: number; parent: string; parent_pid: number; version: string };
   remote_addr: string; user_agent: string;
@@ -1369,6 +1375,13 @@ export interface ClientSession {
 // `limit` is the page size the server actually used and `max_limit` the largest
 // it will accept, echoed for the same reason the thresholds are: so the UI never
 // hardcodes a number that can disagree with the server.
+export interface ClientSessionMount {
+  mount: string; kind: string; uid: string; name: string | null;
+  experiment: string;
+  /** The branch this session actually writes to on that mount. */
+  branch: string;
+  set_at: string;
+}
 export interface ClientSessionPolicy {
   dead_after_s: number; hidden_after_s: number; retention_s: number; live_window_s: number;
   limit: number; max_limit: number;

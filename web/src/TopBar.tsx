@@ -503,13 +503,13 @@ export const TopBar = memo(function TopBar({ state, repos, lenses = [], dispatch
           })}
 
           {/* No "New experiment" entry: creation is MCP-only (user ruling
-              2026-09-20). An agent opens one with knomit_experiment; this
-              picker only moves between the branches that already exist. */}
-          {branchRows.length === 0 && (
-            <div data-testid="toknomitr-branch-no-experiments" style={{ padding: '6px 12px', fontSize: 11, color: '#6a7078', maxWidth: 260, lineHeight: 1.45 }}>
-              No experiments. Agents open them with knomit_experiment.
-            </div>
-          )}
+              2026-09-20), and no explanatory line when the list is empty —
+              with no experiments the section is simply absent. A picker that
+              explains its own emptiness is a sentence read once and skipped
+              forever after.
+
+              The Branch group above always has the agent branch, so the menu
+              is never empty. */}
         </div>,
         document.body,
       )}

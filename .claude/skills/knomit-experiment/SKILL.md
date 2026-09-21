@@ -159,6 +159,13 @@ at. Then:
    experiment INTO the agent branch, so **"ours" is the experiment** — the
    opposite of git's convention, where "ours" is the branch you merge into.
 
+   **Record NOTHING about the resolution.** No `/knomit-decided`, no fact, no
+   observation, not under `meta/` either. Two edits colliding is housekeeping,
+   not a finding about the system: the choice is already in the merge commit,
+   and a corpus that accrues one fact per conflict fills up with the history of
+   its own maintenance. Say which you chose and why in your reply to the human,
+   and stop there.
+
 3. **Retry with the resolutions**, all in one call:
 
    ```

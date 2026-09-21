@@ -402,3 +402,41 @@ describe('ManageSessions truncation', () => {
     await waitFor(() => expect(screen.queryByTestId('session-truncated')).toBeNull());
   });
 });
+
+describe('ManageSessions — the branch a session actually writes to', () => {
+  // The whole point of the `mounts` field: a URL-scoped mount names a branch in
+  // its path, but a session inside an experiment writes somewhere else. The
+  // table must state the STORED answer, never re-derive one from the URL — a
+  // column that read the path would confidently show the wrong branch.
+  it('shows the experiment for a session inside one', async () => {
+    (api.listClientSessions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessions: [sess({
+        branch: 'agent/h-1',
+        mounts: [{
+          mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
+          experiment: 'pr-237-ui', branch: 'exp/pr-237-ui',
+          set_at: '2026-09-14T11:30:00Z',
+        }],
+      })],
+      policy: POLICY,
+    });
+    render(<ManageSessions onLiveCount={() => {}} />);
+
+    const cell = await screen.findByTestId('session-write-branch');
+    expect(cell.textContent).toContain('pr-237-ui');
+    // The client's own git branch is a DIFFERENT thing and must not be what
+    // this column shows while an experiment is active.
+    expect(cell.textContent).not.toContain('agent/h-1');
+  });
+
+  it('falls back to the reported branch when no experiment is open', async () => {
+    (api.listClientSessions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      sessions: [sess({ branch: 'agent/h-1' })],
+      policy: POLICY,
+    });
+    render(<ManageSessions onLiveCount={() => {}} />);
+
+    const cell = await screen.findByTestId('session-write-branch');
+    expect(cell.textContent).toContain('agent/h-1');
+  });
+});

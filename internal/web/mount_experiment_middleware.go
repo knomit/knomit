@@ -176,3 +176,25 @@ func mountExperimentUID(b *repos.Binding) string {
 	// spelling here is how two keys for one mount start disagreeing.
 	return b.PinID()
 }
+
+// servedBranch is the branch this request was actually served on, when it
+// differs from the branch its URL names — and "" when they agree.
+//
+// It exists for the log line: a session inside an experiment is served
+// exp/<name> while its path still reads …/branches/agent:…/mcp, so a log
+// carrying only the path answers "where did that fact go" wrongly and with no
+// sign of it. Empty when they match, so the common line stays unchanged.
+func servedBranch(ctx context.Context) string {
+	b, ok := repos.BindingFromContextOpt(ctx)
+	if !ok {
+		return ""
+	}
+	served := b.WriteBranch()
+	if served == "" {
+		return ""
+	}
+	if urlBranch, hasURL := repos.BranchFromContextOpt(ctx); hasURL && urlBranch == served {
+		return ""
+	}
+	return served
+}
