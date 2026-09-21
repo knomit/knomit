@@ -313,7 +313,14 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // facet looked like, a chip in the bar above an unchanged list of topics. A
   // filter needs a flat list to be a filter OF, so it borrows Recent. Nothing
   // is written to librarySort, so removing the chip returns to the tree.
-  const hasContentFilters = state.filters.some(f => f.category !== 'path');
+  // SINCE-FORK IS A CONTENT FILTER and belongs in this test, not beside it.
+  // It was originally wired only into the Recent and Relevance effects, which
+  // made it dead in the DEFAULT mode: librarySort starts at 'path', the tree
+  // walk cannot honour it, and the toggle changed the chip's colour while the
+  // list below it kept every fact and issued no request at all. That is the
+  // same failure this comment already describes for facet chips, one flag
+  // over — so it takes the same cure rather than a second mechanism.
+  const hasContentFilters = state.filters.some(f => f.category !== 'path') || state.sinceFork;
   const effectiveSort = searchActive ? 'relevance'
     : hasContentFilters && state.librarySort === 'path' ? 'recent'
     : state.librarySort;

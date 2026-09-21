@@ -76,6 +76,14 @@ export function ExperimentsPanel({ repo, currentBranch, onEnterBranch, agentBran
     }
   }, [repo]);
 
+  // The disable below is a FALSE POSITIVE, not a waiver: every setState in
+  // `load` sits after `await api.listExperiments(repo)` — including the catch
+  // and finally arms — so none of them runs synchronously in this effect body,
+  // which is the thing the rule forbids. It cannot see through the async
+  // boundary. Deliberately NOT inlined the way ExperimentBand's fetch is:
+  // `run()` calls `load` too, and one loader is what keeps the table and the
+  // actions from disagreeing about what is in the repo.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { void load(); }, [load]);
 
   const run = async (label: string, fn: () => Promise<unknown>, after?: () => void) => {

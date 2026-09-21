@@ -240,15 +240,22 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 // can branch on.
 //
 // A refused COMMIT is the one that matters: it is a 409 carrying the
-// conflicting paths, because the client's next move (sync, or rollback) is
-// chosen by looking at which paths, and a bare "conflict" string would make
-// the UI guess.
+// conflicting paths, because the reader's next move is chosen by looking at
+// WHICH paths, and a bare "conflict" string would make the UI guess.
+//
+// The detail does NOT tell the caller to sync. Sync resolves every collision
+// in the agent branch's favour, so recommending it here would be recommending
+// that the experiment's version of exactly these facts be overwritten
+// unseen — which is why the UI has no sync control at all. Resolution needs
+// all three versions, and that is an agent's job through knomit_experiment.
 func writeExperimentError(w http.ResponseWriter, r *http.Request, title string, err error) {
 	var conflict *store.MergeConflictError
 	if errors.As(err, &conflict) {
 		hal.WriteProblemWithExtra(w, http.StatusConflict, "Experiment has conflicting changes",
 			"both the experiment and the agent branch changed the same fact(s) since the fork; "+
-				"sync to take the agent branch's version, then commit again, or roll the experiment back",
+				"nothing was merged and nothing changed. An agent resolves these with the "+
+				"knomit_experiment tool, which can read all three versions of each fact; "+
+				"otherwise roll the experiment back",
 			r.URL.Path, map[string]any{"conflicting_paths": conflict.Paths})
 		return
 	}

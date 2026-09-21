@@ -2017,9 +2017,12 @@ export const api = {
   // lives in the branch namespace.
 
   listExperiments: async (repo: string): Promise<ExperimentsResponse> => {
-    const data = await fetchJSON<any>(`${repoBase(repo)}/experiments`);
+    const data = await fetchJSON<{
+      expiry_days?: number;
+      _embedded?: { experiments?: ExperimentRow[] };
+    }>(`${repoBase(repo)}/experiments`);
     return {
-      experiments: (data._embedded?.experiments as ExperimentRow[]) || [],
+      experiments: data._embedded?.experiments || [],
       // 0 means NEVER expire, and it is a real answer rather than a missing
       // one, so it must not fall through to a default.
       expiryDays: typeof data.expiry_days === 'number' ? data.expiry_days : 0,
@@ -2042,7 +2045,9 @@ export const api = {
   experimentAction: async (repo: string, name: string, action: 'commit' | 'rollback' | 'sync'): Promise<void> => {
     const r = await fetch(`${repoBase(repo)}/experiments/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
     if (r.ok) return;
-    let body: any = {};
+    // Only the two members this function branches on. A problem document may
+    // carry more; nothing here reads them, so nothing here has to name them.
+    let body: { title?: string; detail?: string; conflicting_paths?: unknown } = {};
     try { body = await r.json(); } catch { /* a non-JSON error body is still a failure */ }
     if (r.status === 409 && Array.isArray(body.conflicting_paths)) {
       throw new ExperimentConflictError(body.detail || 'experiment has conflicting changes', body.conflicting_paths);
