@@ -180,3 +180,105 @@ func (s *Store) ClearHandleExperiment(ctx context.Context, handle string) error 
 	}
 	return nil
 }
+
+// MountExperiment reports the experiment a session is working inside on ONE
+// URL-scoped mount, or "" for none.
+//
+// Keyed on (session id, mount uid), never on the session id alone: a client may
+// hold a repo bridge and a lens bridge on one connection, and each carries its
+// own experiment. See migration 000008 for why session-keying is admissible
+// here and forbidden on the unscoped mount — the short version is that the URL
+// has already fixed the repo, so this can only choose a BRANCH within it.
+//
+// A read failure returns the error, not "", for the reason HandleExperiment
+// gives: "" is a routing ANSWER, so a caller handed it by a failed query would
+// silently leave the experiment its user is working in.
+func (s *Store) MountExperiment(ctx context.Context, sessionID, mountUID string) (string, error) {
+	if sessionID == "" || mountUID == "" {
+		return "", nil
+	}
+	var name string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT experiment FROM mount_experiments WHERE session_id = ? AND mount_uid = ?`,
+		sessionID, mountUID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("mount experiment: %w", err)
+	}
+	return name, nil
+}
+
+// SetMountExperiment records that this session, on this mount, is now inside
+// experiment. UPSERT for the same reason SetHandleExperiment upserts: opening a
+// second experiment is a switch, not a collision.
+//
+// There is no branch-pin collision to guard against here, unlike the handle
+// path: a URL-scoped mount's branch comes from the URL, and an experiment
+// replaces it for the duration rather than competing with it.
+func (s *Store) SetMountExperiment(ctx context.Context, sessionID, mountUID, experiment string, now time.Time) error {
+	if sessionID == "" || mountUID == "" || experiment == "" {
+		return errors.New("set mount experiment: empty session, mount or experiment")
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO mount_experiments (session_id, mount_uid, experiment, set_at) VALUES (?, ?, ?, ?)
+ON CONFLICT(session_id, mount_uid) DO UPDATE SET experiment = excluded.experiment, set_at = excluded.set_at`,
+		sessionID, mountUID, experiment, now.Unix()); err != nil {
+		return fmt.Errorf("set mount experiment: %w", err)
+	}
+	return nil
+}
+
+// ClearMountExperiment puts this session, on this mount, back on the branch the
+// URL names. Not an error when there was none: commit and rollback both call
+// it, and repeating one asks for a state already held.
+func (s *Store) ClearMountExperiment(ctx context.Context, sessionID, mountUID string) error {
+	if sessionID == "" || mountUID == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM mount_experiments WHERE session_id = ? AND mount_uid = ?`,
+		sessionID, mountUID); err != nil {
+		return fmt.Errorf("clear mount experiment: %w", err)
+	}
+	return nil
+}
+
+// MountExperimentRow is one URL-scoped mount this session is working inside an
+// experiment on.
+type MountExperimentRow struct {
+	MountUID   string
+	Experiment string
+	SetAt      time.Time
+}
+
+// SessionMountExperiments lists the experiments a session holds across its
+// URL-scoped mounts.
+//
+// This is the ATTRIBUTION read: it is how a session row can state the branch it
+// actually writes to instead of the one its URL names. Sorted by mount so the
+// listing is stable.
+func (s *Store) SessionMountExperiments(ctx context.Context, sessionID string) ([]MountExperimentRow, error) {
+	if sessionID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT mount_uid, experiment, set_at FROM mount_experiments WHERE session_id = ? ORDER BY mount_uid`,
+		sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session mount experiments: %w", err)
+	}
+	defer rows.Close()
+	var out []MountExperimentRow
+	for rows.Next() {
+		var r MountExperimentRow
+		var setAt int64
+		if err := rows.Scan(&r.MountUID, &r.Experiment, &setAt); err != nil {
+			return nil, fmt.Errorf("session mount experiments: scan: %w", err)
+		}
+		r.SetAt = time.Unix(setAt, 0)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}

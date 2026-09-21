@@ -138,3 +138,46 @@ func ResolveSessionBindingOnExperiment(ctx context.Context, m *Manager, pin, bra
 	}
 	return ResolveSessionBinding(ctx, m, pin, branch)
 }
+
+// mountSessionKey carries the MCP session id and mount identity from the HTTP
+// middleware down to the tool handlers.
+type mountSessionKey struct{}
+
+type mountSession struct {
+	SessionID string
+	MountUID  string
+}
+
+// WithMountSession marks this request as arriving on a URL-scoped mount whose
+// URL names a PLAIN branch — one where session state may decide the branch —
+// and carries the session id when there is one.
+//
+// It lives here rather than in internal/web because internal/mcp must READ it
+// and cannot import internal/web.
+//
+// THE MARKER IS SET EVEN WITH AN EMPTY SESSION ID, and that distinction is
+// load-bearing: "this mount accepts session state but you sent no session id"
+// and "this mount addresses an experiment by URL" are different refusals with
+// different fixes, and a caller told the wrong one goes looking in the wrong
+// place. Presence answers the first question, SessionID the second.
+func WithMountSession(ctx context.Context, sessionID, mountUID string) context.Context {
+	if mountUID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, mountSessionKey{}, mountSession{SessionID: sessionID, MountUID: mountUID})
+}
+
+// MountSessionFromContext returns the session id and mount identity for a
+// URL-scoped MCP request on a PLAIN-branch mount.
+//
+// ok is false on the unscoped mount, on a mount whose URL names an experiment,
+// and on every REST route — none of which may record or read a mount
+// experiment. ok true with an empty sessionID means the mount would accept
+// session state but the client sent no session id.
+func MountSessionFromContext(ctx context.Context) (sessionID, mountUID string, ok bool) {
+	ms, found := ctx.Value(mountSessionKey{}).(mountSession)
+	if !found {
+		return "", "", false
+	}
+	return ms.SessionID, ms.MountUID, true
+}

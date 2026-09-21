@@ -56,10 +56,25 @@ post-#236 build is the fix, and that is the user's call.
 `name` defaults to the experiment you are in for commit/rollback/sync; `open`
 always needs it. `description` is local-only and never enters git.
 
-**On a URL-scoped mount** (`--repo` / `--lens` bridges) `open` cannot move you:
-it creates the experiment and returns a `reconnect_url`. You are still on the
-old branch until you reconnect there. Say that plainly rather than proceeding
-as if you were inside.
+**`open` moves you on every mount.** A `--repo` or `--lens` bridge is scoped by
+its URL, but the experiment you open is recorded against your session and that
+mount, so the very next call writes inside it — no reconnect, no bridge flag.
+The result says which branch that is.
+
+TWO EXCEPTIONS, both of which refuse rather than pretend:
+
+- A mount whose URL already NAMES an experiment
+  (`/repos/{repo}/branches/exp:<name>/mcp`) serves that one. Opening a
+  different experiment there creates it and refuses to switch, because the
+  endpoint is an address.
+- A connection with no MCP session id has nothing to attach the experiment to,
+  so `open` refuses. Bind on the unscoped mount instead.
+
+**One connection is one session.** If your client shares a connection across
+several jobs — Claude Desktop does — they share the session id, so opening an
+experiment moves all of them on that mount. It can never reach another
+knowledge base: the URL fixed the repo before any of this applied. Say so if
+you are not the only job on the connection.
 
 **On open, warn about expiry.** An experiment with no commits for
 `experiments.expiry_days` (default 30) is rolled back automatically by the

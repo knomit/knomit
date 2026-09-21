@@ -97,6 +97,8 @@ type experimentEnvelope struct {
 	Repo         string `json:"repo"`
 	Branch       string `json:"branch"`
 	Active       string `json:"active_experiment"`
+	// Kept on the envelope though the server no longer sets it: the tests
+	// assert it is ABSENT, which needs the field to decode into.
 	ReconnectURL string `json:"reconnect_url"`
 	Summary      string `json:"summary"`
 	Experiments  []struct {
@@ -197,11 +199,18 @@ func TestExperiment_IsPerHandleNotPerSession(t *testing.T) {
 	}))
 }
 
-// TestExperiment_URLScopedOpenReturnsTheReconnectURL: a URL-scoped mount has
-// no handle, so `open` can create the experiment but cannot move the caller.
-// It must say so and name the endpoint to reconnect on — an agent told only
-// "created" keeps writing to the agent branch believing otherwise.
-func TestExperiment_URLScopedOpenReturnsTheReconnectURL(t *testing.T) {
+// TestExperiment_URLScopedOpenEntersItWithoutReconnecting REPLACES the former
+// TestExperiment_URLScopedOpenReturnsTheReconnectURL, which pinned the
+// behaviour this build deliberately changes: a URL-scoped mount used to create
+// the experiment, leave the caller outside it, and hand back an endpoint to
+// reconnect on.
+//
+// It no longer does. A mount whose URL names a PLAIN branch now carries the
+// session's experiment in (session id, mount uid), so `open` moves the caller
+// and the next write lands inside. The mount's own experiment endpoint still
+// exists and still resolves — that is asserted here too, because removing the
+// reconnect instruction must not have removed the address it pointed at.
+func TestExperiment_URLScopedOpenEntersItWithoutReconnecting(t *testing.T) {
 	h, _ := experimentServer(t)
 	mount := "/repos/jobA-repo/branches/agent:test/mcp"
 
@@ -209,20 +218,21 @@ func TestExperiment_URLScopedOpenReturnsTheReconnectURL(t *testing.T) {
 		`{"action":"open","name":"from-a-url"}`)
 	require.False(t, isErr, "open on a URL-scoped mount: %s", text)
 
-	require.Equal(t, "/api/v1/repos/jobA-repo/branches/exp:from-a-url/mcp", env.ReconnectURL)
-	require.Empty(t, env.Active, "this session is NOT inside it")
-	require.Contains(t, env.Summary, "NOT INSIDE IT")
-	require.Contains(t, env.Summary, env.ReconnectURL)
+	require.Equal(t, "from-a-url", env.Active, "this session IS inside it now")
+	require.Empty(t, env.ReconnectURL, "there is nothing to reconnect to")
+	require.NotContains(t, env.Summary, "NOT INSIDE IT")
+	require.Contains(t, env.Summary, "exp/from-a-url",
+		"the summary names the branch every later call on this connection writes to")
 
-	// The URL it names must actually be a mount, not a plausible-looking
-	// string. This is the half that makes the hardcoded /api/v1 prefix in
-	// internal/mcp safe.
-	back := apiPath(env.ReconnectURL)
+	// The experiment's own mount is unchanged and still resolves. This is the
+	// half that keeps the hardcoded /api/v1 prefix in internal/mcp honest, and
+	// it is why a client that DOES address an experiment by URL still works.
+	back := "/repos/jobA-repo/branches/exp:from-a-url/mcp"
 	text2, isErr2 := callToolAt(t, h, back, initAt(t, h, back), "knomit_experiment", `{"action":"list"}`)
-	require.False(t, isErr2, "the reconnect URL must resolve: %s", text2)
+	require.False(t, isErr2, "the experiment mount must still resolve: %s", text2)
 	var listed experimentEnvelope
 	require.NoError(t, json.Unmarshal([]byte(text2), &listed))
-	require.Equal(t, "exp/from-a-url", listed.Branch, "and it must land inside the experiment")
+	require.Equal(t, "exp/from-a-url", listed.Branch)
 	require.Equal(t, "from-a-url", listed.Active)
 }
 

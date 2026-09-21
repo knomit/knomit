@@ -314,8 +314,16 @@ func (s *Server) NewAPIRouter() chi.Router {
 				r.Delete("/index-rebuilds/{id}", handleDeleteJob(s.JobRegistry))
 				r.Get("/index-rebuilds/{id}/events", handleJobEvents(s.JobRegistry))
 
-				r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
-				r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+				// ONLY the MCP mount gets the session's experiment applied.
+				// The REST routes above name their branch in the URL and must
+				// keep meaning exactly that: a GET of
+				// /branches/agent:x/facts is a question about agent:x
+				// whoever asks it.
+				r.Group(func(r chi.Router) {
+					r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
+					r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+					r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+				})
 			})
 		})
 	})
@@ -351,8 +359,14 @@ func (s *Server) NewAPIRouter() chi.Router {
 			r.Get("/stats", handleHALLensStats(p.stats, p.activity))
 			r.Get("/topics", handleHALLensTopics(p.topicLister, s.OntologyRoot))
 			r.Get("/topics/*", handleHALLensTopics(p.topicLister, s.OntologyRoot))
-			r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
-			r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+			// As on the repo subtree: the session's experiment applies to the
+			// MCP mount only. The HAL reads above federate at each member's
+			// own pinned branch and must keep doing so.
+			r.Group(func(r chi.Router) {
+				r.Use(MountExperimentMiddleware(s.Manager, s.ClientSessions))
+				r.HandleFunc("/mcp", mcpDispatch.ServeHTTP)
+				r.HandleFunc("/mcp/*", mcpDispatch.ServeHTTP)
+			})
 		})
 
 		// The lens twin of /repos/{repo}/branches/exp:<name>/mcp. A lens pins
