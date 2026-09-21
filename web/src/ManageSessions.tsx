@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import { api } from './api';
 import type { ClientSession, ClientSessionPolicy } from './api';
 import { card, cardLabel } from './manageStyles';
+import { FlaskIcon } from './icons';
 import { useClientSessionChanges } from './useClientSessionChanges';
 
 // ManageSessions lists every MCP client session the server has seen.
@@ -181,7 +182,23 @@ export function ManageSessions({ onLiveCount }: {
                             ? <span style={{ color: '#777' }}>{r.binding.kind}:{r.binding.uid}</span>
                             : <span style={{ color: '#777' }}>—</span>))}
                     </td>
-                    <td style={{ color: '#888' }}>{r.branch || '—'}</td>
+                    {/* The branch this session WRITES to, which is not always
+                        the one its mount's URL names: a session inside an
+                        experiment is served exp/<name>. `mounts` carries the
+                        stored answer, so this column states it rather than
+                        repeating the URL back. `r.branch` is a different
+                        thing — the client's own git branch, reported by the
+                        bridge — and stays the fallback. */}
+                    <td data-testid="session-write-branch" style={{ color: '#888' }}>
+                      {r.mounts && r.mounts.length > 0
+                        ? r.mounts.map(mo => (
+                            <div key={mo.mount} data-testid="session-mount" style={{ whiteSpace: 'nowrap', color: '#7c9' }}>
+                              <FlaskIcon color="currentColor" size={11} />
+                              <span style={{ marginLeft: 4 }}>{mo.experiment}</span>
+                            </div>
+                          ))
+                        : (r.branch || '—')}
+                    </td>
                     <td title={r.last_seen_at}>{relativeTime(r.last_seen_at, now)}</td>
                     <td>{r.request_count}</td>
                   </tr>

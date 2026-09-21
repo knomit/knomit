@@ -380,3 +380,33 @@ func TestMountExperiment_SessionRowNamesTheBranchItWritesTo(t *testing.T) {
 	}
 	require.True(t, found, "the session row must carry its mount's experiment: %s", rec.Body.String())
 }
+
+// TestMountExperiment_LogNamesTheServedBranch: the "request done" line carries
+// the branch actually served whenever it differs from the one in the URL.
+//
+// Two lines, required to DIFFER — one before the open and one after, on the
+// same mount and the same session. Asserting only the second would pass on a
+// build that stamped the field unconditionally, which would be just as wrong
+// in the other direction.
+func TestMountExperiment_LogNamesTheServedBranch(t *testing.T) {
+	h, m := experimentServer(t)
+	mount := repoMount(t, m, "jobA-repo")
+	sid := initAt(t, h, mount)
+	agent := m.Get("jobA-repo").AgentBranch()
+
+	ri := m.Get("jobA-repo")
+	base := repos.WithRepoInstance(repos.WithBranch(context.Background(), agent), ri)
+
+	// Before: the binding is the URL's own branch, so there is nothing to add.
+	before := servedBranch(applyMountExperiment(base, m, m.ClientSessions(), sid))
+	require.Empty(t, before,
+		"with no experiment the served branch IS the URL's, so the field must be omitted")
+
+	_, text, isErr := callExperiment(t, h, mount, sid, `{"action":"open","name":"logged"}`)
+	require.False(t, isErr, "open: %s", text)
+
+	after := servedBranch(applyMountExperiment(base, m, m.ClientSessions(), sid))
+	require.Equal(t, "exp/logged", after,
+		"inside an experiment the log must name the branch actually written to")
+	require.NotEqual(t, before, after, "the two lines must differ; that is the whole point")
+}

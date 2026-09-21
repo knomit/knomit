@@ -21,6 +21,8 @@ import { btn } from './manageStyles';
 interface Props {
   /** The experiment whose commit was refused. */
   name: string;
+  /** The repository, so the bridge snippet below is the one to actually run. */
+  repo: string;
   /** Where the commit was trying to land — named, because "the agent branch" is not a name. */
   parent: string;
   /** The conflicting fact paths, exactly as the 409 listed them. */
@@ -31,7 +33,16 @@ interface Props {
   onClose: () => void;
 }
 
-export function ExperimentConflictDialog({ name, parent, paths, busy = false, onRollback, onClose }: Props) {
+// codeBlock keeps the snippets copyable and visually distinct from the prose
+// around them — they are meant to be pasted, not read.
+const codeBlock: React.CSSProperties = {
+  margin: '4px 0 0', padding: '6px 8px',
+  background: '#141414', border: '1px solid #2a2a2a', borderRadius: 4,
+  fontFamily: 'var(--k-font-mono, monospace)', fontSize: 11,
+  color: '#ddd', whiteSpace: 'pre', overflowX: 'auto',
+};
+
+export function ExperimentConflictDialog({ name, repo, parent, paths, busy = false, onRollback, onClose }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
 
   // Escape closes, and the close button takes focus on open. A refused commit
@@ -94,13 +105,39 @@ export function ExperimentConflictDialog({ name, parent, paths, busy = false, on
           ))}
         </div>
 
+        {/* CONCRETE STEPS, not an explanation of what an agent could do.
+            Whoever is reading this has a refused commit and needs the next
+            command, so the panel is a recipe with this repo and this
+            experiment already substituted in. */}
+        <div style={{ fontSize: 12, lineHeight: 1.6, color: '#bbb' }}>
+          <div style={{ color: '#ddd', marginBottom: 6 }}>To resolve, from an agent:</div>
+          <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <li>
+              Point a bridge at this repository — in your MCP config:
+              <pre style={codeBlock}>{`"knomit": {\n  "command": "/path/to/kb",\n  "args": ["--repo", "${repo}"]\n}`}</pre>
+            </li>
+            <li>
+              Enter the experiment. No reconnect is needed — the session moves on the spot:
+              <pre style={codeBlock}>{`knomit_experiment {action: "open", name: "${name}"}`}</pre>
+            </li>
+            <li>
+              Commit, and read the refusal. It names each conflicting path and the
+              three commits to read that fact at:
+              <pre style={codeBlock}>{`knomit_experiment {action: "commit"}`}</pre>
+            </li>
+            <li>
+              Decide per path, then commit again with the answers.{' '}
+              <span style={{ color: '#ddd' }}>“ours” keeps this experiment’s version</span>{' '}
+              and <span style={{ color: '#ddd' }}>“theirs” takes {parent}’s</span> — the
+              opposite way round from git, because the experiment is the merge source:
+              <pre style={codeBlock}>{`knomit_experiment {action: "commit", resolutions: {\n  "${paths[0] ?? '<path>'}": "ours"\n}}`}</pre>
+            </li>
+          </ol>
+        </div>
+
         <p style={{ margin: 0, fontSize: 12, lineHeight: 1.55, color: '#999' }}>
-          Resolving {paths.length === 1 ? 'it' : 'them'} means choosing, per fact, between this
-          experiment’s version and{' '}
-          <span style={{ fontFamily: 'var(--k-font-mono, monospace)', color: '#8af' }}>{parent}</span>’s — an agent
-          does that with <span style={{ fontFamily: 'var(--k-font-mono, monospace)', color: '#ddd' }}>knomit_experiment</span>,
-          which can see all three versions. This window can only leave the experiment as it is, or
-          discard it: <span style={{ color: '#ddd' }}>Roll back</span> deletes it and everything on it.
+          <span style={{ color: '#ddd' }}>Roll back</span> discards the experiment and
+          everything on it.
         </p>
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>

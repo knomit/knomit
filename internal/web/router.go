@@ -79,13 +79,27 @@ func (s *Server) NewAPIRouter() chi.Router {
 			Str("session", req.Header.Get("Mcp-Session-Id")).
 			Msg("mcp: request in")
 		h.ServeHTTP(mw, req)
-		log.Info().
+		// The PATH is what the client addressed; `branch` is what was actually
+		// served, and it is logged whenever the URL does not ALREADY NAME the
+		// served branch — which is exactly when the path alone misleads. A
+		// session inside an experiment writes to exp/<name> while every log
+		// line still reads …/branches/agent:…/mcp, so someone reading the log
+		// to find out where a fact went is told the wrong answer with no hint
+		// that it is wrong. A lens mount has no branch in its URL at all, so
+		// the field is always present there.
+		//
+		// The path is never rewritten. It stays the address the caller used,
+		// because that is what they can correlate with their own config.
+		done := log.Info().
 			Str("method", req.Method).
 			Str("path", req.URL.Path).
 			Int("status", mw.status).
 			Str("response_content_type", mw.Header().Get("Content-Type")).
-			Dur("elapsed", time.Since(start)).
-			Msg("mcp: request done")
+			Dur("elapsed", time.Since(start))
+		if served := servedBranch(req.Context()); served != "" {
+			done = done.Str("branch", served)
+		}
+		done.Msg("mcp: request done")
 		// AFTER the response: recording is never in the request's critical
 		// path, and never a reason for it to fail.
 		//

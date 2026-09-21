@@ -128,13 +128,14 @@ export function ExperimentBand({ repo, branch, experiment, onEnterBranch, onChan
         <button data-testid="experiment-band-commit" disabled={busy}
           title={`Merge into ${parent} and delete the experiment`}
           onClick={() => void run('commit')} style={bandBtn(busy, true)}>
-          Commit to {parent}
+          Commit
         </button>
       </div>
 
       {conflicts && (
         <ExperimentConflictDialog
           name={experiment.name}
+          repo={repo}
           parent={parent}
           paths={conflicts}
           busy={busy}

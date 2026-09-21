@@ -103,11 +103,17 @@ PR comment as the gate. That changes:
 
 ## The commit procedure — refs must be re-pinned to the merge commit
 
+**ONLY IF the experiment holds facts carrying `src://` refs.** An experiment
+whose facts cite no source — and one opened outside a PR at all — skips this
+whole section and commits. Say nothing about having skipped it: a step that
+does not apply is not an omission, and reporting it as one teaches the reader
+to discount the times it matters.
+
 Facts written during the PR cite `src://` refs at **branch** commits. After the
 merge those commits may be unreachable, and a fact whose ref cannot be resolved
 is worse than one with no ref: it looks anchored and is not.
 
-Before `{action: "commit"}`:
+So, when any fact in the experiment carries one, before `{action: "commit"}`:
 
 1. **Find the merge commit** of the PR on the default branch.
 2. **For every fact in the experiment, re-read each `src://` ref at the merge
@@ -158,6 +164,13 @@ at. Then:
    Remember which way round these words go here: `commit` merges the
    experiment INTO the agent branch, so **"ours" is the experiment** — the
    opposite of git's convention, where "ours" is the branch you merge into.
+
+   **Record NOTHING about the resolution.** No `/knomit-decided`, no fact, no
+   observation, not under `meta/` either. Two edits colliding is housekeeping,
+   not a finding about the system: the choice is already in the merge commit,
+   and a corpus that accrues one fact per conflict fills up with the history of
+   its own maintenance. Say which you chose and why in your reply to the human,
+   and stop there.
 
 3. **Retry with the resolutions**, all in one call:
 

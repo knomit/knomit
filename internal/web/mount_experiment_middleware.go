@@ -176,3 +176,32 @@ func mountExperimentUID(b *repos.Binding) string {
 	// spelling here is how two keys for one mount start disagreeing.
 	return b.PinID()
 }
+
+// servedBranch is the branch this request was actually served on, logged
+// whenever the URL does not ALREADY NAME that branch — and "" when it does.
+//
+// It exists for the log line: a session inside an experiment is served
+// exp/<name> while its path still reads …/branches/agent:…/mcp, so a log
+// carrying only the path answers "where did that fact go" wrongly and with no
+// sign of it.
+//
+// Note the condition is "the URL does not already say it", not "the two
+// differ". A lens mount carries NO {branch} segment, so its URL never names a
+// branch and the field is present on every one of its lines — which is right:
+// there the path alone has never said where a write goes. Only a repo mount,
+// whose path does name a branch, can be in the case where the field would
+// merely repeat it, and there it is omitted.
+func servedBranch(ctx context.Context) string {
+	b, ok := repos.BindingFromContextOpt(ctx)
+	if !ok {
+		return ""
+	}
+	served := b.WriteBranch()
+	if served == "" {
+		return ""
+	}
+	if urlBranch, hasURL := repos.BranchFromContextOpt(ctx); hasURL && urlBranch == served {
+		return ""
+	}
+	return served
+}

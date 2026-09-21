@@ -24,8 +24,8 @@ import { ExperimentConflictDialog } from './ExperimentConflictDialog';
 // experiment's version of the very facts a refused commit is about. What is
 // left is browsing and housekeeping: Open, Commit, Roll back. The REST create
 // and sync routes still exist (the mirrored routes must stay at parity); they
-// simply have no caller in the UI, and the empty state says who opens one so
-// the absence reads as a decision rather than a missing button.
+// simply have no caller in the UI. The empty state is one short line: a panel
+// that explains its own emptiness is read once and skipped forever after.
 //
 // The expiry line is a POLICY STATEMENT, not a control. `experiments.expiry_days`
 // is a server-level setting in knomit.toml and there is no config-write surface
@@ -136,11 +136,8 @@ export function ExperimentsPanel({ repo, currentBranch, onEnterBranch, agentBran
       {!loaded && <div style={{ fontSize: 12, color: '#666' }}>Loading…</div>}
 
       {loaded && rows.length === 0 && (
-        <div data-testid="experiments-empty" style={{ fontSize: 12, color: '#666', lineHeight: 1.5 }}>
-          No experiments. An agent opens one with{' '}
-          <span style={{ fontFamily: 'var(--k-font-mono, monospace)', color: '#aaa' }}>knomit_experiment</span>, which forks{' '}
-          <span style={{ color: '#8af' }}>{agentBranch || 'the agent branch'}</span> so its work stays off that branch
-          until it is committed. They are managed from here once they exist.
+        <div data-testid="experiments-empty" style={{ fontSize: 12, color: '#666' }}>
+          No experiments.
         </div>
       )}
 
@@ -247,6 +244,7 @@ export function ExperimentsPanel({ repo, currentBranch, onEnterBranch, agentBran
       {conflicts && (
         <ExperimentConflictDialog
           name={conflicts.name}
+          repo={repo}
           parent={agentBranch}
           paths={conflicts.paths}
           busy={rowBusy}

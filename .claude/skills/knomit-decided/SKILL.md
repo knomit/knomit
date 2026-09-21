@@ -32,6 +32,10 @@ These thoughts mean fire the skill NOW, not later:
 ## DON'T fire for
 
 - Mechanical default choices (no real alternative considered, e.g. picking a variable name)
+- **Resolving a merge conflict.** Choosing `ours`/`theirs`/a merged body for a
+  colliding path is a repair, not a tradeoff about the system — the choice
+  lives in the merge commit. Recording one per conflict fills the corpus with
+  the history of its own housekeeping.
 - Decisions about the current conversation only (what to say next, how to format a response)
 - Re-stating a decision already captured earlier in the same session
 
