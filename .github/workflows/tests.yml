@@ -265,28 +265,13 @@ jobs:
       # below, via ./internal/platform/... — also on every matrix platform, so
       # the Windows branch is reached there too. BOTH halves are covered, and
       # each by a different step; if either moves, check the other still is.
-      # internal/auth joined this step in 29c5594f and moved to its own,
-      # verbose one directly below in knomit#245 — see the reason there. It is
-      # still named explicitly, which is the thing that matters: before 29c5594f
-      # it was in no step on any OS.
+      # internal/auth joined this step in 29c5594f. Keeping it here matters
+      # doubly for knomit#245: its Windows named-pipe tests are the only
+      # coverage the pipe transport has, and they are compiled on no other
+      # platform, so a step that did not name the package would let them
+      # compile and never execute on windows-2025.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
-
-      # internal/auth runs SEPARATELY and VERBOSE, which is unusual here and
-      # deliberate. Its Windows-only tests — the named-pipe listener, the SID
-      # read off an impersonated client, the anonymous-level negative control —
-      # are compiled on no other platform, so the windows-2025 leg of this
-      # matrix is the only place they ever execute. Without -v a green step
-      # proves the PACKAGE compiled and ran; it does not let a reader confirm
-      # from the log that those tests were among the ones that did, and "green"
-      # is exactly what a package whose platform-specific half silently stopped
-      # being built would also look like.
-      #
-      # -v makes the job log name every test, so `grep TestPeerCred_PipeReportsOwnSID`
-      # against this job answers the question directly. The cost is ~35 lines
-      # of log and 0.6s of runtime (measured on windows-2025, run 35797609127).
-      - name: Unit tests (internal/auth, verbose — names the platform-only tests)
-        run: CGO_ENABLED=1 go test -v ./internal/auth/
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no
