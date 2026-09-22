@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/Microsoft/go-winio"
 
 	"knomit/internal/auth"
 )
@@ -44,7 +47,7 @@ func testPipePath(t *testing.T) string {
 func TestBootServer_OpensLocalPipeWithPeerCreds(t *testing.T) {
 	pipe := testPipePath(t)
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", pipe)
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", pipe, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestBootServer_PipeInUseServesTCPOnly(t *testing.T) {
 	defer release()
 
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", pipe)
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", pipe, false)
 	if err != nil {
 		t.Fatalf("a pipe in use must not fail the boot: %v", err)
 	}
@@ -126,7 +129,7 @@ func TestBootServer_PipeInUseServesTCPOnly(t *testing.T) {
 func TestBootServer_PipeFailureWritesNoLockfile(t *testing.T) {
 	notAPipe := filepath.Join(t.TempDir(), "knomit.sock")
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", notAPipe)
+	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", notAPipe, false)
 	if err == nil {
 		srv.shutdown()
 		t.Fatal("bootServer must fail when the local listener cannot be opened")
@@ -137,4 +140,60 @@ func TestBootServer_PipeFailureWritesNoLockfile(t *testing.T) {
 	if _, serr := os.Stat(lockPath); !errors.Is(serr, os.ErrNotExist) {
 		t.Fatalf("lockfile written despite the listener failure: %v", serr)
 	}
+}
+
+// The second door on the silent lockout (knomit#245 review). With
+// [auth].require = true there is no anonymous path, so a desktop that could
+// not bind the pipe must FAIL rather than take the benign ErrSocketInUse
+// branch and serve TCP — which would be a running app answering every request
+// 403 while looking healthy.
+//
+// The holder here is a FOREIGN owner, because that is how this is actually
+// reached: the pipe namespace is flat and world-creatable, and any process
+// holding `knomit-<hash>` produces the same ERROR_ACCESS_DENIED. No attacker,
+// no second knomit — a name collision is enough.
+func TestBootServer_PipeHeldWithRequireAuthFailsTheBoot(t *testing.T) {
+	pipe := testPipePath(t)
+	foreign, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: "D:P(A;;GA;;;SY)"})
+	if err != nil {
+		t.Fatalf("fixture: could not hold the name as a foreign owner: %v", err)
+	}
+	defer foreign.Close()
+
+	lockPath := filepath.Join(t.TempDir(), "server.json")
+	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", pipe, true)
+	if err == nil {
+		srv.shutdown()
+		t.Fatal("require = true with no local listener must fail the boot, not serve TCP only")
+	}
+	if !strings.Contains(err.Error(), "[auth].require = true") {
+		t.Fatalf("the refusal must name the setting that caused it; got: %v", err)
+	}
+	// And nothing is advertised: a lockfile here would point clients at a port
+	// that answers 403 to all of them.
+	if _, serr := os.Stat(lockPath); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("no lockfile may be written when the boot is refused: %v", serr)
+	}
+
+	// POSITIVE CONTROL 1: the SAME config boots once the name is free, so the
+	// refusal above is the guard and not require=true breaking every boot.
+	foreign.Close()
+	ok1, _, err := bootServer(context.Background(), peerEcho, filepath.Join(t.TempDir(), "s1.json"), "v", "", testPipePath(t), true)
+	if err != nil {
+		t.Fatalf("require = true with a free pipe must boot: %v", err)
+	}
+	ok1.shutdown()
+
+	// POSITIVE CONTROL 2: the same HELD name is benign with require = false,
+	// so the guard keys on the setting and not merely on the held pipe.
+	foreign2, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: "D:P(A;;GA;;;SY)"})
+	if err != nil {
+		t.Fatalf("fixture: could not retake the name: %v", err)
+	}
+	defer foreign2.Close()
+	ok2, _, err := bootServer(context.Background(), peerEcho, filepath.Join(t.TempDir(), "s2.json"), "v", "", pipe, false)
+	if err != nil {
+		t.Fatalf("a held pipe with require = false must still boot on TCP: %v", err)
+	}
+	ok2.shutdown()
 }

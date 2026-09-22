@@ -271,11 +271,18 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 // business failing on a server-only combination. Both server boot paths
 // (cmd/serve and the desktop app) reach New.
 //
-// It checks what is CONFIGURED, not what is listening: the desktop app boots
-// its own http.Server and does not yet serve cfg.Socket
-// (kb/gotchas/desktop/separate-server-boot-path), so a desktop with
-// require = true is still locked out. That gap is the desktop wiring, not
-// this check.
+// IT CHECKS WHAT IS CONFIGURED, NOT WHAT IS BOUND, and the difference is a
+// SECOND DOOR onto the same lockout that this check alone cannot close.
+// auth.ListenLocal can return ErrSocketInUse — another process holds the
+// path — which both callers treat as benign and serve TCP only for. With
+// require = true that produces exactly the server this refuses at config
+// time. auth.RequireLocalListener is the guard for it, called by cmd/serve.go
+// and tools/desktop/boot.go straight after they listen; the two together are
+// what the property actually rests on, and neither is sufficient alone.
+//
+// knomit#245 is what made that second door reachable: before it, Windows had
+// no socket default, so require = true failed HERE and never got as far as
+// listening.
 func checkLocalListener(cfg config.Config) error {
 	if cfg.Auth.Require && cfg.Socket == "" {
 		return fmt.Errorf("[auth].require = true but no local authenticated listener is configured " +

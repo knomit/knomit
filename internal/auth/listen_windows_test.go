@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Microsoft/go-winio"
 )
 
 // The WINDOWS half of the ListenLocal tests. It asks the same QUESTIONS as
@@ -149,4 +151,47 @@ func mustOwnSID(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return sid
+}
+
+// The case that actually matters, and the one TestListenLocal_LivePipeIsNotStolen
+// does NOT cover: a name held by a FOREIGN owner, not by us.
+//
+// The pipe namespace is flat and world-creatable, so any local process can
+// hold `knomit-<hash>` — it need not be knomit, and there is no attacker in
+// this story either, just a name collision. ERROR_ACCESS_DENIED is what the OS
+// returns for any foreign owner, so this has to map to ErrSocketInUse exactly
+// as the same-process case does; if it did not, `knomit serve` would die on
+// boot instead of serving TCP.
+//
+// It is also what makes auth.RequireLocalListener necessary: the ErrSocketInUse
+// below is precisely the benign-looking branch that, with [auth].require = true,
+// would otherwise produce a 403-everything server.
+func TestListenLocal_ForeignOwnerIsNotStolenAndMapsToInUse(t *testing.T) {
+	path := testLocalListenerPath(t)
+	// SYSTEM only: no ACE matches this process, so we are a stranger to it in
+	// exactly the way another user's knomit would be.
+	foreign, err := winio.ListenPipe(path, &winio.PipeConfig{SecurityDescriptor: "D:P(A;;GA;;;SY)"})
+	if err != nil {
+		t.Fatalf("fixture: could not hold the name as a foreign owner: %v", err)
+	}
+	defer foreign.Close()
+
+	ln, cleanup, lerr := ListenLocal(path)
+	if ln != nil {
+		defer ln.Close()
+	}
+	if !errors.Is(lerr, ErrSocketInUse) {
+		t.Fatalf("a name held by another process must map to ErrSocketInUse, or serve dies on boot instead of serving TCP; got: %v", lerr)
+	}
+	cleanup() // the noop
+	t.Logf("foreign-owner refusal, recorded verbatim: %v", lerr)
+
+	// POSITIVE CONTROL: once the stranger lets go, the name is ours. Without
+	// this, a ListenLocal broken for every path would pass the assertion above.
+	foreign.Close()
+	mine, mcleanup, merr := ListenLocal(path)
+	if merr != nil || mine == nil {
+		t.Fatalf("after the foreign owner released it, the name must be free: %v %v", mine, merr)
+	}
+	mcleanup()
 }

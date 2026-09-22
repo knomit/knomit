@@ -34,7 +34,7 @@ func shortSocketPath(t *testing.T) string {
 func TestBootServer_OpensLocalSocketWithPeerCreds(t *testing.T) {
 	sock := shortSocketPath(t)
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", sock)
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", sock, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestBootServer_SocketInUseServesTCPOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", sock)
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", sock, false)
 	if err != nil {
 		t.Fatalf("socket in use must not fail the boot: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestBootServer_SocketInUseServesTCPOnly(t *testing.T) {
 func TestBootServer_SocketFailureWritesNoLockfile(t *testing.T) {
 	sock := filepath.Join(shortSocketPath(t)+".missing-dir", "knomit.sock") // parent does not exist
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", sock)
+	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", sock, false)
 	if err == nil {
 		srv.shutdown()
 		t.Fatal("bootServer must fail when the socket cannot be opened")

@@ -145,6 +145,13 @@ const localDialCap = 2 * time.Second
 // It matters most on Windows, where winio retries a BUSY pipe every 10ms
 // until the context expires rather than failing fast.
 //
+// ON UNIX THIS IS A BEHAVIOUR CHANGE: the local dial was previously bounded
+// only by the caller's timeout, so with Timeout 0 it was unbounded. A unix
+// connect() to a live listener returns immediately or with ECONNREFUSED, so
+// the cap is not reachable in practice there -- but it is a cap where there
+// was none, and it is here rather than Windows-only because one budget for
+// both platforms is easier to reason about than two.
+//
 // A timeout of 0 means NO LIMIT, which is what the real bridge uses -- it
 // holds SSE long-polls open, so a deadline would cut them (tools/bridge).
 // Zero must therefore NOT become a zero-length budget: a context deadline of
@@ -159,6 +166,9 @@ func localDialBudget(timeout time.Duration) time.Duration {
 	if budget > localDialCap {
 		budget = localDialCap
 	}
+	// Only reachable for a timeout under 4ns, where a quarter rounds to zero.
+	// A zero budget is the very failure this function exists to prevent, so
+	// such a caller gets its whole (vanishing) timeout rather than none of it.
 	if budget <= 0 {
 		budget = timeout
 	}
