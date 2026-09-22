@@ -9,6 +9,7 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/client/sessions"
 	"knomit/internal/config"
+	"knomit/internal/pki"
 	"knomit/internal/web/hal"
 )
 
@@ -34,8 +35,10 @@ import (
 // principal at all) versus "Permission denied" in Require (a principal that
 // lacks the permission). Clients and tests key on the title, not the status.
 //
-// Certificates (phase 2) and bearer tokens (phase 3) slot in between 1 and 2
-// and produce the same Principal type, so nothing downstream changes.
+// 1b (phase 2) sits between 1 and 2: a request on the TLS listener becomes
+// the instance (or operator) principal of its verified client certificate,
+// and is refused outright if it has none. Bearer tokens (phase 3) will slot
+// in beside it and produce the same Principal type.
 func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +53,34 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 				ctx = auth.WithPrincipal(ctx, p)
 				ctx = sessions.WithVerifiedPID(ctx, pid)
 				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if auth.IsTLSListener(ctx) {
+				// 1b. The TLS listener (F19 phase 2) is NEVER anonymous, reads
+				// included, whatever cfg.Require says: it exists only for
+				// enrolled instances. Its tls.Config (pki.ServerConfig) uses
+				// RequireAnyClientCert and verifies EVERYTHING in
+				// VerifyConnection, which leaves VerifiedChains empty — so the
+				// principal is read from PeerCertificates[0], and that is safe
+				// only because no connection reaches here without the verifier
+				// having accepted it. The refusals below are the belt to that
+				// brace; nothing re-checks the chain or the CRL here.
+				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+					hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
+						"the TLS listener accepts only enrolled instances; no client certificate on this request", r.URL.Path)
+					return
+				}
+				id, err := pki.IdentityOf(r.TLS.PeerCertificates[0])
+				if err != nil {
+					hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
+						"the TLS listener accepts only enrolled instances; the client certificate names no knomit identity", r.URL.Path)
+					return
+				}
+				p := auth.InstancePrincipal(id.Fingerprint)
+				if id.Role == pki.RoleOperator {
+					p = auth.OperatorPrincipal(id.Fingerprint)
+				}
+				next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(ctx, p)))
 				return
 			}
 			if !cfg.Require && isLoopback(r.RemoteAddr) {
