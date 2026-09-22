@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -249,6 +250,22 @@ type Config struct {
 	Git                 GitConfig          `toml:"git"`
 	Log                 LogConfig          `toml:"log"`
 	Runtime             RuntimeConfig      `toml:"runtime"`
+	Auth                AuthConfig         `toml:"auth"`
+}
+
+// AuthConfig governs who may do what on this instance (F19 phase 1).
+type AuthConfig struct {
+	// Require, when true, refuses any request that carries no verified
+	// principal. False (the default) keeps loopback TCP working as it did
+	// before authentication existed: such requests run as the anonymous
+	// principal with LoopbackDefault's permissions. Never true by default.
+	Require bool `toml:"require"`
+	// LoopbackDefault lists the permissions the anonymous loopback principal
+	// holds while Require is false. Names are validated by auth.ParseSet at
+	// the first Handler(); a typo fails there rather than granting the wrong
+	// thing. An empty (but present) list is honoured as "anonymous holds
+	// nothing" -- only an absent one falls back to the defaults.
+	LoopbackDefault []string `toml:"loopback_default"`
 }
 
 // RuntimeConfig configures the optional runtime diagnostics port (live
@@ -279,6 +296,10 @@ func Defaults() Config {
 		ClusterCache: ClusterCacheConfig{
 			Resolution:       4.0,
 			MinCommunitySize: 2,
+		},
+		Auth: AuthConfig{
+			// Everything a local operator could do before [auth] existed.
+			LoopbackDefault: []string{"read", "write", "push:own", "operator", "admin"},
 		},
 		Session: SessionConfig{
 			ToolIdleTTL:       "15m",
@@ -445,6 +466,18 @@ func Load() (Config, error) {
 	// explicit TOML/env value (e.g. ~/.ssh/known_hosts) wins.
 	if cfg.Remote.KnownHosts == "" {
 		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
+	}
+
+	// Default the unix socket to <Home>/knomit.sock, for the same reason and
+	// at the same point as known_hosts: after tilde expansion, and only when
+	// nothing set it, so a TOML or KNOMIT_SOCKET value wins.
+	//
+	// The socket is the local bridge's credential -- the kernel tells the
+	// server which uid is on the other end (internal/auth.PeerCred) -- so it
+	// has to exist without being configured, and the directory mode is what
+	// guards it. Windows has no AF_UNIX default here.
+	if cfg.Socket == "" && runtime.GOOS != "windows" {
+		cfg.Socket = filepath.Join(cfg.Home, "knomit.sock")
 	}
 
 	if err := cfg.Validate(); err != nil {

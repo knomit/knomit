@@ -2,6 +2,8 @@ package config
 
 import (
 	"math"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -510,5 +512,53 @@ func TestLoad_ClientSessionEnvOverrides(t *testing.T) {
 	}
 	if cfg.Session.ClientRetention != "0" {
 		t.Errorf("ClientRetention = %q, want 0", cfg.Session.ClientRetention)
+	}
+}
+
+// F19 phase 1: [auth] exists and its defaults keep an upgrade uneventful —
+// require off, and the anonymous loopback caller holds everything a local
+// operator held before authentication existed.
+func TestDefaults_AuthLoopbackIsFullLocalRights(t *testing.T) {
+	d := Defaults()
+	if d.Auth.Require {
+		t.Fatal("require must default false so an upgrade breaks nobody")
+	}
+	want := []string{"read", "write", "push:own", "operator", "admin"}
+	if strings.Join(d.Auth.LoopbackDefault, ",") != strings.Join(want, ",") {
+		t.Fatalf("loopback_default = %v, want %v", d.Auth.LoopbackDefault, want)
+	}
+}
+
+// The socket is the local credential, so it must exist without being asked
+// for: Load fills it in under Home when nothing set it.
+func TestLoad_SocketDefaultsUnderHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Socket != filepath.Join(home, "knomit.sock") {
+		t.Fatalf("Socket = %q, want %q", cfg.Socket, filepath.Join(home, "knomit.sock"))
+	}
+}
+
+// An explicit socket path must survive: the default only fills a gap.
+func TestLoad_ExplicitSocketWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	t.Setenv("KNOMIT_SOCKET", "/tmp/explicit.sock")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Socket != "/tmp/explicit.sock" {
+		t.Fatalf("Socket = %q, want the explicit path", cfg.Socket)
 	}
 }
