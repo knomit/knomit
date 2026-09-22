@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { api } from './api';
-import type { ClientSession, ClientSessionPolicy } from './api';
+import type { ClientSession, ClientSessionBindingRow, ClientSessionMount, ClientSessionPolicy } from './api';
 import { card, cardLabel } from './manageStyles';
-import { FlaskIcon } from './icons';
+import { BookIcon, ChevronDownIcon, FlaskIcon, GitBranchIcon, LayersIcon } from './icons';
+import { LENS } from './utils';
 import { useClientSessionChanges } from './useClientSessionChanges';
 
 // ManageSessions lists every MCP client session the server has seen.
@@ -22,6 +23,22 @@ import { useClientSessionChanges } from './useClientSessionChanges';
 
 const POLL_MS = 30_000;
 
+// Show hidden is a VIEW preference, not state the server owns, so it is
+// remembered here rather than round-tripped. Every access is wrapped: a
+// blocked or throwing localStorage (private windows, embedded webviews) must
+// cost the page the preference and nothing else — the same shape
+// repoSelection.ts uses for the last-context and splitter keys.
+const SHOW_HIDDEN_KEY = 'knomit.sessions.showHidden';
+
+function readShowHidden(): boolean {
+  try { return localStorage.getItem(SHOW_HIDDEN_KEY) === '1'; } catch { return false; }
+}
+function writeShowHidden(on: boolean): void {
+  // '0' rather than removing the key: an explicit "off" has to beat whatever
+  // default a later version picks, and a missing key cannot say that.
+  try { localStorage.setItem(SHOW_HIDDEN_KEY, on ? '1' : '0'); } catch { /* preference only */ }
+}
+
 // relativeTime renders an age the way the table reads it. Not exported: this
 // module exports components only (react-refresh), and the test reads the
 // rendered cell rather than the function.
@@ -36,6 +53,143 @@ function relativeTime(iso: string, now: Date): string {
 }
 
 const STATE_COLOR: Record<ClientSession['state'], string> = { live: '#4ade80', idle: '#facc15', dead: '#555' };
+
+// ── the Binding column ───────────────────────────────────────────────────
+//
+// A BindingGroup is every handle a session has presented against ONE target.
+// The set is keyed by handle server-side, on purpose — two handles naming the
+// same repo are two callers, and collapsing them by pin would discard exactly
+// the distinction the handle exists to make. This grouping is PRESENTATION
+// over that set: the count and the detail row keep every handle reachable, so
+// nothing the key separates is lost.
+type WriteChip = { branch: string; experiment?: string };
+type BindingGroup = {
+  key: string; kind: string; uid: string; name: string | null;
+  count: number; chips: WriteChip[];
+};
+
+const chipKey = (c: WriteChip): string => (c.experiment ? `e:${c.experiment}` : `b:${c.branch}`);
+
+// mountFor finds the URL-scoped mount for a target, matched on KIND AND UID.
+// Uid alone would let a repo and a lens that happen to share one put each
+// other's experiment on the wrong line.
+function mountFor(kind: string, uid: string, mounts: ClientSessionMount[] | undefined): ClientSessionMount | undefined {
+  return mounts?.find(m => m.kind === kind && m.uid === uid && m.experiment);
+}
+
+// writeChip says what a handle on this target WRITES to, or null when there is
+// nothing to say.
+//
+// THE HANDLE'S OWN BRANCH WINS. kb/invariants/mcp/experiments/one-answer-per-handle
+// makes "a branch pin AND an experiment" unrepresentable — a handle carries one
+// or the other — so a non-empty `branch` IS this handle's answer, and a mount's
+// experiment must not overwrite it. An empty branch means the handle named
+// nothing, and there the mount is the only thing that knows: `mounts` is the
+// STORED answer for a URL-scoped mount, and a session that opened an experiment
+// writes to exp/<name>, which is why
+// kb/invariants/mcp/experiments/mount-eligibility-from-the-route has it stored
+// rather than re-derived from the URL. Neither → no chip, because "" means the
+// target's own branch and a chip saying nothing is worse than no chip.
+//
+// The mount half is a DISPLAY join, not a routing claim: mounts are per
+// URL-scoped mount and bindings are per handle. See
+// kb/gotchas/web/ui/manage-page/sessions-binding-groups.
+function writeChip(kind: string, uid: string, branch: string, mounts: ClientSessionMount[] | undefined): WriteChip | null {
+  if (branch) return { branch };
+  const mo = mountFor(kind, uid, mounts);
+  return mo ? { branch: mo.branch, experiment: mo.experiment } : null;
+}
+
+// targetLines is every line the Binding cell draws for one session: the
+// grouped handles, or the singular `binding` fallback when the session
+// presented none, PLUS any mount whose target no line already names.
+//
+// That last part is not cosmetic. The Branch column this replaced rendered
+// `r.mounts` UNCONDITIONALLY, so an experiment on a target the session has
+// presented no handle for used to be visible and would otherwise now be shown
+// nowhere at all.
+function targetLines(r: ClientSession): BindingGroup[] {
+  const lines = groupBindings(r.bindings, r.mounts);
+  if (lines.length === 0) {
+    const mo = mountFor(r.binding.kind, r.binding.uid, r.mounts);
+    lines.push({
+      key: `${r.binding.kind}:${r.binding.uid}`,
+      kind: r.binding.kind, uid: r.binding.uid, name: r.binding.name,
+      count: 1, chips: mo ? [{ branch: mo.branch, experiment: mo.experiment }] : [],
+    });
+  }
+  for (const mo of r.mounts ?? []) {
+    if (!mo.experiment) continue;
+    const key = `${mo.kind}:${mo.uid}`;
+    if (lines.some(l => l.key === key)) continue;
+    // count 0: no handle stands behind this line, so there is no count to show.
+    lines.push({
+      key, kind: mo.kind, uid: mo.uid, name: mo.name,
+      count: 0, chips: [{ branch: mo.branch, experiment: mo.experiment }],
+    });
+  }
+  return lines;
+}
+
+function groupBindings(bindings: ClientSessionBindingRow[], mounts: ClientSessionMount[] | undefined): BindingGroup[] {
+  // A Map keeps insertion order, which is first appearance, which — because
+  // the server returns the set most-recently-used first — puts the target used
+  // most recently on top.
+  const byTarget = new Map<string, BindingGroup>();
+  for (const b of bindings) {
+    const key = `${b.kind}:${b.uid}`;
+    let g = byTarget.get(key);
+    if (!g) { g = { key, kind: b.kind, uid: b.uid, name: b.name, count: 0, chips: [] }; byTarget.set(key, g); }
+    g.count++;
+    const chip = writeChip(b.kind, b.uid, b.branch, mounts);
+    // Distinct branches only: the common case is N handles writing to one
+    // branch, and repeating the chip N times would be noise. When they
+    // genuinely diverge, both chips show.
+    if (chip && !g.chips.some(c => chipKey(c) === chipKey(chip))) g.chips.push(chip);
+  }
+  return [...byTarget.values()];
+}
+
+// The target, with the glyph the top bar already uses for its kind: the book
+// for a repo, the stacked planes for a lens. An unresolvable target keeps
+// today's grey kind:uid.
+function TargetName({ kind, uid, name }: { kind: string; uid: string; name: string | null }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+      {kind === 'repo' && <BookIcon color="#6a8" size={11} />}
+      {kind === 'lens' && <LayersIcon color={LENS.accent} size={11} />}
+      {/* An unscoped session that has not yet called knomit_bind has NO pin:
+          the server's bindingNames.lookup returns empty strings for a value
+          that is not a PinID, so kind, uid and name all arrive empty and
+          `kind:uid` would render a bare ":". */}
+      {name ?? <span style={{ color: '#777' }}>{kind ? `${kind}:${uid}` : '—'}</span>}
+    </span>
+  );
+}
+
+// BranchChip is the top bar's branch button, at table scale: blue fork on
+// transparent for an ordinary branch, green flask on #11201a with a #2a4a3a
+// border for an experiment. Copied rather than shared — TopBar's own chip
+// carries a caret, a drag-region opt-out and a click target that mean nothing
+// here, and factoring the two together would drag all of it into this file.
+function BranchChip({ branch, experiment }: WriteChip) {
+  const exp = Boolean(experiment);
+  return (
+    <span data-testid="session-branch-chip"
+          title={exp ? `Experiment ${experiment}` : branch}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+            fontFamily: 'var(--k-font-mono)', fontSize: 11, lineHeight: 1.5,
+            borderRadius: 3, padding: '0 5px',
+            color: exp ? '#7c9' : '#8af',
+            background: exp ? '#11201a' : 'transparent',
+            border: '1px solid ' + (exp ? '#2a4a3a' : 'transparent'),
+          }}>
+      {exp ? <FlaskIcon color="currentColor" size={10} /> : <GitBranchIcon color="currentColor" size={10} />}
+      {exp ? experiment : branch}
+    </span>
+  );
+}
 
 // Amber rather than red: the page is correct, just partial. Red would read as
 // a failure and send someone looking for a broken request.
@@ -56,7 +210,15 @@ export function ManageSessions({ onLiveCount }: {
   // so this is the only thing that can tell a reader there is more.
   const [truncated, setTruncated] = useState(false);
   const [policy, setPolicy] = useState<ClientSessionPolicy | null>(null);
-  const [showHidden, setShowHidden] = useState(false);
+  // Read in the initializer so the FIRST fetch already carries it. Reading it
+  // in an effect instead would render the unremembered list and correct it,
+  // flashing the wrong rows.
+  const [showHidden, setShowHidden] = useState(readShowHidden);
+  // Which rows have their per-handle detail open, keyed by session id. Per page
+  // load, deliberately not persisted — but keyed by id rather than by index, so
+  // a poll that reorders or re-fetches the rows does not close what is open or
+  // move it onto a different session.
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
 
@@ -64,6 +226,18 @@ export function ManageSessions({ onLiveCount }: {
     api.listClientSessions({ includeHidden: showHidden })
       .then(r => {
         setRows(r.sessions); setPolicy(r.policy); setTruncated(r.truncated); setError(null);
+        // Drop ids that are no longer on the page. Keying by id is what lets
+        // an open row survive a poll, but it also lets a stale id outlive the
+        // row it named: a session that leaves the list — purged, or filtered
+        // out by a Show hidden change — and later comes back would spring open
+        // on its own, having never been asked to. Returning `prev` unchanged
+        // when nothing was dropped keeps this off the re-render path.
+        setExpanded(prev => {
+          if (prev.size === 0) return prev;
+          const live = new Set(r.sessions.map(s => s.id));
+          const next = new Set([...prev].filter(id => live.has(id)));
+          return next.size === prev.size ? prev : next;
+        });
         onLiveCount?.(r.sessions.filter(s => s.state === 'live').length, r.truncated);
       })
       .catch(e => { setError(String(e)); onLiveCount?.(null, false); })
@@ -111,7 +285,8 @@ export function ManageSessions({ onLiveCount }: {
             </span>
           )}
           <label style={showHiddenLabel}>
-            <input type="checkbox" aria-label="Show hidden" checked={showHidden} onChange={e => setShowHidden(e.target.checked)} />
+            <input type="checkbox" aria-label="Show hidden" checked={showHidden}
+                   onChange={e => { setShowHidden(e.target.checked); writeShowHidden(e.target.checked); }} />
             Show hidden
           </label>
         </div>
@@ -132,14 +307,33 @@ export function ManageSessions({ onLiveCount }: {
                   So the header's rule is an inset shadow, which travels with the
                   cell the way a collapsed border would not. */}
               <tr style={{ color: '#777', textAlign: 'left' }}>
-                <th style={th}></th><th style={th}>Client</th><th style={th}>Parent</th><th style={th}>Host · cwd</th><th style={th}>Binding</th><th style={th}>Branch</th><th style={th}>Last seen</th><th style={th}>Requests</th>
+                {/* No Branch column. It showed `r.branch` — the branch the
+                    BRIDGE declares about itself in its client header, which it
+                    fills only in --repo mode and leaves empty in lens and
+                    unscoped mode, and which repeats the binding's own agent
+                    branch when it is set. The one live thing it carried was the
+                    experiment attribution from `mounts`, and that now sits on
+                    the target line, where it can also disagree per target
+                    instead of per session. */}
+                <th style={th}></th><th style={th}>Client</th><th style={th}>Parent</th><th style={th}>Host · cwd</th><th style={th}>Binding</th><th style={th}>Last seen</th><th style={th}>Requests</th>
               </tr>
             </thead>
             <tbody>
               {rows.map(r => {
                 const dead = r.state === 'dead';
+                const lines = targetLines(r);
+                // The toggle reveals what the grouped line does not carry —
+                // and it carries no handle at all, so ONE handle needs it just
+                // as much: the handle is what an operator correlating a log
+                // line is after. Only a session that presented none has
+                // nothing to open.
+                const handles = r.bindings.length;
+                const expandable = handles >= 1;
+                const open = expandable && expanded.has(r.id);
+                const detailId = `session-detail-${r.id}`;
                 return (
-                  <tr key={r.id} data-testid="session-row" style={{ color: dead ? '#666' : '#ddd', borderTop: '1px solid #222' }}>
+                  <Fragment key={r.id}>
+                  <tr data-testid="session-row" style={{ color: dead ? '#666' : '#ddd', borderTop: '1px solid #222' }}>
                     <td title={r.state}><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: STATE_COLOR[r.state] }} /></td>
                     <td>
                       {r.client.name ? `${r.client.name} ${r.client.version}` : <span style={{ color: '#777' }}>unknown</span>}
@@ -151,61 +345,100 @@ export function ManageSessions({ onLiveCount }: {
                     </td>
                     <td>{r.bridge.parent || '—'}{r.bridge.pid ? <span style={{ color: '#666' }}> #{r.bridge.pid}</span> : null}</td>
                     <td><div>{r.bridge.host || r.remote_addr}</div><div style={{ color: '#666', fontSize: 11 }}>{r.bridge.cwd}</div></td>
-                    {/* Every handle the session has presented, most recently
-                        used first — NOT just the last one. One session id can
-                        serve several concurrent callers, so a single value here
-                        would show whichever call landed most recently and hide
-                        the rest. Falls back to the singular `binding` for a
-                        session that presented no handle at all (a URL-scoped
-                        caller), which is the only case the array is empty. */}
+                    {/* One line per distinct TARGET, not per handle. The set is
+                        still the whole set — the count says how many handles
+                        stand behind each line and the detail row lists them —
+                        but a busy agent presents dozens of handles against two
+                        repos, and eighteen identical lines said nothing the
+                        count does not. Order is first appearance, and bindings
+                        arrive most-recently-used first, so the target used most
+                        recently is on top.
+
+                        Falls back to the singular `binding` for a session that
+                        presented no handle at all (a URL-scoped caller), which
+                        is the only case the array is empty — and appends a line
+                        for any mount whose target no handle named, which the
+                        Branch column used to render unconditionally. */}
                     <td data-testid="session-bindings">
-                      {r.bindings.length > 0
-                        ? r.bindings.map(b => (
-                            <div key={b.handle || `${b.kind}:${b.uid}`} data-testid="session-binding" style={{ whiteSpace: 'nowrap' }}>
-                              {b.name ?? <span style={{ color: '#777' }}>{b.kind}:{b.uid}</span>}
-                              {/* The handle, shortened. Full value on hover:
-                                  it is 32 opaque characters and would dominate
-                                  the row, but an operator correlating a log
-                                  line needs the whole thing. Absent on a
-                                  read-only server, which redacts it. */}
-                              {b.handle && (
-                                <span title={b.handle} style={{ marginLeft: 6, color: '#666', fontSize: 11 }}>
-                                  {b.handle.slice(0, 6)}…
-                                </span>
-                              )}
-                              {b.branch && (
-                                <span style={{ marginLeft: 6, color: '#888', fontSize: 11 }}>@{b.branch}</span>
-                              )}
-                            </div>
-                          ))
-                        : (r.binding.name ?? (r.binding.kind
-                            ? <span style={{ color: '#777' }}>{r.binding.kind}:{r.binding.uid}</span>
-                            : <span style={{ color: '#777' }}>—</span>))}
-                    </td>
-                    {/* The branch this session WRITES to, which is not always
-                        the one its mount's URL names: a session inside an
-                        experiment is served exp/<name>. `mounts` carries the
-                        stored answer, so this column states it rather than
-                        repeating the URL back. `r.branch` is a different
-                        thing — the client's own git branch, reported by the
-                        bridge — and stays the fallback. */}
-                    <td data-testid="session-write-branch" style={{ color: '#888' }}>
-                      {r.mounts && r.mounts.length > 0
-                        ? r.mounts.map(mo => (
-                            <div key={mo.mount} data-testid="session-mount" style={{ whiteSpace: 'nowrap', color: '#7c9' }}>
-                              <FlaskIcon color="currentColor" size={11} />
-                              <span style={{ marginLeft: 4 }}>{mo.experiment}</span>
-                            </div>
-                          ))
-                        : (r.branch || '—')}
+                      <div style={targetsCol}>
+                        {lines.map(g => (
+                          <div key={g.key} data-testid="session-binding-group" style={targetLine}>
+                            <TargetName kind={g.kind} uid={g.uid} name={g.name} />
+                            {g.count > 1 && <span style={handleCount}>×{g.count}</span>}
+                            {g.chips.map(c => <BranchChip key={chipKey(c)} {...c} />)}
+                          </div>
+                        ))}
+                        {expandable && (
+                          <button type="button" data-testid="session-handles-toggle" style={moreButton}
+                                  aria-expanded={open} aria-controls={detailId}
+                                  onClick={() => setExpanded(prev => {
+                                    const next = new Set(prev);
+                                    if (!next.delete(r.id)) next.add(r.id);
+                                    return next;
+                                  })}>
+                            <span style={{ display: 'inline-flex', transform: open ? 'rotate(180deg)' : undefined }}>
+                              <ChevronDownIcon color="currentColor" size={10} />
+                            </span>
+                            {handles} {handles === 1 ? 'handle' : 'handles'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td title={r.last_seen_at}>{relativeTime(r.last_seen_at, now)}</td>
                     <td>{r.request_count}</td>
                   </tr>
+                  {open && (
+                    // Every handle the session has presented, in server order
+                    // (most recently used first), with the per-handle ages and
+                    // request count the server has always returned and this
+                    // table has never shown. The dot column stays empty so the
+                    // block hangs under the row it belongs to.
+                    <tr data-testid="session-detail" id={detailId}>
+                      <td />
+                      <td colSpan={6} style={{ padding: '0 0 10px' }}>
+                        <div style={handlesBlock}>
+                          <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+                            <thead>
+                              <tr>
+                                {['Handle', 'Target', 'Writes to', 'First seen', 'Last seen', 'Requests'].map(h => (
+                                  <th key={h} style={handlesTh}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {r.bindings.map((b, i) => {
+                                const chip = writeChip(b.kind, b.uid, b.branch, r.mounts);
+                                return (
+                                  // The first entry is the one that made the
+                                  // most recent call; it is brighter because
+                                  // that is the one an operator is looking for.
+                                  <tr key={b.handle || `${b.kind}:${b.uid}:${i}`} data-testid="session-detail-row"
+                                      style={{ color: i === 0 ? '#ddd' : '#888' }}>
+                                    <td style={{ ...handlesTd, fontFamily: 'var(--k-font-mono)' }} title={b.handle || undefined}>
+                                      {/* Absent on a read-only server, which
+                                          redacts it. An em dash, so the column
+                                          does not read as an empty value. */}
+                                      {b.handle ? <>{b.handle.slice(0, 6)}<span style={{ color: '#555' }}>…</span></> : '—'}
+                                    </td>
+                                    <td style={handlesTd}>{b.name ?? `${b.kind}:${b.uid}`}</td>
+                                    <td style={handlesTd}>{chip ? <BranchChip {...chip} /> : '—'}</td>
+                                    <td style={handlesTd} title={b.first_seen_at}>{relativeTime(b.first_seen_at, now)}</td>
+                                    <td style={handlesTd} title={b.last_seen_at}>{relativeTime(b.last_seen_at, now)}</td>
+                                    <td style={handlesTd}>{b.request_count}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
               {rows.length === 0 && !error && (
-                <tr><td colSpan={8} style={{ color: '#666', padding: 12 }}>No client sessions in the presence window.</td></tr>
+                <tr><td colSpan={7} style={{ color: '#666', padding: 12 }}>No client sessions in the presence window.</td></tr>
               )}
             </tbody>
           </table>
@@ -310,3 +543,28 @@ const th: React.CSSProperties = {
 const policyFooter: React.CSSProperties = {
   color: '#666', fontSize: 11, margin: '8px 0 0', flexShrink: 0,
 };
+// One line per target, stacked. Each line wraps rather than overflowing: a
+// target with two divergent branch chips is wider than the column on a narrow
+// window, and the table's horizontal scroll is for the table, not for a cell.
+const targetsCol: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4 };
+const targetLine: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', whiteSpace: 'nowrap',
+};
+const handleCount: React.CSSProperties = { color: '#666', fontSize: 11 };
+// A real <button>: the row is not a link and the detail is not a navigation,
+// so the affordance is the control that announces its own expanded state.
+const moreButton: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 2,
+  background: 'none', border: 0, padding: 0, cursor: 'pointer',
+  color: '#888', fontSize: 11, fontFamily: 'inherit',
+};
+// A left rule rather than indentation alone, so the block reads as belonging to
+// the row above it even when the row above has scrolled to the top of the pane.
+const handlesBlock: React.CSSProperties = {
+  marginLeft: 14, borderLeft: '2px solid #222', padding: '6px 0 2px 12px',
+};
+const handlesTh: React.CSSProperties = {
+  textAlign: 'left', fontWeight: 500, color: '#555',
+  textTransform: 'uppercase', letterSpacing: 1, fontSize: 9.5, paddingRight: 18,
+};
+const handlesTd: React.CSSProperties = { padding: '2px 18px 2px 0', whiteSpace: 'nowrap' };
