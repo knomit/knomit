@@ -265,7 +265,9 @@ func (b *repoBuilder) loadOntology() {
 	//
 	// A subscription never writes: the upstream's ontology is theirs to refresh.
 	if preset := fact.EmbeddedPresetByID(ont.ID); !b.subscribed && preset != nil {
-		if ont.IsSubsetOf(preset) {
+		// Attributes count as divergence (see IsSubsetOf): overwriting a repo
+		// that flags a preset topic would erase the flag on every boot.
+		if divergence := ont.SubsetDivergence(preset); divergence == "" {
 			storedY, sErr := ont.Serialize()
 			presetY, pErr := preset.Serialize()
 			if sErr == nil && pErr == nil && !bytes.Equal(storedY, presetY) {
@@ -288,9 +290,13 @@ func (b *repoBuilder) loadOntology() {
 				}
 			}
 		} else {
+			// reason "attributes" means the taxonomy still matches the preset
+			// and only attributes stopped the upgrade — so an operator who
+			// flagged a topic can see that is what it cost.
 			log.Warn().
 				Str("repo", b.name).
 				Str("preset_id", ont.ID).
+				Str("reason", divergence).
 				Msg("ontology refresh: stored has diverged from embedded preset; upgrade skipped")
 		}
 	}

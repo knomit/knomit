@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -82,18 +83,52 @@ func EmbeddedPresetByID(id string) *Ontology {
 	}
 }
 
-// IsSubsetOf returns true if every topic, child, and Validation in o also
-// appears in other (matched by key/name). Used by boot-time refresh to
+// IsSubsetOf returns true if every topic, child, Validation, and attribute in
+// o also appears in other (matched by key/name). Used by boot-time refresh to
 // decide whether upgrading to a newer embedded preset is safe — if the
 // stored ontology is a strict subset, the preset can only add, never break.
 //
 // Validations are matched by Name only — rule body and message differences
 // don't block an upgrade (this is how a preset would deliver bug fixes to
 // existing rules).
+//
+// Attributes ARE compared, by value: a subset here means "safe to OVERWRITE
+// with other", and the refresh in repos/builder.go writes the preset over the
+// stored file. A repo that flags a preset topic `learn_dedup: off` has the
+// same taxonomy as the preset, but overwriting it would erase the flag on
+// every boot. So a stored attribute the preset does not carry, with the same
+// value, is divergence — the repo keeps its file and forgoes auto-upgrade,
+// exactly as it would for a custom topic or rule. See SubsetDivergence for
+// telling the two apart in a log.
 func (o *Ontology) IsSubsetOf(other *Ontology) bool {
+	return o.SubsetDivergence(other) == ""
+}
+
+// Divergence reasons returned by SubsetDivergence.
+const (
+	DivergenceShape      = "shape"      // a topic, child, or validation other lacks
+	DivergenceAttributes = "attributes" // taxonomy is a subset; only attributes differ
+)
+
+// SubsetDivergence reports why o is NOT a subset of other: "" when it is,
+// DivergenceAttributes when the taxonomy and validations would be a subset and
+// only attributes stand in the way, DivergenceShape otherwise. It exists so the
+// refresh can tell an operator that flagging a topic is what stopped preset
+// auto-upgrades, rather than leaving them to guess.
+func (o *Ontology) SubsetDivergence(other *Ontology) string {
 	if o == nil || other == nil {
-		return false
+		return DivergenceShape
 	}
+	if !o.subsetOf(other, false) {
+		return DivergenceShape
+	}
+	if !o.subsetOf(other, true) {
+		return DivergenceAttributes
+	}
+	return ""
+}
+
+func (o *Ontology) subsetOf(other *Ontology, attrs bool) bool {
 	// Root-level validations: every name in o must exist in other.
 	if !validationsSubset(o.Validations, other.Validations) {
 		return false
@@ -104,16 +139,16 @@ func (o *Ontology) IsSubsetOf(other *Ontology) bool {
 		if !ok {
 			return false
 		}
-		if !nodeIsSubsetOf(node, otherNode) {
+		if !nodeIsSubsetOf(node, otherNode, attrs) {
 			return false
 		}
 	}
 	return true
 }
 
-// nodeIsSubsetOf returns true if every Validation and child in n also
-// appears in other.
-func nodeIsSubsetOf(n, other *OntologyNode) bool {
+// nodeIsSubsetOf returns true if every Validation and child in n — and, when
+// attrs is set, every attribute with an equal value — also appears in other.
+func nodeIsSubsetOf(n, other *OntologyNode, attrs bool) bool {
 	if n == nil {
 		return true
 	}
@@ -123,12 +158,20 @@ func nodeIsSubsetOf(n, other *OntologyNode) bool {
 	if !validationsSubset(n.Validations, other.Validations) {
 		return false
 	}
+	if attrs {
+		for k, v := range n.Attributes {
+			ov, ok := other.Attributes[k]
+			if !ok || !reflect.DeepEqual(v, ov) {
+				return false
+			}
+		}
+	}
 	for key, child := range n.Children {
 		otherChild, ok := other.Children[key]
 		if !ok {
 			return false
 		}
-		if !nodeIsSubsetOf(child, otherChild) {
+		if !nodeIsSubsetOf(child, otherChild, attrs) {
 			return false
 		}
 	}
@@ -169,6 +212,15 @@ type Ontology struct {
 type compiledRulesCache struct {
 	byTopic      map[string][]compiledRule
 	compileCalls int // test hook — incremented once at build time
+
+	// attrsByTopic maps every DECLARED topic path (lowercase, "topic" or
+	// "topic/child/…") to its fully RESOLVED attribute map: its own
+	// attributes laid over everything inherited from its ancestors. Paths
+	// with nothing resolved are absent. Built in the same pass as byTopic, so
+	// parse stays the single build point; read-only afterwards. The maps are
+	// shared between a parent and any child that adds nothing — never write
+	// to one.
+	attrsByTopic map[string]map[string]any
 }
 
 // buildRulesCache compiles every Validation rule in the ontology (root +
@@ -176,7 +228,8 @@ type compiledRulesCache struct {
 // Returns an error if any rule fails to compile.
 func (o *Ontology) buildRulesCache() error {
 	o.cache = compiledRulesCache{
-		byTopic: map[string][]compiledRule{},
+		byTopic:      map[string][]compiledRule{},
+		attrsByTopic: map[string]map[string]any{},
 	}
 	o.cache.compileCalls++
 
@@ -186,8 +239,24 @@ func (o *Ontology) buildRulesCache() error {
 		o.cache.byTopic["<root>"] = rs
 	}
 
-	var walk func(prefix string, n *OntologyNode) error
-	walk = func(prefix string, n *OntologyNode) error {
+	var walk func(prefix string, n *OntologyNode, inherited map[string]any) error
+	walk = func(prefix string, n *OntologyNode, inherited map[string]any) error {
+		// A bare key (`research:` with nothing under it) is a nil node but is
+		// still DECLARED — Attr's walk, like ValidateFact's, stops one step
+		// past it — so it records what it inherits before the nil return.
+		resolved := inherited
+		if n != nil && len(n.Attributes) > 0 {
+			resolved = make(map[string]any, len(inherited)+len(n.Attributes))
+			for k, v := range inherited {
+				resolved[k] = v
+			}
+			for k, v := range n.Attributes {
+				resolved[k] = v
+			}
+		}
+		if len(resolved) > 0 {
+			o.cache.attrsByTopic[prefix] = resolved
+		}
 		if n == nil {
 			return nil
 		}
@@ -197,18 +266,89 @@ func (o *Ontology) buildRulesCache() error {
 			o.cache.byTopic[prefix] = rs
 		}
 		for k, c := range n.Children {
-			if err := walk(prefix+"/"+k, c); err != nil {
+			if err := walk(prefix+"/"+k, c, resolved); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	for k, n := range o.Topics {
-		if err := walk(k, n); err != nil {
+		if err := walk(k, n, nil); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// AttrLearnDedup is the attribute that, set to "off", makes knomit_learn skip
+// both its auto-merge search and its same-subject refusal for incoming facts
+// under the topic. It governs LEARN ONLY — review never reads it.
+const AttrLearnDedup = "learn_dedup"
+
+// attributeValidators is the ONLY place an attribute key is declared. Each
+// entry validates a value for its key and returns a description of what it
+// accepts when the value is wrong.
+//
+// A key missing from this map is NOT an error: it may have been written by a
+// newer knomit, and the open path must still read that ontology (see
+// ParseOntology). ValidateOntologyYAML reports it as a warning. A bad value
+// for a key that IS here is fatal — a binary that knows the key must not
+// guess what the author meant.
+var attributeValidators = map[string]func(v any) (accepts string, ok bool){
+	// Exactly the strings "off" and "on"; "on" behaves as absent (and exists
+	// so a child can undo a parent's "off"). A yaml bool is rejected on
+	// purpose: `learn_dedup: false` reads as "dedup is off" to one person and
+	// "the off-switch is false" to another, and go-yaml v3 decodes the bare
+	// scalar `off` as the STRING "off" (YAML 1.2), so the unambiguous spelling
+	// is also the one that parses.
+	AttrLearnDedup: func(v any) (string, bool) {
+		s, isStr := v.(string)
+		return `"off" or "on"`, isStr && (s == "off" || s == "on")
+	},
+}
+
+// Attr resolves an attribute for a topic path by the same walk ValidateFact
+// uses: lowercase each segment, root → topic → each DECLARED child, stopping
+// at the first undeclared segment. The nearest declared value wins, so an
+// undeclared deeper category inherits from its deepest declared ancestor.
+// topicPath is "topic" or "topic/category/…" — the string learn passes to
+// ValidateFact. Returns (nil, false) when nothing on the path sets key.
+// Read-only after parse; safe for concurrent use.
+func (o *Ontology) Attr(topicPath, key string) (any, bool) {
+	if o == nil || topicPath == "" {
+		return nil, false
+	}
+	parts := strings.Split(topicPath, "/")
+	prefix := strings.ToLower(parts[0])
+	node, ok := o.Topics[prefix]
+	if !ok {
+		return nil, false
+	}
+	for _, seg := range parts[1:] {
+		// node can be nil at ANY depth — a bare topic key or a bare child
+		// key — so this check comes before touching Children, exactly as in
+		// ValidateFact.
+		if node == nil || node.Children == nil {
+			break
+		}
+		segLower := strings.ToLower(seg)
+		child, ok := node.Children[segLower]
+		if !ok {
+			break
+		}
+		prefix = prefix + "/" + segLower
+		node = child
+	}
+	v, ok := o.cache.attrsByTopic[prefix][key]
+	return v, ok
+}
+
+// LearnDedupOff reports whether learn's dedup stages are switched off for
+// facts written under topicPath. Callers use this rather than comparing the
+// raw Attr value. A nil ontology returns false.
+func (o *Ontology) LearnDedupOff(topicPath string) bool {
+	v, _ := o.Attr(topicPath, AttrLearnDedup)
+	return v == "off"
 }
 
 // OntologyNode is a single node in the ontology tree.
@@ -216,6 +356,11 @@ type OntologyNode struct {
 	Description string                   `yaml:"description"`
 	Children    map[string]*OntologyNode `yaml:"children,omitempty"`
 	Validations []Validation             `yaml:"validations,omitempty"`
+	// Attributes switch store behaviour for facts under this node and every
+	// node below it that does not override them. Keys are declared in
+	// attributeValidators; resolve with Ontology.Attr, never by reading this
+	// map directly (it holds only this node's own values, not inherited ones).
+	Attributes map[string]any `yaml:"attributes,omitempty"`
 }
 
 // Validation is one ontology-declared rule evaluated against a fact on write.
@@ -342,6 +487,10 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 
 	addScalar(valNode, "description", node.Description)
 
+	if len(node.Attributes) > 0 {
+		serializeAttributes(valNode, node.Attributes)
+	}
+
 	if len(node.Validations) > 0 {
 		serializeValidations(valNode, node.Validations)
 	}
@@ -354,6 +503,28 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 			serializeNode(childVal, ck, node.Children[ck])
 		}
 	}
+}
+
+// serializeAttributes emits the block with sorted keys. Without it Serialize
+// silently dropped attributes — and initSeed and the custom-create path both
+// serialize before committing, so a new repo would lose them. Values go
+// through the yaml encoder, which quotes "off"/"on" (YAML 1.1 bools) — they
+// still re-parse as the same strings.
+func serializeAttributes(parent *yaml.Node, attrs map[string]any) {
+	keys := make([]string, 0, len(attrs))
+	for k := range attrs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	m := &yaml.Node{Kind: yaml.MappingNode}
+	for _, k := range keys {
+		var v yaml.Node
+		if err := v.Encode(attrs[k]); err != nil {
+			continue
+		}
+		m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, &v)
+	}
+	parent.Content = append(parent.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "attributes"}, m)
 }
 
 func serializeValidations(parent *yaml.Node, vs []Validation) {

@@ -499,9 +499,36 @@ topics:
 
 Schema: the root carries `id`, `name`, `description`, `topics`, and an
 optional `validations` list; each node carries `description`, optional
-`children`, and optional `validations`; each validation carries `name`,
-`message`, and `rule` (§3.4). Required: `id`, `name`, and at least one
-topic.
+`children`, optional `validations`, and optional `attributes`; each
+validation carries `name`, `message`, and `rule` (§3.4). Required: `id`,
+`name`, and at least one topic.
+
+`attributes` is a map on a topic or child node (not the root) that switches
+store behaviour for facts under that node. It resolves by the same walk as
+validation rules: root → topic → each declared child, stopping at the first
+undeclared segment; the nearest declared value wins, so an undeclared deeper
+category inherits from its deepest declared ancestor, and a child may
+override its parent. One key is defined:
+
+- `learn_dedup` — the string `off` or `on`. `off` makes a learn write under
+  the node skip both the category-directory auto-merge and the same-subject
+  refusal, so two near-identical facts land as two files. `on` behaves as
+  absent (it exists so a child can undo a parent's `off`). A YAML boolean
+  (`false`, `true`) is rejected: write the bare word `off`, which YAML 1.2
+  reads as a string. It governs learn only; review ignores it.
+
+```yaml
+topics:
+  tasks:
+    attributes:
+      learn_dedup: off
+    children:
+      research: {}   # inherits off
+```
+
+A bad value for a defined key makes the ontology invalid. An attribute key
+the reader does not define is reported as a warning and ignored, so an
+ontology written by a newer implementation still opens.
 
 Topic and category keys MUST match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase
 kebab-case) at every depth. Writers do not necessarily enforce the grammar
@@ -556,7 +583,7 @@ support them must provide that address.
 A stored ontology whose `id` matches an embedded preset and whose content is
 a **subset** of it (every topic key, every child key, every validation
 *name* present in the preset — validations match by name only, which is how
-presets deliver fixes to existing rules) may be auto-refreshed to the newer
+presets deliver fixes to existing rules; `attributes` are not compared) may be auto-refreshed to the newer
 preset. The refresh appears in history as a commit with message
 `ontology: refresh to embedded <id> preset` under operation token `updated`
 (§4.2). If the stored ontology has diverged, it wins and is left alone.

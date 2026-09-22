@@ -108,6 +108,11 @@ func newSameSubjectRepo(t *testing.T, modelID string, th params.Thresholds, prob
 
 func newRepoWithEmbedder(t *testing.T, emb store.BatchEmbedder) (*store.Service, context.Context, store.BatchEmbedder) {
 	t.Helper()
+	return newRepoWithEmbedderOntology(t, emb, fact.CodeOntology())
+}
+
+func newRepoWithEmbedderOntology(t *testing.T, emb store.BatchEmbedder, ontology *fact.Ontology) (*store.Service, context.Context, store.BatchEmbedder) {
+	t.Helper()
 	dir := t.TempDir()
 	svc, err := store.Open(filepath.Join(dir, "k.db"))
 	require.NoError(t, err)
@@ -122,7 +127,7 @@ func newRepoWithEmbedder(t *testing.T, emb store.BatchEmbedder) (*store.Service,
 		UID:          nextTestRepoUID(),
 		AgentBranch:  "agent/test",
 		Svc:          svc,
-		Ontology:     fact.CodeOntology(),
+		Ontology:     ontology,
 		OntologyRoot: "kb",
 		Embedder:     emb,
 	})

@@ -26,6 +26,7 @@ func OntologySchema() []SchemaField {
 		{"OntologyNode", "description", "What this topic covers"},
 		{"OntologyNode", "children", "Map of nested sub-topic keys to their definitions"},
 		{"OntologyNode", "validations", "Rules applied to facts filed under this topic"},
+		{"OntologyNode", "attributes", "Store behaviour for facts under this topic and every sub-topic that does not override it. One key today: learn_dedup: off (or on) — skip knomit_learn's auto-merge and same-subject refusal"},
 
 		{"Validation", "name", "Short identifier for the rule"},
 		{"Validation", "message", "Message shown when the rule rejects a fact"},
