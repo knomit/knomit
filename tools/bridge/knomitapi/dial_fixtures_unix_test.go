@@ -55,10 +55,11 @@ func localListenerPath(t *testing.T) string {
 // listenLocal opens a listener a test can serve on.
 func listenLocal(t *testing.T, path string) net.Listener {
 	t.Helper()
-	l, err := auth.ListenLocal(path)
+	l, cleanup, err := auth.ListenLocal(path)
 	if err != nil {
 		t.Fatalf("ListenLocal(%q): %v", path, err)
 	}
+	t.Cleanup(cleanup)
 	return l
 }
 

@@ -4,7 +4,6 @@ package auth
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"os"
 	"strconv"
@@ -45,37 +44,11 @@ func LocalPrincipal() (Principal, error) {
 	return Principal{Kind: KindBridge, ID: localID(os.Getuid()), Via: LocalVia}, nil
 }
 
-// ListenLocal opens the local authenticated listener at path. One function
-// per platform, called by cmd/serve (and callable from the desktop boot), so
-// that "what a local listener IS" is answered in one place rather than inline
-// at each listen site.
-//
-// The stale-socket removal and the 0600 mode came from cmd/serve.go and mean
-// what they meant there: a socket file outlives an ungraceful exit, and 0600
-// on the socket under the 0700 data root IS the credential — the kernel
-// vouches for the peer uid, and the file mode decides which uids can reach
-// the socket at all. A world-writable socket would let any local user be
-// taken for this one.
-//
-// The returned listener unlinks the socket on Close (net.Listen sets that for
-// a path it created), which is what the caller's old deferred os.Remove did.
-func ListenLocal(path string) (net.Listener, error) {
-	_ = os.Remove(path) // clean up a socket left by an ungraceful exit
-	l, err := net.Listen("unix", path)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		_ = l.Close()
-		return nil, fmt.Errorf("chmod %s: %w", path, err)
-	}
-	return l, nil
-}
-
 // DialLocal dials the local authenticated listener at path. It is the other
-// half of ListenLocal and the bridge's only door to it: keeping both here
-// means the client and the server cannot come to disagree about what the
-// transport is, the way they once disagreed about where the data root was.
+// half of ListenLocal (listen.go, listen_unix.go) and the bridge's only door
+// to it: keeping the pair in one package means the client and the server
+// cannot come to disagree about what the transport is, the way they once
+// disagreed about where the data root was.
 func DialLocal(ctx context.Context, path string, timeout time.Duration) (net.Conn, error) {
 	d := &net.Dialer{Timeout: timeout}
 	return d.DialContext(ctx, "unix", path)

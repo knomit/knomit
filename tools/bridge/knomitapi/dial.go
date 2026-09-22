@@ -99,7 +99,7 @@ func socketPreferringClient(timeout time.Duration, socketPath func() string) *ht
 				if p == "" {
 					return d.DialContext(ctx, network, addr)
 				}
-				conn, err := auth.DialLocal(ctx, p, timeout)
+				conn, err := auth.DialLocal(ctx, p, localDialBudget(timeout))
 				if err == nil {
 					return conn, nil
 				}
@@ -131,6 +131,38 @@ func socketPreferringClient(timeout time.Duration, socketPath func() string) *ht
 			},
 		},
 	}
+}
+
+// localDialCap bounds how long a dial of the local listener may take before
+// the client gives up and tries TCP.
+const localDialCap = 2 * time.Second
+
+// localDialBudget is the slice of a request's overall timeout the LOCAL dial
+// may spend. The rest stays for the TCP fallback, which is the whole reason
+// the fallback exists: spending the entire budget failing to reach a listener
+// and then having none left to reach the server is not a fallback.
+//
+// It matters most on Windows, where winio retries a BUSY pipe every 10ms
+// until the context expires rather than failing fast.
+//
+// A timeout of 0 means NO LIMIT, which is what the real bridge uses -- it
+// holds SSE long-polls open, so a deadline would cut them (tools/bridge).
+// Zero must therefore NOT become a zero-length budget: a context deadline of
+// now fails every local dial instantly, and the bridge would silently never
+// use the pipe at all while looking perfectly healthy on TCP. That is exactly
+// the failure this ticket exists to remove, so it has its own test.
+func localDialBudget(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return localDialCap
+	}
+	budget := timeout / 4
+	if budget > localDialCap {
+		budget = localDialCap
+	}
+	if budget <= 0 {
+		budget = timeout
+	}
+	return budget
 }
 
 // TransportPreference names which path a client will TRY first, for one

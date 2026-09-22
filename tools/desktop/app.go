@@ -452,13 +452,13 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhas
 	}
 
 	setPhase(phaseStartingServer)
-	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String(), cfg.Port)
+	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String(), cfg.Port, cfg.Socket)
 	if err != nil {
 		a.Close()
 		return "", nil, err
 	}
 	apiBase := fmt.Sprintf("http://127.0.0.1:%d", port)
-	log.Info().Str("api", apiBase).Int("port", port).Msg("knomit-desktop server up (API-only)")
+	log.Info().Str("api", apiBase).Int("port", port).Str("socket", cfg.Socket).Msg("knomit-desktop server up (API-only)")
 	return apiBase, func() { srv.shutdown(); a.Close() }, nil
 }
 

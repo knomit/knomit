@@ -4,6 +4,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"strings"
@@ -19,11 +20,11 @@ import (
 // test's cleanup.
 func acceptOne(t *testing.T, path string, dial func(context.Context, string) (net.Conn, error)) net.Conn {
 	t.Helper()
-	l, err := ListenLocal(path)
+	l, cleanup, err := ListenLocal(path)
 	if err != nil {
 		t.Fatalf("ListenLocal(%q): %v", path, err)
 	}
-	t.Cleanup(func() { l.Close() })
+	t.Cleanup(cleanup)
 	accepted := make(chan net.Conn, 1)
 	go func() { c, _ := l.Accept(); accepted <- c }()
 	client, err := dial(context.Background(), path)
@@ -116,8 +117,15 @@ func TestReadClientSID_AnonymousFailsWithCantOpenAnonymous(t *testing.T) {
 	if err == nil {
 		t.Fatal("reading a SID at anonymous level must fail")
 	}
+	// The ERRNO, not just the call site: ERROR_ACCESS_DENIED would also come
+	// from OpenThreadToken and would mean something quite different (a token
+	// we may not read, rather than no identity to read), and a substring
+	// assertion cannot tell them apart.
+	if !errors.Is(err, windows.ERROR_CANT_OPEN_ANONYMOUS) {
+		t.Fatalf("want ERROR_CANT_OPEN_ANONYMOUS (1347), the errno that means the client dialled at SECURITY_ANONYMOUS; got: %v", err)
+	}
 	if !strings.Contains(err.Error(), "OpenThreadToken") {
-		t.Fatalf("the failure must come from OpenThreadToken; got: %v", err)
+		t.Fatalf("the failure must name the call it came from; got: %v", err)
 	}
 	t.Logf("anonymous-level failure, recorded verbatim: %v", err)
 }

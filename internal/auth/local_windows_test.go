@@ -3,12 +3,10 @@
 package auth
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 	"testing"
-	"time"
 )
 
 // testLocalListenerPath is a pipe name for one test's own listener. Pipe
@@ -34,35 +32,6 @@ func TestTestLocalListenerPath_IsUniquePerTest(t *testing.T) {
 	}
 	if !strings.HasPrefix(a, PipePrefix) {
 		t.Fatalf("pipe name %q does not start with %q", a, PipePrefix)
-	}
-}
-
-// A path outside the pipe namespace must be REFUSED, not passed through.
-// CreateFile would open a regular file at an ordinary path, so a server
-// handed one would "listen" on a file: it would look up and accept nothing.
-// The same guard on the dial side keeps a misconfigured bridge from opening
-// whatever happens to be at that path.
-func TestListenLocal_RefusesAPathOutsideThePipeNamespace(t *testing.T) {
-	notAPipe := t.TempDir() + `\knomit.sock`
-	l, err := ListenLocal(notAPipe)
-	if err == nil {
-		l.Close()
-		t.Fatal("a non-pipe path must be refused, not opened as a file")
-	}
-	if !strings.Contains(err.Error(), PipePrefix) {
-		t.Fatalf("the error must name the namespace it wanted; got: %v", err)
-	}
-
-	// Positive control: the SAME call succeeds on a real pipe path, so the
-	// refusal above is the guard firing and not ListenLocal being broken.
-	good, gerr := ListenLocal(testLocalListenerPath(t))
-	if gerr != nil {
-		t.Fatalf("ListenLocal on a real pipe path: %v", gerr)
-	}
-	good.Close()
-
-	if _, derr := DialLocal(context.Background(), notAPipe, time.Second); derr == nil {
-		t.Fatal("DialLocal must refuse a non-pipe path too")
 	}
 }
 

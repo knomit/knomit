@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -220,23 +221,27 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
-			// The local authenticated listener: a unix socket, or a named pipe
-			// on Windows. WHICH it is, the stale-socket cleanup, the 0600 mode
-			// and the pipe ACL all live in auth.ListenLocal, so that this and
-			// the desktop boot path cannot open it two different ways.
-			if cfg.Socket != "" {
-				ll, err := auth.ListenLocal(cfg.Socket)
-				if err != nil {
-					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("local authenticated listener failed to start")
-				}
-				// Close unlinks the unix socket it created, which is what the
-				// deferred os.Remove here used to do; a pipe has nothing to
-				// unlink.
-				defer ll.Close()
+			// Local authenticated listener: a unix socket, or a named pipe on
+			// Windows (see auth.ListenLocal). Which one, and everything that
+			// makes it a credential, is decided there.
+			ul, closeSocket, err := auth.ListenLocal(cfg.Socket)
+			switch {
+			case errors.Is(err, auth.ErrSocketInUse):
+				// Another knomit instance (normally the desktop app) owns the
+				// listener. Do not steal it: bridges belong to the instance
+				// that was there first. This process serves TCP only.
+				log.Warn().Err(err).Str("socket", cfg.Socket).Msg("local listener in use by another knomit instance; serving TCP only")
+			case err != nil:
+				log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("local listener failed to start")
+			}
+			defer closeSocket()
+			if ul != nil {
+				// `via` names the MECHANISM, so the line says which credential
+				// a session over it will carry rather than assuming a socket.
 				log.Info().Str("socket", cfg.Socket).Str("via", string(auth.LocalVia)).
 					Msg("local authenticated listener listening")
 				go func() {
-					if err := srv.Serve(ll); err != nil && err != http.ErrServerClosed {
+					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {
 						log.Fatal().Err(err).Msg("local authenticated listener serve failed")
 					}
 				}()

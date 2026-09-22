@@ -65,43 +65,23 @@ func ownSID() (string, error) {
 // PipePrefix is the Windows named-pipe namespace prefix. It is an OS fact
 // rather than a knomit one, and it appears twice on purpose: internal/config
 // BUILDS the local listener path with it, and this package RECOGNISES the
-// result. TestLocalListenerPath_IsAPipeConfigAgrees pins the two together, so
+// result. TestSocketPath_IsOpenableAndDialableByAuth (internal/config) pins
+// the two together, so
 // a drift would fail a test rather than silently listen on a file.
 const PipePrefix = `\\.\pipe\`
 
-// ListenLocal opens the local authenticated listener at path. One function
-// per platform, called by cmd/serve (and callable from the desktop boot), so
-// that "what a local listener IS" is answered in one place rather than inline
-// at each listen site.
-//
-// The PIPE'S ACL IS THE CREDENTIAL here, as the 0700 data root and the 0600
-// socket are on unix: only this user and SYSTEM can open it at all. PeerCred
-// is what then turns "you got through" into a named principal, so that the
-// identity is asked of the OS rather than assumed from the ACL.
-//
-// A path that is not in the pipe namespace is REFUSED rather than passed
-// through. CreateFile would happily open a regular file at an ordinary path,
-// and a server listening on a file would accept nothing while looking like it
-// had come up.
-func ListenLocal(path string) (net.Listener, error) {
-	if !strings.HasPrefix(path, PipePrefix) {
-		return nil, fmt.Errorf("local listener path %q is not a named pipe (it must start with %s): "+
-			"on Windows the local authenticated listener is a pipe, and anything else would open a FILE "+
-			"that no client could be authenticated over", path, PipePrefix)
-	}
-	sddl, err := ownerOnlySDDL()
-	if err != nil {
-		return nil, err
-	}
-	l, err := winio.ListenPipe(path, &winio.PipeConfig{SecurityDescriptor: sddl})
-	if err != nil {
-		return nil, fmt.Errorf("listen on named pipe %s: %w", path, err)
-	}
-	return l, nil
-}
-
 // ownerOnlySDDL grants generic-all to this process's user and to SYSTEM, and
 // to nobody else.
+//
+// WHAT THIS IS AND IS NOT. It controls who may OPEN knomit's pipe, which is
+// the unix parallel to 0600 under a 0700 data root. It does NOT control who
+// may CREATE a pipe by that name: \\.\pipe\ is world-creatable, so another
+// local user can take the name before knomit boots and receive the bridge's
+// traffic. That is not a silent hijack — ListenLocal then fails to create the
+// name and the server says so — but it is a real difference from the unix
+// case, where the 0700 data root also gates creation. Closing it needs the
+// client to verify the SERVER's owner at dial time, which DialLocal does not
+// do; it is out of scope for phase 1b and belongs with the certificate work.
 //
 // P (protected) matters: without it an inherited ACE could widen the pipe
 // silently. There is deliberately no explicit DENY ace — a DACL with no
@@ -121,9 +101,10 @@ func ownerOnlySDDL() (string, error) {
 }
 
 // DialLocal dials the local authenticated listener at path. It is the other
-// half of ListenLocal and the bridge's only door to it: keeping both here
-// means the client and the server cannot come to disagree about what the
-// transport is, the way they once disagreed about where the data root was.
+// half of ListenLocal (listen.go, listen_windows.go) and the bridge's only
+// door to it: keeping the pair in one package means the client and the server
+// cannot come to disagree about what the transport is, the way they once
+// disagreed about where the data root was.
 //
 // THE IMPERSONATION LEVEL IS THE WHOLE POINT OF NOT USING
 // winio.DialPipeContext. That helper dials at PipeImpLevelAnonymous, and at

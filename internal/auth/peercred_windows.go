@@ -115,7 +115,9 @@ func readClientSID(pipe windows.Handle) (sid string, err error, clean bool) {
 		// Never impersonated, so the thread is untouched and reusable.
 		return "", fmt.Errorf("ImpersonateNamedPipeClient: %w", errno), true
 	}
-	// From here on, RevertToSelf on EVERY path out, including a panic.
+	// From here on the thread IS impersonating. `clean` is decided by the
+	// deferred RevertToSelf below and by nothing else, including on a panic,
+	// so every return past this point leaves it alone (naked returns).
 	defer func() {
 		if rerr := windows.RevertToSelf(); rerr != nil {
 			clean = false
@@ -137,13 +139,16 @@ func readClientSID(pipe windows.Handle) (sid string, err error, clean bool) {
 		// DialPipeContext does by default. There is no identity to open at
 		// that level, so a client that wants to be recognised must dial at
 		// PipeImpLevelIdentification; auth.DialLocal does.
-		return "", fmt.Errorf("OpenThreadToken: %w", terr), false
+		err = fmt.Errorf("OpenThreadToken: %w", terr)
+		return
 	}
 	defer token.Close()
 
 	u, uerr := token.GetTokenUser()
 	if uerr != nil {
-		return "", fmt.Errorf("GetTokenUser for the pipe client: %w", uerr), false
+		err = fmt.Errorf("GetTokenUser for the pipe client: %w", uerr)
+		return
 	}
-	return u.User.Sid.String(), nil, false
+	sid = u.User.Sid.String()
+	return
 }

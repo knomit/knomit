@@ -36,11 +36,11 @@ func TestSocketPath_IsOpenableAndDialableByAuth(t *testing.T) {
 		t.Fatalf("config built %q, which internal/auth (PipePrefix %q) would refuse to open", path, auth.PipePrefix)
 	}
 
-	l, err := auth.ListenLocal(path)
+	l, cleanup, err := auth.ListenLocal(path)
 	if err != nil {
 		t.Fatalf("auth.ListenLocal could not open what config.SocketPath built (%q): %v", path, err)
 	}
-	defer l.Close()
+	defer cleanup()
 
 	accepted := make(chan net.Conn, 1)
 	go func() { c, _ := l.Accept(); accepted <- c }()

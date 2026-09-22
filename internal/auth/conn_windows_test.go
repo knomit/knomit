@@ -15,11 +15,11 @@ import (
 // a TCP connection on the same server carries none.
 func TestConnContext_PipeCarriesPeer_TCPDoesNot(t *testing.T) {
 	path := testLocalListenerPath(t)
-	pl, err := ListenLocal(path)
+	pl, cleanup, err := ListenLocal(path)
 	if err != nil {
 		t.Fatalf("ListenLocal(%q): %v", path, err)
 	}
-	defer pl.Close()
+	t.Cleanup(cleanup)
 	acc := make(chan net.Conn, 2)
 	go func() { c, _ := pl.Accept(); acc <- c }()
 	cl, err := DialLocal(context.Background(), path, 10*time.Second)

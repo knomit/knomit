@@ -23,11 +23,11 @@ import (
 // same function — which would pass however wrong both were.
 func TestLocalPrincipal_AgreesWithWhatPeerCredSeesOfUs(t *testing.T) {
 	path := testLocalListenerPath(t)
-	l, err := ListenLocal(path)
+	l, cleanup, err := ListenLocal(path)
 	if err != nil {
 		t.Fatalf("ListenLocal(%q): %v", path, err)
 	}
-	defer l.Close()
+	t.Cleanup(cleanup)
 
 	accepted := make(chan net.Conn, 1)
 	go func() { c, _ := l.Accept(); accepted <- c }()
@@ -84,11 +84,11 @@ func TestLocalPrincipal_AgreesWithWhatPeerCredSeesOfUs(t *testing.T) {
 // while giving the bridge nothing.
 func TestListenLocal_ServesHTTPOverTheLocalTransport(t *testing.T) {
 	path := testLocalListenerPath(t)
-	l, err := ListenLocal(path)
+	l, cleanup, err := ListenLocal(path)
 	if err != nil {
 		t.Fatalf("ListenLocal(%q): %v", path, err)
 	}
-	defer l.Close()
+	t.Cleanup(cleanup)
 
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

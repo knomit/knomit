@@ -30,9 +30,10 @@ func defaultHome() (string, error) {
 // pipeNamePrefix is the Windows pipe namespace prefix plus knomit's own
 // marker. The namespace half is spelled again as internal/auth.PipePrefix,
 // which is what RECOGNISES a pipe path when opening or dialling one; this is
-// what BUILDS it. paths_windows_test.go pins that what this builds starts
-// with what that recognises, so the two spellings of an OS constant cannot
-// drift apart unnoticed. They are apart at all because internal/auth has no
+// what BUILDS it. TestSocketPath_IsOpenableAndDialableByAuth pins the two
+// together — by round-tripping a real listener through both and reading a peer
+// off it, not by comparing constants — so the two spellings of an OS constant
+// cannot drift apart unnoticed. They are apart at all because internal/auth has no
 // knomit dependencies by design, and making config import it — or it import
 // config — to share nine characters would invert that.
 const pipeNamePrefix = `\\.\pipe\knomit-`

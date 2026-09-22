@@ -5,13 +5,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/auth"
 	"knomit/internal/config"
 )
 
@@ -39,14 +42,47 @@ func isolateHome(t *testing.T) string {
 
 // serveLocalAt starts an HTTP server on the local listener at path and
 // answers every request with body.
+//
+// It installs the SAME ConnContext hook the real server does, and holds every
+// request to the standard the transport exists for: a request that arrives
+// here must carry a verified peer whose pid is this test process's.
+//
+// Without that, this suite would prove only TRANSPORT SELECTION. It did: under
+// a forced failure that downgraded auth.DialLocal to the anonymous
+// impersonation level, internal/auth and internal/config went red and this
+// package stayed green -- the bridge still reached the listener, and was
+// simply nobody when it got there, which is the exact silent failure
+// knomit#245 is about.
 func serveLocalAt(t *testing.T, path, body string) {
 	t.Helper()
 	l := listenLocal(t, path)
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, body)
-	})}
+	var mu sync.Mutex
+	var served, identified int
+	srv := &http.Server{
+		ConnContext: auth.ConnContext,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			served++
+			if peer, ok := auth.PeerFromContext(r.Context()); ok && peer.ID != "" && peer.PID == os.Getpid() {
+				identified++
+			}
+			mu.Unlock()
+			_, _ = io.WriteString(w, body)
+		}),
+	}
 	go func() { _ = srv.Serve(l) }()
-	t.Cleanup(func() { srv.Close(); l.Close() })
+	t.Cleanup(func() {
+		srv.Close()
+		l.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		// served == 0 is not a failure: several tests here exist precisely to
+		// show the bridge did NOT come this way.
+		if served > 0 && identified != served {
+			t.Errorf("the bridge reached this listener %d time(s) but only %d carried a verified peer with our pid: "+
+				"the transport worked and the IDENTITY did not, which is the only reason to prefer it", served, identified)
+		}
+	})
 }
 
 // serveLocal starts a server on a listener path of this test's own.
@@ -271,4 +307,47 @@ func TestTransportPreference_NeverClaimsUnixWithoutASocket(t *testing.T) {
 // miss it and the "names the path" assertion would silently never fire.
 func jsonEscaped(s string) string {
 	return strings.ReplaceAll(s, `\`, `\\`)
+}
+
+// REGRESSION. The real bridge builds its client with Timeout 0 — no limit,
+// because it holds SSE long-polls open and a deadline would cut them
+// (tools/bridge/main.go). Zero must not become a zero-length budget for the
+// local dial: a context deadline of "now" fails every dial instantly, so the
+// bridge would never once use the pipe while looking perfectly healthy on TCP.
+//
+// This is not hypothetical. It is the state this branch was in until the
+// budget below was added, and NOTHING else in the suite caught it, because
+// every other test passes a real timeout.
+func TestNewHTTPClient_UnlimitedTimeoutStillPrefersTheLocalListener(t *testing.T) {
+	isolateHome(t)
+	sock := serveLocal(t, "via-socket")
+	c := NewHTTPClient(sock, false, 0) // exactly what tools/bridge/main.go does
+	if got := get(t, c, "http://localhost:1/anything"); got != "via-socket" {
+		t.Fatalf("with no overall timeout the %s must still answer; body=%q", localListenerName, got)
+	}
+}
+
+// The budget is a SLICE of the request's time, not all of it: a local dial
+// that spends the whole budget leaves the TCP fallback none, which is not a
+// fallback. On Windows this is what stops a BUSY pipe — which winio retries
+// every 10ms until the context expires rather than failing fast — from
+// consuming the entire request.
+func TestLocalDialBudget_LeavesRoomForTheFallback(t *testing.T) {
+	if got := localDialBudget(0); got != localDialCap {
+		t.Fatalf("no limit must become a bounded budget, got %v", got)
+	}
+	if got := localDialBudget(time.Hour); got != localDialCap {
+		t.Fatalf("a huge timeout must still be capped, got %v", got)
+	}
+	if got := localDialBudget(4 * time.Second); got != time.Second {
+		t.Fatalf("budget for 4s = %v, want 1s (a quarter, leaving 3s for TCP)", got)
+	}
+	// Never zero and never longer than the request itself: both would be
+	// worse than not trying the local listener at all.
+	for _, d := range []time.Duration{time.Nanosecond, time.Millisecond, time.Second, time.Minute} {
+		got := localDialBudget(d)
+		if got <= 0 || got > d {
+			t.Fatalf("budget for %v = %v, want a positive slice no longer than it", d, got)
+		}
+	}
 }
