@@ -115,6 +115,12 @@ func parseGrantArgs(principal, permission string) (auth.Principal, auth.Permissi
 	for k := range set {
 		perm = k
 	}
+	// A certificate principal's id is the FULL 64-hex fingerprint. The 8-hex
+	// short form (what the branch name carries) names nobody: a row for it
+	// could never match a request, and `grants add` would report success.
+	if p.Via == auth.ViaCert && !isFingerprint(p.ID) {
+		return auth.Principal{}, "", fmt.Errorf("%s: a certificate principal's id is the full 64-hex fingerprint (`knomit identity show` prints it as \"fingerprint:\"), not %q", principal, p.ID)
+	}
 	if p.Kind == auth.KindAnonymous {
 		// loopbackGrants answers anonymous from config and never reads the
 		// store, so a row here would silently do nothing.
@@ -173,4 +179,17 @@ func grantsList(ctx context.Context, out io.Writer, g *auth.SQLGrants, principal
 		fmt.Fprintf(out, "%s\t%s\t%s\tby=%s\tat=%s\n", r.Principal, r.Permission, state, r.GrantedBy, r.GrantedAt.Format(time.RFC3339))
 	}
 	return nil
+}
+
+// isFingerprint reports whether s has pki.Fingerprint's shape: 64 lowercase hex.
+func isFingerprint(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }

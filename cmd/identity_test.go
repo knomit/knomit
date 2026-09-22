@@ -186,10 +186,21 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 	if _, err := run(t, "", "identity", "install", "--bundle", foreign); err == nil || !strings.Contains(err.Error(), "--replace-root") {
 		t.Fatalf("switched fleets without --replace-root: %v", err)
 	}
-	// With it, the new fleet's CRL #1 is accepted: the old watermark (#2)
-	// belonged to the old root and is reset.
+	// With it, the new fleet's CRL #1 is accepted: it is judged against the
+	// NEW root's watermark entry (none yet), not the old root's #2.
 	if out, err := run(t, "", "identity", "install", "--bundle", foreign, "--replace-root"); err != nil {
 		t.Fatalf("--replace-root: %v\n%s", err, out)
+	}
+	// The bounce: back to the FIRST fleet with its OLD bundle (CRL #1, while
+	// that root's watermark is #2). Nothing was reset on the way through the
+	// other fleet, so this is still a rollback. (The two masters share a
+	// CommonName, so a CN-keyed watermark would not tell them apart either.)
+	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle, "--replace-root"); err == nil || !strings.Contains(err.Error(), "older") {
+		t.Fatalf("A -> B -> old A bundle was accepted: %v", err)
+	}
+	// Positive control: a CURRENT bundle of the first fleet (CRL #2) moves back.
+	if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--replace-root"); err != nil {
+		t.Fatalf("moving back with a current bundle: %v\n%s", err, out)
 	}
 
 	// 4. Garbage.
@@ -247,10 +258,12 @@ func TestGrants_AddListRevokeAndTheRefusals(t *testing.T) {
 	}
 
 	for _, bad := range [][]string{
-		{"grants", "add", "anonymous@none", "write"}, // anonymous comes from config
-		{"grants", "add", "agent:x@cert", "write"},   // unknown kind
-		{"grants", "add", inst, "wirte"},             // unknown permission
-		{"grants", "add", "instance@cert", "write"},  // no id
+		{"grants", "add", "anonymous@none", "write"},                            // anonymous comes from config
+		{"grants", "add", "agent:x@cert", "write"},                              // unknown kind
+		{"grants", "add", inst, "wirte"},                                        // unknown permission
+		{"grants", "add", "instance@cert", "write"},                             // no id
+		{"grants", "add", "instance:" + fp[:8] + "@cert", "write"},              // the 8-hex short form
+		{"grants", "add", "instance:" + strings.ToUpper(fp) + "@cert", "write"}, // not lowercase
 	} {
 		if _, err := run(t, "", bad...); err == nil {
 			t.Fatalf("%v succeeded", bad)

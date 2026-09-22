@@ -3,6 +3,7 @@ package pki
 import (
 	"bufio"
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
@@ -12,7 +13,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -168,27 +168,89 @@ func IsRevoked(crl *x509.RevocationList, serial *big.Int) bool {
 	return false
 }
 
-// ReadAcceptedNumber returns the highest CRL Number this instance has
-// accepted, persisted in <dir>/crl.number, or nil if none has been. Without
-// it a restart would accept any older validly-signed crl.pem put in place,
-// and a revocation would silently roll back. A garbled file is an ERROR, not
-// "none": resetting to accept-any is exactly the rollback it exists to stop.
-func ReadAcceptedNumber(dir string) (*big.Int, error) {
+// RootID is the key the CRL watermark is filed under: pki.Fingerprint of the
+// root's Ed25519 key — the one fingerprint definition, never the CommonName,
+// which two unrelated roots can share. A non-Ed25519 root has no ID and is
+// refused wherever a root is loaded.
+func RootID(root *x509.Certificate) (string, error) {
+	pub, ok := root.PublicKey.(ed25519.PublicKey)
+	if !ok || len(pub) != ed25519.PublicKeySize {
+		return "", fmt.Errorf("pki: root %q key is %T, want ed25519", root.Subject.CommonName, root.PublicKey)
+	}
+	return Fingerprint(pub), nil
+}
+
+// watermarks is the on-disk form of crl.number: the highest CRL Number ever
+// accepted, PER ROOT. A root's CRL numbering is its own; a different root
+// starts over at 1. Keying by root means `install --replace-root` can adopt a
+// new fleet's CRL #1 without forgetting the old fleet's watermark, so moving
+// A -> B -> A with an OLD fleet-A bundle is still refused as a rollback.
+type watermarks map[string]string // RootID -> decimal CRL Number
+
+func readWatermarks(dir string) (watermarks, error) {
 	raw, err := os.ReadFile(filepath.Join(dir, CRLNumberFile))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return watermarks{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("pki: read %s: %w", CRLNumberFile, err)
 	}
-	n, ok := new(big.Int).SetString(strings.TrimSpace(string(raw)), 10)
-	if !ok || n.Sign() < 0 {
-		return nil, fmt.Errorf("pki: %s is not a CRL Number: %q", CRLNumberFile, raw)
+	var w watermarks
+	if err := json.Unmarshal(raw, &w); err != nil {
+		// Garbled is an ERROR, not "none": resetting to accept-any is exactly
+		// the rollback this file exists to stop.
+		return nil, fmt.Errorf("pki: %s is not a CRL watermark record: %w", CRLNumberFile, err)
 	}
+	if w == nil {
+		w = watermarks{}
+	}
+	for id, n := range w {
+		if v, ok := new(big.Int).SetString(n, 10); !ok || v.Sign() < 0 {
+			return nil, fmt.Errorf("pki: %s: bad CRL Number %q for root %s", CRLNumberFile, n, id)
+		}
+	}
+	return w, nil
+}
+
+// AcceptedNumber returns the highest CRL Number this instance has accepted
+// for root, or nil if it never accepted one from that root.
+func AcceptedNumber(dir string, root *x509.Certificate) (*big.Int, error) {
+	id, err := RootID(root)
+	if err != nil {
+		return nil, err
+	}
+	w, err := readWatermarks(dir)
+	if err != nil {
+		return nil, err
+	}
+	s, ok := w[id]
+	if !ok {
+		return nil, nil
+	}
+	n, _ := new(big.Int).SetString(s, 10)
 	return n, nil
 }
 
-// WriteAcceptedNumber persists n as the highest accepted CRL Number.
-func WriteAcceptedNumber(dir string, n *big.Int) error {
-	return writeFileAtomic(filepath.Join(dir, CRLNumberFile), []byte(n.String()+"\n"), 0o600)
+// RecordAcceptedNumber raises root's watermark to n (never lowers it) and
+// keeps every other root's entry.
+func RecordAcceptedNumber(dir string, root *x509.Certificate, n *big.Int) error {
+	id, err := RootID(root)
+	if err != nil {
+		return err
+	}
+	w, err := readWatermarks(dir)
+	if err != nil {
+		return err
+	}
+	if cur, ok := w[id]; ok {
+		if c, _ := new(big.Int).SetString(cur, 10); c.Cmp(n) >= 0 {
+			return nil
+		}
+	}
+	w[id] = n.String()
+	raw, err := json.MarshalIndent(w, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(filepath.Join(dir, CRLNumberFile), append(raw, '\n'), 0o600)
 }

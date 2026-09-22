@@ -310,18 +310,17 @@ func installBundle(out io.Writer, cfg config.Config, raw []byte, replaceRoot boo
 	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
-	// A different root is a different fleet, and its CRL numbering starts
-	// over: refuse unless asked, and then reset the rollback watermark.
-	if cur, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile)); err == nil && !cur.Equal(root) {
-		if !replaceRoot {
-			return fmt.Errorf("this instance is enrolled under root %q and the bundle is from root %q; pass --replace-root to move it to the other fleet",
-				cur.Subject.CommonName, root.Subject.CommonName)
-		}
-		if err := os.Remove(filepath.Join(dir, pki.CRLNumberFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	// A different root is a different fleet: refuse unless asked. Nothing is
+	// reset when it is asked: the CRL watermark is kept PER ROOT
+	// (pki.AcceptedNumber), so the new fleet's CRL #1 is judged against the
+	// new root's entry, while an old bundle of a root seen before — after a
+	// detour A -> B -> A — is still judged against that root's own entry and
+	// refused if older.
+	if cur, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile)); err == nil && !cur.Equal(root) && !replaceRoot {
+		return fmt.Errorf("this instance is enrolled under root %q and the bundle is from a different root %q; pass --replace-root to move it to the other fleet",
+			cur.Subject.CommonName, root.Subject.CommonName)
 	}
-	last, err := pki.ReadAcceptedNumber(dir)
+	last, err := pki.AcceptedNumber(dir, root) // the BUNDLE's root, not the installed one
 	if err != nil {
 		return err
 	}
@@ -342,10 +341,8 @@ func installBundle(out io.Writer, cfg config.Config, raw []byte, replaceRoot boo
 			return err
 		}
 	}
-	if last == nil || crl.Number.Cmp(last) > 0 {
-		if err := pki.WriteAcceptedNumber(dir, crl.Number); err != nil {
-			return err
-		}
+	if err := pki.RecordAcceptedNumber(dir, root, crl.Number); err != nil {
+		return err
 	}
 	fmt.Fprintf(out, "installed in %s\nprincipal: %s:%s@cert\nsan: %s\nnot_after: %s\n",
 		dir, principalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), id.NotAfter.Format(time.RFC3339))

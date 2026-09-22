@@ -292,7 +292,7 @@ func TestServerConfig_RevocationTakesEffectWithoutRestartIncludingResumption(t *
 	if !rec.has("tls_reloaded") {
 		t.Fatalf("no reload logged:\n%s", rec)
 	}
-	num, _ := ReadAcceptedNumber(dir)
+	num, _ := AcceptedNumber(dir, f.root.Cert)
 	if num == nil || num.Cmp(big.NewInt(2)) != 0 {
 		t.Fatalf("persisted crl.number = %v, want 2", num)
 	}
@@ -502,5 +502,166 @@ func (f fleet) Revoke(t *testing.T, m member, dirs ...string) {
 	}
 	for _, d := range dirs {
 		f.publishCRL(t, d)
+	}
+}
+
+// `knomit identity install --replace-root` against a RUNNING server. The CRL
+// watermark belongs to a root: install resets crl.number on disk, and the
+// reloader must take the new root's watermark from there rather than keep
+// the old fleet's in memory — or it rejects the new fleet's CRL #1 as a
+// "rollback" and silently keeps trusting the old root until a restart.
+// Found by the review of #252 (repro in the review file).
+func TestServerConfig_ReplaceRootWhileRunningMovesToTheNewFleet(t *testing.T) {
+	fa := newFleet(t)
+	srvM := fa.enroll(t, "server")
+	dir := fa.install(t, srvM)
+	for _, s := range []int64{101, 102} { // fleet A's watermark reaches 3
+		if _, err := Revoke(fa.dir, fa.root, Revoked{Serial: big.NewInt(s), At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fa.publishCRL(t, dir)
+	rec := &recorder{}
+	addr := startServer(t, dir, srvM.keyPath, rec)
+	peerA := fa.enroll(t, "peerA")
+	if _, err := get(fa.clientFor(t, peerA, nil), addr); err != nil {
+		t.Fatalf("control: fleet A peer before the move: %v", err)
+	}
+
+	// Exactly what installBundle --replace-root writes, in its order. It no
+	// longer removes crl.number: fleet A's watermark must SURVIVE the move.
+	fb := newFleet(t)
+	certB, _, err := IssueInstance(fb.dir, fb.root, srvM.pub, "server", RoleInstance, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootB, _ := os.ReadFile(filepath.Join(fb.dir, RootCertFile))
+	crlB, _ := os.ReadFile(filepath.Join(fb.dir, CRLFile))
+	for _, f := range []struct {
+		name string
+		b    []byte
+	}{{RootCertFile, rootB}, {CRLFile, crlB}, {InstanceCertFile, certB}} {
+		if err := writeFileAtomic(filepath.Join(dir, f.name), f.b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := RecordAcceptedNumber(dir, fb.root.Cert, big.NewInt(1)); err != nil {
+		t.Fatal(err)
+	}
+
+	peerB := fb.enroll(t, "peerB")
+	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
+		t.Fatalf("fleet B peer refused after --replace-root, no restart: %v\nserver log:\n%s", err, rec)
+	}
+	// Fleet A's certificate, presented by a client that TRUSTS the server's
+	// new root, so only the SERVER can be the one refusing it.
+	mustRefuse(t, fb.clientFor(t, peerA, nil), addr, rec, ErrUntrustedRoot)
+	if rec.has("rollback") {
+		t.Fatalf("the new fleet's CRL was treated as a rollback:\n%s", rec)
+	}
+}
+
+// installSet writes a whole (root, crl, cert) set into dir in install's order.
+func installSet(t *testing.T, dir string, rootPEM, crlPEM, certPEM []byte) {
+	t.Helper()
+	for _, f := range []struct {
+		name string
+		b    []byte
+	}{{RootCertFile, rootPEM}, {CRLFile, crlPEM}, {InstanceCertFile, certPEM}} {
+		if err := writeFileAtomic(filepath.Join(dir, f.name), f.b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The bounce: fleet A at watermark 7 → move to fleet B (CRL #1) while
+// running → back to fleet A with an OLD CRL #3. Per-root keying adopts B's #1
+// and refuses A's #3; an unkeyed reset on root change (the reviewer's
+// sabotage) would accept A's #3 and un-revoke whatever #4..#7 revoked. The two
+// fleets share a CommonName, so a CN-keyed watermark would fail here too.
+func TestServerConfig_WatermarkIsPerRootSoABounceCannotRollBack(t *testing.T) {
+	fa, fb := newFleet(t), newFleet(t)
+	if fa.root.Cert.Subject.CommonName != fb.root.Cert.Subject.CommonName {
+		t.Fatal("fixture: both fleets must share a CommonName")
+	}
+	srvM := fa.enroll(t, "server")
+	dir := fa.install(t, srvM)
+	crlA7, err := IssueCRL(fa.dir, fa.root, nil, big.NewInt(7), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFileAtomic(filepath.Join(dir, CRLFile), crlA7, 0o600)
+	rec := &recorder{}
+	addr := startServer(t, dir, srvM.keyPath, rec) // adopts A #7
+	rootA, _ := os.ReadFile(filepath.Join(fa.dir, RootCertFile))
+	rootB, _ := os.ReadFile(filepath.Join(fb.dir, RootCertFile))
+
+	// Move to B while running.
+	certB, _, _ := IssueInstance(fb.dir, fb.root, srvM.pub, "server", RoleInstance, time.Hour)
+	crlB1, _ := os.ReadFile(filepath.Join(fb.dir, CRLFile))
+	installSet(t, dir, rootB, crlB1, certB)
+	peerA, peerB := fa.enroll(t, "peerA"), fb.enroll(t, "peerB")
+	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
+		t.Fatalf("after moving to B, B's peer refused: %v\n%s", err, rec)
+	}
+	mustRefuse(t, fb.clientFor(t, peerA, nil), addr, rec, ErrUntrustedRoot)
+
+	// Back to A with an OLD CRL (#3 < A's watermark 7): refused, B stays.
+	certA, _, _ := IssueInstance(fa.dir, fa.root, srvM.pub, "server", RoleInstance, time.Hour)
+	crlA3, _ := IssueCRL(fa.dir, fa.root, nil, big.NewInt(3), time.Now().Add(time.Hour))
+	installSet(t, dir, rootA, crlA3, certA)
+	if _, err := get(fb.clientFor(t, peerB, nil), addr); err != nil {
+		t.Fatalf("the rollback set was adopted: B's peer is refused: %v\n%s", err, rec)
+	}
+	if !rec.has("7 already accepted (rollback)") {
+		t.Fatalf("the A #3 set was not refused as a rollback against A's watermark 7:\n%s", rec)
+	}
+	// Positive control: A with a NEWER CRL (#8) is adopted, and A's peer is back.
+	crlA8, _ := IssueCRL(fa.dir, fa.root, nil, big.NewInt(8), time.Now().Add(time.Hour))
+	installSet(t, dir, rootA, crlA8, certA)
+	if _, err := get(fa.clientFor(t, peerA, nil), addr); err != nil {
+		t.Fatalf("A with CRL #8 was not adopted: %v\n%s", err, rec)
+	}
+	// And the durable record carries both roots.
+	if n, _ := AcceptedNumber(dir, fa.root.Cert); n == nil || n.Cmp(big.NewInt(8)) != 0 {
+		t.Fatalf("A watermark on disk = %v, want 8", n)
+	}
+	if n, _ := AcceptedNumber(dir, fb.root.Cert); n == nil || n.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("B watermark on disk = %v, want 1", n)
+	}
+}
+
+// Over a real handshake: a client presenting [own leaf, own CA] is refused.
+func TestServerConfig_PeerSuppliedCAInTheChainIsRefused(t *testing.T) {
+	f, _, _, rec, addr := serverSide(t)
+	attacker := newFleet(t)
+	intruder := attacker.enroll(t, "intruder")
+	c := f.clientFor(t, intruder, nil) // verifies the SERVER against f: fine
+	tr := c.Transport.(*http.Transport)
+	cert := tr.TLSClientConfig.Certificates[0]
+	cert.Certificate = [][]byte{intruder.cert.Raw, attacker.root.Cert.Raw} // leaf + own CA
+	tr.TLSClientConfig.Certificates = []tls.Certificate{cert}
+	mustRefuse(t, c, addr, rec, ErrUntrustedRoot)
+	// Positive control: a real fleet member on the same server gets in.
+	if _, err := get(f.clientFor(t, f.enroll(t, "member"), nil), addr); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+}
+
+// A file that goes MISSING while serving keeps the previous set in force and
+// is logged once, not on every handshake (review note 4 on #252).
+func TestServerConfig_MissingFileWhileServingKeepsTheSetAndLogsOnce(t *testing.T) {
+	f, _, dir, rec, addr := serverSide(t)
+	peer := f.enroll(t, "peer")
+	if err := os.Remove(filepath.Join(dir, CRLFile)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if _, err := get(f.clientFor(t, peer, nil), addr); err != nil {
+			t.Fatalf("handshake %d with crl.pem missing: %v\n%s", i, err, rec)
+		}
+	}
+	if n := rec.count("tls_reload_rejected"); n != 1 {
+		t.Fatalf("missing crl.pem logged %d times over 3 handshakes, want once:\n%s", n, rec)
 	}
 }

@@ -163,21 +163,42 @@ func TestRevoke_AppendsAndTheNextCRLCarriesEveryPriorEntry(t *testing.T) {
 	}
 }
 
-func TestAcceptedNumber_PersistsAndStartsAbsent(t *testing.T) {
+// The watermark is PER ROOT, keyed by RootID (the fingerprint of the root
+// key). Two roots with the SAME CommonName — newTestRoot gives every fleet
+// "knomit-master-test" — keep separate entries, so a CN-keyed record would
+// fail here.
+func TestAcceptedNumber_IsPerRootKeyedByFingerprintNotCN(t *testing.T) {
 	dir := t.TempDir()
-	n, err := ReadAcceptedNumber(dir)
-	if err != nil || n != nil {
+	_, a := newTestRoot(t)
+	_, b := newTestRoot(t)
+	if a.Cert.Subject.CommonName != b.Cert.Subject.CommonName {
+		t.Fatal("fixture: the two roots must share a CommonName")
+	}
+	if n, err := AcceptedNumber(dir, a.Cert); err != nil || n != nil {
 		t.Fatalf("fresh dir: n=%v err=%v", n, err)
 	}
-	if err := WriteAcceptedNumber(dir, big.NewInt(12)); err != nil {
+	if err := RecordAcceptedNumber(dir, a.Cert, big.NewInt(7)); err != nil {
 		t.Fatal(err)
 	}
-	n, err = ReadAcceptedNumber(dir)
-	if err != nil || n.Cmp(big.NewInt(12)) != 0 {
-		t.Fatalf("after write: n=%v err=%v", n, err)
+	if err := RecordAcceptedNumber(dir, b.Cert, big.NewInt(1)); err != nil {
+		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(dir, CRLNumberFile), []byte("not a number"), 0o600)
-	if _, err := ReadAcceptedNumber(dir); err == nil {
+	if n, _ := AcceptedNumber(dir, a.Cert); n == nil || n.Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("root A watermark = %v, want 7 (root B's entry must not overwrite it)", n)
+	}
+	if n, _ := AcceptedNumber(dir, b.Cert); n == nil || n.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("root B watermark = %v, want 1", n)
+	}
+	// Never lowered.
+	if err := RecordAcceptedNumber(dir, a.Cert, big.NewInt(3)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := AcceptedNumber(dir, a.Cert); n.Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("watermark lowered to %v", n)
+	}
+	// Garbled fails closed rather than resetting to accept-any.
+	os.WriteFile(filepath.Join(dir, CRLNumberFile), []byte("12\n"), 0o600) // the old single-number format
+	if _, err := AcceptedNumber(dir, a.Cert); err == nil {
 		t.Fatal("a garbled crl.number must fail closed, not reset to 'accept any'")
 	}
 }

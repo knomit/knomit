@@ -9,7 +9,8 @@ const (
 	RootCertFile     = "root.crt"
 	CRLFile          = "crl.pem"
 	// CRLNumberFile persists the highest CRL Number this instance has
-	// accepted, so a restart cannot be fed an OLDER crl.pem and silently
+	// accepted PER ROOT (a JSON object, RootID -> Number), so neither a
+	// restart nor a root swap can be fed an OLDER crl.pem and silently
 	// un-revoke a serial.
 	CRLNumberFile = "crl.number"
 )

@@ -276,3 +276,25 @@ func upper(s string) string {
 	}
 	return string(b)
 }
+
+// The trust anchor is the fleet root ALONE. A peer's own certificates are
+// intermediates and must never become roots: a stranger who presents
+// [leaf signed by own CA, own CA] is not a fleet member.
+//
+// SABOTAGE (reviewer's S-D, run when this was written): adding the
+// `intermediates` to the `roots` pool in VerifyInstanceChain turns this test
+// red. Before this test existed that sabotage left the suite green.
+func TestVerifyInstanceChain_PeerSuppliedCAIsNeverATrustAnchor(t *testing.T) {
+	fleetF := newFleet(t)
+	attacker := newFleet(t) // self-signed CA the fleet never trusted
+	leaf, _ := attacker.issue(t, "intruder", RoleInstance)
+	_, err := VerifyInstanceChain(leaf, []*x509.Certificate{attacker.root.Cert}, fleetF.root.Cert, fleetF.crl, time.Now(), UsageClient)
+	if !errors.Is(err, ErrUntrustedRoot) {
+		t.Fatalf("leaf + its own CA as an intermediate: err=%v, want ErrUntrustedRoot", err)
+	}
+	// Positive control: the fixture is well formed — the same leaf verifies
+	// when its CA IS the root, so the refusal above is the pool's doing.
+	if _, err := VerifyInstanceChain(leaf, nil, attacker.root.Cert, attacker.crl, time.Now(), UsageClient); err != nil {
+		t.Fatalf("control: the attacker's leaf does not verify under its own root: %v", err)
+	}
+}

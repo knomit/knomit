@@ -47,9 +47,12 @@ type reloader struct {
 	pub    ed25519.PublicKey
 	logf   Logf
 
-	mu      sync.Mutex
-	cur     *snapshot
-	lastNum *big.Int // highest CRL Number accepted, persisted in crl.number
+	mu  sync.Mutex
+	cur *snapshot
+	// seen is the highest CRL Number accepted per RootID in this process.
+	// crl.number on disk is the durable copy; the effective watermark is
+	// the higher of the two, so a failed persist still protects this run.
+	seen map[string]*big.Int
 	// rejected is the last file set that failed to load, remembered so a
 	// bad set (a rolled-back CRL, a half-finished install) is parsed and
 	// logged ONCE rather than on every handshake until someone fixes it.
@@ -84,11 +87,7 @@ func newReloader(dir, keyPath string, logf Logf) (*reloader, *snapshot, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	lastNum, err := ReadAcceptedNumber(dir)
-	if err != nil {
-		return nil, nil, err
-	}
-	r := &reloader{dir: dir, signer: signer, pub: pub, logf: logf, lastNum: lastNum}
+	r := &reloader{dir: dir, signer: signer, pub: pub, logf: logf, seen: map[string]*big.Int{}}
 	snap, err := r.load()
 	if err != nil {
 		return nil, nil, err
@@ -153,12 +152,20 @@ func (r *reloader) refresh() *snapshot {
 		bytes.Equal(rawCert, cur.rawCert) && bytes.Equal(rawRoot, cur.rawRoot) && bytes.Equal(rawCRL, cur.rawCRL) {
 		return cur
 	}
-	set := [3][]byte{rawCert, rawRoot, rawCRL}
+	// The memo key includes a read ERROR in place of the bytes, so a file
+	// that has gone missing is also logged once, not on every handshake.
+	key := func(b []byte, err error) []byte {
+		if err != nil {
+			return []byte("\x00" + err.Error())
+		}
+		return b
+	}
+	set := [3][]byte{key(rawCert, errC), key(rawRoot, errR), key(rawCRL, errL)}
 	r.mu.Lock()
-	seen := r.rejected != nil && errC == nil && errR == nil && errL == nil &&
+	already := r.rejected != nil &&
 		bytes.Equal(set[0], r.rejected[0]) && bytes.Equal(set[1], r.rejected[1]) && bytes.Equal(set[2], r.rejected[2])
 	r.mu.Unlock()
-	if seen {
+	if already {
 		return cur
 	}
 	next, err := r.parse(rawCert, errC, rawRoot, errR, rawCRL, errL)
@@ -228,14 +235,32 @@ func (r *reloader) parse(rawCert []byte, errC error, rawRoot []byte, errR error,
 }
 
 // adopt checks the snapshot's CRL against its root and the highest Number
-// ever accepted, persists a higher Number, and makes the snapshot current.
-// A stale CRL is adopted and ENFORCED, with a warning: refusing it would
-// shut out every peer because the operator has not published lately, and
-// ignoring it would un-revoke everything.
+// ever accepted FOR THAT ROOT, persists a higher Number, and makes the
+// snapshot current.
+//
+// The watermark is per root because a root's CRL numbering is its own: after
+// `install --replace-root` the new fleet's CRL #1 is not a rollback, while an
+// older CRL of a root seen before still is — including one re-installed after
+// a detour through another fleet.
+//
+// A stale CRL is adopted and ENFORCED, with a warning: refusing it would shut
+// out every peer because the operator has not published lately, and ignoring
+// it would un-revoke everything.
 func (r *reloader) adopt(s *snapshot) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	stale, err := CheckCRL(s.crl, s.root, r.lastNum)
+	id, err := RootID(s.root)
+	if err != nil {
+		return err
+	}
+	last, err := AcceptedNumber(r.dir, s.root)
+	if err != nil {
+		return err
+	}
+	if mem := r.seen[id]; mem != nil && (last == nil || mem.Cmp(last) > 0) {
+		last = mem
+	}
+	stale, err := CheckCRL(s.crl, s.root, last)
 	if err != nil {
 		return err
 	}
@@ -243,14 +268,14 @@ func (r *reloader) adopt(s *snapshot) error {
 		r.logf("CRL is stale (NextUpdate passed); still enforcing it; publish a fresh one with `knomit identity revoke` or a reissue",
 			"event", "tls_crl_stale", "next_update", s.crl.NextUpdate, "crl_number", s.crl.Number.String())
 	}
-	if r.lastNum == nil || s.crl.Number.Cmp(r.lastNum) > 0 {
-		if err := WriteAcceptedNumber(r.dir, s.crl.Number); err != nil {
+	if last == nil || s.crl.Number.Cmp(last) > 0 {
+		if err := RecordAcceptedNumber(r.dir, s.root, s.crl.Number); err != nil {
 			// Enforce the newer list now regardless; only the restart
 			// protection is lost, and the operator must hear about it.
 			r.logf("could not persist the CRL Number; a restart could accept an older CRL: "+err.Error(),
 				"event", "tls_crl_number_unpersisted")
 		}
-		r.lastNum = new(big.Int).Set(s.crl.Number)
+		r.seen[id] = new(big.Int).Set(s.crl.Number)
 	}
 	r.cur = s
 	return nil
