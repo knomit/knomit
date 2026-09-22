@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"strconv"
 
 	"knomit/internal/auth"
 	"knomit/internal/client/sessions"
@@ -15,9 +14,11 @@ import (
 // AuthMiddleware is the ONE place a transport becomes a Principal (F19
 // revision 2, "Decision"). Order of evidence, strongest first:
 //
-//  1. Kernel peer credentials on a unix socket connection (auth.ConnContext
-//     put them there) — a bridge principal keyed by uid, with the kernel's
-//     pid carried alongside for the client_sessions row.
+//  1. Kernel peer credentials on a LOCAL connection — a unix socket, or a
+//     Windows named pipe (auth.ConnContext put them there) — as a bridge
+//     principal keyed by uid or SID, with the OS-reported pid carried
+//     alongside for the client_sessions row. Which of the two a platform
+//     uses is auth.LocalVia; this function never asks.
 //  2. Nothing, from loopback, with [auth].require = false — the ANONYMOUS
 //     principal, so an upgrade changes nobody's day. What it may do is the
 //     parsed [auth].loopback_default, resolved in Require through
@@ -27,8 +28,9 @@ import (
 //     still denies, because the zero principal holds nothing.
 //
 // The refusal is 403, never 401. RFC 7235 makes WWW-Authenticate mandatory on
-// a 401, and phase 1 has no scheme a TCP caller could satisfy — the socket is
-// the only credential, and it is not something a header can present. Phase 3
+// a 401, and phase 1 has no scheme a TCP caller could satisfy — the local
+// listener is the only credential, and it is not something a header can
+// present. Phase 3
 // introduces the 401 with a Bearer challenge on the routes a token unlocks.
 // The two 403s are told apart by TITLE: "Authentication required" here (no
 // principal at all) versus "Permission denied" in Require (a principal that
@@ -45,10 +47,14 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 					auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindAnonymous, Via: auth.ViaNone})))
 				return
 			}
-			if uid, pid, ok := auth.PeerFromContext(ctx); ok {
-				p := auth.Principal{Kind: auth.KindBridge, ID: "uid:" + strconv.Itoa(uid), Via: auth.ViaSocket}
-				ctx = auth.WithPrincipal(ctx, p)
-				ctx = sessions.WithVerifiedPID(ctx, pid)
+			if peer, ok := auth.PeerFromContext(ctx); ok {
+				// Peer.Principal, never a literal built here: app.seedOwnPrincipal
+				// seeds the grant with auth.LocalPrincipal, and the two have to
+				// render the same string or the seeded row matches no request
+				// (knomit#245, defect B). One formatting function per platform,
+				// fed from both ends.
+				ctx = auth.WithPrincipal(ctx, peer.Principal())
+				ctx = sessions.WithVerifiedPID(ctx, peer.PID)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
@@ -59,7 +65,7 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 			}
 			if cfg.Require {
 				hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
-					"this knomit instance requires a verified principal ([auth].require = true); connect over the unix socket",
+					"this knomit instance requires a verified principal ([auth].require = true); connect over the local authenticated listener (the unix socket, or the named pipe on Windows)",
 					r.URL.Path)
 				return
 			}

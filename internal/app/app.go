@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -242,15 +241,16 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	sqlGrants := auth.NewSQLGrants(a.manager.ControlDB())
 	a.server.Grants = sqlGrants
 
-	// The OS user running the server is its operator, so seed the socket
-	// principal for our own uid with [auth].loopback_default. That is what
+	// The OS user running the server is its operator, so seed the LOCAL
+	// principal for our own account with [auth].loopback_default. That is what
 	// makes the local bridge work with no configuration at all: it dials the
-	// socket, the kernel says which uid, and the grant is already there.
+	// local listener, the OS says who is calling, and the grant is already
+	// there.
 	//
 	// A failure here STOPS the boot rather than logging: a server that came
 	// up without the seed would look healthy and refuse every local write,
 	// which is harder to diagnose than not starting.
-	if err := seedOwnUID(ctx, sqlGrants, cfg.Auth); err != nil {
+	if err := seedOwnPrincipal(ctx, sqlGrants, cfg.Auth); err != nil {
 		a.Close()
 		return nil, fmt.Errorf("seed grants: %w", err)
 	}
@@ -264,7 +264,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 // such a server would boot, look healthy, and answer every request 403
 // "Authentication required" -- a silent lockout. That is harder to diagnose
 // than a server that did not start, the same argument that makes a
-// seedOwnUID failure stop the boot.
+// seedOwnPrincipal failure stop the boot.
 //
 // It lives in app rather than config.Validate because it is a property of
 // the SERVER boot: `kb` and other clients load the same config and have no
@@ -284,20 +284,30 @@ func checkLocalListener(cfg config.Config) error {
 	return nil
 }
 
-// seedOwnUID grants this process's own socket principal each permission in
-// loopback_default, ONCE per permission for the lifetime of the database.
+// seedOwnPrincipal grants this process's own local principal each permission
+// in loopback_default, ONCE per permission for the lifetime of the database.
+//
+// WHO we are comes from auth.LocalPrincipal and from nowhere else. The
+// middleware names an incoming caller with auth.Peer.Principal, and the two
+// are one formatting function per platform precisely so this seeded row and
+// that request cannot disagree. They did disagree on Windows before
+// knomit#245: os.Getuid() returns -1 there, so the boot seeded "uid:-1" and
+// no request could ever have matched it.
 //
 // "Once" is the whole point, and it is why this asks EverGranted rather than
 // For: a revoked row is history, not absence. Seeding on liveness would mean
 // every restart silently undid an operator's revocation, which is the failure
 // mode that makes a permission system worthless — the grant would be
 // unrevokable in practice while appearing revocable.
-func seedOwnUID(ctx context.Context, g *auth.SQLGrants, cfg config.AuthConfig) error {
+func seedOwnPrincipal(ctx context.Context, g *auth.SQLGrants, cfg config.AuthConfig) error {
 	set, err := auth.ParseSet(cfg.EffectiveLoopbackDefault())
 	if err != nil {
 		return err
 	}
-	me := auth.Principal{Kind: auth.KindBridge, ID: "uid:" + strconv.Itoa(os.Getuid()), Via: auth.ViaSocket}
+	me, err := auth.LocalPrincipal()
+	if err != nil {
+		return fmt.Errorf("resolve this machine's local principal: %w", err)
+	}
 	for perm := range set {
 		ever, err := g.EverGranted(ctx, me, perm)
 		if err != nil {

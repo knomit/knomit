@@ -113,7 +113,7 @@ type Server struct {
 // at wiring time rather than once per request.
 //
 // What anonymous holds comes from config.AuthConfig.EffectiveLoopbackDefault,
-// which app.seedOwnUID also calls -- one definition of the nil fallback, so
+// which app.seedOwnPrincipal also calls -- one definition of the nil fallback, so
 // the middleware and the boot seeding cannot come to disagree about it.
 // TestApp_AuthConfigReachesMiddleware fails if the production wiring that
 // feeds this is ever dropped.

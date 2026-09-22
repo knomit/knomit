@@ -90,7 +90,7 @@ func TestWriteGate_SocketPrincipalNeedsGrant(t *testing.T) {
 
 	newPost := func() *http.Request {
 		p := httptest.NewRequest("POST", "/api/v1/repos", nil)
-		return p.WithContext(auth.WithPeer(p.Context(), 501, 7))
+		return p.WithContext(auth.WithPeer(p.Context(), testPeer(501, 7)))
 	}
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, newPost())
