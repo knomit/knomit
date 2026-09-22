@@ -32,7 +32,7 @@ func TestCertGrants_NoImplicitReadForAnyoneElse(t *testing.T) {
 	for _, p := range []Principal{
 		OperatorPrincipal(fp),
 		{Kind: KindInstance, ID: fp, Via: ViaToken}, // an instance kind NOT vouched for by a cert
-		{Kind: KindInstance, Via: ViaCert},         // no id
+		{Kind: KindInstance, Via: ViaCert},          // no id
 		{Kind: KindBridge, ID: "uid:501", Via: ViaSocket},
 		{Kind: KindAnonymous, Via: ViaNone},
 		{},
