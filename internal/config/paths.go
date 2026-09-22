@@ -41,7 +41,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 
 	"knomit/internal/platform/userdirs"
 )
@@ -101,11 +100,6 @@ func withHomeHint(err error) error {
 	return fmt.Errorf("%w. Set KNOMIT_HOME to the directory knomit should use", err)
 }
 
-// socketFile is the unix socket's name inside the data root. One spelling,
-// for the same reason appDir has one: `knomit serve` opens it and `kb` dials
-// it, and a disagreement means the bridge silently falls back to TCP.
-const socketFile = "knomit.sock"
-
 // ResolveHome is the data root the operator actually gets: KNOMIT_HOME, else
 // the KNOMIT_REPO alias, else DefaultHome. Load layers TOML and the rest on
 // top, but WHICH directory is the root is decided here and only here.
@@ -119,9 +113,12 @@ func ResolveHome() (string, error) {
 	return DefaultHome()
 }
 
-// SocketPath is <data root>/knomit.sock: the unix socket a same-machine
-// server listens on, and the local bridge's credential — the kernel tells the
-// server which uid is dialling, so nothing has to be stored or presented.
+// SocketPath is the LOCAL AUTHENTICATED LISTENER for the resolved data root:
+// <data root>/knomit.sock on unix, and a named pipe called knomit-<hash of
+// the data root> in the machine's pipe namespace on Windows (see
+// paths_windows.go, which is where the shape of that name is decided).
+// It is the local bridge's credential either way — the OS tells the
+// server who is dialling, so nothing has to be stored or presented.
 //
 // It resolves the data root through ResolveHome, the SAME way Load does, and
 // that is the point of it being here rather than in the bridge. This file's
@@ -130,15 +127,13 @@ func ResolveHome() (string, error) {
 // from the server would not fail loudly — it would find no socket, fall back
 // to TCP, and quietly lose the verified identity that is the whole feature.
 //
-// Windows has no AF_UNIX default here, and returns "" with no error: absence
-// is the answer, not a failure.
+// It NO LONGER returns "" on Windows. That absence was phase 1 having no
+// credential there at all (knomit#245); the pipe is the credential now, and
+// a caller that still treats "" as "Windows" would just keep using TCP.
 func SocketPath() (string, error) {
-	if runtime.GOOS == "windows" {
-		return "", nil
-	}
 	home, err := ResolveHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, socketFile), nil
+	return localListenerName(home), nil
 }

@@ -220,27 +220,24 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
-			// Optional Unix socket listener.
+			// The local authenticated listener: a unix socket, or a named pipe
+			// on Windows. WHICH it is, the stale-socket cleanup, the 0600 mode
+			// and the pipe ACL all live in auth.ListenLocal, so that this and
+			// the desktop boot path cannot open it two different ways.
 			if cfg.Socket != "" {
-				_ = os.Remove(cfg.Socket) // clean up stale socket
-				ul, err := net.Listen("unix", cfg.Socket)
+				ll, err := auth.ListenLocal(cfg.Socket)
 				if err != nil {
-					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("unix socket listen failed")
+					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("local authenticated listener failed to start")
 				}
-				defer ul.Close()
-				defer os.Remove(cfg.Socket)
-				// 0600 on the socket, with the 0700 data root above it, IS the
-				// credential: the kernel vouches for the peer uid, and the file
-				// mode decides which uids can reach the socket at all. A
-				// world-writable socket would let any local user be taken for
-				// this one.
-				if err := os.Chmod(cfg.Socket, 0o600); err != nil {
-					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("chmod socket failed")
-				}
-				log.Info().Str("socket", cfg.Socket).Msg("unix socket listening")
+				// Close unlinks the unix socket it created, which is what the
+				// deferred os.Remove here used to do; a pipe has nothing to
+				// unlink.
+				defer ll.Close()
+				log.Info().Str("socket", cfg.Socket).Str("via", string(auth.LocalVia)).
+					Msg("local authenticated listener listening")
 				go func() {
-					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {
-						log.Fatal().Err(err).Msg("unix socket serve failed")
+					if err := srv.Serve(ll); err != nil && err != http.ErrServerClosed {
+						log.Fatal().Err(err).Msg("local authenticated listener serve failed")
 					}
 				}()
 			}
