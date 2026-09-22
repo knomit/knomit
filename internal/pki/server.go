@@ -64,23 +64,8 @@ type reloader struct {
 // that does not match the key, or a CRL older than the persisted crl.number
 // is an error, and no listener should be opened.
 func ServerConfig(dir, keyPath string, logf Logf) (*tls.Config, error) {
-	if logf == nil {
-		logf = func(string, ...any) {}
-	}
-	signer, pub, err := LoadSigner(keyPath)
+	r, snap, err := newReloader(dir, keyPath, logf)
 	if err != nil {
-		return nil, err
-	}
-	lastNum, err := ReadAcceptedNumber(dir)
-	if err != nil {
-		return nil, err
-	}
-	r := &reloader{dir: dir, signer: signer, pub: pub, logf: logf, lastNum: lastNum}
-	snap, err := r.load()
-	if err != nil {
-		return nil, err
-	}
-	if err := r.adopt(snap); err != nil {
 		return nil, err
 	}
 	base := r.configFor(snap)
@@ -88,6 +73,30 @@ func ServerConfig(dir, keyPath string, logf Logf) (*tls.Config, error) {
 		return r.configFor(r.refresh()), nil
 	}
 	return base, nil
+}
+
+// newReloader loads and adopts the initial file set, failing closed.
+func newReloader(dir, keyPath string, logf Logf) (*reloader, *snapshot, error) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	signer, pub, err := LoadSigner(keyPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	lastNum, err := ReadAcceptedNumber(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	r := &reloader{dir: dir, signer: signer, pub: pub, logf: logf, lastNum: lastNum}
+	snap, err := r.load()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := r.adopt(snap); err != nil {
+		return nil, nil, err
+	}
+	return r, snap, nil
 }
 
 // configFor is the per-handshake config for one snapshot.
@@ -107,21 +116,23 @@ func (r *reloader) configFor(s *snapshot) *tls.Config {
 		// this to RequireAndVerifyClientCert.
 		ClientAuth: tls.RequireAnyClientCert,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			return r.verify(s, cs)
+			return r.verify(s, cs, UsageClient)
 		},
 	}
 }
 
-func (r *reloader) verify(s *snapshot, cs tls.ConnectionState) error {
+// verify is the ONE verifier for both directions: usage says whether the
+// peer is a client connecting to us or a server we connected to.
+func (r *reloader) verify(s *snapshot, cs tls.ConnectionState, usage Usage) error {
 	if len(cs.PeerCertificates) == 0 {
-		err := fmt.Errorf("%w: no client certificate", ErrUntrustedRoot)
+		err := fmt.Errorf("%w: peer presented no certificate", ErrUntrustedRoot)
 		r.logf(err.Error(), "event", "tls_refused")
 		return err
 	}
 	// Runs on resumed connections too (crypto/tls calls VerifyConnection
 	// for every handshake), so a revoked peer cannot ride a session ticket
 	// issued before the revocation.
-	if _, err := VerifyInstanceChain(cs.PeerCertificates[0], cs.PeerCertificates[1:], s.root, s.crl, time.Now(), UsageClient); err != nil {
+	if _, err := VerifyInstanceChain(cs.PeerCertificates[0], cs.PeerCertificates[1:], s.root, s.crl, time.Now(), usage); err != nil {
 		r.logf(err.Error(), "event", "tls_refused", "resumed", cs.DidResume)
 		return err
 	}

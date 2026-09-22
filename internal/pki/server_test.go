@@ -493,3 +493,14 @@ func TestServerConfig_TornInstallKeepsThePreviousSetAndLogsOnce(t *testing.T) {
 		t.Fatal("a peer of the replaced root still gets in")
 	}
 }
+
+// Revoke revokes m on the master and publishes the CRL into each dir.
+func (f fleet) Revoke(t *testing.T, m member, dirs ...string) {
+	t.Helper()
+	if _, err := Revoke(f.dir, f.root, Revoked{Serial: m.cert.SerialNumber, At: time.Now()}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range dirs {
+		f.publishCRL(t, d)
+	}
+}
