@@ -404,14 +404,115 @@ describe('ManageSessions binding groups', () => {
     expect(screen.queryByTestId('session-detail')).toBeNull();
   });
 
-  it('renders no toggle and no detail row for a single handle', async () => {
+  // The grouped line does not carry the handle, so a ONE-handle session would
+  // have no way to reach it at all — and the handle is exactly what an
+  // operator correlating a log line needs. One handle therefore still gets a
+  // toggle; the label goes singular.
+  it('offers the detail row for a single handle too, so the handle stays reachable', async () => {
     withBindings([bindingRow({ handle: 'ONLYONEaaaaaaaaaaaaaaaaaaaaaaaaa' })]);
     render(<ManageSessions />);
     await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
     expect(screen.getAllByTestId('session-binding-group')).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: /handle/ })).toBeNull();
+    const toggle = screen.getByRole('button', { name: /1 handle$/ });
     expect(screen.queryByTestId('session-detail')).toBeNull();
+
+    fireEvent.click(toggle);
+    const detail = screen.getByTestId('session-detail');
+    expect(within(detail).getAllByTestId('session-detail-row')).toHaveLength(1);
+    expect(detail.querySelector('[title="ONLYONEaaaaaaaaaaaaaaaaaaaaaaaaa"]')).not.toBeNull();
+  });
+
+  // A handle carries a branch pin OR an experiment, never both
+  // (kb/invariants/mcp/experiments/one-answer-per-handle) — so a non-empty
+  // `branch` IS this handle's answer and a mount's experiment must not
+  // overwrite it. The mount only fills an EMPTY branch.
+  it('lets a handle\'s own branch beat a mount experiment on the same target', async () => {
+    withBindings(
+      [
+        bindingRow({ handle: 'PINNEDaaaaaaaaaaaaaaaaaaaaaaaaaa', branch: 'agent/foo' }),
+        bindingRow({ handle: 'UNPINNEDaaaaaaaaaaaaaaaaaaaaaaaa', branch: '' }),
+      ],
+      {
+        mounts: [{
+          mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
+          experiment: 'exp-a', branch: 'exp/exp-a', set_at: '2026-09-14T11:30:00Z',
+        }],
+      },
+    );
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    // The two handles genuinely disagree, so the line shows both chips.
+    const group = screen.getAllByTestId('session-binding-group')[0];
+    expect(within(group).getAllByTestId('session-branch-chip')).toHaveLength(2);
+    expect(group).toHaveTextContent('agent/foo');
+    expect(group).toHaveTextContent('exp-a');
+
+    fireEvent.click(screen.getByRole('button', { name: /2 handles/ }));
+    const lines = within(screen.getByTestId('session-detail')).getAllByTestId('session-detail-row');
+    expect(lines[0]).toHaveTextContent('agent/foo');
+    expect(lines[0]).not.toHaveTextContent('exp-a');
+    expect(lines[1]).toHaveTextContent('exp-a');
+  });
+
+  // The mount join is by kind AND uid. A repo and a lens that happen to share
+  // a uid are different targets, and matching on uid alone would put one's
+  // experiment on the other's line.
+  it('does not match a mount to a target of a different kind with the same uid', async () => {
+    withBindings(
+      [bindingRow({ handle: 'LENSHANDLEaaaaaaaaaaaaaaaaaaaaaa', kind: 'lens', uid: 'u1', name: 'eng', branch: '' })],
+      {
+        mounts: [{
+          mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
+          experiment: 'repo-side', branch: 'exp/repo-side', set_at: '2026-09-14T11:30:00Z',
+        }],
+      },
+    );
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    const groups = screen.getAllByTestId('session-binding-group');
+    const lensLine = groups.find(g => g.textContent?.includes('eng')) as HTMLElement;
+    expect(within(lensLine).queryAllByTestId('session-branch-chip')).toHaveLength(0);
+  });
+
+  // The old Branch column rendered `mounts` unconditionally. An experiment on
+  // a target this session has presented no handle for still has to be visible
+  // — it is a real experiment the session has open.
+  it('gives a mount no binding names a target line of its own', async () => {
+    withBindings(
+      [bindingRow({ handle: 'ELSEWHEREaaaaaaaaaaaaaaaaaaaaaaa', uid: 'u1', name: 'core' })],
+      {
+        mounts: [{
+          mount: 'repo:zz9', kind: 'repo', uid: 'zz9', name: 'other-repo',
+          experiment: 'orphan-exp', branch: 'exp/orphan-exp', set_at: '2026-09-14T11:30:00Z',
+        }],
+      },
+    );
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    const groups = screen.getAllByTestId('session-binding-group');
+    expect(groups).toHaveLength(2);
+    const orphan = groups.find(g => g.textContent?.includes('other-repo')) as HTMLElement;
+    expect(orphan).toHaveTextContent('orphan-exp');
+    // No handles stand behind it, so there is no count to show.
+    expect(orphan).not.toHaveTextContent('×');
+  });
+
+  // An unscoped session that has not yet called knomit_bind has no pin at all:
+  // the server's bindingNames.lookup returns empty strings for a value that is
+  // not a PinID, so kind, uid and name all come back empty. Printing
+  // `kind:uid` there renders a bare ":".
+  it('renders an em dash for a session with no binding at all', async () => {
+    withBindings([], { binding: { kind: '', uid: '', name: null } });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    const cell = screen.getByTestId('session-bindings');
+    expect(cell).toHaveTextContent('—');
+    expect(cell.textContent).not.toContain(':');
   });
 
   // The experiment attribution used to live in its own Branch column, one per
@@ -589,5 +690,59 @@ describe('ManageSessions Show hidden persistence', () => {
       get.mockRestore();
       set.mockRestore();
     }
+  });
+});
+
+// Expanded state is keyed by session id and lives for the page load. Keying by
+// id is what lets it survive a poll, but it also means a stale id can outlive
+// the row it named, so `load` reconciles the set against the ids it just read.
+describe('ManageSessions expanded state', () => {
+  const bindingRow = (over: Partial<import('./api').ClientSessionBindingRow> = {}) => ({
+    handle: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kind: 'repo', uid: 'u1', name: 'core', branch: '',
+    first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:58:00Z', request_count: 1,
+    ...over,
+  });
+  const two = [
+    bindingRow({ handle: 'H1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }),
+    bindingRow({ handle: 'H2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' }),
+  ];
+
+  it('survives a poll that returns the same session', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY, sessions: [sess({ id: 'keep-me', bindings: two })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: /2 handles/ }));
+    expect(screen.getByTestId('session-detail')).toBeInTheDocument();
+
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    expect(screen.getByTestId('session-detail')).toBeInTheDocument();
+  });
+
+  it('forgets a session that left the list, so its return does not spring open', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY, sessions: [sess({ id: 'comes-and-goes', bindings: two })],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    fireEvent.click(screen.getByRole('button', { name: /2 handles/ }));
+    expect(screen.getByTestId('session-detail')).toBeInTheDocument();
+
+    // Gone — purged, or filtered out by a Show hidden change.
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY, sessions: [],
+    });
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    await waitFor(() => expect(screen.queryAllByTestId('session-row')).toHaveLength(0));
+
+    // Back again. The reader never asked for THIS row to be open.
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY, sessions: [sess({ id: 'comes-and-goes', bindings: two })],
+    });
+    await act(async () => { vi.advanceTimersByTime(30_000); });
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    expect(screen.queryByTestId('session-detail')).toBeNull();
+    expect(screen.getByRole('button', { name: /2 handles/ })).toHaveAttribute('aria-expanded', 'false');
   });
 });

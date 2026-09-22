@@ -70,22 +70,65 @@ type BindingGroup = {
 
 const chipKey = (c: WriteChip): string => (c.experiment ? `e:${c.experiment}` : `b:${c.branch}`);
 
+// mountFor finds the URL-scoped mount for a target, matched on KIND AND UID.
+// Uid alone would let a repo and a lens that happen to share one put each
+// other's experiment on the wrong line.
+function mountFor(kind: string, uid: string, mounts: ClientSessionMount[] | undefined): ClientSessionMount | undefined {
+  return mounts?.find(m => m.kind === kind && m.uid === uid && m.experiment);
+}
+
 // writeChip says what a handle on this target WRITES to, or null when there is
 // nothing to say.
 //
-// The mount wins. `mounts` is the STORED answer for a URL-scoped mount, and a
-// session that opened an experiment writes to exp/<name> rather than to
-// anything the binding names — kb/invariants/mcp/experiments/mount-eligibility-from-the-route
-// is why that answer is stored rather than re-derived. `b.branch` is the
-// ordinary case, and "" means the target's own branch: no chip, because a chip
-// saying nothing is worse than no chip.
+// THE HANDLE'S OWN BRANCH WINS. kb/invariants/mcp/experiments/one-answer-per-handle
+// makes "a branch pin AND an experiment" unrepresentable — a handle carries one
+// or the other — so a non-empty `branch` IS this handle's answer, and a mount's
+// experiment must not overwrite it. An empty branch means the handle named
+// nothing, and there the mount is the only thing that knows: `mounts` is the
+// STORED answer for a URL-scoped mount, and a session that opened an experiment
+// writes to exp/<name>, which is why
+// kb/invariants/mcp/experiments/mount-eligibility-from-the-route has it stored
+// rather than re-derived from the URL. Neither → no chip, because "" means the
+// target's own branch and a chip saying nothing is worse than no chip.
 //
-// The join is by UID — the mount and the binding naming the same target — and
-// it is a DISPLAY join, not a routing claim. See the fact this PR wrote on it.
-function writeChip(uid: string, branch: string, mounts: ClientSessionMount[] | undefined): WriteChip | null {
-  const mo = mounts?.find(m => m.uid === uid && m.experiment);
-  if (mo) return { branch: mo.branch, experiment: mo.experiment };
-  return branch ? { branch } : null;
+// The mount half is a DISPLAY join, not a routing claim: mounts are per
+// URL-scoped mount and bindings are per handle. See
+// kb/gotchas/web/ui/manage-page/sessions-binding-groups.
+function writeChip(kind: string, uid: string, branch: string, mounts: ClientSessionMount[] | undefined): WriteChip | null {
+  if (branch) return { branch };
+  const mo = mountFor(kind, uid, mounts);
+  return mo ? { branch: mo.branch, experiment: mo.experiment } : null;
+}
+
+// targetLines is every line the Binding cell draws for one session: the
+// grouped handles, or the singular `binding` fallback when the session
+// presented none, PLUS any mount whose target no line already names.
+//
+// That last part is not cosmetic. The Branch column this replaced rendered
+// `r.mounts` UNCONDITIONALLY, so an experiment on a target the session has
+// presented no handle for used to be visible and would otherwise now be shown
+// nowhere at all.
+function targetLines(r: ClientSession): BindingGroup[] {
+  const lines = groupBindings(r.bindings, r.mounts);
+  if (lines.length === 0) {
+    const mo = mountFor(r.binding.kind, r.binding.uid, r.mounts);
+    lines.push({
+      key: `${r.binding.kind}:${r.binding.uid}`,
+      kind: r.binding.kind, uid: r.binding.uid, name: r.binding.name,
+      count: 1, chips: mo ? [{ branch: mo.branch, experiment: mo.experiment }] : [],
+    });
+  }
+  for (const mo of r.mounts ?? []) {
+    if (!mo.experiment) continue;
+    const key = `${mo.kind}:${mo.uid}`;
+    if (lines.some(l => l.key === key)) continue;
+    // count 0: no handle stands behind this line, so there is no count to show.
+    lines.push({
+      key, kind: mo.kind, uid: mo.uid, name: mo.name,
+      count: 0, chips: [{ branch: mo.branch, experiment: mo.experiment }],
+    });
+  }
+  return lines;
 }
 
 function groupBindings(bindings: ClientSessionBindingRow[], mounts: ClientSessionMount[] | undefined): BindingGroup[] {
@@ -98,7 +141,7 @@ function groupBindings(bindings: ClientSessionBindingRow[], mounts: ClientSessio
     let g = byTarget.get(key);
     if (!g) { g = { key, kind: b.kind, uid: b.uid, name: b.name, count: 0, chips: [] }; byTarget.set(key, g); }
     g.count++;
-    const chip = writeChip(b.uid, b.branch, mounts);
+    const chip = writeChip(b.kind, b.uid, b.branch, mounts);
     // Distinct branches only: the common case is N handles writing to one
     // branch, and repeating the chip N times would be noise. When they
     // genuinely diverge, both chips show.
@@ -115,7 +158,11 @@ function TargetName({ kind, uid, name }: { kind: string; uid: string; name: stri
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
       {kind === 'repo' && <BookIcon color="#6a8" size={11} />}
       {kind === 'lens' && <LayersIcon color={LENS.accent} size={11} />}
-      {name ?? <span style={{ color: '#777' }}>{kind}:{uid}</span>}
+      {/* An unscoped session that has not yet called knomit_bind has NO pin:
+          the server's bindingNames.lookup returns empty strings for a value
+          that is not a PinID, so kind, uid and name all arrive empty and
+          `kind:uid` would render a bare ":". */}
+      {name ?? <span style={{ color: '#777' }}>{kind ? `${kind}:${uid}` : '—'}</span>}
     </span>
   );
 }
@@ -179,6 +226,18 @@ export function ManageSessions({ onLiveCount }: {
     api.listClientSessions({ includeHidden: showHidden })
       .then(r => {
         setRows(r.sessions); setPolicy(r.policy); setTruncated(r.truncated); setError(null);
+        // Drop ids that are no longer on the page. Keying by id is what lets
+        // an open row survive a poll, but it also lets a stale id outlive the
+        // row it named: a session that leaves the list — purged, or filtered
+        // out by a Show hidden change — and later comes back would spring open
+        // on its own, having never been asked to. Returning `prev` unchanged
+        // when nothing was dropped keeps this off the re-render path.
+        setExpanded(prev => {
+          if (prev.size === 0) return prev;
+          const live = new Set(r.sessions.map(s => s.id));
+          const next = new Set([...prev].filter(id => live.has(id)));
+          return next.size === prev.size ? prev : next;
+        });
         onLiveCount?.(r.sessions.filter(s => s.state === 'live').length, r.truncated);
       })
       .catch(e => { setError(String(e)); onLiveCount?.(null, false); })
@@ -262,10 +321,14 @@ export function ManageSessions({ onLiveCount }: {
             <tbody>
               {rows.map(r => {
                 const dead = r.state === 'dead';
-                const groups = groupBindings(r.bindings, r.mounts);
-                // The toggle exists to reveal what the grouping hid. One
-                // handle hides nothing, so it gets no control and no row.
-                const expandable = r.bindings.length > 1;
+                const lines = targetLines(r);
+                // The toggle reveals what the grouped line does not carry —
+                // and it carries no handle at all, so ONE handle needs it just
+                // as much: the handle is what an operator correlating a log
+                // line is after. Only a session that presented none has
+                // nothing to open.
+                const handles = r.bindings.length;
+                const expandable = handles >= 1;
                 const open = expandable && expanded.has(r.id);
                 const detailId = `session-detail-${r.id}`;
                 return (
@@ -293,23 +356,18 @@ export function ManageSessions({ onLiveCount }: {
 
                         Falls back to the singular `binding` for a session that
                         presented no handle at all (a URL-scoped caller), which
-                        is the only case the array is empty. */}
+                        is the only case the array is empty — and appends a line
+                        for any mount whose target no handle named, which the
+                        Branch column used to render unconditionally. */}
                     <td data-testid="session-bindings">
                       <div style={targetsCol}>
-                        {groups.length > 0
-                          ? groups.map(g => (
-                              <div key={g.key} data-testid="session-binding-group" style={targetLine}>
-                                <TargetName kind={g.kind} uid={g.uid} name={g.name} />
-                                {g.count > 1 && <span style={handleCount}>×{g.count}</span>}
-                                {g.chips.map(c => <BranchChip key={chipKey(c)} {...c} />)}
-                              </div>
-                            ))
-                          : (
-                              <div data-testid="session-binding-group" style={targetLine}>
-                                <TargetName kind={r.binding.kind} uid={r.binding.uid} name={r.binding.name} />
-                                {writeChip(r.binding.uid, '', r.mounts) && <BranchChip {...writeChip(r.binding.uid, '', r.mounts)!} />}
-                              </div>
-                            )}
+                        {lines.map(g => (
+                          <div key={g.key} data-testid="session-binding-group" style={targetLine}>
+                            <TargetName kind={g.kind} uid={g.uid} name={g.name} />
+                            {g.count > 1 && <span style={handleCount}>×{g.count}</span>}
+                            {g.chips.map(c => <BranchChip key={chipKey(c)} {...c} />)}
+                          </div>
+                        ))}
                         {expandable && (
                           <button type="button" data-testid="session-handles-toggle" style={moreButton}
                                   aria-expanded={open} aria-controls={detailId}
@@ -321,7 +379,7 @@ export function ManageSessions({ onLiveCount }: {
                             <span style={{ display: 'inline-flex', transform: open ? 'rotate(180deg)' : undefined }}>
                               <ChevronDownIcon color="currentColor" size={10} />
                             </span>
-                            {r.bindings.length} handles
+                            {handles} {handles === 1 ? 'handle' : 'handles'}
                           </button>
                         )}
                       </div>
@@ -349,7 +407,7 @@ export function ManageSessions({ onLiveCount }: {
                             </thead>
                             <tbody>
                               {r.bindings.map((b, i) => {
-                                const chip = writeChip(b.uid, b.branch, r.mounts);
+                                const chip = writeChip(b.kind, b.uid, b.branch, r.mounts);
                                 return (
                                   // The first entry is the one that made the
                                   // most recent call; it is brighter because
