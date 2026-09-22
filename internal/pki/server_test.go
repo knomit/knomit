@@ -319,6 +319,13 @@ func TestServerConfig_LowerCRLNumberNotAdoptedPreviousStillEnforced(t *testing.T
 	if !strings.Contains(rec.String()[rec2:], ErrCRLInvalid.Error()) || !strings.Contains(rec.String()[rec2:], "rollback") {
 		t.Fatalf("rollback not logged as ErrCRLInvalid:\n%s", rec)
 	}
+	// Several more handshakes against the same rejected file: logged ONCE.
+	for range 3 {
+		get(f.clientFor(t, peer, nil), addr)
+	}
+	if n := rec.count("rollback"); n != 1 {
+		t.Fatalf("the rejected CRL was logged %d times, want once:\n%s", n, rec)
+	}
 }
 
 func TestServerConfig_RestartRemembersTheCRLNumber(t *testing.T) {
@@ -409,3 +416,80 @@ func parseURL(s string) ([]*url.URL, error) {
 // discardLogger swallows net/http's own "TLS handshake error" lines; the
 // assertions read the recorder, which carries the named reason.
 func discardLogger() *log.Logger { return log.New(io.Discard, "", 0) }
+
+func (r *recorder) count(sub string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, l := range r.lines {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
+// serverSerial connects and returns the serial of the certificate the
+// server presented, i.e. which file set it is serving.
+func serverSerial(t *testing.T, c *http.Client, addr string) (*big.Int, error) {
+	t.Helper()
+	resp, err := c.Get("https://" + addr + "/")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return resp.TLS.PeerCertificates[0].SerialNumber, nil
+}
+
+// install writes instance.crt, root.crt and crl.pem one rename at a time, so
+// a handshake can land between them. A new instance.crt beside the OLD
+// root.crt must not be served; the previous set stays whole.
+func TestServerConfig_TornInstallKeepsThePreviousSetAndLogsOnce(t *testing.T) {
+	f, srvM, dir, rec, addr := serverSide(t)
+	peer := f.enroll(t, "peer")
+	c := f.clientFor(t, peer, nil)
+	before, err := serverSerial(t, c, addr)
+	if err != nil || before.Cmp(srvM.cert.SerialNumber) != 0 {
+		t.Fatalf("baseline: serial %v err %v", before, err)
+	}
+
+	// Re-enroll the SAME server key under a different root; write ONLY
+	// instance.crt (the first of install's three renames).
+	g := newFleet(t)
+	newPEM, _, err := IssueInstance(g.dir, g.root, srvM.pub, "server", RoleInstance, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(filepath.Join(dir, InstanceCertFile), newPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		got, err := serverSerial(t, c, addr)
+		if err != nil {
+			t.Fatalf("handshake %d during the torn install: %v\n%s", i, err, rec)
+		}
+		if got.Cmp(before) != 0 {
+			t.Fatalf("handshake %d served serial %v; the torn set was adopted", i, got)
+		}
+	}
+	if n := rec.count("tls_reload_rejected"); n != 1 {
+		t.Fatalf("torn set logged %d times over 3 handshakes, want once:\n%s", n, rec)
+	}
+
+	// Finish the install: root.crt and crl.pem of the new fleet. The set now
+	// verifies together and is adopted on the next handshake.
+	rootPEM, _ := os.ReadFile(filepath.Join(g.dir, RootCertFile))
+	writeFileAtomic(filepath.Join(dir, RootCertFile), rootPEM, 0o600)
+	g.publishCRL(t, dir)
+	newPeer := g.enroll(t, "peer2")
+	got, err := serverSerial(t, g.clientFor(t, newPeer, nil), addr)
+	if err != nil {
+		t.Fatalf("after the install completed: %v\n%s", err, rec)
+	}
+	if got.Cmp(before) == 0 {
+		t.Fatal("the completed install was not adopted")
+	}
+	if _, err := get(c, addr); err == nil { // the old fleet's peer is now a stranger
+		t.Fatal("a peer of the replaced root still gets in")
+	}
+}

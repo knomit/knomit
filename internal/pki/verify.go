@@ -102,23 +102,12 @@ func VerifyInstanceChain(leaf *x509.Certificate, intermediates []*x509.Certifica
 		return Identity{}, fmt.Errorf("%w: serial %s", ErrRevoked, leaf.SerialNumber.Text(16))
 	}
 
-	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
-	if !ok {
+	if _, ok := leaf.PublicKey.(ed25519.PublicKey); !ok {
 		return Identity{}, fmt.Errorf("%w: %T", ErrNotEd25519, leaf.PublicKey)
 	}
-
-	role, host, fp8, err := parseSAN(leaf)
-	if err != nil {
-		return Identity{}, err
-	}
-	fp := Fingerprint(pub)
-	if Short(fp) != fp8 {
-		return Identity{}, fmt.Errorf("%w: SAN carries %s, key is %s", ErrSANMismatch, fp8, Short(fp))
-	}
-	if !role.known() {
-		return Identity{}, fmt.Errorf("%w: %q", ErrRoleUnknown, role)
-	}
-	return Identity{Fingerprint: fp, Host: host, Role: role, Serial: leaf.SerialNumber, NotAfter: leaf.NotAfter}, nil
+	// SAN shape, fingerprint cross-check and role: the same code IdentityOf
+	// runs, so the two can never disagree about what a leaf names.
+	return IdentityOf(leaf)
 }
 
 var oidSubjectAltName = asn1.ObjectIdentifier{2, 5, 29, 17}
@@ -230,4 +219,30 @@ func isLowerHex8(s string) bool {
 		}
 	}
 	return true
+}
+
+// IdentityOf reads the Identity of a leaf WITHOUT verifying it: SAN, role and
+// fingerprint only. It exists for the one caller that sits behind
+// VerifyInstanceChain — internal/web's AuthMiddleware on the TLS listener,
+// where every connection has already passed VerifyConnection — and must not
+// be used to decide whether to trust a certificate. It still refuses a leaf
+// whose SAN does not name its own key, so a bypass of the verifier cannot
+// turn into a principal for someone else's fingerprint.
+func IdentityOf(leaf *x509.Certificate) (Identity, error) {
+	pub, ok := leaf.PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return Identity{}, fmt.Errorf("%w: %T", ErrNotEd25519, leaf.PublicKey)
+	}
+	role, host, fp8, err := parseSAN(leaf)
+	if err != nil {
+		return Identity{}, err
+	}
+	fp := Fingerprint(pub)
+	if Short(fp) != fp8 {
+		return Identity{}, fmt.Errorf("%w: SAN carries %s, key is %s", ErrSANMismatch, fp8, Short(fp))
+	}
+	if !role.known() {
+		return Identity{}, fmt.Errorf("%w: %q", ErrRoleUnknown, role)
+	}
+	return Identity{Fingerprint: fp, Host: host, Role: role, Serial: leaf.SerialNumber, NotAfter: leaf.NotAfter}, nil
 }

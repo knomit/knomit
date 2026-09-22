@@ -50,6 +50,10 @@ type reloader struct {
 	mu      sync.Mutex
 	cur     *snapshot
 	lastNum *big.Int // highest CRL Number accepted, persisted in crl.number
+	// rejected is the last file set that failed to load, remembered so a
+	// bad set (a rolled-back CRL, a half-finished install) is parsed and
+	// logged ONCE rather than on every handshake until someone fixes it.
+	rejected *[3][]byte
 }
 
 // ServerConfig builds the TLS listener's config from <dir>/instance.crt,
@@ -138,11 +142,22 @@ func (r *reloader) refresh() *snapshot {
 		bytes.Equal(rawCert, cur.rawCert) && bytes.Equal(rawRoot, cur.rawRoot) && bytes.Equal(rawCRL, cur.rawCRL) {
 		return cur
 	}
+	set := [3][]byte{rawCert, rawRoot, rawCRL}
+	r.mu.Lock()
+	seen := r.rejected != nil && errC == nil && errR == nil && errL == nil &&
+		bytes.Equal(set[0], r.rejected[0]) && bytes.Equal(set[1], r.rejected[1]) && bytes.Equal(set[2], r.rejected[2])
+	r.mu.Unlock()
+	if seen {
+		return cur
+	}
 	next, err := r.parse(rawCert, errC, rawRoot, errR, rawCRL, errL)
 	if err == nil {
 		err = r.adopt(next)
 	}
 	if err != nil {
+		r.mu.Lock()
+		r.rejected = &set
+		r.mu.Unlock()
 		r.logf(err.Error(), "event", "tls_reload_rejected", "dir", r.dir)
 		return cur
 	}
@@ -181,6 +196,14 @@ func (r *reloader) parse(rawCert []byte, errC error, rawRoot []byte, errR error,
 	root, err := parseOneCert(rawRoot)
 	if err != nil || !root.IsCA {
 		return nil, fmt.Errorf("pki: %s: not a CA certificate: %v", RootCertFile, err)
+	}
+	// The three files must verify TOGETHER. `install` writes them one rename
+	// at a time, so a handshake can see a new instance.crt beside the old
+	// root.crt; such a set is rejected whole and the previous one stays.
+	pool := x509.NewCertPool()
+	pool.AddCert(root)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return nil, fmt.Errorf("pki: %s does not chain to %s: %w", InstanceCertFile, RootCertFile, err)
 	}
 	crl, err := parseCRL(rawCRL)
 	if err != nil {
