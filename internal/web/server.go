@@ -108,7 +108,8 @@ type Server struct {
 }
 
 // grants is the Grants every enforcement point in this server consults: the
-// anonymous loopback principal from config, everyone else from the store.
+// anonymous loopback principal from config, a chained instance's implicit
+// read from auth.CertGrants, and everything else from the store.
 // Building it once per Handler() means a bad permission name in config fails
 // at wiring time rather than once per request.
 //
@@ -122,7 +123,7 @@ func (s *Server) grants() auth.Grants {
 	if err != nil {
 		log.Fatal().Err(err).Msg("[auth].loopback_default invalid")
 	}
-	return loopbackGrants{anon: set, store: s.Grants}
+	return loopbackGrants{anon: set, store: auth.CertGrants{Store: s.Grants}}
 }
 
 // buildMCPHandler constructs the single MCP server instance, shared across
