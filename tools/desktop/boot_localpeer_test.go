@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"knomit/internal/auth"
+	"knomit/internal/config"
 )
 
 // Helpers shared by the two halves of the desktop's local-listener tests:
@@ -67,4 +68,33 @@ func getBody(t *testing.T, c *http.Client, url string) string {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
+}
+
+// The PIN on the desktop's half of the silent-lockout guard (knomit#245
+// review).
+//
+// The guard is tested against a real held pipe in boot_pipe_windows_test.go,
+// but that test calls bootServer with a localListener of its own. Nothing
+// asserted that the REAL config reaches it — and it did not used to be
+// assertable: the path and the flag were two positional arguments, so
+// mutating cfg.Auth.Require at the call site to a constant left the whole
+// desktop suite green. localListenerFrom is now the one place that mapping
+// happens, and this is what holds it.
+func TestLocalListenerFrom_CarriesPathAndRequire(t *testing.T) {
+	for _, require := range []bool{true, false} {
+		cfg := config.Defaults()
+		cfg.Socket = "/tmp/k/knomit.sock" // a literal: this is about the mapping, not the path
+		cfg.Auth.Require = require
+
+		got := localListenerFrom(cfg)
+		if got.Path != cfg.Socket {
+			t.Fatalf("Path = %q, want %q", got.Path, cfg.Socket)
+		}
+		// BOTH ways. Asserting only the true case would pass for a mapping
+		// hard-coded to true, which fails open in the other direction: every
+		// boot refused when the listener is merely held.
+		if got.Require != require {
+			t.Fatalf("Require = %v, want %v (cfg.Auth.Require)", got.Require, require)
+		}
+	}
 }

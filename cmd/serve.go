@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -222,34 +221,14 @@ func serveCmd() *cobra.Command {
 			}
 
 			// Local authenticated listener: a unix socket, or a named pipe on
-			// Windows (see auth.ListenLocal). Which one, and everything that
-			// makes it a credential, is decided there.
-			ul, closeSocket, err := auth.ListenLocal(cfg.Socket)
-			switch {
-			case errors.Is(err, auth.ErrSocketInUse):
-				// Another process holds the path -- normally the desktop app,
-				// but all that is KNOWN is that it is held: on Windows the
-				// pipe namespace is flat and world-creatable, so the owner
-				// need not be knomit at all. Do not steal it either way:
-				// bridges belong to whatever was there first. Serve TCP only.
-				log.Warn().Err(err).Str("socket", cfg.Socket).Msg("local listener path is held by another process; serving TCP only")
-			case err != nil:
-				log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("local listener failed to start")
-			}
-			defer closeSocket()
-			// ...unless serving TCP only would mean serving NOTHING. With
-			// [auth].require = true there is no anonymous path, so a boot that
-			// carried on here would answer every request 403 while looking
-			// healthy -- the silent lockout app.checkLocalListener refuses at
-			// config time, arriving through the one door it cannot see.
-			//
-			// It RETURNS rather than log.Fatal()ing like the branch above:
-			// this is a refusal to start, not a crash, and returning lets the
-			// deferred a.Close() and closeSocket() run. The Fatal above
-			// predates this and is left alone.
-			if err := auth.RequireLocalListener(cfg.Auth.Require, ul, cfg.Socket, err); err != nil {
+			// Windows. openLocalListener takes the WHOLE config rather than a
+			// path and a flag, so there is no pair of arguments here to wire up
+			// the wrong way round, and its policy is pinned by a test.
+			ul, closeSocket, err := openLocalListener(cfg)
+			if err != nil {
 				return err
 			}
+			defer closeSocket()
 			if ul != nil {
 				// `via` names the MECHANISM, so the line says which credential
 				// a session over it will carry rather than assuming a socket.
