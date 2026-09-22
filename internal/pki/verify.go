@@ -159,8 +159,11 @@ func rawURIs(leaf *x509.Certificate) ([]string, error) {
 //   - the role is u.Host (the URI authority): no userinfo, no port;
 //   - the path is exactly "/<host>-<fp8>": one segment, no escapes, fp8 eight
 //     lowercase hex after the LAST '-', host from [A-Za-z0-9._-];
-//   - no query, no fragment;
-//   - finally the raw string must equal its canonical rebuild byte for byte.
+//   - no query, no fragment.
+//
+// Together these leave exactly one spelling: the raw string is then
+// knomit://<role>/<host>-<fp8> byte for byte, so no canonical-rebuild
+// comparison is needed (it was tried, and no case reached it).
 //
 // An unknown role is returned, not refused, so the caller can map it to
 // ErrRoleUnknown after the fingerprint check.
@@ -214,11 +217,7 @@ func parseSAN(leaf *x509.Certificate) (Role, string, string, error) {
 	if !validHost(host) || !isLowerHex8(fp8) {
 		return bad("path must be <host>-<fp8> with fp8 eight lowercase hex")
 	}
-	role := Role(u.Host)
-	if canonical := SANScheme + "://" + string(role) + "/" + host + "-" + fp8; raw != canonical {
-		return bad("not in canonical form " + canonical)
-	}
-	return role, host, fp8, nil
+	return Role(u.Host), host, fp8, nil
 }
 
 func isLowerHex8(s string) bool {

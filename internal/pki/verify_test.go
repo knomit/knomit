@@ -216,7 +216,16 @@ func TestVerifyInstanceChain_UnknownRole(t *testing.T) {
 
 func TestVerifyInstanceChain_SANShapeIsStrict(t *testing.T) {
 	f := newFleet(t)
-	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	// The "uppercase fp8" case is only a NEGATIVE case if fp8 has a letter;
+	// an all-digit fp8 uppercases to itself and is valid. Draw keys until
+	// it has one, so the case cannot pass by chance.
+	var pub ed25519.PublicKey
+	for {
+		pub, _, _ = ed25519.GenerateKey(rand.Reader)
+		if upper(Short(Fingerprint(pub))) != Short(Fingerprint(pub)) {
+			break
+		}
+	}
 	fp8 := Short(Fingerprint(pub))
 	good := "knomit://instance/h-" + fp8
 	cases := map[string][]string{
