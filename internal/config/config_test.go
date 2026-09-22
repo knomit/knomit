@@ -602,3 +602,29 @@ func TestSocketPath_HonoursTheRepoAlias(t *testing.T) {
 		t.Fatalf("SocketPath() = %q", got)
 	}
 }
+
+// The nil fallback has exactly one definition, because web.Server.grants()
+// and app.seedOwnUID both read it: if they ever disagreed, boot would seed
+// the server's own uid with one permission set while the middleware resolved
+// anonymous to another.
+func TestEffectiveLoopbackDefault_ThreeCases(t *testing.T) {
+	// nil — the literal was built without config, which only tests do.
+	if got := (AuthConfig{}).EffectiveLoopbackDefault(); strings.Join(got, ",") !=
+		strings.Join(Defaults().Auth.LoopbackDefault, ",") {
+		t.Fatalf("nil must fall back to the defaults, got %v", got)
+	}
+
+	// EMPTY BUT NON-NIL — `loopback_default = []` in TOML. An operator who
+	// writes an empty list means it; falling back here would silently grant
+	// the full default set to someone who asked for none of it.
+	got := AuthConfig{LoopbackDefault: []string{}}.EffectiveLoopbackDefault()
+	if len(got) != 0 {
+		t.Fatalf("an explicitly empty list must stay empty, got %v", got)
+	}
+
+	// Populated — returned as written.
+	want := []string{"read"}
+	if got := (AuthConfig{LoopbackDefault: want}).EffectiveLoopbackDefault(); strings.Join(got, ",") != "read" {
+		t.Fatalf("a populated list must be returned as written, got %v", got)
+	}
+}

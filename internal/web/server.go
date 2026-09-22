@@ -112,17 +112,13 @@ type Server struct {
 // Building it once per Handler() means a bad permission name in config fails
 // at wiring time rather than once per request.
 //
-// A nil LoopbackDefault means the Server literal was built without config,
-// which only tests do -- production goes through internal/app, and
-// TestApp_AuthConfigReachesMiddleware fails if that wiring is ever dropped.
-// An EMPTY but present slice ([auth] loopback_default = [] in TOML) is
-// honoured as "anonymous holds nothing"; only nil falls back.
+// What anonymous holds comes from config.AuthConfig.EffectiveLoopbackDefault,
+// which app.seedOwnUID also calls -- one definition of the nil fallback, so
+// the middleware and the boot seeding cannot come to disagree about it.
+// TestApp_AuthConfigReachesMiddleware fails if the production wiring that
+// feeds this is ever dropped.
 func (s *Server) grants() auth.Grants {
-	names := s.Auth.LoopbackDefault
-	if names == nil {
-		names = config.Defaults().Auth.LoopbackDefault
-	}
-	set, err := auth.ParseSet(names)
+	set, err := auth.ParseSet(s.Auth.EffectiveLoopbackDefault())
 	if err != nil {
 		log.Fatal().Err(err).Msg("[auth].loopback_default invalid")
 	}
@@ -177,7 +173,9 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	// On the OUTER router as well as the API one, because /git is mounted
-	// here and never passes through NewAPIRouter.
+	// here and never passes through NewAPIRouter. Below Recoverer for the
+	// same reason it is on the API router: a panic here must become a 500,
+	// not a dropped connection.
 	r.Use(AuthMiddleware(s.Auth, s.authDisabled))
 	if len(s.CORSOrigins) > 0 {
 		r.Use(corsMiddleware(s.CORSOrigins))

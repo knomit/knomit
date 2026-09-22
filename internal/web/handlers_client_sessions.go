@@ -85,29 +85,29 @@ type clientSessionView struct {
 	// Bindings is every handle the session has presented, most recently used
 	// first. Empty for a session that has only ever used URL-scoped mounts,
 	// which present no handle.
-	Bindings     []clientSessionBindingRow `json:"bindings"`
+	Bindings []clientSessionBindingRow `json:"bindings"`
 	// Mounts is what this session is writing to on its URL-SCOPED mounts, and
 	// it is STORED rather than inferred from the URL. A URL-scoped mount names
 	// a branch in its path, but a session that opened an experiment writes
 	// somewhere else — so a table reading the path would confidently show the
 	// wrong branch. Empty for a session with no experiment anywhere.
-	Mounts []clientSessionMountRow `json:"mounts,omitempty"`
-	Branch       string                    `json:"branch"`
-	Client       clientSessionClient       `json:"client"`
-	Bridge       clientSessionBridge       `json:"bridge"`
-	RemoteAddr   string                    `json:"remote_addr"`
-	UserAgent    string                    `json:"user_agent"`
+	Mounts     []clientSessionMountRow `json:"mounts,omitempty"`
+	Branch     string                  `json:"branch"`
+	Client     clientSessionClient     `json:"client"`
+	Bridge     clientSessionBridge     `json:"bridge"`
+	RemoteAddr string                  `json:"remote_addr"`
+	UserAgent  string                  `json:"user_agent"`
 	// Principal is who the edge VERIFIED this caller to be, empty when
 	// nobody did. VerifiedPID is the kernel's pid for a unix socket peer.
 	// Deliberately NOT inside the bridge block: everything there is
 	// self-declared, and the distinction between what the client said and
 	// what the kernel said is the reason both are kept.
-	Principal   string `json:"principal,omitempty"`
-	VerifiedPID int    `json:"verified_pid,omitempty"`
-	FirstSeenAt  string                    `json:"first_seen_at"`
-	LastSeenAt   string                    `json:"last_seen_at"`
-	EndedAt      *string                   `json:"ended_at"`
-	RequestCount int                       `json:"request_count"`
+	Principal    string  `json:"principal,omitempty"`
+	VerifiedPID  int     `json:"verified_pid,omitempty"`
+	FirstSeenAt  string  `json:"first_seen_at"`
+	LastSeenAt   string  `json:"last_seen_at"`
+	EndedAt      *string `json:"ended_at"`
+	RequestCount int     `json:"request_count"`
 }
 
 type clientSessionPolicy struct {
@@ -264,7 +264,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 				Bridge: clientSessionBridge{Host: s.Host, User: s.User, Cwd: s.Cwd, PID: s.PID,
 					Parent: s.ParentApp, ParentPID: s.ParentPID, Version: s.BridgeVersion},
 				RemoteAddr: s.RemoteAddr, UserAgent: s.UserAgent,
-				Principal:  s.Principal, VerifiedPID: s.VerifiedPID,
+				Principal: s.Principal, VerifiedPID: s.VerifiedPID,
 				FirstSeenAt: s.FirstSeen.UTC().Format(time.RFC3339),
 				LastSeenAt:  s.LastSeen.UTC().Format(time.RFC3339),
 				EndedAt:     ended, RequestCount: s.RequestCount,

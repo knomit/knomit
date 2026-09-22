@@ -261,11 +261,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 // mode that makes a permission system worthless — the grant would be
 // unrevokable in practice while appearing revocable.
 func seedOwnUID(ctx context.Context, g *auth.SQLGrants, cfg config.AuthConfig) error {
-	names := cfg.LoopbackDefault
-	if names == nil {
-		names = config.Defaults().Auth.LoopbackDefault
-	}
-	set, err := auth.ParseSet(names)
+	set, err := auth.ParseSet(cfg.EffectiveLoopbackDefault())
 	if err != nil {
 		return err
 	}

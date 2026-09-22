@@ -292,6 +292,29 @@ type AuthConfig struct {
 	LoopbackDefault []string `toml:"loopback_default"`
 }
 
+// EffectiveLoopbackDefault is the permission list the anonymous loopback
+// principal actually holds. It is the ONE place the nil fallback lives.
+//
+// nil means the AuthConfig was built without config — which in practice only
+// tests do, since production goes through internal/app — and falls back to the
+// shipped defaults. An EMPTY BUT NON-NIL slice ([auth] loopback_default = []
+// in TOML) is honoured as "anonymous holds nothing": an operator who writes an
+// empty list means it, and collapsing that into the fallback would silently
+// grant the full default set to someone who asked for none of it.
+//
+// Both enforcement-side callers go through this — web.Server.grants(), which
+// resolves what anonymous may do, and app.seedOwnUID, which seeds the server's
+// own socket uid. They used to each carry their own copy of the nil check. If
+// one had ever been changed alone, boot would seed one set while the
+// middleware resolved another, and the two enforcement points would disagree
+// about exactly the principal this phase exists to serve.
+func (a AuthConfig) EffectiveLoopbackDefault() []string {
+	if a.LoopbackDefault == nil {
+		return Defaults().Auth.LoopbackDefault
+	}
+	return a.LoopbackDefault
+}
+
 // RuntimeConfig configures the optional runtime diagnostics port (live
 // introspection + pprof + metrics). Off unless Addr is set; bind it to a local
 // address only — it is never meant to face the network.

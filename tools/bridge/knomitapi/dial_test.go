@@ -148,6 +148,35 @@ func TestNewHTTPClient_StaleSocketFallsBackToLiveTCP(t *testing.T) {
 	}
 }
 
+// A path too long for sun_path fails with EINVAL, not ENOENT. That is a
+// misconfiguration and not the ordinary "no server running" case, so it must
+// still WARN — this pins that the quiet path is keyed on ENOENT specifically
+// and not on "any failure to reach the socket".
+func TestNewHTTPClient_OverlongSocketPathStillWarns(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the sun_path cap that produces EINVAL here is a darwin limit")
+	}
+	isolateHome(t)
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	defer tcp.Close()
+
+	var logbuf bytes.Buffer
+	restore := log.Logger
+	log.Logger = zerolog.New(&logbuf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = restore })
+
+	overlong := filepath.Join(t.TempDir(), strings.Repeat("x", 120)+".sock")
+	c := NewHTTPClient(overlong, false, 2*time.Second)
+	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
+		t.Fatalf("it must still fall back; body=%q", got)
+	}
+	if !strings.Contains(logbuf.String(), "unreachable") {
+		t.Fatalf("an unusable socket path is an anomaly and must warn, got: %s", logbuf.String())
+	}
+}
+
 // Precedence is unchanged by the fallback: a socket that ANSWERS still wins
 // over a live TCP server.
 func TestNewHTTPClient_LiveSocketWinsOverLiveTCP(t *testing.T) {
@@ -183,16 +212,44 @@ func TestNewHTTPClient_ExplicitURLIgnoresSocket(t *testing.T) {
 	}
 }
 
-func TestNewHTTPClient_MissingSocketFallsBackToTCP(t *testing.T) {
+// A MISSING socket is the ordinary case — no server running, or one older
+// than the socket. It must fall back silently: warning about it would dilute
+// the signal the WARN exists for, which is the stale-socket anomaly.
+func TestNewHTTPClient_MissingSocketFallsBackToTCPWithoutWarning(t *testing.T) {
 	isolateHome(t)
 	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "via-tcp")
 	}))
 	defer tcp.Close()
 
-	c := NewHTTPClient(filepath.Join(t.TempDir(), "absent.sock"), false, 2*time.Second)
+	var logbuf bytes.Buffer
+	restore := log.Logger
+	// Debug level, so a Debug line WOULD be captured if one were emitted at
+	// WARN by mistake -- the assertion below is about the level, and a
+	// logger that dropped Debug could not tell the two apart.
+	log.Logger = zerolog.New(&logbuf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = restore })
+
+	// A SHORT path: macOS caps sun_path at 104 bytes, and a path over that
+	// fails with EINVAL rather than ENOENT — which is a different thing and
+	// SHOULD still warn, so using t.TempDir() here would test the wrong case.
+	dir, err := os.MkdirTemp("/tmp", "ka")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	c := NewHTTPClient(filepath.Join(dir, "absent.sock"), false, 2*time.Second)
 	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
 		t.Fatalf("a missing socket must fall back to TCP; body=%q", got)
+	}
+	out := logbuf.String()
+	if strings.Contains(out, "unreachable") || strings.Contains(out, `"level":"warn"`) {
+		t.Fatalf("an absent socket is ordinary and must not WARN, got: %s", out)
+	}
+	// Positive control: it did take the fallback path, and said so quietly.
+	if !strings.Contains(out, `"level":"debug"`) || !strings.Contains(out, "no unix socket") {
+		t.Fatalf("the absent-socket fallback should still be visible at Debug, got: %s", out)
 	}
 }
 

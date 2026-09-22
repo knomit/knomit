@@ -93,10 +93,10 @@ func initAt(t *testing.T, h http.Handler, mount string) string {
 // experimentEnvelope is the part of a knomit_experiment result these tests
 // read.
 type experimentEnvelope struct {
-	Action       string `json:"action"`
-	Repo         string `json:"repo"`
-	Branch       string `json:"branch"`
-	Active       string `json:"active_experiment"`
+	Action string `json:"action"`
+	Repo   string `json:"repo"`
+	Branch string `json:"branch"`
+	Active string `json:"active_experiment"`
 	// Kept on the envelope though the server no longer sets it: the tests
 	// assert it is ABSENT, which needs the field to decode into.
 	ReconnectURL string `json:"reconnect_url"`

@@ -2,6 +2,8 @@ package knomitapi
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -84,6 +86,15 @@ func socketPreferringClient(timeout time.Duration, socketPath func() string) *ht
 				conn, err := d.DialContext(ctx, "unix", p)
 				if err == nil {
 					return conn, nil
+				}
+				// NO SOCKET AT ALL is the ordinary case — no server running,
+				// or one older than the socket — and warning about it would
+				// dilute the signal this log line exists for. The anomaly
+				// worth a WARN is a socket that EXISTS and does not answer,
+				// which is what an ungracefully killed server leaves behind.
+				if errors.Is(err, fs.ErrNotExist) {
+					log.Debug().Str("socket", p).Msg("bridge: no unix socket, using TCP")
+					return d.DialContext(ctx, network, addr)
 				}
 				// Once, not per dial: a stale socket would otherwise repeat
 				// this on every connection. Silence here is the failure mode
