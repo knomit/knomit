@@ -6,13 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"knomit/internal/auth"
 )
