@@ -71,7 +71,7 @@ func actorE2E(t *testing.T) (*httptest.Server, *store.Service) {
 		OntologyRoot: "kb",
 	})
 
-	mcpHandler := mcpserver.NewStreamableHTTPServer(NewServer("kb", nil, false))
+	mcpHandler := mcpserver.NewStreamableHTTPServer(NewServer("kb", nil, false, nil))
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mcpHandler.ServeHTTP(w, r.WithContext(repos.WithRepoInstance(r.Context(), ri)))
 	}))

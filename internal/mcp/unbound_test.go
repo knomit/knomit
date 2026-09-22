@@ -74,7 +74,7 @@ func TestHandlers_StoredBindingErrorSurfaces(t *testing.T) {
 func TestAfterInitialize_UnscopedMountSaysBindFirst(t *testing.T) {
 	// A nil manager is safe here and keeps the test to the instructions path:
 	// neither recordClientInfo nor profileFor dereferences it.
-	srv := NewServer("kb", nil, false)
+	srv := NewServer("kb", nil, false, nil)
 
 	instr := initializeInstructions(t, srv, repos.WithSessionScoped(context.Background()))
 	require.Contains(t, instr, "knomit_bind")
@@ -91,7 +91,7 @@ func TestAfterInitialize_UnscopedMountSaysBindFirst(t *testing.T) {
 func TestAfterInitialize_UnscopedAddendumOnlyWhenSessionScoped(t *testing.T) {
 	// A nil manager is safe here and keeps the test to the instructions path:
 	// neither recordClientInfo nor profileFor dereferences it.
-	srv := NewServer("kb", nil, false)
+	srv := NewServer("kb", nil, false, nil)
 
 	instr := initializeInstructions(t, srv, context.Background())
 	require.NotContains(t, instr, "knomit_bind")
@@ -121,7 +121,7 @@ func TestAfterInitialize_UnscopedAddendumOnlyWhenSessionScoped(t *testing.T) {
 // call reports nothing bound — and without this seeding the suite would stay
 // green while it happened.
 func TestAfterInitialize_SessionScopedIgnoresResolvedBinding(t *testing.T) {
-	srv := NewServer("kb", nil, false)
+	srv := NewServer("kb", nil, false, nil)
 
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "alpha", UID: "u-alpha", AgentBranch: "agent/test", OntologyRoot: "kb",

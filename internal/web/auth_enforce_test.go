@@ -2,8 +2,10 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"knomit/internal/auth"
@@ -173,5 +175,74 @@ func TestReadOnlyGate_StillWinsOverWriteGate(t *testing.T) {
 	s.Handler().ServeHTTP(rr, post)
 	if rr.Code != http.StatusForbidden || !bytes.Contains(rr.Body.Bytes(), []byte("Read-only instance")) {
 		t.Fatalf("read-only message must win: %d %s", rr.Code, rr.Body.String())
+	}
+}
+
+// End to end over HTTP: what a caller may DO decides what it is even told
+// exists. A read-only anonymous loopback caller must not see knomit_learn in
+// tools/list; the default loopback caller must.
+func TestMCPToolsList_FilteredByWritePermission(t *testing.T) {
+	const mount = "/api/v1/repos/alpha/branches/agent:test/mcp"
+
+	list := func(t *testing.T, loopbackDefault []string) string {
+		t.Helper()
+		s := &Server{
+			Manager: newTestManagerWithRepos(t, "alpha"),
+			Auth:    config.AuthConfig{LoopbackDefault: loopbackDefault},
+		}
+		h := s.Handler()
+		// initialize first: the streamable-HTTP server mints the session id
+		// in the RESPONSE, and a tools/list without one is 404.
+		_, sid := rpcAt(t, h, mount, "",
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"auth-e2e","version":"1.0"}}}`)
+		out, _ := rpcAt(t, h, mount, sid, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+		raw, err := json.Marshal(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	readOnly := list(t, []string{"read"})
+	if strings.Contains(readOnly, "knomit_learn") {
+		t.Fatalf("a caller without write must not be offered knomit_learn: %s", readOnly)
+	}
+	if !strings.Contains(readOnly, "knomit_query") {
+		t.Fatalf("a read tool must still be listed: %s", readOnly)
+	}
+
+	full := list(t, config.Defaults().Auth.LoopbackDefault)
+	if !strings.Contains(full, "knomit_learn") {
+		t.Fatalf("the default loopback caller must still see the write tools: %s", full)
+	}
+}
+
+// Filtering is a courtesy; the gate is the check. A caller that never listed
+// and calls a write tool straight out is refused by name — and the refusal
+// names the PERMISSION, not a missing binding handle, because the permission
+// gate runs outside the binding gate.
+func TestMCPToolCall_WriteToolRefusedWithoutWritePermission(t *testing.T) {
+	const mount = "/api/v1/repos/alpha/branches/agent:test/mcp"
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		Auth:    config.AuthConfig{LoopbackDefault: []string{"read"}},
+	}
+	h := s.Handler()
+	_, sid := rpcAt(t, h, mount, "",
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"auth-e2e","version":"1.0"}}}`)
+
+	text, isErr := callToolAt(t, h, mount, sid, "knomit_learn", `{}`)
+	if !isErr {
+		t.Fatalf("knomit_learn must be refused for a read-only principal: %s", text)
+	}
+	if !strings.Contains(text, "permission denied") || !strings.Contains(text, "write") {
+		t.Fatalf("the refusal must name the permission: %s", text)
+	}
+
+	// A READ tool on the same session still works, so the refusal above is
+	// the permission gate and not a broken handshake.
+	if text, isErr := callToolAt(t, h, mount, sid, "knomit_query", `{"text":"anything"}`); isErr &&
+		strings.Contains(text, "permission denied") {
+		t.Fatalf("a read tool must not be permission-gated: %s", text)
 	}
 }

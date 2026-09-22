@@ -22,7 +22,7 @@ func callToolMessage(name string) json.RawMessage {
 // we want in the log — the warning reports what the client ASKED for, whether or
 // not the tool exists.
 func TestBeforeCallToolRecordsToolNameInReqInfo(t *testing.T) {
-	s := NewServer("kb", nil, false)
+	s := NewServer("kb", nil, false, nil)
 	ctx, info := reqinfo.NewContext(context.Background())
 
 	s.HandleMessage(ctx, callToolMessage("knomit_no_such_tool"))
@@ -35,6 +35,6 @@ func TestBeforeCallToolRecordsToolNameInReqInfo(t *testing.T) {
 // stdio sessions and in-process callers carry no annotation. The hook must be a
 // no-op there, never a panic.
 func TestBeforeCallToolWithoutReqInfoDoesNotPanic(t *testing.T) {
-	s := NewServer("kb", nil, false)
+	s := NewServer("kb", nil, false, nil)
 	s.HandleMessage(context.Background(), callToolMessage("knomit_no_such_tool"))
 }

@@ -133,11 +133,18 @@ func (s *Server) grants() auth.Grants {
 // all repos and lenses. Profile is a per-repo attribute now; the formerly
 // profile-keyed instances are collapsed (lenses RFC decision 12).
 func (s *Server) buildMCPHandler() {
+	// The SAME Grants the HTTP gate consults, so the two enforcement points
+	// cannot come to disagree about anonymous. Form B disables it alongside
+	// writeGate, or an authDisabled test would still be refused per tool.
+	var g auth.Grants
+	if !s.authDisabled {
+		g = s.grants()
+	}
 	var mcpSrv *mcpserver.MCPServer
 	if s.Embedder != nil {
-		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, s.Embedder)
+		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g, s.Embedder)
 	} else {
-		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly)
+		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g)
 	}
 	// mcp-go does not put the *http.Request in the context it hands to hooks,
 	// so the initialize hook — the only place the declared clientInfo exists —

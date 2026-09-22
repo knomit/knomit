@@ -56,7 +56,7 @@ func TestAfterInitialize_RecordsClientInfo(t *testing.T) {
 	store := newSessionsStore(t)
 	m.SetClientSessions(store)
 
-	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false))
+	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false, nil))
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 
@@ -81,7 +81,7 @@ func TestAfterInitialize_RecordsClientInfo(t *testing.T) {
 // recording is never on the critical path.
 func TestAfterInitialize_NilManagerAndNilStoreAreSafe(t *testing.T) {
 	for _, m := range []*repos.Manager{nil, repos.New(context.Background(), repos.Deps{})} {
-		h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false))
+		h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false, nil))
 		srv := httptest.NewServer(h)
 		resp := postInitialize(t, srv.URL)
 		if resp.StatusCode != http.StatusOK {
@@ -122,7 +122,7 @@ func TestAfterInitialize_RecordsBindingOnTheRepoRoute(t *testing.T) {
 // a RepoInstance and a branch in the context, and NO explicit Binding.
 func repoScopedMCP(t *testing.T, m *repos.Manager, repo, branch string) http.Handler {
 	t.Helper()
-	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false))
+	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false, nil))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := repos.WithRepoInstance(r.Context(), m.Get(repo))
 		ctx = repos.WithBranch(ctx, branch)
@@ -140,7 +140,7 @@ func TestAfterInitialize_RecordsObservedConnectionDetails(t *testing.T) {
 	store := newSessionsStore(t)
 	m.SetClientSessions(store)
 
-	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false),
+	h := mcpserver.NewStreamableHTTPServer(NewServer("kb", m, false, nil),
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			return sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
 		}),

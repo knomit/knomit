@@ -44,7 +44,7 @@ func bindFixture(t *testing.T) (*repos.Manager, *sessions.Store, *mcpserver.MCPS
 	})
 	require.NoError(t, err)
 
-	return m, st, NewServer("kb", m, false)
+	return m, st, NewServer("kb", m, false, nil)
 }
 
 // newBindRepo registers a repo instance on m. A subscribed one carries no
