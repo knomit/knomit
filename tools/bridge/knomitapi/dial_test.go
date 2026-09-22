@@ -17,6 +17,23 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// requireUnixSockets skips on Windows. The unix socket is the ONLY credential
+// this phase has, and Windows has no equivalent yet -- knomit/knomit#245 tracks
+// the named-pipe transport that will give it one. These tests are not
+// platform-agnostic tests that happen to fail there; they exercise a mechanism
+// that does not exist on that platform in this phase.
+//
+// They also need a SHORT socket path (os.MkdirTemp("/tmp", ...) rather than
+// t.TempDir()), because macOS caps sun_path at 104 bytes and t.TempDir()
+// overruns it -- and /tmp does not exist on Windows, which is how the missing
+// guard here first showed up, as a CI failure rather than a skip.
+func requireUnixSockets(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix domain sockets on windows in this phase; named pipes are knomit/knomit#245")
+	}
+}
+
 // isolateHome points KNOMIT_HOME at an empty temp dir so nothing in this
 // package's suite can reach a socket that happens to exist on the developer's
 // machine. Without it a green run means "no socket at ~/.knomit right now",
@@ -92,9 +109,7 @@ func get(t *testing.T, c *http.Client, url string) string {
 }
 
 func TestNewHTTPClient_DialsSocketWhenPresentAndNoExplicitURL(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix sockets")
-	}
+	requireUnixSockets(t)
 	isolateHome(t)
 	sock := serveUnix(t, "via-socket")
 	c := NewHTTPClient(sock, false, 2*time.Second)
@@ -109,9 +124,7 @@ func TestNewHTTPClient_DialsSocketWhenPresentAndNoExplicitURL(t *testing.T) {
 // connectivity. Deciding the transport once from os.Stat installed a
 // socket-only transport and every request failed with "connection refused".
 func TestNewHTTPClient_StaleSocketFallsBackToLiveTCP(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix sockets")
-	}
+	requireUnixSockets(t)
 	isolateHome(t)
 	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "via-tcp")
@@ -153,6 +166,7 @@ func TestNewHTTPClient_StaleSocketFallsBackToLiveTCP(t *testing.T) {
 // still WARN — this pins that the quiet path is keyed on ENOENT specifically
 // and not on "any failure to reach the socket".
 func TestNewHTTPClient_OverlongSocketPathStillWarns(t *testing.T) {
+	requireUnixSockets(t)
 	if runtime.GOOS != "darwin" {
 		t.Skip("the sun_path cap that produces EINVAL here is a darwin limit")
 	}
@@ -180,9 +194,7 @@ func TestNewHTTPClient_OverlongSocketPathStillWarns(t *testing.T) {
 // Precedence is unchanged by the fallback: a socket that ANSWERS still wins
 // over a live TCP server.
 func TestNewHTTPClient_LiveSocketWinsOverLiveTCP(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix sockets")
-	}
+	requireUnixSockets(t)
 	isolateHome(t)
 	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "via-tcp")
@@ -196,9 +208,7 @@ func TestNewHTTPClient_LiveSocketWinsOverLiveTCP(t *testing.T) {
 }
 
 func TestNewHTTPClient_ExplicitURLIgnoresSocket(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix sockets")
-	}
+	requireUnixSockets(t)
 	isolateHome(t)
 	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "via-tcp")
@@ -216,6 +226,7 @@ func TestNewHTTPClient_ExplicitURLIgnoresSocket(t *testing.T) {
 // than the socket. It must fall back silently: warning about it would dilute
 // the signal the WARN exists for, which is the stale-socket anomaly.
 func TestNewHTTPClient_MissingSocketFallsBackToTCPWithoutWarning(t *testing.T) {
+	requireUnixSockets(t)
 	isolateHome(t)
 	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "via-tcp")
@@ -256,6 +267,7 @@ func TestNewHTTPClient_MissingSocketFallsBackToTCPWithoutWarning(t *testing.T) {
 // A path that exists but is NOT a socket (a stale regular file) must also
 // fall back rather than fail every request.
 func TestNewHTTPClient_NonSocketPathFallsBackToTCP(t *testing.T) {
+	requireUnixSockets(t)
 	isolateHome(t)
 	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "via-tcp")
@@ -278,9 +290,7 @@ func TestNewHTTPClient_NonSocketPathFallsBackToTCP(t *testing.T) {
 // live socket those tests reached the real local server and could pass for
 // the wrong reason.
 func TestClient_HonoursBaseURLSetAfterInit(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix sockets")
-	}
+	requireUnixSockets(t)
 	isolateHome(t)
 	// A LIVE socket at the resolved home: without per-dial resolution this is
 	// exactly the machine state that hijacks the call.
@@ -302,9 +312,7 @@ func TestClient_HonoursBaseURLSetAfterInit(t *testing.T) {
 // take the socket — so the test above is not passing merely because the
 // socket was never reachable.
 func TestClient_UsesTheSocketWhenNoBaseURLIsNamed(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix sockets")
-	}
+	requireUnixSockets(t)
 	isolateHome(t)
 	sock := serveUnix(t, "via-socket")
 	t.Setenv("KNOMIT_HOME", filepath.Dir(sock))
