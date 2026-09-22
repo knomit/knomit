@@ -62,15 +62,22 @@ type Options struct {
 	LogTap *logging.Tap
 }
 
+// ResolveKeyPath is where the instance key lives: [remote].ssh_key, else
+// <Home>/id_ed25519. The ONE definition — New uses it, and so does
+// `knomit identity`, which must find the same key without booting the app.
+func ResolveKeyPath(cfg config.Config) string {
+	if cfg.Remote.SSHKey != "" {
+		return cfg.Remote.SSHKey
+	}
+	return filepath.Join(cfg.Home, "id_ed25519")
+}
+
 // New creates and boots the application from the given config and context.
 func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a := &App{}
 
 	// SSH keypair.
-	keyPath := cfg.Remote.SSHKey
-	if keyPath == "" {
-		keyPath = filepath.Join(cfg.Home, "id_ed25519")
-	}
+	keyPath := ResolveKeyPath(cfg)
 	signer, keyFingerprint, err := ensureKeyPair(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("ensure keypair: %w", err)
