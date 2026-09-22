@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -491,6 +492,19 @@ func (m *Manager) Repos() *Registry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.reg
+}
+
+// ControlDB returns the single control.db handle, or nil before Start. It is
+// the same handle the repo registry owns and the client-session store
+// borrows; stores that live in control.db without owning it take it from
+// here rather than opening a second connection.
+func (m *Manager) ControlDB() *sql.DB {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.reg == nil {
+		return nil
+	}
+	return m.reg.DB()
 }
 
 // ClientSessions returns the client-session store, or nil before Start.

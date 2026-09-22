@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
@@ -208,6 +209,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		APIOnly:           opts.APIOnly,
 		CORSOrigins:       opts.CORSOrigins,
 		ReadOnly:          cfg.ReadOnly,
+		Auth:              cfg.Auth,
 		SlowRequestMS:     cfg.Log.SlowRequestMS,
 		Logs:              opts.LogTap,
 		// 0 means experiments never expire, and the API then OMITS
@@ -227,6 +229,10 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// over the control.db handle the repo registry owns, so reading it into
 	// the server literal above would capture nil.
 	a.server.ClientSessions = a.manager.ClientSessions()
+
+	// Grants, like ClientSessions, lives in control.db and is set AFTER
+	// Start for the same reason: the handle does not exist until then.
+	a.server.Grants = auth.NewSQLGrants(a.manager.ControlDB())
 
 	return a, nil
 }

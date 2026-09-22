@@ -36,6 +36,11 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// a proxy's id to ours, forgeable by anyone who wants two requests to look
 	// like one. It labels log lines only — never an authorization decision.
 	r.Use(middleware.RequestID)
+	// Every request gets a principal here, before anything can act on it.
+	// The outer router in Handler() runs this too, so /git inherits one as
+	// well; running twice is idempotent (the same connection yields the same
+	// answer) and keeps a directly-constructed API router authenticated.
+	r.Use(AuthMiddleware(s.Auth))
 	r.Use(middleware.Recoverer)                    // produces the 500 response
 	r.Use(reportPanic)                             // captures a crash bundle, re-panics
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default

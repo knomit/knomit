@@ -10,7 +10,9 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/auth"
 	"knomit/internal/client/sessions"
+	"knomit/internal/config"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
 	"knomit/internal/platform/logging"
@@ -45,6 +47,15 @@ type Server struct {
 	// ReadOnly runs the instance as a read-only demo: /git is not mounted,
 	// MCP exposes only read tools, and the API router rejects mutations.
 	ReadOnly bool
+
+	// Grants answers what a VERIFIED principal may do (the control.db grants
+	// table). nil means no store, and then only the anonymous loopback set
+	// from Auth applies — which is what an in-process or test server gets.
+	Grants auth.Grants
+
+	// Auth mirrors the [auth] config section. LoopbackDefault is parsed once
+	// per Handler() in grants(), not per request.
+	Auth config.AuthConfig
 
 	// SlowRequestMS, when > 0, logs any HTTP request slower than this many
 	// milliseconds at WARN. Wired from config ([log].slow_request_ms).
@@ -83,6 +94,28 @@ type Server struct {
 	providers storeProviders
 }
 
+// grants is the Grants every enforcement point in this server consults: the
+// anonymous loopback principal from config, everyone else from the store.
+// Building it once per Handler() means a bad permission name in config fails
+// at wiring time rather than once per request.
+//
+// A nil LoopbackDefault means the Server literal was built without config,
+// which only tests do -- production goes through internal/app, and
+// TestApp_AuthConfigReachesMiddleware fails if that wiring is ever dropped.
+// An EMPTY but present slice ([auth] loopback_default = [] in TOML) is
+// honoured as "anonymous holds nothing"; only nil falls back.
+func (s *Server) grants() auth.Grants {
+	names := s.Auth.LoopbackDefault
+	if names == nil {
+		names = config.Defaults().Auth.LoopbackDefault
+	}
+	set, err := auth.ParseSet(names)
+	if err != nil {
+		log.Fatal().Err(err).Msg("[auth].loopback_default invalid")
+	}
+	return loopbackGrants{anon: set, store: s.Grants}
+}
+
 // buildMCPHandler constructs the single MCP server instance, shared across
 // all repos and lenses. Profile is a per-repo attribute now; the formerly
 // profile-keyed instances are collapsed (lenses RFC decision 12).
@@ -100,7 +133,18 @@ func (s *Server) buildMCPHandler() {
 	// two empty strings.
 	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv,
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-			return sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
+			ctx = sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
+			// mcp-go builds its own context from the request rather than
+			// continuing r.Context(), so what AuthMiddleware attached has to
+			// be copied across explicitly or every MCP call arrives with no
+			// principal and the tool gate denies everything.
+			if p, ok := auth.FromContext(r.Context()); ok {
+				ctx = auth.WithPrincipal(ctx, p)
+			}
+			if pid, ok := sessions.VerifiedPIDFromContext(r.Context()); ok {
+				ctx = sessions.WithVerifiedPID(ctx, pid)
+			}
+			return ctx
 		}),
 	)
 }
@@ -112,6 +156,9 @@ func (s *Server) Handler() http.Handler {
 	}
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+	// On the OUTER router as well as the API one, because /git is mounted
+	// here and never passes through NewAPIRouter.
+	r.Use(AuthMiddleware(s.Auth))
 	if len(s.CORSOrigins) > 0 {
 		r.Use(corsMiddleware(s.CORSOrigins))
 	}
