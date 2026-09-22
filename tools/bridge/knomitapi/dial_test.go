@@ -1,107 +1,276 @@
 package knomitapi
 
 import (
+	"bytes"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
+
+// isolateHome points KNOMIT_HOME at an empty temp dir so nothing in this
+// package's suite can reach a socket that happens to exist on the developer's
+// machine. Without it a green run means "no socket at ~/.knomit right now",
+// not "this commit is good".
+func isolateHome(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("KNOMIT_HOME", dir)
+	t.Setenv("KNOMIT_REPO", "")
+	t.Setenv("KNOMIT_BASE_URL", "")
+	return dir
+}
+
+// serveUnix starts an HTTP server on a unix socket that answers with body.
+// The path is short on purpose: macOS caps sun_path at 104 bytes and
+// t.TempDir() can exceed it.
+func serveUnix(t *testing.T, body string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "kd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "knomit.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, body)
+	})}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { srv.Close(); l.Close() })
+	return sock
+}
+
+// staleSocket creates a socket INODE with nothing accepting on it — what an
+// ungraceful server exit leaves behind, because cmd/serve.go only removes the
+// socket on a graceful one.
+func staleSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "ks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "knomit.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Go unlinks a unix socket on Close by default, which is precisely what a
+	// CRASHING server does not do. Turning that off reproduces the real
+	// leftover: the inode survives, so os.Stat still reports a socket and a
+	// dial gets ECONNREFUSED.
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	l.Close()
+	if st, serr := os.Stat(sock); serr != nil || st.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("expected a stale SOCKET to remain at %s (err=%v)", sock, serr)
+	}
+	return sock
+}
+
+func get(t *testing.T, c *http.Client, url string) string {
+	t.Helper()
+	resp, err := c.Get(url)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
+}
 
 func TestNewHTTPClient_DialsSocketWhenPresentAndNoExplicitURL(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no unix sockets")
 	}
-	// A short path: macOS caps sun_path at 104 bytes and t.TempDir() can exceed it.
-	dir, err := os.MkdirTemp("/tmp", "bd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	sock := filepath.Join(dir, "knomit.sock")
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-socket")
-	})}
-	go func() { _ = srv.Serve(l) }()
-	defer srv.Close()
-
+	isolateHome(t)
+	sock := serveUnix(t, "via-socket")
 	c := NewHTTPClient(sock, false, 2*time.Second)
 	// Port 1: nothing listens there, so ONLY the socket can answer this.
-	resp, err := c.Get("http://localhost:1/anything")
-	if err != nil {
-		t.Fatal(err)
+	if got := get(t, c, "http://localhost:1/anything"); got != "via-socket" {
+		t.Fatalf("body=%q", got)
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	if string(b) != "via-socket" {
-		t.Fatalf("body=%q", b)
+}
+
+// REGRESSION, blocking finding 1 of the 2026-09-22 review: a socket file that
+// exists but is not serving must cost the verified identity, not all
+// connectivity. Deciding the transport once from os.Stat installed a
+// socket-only transport and every request failed with "connection refused".
+func TestNewHTTPClient_StaleSocketFallsBackToLiveTCP(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix sockets")
+	}
+	isolateHome(t)
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	defer tcp.Close()
+
+	sock := staleSocket(t)
+
+	// Capture the bridge log: falling back SILENTLY is the failure mode worth
+	// guarding, because a dead socket beside a live server then looks exactly
+	// like a healthy bridge.
+	var logbuf bytes.Buffer
+	restore := log.Logger
+	log.Logger = zerolog.New(&logbuf)
+	t.Cleanup(func() { log.Logger = restore })
+
+	c := NewHTTPClient(sock, false, 2*time.Second)
+	// Asserts WHICH server answered: a call that merely succeeded would pass
+	// even if the socket had been used.
+	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
+		t.Fatalf("a stale socket must fall back to the TCP target; body=%q", got)
+	}
+	out := logbuf.String()
+	if !strings.Contains(out, "falling back to TCP") || !strings.Contains(out, sock) {
+		t.Fatalf("the fallback must be logged with the socket path, got: %s", out)
+	}
+
+	// Once, not per dial. A second request must not repeat the warning.
+	logbuf.Reset()
+	c.CloseIdleConnections() // force a fresh dial
+	_ = get(t, c, tcp.URL+"/again")
+	if strings.Contains(logbuf.String(), "falling back to TCP") {
+		t.Fatalf("the fallback warning must be logged ONCE, not per dial: %s", logbuf.String())
+	}
+}
+
+// Precedence is unchanged by the fallback: a socket that ANSWERS still wins
+// over a live TCP server.
+func TestNewHTTPClient_LiveSocketWinsOverLiveTCP(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix sockets")
+	}
+	isolateHome(t)
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	defer tcp.Close()
+
+	c := NewHTTPClient(serveUnix(t, "via-socket"), false, 2*time.Second)
+	if got := get(t, c, tcp.URL+"/anything"); got != "via-socket" {
+		t.Fatalf("a live socket must win over a live TCP server; body=%q", got)
 	}
 }
 
 func TestNewHTTPClient_ExplicitURLIgnoresSocket(t *testing.T) {
-	c := NewHTTPClient("/nonexistent/knomit.sock", true, 500*time.Millisecond)
-	if _, err := c.Get("http://127.0.0.1:1/"); err == nil {
-		t.Fatal("an explicit URL must use TCP and fail on a closed port")
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix sockets")
+	}
+	isolateHome(t)
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	defer tcp.Close()
+
+	// The socket is LIVE and would win if this were not explicit.
+	c := NewHTTPClient(serveUnix(t, "via-socket"), true, 2*time.Second)
+	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
+		t.Fatalf("an explicit URL must not be rerouted onto the socket; body=%q", got)
 	}
 }
 
 func TestNewHTTPClient_MissingSocketFallsBackToTCP(t *testing.T) {
-	c := NewHTTPClient("/nonexistent/knomit.sock", false, 500*time.Millisecond)
-	if _, err := c.Get("http://127.0.0.1:1/"); err == nil {
-		t.Fatal("a missing socket must fall back to TCP, which fails on a closed port")
+	isolateHome(t)
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	defer tcp.Close()
+
+	c := NewHTTPClient(filepath.Join(t.TempDir(), "absent.sock"), false, 2*time.Second)
+	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
+		t.Fatalf("a missing socket must fall back to TCP; body=%q", got)
 	}
 }
 
-// An EXPLICIT url wins even when the socket is right there: the user is
-// pointing at a particular server, possibly a remote one.
-func TestNewHTTPClient_ExplicitURLWinsOverALiveSocket(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix sockets")
-	}
-	dir, err := os.MkdirTemp("/tmp", "bd")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	sock := filepath.Join(dir, "knomit.sock")
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-socket")
-	})}
-	go func() { _ = srv.Serve(l) }()
-	defer srv.Close()
-
-	c := NewHTTPClient(sock, true, 500*time.Millisecond)
-	if _, err := c.Get("http://127.0.0.1:1/"); err == nil {
-		t.Fatal("explicit must not be redirected onto the socket")
-	}
-}
-
-// A path that exists but is NOT a socket (a stale regular file) must not be
-// dialled: every request would fail instead of falling back to TCP.
+// A path that exists but is NOT a socket (a stale regular file) must also
+// fall back rather than fail every request.
 func TestNewHTTPClient_NonSocketPathFallsBackToTCP(t *testing.T) {
-	dir := t.TempDir()
-	notASocket := filepath.Join(dir, "knomit.sock")
+	isolateHome(t)
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	defer tcp.Close()
+
+	notASocket := filepath.Join(t.TempDir(), "knomit.sock")
 	if err := os.WriteFile(notASocket, []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	c := NewHTTPClient(notASocket, false, 500*time.Millisecond)
-	if _, err := c.Get("http://127.0.0.1:1/"); err == nil {
-		t.Fatal("a regular file must not be dialled as a socket")
+	c := NewHTTPClient(notASocket, false, 2*time.Second)
+	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
+		t.Fatalf("a regular file must not be dialled as a socket; body=%q", got)
 	}
-	if c.Transport != nil {
-		t.Fatal("a non-socket path must leave the default TCP transport in place")
+}
+
+// REGRESSION, blocking finding 2: the hooks client must read KNOMIT_BASE_URL
+// at DIAL time. A package-level var froze the transport at package init,
+// before any test body ran, so t.Setenv could not redirect it — and with a
+// live socket those tests reached the real local server and could pass for
+// the wrong reason.
+func TestClient_HonoursBaseURLSetAfterInit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix sockets")
+	}
+	isolateHome(t)
+	// A LIVE socket at the resolved home: without per-dial resolution this is
+	// exactly the machine state that hijacks the call.
+	sock := serveUnix(t, "via-socket")
+	t.Setenv("KNOMIT_HOME", filepath.Dir(sock))
+
+	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	defer tcp.Close()
+	t.Setenv("KNOMIT_BASE_URL", tcp.URL)
+
+	if got := get(t, Client(), tcp.URL+"/anything"); got != "via-tcp" {
+		t.Fatalf("KNOMIT_BASE_URL set after init must be honoured; body=%q", got)
+	}
+}
+
+// The counterpart: with no explicit URL, the same lazily-built client DOES
+// take the socket — so the test above is not passing merely because the
+// socket was never reachable.
+func TestClient_UsesTheSocketWhenNoBaseURLIsNamed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix sockets")
+	}
+	isolateHome(t)
+	sock := serveUnix(t, "via-socket")
+	t.Setenv("KNOMIT_HOME", filepath.Dir(sock))
+
+	if got := get(t, Client(), "http://127.0.0.1:1/anything"); got != "via-socket" {
+		t.Fatalf("the hooks client must prefer the socket; body=%q", got)
+	}
+}
+
+func TestTransportPreference_NeverClaimsUnixWithoutASocket(t *testing.T) {
+	if got := TransportPreference("/tmp/x.sock", true); got != "tcp" {
+		t.Fatalf("explicit = %q", got)
+	}
+	if got := TransportPreference("", false); got != "tcp" {
+		t.Fatalf("no socket path = %q", got)
+	}
+	got := TransportPreference("/tmp/x.sock", false)
+	if got != "unix-preferred" {
+		t.Fatalf("socket path = %q", got)
+	}
+	// The word matters: the startup line must not read as a fact about a
+	// connection that has not been made.
+	if got == "unix" || !strings.Contains(got, "preferred") {
+		t.Fatalf("the log value must say it is a preference, got %q", got)
 	}
 }

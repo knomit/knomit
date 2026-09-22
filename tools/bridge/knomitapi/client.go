@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -21,12 +22,35 @@ import (
 // that a missing/dead server feels like a no-op.
 const httpTimeout = 2 * time.Second
 
-// HTTPClient is shared so hooks within a session reuse the connection pool.
-// It prefers the unix socket for the same reason the proxy client does — the
-// kernel vouches for the caller — unless KNOMIT_BASE_URL names a server, in
-// which case the operator has chosen one and that choice stands. The hooks
-// have no CLI argument, so that env var is the only explicit form here.
-var HTTPClient = NewHTTPClient(SocketPath(), os.Getenv("KNOMIT_BASE_URL") != "", httpTimeout)
+// hooksClient is built on FIRST USE, never at package init, and reached only
+// through Client(). It prefers the unix socket for the same reason the proxy
+// client does — the kernel vouches for the caller — unless KNOMIT_BASE_URL
+// names a server, in which case the operator has chosen one and that choice
+// stands. The hooks have no CLI argument, so that env var is the only
+// explicit form here.
+var (
+	hooksOnce   sync.Once
+	hooksClient *http.Client
+)
+
+// Client is the shared hooks client, so hooks within a session reuse the
+// connection pool.
+//
+// It is a FUNCTION and not a package-level var on purpose. A var would be
+// initialised at package-init time, before any caller — or any test's
+// t.Setenv — could say where the server is, and the transport chosen from
+// whatever ambient state the machine happened to be in would then be frozen
+// for the life of the process. That made this package's own suite pass or
+// fail on whether a socket existed at the developer's ~/.knomit, which is a
+// green run that says nothing about the commit.
+//
+// Laziness alone would only move that freeze later, so the socket decision is
+// ALSO made per dial (see socketPreferringClient): this function may be
+// called once, and the answer still tracks the environment afterwards.
+func Client() *http.Client {
+	hooksOnce.Do(func() { hooksClient = newLazyHooksClient(httpTimeout) })
+	return hooksClient
+}
 
 // EncodeBranch URL-encodes a branch name for a knomit API path. Branches with
 // slashes (e.g. "machine/host") are substituted "/" -> ":" per the project
@@ -51,7 +75,7 @@ func BaseURL() string {
 // hook stays silent toward the agent.
 func AgentBranch(repo string) string {
 	u := fmt.Sprintf("%s/api/v1/repos/%s", BaseURL(), url.PathEscape(repo))
-	resp, err := HTTPClient.Get(u) //nolint:noctx
+	resp, err := Client().Get(u) //nolint:noctx
 	if err != nil {
 		log.Warn().Err(err).Str("url", u).Msg("AgentBranch: GET failed")
 		return ""
@@ -80,7 +104,7 @@ func AgentBranch(repo string) string {
 // Returns "" on any error, with every failure path logged at Warn.
 func LensWriteRepo(name string) string {
 	u := fmt.Sprintf("%s/api/v1/lenses/%s", BaseURL(), url.PathEscape(name))
-	resp, err := HTTPClient.Get(u) //nolint:noctx
+	resp, err := Client().Get(u) //nolint:noctx
 	if err != nil {
 		log.Warn().Err(err).Str("url", u).Msg("LensWriteRepo: GET failed")
 		return ""

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -37,35 +38,74 @@ func SocketPath() string {
 // different question than the one asked. A port DISCOVERED from the lockfile
 // is NOT explicit — nobody chose it — so the socket still wins over it.
 //
-// The request URL keeps its http://host form either way; on the unix path the
-// host is ignored, and the dialler is what decides where the bytes go.
+// THE CHOICE IS MADE PER DIAL, NOT HERE. That matters: the socket file
+// outlives any ungraceful exit, because cmd/serve.go only removes it on a
+// graceful one, so a SIGKILL, panic, OOM or power loss leaves a socket inode
+// with nothing accepting on it. Deciding once from os.Stat would install a
+// socket-only transport and every request would then fail with "connect:
+// connection refused" — naming a socket the caller never asked for — where
+// before there was a working TCP path. A dead socket must cost the verified
+// identity, not all connectivity.
 func NewHTTPClient(socketPath string, explicitURL bool, timeout time.Duration) *http.Client {
-	c := &http.Client{Timeout: timeout}
-	if explicitURL || socketPath == "" {
-		return c
+	if explicitURL {
+		return &http.Client{Timeout: timeout}
 	}
-	// Stat, not just existence: a stale regular file left at this path would
-	// otherwise be dialled as a socket and fail EVERY request, where falling
-	// back to TCP merely loses the verified identity.
-	st, err := os.Stat(socketPath)
-	if err != nil || st.Mode()&os.ModeSocket == 0 {
-		return c
-	}
-	d := &net.Dialer{Timeout: timeout}
-	c.Transport = &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return d.DialContext(ctx, "unix", socketPath)
-		},
-	}
-	return c
+	return socketPreferringClient(timeout, func() string { return socketPath })
 }
 
-// Transport names which path NewHTTPClient chose, for one startup log line.
-// Without it a bridge that quietly fell back to TCP looks exactly like one
-// that used the socket, and the difference is the whole feature.
-func Transport(c *http.Client) string {
-	if c != nil && c.Transport != nil {
-		return "unix"
+// newLazyHooksClient is the hooks' client. Its socket decision is deferred to
+// dial time for BOTH halves — whether an explicit URL was named, and where the
+// socket is — because this client is reached through a package-level accessor
+// and would otherwise freeze its transport at package-init time, before any
+// caller (or any test's t.Setenv) can say where the server is.
+func newLazyHooksClient(timeout time.Duration) *http.Client {
+	return socketPreferringClient(timeout, func() string {
+		if os.Getenv("KNOMIT_BASE_URL") != "" {
+			return "" // the operator named a server; do not reroute it
+		}
+		return SocketPath()
+	})
+}
+
+// socketPreferringClient dials the socket first and falls back to the address
+// the request actually asked for. socketPath is consulted on EVERY dial, and
+// "" means "do not try the socket at all".
+func socketPreferringClient(timeout time.Duration, socketPath func() string) *http.Client {
+	d := &net.Dialer{Timeout: timeout}
+	var warnOnce sync.Once
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				p := socketPath()
+				if p == "" {
+					return d.DialContext(ctx, network, addr)
+				}
+				conn, err := d.DialContext(ctx, "unix", p)
+				if err == nil {
+					return conn, nil
+				}
+				// Once, not per dial: a stale socket would otherwise repeat
+				// this on every connection. Silence here is the failure mode
+				// worth avoiding — a dead socket beside a live server looks
+				// exactly like a healthy bridge until someone reads this.
+				warnOnce.Do(func() {
+					log.Warn().Err(err).Str("socket", p).Str("addr", addr).
+						Msg("bridge: unix socket unreachable, falling back to TCP; the server's verified identity is not available on this path")
+				})
+				return d.DialContext(ctx, network, addr)
+			},
+		},
 	}
-	return "tcp"
+}
+
+// TransportPreference names which path a client will TRY first, for one
+// startup log line. It is a preference and not a fact: the dial decides, and
+// a socket that does not answer falls back to TCP with its own warning. Do
+// not log this as though a connection had already been made on it.
+func TransportPreference(socketPath string, explicitURL bool) string {
+	if explicitURL || socketPath == "" {
+		return "tcp"
+	}
+	return "unix-preferred"
 }

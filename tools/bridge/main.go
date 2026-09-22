@@ -310,9 +310,13 @@ func main() {
 	explicitURL := arg != "" || os.Getenv("KNOMIT_BASE_URL") != ""
 	// Timeout 0, matching the http.Client{} this replaces: the proxy holds SSE
 	// long-polls open and a deadline here would cut them.
-	client := knomitapi.NewHTTPClient(knomitapi.SocketPath(), explicitURL, 0)
-	log.Info().Str("transport", knomitapi.Transport(client)).Str("base_url", baseURL).
-		Msg("bridge transport")
+	socketPath := knomitapi.SocketPath()
+	client := knomitapi.NewHTTPClient(socketPath, explicitURL, 0)
+	// PREFERENCE, not fact: the transport is chosen per dial, and a socket
+	// that does not answer falls back to TCP with its own warning. Logging
+	// "unix" here would claim a connection nothing has made yet.
+	log.Info().Str("transport", knomitapi.TransportPreference(socketPath, explicitURL)).
+		Str("base_url", baseURL).Msg("bridge transport")
 
 	sessionID, err := runProxy(os.Stdin, os.Stdout, client, serverURL, hdr)
 	// stdin closed: the host is gone. Tell the server so the row is marked

@@ -57,7 +57,7 @@ func InvariantFactsURL(repo, branch string, limit int) string {
 // Returns nil on any error; each failure path logs at Warn so a dead server is
 // visible in the bridge log rather than indistinguishable from an empty result.
 func FetchFacts(u string) []FactSummary {
-	resp, err := HTTPClient.Get(u) //nolint:noctx
+	resp, err := Client().Get(u) //nolint:noctx
 	if err != nil {
 		log.Warn().Err(err).Str("url", u).Msg("FetchFacts: GET failed")
 		return nil
