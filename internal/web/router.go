@@ -40,7 +40,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// The outer router in Handler() runs this too, so /git inherits one as
 	// well; running twice is idempotent (the same connection yields the same
 	// answer) and keeps a directly-constructed API router authenticated.
-	r.Use(AuthMiddleware(s.Auth))
+	r.Use(AuthMiddleware(s.Auth, s.authDisabled))
 	r.Use(middleware.Recoverer)                    // produces the 500 response
 	r.Use(reportPanic)                             // captures a crash bundle, re-panics
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default
@@ -48,6 +48,9 @@ func (s *Server) NewAPIRouter() chi.Router {
 	if s.ReadOnly {
 		r.Use(readOnlyGate)
 	}
+	// After readOnlyGate, so the instance-level message wins over the
+	// caller-level one when both would refuse.
+	r.Use(writeGate(s.grants(), s.authDisabled))
 
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no resource at "+req.URL.Path, req.URL.Path)

@@ -166,7 +166,7 @@ func postLens(t *testing.T, m *repos.Manager, r http.Handler, body string) *http
 func postLensRaw(t *testing.T, r http.Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/lenses", bytes.NewBufferString(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/lenses", bytes.NewBufferString(body)))
 	r.ServeHTTP(rec, req)
 	return rec
 }
@@ -648,7 +648,7 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/lenses/eng", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/lenses/eng", nil))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete: got %d, want 204; body=%s", rec.Code, rec.Body.String())
@@ -659,7 +659,7 @@ func TestHandleHALLensDelete_DeleteAndNotFound(t *testing.T) {
 
 	// Deleting an unknown lens → 404.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodDelete, "/lenses/missing", nil)
+	req = fromLoopback(httptest.NewRequest(http.MethodDelete, "/lenses/missing", nil))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("delete missing: got %d, want 404", rec.Code)
@@ -813,7 +813,7 @@ func TestHandleHALLenses_500DoesNotLeakError(t *testing.T) {
 		r := (&Server{Manager: m}).NewAPIRouter()
 		closeControlDB(t, m)
 		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/lenses/eng", nil))
+		r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/lenses/eng", nil)))
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status: got %d, want 500; body=%s", rec.Code, rec.Body.String())
 		}
@@ -873,7 +873,7 @@ func TestHandleHALLenses_RegistryNil503(t *testing.T) {
 	}
 	// delete
 	rec = httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/lenses/x", nil))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/lenses/x", nil)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("delete: got %d, want 503", rec.Code)
 	}

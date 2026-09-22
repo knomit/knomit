@@ -36,10 +36,15 @@ import (
 //
 // Certificates (phase 2) and bearer tokens (phase 3) slot in between 1 and 2
 // and produce the same Principal type, so nothing downstream changes.
-func AuthMiddleware(cfg config.AuthConfig) func(http.Handler) http.Handler {
+func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
+			if disabled {
+				next.ServeHTTP(w, r.WithContext(
+					auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindAnonymous, Via: auth.ViaNone})))
+				return
+			}
 			if uid, pid, ok := auth.PeerFromContext(ctx); ok {
 				p := auth.Principal{Kind: auth.KindBridge, ID: "uid:" + strconv.Itoa(uid), Via: auth.ViaSocket}
 				ctx = auth.WithPrincipal(ctx, p)

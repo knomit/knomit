@@ -16,7 +16,7 @@ import (
 func postLensRename(t *testing.T, r http.Handler, lens, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/lenses/"+lens+"/rename", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/lenses/"+lens+"/rename", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	return rec

@@ -28,7 +28,7 @@ type initializedResponse struct {
 func postProbeInitialized(t *testing.T, r http.Handler, body string) (*httptest.ResponseRecorder, initializedResponse) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos:probe-initialized", strings.NewReader(body)))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos:probe-initialized", strings.NewReader(body))))
 	var got initializedResponse
 	if rec.Code == http.StatusOK {
 		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {

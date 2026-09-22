@@ -24,7 +24,7 @@ func patchLens(t *testing.T, m *repos.Manager, r http.Handler, name, body string
 func patchLensRaw(t *testing.T, r http.Handler, name, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPatch, "/lenses/"+name, bytes.NewBufferString(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPatch, "/lenses/"+name, bytes.NewBufferString(body)))
 	r.ServeHTTP(rec, req)
 	return rec
 }

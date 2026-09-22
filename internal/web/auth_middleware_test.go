@@ -26,7 +26,7 @@ func principalEcho() http.Handler {
 }
 
 func TestAuthMiddleware_LoopbackWithoutRequireIsAnonymous(t *testing.T) {
-	h := AuthMiddleware(config.AuthConfig{Require: false})(principalEcho())
+	h := AuthMiddleware(config.AuthConfig{Require: false}, false)(principalEcho())
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
 	rr := httptest.NewRecorder()
@@ -37,7 +37,7 @@ func TestAuthMiddleware_LoopbackWithoutRequireIsAnonymous(t *testing.T) {
 }
 
 func TestAuthMiddleware_RequireRefusesUnauthenticated(t *testing.T) {
-	h := AuthMiddleware(config.AuthConfig{Require: true})(principalEcho())
+	h := AuthMiddleware(config.AuthConfig{Require: true}, false)(principalEcho())
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
 	rr := httptest.NewRecorder()
@@ -51,7 +51,7 @@ func TestAuthMiddleware_RequireRefusesUnauthenticated(t *testing.T) {
 }
 
 func TestAuthMiddleware_NonLoopbackWithoutRequireHasNoPrincipal(t *testing.T) {
-	h := AuthMiddleware(config.AuthConfig{Require: false})(principalEcho())
+	h := AuthMiddleware(config.AuthConfig{Require: false}, false)(principalEcho())
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "10.0.0.7:5555"
 	rr := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestAuthMiddleware_NonLoopbackWithoutRequireHasNoPrincipal(t *testing.T) {
 }
 
 func TestAuthMiddleware_SocketPeerBecomesBridgePrincipal(t *testing.T) {
-	h := AuthMiddleware(config.AuthConfig{Require: true})(principalEcho())
+	h := AuthMiddleware(config.AuthConfig{Require: true}, false)(principalEcho())
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "@" // a unix conn has no ip; the peer in ctx is what counts
 	req = req.WithContext(auth.WithPeer(req.Context(), 501, 4242))
@@ -81,7 +81,7 @@ func TestAuthMiddleware_SocketPeerCarriesVerifiedPID(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPID, gotOK = sessions.VerifiedPIDFromContext(r.Context())
 	})
-	h := AuthMiddleware(config.AuthConfig{Require: true})(inner)
+	h := AuthMiddleware(config.AuthConfig{Require: true}, false)(inner)
 	req := httptest.NewRequest("GET", "/x", nil)
 	req = req.WithContext(auth.WithPeer(req.Context(), 501, 4242))
 	h.ServeHTTP(httptest.NewRecorder(), req)
@@ -139,5 +139,18 @@ func TestLoopbackGrants_AnonymousComesFromConfigNotTheStore(t *testing.T) {
 	}
 	if !set.Has(auth.Read) || set.Has(auth.Write) {
 		t.Fatalf("anonymous must come from config, not from a grants row: %v", set)
+	}
+}
+
+// Form B must attach a principal, not merely skip the gate: a handler that
+// reads auth.FromContext has to see anonymous, the same as on loopback.
+func TestAuthMiddleware_DisabledAttachesAnonymousRegardlessOfAddress(t *testing.T) {
+	h := AuthMiddleware(config.AuthConfig{Require: true}, true)(principalEcho())
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.RemoteAddr = "192.0.2.1:1234"
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Body.String() != "anonymous@none" {
+		t.Fatalf("body=%q", rr.Body.String())
 	}
 }

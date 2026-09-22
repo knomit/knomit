@@ -29,9 +29,9 @@ func putFact(t *testing.T, content string) (int, string) {
 		providers: storeProviders{factWriter: writer},
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/know/ai/test.md",
-		strings.NewReader(`{"content":"`+content+`"}`))
+		strings.NewReader(`{"content":"`+content+`"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	return rec.Code, writer.lastWriteContent

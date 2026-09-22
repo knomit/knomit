@@ -26,9 +26,9 @@ func refusedByGuard(t *testing.T, path string) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/"+path,
-		strings.NewReader(`{"content":"`+testFactContent+`"}`))
+		strings.NewReader(`{"content":"`+testFactContent+`"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -39,8 +39,8 @@ func refusedByGuard(t *testing.T, path string) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodDelete,
-		"/repos/alpha/branches/agent:test/facts/"+path, nil)
+	req = fromLoopback(httptest.NewRequest(http.MethodDelete,
+		"/repos/alpha/branches/agent:test/facts/"+path, nil))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("DELETE %s: status %d, want 400, body=%s", path, rec.Code, rec.Body.String())
@@ -114,9 +114,9 @@ func TestFactEndpoints_AllowOrdinaryFactsNearServerOwnedNames(t *testing.T) {
 			r := s.NewAPIRouter()
 
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPut,
+			req := fromLoopback(httptest.NewRequest(http.MethodPut,
 				"/repos/alpha/branches/agent:test/facts/"+path,
-				strings.NewReader(`{"content":"`+testFactContent+`"}`))
+				strings.NewReader(`{"content":"`+testFactContent+`"}`)))
 			req.Header.Set("Content-Type", "application/json")
 			r.ServeHTTP(rec, req)
 			if rec.Code != http.StatusOK {
@@ -161,7 +161,7 @@ func TestFactWrite_RefusesNonWritableBranchWith403(t *testing.T) {
 		{"ordinary repo on the consensus branch", http.MethodPut, "/repos/rw/branches/main/facts/kb/x.md", `{"content":"` + testFactContent + `"}`, rwDetail},
 	} {
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req := fromLoopback(httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body)))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusForbidden, rec.Code, "%s: %s %s: body=%s", tc.name, tc.method, tc.path, rec.Body.String())

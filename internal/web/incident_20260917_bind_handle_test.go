@@ -73,7 +73,7 @@ func incidentServer(t *testing.T) (http.Handler, *sessions.Store) {
 // client does.
 func rpcAt(t *testing.T, h http.Handler, mount, sid, body string) (map[string]any, string) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, mount, strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, mount, strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if sid != "" {

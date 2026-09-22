@@ -30,7 +30,7 @@ func TestFactCreate_RejectsUnresolvableLocalRef(t *testing.T) {
 	body := `{"title":"T","body":"b","type":"observation","domain":["ai"],
 	          "refs":["know/ai/ml/nope.md"]}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 
@@ -61,7 +61,7 @@ func TestFactCreate_AcceptsResolvableLocalRef(t *testing.T) {
 	body := `{"title":"T","body":"b","type":"observation","domain":["ai"],
 	          "refs":["know/ai/ml/target.md"]}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 
@@ -107,8 +107,8 @@ func TestFactUpdate_RejectsUnresolvableLocalRef(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
-		"/repos/alpha/branches/agent:test/facts/know/ai/ml/xyz99999.md", strings.NewReader(string(body)))
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
+		"/repos/alpha/branches/agent:test/facts/know/ai/ml/xyz99999.md", strings.NewReader(string(body))))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 

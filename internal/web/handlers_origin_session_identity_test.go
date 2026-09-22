@@ -146,8 +146,8 @@ func createLocalRepo(t *testing.T, m *repos.Manager, name string) *repos.RepoIns
 func startOriginSession(t *testing.T, s *Server, repo, url string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/"+repo+"/origin-sessions",
-		strings.NewReader(`{"url":`+mustJSON(t, url)+`}`))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/"+repo+"/origin-sessions",
+		strings.NewReader(`{"url":`+mustJSON(t, url)+`}`)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -173,9 +173,9 @@ func sseCall(t *testing.T, s *Server, method, path, body string) string {
 	rec := newStreamRecorder()
 	var req *http.Request
 	if body == "" {
-		req = httptest.NewRequest(method, path, nil)
+		req = fromLoopback(httptest.NewRequest(method, path, nil))
 	} else {
-		req = httptest.NewRequest(method, path, strings.NewReader(body))
+		req = fromLoopback(httptest.NewRequest(method, path, strings.NewReader(body)))
 		req.Header.Set("Content-Type", "application/json")
 	}
 	s.NewAPIRouter().ServeHTTP(rec, req)
@@ -338,8 +338,8 @@ func TestConnect_AlreadyRegisteredRemoteRejectedAtTest(t *testing.T) {
 
 	// /apply must refuse outright — the refusal at /test is not advisory.
 	rec := newStreamRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/beta/origin-sessions/"+sessID+"/apply",
-		strings.NewReader(`{"conflict_strategy":"local_wins"}`))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/beta/origin-sessions/"+sessID+"/apply",
+		strings.NewReader(`{"conflict_strategy":"local_wins"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {

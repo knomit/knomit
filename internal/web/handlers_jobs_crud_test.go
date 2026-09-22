@@ -114,7 +114,7 @@ func TestHandleDeleteJob_DoneJob_Returns204(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/main/index-rebuilds/rebuild-1", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/main/index-rebuilds/rebuild-1", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
@@ -132,7 +132,7 @@ func TestHandleDeleteJob_RunningJob_Returns409(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/main/index-rebuilds/rebuild-1", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/main/index-rebuilds/rebuild-1", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
@@ -145,7 +145,7 @@ func TestHandleDeleteJob_NotFound_Returns204(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/main/synthesis-runs/ghost", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/main/synthesis-runs/ghost", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {

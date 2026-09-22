@@ -122,7 +122,7 @@ func TestDeleteRepoCreate_DismissesAFinishedJob(t *testing.T) {
 	awaitCreateID(t, r, id)
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repo-creates/"+id, nil))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repo-creates/"+id, nil)))
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204, body=%s", rec.Code, rec.Body.String())
 	}
@@ -177,7 +177,7 @@ func TestDeleteRepoCreate_RunningIs409(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repo-creates/"+job.ID(), nil))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repo-creates/"+job.ID(), nil)))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409, body=%s", rec.Code, rec.Body.String())
 	}
@@ -252,8 +252,8 @@ func TestPostRepos_LocalOriginOutsideTheRootIs400(t *testing.T) {
 	// filesystem origins entirely — the stricter half of the same gate.
 	s := &Server{Manager: newRealManager(t)}
 	rec := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
-		strings.NewReader(`{"name":"sneaky","mode":"subscribe","origin":{"url":"file:///etc/definitely-not-allowed.git"}}`)))
+	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"sneaky","mode":"subscribe","origin":{"url":"file:///etc/definitely-not-allowed.git"}}`))))
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
@@ -285,7 +285,7 @@ func TestPostRepos_LocalOriginOutsideTheRootIs400(t *testing.T) {
 func TestDeleteRepoCreate_UnknownIDIs404(t *testing.T) {
 	s := &Server{Manager: newRealManager(t)}
 	rec := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repo-creates/nosuchjob", nil))
+	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repo-creates/nosuchjob", nil)))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
 	}
@@ -325,8 +325,8 @@ func awaitCreateID(t *testing.T, r http.Handler, id string) map[string]any {
 func startCreate(t *testing.T, r http.Handler, name string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos",
-		strings.NewReader(`{"name":"`+name+`","mode":"preset","ontology_preset":"default"}`)))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+		strings.NewReader(`{"name":"`+name+`","mode":"preset","ontology_preset":"default"}`))))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create %q: status = %d, body=%s", name, rec.Code, rec.Body.String())
 	}

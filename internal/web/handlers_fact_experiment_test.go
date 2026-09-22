@@ -60,7 +60,7 @@ func TestHandleFactCreate_AcceptsOwnExperimentBranch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// "exp:rest-write" is the URL spelling of "exp/rest-write" — the router
 	// substitutes ":" for "/" in a branch segment.
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/exp:rest-write/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/exp:rest-write/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -96,7 +96,7 @@ func TestHandleFactCreate_RefusesForeignExperimentBranch(t *testing.T) {
 	for _, branch := range []string{"exp:theirs", "exp:unrecorded", "main"} {
 		body := `{"title":"My Fact","body":"some body","type":"observation","domain":["ai"],"confidence":0.9,"sources":1}`
 		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+branch+"/facts", strings.NewReader(body))
+		req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/"+branch+"/facts", strings.NewReader(body)))
 		req.Header.Set("Content-Type", "application/json")
 		r.ServeHTTP(rec, req)
 

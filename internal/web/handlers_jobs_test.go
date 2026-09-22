@@ -28,8 +28,8 @@ func TestHandleStartSynthesis_NoLLM_Returns503(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/branches/main/synthesis-runs", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/alpha/branches/main/synthesis-runs", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -49,8 +49,8 @@ func TestHandleStartSynthesis_UnknownRepo_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost,
-		"/repos/missing/branches/main/synthesis-runs", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/missing/branches/main/synthesis-runs", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -63,8 +63,8 @@ func TestHandleStartRebuild_UnknownRepo_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost,
-		"/repos/missing/branches/main/index-rebuilds", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/missing/branches/main/index-rebuilds", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -85,8 +85,8 @@ func TestHandleStartRebuild_Returns201WithJobEnvelope(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/branches/main/index-rebuilds", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/alpha/branches/main/index-rebuilds", nil))
 	r.ServeHTTP(rec, req)
 
 	// No store is wired — expects 503 (service unavailable) because svc == nil.
@@ -120,8 +120,8 @@ func TestHandleStartRebuild_WithStub_Returns201(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/branches/main/index-rebuilds", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/alpha/branches/main/index-rebuilds", nil))
 	r.ServeHTTP(rec, req)
 
 	// No store attached — expect 503 (store unavailable), not a panic.

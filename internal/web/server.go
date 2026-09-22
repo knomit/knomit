@@ -57,6 +57,19 @@ type Server struct {
 	// per Handler() in grants(), not per request.
 	Auth config.AuthConfig
 
+	// authDisabled makes AuthMiddleware attach the anonymous principal
+	// whatever the remote address is, and writeGate a no-op. It is FORM B of
+	// the two sanctioned auth test fixes: for a test that must drive
+	// non-loopback addresses (because it asserts on them) or that calls
+	// NewAPIRouter directly, where r.URL.Path carries no /api/v1 prefix and
+	// mcpRoutePattern -- which is anchored on APIBase -- therefore cannot
+	// exempt the MCP routes it was written to exempt.
+	//
+	// UNEXPORTED and set only from _test.go, via withoutAuthForTests. It is
+	// not a config knob and must never become one: an exported field here
+	// would be an off switch for the whole permission layer.
+	authDisabled bool
+
 	// SlowRequestMS, when > 0, logs any HTTP request slower than this many
 	// milliseconds at WARN. Wired from config ([log].slow_request_ms).
 	SlowRequestMS int
@@ -158,13 +171,17 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.Recoverer)
 	// On the OUTER router as well as the API one, because /git is mounted
 	// here and never passes through NewAPIRouter.
-	r.Use(AuthMiddleware(s.Auth))
+	r.Use(AuthMiddleware(s.Auth, s.authDisabled))
 	if len(s.CORSOrigins) > 0 {
 		r.Use(corsMiddleware(s.CORSOrigins))
 	}
 	if s.GitHandler != nil && !s.ReadOnly {
 		log.Info().Msg("git handler enabled at /git")
-		r.Mount("/git", s.GitHandler)
+		// /git is mounted on the OUTER router and never passes through
+		// NewAPIRouter, so the write gate has to wrap the MOUNT. A writeGate
+		// added only inside the API router would not touch it, and no
+		// existing test would notice.
+		r.With(writeGate(s.grants(), s.authDisabled)).Mount("/git", s.GitHandler)
 	}
 
 	// /docs is 8 KB of text/html and sits on the OUTER router, which carries

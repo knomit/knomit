@@ -109,8 +109,8 @@ func TestHandleCommit_SharedHistory_DoesNotSwapLocalStore(t *testing.T) {
 	// Shared SSE recorder: /commit streams, so the double needs
 	// SetWriteDeadline as well as Flush.
 	rec := newStreamRecorder()
-	req := httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/origin-sessions/"+sess.ID+"/commit", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/alpha/origin-sessions/"+sess.ID+"/commit", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -170,8 +170,8 @@ func TestHandleCreateSession_SubscriptionIs409(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/sub/origin-sessions",
-		strings.NewReader(`{"url":"https://example.com/x.git"}`))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/sub/origin-sessions",
+		strings.NewReader(`{"url":"https://example.com/x.git"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
