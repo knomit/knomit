@@ -125,9 +125,12 @@ async function mountApp(): Promise<FakeEventSource> {
 
 beforeEach(async () => {
   installFakeEventSource();
-  // NOTE: this jsdom environment provides no localStorage at all (the app's
-  // reads are try/catch-wrapped), so there is no persisted context to clear —
-  // App always bootstraps onto the first repo from api.repos().
+  // jsdom DOES provide localStorage, and it persists across the tests in this
+  // file. App saves the browse context on every change, so a test that switches
+  // to `beta` leaves `beta` behind, and the next mount boots straight into it —
+  // which turned the resubscribe test's click on `beta` into a no-op and its
+  // expected second stream into one. Same clear as App.boot.test.tsx.
+  localStorage.clear();
   vi.clearAllMocks();
   // Silenced, not passed through: these tests deliberately provoke the error
   // paths, and an un-mocked console.error would bury the real output.
