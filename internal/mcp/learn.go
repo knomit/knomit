@@ -594,6 +594,20 @@ func applyDedupMerge(
 			donatePaths[i] = ""
 			continue
 		}
+		// learn_dedup: off (ontology attribute) — the topic holds facts that
+		// are near-identical BY DESIGN (templated protocol messages, two
+		// agents' takes of one task), so the search is skipped and the fact is
+		// written at its own freshly-minted path. This classifies the INCOMING
+		// fact and sits on the BEFORE-merge side: it reads only the topic path,
+		// which the merge never changes.
+		//
+		// Unlike the private-state skip above, the donation is KEPT: this fact
+		// is written at paths[i] and indexed like any other, so dedupVecs[i]
+		// describes exactly what upsert will embed. topicCategories[i] is the
+		// same string ValidateFact receives, which is what Attr expects.
+		if ontology.LearnDedupOff(topicCategories[i]) {
+			continue
+		}
 		// Search scope is derived from the on-disk path so the category
 		// directory carries the configured ontology root's real case.
 		categoryDir := categoryDirOf(paths[i])
@@ -843,7 +857,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, writeBranch, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
+		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 

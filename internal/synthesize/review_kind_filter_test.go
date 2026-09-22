@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/repos"
 	"knomit/internal/store"
 )
 
@@ -190,4 +191,39 @@ func countOf(haystack []string, wanted ...string) int {
 		}
 	}
 	return n
+}
+
+// TestDirtyFacts_LearnDedupOffDoesNotAffectSeeds pins F02's scope: the
+// learn_dedup attribute governs knomit_learn ONLY. A knowledge-kind fact under
+// a flagged topic is still a review seed. Incremental path, for the reason
+// TestDirtyFacts_ExcludesSignalFacts gives: it is the one that puts every
+// changed file to AcceptSeed.
+func TestDirtyFacts_LearnDedupOffDoesNotAffectSeeds(t *testing.T) {
+	ctx := context.Background()
+	branch := "agent/test"
+	const path = "kb/tasks/research/obs.md"
+
+	ont, err := fact.ParseOntology([]byte("id: t\nname: T\ntopics:\n  tasks:\n    description: d\n    attributes:\n      learn_dedup: off\n  technology:\n    description: d\n"))
+	require.NoError(t, err)
+	require.True(t, ont.LearnDedupOff("tasks/research"), "fixture must actually flag the topic")
+
+	_, svc := newPhaseTestReviewer(t)
+	r := NewReviewer(repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name:         "test",
+		AgentBranch:  branch,
+		Svc:          svc,
+		Ontology:     ont,
+		OntologyRoot: "kb",
+	}), nil)
+
+	head, err := svc.Branches().HeadCommit(ctx, branch)
+	require.NoError(t, err)
+	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", branch, head))
+	writeKindFact(t, svc, branch, path, fact.Epistemic, fact.Observation)
+	requireParsedOnBranch(t, svc, branch, path, fact.Epistemic, fact.Observation)
+
+	gs, idx, pipelineIdx, _ := r.storeIndices()
+	seeds, err := r.dirtyFacts(ctx, branch, gs, idx, pipelineIdx)
+	require.NoError(t, err)
+	require.Equal(t, []string{path}, seedPaths(seeds), "a flagged topic must not change what seeds review")
 }
