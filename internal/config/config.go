@@ -356,17 +356,11 @@ func Load() (Config, error) {
 	// path is the worse failure: it looks like a fresh install, so the models
 	// download again and a second SSH identity is generated under a root
 	// nobody will think to look in.
-	if v := os.Getenv("KNOMIT_HOME"); v != "" {
-		cfg.Home = v
-	} else if v := os.Getenv("KNOMIT_REPO"); v != "" {
-		cfg.Home = v
-	} else {
-		home, err := DefaultHome()
-		if err != nil {
-			return Config{}, fmt.Errorf("config: cannot determine the knomit data root: %w", err)
-		}
-		cfg.Home = home
+	home, err := ResolveHome()
+	if err != nil {
+		return Config{}, fmt.Errorf("config: cannot determine the knomit data root: %w", err)
 	}
+	cfg.Home = home
 
 	// Find and decode TOML file.
 	homeBefore := cfg.Home
@@ -477,7 +471,7 @@ func Load() (Config, error) {
 	// has to exist without being configured, and the directory mode is what
 	// guards it. Windows has no AF_UNIX default here.
 	if cfg.Socket == "" && runtime.GOOS != "windows" {
-		cfg.Socket = filepath.Join(cfg.Home, "knomit.sock")
+		cfg.Socket = filepath.Join(cfg.Home, socketFile)
 	}
 
 	if err := cfg.Validate(); err != nil {

@@ -39,7 +39,9 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 
 	"knomit/internal/platform/userdirs"
 )
@@ -97,4 +99,46 @@ func LockfilePath() (string, error) {
 // do about it is the failure being fixed, not a fix.
 func withHomeHint(err error) error {
 	return fmt.Errorf("%w. Set KNOMIT_HOME to the directory knomit should use", err)
+}
+
+// socketFile is the unix socket's name inside the data root. One spelling,
+// for the same reason appDir has one: `knomit serve` opens it and `kb` dials
+// it, and a disagreement means the bridge silently falls back to TCP.
+const socketFile = "knomit.sock"
+
+// ResolveHome is the data root the operator actually gets: KNOMIT_HOME, else
+// the KNOMIT_REPO alias, else DefaultHome. Load layers TOML and the rest on
+// top, but WHICH directory is the root is decided here and only here.
+func ResolveHome() (string, error) {
+	if v := os.Getenv("KNOMIT_HOME"); v != "" {
+		return v, nil
+	}
+	if v := os.Getenv("KNOMIT_REPO"); v != "" {
+		return v, nil
+	}
+	return DefaultHome()
+}
+
+// SocketPath is <data root>/knomit.sock: the unix socket a same-machine
+// server listens on, and the local bridge's credential — the kernel tells the
+// server which uid is dialling, so nothing has to be stored or presented.
+//
+// It resolves the data root through ResolveHome, the SAME way Load does, and
+// that is the point of it being here rather than in the bridge. This file's
+// header records what happened last time each binary worked a path out for
+// itself: the answers drifted. A bridge that computed a different socket path
+// from the server would not fail loudly — it would find no socket, fall back
+// to TCP, and quietly lose the verified identity that is the whole feature.
+//
+// Windows has no AF_UNIX default here, and returns "" with no error: absence
+// is the answer, not a failure.
+func SocketPath() (string, error) {
+	if runtime.GOOS == "windows" {
+		return "", nil
+	}
+	home, err := ResolveHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, socketFile), nil
 }

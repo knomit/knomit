@@ -562,3 +562,43 @@ func TestLoad_ExplicitSocketWins(t *testing.T) {
 		t.Fatalf("Socket = %q, want the explicit path", cfg.Socket)
 	}
 }
+
+// The bridge dials the socket the server opens. They resolve it through the
+// same helper precisely so they cannot drift; this pins that they agree.
+func TestSocketPath_AgreesWithTheResolvedConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := SocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != cfg.Socket {
+		t.Fatalf("SocketPath() = %q but the server listens on %q — a bridge computing this itself would silently fall back to TCP", got, cfg.Socket)
+	}
+}
+
+// KNOMIT_REPO is the backward-compatible alias for the data root, and the
+// socket has to follow it too.
+func TestSocketPath_HonoursTheRepoAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", "")
+	t.Setenv("KNOMIT_REPO", home)
+	got, err := SocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Join(home, "knomit.sock") {
+		t.Fatalf("SocketPath() = %q", got)
+	}
+}

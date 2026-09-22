@@ -22,7 +22,11 @@ import (
 const httpTimeout = 2 * time.Second
 
 // HTTPClient is shared so hooks within a session reuse the connection pool.
-var HTTPClient = &http.Client{Timeout: httpTimeout}
+// It prefers the unix socket for the same reason the proxy client does — the
+// kernel vouches for the caller — unless KNOMIT_BASE_URL names a server, in
+// which case the operator has chosen one and that choice stands. The hooks
+// have no CLI argument, so that env var is the only explicit form here.
+var HTTPClient = NewHTTPClient(SocketPath(), os.Getenv("KNOMIT_BASE_URL") != "", httpTimeout)
 
 // EncodeBranch URL-encodes a branch name for a knomit API path. Branches with
 // slashes (e.g. "machine/host") are substituted "/" -> ":" per the project

@@ -62,6 +62,7 @@ import (
 	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
+	"knomit/tools/bridge/knomitapi"
 )
 
 // peelLogFlag extracts --log / -log (with either '=value' or next-arg form)
@@ -303,7 +304,15 @@ func main() {
 	// Identity is computed once and never re-read: this process is one
 	// instance for its whole life.
 	hdr := clientHeaders(buildIdentity(branch, time.Now()))
-	client := &http.Client{}
+	// The socket wins over a DISCOVERED port but never over a chosen one: a
+	// CLI argument or KNOMIT_BASE_URL means the user pointed at a particular
+	// server, and a lockfile port means nobody chose anything.
+	explicitURL := arg != "" || os.Getenv("KNOMIT_BASE_URL") != ""
+	// Timeout 0, matching the http.Client{} this replaces: the proxy holds SSE
+	// long-polls open and a deadline here would cut them.
+	client := knomitapi.NewHTTPClient(knomitapi.SocketPath(), explicitURL, 0)
+	log.Info().Str("transport", knomitapi.Transport(client)).Str("base_url", baseURL).
+		Msg("bridge transport")
 
 	sessionID, err := runProxy(os.Stdin, os.Stdout, client, serverURL, hdr)
 	// stdin closed: the host is gone. Tell the server so the row is marked
