@@ -15,11 +15,12 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/app"
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
+	"knomit/internal/repos"
+	"knomit/internal/web"
 )
 
 // syncBuffer is a goroutine-safe log sink: the TLS server logs from its own
@@ -51,23 +52,23 @@ func captureLog(t *testing.T) *syncBuffer {
 }
 
 // serveBoth starts what `knomit serve` starts for these two listeners: the
-// plaintext http.Server over a.Handler() and, through openTLSServer, the TLS
-// one beside it. It returns both addresses.
-func serveBoth(t *testing.T, a *app.App, tcfg config.TLSConfig) (plain, tlsAddr string) {
+// plaintext http.Server over handler and, through openTLSServer, the TLS one
+// beside it. It returns both addresses.
+func serveBoth(t *testing.T, handler http.Handler, keyPath string, tcfg config.TLSConfig) (plain, tlsAddr string) {
 	t.Helper()
 	pl, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := &http.Server{
-		Handler:           a.Handler(),
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ConnContext:       auth.ConnContext,
 	}
 	go srv.Serve(pl)
 	t.Cleanup(func() { srv.Close() })
 
-	tlsSrv, tl, err := openTLSServer(tcfg, a.KeyPath(), srv)
+	tlsSrv, tl, err := openTLSServer(tcfg, keyPath, srv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +78,27 @@ func serveBoth(t *testing.T, a *app.App, tcfg config.TLSConfig) (plain, tlsAddr 
 	go tlsSrv.Serve(tl)
 	t.Cleanup(func() { tlsSrv.Close() })
 	return pl.Addr().String(), tl.Addr().String()
+}
+
+// serverStack is the production server minus the embedder: the repo manager
+// over a real control.db, and web.Server with the SQLGrants app.New wires.
+// app.New itself is not used because it DOWNLOADS the embedding model into
+// <Home>/models, which a cmd test on every CI platform must not do; its own
+// wiring of Auth and Grants is pinned by internal/app's tests.
+func serverStack(t *testing.T, cfg config.Config, keyPath string) http.Handler {
+	t.Helper()
+	mgr := repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: keyPath, AgentBranch: "agent/test-00000000"})
+	if err := mgr.Start(); err != nil {
+		t.Fatalf("manager start: %v", err)
+	}
+	t.Cleanup(func() { mgr.Close() })
+	s := &web.Server{
+		Manager: mgr,
+		APIOnly: true,
+		Auth:    cfg.Auth,
+		Grants:  auth.NewSQLGrants(mgr.ControlDB()),
+	}
+	return s.Handler()
 }
 
 func status(t *testing.T, c *http.Client, method, url string) (int, string, error) {
@@ -103,16 +125,13 @@ func TestServeTLS_EndToEnd(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Home = t.TempDir()
 	cfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: cfg.Home + "/pki"}
-	a, err := app.New(context.Background(), cfg, app.Options{APIOnly: true})
-	if err != nil {
-		t.Fatalf("boot: %v", err)
-	}
-	defer a.Close()
+	keyPath, _ := pkitest.NewKey(t)
+	handler := serverStack(t, cfg, keyPath)
 
 	f := pkitest.New(t)
-	self := f.Enroll(t, "server", pki.RoleInstance, a.KeyPath()) // the App's OWN key
+	self := f.Enroll(t, "server", pki.RoleInstance, keyPath) // the server's OWN key
 	f.Install(t, self, cfg.TLS.Dir)
-	plain, tlsAddr := serveBoth(t, a, cfg.TLS)
+	plain, tlsAddr := serveBoth(t, handler, keyPath, cfg.TLS)
 
 	peer := f.Enroll(t, "peer", pki.RoleInstance)
 	principal := auth.InstancePrincipal(peer.Fingerprint()).String()
@@ -133,8 +152,9 @@ func TestServeTLS_EndToEnd(t *testing.T) {
 
 	// 3. A write row (what `knomit grants add` writes) lets the same request
 	//    past the gate; the handler then judges the empty body on its own.
-	if err := auth.NewSQLGrants(a.Manager().ControlDB()).Grant(context.Background(),
-		auth.InstancePrincipal(peer.Fingerprint()), auth.Write, "test"); err != nil {
+	if err := withGrantsAt(cfg, func(g *auth.SQLGrants) error { // what `knomit grants add` does
+		return g.Grant(context.Background(), auth.InstancePrincipal(peer.Fingerprint()), auth.Write, "test")
+	}); err != nil {
 		t.Fatal(err)
 	}
 	code, body, err = status(t, pc, "POST", "https://"+tlsAddr+"/api/v1/repos")

@@ -258,8 +258,12 @@ jobs:
       # below, via ./internal/platform/... — also on every matrix platform, so
       # the Windows branch is reached there too. BOTH halves are covered, and
       # each by a different step; if either moves, check the other still is.
+      #
+      # internal/pki (F19 phase 2) is pure Go with in-process fixtures: every
+      # root, key and certificate its tests use is generated in t.TempDir().
+      # A new package is not tested until it is named here.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no
