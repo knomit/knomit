@@ -1,12 +1,15 @@
 package pki
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -84,7 +87,51 @@ func Dial(ctx context.Context, addr, dir, keyPath string) (Identity, error) {
 	if len(cs.PeerCertificates) == 0 {
 		return Identity{}, fmt.Errorf("%w: peer presented no certificate", ErrUntrustedRoot)
 	}
+	if err := peerAccepted(ctx, tc, addr); err != nil {
+		return Identity{}, err
+	}
 	// VerifyConnection accepted the chain during the handshake; this only
 	// reads what it established.
 	return IdentityOf(cs.PeerCertificates[0])
+}
+
+// peerAccepted proves the PEER accepted our certificate, which a finished
+// handshake does not: in TLS 1.3 the client completes its side before the
+// server has judged the client certificate, and a refusal arrives only as an
+// alert on the first read. So Dial completes one minimal HTTP/1.1 exchange —
+// any status line means the peer let us in; a remote TLS alert means it
+// refused us (the reason is in ITS log, not ours).
+func peerAccepted(ctx context.Context, tc *tls.Conn, addr string) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(10 * time.Second) // defensive bound on a peer that never answers
+	}
+	if err := tc.SetDeadline(deadline); err != nil {
+		return err
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if _, err := fmt.Fprintf(tc, "HEAD / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", host); err != nil {
+		return peerError(err)
+	}
+	line, err := bufio.NewReader(tc).ReadString('\n')
+	if err != nil {
+		return peerError(err)
+	}
+	if !strings.HasPrefix(line, "HTTP/") {
+		return fmt.Errorf("pki: %s answered the handshake but is not an HTTP server: %q", addr, strings.TrimSpace(line))
+	}
+	return nil
+}
+
+// peerError maps a remote TLS alert — crypto/tls reports one as a
+// *net.OpError whose Op is "remote error" — to ErrRefusedByPeer.
+func peerError(err error) error {
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "remote error" {
+		return fmt.Errorf("%w: %v", ErrRefusedByPeer, op.Err)
+	}
+	return fmt.Errorf("pki: peer did not answer after the handshake: %w", err)
 }

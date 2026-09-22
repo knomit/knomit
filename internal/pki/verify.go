@@ -25,6 +25,9 @@ var (
 	ErrSANMissing    = errors.New("pki: no single well-formed knomit:// URI SAN")
 	ErrSANMismatch   = errors.New("pki: SAN fingerprint does not match the certificate key")
 	ErrRoleUnknown   = errors.New("pki: unknown role in SAN")
+	// ErrRefusedByPeer: WE verified the peer, but the peer refused OUR
+	// certificate. The peer's log carries the reason; we only see an alert.
+	ErrRefusedByPeer = errors.New("pki: the peer refused this instance's certificate")
 )
 
 // Identity is what a verified certificate establishes. Fingerprint is the

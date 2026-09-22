@@ -165,3 +165,23 @@ func TestClientConfig_FailsClosedAtConstruction(t *testing.T) {
 		t.Fatal("certificate for another key: constructed")
 	}
 }
+
+// TLS 1.3 lets the CLIENT finish its handshake before the server has judged
+// the client certificate; the server's refusal arrives as an alert on the
+// first read. Dial must not report "ok" for a peer that turned us away.
+// Found by the manual two-instance run: a revoked client was told "dial ok".
+func TestDial_ServerRefusingUsIsAnErrorNotOK(t *testing.T) {
+	f, _, sdir, rec, addr := serverSide(t)
+	peer, dir := f.clientSide(t, "peer")
+	if _, err := dial(t, addr, dir, peer.keyPath); err != nil { // positive control
+		t.Fatal(err)
+	}
+	f.Revoke(t, peer, sdir) // the SERVER's CRL lists us; ours does not list it
+	_, err := dial(t, addr, dir, peer.keyPath)
+	if !errors.Is(err, ErrRefusedByPeer) {
+		t.Fatalf("err=%v, want ErrRefusedByPeer\nserver log:\n%s", err, rec)
+	}
+	if !rec.has(ErrRevoked.Error()) {
+		t.Fatalf("server did not log why:\n%s", rec)
+	}
+}
