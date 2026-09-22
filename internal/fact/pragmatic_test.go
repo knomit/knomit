@@ -248,3 +248,58 @@ func TestAllPragmaticTypes_MatchesSet(t *testing.T) {
 		"AllPragmaticTypes() and PragmaticTypes must stay in sync — a type in the set but "+
 			"not the slice is accepted by Kind.AllowsType yet rejected by the tool schema enum")
 }
+
+func TestParseFact_Pragmatic_Signal(t *testing.T) {
+	const content = `---
+kind: pragmatic
+type: signal
+domain: [lane-memory]
+confidence: 1
+sources: 0
+entities: [task-7f3a9c]
+refs: []
+---
+# task-7f3a9c: survey Zep and Graphiti memory write paths
+
+Deliver observations under architecture/memory-systems, each citing a
+primary source. Ack to the poster's inbox when done.
+`
+	f, err := ParseFact("kb/tasks/inbox/mindev-local-8ef0cd32/s.md", content)
+	require.NoError(t, err)
+	require.Equal(t, Pragmatic, f.Kind)
+	require.Equal(t, Signal, f.Type)
+	require.Equal(t, []string{"task-7f3a9c"}, f.Entities,
+		"the task identity is an entity — that is what keeps the entity-anchored "+
+			"same-subject stage from anchoring on a signal")
+}
+
+// A signal carries kind and type through serialize→parse unchanged. The round
+// trip is the real check that Kind.AllowsType is the only switch: both halves
+// of the trip run validateKindAndType, so a type the set accepts but some
+// second switch does not would fail here rather than at the boundary.
+func TestSerializeFact_RoundTrip_Signal(t *testing.T) {
+	f := NewFact("kb/tasks/inbox/mindev-local-8ef0cd32/s.md")
+	f.Title = "task-7f3a9c: survey Zep and Graphiti memory write paths"
+	f.Body = "Ack to the poster's inbox when done."
+	f.Kind = Pragmatic
+	f.Type = Signal
+	f.Domain = []string{"lane-memory"}
+	f.Confidence = 1
+	f.Entities = []string{"task-7f3a9c"}
+	f.Refs = []string{}
+
+	out, err := SerializeFact(f)
+	require.NoError(t, err)
+	require.Contains(t, out, "kind: pragmatic",
+		"kind is elided only when epistemic; a signal must carry it")
+	require.Contains(t, out, "type: signal")
+
+	parsed, err := ParseFact(f.Path(), out)
+	require.NoError(t, err)
+	require.Equal(t, Pragmatic, parsed.Kind)
+	require.Equal(t, Signal, parsed.Type)
+	require.Equal(t, f.Title, parsed.Title)
+	require.Equal(t, f.Body, parsed.Body)
+	require.Equal(t, f.Entities, parsed.Entities)
+	require.Equal(t, f.Confidence, parsed.Confidence)
+}

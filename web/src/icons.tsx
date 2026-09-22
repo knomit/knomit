@@ -322,6 +322,15 @@ export const HeuristicIcon = ({ color, size = 14 }: IconProps) => (
   </svg>
 );
 
+// signal: an arrow arriving at a stop — addressed, delivered, consumed once.
+export const SignalIcon = ({ color, size = 14 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="12" x2="14" y2="12"/>
+    <polyline points="10 8 14 12 10 16"/>
+    <line x1="19" y1="5" x2="19" y2="19"/>
+  </svg>
+);
+
 // ---------- TypeIcon dispatcher ----------
 
 export function TypeIcon({ type, color, size = 12 }: { type: string; color: string; size?: number }) {
@@ -338,6 +347,7 @@ export function TypeIcon({ type, color, size = 12 }: { type: string; color: stri
     case 'methodology': return <MethodologyIcon color={color} size={size} />;
     case 'policy': return <PolicyIcon color={color} size={size} />;
     case 'heuristic': return <HeuristicIcon color={color} size={size} />;
+    case 'signal': return <SignalIcon color={color} size={size} />;
     default: return <UnknownIcon color={color} size={size} />;
   }
 }
