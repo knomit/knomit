@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/crypto/ssh"
@@ -232,9 +233,56 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 
 	// Grants, like ClientSessions, lives in control.db and is set AFTER
 	// Start for the same reason: the handle does not exist until then.
-	a.server.Grants = auth.NewSQLGrants(a.manager.ControlDB())
+	sqlGrants := auth.NewSQLGrants(a.manager.ControlDB())
+	a.server.Grants = sqlGrants
+
+	// The OS user running the server is its operator, so seed the socket
+	// principal for our own uid with [auth].loopback_default. That is what
+	// makes the local bridge work with no configuration at all: it dials the
+	// socket, the kernel says which uid, and the grant is already there.
+	//
+	// A failure here STOPS the boot rather than logging: a server that came
+	// up without the seed would look healthy and refuse every local write,
+	// which is harder to diagnose than not starting.
+	if err := seedOwnUID(ctx, sqlGrants, cfg.Auth); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("seed grants: %w", err)
+	}
 
 	return a, nil
+}
+
+// seedOwnUID grants this process's own socket principal each permission in
+// loopback_default, ONCE per permission for the lifetime of the database.
+//
+// "Once" is the whole point, and it is why this asks EverGranted rather than
+// For: a revoked row is history, not absence. Seeding on liveness would mean
+// every restart silently undid an operator's revocation, which is the failure
+// mode that makes a permission system worthless — the grant would be
+// unrevokable in practice while appearing revocable.
+func seedOwnUID(ctx context.Context, g *auth.SQLGrants, cfg config.AuthConfig) error {
+	names := cfg.LoopbackDefault
+	if names == nil {
+		names = config.Defaults().Auth.LoopbackDefault
+	}
+	set, err := auth.ParseSet(names)
+	if err != nil {
+		return err
+	}
+	me := auth.Principal{Kind: auth.KindBridge, ID: "uid:" + strconv.Itoa(os.Getuid()), Via: auth.ViaSocket}
+	for perm := range set {
+		ever, err := g.EverGranted(ctx, me, perm)
+		if err != nil {
+			return err
+		}
+		if ever {
+			continue
+		}
+		if err := g.Grant(ctx, me, perm, "boot:loopback_default"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Handler returns the wired HTTP handler.

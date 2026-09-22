@@ -254,6 +254,30 @@ type Config struct {
 }
 
 // AuthConfig governs who may do what on this instance (F19 phase 1).
+//
+// The model in one line: every request gets an auth.Principal at the edge,
+// and a mutation needs the `write` permission that principal holds. There are
+// two ways to be somebody today --
+//
+//	a unix socket peer   the kernel reports the uid, and the principal is
+//	                     bridge:uid:<n>@socket. Boot seeds the SERVER's own
+//	                     uid with LoopbackDefault, so the local bridge works
+//	                     with no configuration.
+//	nobody, on loopback  the anonymous principal, holding LoopbackDefault,
+//	                     while Require is false.
+//
+// Certificates and bearer tokens are phases 2 and 3 and produce the same
+// Principal. Six permissions exist (read, write, push:own, merge:main,
+// operator, admin) but only `write` is ENFORCED in phase 1 -- do not read the
+// presence of the others as protection.
+//
+// Refusals are 403, never 401: RFC 7235 makes WWW-Authenticate mandatory on a
+// 401 and phase 1 has no scheme a TCP caller could satisfy. They are told
+// apart by title -- "Authentication required" when there is no principal,
+// "Permission denied" when there is one and it lacks the permission.
+//
+// An upgrade changes nothing: Require defaults false and LoopbackDefault is
+// everything a local operator could already do.
 type AuthConfig struct {
 	// Require, when true, refuses any request that carries no verified
 	// principal. False (the default) keeps loopback TCP working as it did
