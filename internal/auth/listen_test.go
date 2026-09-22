@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // shortSocketDir returns a fresh directory under /tmp: macOS caps sun_path at
@@ -155,22 +157,45 @@ func TestListenLocal_StaleSocketIsReplaced(t *testing.T) {
 	if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stale := statSocket(t, path)
+	// Precondition: the leftover refuses, which is what makes it stale.
+	if _, err := net.Dial("unix", path); !errors.Is(err, syscall.ECONNREFUSED) {
+		t.Fatalf("fixture: stale socket must refuse with ECONNREFUSED, got %v", err)
+	}
 	ln, cleanup, err := ListenLocal(path)
 	if err != nil || ln == nil {
 		t.Fatalf("stale socket must be replaced: %v %v", ln, err)
 	}
 	defer cleanup()
-	// Positive control: the path now holds a NEW socket, not the leftover.
-	if os.SameFile(stale, statSocket(t, path)) {
-		t.Fatal("stale socket file was not replaced")
-	}
-	acceptAll(ln)
-	c, err := net.Dial("unix", path)
+	// "Replaced" is checked by BEHAVIOUR, not by inode: ext4 hands the inode
+	// freed by the removal straight to the new socket, so os.SameFile reports
+	// the same file for a genuinely new one. A dial that the NEW listener's
+	// Accept receives, with the kernel's peer credential on it, is the proof.
+	acc := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			c = nil
+		}
+		acc <- c
+	}()
+	cl, err := net.Dial("unix", path)
 	if err != nil {
 		t.Fatalf("new listener not reachable: %v", err)
 	}
-	c.Close()
+	defer cl.Close()
+	var srv net.Conn
+	select {
+	case srv = <-acc:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the dial was not received by the new listener's Accept")
+	}
+	if srv == nil {
+		t.Fatal("new listener's Accept failed")
+	}
+	defer srv.Close()
+	if uid, _, ok := PeerCred(srv); !ok || uid != os.Getuid() {
+		t.Fatalf("PeerCred on the replaced socket: uid=%d ok=%v", uid, ok)
+	}
 }
 
 // The case a dial probe gets wrong: a live owner whose connects are REFUSED.
