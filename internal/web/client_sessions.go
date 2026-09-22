@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/auth"
 	"knomit/internal/client/sessions"
 	"knomit/internal/repos"
 )
@@ -49,6 +50,15 @@ func recordClientSession(r *http.Request, store *sessions.Store) {
 		RemoteIP:  sessions.RemoteIP(r.RemoteAddr),
 		UserAgent: r.Header.Get("User-Agent"),
 		Now:       now,
+	}
+	// What the EDGE verified, beside what the client declared below. Both go
+	// on the row: the declared pid is a header, the verified one is the
+	// kernel's answer, and keeping them apart is the point.
+	if p, ok := auth.FromContext(r.Context()); ok {
+		obs.Principal = p.String()
+	}
+	if pid, ok := sessions.VerifiedPIDFromContext(r.Context()); ok {
+		obs.VerifiedPID = pid
 	}
 	if raw := r.Header.Get(sessions.ClientHeader); raw != "" {
 		info, err := sessions.ParseClientHeader(raw)

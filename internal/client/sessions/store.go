@@ -35,7 +35,15 @@ type Observation struct {
 	RemoteIP  string // host part only
 	UserAgent string
 	Client    *BridgeInfo // parsed X-Knomit-Client; nil when absent/unparseable
-	Now       time.Time
+	// Principal is auth.Principal.String() for a caller the edge VERIFIED
+	// (today: a unix socket peer). "" for everyone else. It is recorded as
+	// evidence, never read back to decide anything.
+	Principal string
+	// VerifiedPID is the pid the KERNEL reported for a unix socket peer. 0
+	// means there was no peer. It sits beside the self-declared Client.PID
+	// rather than replacing it, so a mismatch stays visible.
+	VerifiedPID int
+	Now         time.Time
 }
 
 // Touch records one request: insert on first sight, otherwise bump
@@ -61,14 +69,18 @@ func (s *Store) Touch(ctx context.Context, o Observation) error {
 		_, err := s.db.ExecContext(ctx, `
 INSERT INTO client_sessions
   (id, instance_id, transport, binding, branch, hostname, username, cwd, pid, parent_app, parent_pid,
-   bridge_version, remote_addr, user_agent, first_seen_at, last_seen_at, request_count)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   bridge_version, remote_addr, user_agent, principal, first_seen_at, last_seen_at, request_count)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 ON CONFLICT(id) DO UPDATE SET
   instance_id = excluded.instance_id, transport = excluded.transport,
   binding = CASE WHEN excluded.binding = '' THEN binding ELSE excluded.binding END,
   branch = excluded.branch, hostname = excluded.hostname, username = excluded.username,
   cwd = excluded.cwd, pid = excluded.pid, parent_app = excluded.parent_app, parent_pid = excluded.parent_pid,
   bridge_version = excluded.bridge_version, remote_addr = excluded.remote_addr, user_agent = excluded.user_agent,
+  -- A later request that carries NO principal must not erase one already
+  -- recorded: blank means "not observed on this request", not "no longer
+  -- verified". Same shape as the binding CASE above.
+  principal = CASE WHEN excluded.principal IS NULL THEN principal ELSE excluded.principal END,
   last_seen_at = excluded.last_seen_at, request_count = request_count + 1,
   -- A DELETE is the client SAYING it is done, not proof that it is: the
   -- default mcp-go manager keeps accepting the id afterwards. A later request
@@ -76,8 +88,12 @@ ON CONFLICT(id) DO UPDATE SET
   -- is demonstrably still calling.
   ended_at = NULL`,
 			o.SessionID, Cap(c.InstanceID), Cap(transport), o.Binding, Cap(c.Branch), Cap(c.Host), Cap(c.User), Cap(c.Cwd),
-			c.PID, Cap(c.ParentApp), c.ParentPID, Cap(c.Version), Cap(o.RemoteIP), Cap(o.UserAgent), now, now)
+			c.PID, Cap(c.ParentApp), c.ParentPID, Cap(c.Version), Cap(o.RemoteIP), Cap(o.UserAgent),
+			nullIfEmpty(Cap(o.Principal)), now, now)
 		if err != nil {
+			return err
+		}
+		if err := s.touchPeer(ctx, o, now); err != nil {
 			return err
 		}
 		s.publish(o.SessionID, "touch")
@@ -99,24 +115,54 @@ ON CONFLICT(id) DO UPDATE SET
 	inst := DeriveInstanceID(ip, ua, name, version)
 	_, err = s.db.ExecContext(ctx, `
 INSERT INTO client_sessions
-  (id, instance_id, transport, binding, remote_addr, user_agent, first_seen_at, last_seen_at, request_count)
-VALUES (?, ?, 'http', ?, ?, ?, ?, ?, 1)
+  (id, instance_id, transport, binding, remote_addr, user_agent, principal, first_seen_at, last_seen_at, request_count)
+VALUES (?, ?, 'http', ?, ?, ?, ?, ?, ?, 1)
 ON CONFLICT(id) DO UPDATE SET
   instance_id = excluded.instance_id,
   binding = CASE WHEN excluded.binding = '' THEN binding ELSE excluded.binding END,
   remote_addr = excluded.remote_addr, user_agent = excluded.user_agent,
+  principal = CASE WHEN excluded.principal IS NULL THEN principal ELSE excluded.principal END,
   last_seen_at = excluded.last_seen_at, request_count = request_count + 1,
   -- A DELETE is the client SAYING it is done, not proof that it is: the
   -- default mcp-go manager keeps accepting the id afterwards. A later request
   -- revives the row rather than leaving it reading "ended" while the session
   -- is demonstrably still calling.
   ended_at = NULL`,
-		o.SessionID, inst, o.Binding, ip, ua, now, now)
+		o.SessionID, inst, o.Binding, ip, ua, nullIfEmpty(Cap(o.Principal)), now, now)
 	if err != nil {
+		return err
+	}
+	if err := s.touchPeer(ctx, o, now); err != nil {
 		return err
 	}
 	s.publish(o.SessionID, "touch")
 	return nil
+}
+
+// nullIfEmpty keeps an unobserved value out of the column as NULL rather than
+// as "". The two are different claims: NULL is "this request said nothing",
+// "" would be "this request said the principal is the empty string", and the
+// upsert's CASE relies on being able to tell them apart.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// touchPeer records the kernel-reported pid for a unix socket peer. A second
+// statement rather than a column on client_sessions because the control
+// migration chain admits only CREATE ... IF NOT EXISTS and cannot ALTER a
+// table into a new column (see 000009).
+func (s *Store) touchPeer(ctx context.Context, o Observation, now int64) error {
+	if o.VerifiedPID == 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO client_session_peers (session_id, verified_pid, seen_at) VALUES (?, ?, ?)
+ON CONFLICT(session_id) DO UPDATE SET verified_pid = excluded.verified_pid, seen_at = excluded.seen_at`,
+		o.SessionID, o.VerifiedPID, now)
+	return err
 }
 
 // SetClientInfo records what `initialize` declared, plus what the server
@@ -231,11 +277,16 @@ type Session struct {
 	PID, ParentPID                             int
 	RemoteAddr, UserAgent                      string
 	ClientName, ClientVersion                  string
-	Initialized                                bool
-	FirstSeen, LastSeen                        time.Time
-	Ended                                      *time.Time
-	RequestCount                               int
-	State                                      State
+	// Principal is who the edge VERIFIED this caller to be, "" when nobody
+	// did. VerifiedPID is the kernel's pid for a unix socket peer, 0 when
+	// there was none -- distinct from PID, which the client declared.
+	Principal           string
+	VerifiedPID         int
+	Initialized         bool
+	FirstSeen, LastSeen time.Time
+	Ended               *time.Time
+	RequestCount        int
+	State               State
 }
 
 // List returns sessions newest-last-seen first, bounded by f.Limit.
@@ -245,29 +296,32 @@ type Session struct {
 // tell truncation from exhaustion: a silently cut list is worse than the
 // unbounded read this replaced, because it looks complete.
 func (s *Store) List(ctx context.Context, f Filter) (out []Session, truncated bool, err error) {
-	q := `SELECT id, instance_id, transport, binding, branch, hostname, username, cwd, pid, parent_app, parent_pid,
-       bridge_version, remote_addr, user_agent, client_name, client_version, initialized,
-       first_seen_at, last_seen_at, ended_at, request_count
-FROM client_sessions WHERE 1=1`
+	// LEFT JOIN, not an inner one: a session with no unix peer is the common
+	// case and must still be listed.
+	q := `SELECT cs.id, cs.instance_id, cs.transport, cs.binding, cs.branch, cs.hostname, cs.username, cs.cwd,
+       cs.pid, cs.parent_app, cs.parent_pid, cs.bridge_version, cs.remote_addr, cs.user_agent,
+       cs.client_name, cs.client_version, cs.principal, p.verified_pid, cs.initialized,
+       cs.first_seen_at, cs.last_seen_at, cs.ended_at, cs.request_count
+FROM client_sessions cs LEFT JOIN client_session_peers p ON p.session_id = cs.id WHERE 1=1`
 	args := []any{}
 	if f.Binding != "" {
 		// EXISTS, not a JOIN: a session with three handles on this pin is ONE
 		// session and must appear once. A join would return it three times and
 		// every count built on this list would be wrong.
-		q += ` AND (binding = ? OR EXISTS (
+		q += ` AND (cs.binding = ? OR EXISTS (
                   SELECT 1 FROM client_session_bindings b
-                  WHERE b.session_id = client_sessions.id AND b.binding = ?))`
+                  WHERE b.session_id = cs.id AND b.binding = ?))`
 		args = append(args, f.Binding, f.Binding)
 	}
 	if !f.IncludeHidden {
-		q += ` AND last_seen_at >= ?`
+		q += ` AND cs.last_seen_at >= ?`
 		args = append(args, f.Now.Add(-s.policy.HiddenAfter).Unix())
 	}
 	// ORDER BY is what makes truncation MEANINGFUL rather than arbitrary: the
 	// page that survives is the most recently active, which is the page a
 	// presence view is for. id breaks ties so the cut is deterministic.
 	limit := ResolveListLimit(f.Limit)
-	q += ` ORDER BY last_seen_at DESC, id LIMIT ?`
+	q += ` ORDER BY cs.last_seen_at DESC, cs.id LIMIT ?`
 	// One row PAST the limit, dropped below. That extra row is the whole
 	// difference between "this is everything" and "there is more" — without it
 	// a full page and an exhausted one are indistinguishable.
@@ -282,11 +336,16 @@ FROM client_sessions WHERE 1=1`
 		var first, last int64
 		var ended sql.NullInt64
 		var initialized int
+		var principal sql.NullString
+		var verifiedPID sql.NullInt64
 		if err := rows.Scan(&r.ID, &r.InstanceID, &r.Transport, &r.Binding, &r.Branch, &r.Host, &r.User, &r.Cwd,
 			&r.PID, &r.ParentApp, &r.ParentPID, &r.BridgeVersion, &r.RemoteAddr, &r.UserAgent,
-			&r.ClientName, &r.ClientVersion, &initialized, &first, &last, &ended, &r.RequestCount); err != nil {
+			&r.ClientName, &r.ClientVersion, &principal, &verifiedPID, &initialized,
+			&first, &last, &ended, &r.RequestCount); err != nil {
 			return nil, false, err
 		}
+		r.Principal = principal.String
+		r.VerifiedPID = int(verifiedPID.Int64)
 		r.Initialized = initialized == 1
 		r.FirstSeen = time.Unix(first, 0)
 		r.LastSeen = time.Unix(last, 0)
@@ -361,6 +420,13 @@ func (s *Store) Purge(ctx context.Context, now time.Time) (int64, error) {
 	if _, err := s.db.ExecContext(ctx,
 		`DELETE FROM mount_experiments WHERE session_id NOT IN (SELECT id FROM client_sessions)`); err != nil {
 		return n, fmt.Errorf("purge mount_experiments: %w", err)
+	}
+	// A session's verified peer describes that session and nothing else, so
+	// it dies with it. No foreign key, same as client_session_bindings, so
+	// the orphans are collected here.
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM client_session_peers WHERE session_id NOT IN (SELECT id FROM client_sessions)`); err != nil {
+		return n, fmt.Errorf("purge client_session_peers: %w", err)
 	}
 	// No id: a purge is not about one row, and the consumer re-reads the
 	// whole list anyway.

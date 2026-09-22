@@ -112,6 +112,9 @@ var controlObjects = []string{
 	// grants is read by principal on every permission check, and only live
 	// rows matter, so the index is partial on revoked_at IS NULL.
 	"grants", "grants_principal_live",
+	// client_session_peers has no index: it is read only by primary key,
+	// through the LEFT JOIN in sessions.Store.List.
+	"client_session_peers",
 }
 
 // newestControlVersion is the highest numbered up-migration in the EMBEDDED

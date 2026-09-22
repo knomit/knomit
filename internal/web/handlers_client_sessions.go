@@ -97,6 +97,13 @@ type clientSessionView struct {
 	Bridge       clientSessionBridge       `json:"bridge"`
 	RemoteAddr   string                    `json:"remote_addr"`
 	UserAgent    string                    `json:"user_agent"`
+	// Principal is who the edge VERIFIED this caller to be, empty when
+	// nobody did. VerifiedPID is the kernel's pid for a unix socket peer.
+	// Deliberately NOT inside the bridge block: everything there is
+	// self-declared, and the distinction between what the client said and
+	// what the kernel said is the reason both are kept.
+	Principal   string `json:"principal,omitempty"`
+	VerifiedPID int    `json:"verified_pid,omitempty"`
 	FirstSeenAt  string                    `json:"first_seen_at"`
 	LastSeenAt   string                    `json:"last_seen_at"`
 	EndedAt      *string                   `json:"ended_at"`
@@ -257,6 +264,7 @@ func handleHALClientSessions(b hal.URLBuilder, m *repos.Manager, store *sessions
 				Bridge: clientSessionBridge{Host: s.Host, User: s.User, Cwd: s.Cwd, PID: s.PID,
 					Parent: s.ParentApp, ParentPID: s.ParentPID, Version: s.BridgeVersion},
 				RemoteAddr: s.RemoteAddr, UserAgent: s.UserAgent,
+				Principal:  s.Principal, VerifiedPID: s.VerifiedPID,
 				FirstSeenAt: s.FirstSeen.UTC().Format(time.RFC3339),
 				LastSeenAt:  s.LastSeen.UTC().Format(time.RFC3339),
 				EndedAt:     ended, RequestCount: s.RequestCount,
@@ -370,6 +378,11 @@ func redactForDemo(v *clientSessionView) {
 	v.Branch = ""
 	v.RemoteAddr = ""
 	v.UserAgent = ""
+	// Both are operator details of the same kind the bridge block carries: a
+	// principal spells out the operator's uid and the verified pid is a pid.
+	// Redacted for the same reason those are.
+	v.Principal = ""
+	v.VerifiedPID = 0
 	// The binding SET stays — which repos a visitor's demo instance is serving
 	// is the presence story, and the pin and name are already public on the row
 	// above. Two fields do not:

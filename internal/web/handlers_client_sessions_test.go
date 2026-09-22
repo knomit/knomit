@@ -120,6 +120,7 @@ func TestHandleHALClientSessions_ReadOnlyRedactsOperatorDetail(t *testing.T) {
 		SessionID: "s1", Binding: "repo:u-alpha", RemoteIP: "203.0.113.7", UserAgent: "knomit-bridge/1.4", Now: now,
 		Client: &sessions.BridgeInfo{InstanceID: "i1", Transport: "stdio", PID: 5, ParentPID: 4, ParentApp: "claude",
 			Host: "h1v302", User: "pba", Cwd: "/home/pba/secret-project", Branch: "agent/h1v302-8215ac8f", Version: "1.4"},
+		Principal: "bridge:uid:501@socket", VerifiedPID: 4242,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +151,9 @@ func TestHandleHALClientSessions_ReadOnlyRedactsOperatorDetail(t *testing.T) {
 		open["branch"] != "agent/h1v302-8215ac8f" || open["user_agent"] != "knomit-bridge/1.4" {
 		t.Fatalf("normal mode must not redact: %v", open)
 	}
+	if open["principal"] != "bridge:uid:501@socket" || open["verified_pid"].(float64) != 4242 {
+		t.Fatalf("the operator must see the verified identity: %v", open)
+	}
 
 	// Read-only demo: operator detail is gone.
 	ro := get(true)
@@ -164,6 +168,15 @@ func TestHandleHALClientSessions_ReadOnlyRedactsOperatorDetail(t *testing.T) {
 	}
 	if ro["remote_addr"] != "" || ro["user_agent"] != "" || ro["branch"] != "" {
 		t.Errorf("remote_addr/user_agent/branch not redacted: %v", ro)
+	}
+	// A principal spells out the operator's uid and the verified pid is a
+	// pid: both are operator detail of exactly the kind the bridge block
+	// carries, and both are omitempty so they vanish rather than read as 0.
+	if _, present := ro["principal"]; present {
+		t.Errorf("principal must be redacted in the demo: %v", ro["principal"])
+	}
+	if _, present := ro["verified_pid"]; present {
+		t.Errorf("verified_pid must be redacted in the demo: %v", ro["verified_pid"])
 	}
 
 	// What presence NEEDS is still there.
