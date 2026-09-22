@@ -10,5 +10,7 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(migrateRegistryCmd())
 	root.AddCommand(warmModelsCmd())
 	root.AddCommand(versionCmd())
+	root.AddCommand(identityCmd())
+	root.AddCommand(grantsCmd())
 	return root
 }

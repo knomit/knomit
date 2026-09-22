@@ -102,3 +102,32 @@ func TestSQLGrants_ViaIsPartOfTheKey(t *testing.T) {
 		t.Fatal("a grant to the socket principal must not reach the token principal")
 	}
 }
+
+func TestSQLGrants_ListShowsLiveAndRevokedRowsAndFilters(t *testing.T) {
+	ctx := context.Background()
+	g := NewSQLGrants(openGrantsDB(t))
+	a := Principal{Kind: KindBridge, ID: "uid:501", Via: ViaSocket}
+	b := InstancePrincipal("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	g.Grant(ctx, a, Write, "op")
+	g.Grant(ctx, b, Write, "op")
+	g.Revoke(ctx, b, Write)
+	all, err := g.List(ctx, "")
+	if err != nil || len(all) != 2 {
+		t.Fatalf("List all: %v %v", all, err)
+	}
+	var live, revoked int
+	for _, r := range all {
+		if r.RevokedAt == nil {
+			live++
+		} else {
+			revoked++
+		}
+	}
+	if live != 1 || revoked != 1 {
+		t.Fatalf("live=%d revoked=%d, want 1 and 1: %+v", live, revoked, all)
+	}
+	only, err := g.List(ctx, b.String())
+	if err != nil || len(only) != 1 || only[0].Principal != b.String() || only[0].GrantedBy != "op" {
+		t.Fatalf("List filtered: %+v %v", only, err)
+	}
+}

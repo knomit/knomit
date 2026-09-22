@@ -108,7 +108,8 @@ type Server struct {
 }
 
 // grants is the Grants every enforcement point in this server consults: the
-// anonymous loopback principal from config, everyone else from the store.
+// anonymous loopback principal from config, a chained instance's implicit
+// read from auth.CertGrants, and everything else from the store.
 // Building it once per Handler() means a bad permission name in config fails
 // at wiring time rather than once per request.
 //
@@ -122,7 +123,7 @@ func (s *Server) grants() auth.Grants {
 	if err != nil {
 		log.Fatal().Err(err).Msg("[auth].loopback_default invalid")
 	}
-	return loopbackGrants{anon: set, store: s.Grants}
+	return loopbackGrants{anon: set, store: auth.CertGrants{Store: s.Grants}}
 }
 
 // buildMCPHandler constructs the single MCP server instance, shared across
@@ -150,10 +151,15 @@ func (s *Server) buildMCPHandler() {
 	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv,
 		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
 			ctx = sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
-			// mcp-go builds its own context from the request rather than
-			// continuing r.Context(), so what AuthMiddleware attached has to
-			// be copied across explicitly or every MCP call arrives with no
-			// principal and the tool gate denies everything.
+			// DEFENSIVE, not load-bearing at mcp-go v0.45.0: this func is
+			// called only on the POST path (server/streamable_http.go:420-422),
+			// and there ctx is already derived from r.Context(), so the
+			// principal AuthMiddleware attached is present; the GET/SSE path
+			// (handleGet) never calls it and dispatches no tool calls. The copy
+			// guards a future mcp-go that builds this ctx from scratch, in
+			// which case every MCP call would arrive with no principal and the
+			// tool gate would deny everything. Keep it; the MCP auth tests
+			// cannot tell a redundant copy from an absent one today.
 			if p, ok := auth.FromContext(r.Context()); ok {
 				ctx = auth.WithPrincipal(ctx, p)
 			}
