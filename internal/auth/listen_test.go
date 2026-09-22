@@ -1,0 +1,225 @@
+package auth
+
+import (
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+	"time"
+)
+
+// shortSocketDir returns a fresh directory under /tmp: macOS caps sun_path at
+// 104 bytes and t.TempDir() can exceed it, which would turn every dial into
+// EINVAL and exercise a different branch from the one a test names.
+func shortSocketDir(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("no unix domain sockets on windows in this phase; named pipes are knomit/knomit#245")
+	}
+	dir, err := os.MkdirTemp("/tmp", "ll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+// makeStaleSocket leaves a socket FILE with nothing listening behind it — what
+// a crashed server leaves. net.Listen unlinks on Close by default, which is
+// what a crash does not do, so that is turned off first.
+func makeStaleSocket(t *testing.T, path string) {
+	t.Helper()
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	l.Close()
+	if st, err := os.Stat(path); err != nil || st.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("expected a stale SOCKET to remain at %s (err=%v)", path, err)
+	}
+	if _, err := net.Dial("unix", path); err == nil {
+		t.Fatalf("fixture: stale socket at %s answered a dial", path)
+	}
+}
+
+// statSocket stats path and fails unless it is a socket.
+func statSocket(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	st, err := os.Stat(path)
+	if err != nil || st.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("expected a socket at %s: %v %v", path, st, err)
+	}
+	return st
+}
+
+// acceptAll keeps a listener alive and answering until it is closed.
+func acceptAll(ln net.Listener) {
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+}
+
+func TestListenLocal_Mode0600_StaleRemoved_PeerCredOK(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "s.sock")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil { // a stale REGULAR file
+		t.Fatal(err)
+	}
+	ln, cleanup, err := ListenLocal(path)
+	if err != nil || ln == nil {
+		t.Fatalf("ListenLocal: %v %v", ln, err)
+	}
+	defer cleanup()
+	st, err := os.Stat(path)
+	if err != nil || st.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("not a socket after ListenLocal: %v %v", st, err)
+	}
+	if st.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want 0600", st.Mode().Perm())
+	}
+	acc := make(chan net.Conn, 1)
+	go func() { c, _ := ln.Accept(); acc <- c }()
+	cl, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	srv := <-acc
+	defer srv.Close()
+	uid, _, ok := PeerCred(srv)
+	if !ok || uid != os.Getuid() {
+		t.Fatalf("PeerCred over ListenLocal: uid=%d ok=%v", uid, ok)
+	}
+}
+
+func TestListenLocal_CleanupUnlinks_AndIsIdempotent(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "s.sock")
+	ln, cleanup, err := ListenLocal(path)
+	if err != nil || ln == nil {
+		t.Fatalf("ListenLocal: %v %v", ln, err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("positive control: socket file must exist before cleanup: %v", err)
+	}
+	cleanup()
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("socket file must be gone after cleanup: %v", err)
+	}
+	// The lock file is NEVER unlinked: unlink-and-recreate would let two
+	// processes each lock a different inode and both own the socket.
+	if _, err := os.Stat(path + ".lock"); err != nil {
+		t.Fatalf("lock file must survive cleanup: %v", err)
+	}
+}
+
+func TestListenLocal_LiveSocketIsNotStolen(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "s.sock")
+	first, cleanup1, err := ListenLocal(path)
+	if err != nil || first == nil {
+		t.Fatalf("first ListenLocal: %v %v", first, err)
+	}
+	defer cleanup1()
+	acceptAll(first)
+	before := statSocket(t, path)
+	second, cleanup2, err := ListenLocal(path)
+	if !errors.Is(err, ErrSocketInUse) || second != nil {
+		t.Fatalf("second ListenLocal on a LIVE socket must refuse with ErrSocketInUse: %v %v", second, err)
+	}
+	cleanup2() // the noop: must not unlink the first listener's file
+	// A thief removes and recreates the SAME path, so existence proves nothing:
+	// the file must be the very inode the first owner bound.
+	if !os.SameFile(before, statSocket(t, path)) {
+		t.Fatal("the live owner's socket was replaced by a different file")
+	}
+	// Positive control: the first listener still owns the path and still answers.
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("live socket was disturbed: %v", err)
+	}
+	c.Close()
+}
+
+func TestListenLocal_StaleSocketIsReplaced(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "s.sock")
+	makeStaleSocket(t, path)
+	// A crashed owner also leaves its lock file; with no holder it is inert.
+	if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := statSocket(t, path)
+	ln, cleanup, err := ListenLocal(path)
+	if err != nil || ln == nil {
+		t.Fatalf("stale socket must be replaced: %v %v", ln, err)
+	}
+	defer cleanup()
+	// Positive control: the path now holds a NEW socket, not the leftover.
+	if os.SameFile(stale, statSocket(t, path)) {
+		t.Fatal("stale socket file was not replaced")
+	}
+	acceptAll(ln)
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("new listener not reachable: %v", err)
+	}
+	c.Close()
+}
+
+// The case a dial probe gets wrong: a live owner whose accept backlog is full
+// refuses new connects with ECONNREFUSED (darwin) or EAGAIN (linux), exactly
+// like a stale file. Liveness must come from the owner, not from a dial.
+func TestListenLocal_SaturatedLiveSocketIsNotStolen(t *testing.T) {
+	path := filepath.Join(shortSocketDir(t), "s.sock")
+	first, cleanup1, err := ListenLocal(path)
+	if err != nil || first == nil {
+		t.Fatalf("first ListenLocal: %v %v", first, err)
+	}
+	defer cleanup1()
+	// Never Accept(); dial until the backlog is full and a connect is refused.
+	var held []net.Conn
+	defer func() {
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	saturated := false
+	for i := 0; i < 4096; i++ {
+		c, err := net.DialTimeout("unix", path, 200*time.Millisecond)
+		if err != nil {
+			saturated = true
+			break
+		}
+		held = append(held, c)
+	}
+	if !saturated {
+		t.Fatalf("fixture: backlog never filled after %d connects; the test would not distinguish a dial probe", len(held))
+	}
+	before := statSocket(t, path)
+	second, cleanup2, err := ListenLocal(path)
+	if second != nil {
+		defer second.Close()
+	}
+	if !errors.Is(err, ErrSocketInUse) || second != nil {
+		t.Fatalf("a live owner that is not accepting must still be respected: %v %v", second, err)
+	}
+	cleanup2()
+	if !os.SameFile(before, statSocket(t, path)) {
+		t.Fatal("the live owner's socket was replaced by a different file")
+	}
+}
+
+func TestListenLocal_EmptyPathIsNoop(t *testing.T) {
+	ln, cleanup, err := ListenLocal("")
+	if err != nil || ln != nil {
+		t.Fatalf("empty path: %v %v", ln, err)
+	}
+	cleanup() // must not panic
+}
