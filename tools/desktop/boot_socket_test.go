@@ -90,6 +90,16 @@ func TestBootServer_OpensLocalSocketWithPeerCreds(t *testing.T) {
 	if _, err := os.Stat(sock); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("socket must be gone after shutdown: %v", err)
 	}
+	// http.Server.Shutdown alone already unlinks the socket file, so the check
+	// above cannot see a missing closeSocket. What only closeSocket does is
+	// RELEASE THE LOCK — and a relaunch (NativeService.RestartApp) that finds
+	// it still held serves TCP only, anonymous, until the next restart. Take
+	// the path again the way that successor would.
+	ln, release, err := auth.ListenLocal(sock)
+	if err != nil || ln == nil {
+		t.Fatalf("successor could not take the socket after shutdown: %v", err)
+	}
+	release()
 }
 
 // A live instance (normally `knomit serve`) already owns the socket: the

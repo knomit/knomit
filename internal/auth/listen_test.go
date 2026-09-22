@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
-	"time"
 )
 
 // shortSocketDir returns a fresh directory under /tmp: macOS caps sun_path at
@@ -173,34 +172,24 @@ func TestListenLocal_StaleSocketIsReplaced(t *testing.T) {
 	c.Close()
 }
 
-// The case a dial probe gets wrong: a live owner whose accept backlog is full
-// refuses new connects with ECONNREFUSED (darwin) or EAGAIN (linux), exactly
-// like a stale file. Liveness must come from the owner, not from a dial.
-func TestListenLocal_SaturatedLiveSocketIsNotStolen(t *testing.T) {
+// The case a dial probe gets wrong: a live owner whose connects are REFUSED.
+// A saturated accept backlog refuses exactly like a stale file, but its size
+// is platform-specific (somaxconn 128 on darwin, 4096 on linux), so saturating
+// it is not a fixture that holds everywhere. Instead the owner keeps its lock
+// and closes its listener without unlinking: the file stays and every dial is
+// refused with ECONNREFUSED — what a dial probe sees from a saturated server.
+// Liveness must come from the lock, not from a dial.
+func TestListenLocal_RefusingLiveOwnerIsNotStolen(t *testing.T) {
 	path := filepath.Join(shortSocketDir(t), "s.sock")
 	first, cleanup1, err := ListenLocal(path)
 	if err != nil || first == nil {
 		t.Fatalf("first ListenLocal: %v %v", first, err)
 	}
-	defer cleanup1()
-	// Never Accept(); dial until the backlog is full and a connect is refused.
-	var held []net.Conn
-	defer func() {
-		for _, c := range held {
-			c.Close()
-		}
-	}()
-	saturated := false
-	for i := 0; i < 4096; i++ {
-		c, err := net.DialTimeout("unix", path, 200*time.Millisecond)
-		if err != nil {
-			saturated = true
-			break
-		}
-		held = append(held, c)
-	}
-	if !saturated {
-		t.Fatalf("fixture: backlog never filled after %d connects; the test would not distinguish a dial probe", len(held))
+	defer cleanup1() // the lock stays held until here
+	first.(*net.UnixListener).SetUnlinkOnClose(false)
+	first.Close()
+	if _, err := net.Dial("unix", path); err == nil {
+		t.Fatal("fixture: owner still answers; the test would not distinguish a dial probe")
 	}
 	before := statSocket(t, path)
 	second, cleanup2, err := ListenLocal(path)
@@ -208,7 +197,7 @@ func TestListenLocal_SaturatedLiveSocketIsNotStolen(t *testing.T) {
 		defer second.Close()
 	}
 	if !errors.Is(err, ErrSocketInUse) || second != nil {
-		t.Fatalf("a live owner that is not accepting must still be respected: %v %v", second, err)
+		t.Fatalf("a live owner that refuses connects must still be respected: %v %v", second, err)
 	}
 	cleanup2()
 	if !os.SameFile(before, statSocket(t, path)) {
