@@ -9,7 +9,11 @@
 // produce the same type.
 package auth
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"strings"
+)
 
 type Kind string
 
@@ -63,4 +67,38 @@ func WithPrincipal(ctx context.Context, p Principal) context.Context {
 func FromContext(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(ctxKey{}).(Principal)
 	return p, ok
+}
+
+// ParsePrincipal is the inverse of String: "<kind>:<id>@<via>", or
+// "<kind>@<via>" for a principal with no id (anonymous). Kind and Via must be
+// ones this package defines, so a typo in `knomit grants add` is an error
+// rather than a grants row that names nobody. The id may itself contain ':'
+// ("uid:501"): kind ends at the FIRST ':' and via starts after the LAST '@'.
+func ParsePrincipal(s string) (Principal, error) {
+	at := strings.LastIndexByte(s, '@')
+	if at < 0 {
+		return Principal{}, fmt.Errorf("principal %q: want <kind>:<id>@<via>", s)
+	}
+	head, via := s[:at], Via(s[at+1:])
+	kind, id, _ := strings.Cut(head, ":")
+	p := Principal{Kind: Kind(kind), ID: id, Via: via}
+	switch p.Kind {
+	case KindInstance, KindBridge, KindHost, KindOperator, KindAnonymous:
+	default:
+		return Principal{}, fmt.Errorf("principal %q: unknown kind %q", s, kind)
+	}
+	switch p.Via {
+	case ViaCert, ViaToken, ViaSocket, ViaNone:
+	default:
+		return Principal{}, fmt.Errorf("principal %q: unknown via %q", s, via)
+	}
+	if p.ID == "" && p.Kind != KindAnonymous {
+		return Principal{}, fmt.Errorf("principal %q: %s needs an id", s, kind)
+	}
+	// One spelling per principal: "anonymous:@none" parses to the same value
+	// as "anonymous@none", and a grants row must not exist under both.
+	if p.String() != s {
+		return Principal{}, fmt.Errorf("principal %q is not in canonical form %q", s, p.String())
+	}
+	return p, nil
 }
