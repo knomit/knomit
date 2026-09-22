@@ -264,6 +264,51 @@ func TestFindSameSubjectCandidates_HypothesisLeftToSubsume(t *testing.T) {
 	require.Empty(t, got, "the subsume path owns hypotheses")
 }
 
+// A signal in band is not a same-subject collision, and the control case is
+// what makes that claim mean anything: the SAME incoming observation, the SAME
+// shared entity, the SAME similarity — only the candidate's type differs. If
+// the observation branch did not refuse, the signal branch would be passing
+// because the fixture never triggers the gate at all.
+//
+// Why signals are exempt: a signal is coordination content consumed once, its
+// entity is a task id rather than a subject, and the refusal's advice ("update
+// the existing fact") is nonsense for a message someone sent you.
+func TestFindSameSubjectCandidates_SignalIsNotASameSubjectCollision(t *testing.T) {
+	th := params.Defaults()
+
+	incoming := fact.Fact{Title: "T", Body: "B", Entities: []string{"task-7f3a9c"}}
+	df := map[string]int{"task-7f3a9c": specificDF}
+
+	t.Run("signal candidate is skipped", func(t *testing.T) {
+		h := hit("kb/tasks/inbox/mindev-local-8ef0cd32/sig.md", "task-7f3a9c: survey", inBand(th), "task-7f3a9c")
+		h.Type = string(fact.Signal)
+		q := &fakeSearcher{results: []store.SearchResult{h}}
+
+		got, err := findSameSubjectCandidates(
+			context.Background(), q, "agent/test",
+			incoming, "kb/gotchas/x", nil, th, df, testDFCeiling, defaultPageSize)
+
+		require.NoError(t, err)
+		require.Empty(t, got, "a signal is consumed, not believed — it is never the same subject")
+		require.Equal(t, 1, q.calls, "the gate still ran; the candidate was skipped, not unsought")
+	})
+
+	t.Run("observation candidate IS refused", func(t *testing.T) {
+		h := hit("kb/technology/obs.md", "task-7f3a9c: survey", inBand(th), "task-7f3a9c")
+		h.Type = string(fact.Observation)
+		q := &fakeSearcher{results: []store.SearchResult{h}}
+
+		got, err := findSameSubjectCandidates(
+			context.Background(), q, "agent/test",
+			incoming, "kb/gotchas/x", nil, th, df, testDFCeiling, defaultPageSize)
+
+		require.NoError(t, err)
+		require.Len(t, got, 1, "an ordinary candidate on the same entity is still a collision")
+		require.Equal(t, "kb/technology/obs.md", got[0].Path)
+		require.Equal(t, []string{"task-7f3a9c"}, got[0].SharedEntities)
+	})
+}
+
 // dfCeiling is shared with the motif df band rather than re-derived, so a
 // corpus-size rule lives in one place. These pin the two limbs of
 // max(floor, percent% of N) at the sizes where each one wins.

@@ -136,6 +136,15 @@ func findSameSubjectCandidates(
 		if r.Type == string(fact.Hypothesis) {
 			continue
 		}
+		// A signal is coordination content, not a claim about a subject: its
+		// entity is a task id and it is CONSUMED rather than believed. Two
+		// signals naming the same task are not a duplicated fact, and an
+		// observation that mentions the task is not a restatement of one —
+		// refusing either would block coordination traffic with advice
+		// ("update the existing fact") that makes no sense for a message.
+		if r.Type == string(fact.Signal) {
+			continue
+		}
 		shared := sharedAnchors(anchors, r.Entities)
 		if len(shared) == 0 {
 			continue
