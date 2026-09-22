@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { ManageSessions } from './ManageSessions';
 import { api } from './api';
 import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
@@ -22,6 +22,7 @@ const sess = (over: Partial<import('./api').ClientSession>): import('./api').Cli
 });
 
 beforeEach(() => {
+  localStorage.clear();
   installFakeEventSource();
   vi.useFakeTimers({ now, shouldAdvanceTime: true }); // waitFor needs real progress
   vi.mocked(api.listClientSessions).mockResolvedValue({
@@ -270,94 +271,6 @@ describe('ManageSessions', () => {
   });
 });
 
-// One session id can serve several concurrent callers, each holding its own
-// handle, so the Binding cell shows the SET — one line per handle, most
-// recently used first — not just the last one.
-describe('ManageSessions binding set', () => {
-  const bindingRow = (over: Partial<import('./api').ClientSessionBindingRow> = {}) => ({
-    handle: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kind: 'repo', uid: 'u1', name: 'core', branch: '',
-    first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:58:00Z', request_count: 1,
-    ...over,
-  });
-
-  it('renders one line per handle, including two handles on the same repo', async () => {
-    vi.mocked(api.listClientSessions).mockResolvedValue({
-      truncated: false,
-      policy: POLICY,
-      sessions: [sess({
-        bindings: [
-          bindingRow({ handle: 'HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb', name: 'core' }),
-          bindingRow({ handle: 'GGGGGGaaaaaaaaaaaaaaaaaaaaaaaaaa', name: 'core' }),
-        ],
-      })],
-    });
-    render(<ManageSessions />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-
-    const entries = screen.getAllByTestId('session-binding');
-    expect(entries).toHaveLength(2);
-    // Both name the same repo — the handle is what tells them apart, so it has
-    // to be on screen or the two lines are indistinguishable.
-    expect(entries[0]).toHaveTextContent('core');
-    expect(entries[0]).toHaveTextContent('HHHHHH');
-    expect(entries[1]).toHaveTextContent('GGGGGG');
-  });
-
-  it('shows the full handle on hover and the branch only when set', async () => {
-    vi.mocked(api.listClientSessions).mockResolvedValue({
-      truncated: false,
-      policy: POLICY,
-      sessions: [sess({
-        bindings: [
-          bindingRow({ handle: 'FULLHANDLEVALUE0000000000000000x', branch: 'main' }),
-          bindingRow({ handle: 'SECONDHANDLE00000000000000000000', name: 'eng', kind: 'lens', branch: '' }),
-        ],
-      })],
-    });
-    render(<ManageSessions />);
-    await waitFor(() => expect(screen.getAllByTestId('session-binding')).toHaveLength(2));
-    const entries = screen.getAllByTestId('session-binding');
-
-    // Shortened on screen, whole value in the title — 32 opaque characters
-    // would dominate the row, but an operator correlating a log line needs all
-    // of it.
-    expect(entries[0]).toHaveTextContent('FULLHA');
-    expect(entries[0]).not.toHaveTextContent('FULLHANDLEVALUE0000000000000000x');
-    expect(entries[0].querySelector('[title="FULLHANDLEVALUE0000000000000000x"]')).not.toBeNull();
-
-    expect(entries[0]).toHaveTextContent('@main');
-    // "" means the target's own read branch — nothing to show.
-    expect(entries[1]).not.toHaveTextContent('@');
-  });
-
-  it('falls back to the singular binding when the session presented no handle', async () => {
-    vi.mocked(api.listClientSessions).mockResolvedValue({
-      truncated: false,
-      policy: POLICY,
-      sessions: [sess({ bindings: [], binding: { kind: 'repo', uid: 'u1', name: 'core' } })],
-    });
-    render(<ManageSessions />);
-    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
-    // A URL-scoped caller presents no handle, so the cell shows what the row
-    // itself says rather than going blank.
-    expect(screen.queryAllByTestId('session-binding')).toHaveLength(0);
-    expect(screen.getByTestId('session-bindings')).toHaveTextContent('core');
-  });
-
-  it('renders a read-only server\'s redacted rows without a handle', async () => {
-    vi.mocked(api.listClientSessions).mockResolvedValue({
-      truncated: false,
-      policy: POLICY,
-      sessions: [sess({ bindings: [bindingRow({ handle: '', branch: '' })] })],
-    });
-    render(<ManageSessions />);
-    await waitFor(() => expect(screen.getAllByTestId('session-binding')).toHaveLength(1));
-    const entry = screen.getAllByTestId('session-binding')[0];
-    expect(entry).toHaveTextContent('core');
-    expect(entry).not.toHaveTextContent('…');
-  });
-});
-
 // The server bounds the page. A cut list renders identically to a complete one,
 // so the note is the only thing that stops "12 shown" being read as "12 exist".
 describe('ManageSessions truncation', () => {
@@ -403,40 +316,278 @@ describe('ManageSessions truncation', () => {
   });
 });
 
-describe('ManageSessions — the branch a session actually writes to', () => {
-  // The whole point of the `mounts` field: a URL-scoped mount names a branch in
-  // its path, but a session inside an experiment writes somewhere else. The
-  // table must state the STORED answer, never re-derive one from the URL — a
-  // column that read the path would confidently show the wrong branch.
-  it('shows the experiment for a session inside one', async () => {
-    (api.listClientSessions as ReturnType<typeof vi.fn>).mockResolvedValue({
-      sessions: [sess({
+// One session id can serve several concurrent callers, each holding its own
+// handle, so the Binding cell shows the SET. It shows it GROUPED: one line per
+// distinct target with a handle count, because a busy agent presents dozens of
+// handles against two repos and eighteen identical lines said nothing the
+// count does not. The handles themselves move into an expandable detail row,
+// which is also the only place the per-handle ages and request counts the
+// server already returns have ever been shown.
+describe('ManageSessions binding groups', () => {
+  const bindingRow = (over: Partial<import('./api').ClientSessionBindingRow> = {}) => ({
+    handle: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', kind: 'repo', uid: 'u1', name: 'core', branch: '',
+    first_seen_at: '2026-09-14T11:00:00Z', last_seen_at: '2026-09-14T11:58:00Z', request_count: 1,
+    ...over,
+  });
+  const withBindings = (bindings: import('./api').ClientSessionBindingRow[], over: Partial<import('./api').ClientSession> = {}) =>
+    vi.mocked(api.listClientSessions).mockResolvedValue({
+      truncated: false, policy: POLICY, sessions: [sess({ bindings, ...over })],
+    });
+
+  it('collapses two handles on one target into a single line with a count', async () => {
+    withBindings([
+      bindingRow({ handle: 'HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb' }),
+      bindingRow({ handle: 'GGGGGGaaaaaaaaaaaaaaaaaaaaaaaaaa' }),
+    ]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    // Two callers, one target: ONE line. The count is what carries the fact
+    // that there are two of them.
+    const groups = screen.getAllByTestId('session-binding-group');
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toHaveTextContent('core');
+    expect(groups[0]).toHaveTextContent('×2');
+    // The handles are in the detail row now, not on the summary line.
+    expect(groups[0]).not.toHaveTextContent('HHHHHH');
+  });
+
+  it('keeps one line per distinct target, in the order the server sent them', async () => {
+    withBindings([
+      bindingRow({ handle: 'B1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', uid: 'u2', name: 'docs' }),
+      bindingRow({ handle: 'B2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', uid: 'u1', name: 'core' }),
+      bindingRow({ handle: 'B3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', uid: 'u2', name: 'docs' }),
+    ]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    const groups = screen.getAllByTestId('session-binding-group');
+    expect(groups).toHaveLength(2);
+    // Bindings arrive most-recently-used first, so the order of first
+    // appearance puts the most recently used target on top.
+    expect(groups[0]).toHaveTextContent('docs');
+    expect(groups[0]).toHaveTextContent('×2');
+    expect(groups[1]).toHaveTextContent('core');
+    expect(groups[1]).not.toHaveTextContent('×');
+  });
+
+  it('opens a row per handle on click, with the full handle on hover, and closes again', async () => {
+    withBindings([
+      bindingRow({ handle: 'HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb', request_count: 31 }),
+      bindingRow({ handle: 'GGGGGGaaaaaaaaaaaaaaaaaaaaaaaaaa', request_count: 7, last_seen_at: '2026-09-14T11:00:00Z' }),
+    ]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    expect(screen.queryByTestId('session-detail')).toBeNull();
+    const toggle = screen.getByRole('button', { name: /2 handles/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle);
+    const detail = screen.getByTestId('session-detail');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    const lines = within(detail).getAllByTestId('session-detail-row');
+    expect(lines).toHaveLength(2);
+    // Shortened on screen, whole value in the title — 32 opaque characters
+    // would dominate, but an operator correlating a log line needs all of it.
+    expect(lines[0]).toHaveTextContent('HHHHHH');
+    expect(lines[0]).not.toHaveTextContent('HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb');
+    expect(detail.querySelector('[title="HHHHHHbbbbbbbbbbbbbbbbbbbbbbbbbb"]')).not.toBeNull();
+    // The per-handle numbers the server already returns and the table has
+    // never shown.
+    expect(lines[0]).toHaveTextContent('31');
+    expect(lines[1]).toHaveTextContent('7');
+    expect(lines[1]).toHaveTextContent('1 h ago');
+
+    fireEvent.click(toggle);
+    expect(screen.queryByTestId('session-detail')).toBeNull();
+  });
+
+  it('renders no toggle and no detail row for a single handle', async () => {
+    withBindings([bindingRow({ handle: 'ONLYONEaaaaaaaaaaaaaaaaaaaaaaaaa' })]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    expect(screen.getAllByTestId('session-binding-group')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /handle/ })).toBeNull();
+    expect(screen.queryByTestId('session-detail')).toBeNull();
+  });
+
+  // The experiment attribution used to live in its own Branch column, one per
+  // SESSION. It sits on the target line now, because `mounts` is per mount and
+  // two targets can disagree.
+  it('shows the experiment chip on the target line its mount names', async () => {
+    withBindings(
+      [bindingRow({ handle: 'INEXPaaaaaaaaaaaaaaaaaaaaaaaaaaa', uid: 'u1', name: 'core' })],
+      {
         branch: 'agent/h-1',
         mounts: [{
           mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
-          experiment: 'pr-237-ui', branch: 'exp/pr-237-ui',
-          set_at: '2026-09-14T11:30:00Z',
+          experiment: 'pr-237-ui', branch: 'exp/pr-237-ui', set_at: '2026-09-14T11:30:00Z',
         }],
-      })],
-      policy: POLICY,
-    });
-    render(<ManageSessions onLiveCount={() => {}} />);
+      },
+    );
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
 
-    const cell = await screen.findByTestId('session-write-branch');
-    expect(cell.textContent).toContain('pr-237-ui');
-    // The client's own git branch is a DIFFERENT thing and must not be what
-    // this column shows while an experiment is active.
-    expect(cell.textContent).not.toContain('agent/h-1');
+    const group = screen.getAllByTestId('session-binding-group')[0];
+    expect(group).toHaveTextContent('pr-237-ui');
+    expect(group.querySelector('[title="Experiment pr-237-ui"]')).not.toBeNull();
+    // The client's own git branch is a DIFFERENT thing and is no longer shown
+    // anywhere: the Branch column that used to carry it is gone.
+    expect(screen.getByTestId('session-row')).not.toHaveTextContent('agent/h-1');
   });
 
-  it('falls back to the reported branch when no experiment is open', async () => {
-    (api.listClientSessions as ReturnType<typeof vi.fn>).mockResolvedValue({
-      sessions: [sess({ branch: 'agent/h-1' })],
-      policy: POLICY,
-    });
-    render(<ManageSessions onLiveCount={() => {}} />);
+  it('shows the ordinary branch chip when the handle names one and no mount claims the target', async () => {
+    withBindings([bindingRow({ handle: 'ONBRANCHaaaaaaaaaaaaaaaaaaaaaaaa', branch: 'main' })]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    expect(screen.getAllByTestId('session-binding-group')[0]).toHaveTextContent('main');
+  });
 
-    const cell = await screen.findByTestId('session-write-branch');
-    expect(cell.textContent).toContain('agent/h-1');
+  // "" means the target's own branch — there is nothing to say, and a chip
+  // saying nothing is worse than no chip.
+  it('shows no chip for a handle with no mount and no branch', async () => {
+    withBindings([bindingRow({ handle: 'PLAINaaaaaaaaaaaaaaaaaaaaaaaaaaa', branch: '' })]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    expect(screen.getByTestId('session-bindings').querySelector('[data-testid="session-branch-chip"]')).toBeNull();
+  });
+
+  it('shows both chips when two handles on one target write to different branches', async () => {
+    withBindings([
+      bindingRow({ handle: 'D1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', branch: 'main' }),
+      bindingRow({ handle: 'D2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', branch: 'agent/other' }),
+    ]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    const group = screen.getAllByTestId('session-binding-group')[0];
+    expect(within(group).getAllByTestId('session-branch-chip')).toHaveLength(2);
+    expect(group).toHaveTextContent('main');
+    expect(group).toHaveTextContent('agent/other');
+  });
+
+  it('falls back to the singular binding when the session presented no handle', async () => {
+    withBindings([], { binding: { kind: 'repo', uid: 'u1', name: 'core' } });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    // A URL-scoped caller presents no handle, so the cell shows what the row
+    // itself says rather than going blank — with no count and no toggle.
+    expect(screen.getByTestId('session-bindings')).toHaveTextContent('core');
+    expect(screen.getByTestId('session-bindings')).not.toHaveTextContent('×');
+    expect(screen.queryByRole('button', { name: /handle/ })).toBeNull();
+  });
+
+  it('puts the experiment chip on the singular binding too', async () => {
+    withBindings([], {
+      binding: { kind: 'repo', uid: 'u1', name: 'core' },
+      mounts: [{
+        mount: 'repo:u1', kind: 'repo', uid: 'u1', name: 'core',
+        experiment: 'url-scoped', branch: 'exp/url-scoped', set_at: '2026-09-14T11:30:00Z',
+      }],
+    });
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    expect(screen.getByTestId('session-bindings')).toHaveTextContent('url-scoped');
+  });
+
+  it('renders an unresolvable target as kind:uid', async () => {
+    withBindings([bindingRow({ handle: 'UNRESOLVEDaaaaaaaaaaaaaaaaaaaaaa', kind: 'lens', uid: 'l9', name: null })]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+    expect(screen.getAllByTestId('session-binding-group')[0]).toHaveTextContent('lens:l9');
+  });
+
+  // A read-only server redacts the handle. The summary line never showed it,
+  // so the case that can still break is the detail row: an absent handle has
+  // to render as an em dash rather than an empty cell or a bare ellipsis.
+  it('renders a read-only server\'s redacted rows without a handle', async () => {
+    withBindings([
+      bindingRow({ handle: '', branch: '' }),
+      bindingRow({ handle: '', branch: '', uid: 'u1', name: 'core', request_count: 4 }),
+    ]);
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(1));
+
+    const group = screen.getAllByTestId('session-binding-group')[0];
+    expect(group).toHaveTextContent('core');
+    expect(group).not.toHaveTextContent('…');
+
+    fireEvent.click(screen.getByRole('button', { name: /2 handles/ }));
+    const lines = within(screen.getByTestId('session-detail')).getAllByTestId('session-detail-row');
+    expect(lines[0]).toHaveTextContent('—');
+    expect(lines[0]).not.toHaveTextContent('…');
+  });
+});
+
+// The Branch column showed the branch the BRIDGE declares about itself, which
+// it fills only in --repo mode: empty in lens and unscoped mode, and the same
+// agent branch the binding already names when it is set. The only live content
+// it carried was the experiment attribution, which now sits beside the target
+// it applies to.
+describe('ManageSessions — no Branch column', () => {
+  it('has no Branch header', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(screen.getAllByTestId('session-row')).toHaveLength(3));
+    const head = screen.getByTestId('manage-sessions').querySelector('thead') as HTMLElement;
+    expect(head).not.toHaveTextContent('Branch');
+    expect(head).toHaveTextContent('Binding');
+    expect(head.querySelectorAll('th')).toHaveLength(7);
+  });
+
+  it('spans the empty state across the seven remaining columns', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [] });
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    const cell = screen.getByText(/No client sessions/) as HTMLTableCellElement;
+    expect(cell.colSpan).toBe(7);
+  });
+});
+
+// Show hidden survives a reload. It is a view preference, not state the server
+// owns, so it lives in localStorage — and, like every other key this app
+// stores, behind try/catch: a blocked or throwing store must cost the page
+// nothing more than the preference.
+describe('ManageSessions Show hidden persistence', () => {
+  const KEY = 'knomit.sessions.showHidden';
+
+  it('starts checked and asks for hidden rows on the FIRST fetch when remembered', async () => {
+    localStorage.setItem(KEY, '1');
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    // The first fetch, not a second one after a state settle: a page that
+    // rendered unchecked and corrected itself would flash the wrong list.
+    expect(api.listClientSessions).toHaveBeenNthCalledWith(1, { binding: undefined, includeHidden: true });
+    expect(screen.getByLabelText('Show hidden')).toBeChecked();
+  });
+
+  it('writes the preference on toggle, both ways', async () => {
+    render(<ManageSessions />);
+    await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByLabelText('Show hidden'));
+    expect(localStorage.getItem(KEY)).toBe('1');
+    fireEvent.click(screen.getByLabelText('Show hidden'));
+    // '0' rather than a removal: an explicit off must beat any default a later
+    // version might pick.
+    expect(localStorage.getItem(KEY)).toBe('0');
+  });
+
+  it('renders unchecked, and still toggles, when localStorage throws', async () => {
+    const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    try {
+      render(<ManageSessions />);
+      await waitFor(() => expect(api.listClientSessions).toHaveBeenCalledTimes(1));
+      expect(screen.getByLabelText('Show hidden')).not.toBeChecked();
+      // The write throws too; the checkbox must still move and the list must
+      // still re-fetch.
+      fireEvent.click(screen.getByLabelText('Show hidden'));
+      await waitFor(() => expect(api.listClientSessions).toHaveBeenLastCalledWith({ binding: undefined, includeHidden: true }));
+      expect(screen.getByLabelText('Show hidden')).toBeChecked();
+    } finally {
+      get.mockRestore();
+      set.mockRestore();
+    }
   });
 });
