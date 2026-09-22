@@ -59,6 +59,12 @@ type Options struct {
 
 // New creates and boots the application from the given config and context.
 func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
+	// First, before anything is opened or generated: a config that can only
+	// produce a server refusing every request is refused here, at no cost.
+	if err := checkLocalListener(cfg); err != nil {
+		return nil, err
+	}
+
 	a := &App{}
 
 	// SSH keypair.
@@ -250,6 +256,32 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	return a, nil
+}
+
+// checkLocalListener refuses [auth].require = true when no local
+// authenticated listener is configured. Require turns the anonymous loopback
+// path off, and in phase 1 the socket is the only credential there is, so
+// such a server would boot, look healthy, and answer every request 403
+// "Authentication required" -- a silent lockout. That is harder to diagnose
+// than a server that did not start, the same argument that makes a
+// seedOwnUID failure stop the boot.
+//
+// It lives in app rather than config.Validate because it is a property of
+// the SERVER boot: `kb` and other clients load the same config and have no
+// business failing on a server-only combination. Both server boot paths
+// (cmd/serve and the desktop app) reach New.
+//
+// It checks what is CONFIGURED, not what is listening: the desktop app boots
+// its own http.Server and does not yet serve cfg.Socket
+// (kb/gotchas/desktop/separate-server-boot-path), so a desktop with
+// require = true is still locked out. That gap is the desktop wiring, not
+// this check.
+func checkLocalListener(cfg config.Config) error {
+	if cfg.Auth.Require && cfg.Socket == "" {
+		return fmt.Errorf("[auth].require = true but no local authenticated listener is configured " +
+			"(socket is empty): every request would be refused. Set socket, or set [auth].require = false")
+	}
+	return nil
 }
 
 // seedOwnUID grants this process's own socket principal each permission in
