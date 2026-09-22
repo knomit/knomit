@@ -28,6 +28,7 @@ type App struct {
 	manager     *repos.Manager
 	server      *web.Server
 	signer      ssh.Signer
+	keyPath     string
 	agentBranch string
 
 	closers []func()
@@ -37,6 +38,10 @@ func (a *App) Manager() *repos.Manager { return a.manager }
 func (a *App) Server() *web.Server     { return a.server }
 func (a *App) Signer() ssh.Signer      { return a.signer }
 func (a *App) AgentBranch() string     { return a.agentBranch }
+
+// KeyPath is the instance key file app.New resolved ([remote].ssh_key or
+// <Home>/id_ed25519) — the key the TLS certificate must wrap.
+func (a *App) KeyPath() string { return a.keyPath }
 
 // Options holds CLI-only overrides that are not persisted to config.
 type Options struct {
@@ -71,6 +76,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		return nil, fmt.Errorf("ensure keypair: %w", err)
 	}
 	a.signer = signer
+	a.keyPath = keyPath
 	a.agentBranch = agentBranch(keyFingerprint)
 
 	// Embedder. Embeddings are MANDATORY: every fact is indexed with a vector

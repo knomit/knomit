@@ -242,10 +242,30 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
+			// mTLS listener for enrolled instances (F19 phase 2): its OWN
+			// http.Server over the same handler, off until [tls].addr is set
+			// and `knomit identity install` has placed a certificate. The
+			// plaintext listener above is unchanged.
+			tlsSrv, tl, err := openTLSServer(cfg.TLS, a.KeyPath(), srv)
+			if err != nil {
+				log.Fatal().Err(err).Str("addr", cfg.TLS.Addr).Str("dir", cfg.TLS.Dir).Msg("tls listener failed") // fail closed
+			}
+			if tlsSrv != nil {
+				log.Info().Str("tls", "https://"+tl.Addr().String()).Str("dir", cfg.TLS.Dir).Msg("mTLS listener for enrolled instances")
+				go func() {
+					if err := tlsSrv.Serve(tl); err != nil && err != http.ErrServerClosed {
+						log.Fatal().Err(err).Msg("tls serve failed")
+					}
+				}()
+			}
+
 			<-cmd.Context().Done()
 			// a.Close() runs via defer — shuts down repos and releases resources.
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			if tlsSrv != nil {
+				_ = tlsSrv.Shutdown(shutCtx)
+			}
 			return srv.Shutdown(shutCtx)
 		},
 	}

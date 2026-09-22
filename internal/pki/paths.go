@@ -1,8 +1,7 @@
 package pki
 
-import "path/filepath"
-
-// File names, instance side (inside [tls].dir, default <home>/pki). The
+// File names, instance side (inside [tls].dir; config.Load defaults it to
+// <home>/pki, the one definition of that default). The
 // instance KEY is not here: it stays at ~/.knomit/id_ed25519 (or
 // [remote].ssh_key), the one copy.
 const (
@@ -21,6 +20,3 @@ const (
 	IssuedLogFile  = "issued.jsonl"
 	RevokedLogFile = "revoked.jsonl"
 )
-
-// Dir is the default [tls].dir for a knomit home.
-func Dir(home string) string { return filepath.Join(home, "pki") }
