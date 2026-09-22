@@ -44,9 +44,9 @@ var ErrSocketInUse = errors.New("local socket is in use by a live knomit instanc
 //     path is a leftover", which is then removed.
 //   - windows: the pipe namespace itself. A pipe name exists only while an
 //     instance of it is open, so nothing can be left behind for a successor
-//     to clear up, and winio.ListenPipe asks for FILE_FLAG_FIRST_PIPE_INSTANCE
-//     so a second listener on a live name is refused by the OS. There is no
-//     lock file on Windows and there is nothing for one to guard.
+//     to clear up, and winio.ListenPipe creates the first instance with the
+//     FILE_CREATE disposition, so a second listener on a live name is refused
+//     by the OS. There is no lock file on Windows and nothing for one to guard.
 //
 // The returned cleanup closes the listener and releases whatever the platform
 // held; it is safe to call twice. On unix it keeps the lock file reachable, so

@@ -47,9 +47,11 @@ func listenLocal(path string) (net.Listener, func(), error) {
 // isPipeNameTaken reports whether err is "another process already owns this
 // pipe name", which is the Windows spelling of ErrSocketInUse.
 //
-// winio.ListenPipe creates with FILE_FLAG_FIRST_PIPE_INSTANCE, so the OS
-// refuses a second listener on a live name, and the refusal is
-// ERROR_ACCESS_DENIED — measured on this hardware, not inferred; see
+// winio.ListenPipe creates the first instance with the FILE_CREATE
+// disposition on NtCreateNamedPipeFile (pipe.go:378-381 in v0.6.2), which
+// fails outright if the name already exists — the effect the Win32 API spells
+// FILE_FLAG_FIRST_PIPE_INSTANCE. The refusal is ERROR_ACCESS_DENIED, measured
+// on this hardware rather than inferred; see
 // TestListenLocal_LivePipeIsNotStolen, which records the errno it actually
 // got so a future Windows build changing it fails loudly.
 //
