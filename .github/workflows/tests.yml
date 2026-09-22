@@ -258,8 +258,13 @@ jobs:
       # below, via ./internal/platform/... — also on every matrix platform, so
       # the Windows branch is reached there too. BOTH halves are covered, and
       # each by a different step; if either moves, check the other still is.
+      # internal/auth is here because it ran in NO step on any platform before
+      # knomit#245 — only race.yml's post-merge ./... reached it. Its Windows
+      # named-pipe tests are the only coverage the pipe transport has, and a
+      # package nothing runs would have let them compile and never execute on
+      # windows-2025. It needs no model and no native libs.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no

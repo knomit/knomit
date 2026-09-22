@@ -23,9 +23,14 @@ func TestBoot_RequireWithoutLocalListenerFails(t *testing.T) {
 		a.Close()
 		t.Fatal("boot must fail when require = true and no local listener is configured")
 	}
-	// "[auth].require", not "require": the embedder's own failure says
-	// "embeddings are required", and a bare needle would pass on that.
-	for _, want := range []string{"[auth].require", "socket"} {
+	// "[auth].require = TRUE", not "[auth].require": the message also says
+	// how to fix it ("...or set [auth].require = false"), so a bare-name
+	// needle is satisfied by the remediation clause alone and passes for a
+	// message that never names the failing condition. Found by forced
+	// failure. "socket" for the same reason the name is qualified: the
+	// embedder's own failure says "embeddings are required", and a needle of
+	// just "require" would pass on that.
+	for _, want := range []string{"[auth].require = true", "socket"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error must name %q so an operator knows what to change; got: %v", want, err)
 		}
