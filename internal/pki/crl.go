@@ -48,11 +48,15 @@ func IssueCRL(dir string, root Root, revoked []Revoked, number *big.Int, next ti
 	if err != nil {
 		return nil, fmt.Errorf("pki: sign CRL: %w", err)
 	}
-	out := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
+	out := crlPEM(der)
 	if err := writeFileAtomic(filepath.Join(dir, CRLFile), out, 0o644); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func crlPEM(der []byte) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der})
 }
 
 // Revoke appends r to <dir>/revoked.jsonl and reissues <dir>/crl.pem from the
