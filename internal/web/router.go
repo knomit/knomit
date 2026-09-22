@@ -36,13 +36,29 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// a proxy's id to ours, forgeable by anyone who wants two requests to look
 	// like one. It labels log lines only — never an authorization decision.
 	r.Use(middleware.RequestID)
-	r.Use(middleware.Recoverer)                    // produces the 500 response
-	r.Use(reportPanic)                             // captures a crash bundle, re-panics
+	r.Use(middleware.Recoverer) // produces the 500 response
+	r.Use(reportPanic)          // captures a crash bundle, re-panics
+	// Every request gets a principal here, before anything can act on it.
+	//
+	// BELOW Recoverer and reportPanic, so a panic in here becomes a 500
+	// problem document and a crash bundle rather than a dropped connection —
+	// and ABOVE readOnlyGate and writeGate, which cannot decide anything
+	// without the principal this attaches. Both halves of that sandwich are
+	// load-bearing; moving it outside either one is a regression.
+	//
+	// The outer router in Handler() runs this too (also below its Recoverer),
+	// so /git inherits a principal as well; running twice is idempotent — the
+	// same connection yields the same answer — and it keeps a
+	// directly-constructed API router authenticated.
+	r.Use(AuthMiddleware(s.Auth, s.authDisabled))
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default
 	r.Use(compressor())
 	if s.ReadOnly {
 		r.Use(readOnlyGate)
 	}
+	// After readOnlyGate, so the instance-level message wins over the
+	// caller-level one when both would refuse.
+	r.Use(writeGate(s.grants(), s.authDisabled))
 
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no resource at "+req.URL.Path, req.URL.Path)

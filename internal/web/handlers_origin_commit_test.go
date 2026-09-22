@@ -110,7 +110,7 @@ func newRegisteredManager(t *testing.T, keyPath, name, uid string) *repos.Manage
 func postCommit(t *testing.T, s *Server, sessID string) *streamRecorder {
 	t.Helper()
 	rec := newStreamRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions/"+sessID+"/commit", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions/"+sessID+"/commit", nil))
 	s.NewAPIRouter().ServeHTTP(rec, req)
 	return rec
 }

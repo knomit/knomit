@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 
+	"knomit/internal/auth"
 	"knomit/internal/repos"
 	"knomit/internal/web/hal"
 )
@@ -57,6 +59,50 @@ func readOnlyGate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isGitFetch reports whether a path is git's FETCH endpoint. upload-pack is
+// how a client reads — clone and fetch both POST to it — and receive-pack is
+// how it writes, so gating by HTTP method alone would refuse every clone.
+//
+// Anchored on the FINAL path segment, deliberately. splitGitRoute trims one
+// ".git" suffix, so "/git/knomit.git/git-upload-pack" is a live route and a
+// prefix or contains test would have to enumerate the spellings of the repo
+// segment. Repo names admit only [a-z0-9-_] (isValidRepoName) and so contain
+// no slash, which makes the last segment unambiguous.
+//
+// Only upload-pack is exempt. receive-pack is not exposed at all today
+// (internal/store/httphandler.go: "Push (receive-pack) is not exposed"), so
+// the gate enforces nothing in phase 1 -- it is placed now so F11's
+// receive-pack lands behind it rather than beside it.
+func isGitFetch(path string) bool {
+	return strings.HasSuffix(path, "/git-upload-pack")
+}
+
+// writeGate is the permission twin of readOnlyGate: a mutating request needs
+// the write permission. ReadOnly (the demo) is the special case "nobody has
+// write" and keeps its own message, because it is a property of the INSTANCE
+// and not of the caller -- it runs first so its message wins.
+//
+// It reuses isMutatingRequest, which already exempts the MCP dispatch routes:
+// those are POST-for-reads, and gating them by method would make an instance
+// unreachable through the bridge, since initialize and knomit_bind are
+// themselves POSTs. MCP write enforcement is per TOOL, in internal/mcp.
+func writeGate(g auth.Grants, disabled bool) func(http.Handler) http.Handler {
+	requireWrite := Require(g, auth.Write)
+	return func(next http.Handler) http.Handler {
+		if disabled {
+			return next
+		}
+		gated := requireWrite(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isMutatingRequest(r.Method, r.URL.Path) && !isGitFetch(r.URL.Path) {
+				gated.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // refuseUnwritableBranch answers 403 when facts may not be authored on branch

@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -249,6 +250,69 @@ type Config struct {
 	Git                 GitConfig          `toml:"git"`
 	Log                 LogConfig          `toml:"log"`
 	Runtime             RuntimeConfig      `toml:"runtime"`
+	Auth                AuthConfig         `toml:"auth"`
+}
+
+// AuthConfig governs who may do what on this instance (F19 phase 1).
+//
+// The model in one line: every request gets an auth.Principal at the edge,
+// and a mutation needs the `write` permission that principal holds. There are
+// two ways to be somebody today --
+//
+//	a unix socket peer   the kernel reports the uid, and the principal is
+//	                     bridge:uid:<n>@socket. Boot seeds the SERVER's own
+//	                     uid with LoopbackDefault, so the local bridge works
+//	                     with no configuration.
+//	nobody, on loopback  the anonymous principal, holding LoopbackDefault,
+//	                     while Require is false.
+//
+// Certificates and bearer tokens are phases 2 and 3 and produce the same
+// Principal. Six permissions exist (read, write, push:own, merge:main,
+// operator, admin) but only `write` is ENFORCED in phase 1 -- do not read the
+// presence of the others as protection.
+//
+// Refusals are 403, never 401: RFC 7235 makes WWW-Authenticate mandatory on a
+// 401 and phase 1 has no scheme a TCP caller could satisfy. They are told
+// apart by title -- "Authentication required" when there is no principal,
+// "Permission denied" when there is one and it lacks the permission.
+//
+// An upgrade changes nothing: Require defaults false and LoopbackDefault is
+// everything a local operator could already do.
+type AuthConfig struct {
+	// Require, when true, refuses any request that carries no verified
+	// principal. False (the default) keeps loopback TCP working as it did
+	// before authentication existed: such requests run as the anonymous
+	// principal with LoopbackDefault's permissions. Never true by default.
+	Require bool `toml:"require"`
+	// LoopbackDefault lists the permissions the anonymous loopback principal
+	// holds while Require is false. Names are validated by auth.ParseSet at
+	// the first Handler(); a typo fails there rather than granting the wrong
+	// thing. An empty (but present) list is honoured as "anonymous holds
+	// nothing" -- only an absent one falls back to the defaults.
+	LoopbackDefault []string `toml:"loopback_default"`
+}
+
+// EffectiveLoopbackDefault is the permission list the anonymous loopback
+// principal actually holds. It is the ONE place the nil fallback lives.
+//
+// nil means the AuthConfig was built without config — which in practice only
+// tests do, since production goes through internal/app — and falls back to the
+// shipped defaults. An EMPTY BUT NON-NIL slice ([auth] loopback_default = []
+// in TOML) is honoured as "anonymous holds nothing": an operator who writes an
+// empty list means it, and collapsing that into the fallback would silently
+// grant the full default set to someone who asked for none of it.
+//
+// Both enforcement-side callers go through this — web.Server.grants(), which
+// resolves what anonymous may do, and app.seedOwnUID, which seeds the server's
+// own socket uid. They used to each carry their own copy of the nil check. If
+// one had ever been changed alone, boot would seed one set while the
+// middleware resolved another, and the two enforcement points would disagree
+// about exactly the principal this phase exists to serve.
+func (a AuthConfig) EffectiveLoopbackDefault() []string {
+	if a.LoopbackDefault == nil {
+		return Defaults().Auth.LoopbackDefault
+	}
+	return a.LoopbackDefault
 }
 
 // RuntimeConfig configures the optional runtime diagnostics port (live
@@ -279,6 +343,10 @@ func Defaults() Config {
 		ClusterCache: ClusterCacheConfig{
 			Resolution:       4.0,
 			MinCommunitySize: 2,
+		},
+		Auth: AuthConfig{
+			// Everything a local operator could do before [auth] existed.
+			LoopbackDefault: []string{"read", "write", "push:own", "operator", "admin"},
 		},
 		Session: SessionConfig{
 			ToolIdleTTL:       "15m",
@@ -335,17 +403,11 @@ func Load() (Config, error) {
 	// path is the worse failure: it looks like a fresh install, so the models
 	// download again and a second SSH identity is generated under a root
 	// nobody will think to look in.
-	if v := os.Getenv("KNOMIT_HOME"); v != "" {
-		cfg.Home = v
-	} else if v := os.Getenv("KNOMIT_REPO"); v != "" {
-		cfg.Home = v
-	} else {
-		home, err := DefaultHome()
-		if err != nil {
-			return Config{}, fmt.Errorf("config: cannot determine the knomit data root: %w", err)
-		}
-		cfg.Home = home
+	home, err := ResolveHome()
+	if err != nil {
+		return Config{}, fmt.Errorf("config: cannot determine the knomit data root: %w", err)
 	}
+	cfg.Home = home
 
 	// Find and decode TOML file.
 	homeBefore := cfg.Home
@@ -445,6 +507,18 @@ func Load() (Config, error) {
 	// explicit TOML/env value (e.g. ~/.ssh/known_hosts) wins.
 	if cfg.Remote.KnownHosts == "" {
 		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
+	}
+
+	// Default the unix socket to <Home>/knomit.sock, for the same reason and
+	// at the same point as known_hosts: after tilde expansion, and only when
+	// nothing set it, so a TOML or KNOMIT_SOCKET value wins.
+	//
+	// The socket is the local bridge's credential -- the kernel tells the
+	// server which uid is on the other end (internal/auth.PeerCred) -- so it
+	// has to exist without being configured, and the directory mode is what
+	// guards it. Windows has no AF_UNIX default here.
+	if cfg.Socket == "" && runtime.GOOS != "windows" {
+		cfg.Socket = filepath.Join(cfg.Home, socketFile)
 	}
 
 	if err := cfg.Validate(); err != nil {

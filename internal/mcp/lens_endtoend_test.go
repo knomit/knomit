@@ -183,7 +183,7 @@ func initializeInstructions(t *testing.T, srv *mcpserver.MCPServer, ctx context.
 // construction.
 func TestLensE2E_InitializeEmitsMountTable(t *testing.T) {
 	m, repoA, repoB, _, _, lens := newLensE2E(t)
-	srv := NewServer("kb", m, false)
+	srv := NewServer("kb", m, false, nil)
 
 	var instr string
 	probe := func(w http.ResponseWriter, r *http.Request) {
@@ -214,7 +214,7 @@ func TestLensE2E_InitializeEmitsMountTable(t *testing.T) {
 // carries NEITHER the mount table NOR the read-only-through-this-lens rule.
 func TestLensE2E_InitializeLensOfOneHasNoMountTable(t *testing.T) {
 	m, repoA, _, _, _, _ := newLensE2E(t)
-	srv := NewServer("kb", m, false)
+	srv := NewServer("kb", m, false, nil)
 
 	instr := initializeInstructions(t, srv, repos.WithRepoInstance(context.Background(), repoA))
 

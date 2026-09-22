@@ -2,6 +2,8 @@ package config
 
 import (
 	"math"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -510,5 +512,119 @@ func TestLoad_ClientSessionEnvOverrides(t *testing.T) {
 	}
 	if cfg.Session.ClientRetention != "0" {
 		t.Errorf("ClientRetention = %q, want 0", cfg.Session.ClientRetention)
+	}
+}
+
+// F19 phase 1: [auth] exists and its defaults keep an upgrade uneventful —
+// require off, and the anonymous loopback caller holds everything a local
+// operator held before authentication existed.
+func TestDefaults_AuthLoopbackIsFullLocalRights(t *testing.T) {
+	d := Defaults()
+	if d.Auth.Require {
+		t.Fatal("require must default false so an upgrade breaks nobody")
+	}
+	want := []string{"read", "write", "push:own", "operator", "admin"}
+	if strings.Join(d.Auth.LoopbackDefault, ",") != strings.Join(want, ",") {
+		t.Fatalf("loopback_default = %v, want %v", d.Auth.LoopbackDefault, want)
+	}
+}
+
+// The socket is the local credential, so it must exist without being asked
+// for: Load fills it in under Home when nothing set it.
+func TestLoad_SocketDefaultsUnderHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Socket != filepath.Join(home, "knomit.sock") {
+		t.Fatalf("Socket = %q, want %q", cfg.Socket, filepath.Join(home, "knomit.sock"))
+	}
+}
+
+// An explicit socket path must survive: the default only fills a gap.
+func TestLoad_ExplicitSocketWins(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	t.Setenv("KNOMIT_SOCKET", "/tmp/explicit.sock")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Socket != "/tmp/explicit.sock" {
+		t.Fatalf("Socket = %q, want the explicit path", cfg.Socket)
+	}
+}
+
+// The bridge dials the socket the server opens. They resolve it through the
+// same helper precisely so they cannot drift; this pins that they agree.
+func TestSocketPath_AgreesWithTheResolvedConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := SocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != cfg.Socket {
+		t.Fatalf("SocketPath() = %q but the server listens on %q — a bridge computing this itself would silently fall back to TCP", got, cfg.Socket)
+	}
+}
+
+// KNOMIT_REPO is the backward-compatible alias for the data root, and the
+// socket has to follow it too.
+func TestSocketPath_HonoursTheRepoAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no AF_UNIX default on windows")
+	}
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", "")
+	t.Setenv("KNOMIT_REPO", home)
+	got, err := SocketPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Join(home, "knomit.sock") {
+		t.Fatalf("SocketPath() = %q", got)
+	}
+}
+
+// The nil fallback has exactly one definition, because web.Server.grants()
+// and app.seedOwnUID both read it: if they ever disagreed, boot would seed
+// the server's own uid with one permission set while the middleware resolved
+// anonymous to another.
+func TestEffectiveLoopbackDefault_ThreeCases(t *testing.T) {
+	// nil — the literal was built without config, which only tests do.
+	if got := (AuthConfig{}).EffectiveLoopbackDefault(); strings.Join(got, ",") !=
+		strings.Join(Defaults().Auth.LoopbackDefault, ",") {
+		t.Fatalf("nil must fall back to the defaults, got %v", got)
+	}
+
+	// EMPTY BUT NON-NIL — `loopback_default = []` in TOML. An operator who
+	// writes an empty list means it; falling back here would silently grant
+	// the full default set to someone who asked for none of it.
+	got := AuthConfig{LoopbackDefault: []string{}}.EffectiveLoopbackDefault()
+	if len(got) != 0 {
+		t.Fatalf("an explicitly empty list must stay empty, got %v", got)
+	}
+
+	// Populated — returned as written.
+	want := []string{"read"}
+	if got := (AuthConfig{LoopbackDefault: want}).EffectiveLoopbackDefault(); strings.Join(got, ",") != "read" {
+		t.Fatalf("a populated list must be returned as written, got %v", got)
 	}
 }

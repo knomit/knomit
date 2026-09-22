@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/auth"
 	"knomit/internal/platform/reqinfo"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -27,7 +28,7 @@ import (
 // Review clustering runs in-process over the per-review subgraph via the
 // per-repo store.GraphStore (SubgraphEdges) — no cluster cache or background
 // warmer is involved.
-func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, embedders ...store.BatchEmbedder) *server.MCPServer {
+func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, grants auth.Grants, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
 	// Name the tool for the HTTP layer. Over streamable HTTP every call is the
 	// same POST .../mcp, so without this a slow-request warning cannot say which
@@ -65,21 +66,42 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, em
 		result.Instructions = BindingInstructions(b, profileFor(mgr, b.Write()))
 	})
 
+	regs := enabledTools(toolRegistrations(mgr, embedders...), readOnly)
+	writeTools := make(map[string]bool, len(regs))
+	for _, t := range regs {
+		if t.write {
+			writeTools[t.tool.Name] = true
+		}
+	}
+
 	s := server.NewMCPServer("knomit", "1.0.0",
 		server.WithHooks(hooks),
 		// Advertise tasks capability so clients that support it can invoke
 		// long-running tools (knomit_review) asynchronously and poll for
 		// completion via tasks/get instead of blocking on a single response.
 		server.WithTaskCapabilities(true, true, true),
+		// tools/list is filtered by what the caller may actually do. This is
+		// presentation only — the enforcement is gatePermission below, on the
+		// registration seam, because a filter cannot stop a call that never
+		// listed.
+		server.WithToolFilter(permissionFilter(grants, writeTools)),
 	)
 
-	// The gate wraps the handler BEFORE registration, which is the one seam
+	// Both gates wrap the handler BEFORE registration, which is the one seam
 	// both dispatch paths share — see gateBinding for why neither a hook nor
 	// mcp-go's tool middleware would do.
-	for _, t := range enabledTools(toolRegistrations(mgr, embedders...), readOnly) {
+	//
+	// ORDER MATTERS: the permission gate goes on LAST, so it runs FIRST. A
+	// caller with no write permission is then told about the permission
+	// rather than about a missing handle, and no binding handle is resolved
+	// on behalf of a caller who may not write anyway.
+	for _, t := range regs {
 		h := t.handler
 		if t.gate != gateUngated {
 			h = gateBinding(mgr, t.tool, t.gate, h)
+		}
+		if t.write {
+			h = gatePermission(grants, t.tool, auth.Write, h)
 		}
 		s.AddTool(t.tool, h)
 	}

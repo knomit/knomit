@@ -190,7 +190,7 @@ func postEditSearchURL(repo, branch, rel string) string {
 // dead server is visible in the bridge log rather than being indistinguishable
 // from a legitimate empty result.
 func fetchSearchResults(u string) []knomitapi.FactSummary {
-	resp, err := knomitapi.HTTPClient.Get(u) //nolint:noctx
+	resp, err := knomitapi.Client().Get(u) //nolint:noctx
 	if err != nil {
 		log.Warn().Err(err).Str("url", u).Msg("fetchSearchResults: GET failed")
 		return nil

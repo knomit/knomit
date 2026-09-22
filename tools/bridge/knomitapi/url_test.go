@@ -10,6 +10,7 @@ import (
 // fails anyway, so a broken URL and a correct one would be indistinguishable
 // without this assertion. Keep it red-when-the-URL-changes.
 func TestRecentFactsURL_PinsExactShape(t *testing.T) {
+	isolateHome(t)
 	t.Setenv("KNOMIT_BASE_URL", "http://localhost:19278")
 	got := RecentFactsURL("knomit", "machine/host", 200)
 	want := "http://localhost:19278/api/v1/repos/knomit/branches/machine:host/facts?sort=recent&limit=200"

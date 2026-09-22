@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/app"
+	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/platform/diag"
@@ -170,6 +171,12 @@ func serveCmd() *cobra.Command {
 				WriteTimeout:      0, // 0 = no limit for SSE long-poll
 				IdleTimeout:       60 * time.Second,
 				BaseContext:       func(_ net.Listener) context.Context { return cmd.Context() },
+				// ConnContext runs once per accepted connection, which is the
+				// only moment the net.Conn exists: it asks the kernel who is on
+				// the other end of a unix socket and puts the answer where
+				// internal/web's AuthMiddleware can read it. TCP connections are
+				// left untouched.
+				ConnContext: auth.ConnContext,
 			}
 
 			go func() {
@@ -222,6 +229,14 @@ func serveCmd() *cobra.Command {
 				}
 				defer ul.Close()
 				defer os.Remove(cfg.Socket)
+				// 0600 on the socket, with the 0700 data root above it, IS the
+				// credential: the kernel vouches for the peer uid, and the file
+				// mode decides which uids can reach the socket at all. A
+				// world-writable socket would let any local user be taken for
+				// this one.
+				if err := os.Chmod(cfg.Socket, 0o600); err != nil {
+					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("chmod socket failed")
+				}
 				log.Info().Str("socket", cfg.Socket).Msg("unix socket listening")
 				go func() {
 					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {

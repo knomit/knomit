@@ -429,3 +429,90 @@ func TestResolveListLimit(t *testing.T) {
 		}
 	}
 }
+
+// The kernel's pid and the client's own declared pid are BOTH kept, and they
+// are allowed to differ: the declared one is a header the client wrote about
+// itself, the verified one is what the kernel said. Collapsing them would
+// throw away the only evidence a mismatch ever leaves.
+func TestTouch_RecordsPrincipalAndVerifiedPID(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	o := bridgeObs("sid-1", t0)
+	o.Client.PID = 999 // self-declared, deliberately wrong
+	o.Principal = "bridge:uid:501@socket"
+	o.VerifiedPID = 4242
+	if err := s.Touch(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := s.List(ctx, Filter{Now: t0})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	if rows[0].Principal != "bridge:uid:501@socket" {
+		t.Fatalf("principal = %q", rows[0].Principal)
+	}
+	if rows[0].VerifiedPID != 4242 || rows[0].PID != 999 {
+		t.Fatalf("verified=%d declared=%d: both must survive and differ", rows[0].VerifiedPID, rows[0].PID)
+	}
+}
+
+// A TCP caller has no peer, so it has no verified pid and no principal row;
+// absence must read as 0/"" rather than as a scan error.
+func TestTouch_NoPeerLeavesVerifiedPIDZero(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.Touch(ctx, bridgeObs("sid-tcp", t0)); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := s.List(ctx, Filter{Now: t0})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%v err=%v", rows, err)
+	}
+	if rows[0].VerifiedPID != 0 || rows[0].Principal != "" {
+		t.Fatalf("a TCP session must carry neither: %+v", rows[0])
+	}
+}
+
+// A later request that carries no principal must not ERASE one already
+// recorded: the bridge's very first request can precede the peer being
+// resolved, and a blank overwrite would lose the verified identity.
+func TestTouch_BlankPrincipalDoesNotEraseARecordedOne(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	o := bridgeObs("sid-1", t0)
+	o.Principal = "bridge:uid:501@socket"
+	o.VerifiedPID = 4242
+	if err := s.Touch(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Touch(ctx, bridgeObs("sid-1", t0.Add(time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, _ := s.List(ctx, Filter{Now: t0})
+	if rows[0].Principal != "bridge:uid:501@socket" || rows[0].VerifiedPID != 4242 {
+		t.Fatalf("a blank observation erased the verified identity: %+v", rows[0])
+	}
+}
+
+// client_session_peers has no foreign key, so Purge has to collect its
+// orphans the way it collects client_session_bindings'.
+func TestPurge_CollectsPeerOrphans(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	o := bridgeObs("sid-old", t0)
+	o.Principal = "bridge:uid:501@socket"
+	o.VerifiedPID = 4242
+	if err := s.Touch(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Purge(ctx, t0.Add(200*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM client_session_peers`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("client_session_peers rows left after purge: %d", n)
+	}
+}

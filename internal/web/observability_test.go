@@ -136,7 +136,7 @@ func TestMetricsMiddleware_SlowRequestCarriesRequestDetail(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest("POST", "/repos/core/branches/main/mcp?profile=code", nil)
+	req := fromLoopback(httptest.NewRequest("POST", "/repos/core/branches/main/mcp?profile=code", nil))
 	req.RemoteAddr = "10.1.2.3:54321"
 	req.Header.Set("User-Agent", "claude-code/1.2.3")
 	req.Header.Set("Mcp-Session-Id", "sess-abc")

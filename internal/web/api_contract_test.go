@@ -80,8 +80,8 @@ func TestAnchor_StartSynthesis_UnknownRepoNoLLM_Returns404(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t), LLMAdapter: nil}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/repos/missing/branches/main/synthesis-runs", nil))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/missing/branches/main/synthesis-runs", nil)))
 
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status: got %d, want 404", rec.Code)
@@ -93,7 +93,7 @@ func TestAnchor_RepoArchive_UnknownRepo_KeepsOwnEnvelope(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	r := s.NewAPIRouter()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/repos/missing", nil))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/missing", nil)))
 
 	p := problemOf(t, rec)
 	if p["title"] == "Repo not found" {
@@ -149,8 +149,8 @@ func TestAnchor_OriginSession_ConflictIsProblemJSON(t *testing.T) {
 
 	// Create a session, then commit it before it has been applied.
 	createRec := httptest.NewRecorder()
-	createReq := httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
-		strings.NewReader(`{"url":"https://github.com/example/repo.git"}`))
+	createReq := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+		strings.NewReader(`{"url":"https://github.com/example/repo.git"}`)))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusOK {
@@ -164,8 +164,8 @@ func TestAnchor_OriginSession_ConflictIsProblemJSON(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		"/repos/alpha/origin-sessions/"+created.SessionID+"/commit", nil))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost,
+		"/repos/alpha/origin-sessions/"+created.SessionID+"/commit", nil)))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status: got %d, want 409 (%s)", rec.Code, rec.Body.String())
@@ -188,8 +188,8 @@ func TestAnchor_OriginSession_CreateIsHAL(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
-		strings.NewReader(`{"url":"https://github.com/example/repo.git"}`))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+		strings.NewReader(`{"url":"https://github.com/example/repo.git"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 

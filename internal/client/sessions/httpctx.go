@@ -49,3 +49,21 @@ func RemoteIP(addr string) string {
 	}
 	return addr
 }
+
+type verifiedPIDKey struct{}
+
+// WithVerifiedPID records the pid the KERNEL reported for a unix socket peer
+// (internal/auth.PeerCred). It is the only pid on this path that is not
+// self-declared: client_sessions.pid comes from a header the client wrote
+// about itself, and the two are kept side by side on purpose so a mismatch
+// is visible.
+func WithVerifiedPID(ctx context.Context, pid int) context.Context {
+	return context.WithValue(ctx, verifiedPIDKey{}, pid)
+}
+
+// VerifiedPIDFromContext returns the kernel-reported pid, or false for any
+// request that did not arrive over the unix socket.
+func VerifiedPIDFromContext(ctx context.Context) (int, bool) {
+	pid, ok := ctx.Value(verifiedPIDKey{}).(int)
+	return pid, ok
+}

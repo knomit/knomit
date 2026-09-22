@@ -51,7 +51,12 @@ func stubMCP(status int) http.Handler {
 
 func TestMCPDispatch_RecordsSessions(t *testing.T) {
 	store := newClientSessionsStore(t)
-	s := &Server{Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(200)}
+	// Form B: this test asserts the recorded RemoteAddr is 192.0.2.9, so it
+	// cannot use a loopback address, and it drives NewAPIRouter() directly so
+	// the MCP route exemption (anchored on APIBase) does not match its paths.
+	s := withoutAuthForTests(t, &Server{
+		Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(200),
+	})
 	r := s.NewAPIRouter()
 	hdr := sessions.BridgeInfo{InstanceID: "inst", Transport: "stdio", PID: 7, Host: "h", Cwd: "/w", Branch: "agent/test", Version: "1"}
 
@@ -126,7 +131,7 @@ func TestMCPDispatch_RecordsOnlyOnAcceptedStatuses(t *testing.T) {
 		t.Run(http.StatusText(c.status), func(t *testing.T) {
 			store := newClientSessionsStore(t)
 			s := &Server{Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(c.status)}
-			req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`))
+			req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`)))
 			req.Header.Set("Mcp-Session-Id", "mcp-session-attacker-chosen")
 			s.NewAPIRouter().ServeHTTP(httptest.NewRecorder(), req)
 
@@ -145,7 +150,7 @@ func TestMCPDispatch_404CreatesNothing_NilStoreSafe(t *testing.T) {
 	store := newClientSessionsStore(t)
 	s := &Server{Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), ClientSessions: store, mcpHandler: stubMCP(404)}
 	r := s.NewAPIRouter()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`)))
 	req.Header.Set("Mcp-Session-Id", "stale")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -156,7 +161,7 @@ func TestMCPDispatch_404CreatesNothing_NilStoreSafe(t *testing.T) {
 
 	s2 := &Server{Manager: newTestManagerWithUIDRepo(t, "alpha", "u-alpha"), mcpHandler: stubMCP(200)} // no store
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`))
+	req = fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`)))
 	req.Header.Set("Mcp-Session-Id", "x")
 	s2.NewAPIRouter().ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -178,7 +183,7 @@ func TestRecordClientSession_SurvivesRequestCancellation(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel() // the client is already gone
 
-	req := httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/agent:test/mcp", nil).WithContext(cancelled)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete, "/repos/alpha/branches/agent:test/mcp", nil)).WithContext(cancelled)
 	req.Header.Set("Mcp-Session-Id", "sid")
 	recordClientSession(req, store)
 
@@ -196,7 +201,7 @@ func TestRecordClientSession_TouchSurvivesRequestCancellation(t *testing.T) {
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`)).WithContext(cancelled)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/mcp", strings.NewReader(`{}`))).WithContext(cancelled)
 	req.Header.Set("Mcp-Session-Id", "sid")
 	recordClientSession(req, store)
 

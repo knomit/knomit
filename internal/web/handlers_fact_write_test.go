@@ -74,9 +74,9 @@ func TestHandleFactUpdate_Returns200WithHAL(t *testing.T) {
 	body := `{"content":"` + testFactContent + `"}`
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/know/ai/test.md",
-		strings.NewReader(body))
+		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -100,9 +100,9 @@ func TestHandleFactUpdate_UnknownRepo_Returns404(t *testing.T) {
 
 	body := `{"content":"anything"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/missing/branches/agent:test/facts/know/ai/test.md",
-		strings.NewReader(body))
+		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -129,9 +129,9 @@ func TestHandleFactUpdate_WriteError_Returns500(t *testing.T) {
 	// writer whose error this test is exercising.
 	body := `{"content":"` + testFactContent + `"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/know/ai/test.md",
-		strings.NewReader(body))
+		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -158,9 +158,9 @@ func TestHandleFactUpdate_RejectsPrivatePath(t *testing.T) {
 
 	body := `{"content":"` + testFactContent + `"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/kb/.drafts/test.md",
-		strings.NewReader(body))
+		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -194,9 +194,9 @@ func TestFactWrite_AllowsWritablePrivatePath(t *testing.T) {
 
 	body := `{"content":"` + testFactContent + `"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/.knomit/jobs/ae/crawl-state.md",
-		strings.NewReader(body))
+		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -227,9 +227,9 @@ func TestFactWrite_RefusesOtherPrivatePaths(t *testing.T) {
 
 	body := `{"content":"` + testFactContent + `"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/kb/.drafts/x.md",
-		strings.NewReader(body))
+		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -263,8 +263,8 @@ func TestHandleFactDelete_Returns204(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete,
-		"/repos/alpha/branches/agent:test/facts/know/ai/test.md", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete,
+		"/repos/alpha/branches/agent:test/facts/know/ai/test.md", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
@@ -290,8 +290,8 @@ func TestHandleFactDelete_RejectsPrivatePath(t *testing.T) {
 			r := s.NewAPIRouter()
 
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodDelete,
-				"/repos/alpha/branches/agent:test/facts/"+path, nil)
+			req := fromLoopback(httptest.NewRequest(http.MethodDelete,
+				"/repos/alpha/branches/agent:test/facts/"+path, nil))
 			r.ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
@@ -328,8 +328,8 @@ func TestHandleFactDelete_AllowsWritablePrivatePath(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete,
-		"/repos/alpha/branches/agent:test/facts/.knomit/jobs/ae/crawl-state.md", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete,
+		"/repos/alpha/branches/agent:test/facts/.knomit/jobs/ae/crawl-state.md", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
@@ -351,8 +351,8 @@ func TestHandleFactDelete_UnknownRepo_Returns404(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete,
-		"/repos/missing/branches/agent:test/facts/know/ai/test.md", nil)
+	req := fromLoopback(httptest.NewRequest(http.MethodDelete,
+		"/repos/missing/branches/agent:test/facts/know/ai/test.md", nil))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
@@ -379,9 +379,9 @@ func TestHandleFactUpdate_InvalidContent_RejectsBeforeWriting(t *testing.T) {
 	body := `{"content":"not a fact at all"}`
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut,
+	req := fromLoopback(httptest.NewRequest(http.MethodPut,
 		"/repos/alpha/branches/agent:test/facts/know/ai/test.md",
-		strings.NewReader(body))
+		strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 

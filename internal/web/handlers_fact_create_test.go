@@ -44,7 +44,7 @@ func TestHandleFactCreate_Returns201WithLocation(t *testing.T) {
 
 	body := `{"title":"My Fact","body":"some body","type":"observation","domain":["ai","ml"],"confidence":0.9,"sources":1}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -87,7 +87,7 @@ func TestHandleFactCreate_MissingTitle_Returns400(t *testing.T) {
 
 	body := `{"body":"no title here"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -108,7 +108,7 @@ func TestHandleFactCreate_UnknownRepo_Returns404(t *testing.T) {
 
 	body := `{"title":"T"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/missing/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/missing/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -129,7 +129,7 @@ func TestHandleFactCreate_InvalidType_Returns400(t *testing.T) {
 
 	body := `{"title":"T","type":"bogus"}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -171,7 +171,7 @@ func TestHandleListSessions_AfterCreate_Returns1(t *testing.T) {
 	// Create a session.
 	createBody := `{"url":"https://github.com/example/repo.git"}`
 	createRec := httptest.NewRecorder()
-	createReq := httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(createBody))
+	createReq := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions", strings.NewReader(createBody)))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
 	if createRec.Code != http.StatusOK {
@@ -245,7 +245,7 @@ func TestHandleFactCreate_AppliesDefaults(t *testing.T) {
 
 	body := `{"title":"My Fact","body":"some body","type":"observation","domain":["ai"]}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -279,7 +279,7 @@ func TestHandleFactCreate_ExplicitZeroSourcesSurvives(t *testing.T) {
 
 	body := `{"title":"My Fact","body":"some body","type":"observation","sources":0,"confidence":0}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -316,7 +316,7 @@ func TestHandleFactCreate_RejectsPrivateDomain(t *testing.T) {
 
 	body := `{"title":"My Fact","body":"some body","type":"observation","domain":[".secret"],"confidence":0.9,"sources":1}`
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 

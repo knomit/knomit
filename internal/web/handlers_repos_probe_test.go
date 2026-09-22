@@ -30,8 +30,8 @@ func TestProbeOrigin_ReportsEmptyRemote(t *testing.T) {
 	dir := initBareRepoForWebTest(t, root)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/repos:probe-origin",
-		strings.NewReader(`{"url":"`+dir+`"}`))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos:probe-origin",
+		strings.NewReader(`{"url":"`+dir+`"}`)))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -62,8 +62,8 @@ func TestProbeOrigin_MalformedBodyIs400(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repos:probe-origin",
-		strings.NewReader(`not json`)))
+	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos:probe-origin",
+		strings.NewReader(`not json`))))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}

@@ -73,9 +73,9 @@ func commitViaREST(t *testing.T, h http.Handler, expName, path, factBody string)
 		"resolutions": map[string]any{path: map[string]string{"body": factBody}},
 	})
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost,
+	req := fromLoopback(httptest.NewRequest(http.MethodPost,
 		fmt.Sprintf("/repos/%s/experiments/%s/commit", resolutionRepo, expName),
-		strings.NewReader(string(payload)))
+		strings.NewReader(string(payload))))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

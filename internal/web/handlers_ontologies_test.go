@@ -16,7 +16,7 @@ func TestValidateOntology_OKReturnsSummary(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := "id: x\nname: X\ntopics:\n  alpha:\n    description: d\n"
-	req := httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body)))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -62,7 +62,7 @@ func TestValidateOntology_RuleCountSumsRootAndNestedValidations(t *testing.T) {
 		"          - name: child-rule\n" +
 		"            message: child msg\n" +
 		"            rule: \"fact.kind !== ''\"\n"
-	req := httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body)))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -92,7 +92,7 @@ func TestValidateOntology_InvalidReturns200WithDiagnostics(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := "id: x\nname: X\ntopics:\n  Bad Key:\n    description: d\n"
-	req := httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body)))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -129,8 +129,8 @@ func TestValidateOntology_OversizeRejected(t *testing.T) {
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/ontologies:validate",
-		strings.NewReader(strings.Repeat("x", MaxOntologyBytes+1)))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/ontologies:validate",
+		strings.NewReader(strings.Repeat("x", MaxOntologyBytes+1))))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -236,7 +236,7 @@ func TestValidateOntology_UnknownKeyIsStillRefused(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := "id: x\nname: X\nfuusbar:\n  barfuus:\n    barf:\ntopics:\n  a:\n    description: d\n"
-	req := httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body))
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/ontologies:validate", strings.NewReader(body)))
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
