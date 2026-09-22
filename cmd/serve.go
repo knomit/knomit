@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -220,23 +221,19 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
-			// Optional Unix socket listener.
-			if cfg.Socket != "" {
-				_ = os.Remove(cfg.Socket) // clean up stale socket
-				ul, err := net.Listen("unix", cfg.Socket)
-				if err != nil {
-					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("unix socket listen failed")
-				}
-				defer ul.Close()
-				defer os.Remove(cfg.Socket)
-				// 0600 on the socket, with the 0700 data root above it, IS the
-				// credential: the kernel vouches for the peer uid, and the file
-				// mode decides which uids can reach the socket at all. A
-				// world-writable socket would let any local user be taken for
-				// this one.
-				if err := os.Chmod(cfg.Socket, 0o600); err != nil {
-					log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("chmod socket failed")
-				}
+			// Local authenticated listener (unix socket; see auth.ListenLocal).
+			ul, closeSocket, err := auth.ListenLocal(cfg.Socket)
+			switch {
+			case errors.Is(err, auth.ErrSocketInUse):
+				// Another knomit instance (normally the desktop app) owns the
+				// socket. Do not steal it: bridges belong to the instance that
+				// was there first. This process serves TCP only.
+				log.Warn().Err(err).Str("socket", cfg.Socket).Msg("unix socket in use by another knomit instance; serving TCP only")
+			case err != nil:
+				log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("unix socket listen failed")
+			}
+			defer closeSocket()
+			if ul != nil {
 				log.Info().Str("socket", cfg.Socket).Msg("unix socket listening")
 				go func() {
 					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {
