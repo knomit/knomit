@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -211,4 +212,26 @@ func TestListenLocal_EmptyPathIsNoop(t *testing.T) {
 		t.Fatalf("empty path: %v %v", ln, err)
 	}
 	cleanup() // must not panic
+}
+
+// A lock that cannot be opened is a real failure, not ErrSocketInUse, and the
+// message names the lock path once (os.PathError already carries it).
+func TestListenLocal_UnopenableLockIsARealError(t *testing.T) {
+	dir := shortSocketDir(t)
+	if os.Getuid() == 0 {
+		t.Skip("root ignores the 0500 mode this fixture relies on")
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	path := filepath.Join(dir, "s.sock")
+	ln, cleanup, err := ListenLocal(path)
+	defer cleanup()
+	if err == nil || ln != nil || errors.Is(err, ErrSocketInUse) {
+		t.Fatalf("unopenable lock must be a real error: %v %v", ln, err)
+	}
+	if n := strings.Count(err.Error(), path+".lock"); n != 1 {
+		t.Fatalf("lock path named %d times, want 1: %v", n, err)
+	}
 }

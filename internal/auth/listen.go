@@ -56,7 +56,7 @@ func ListenLocal(path string) (net.Listener, func(), error) {
 	lockPath := path + ".lock"
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, noop, fmt.Errorf("open socket lock %s: %w", lockPath, err)
+		return nil, noop, fmt.Errorf("open socket lock: %w", err) // PathError already names lockPath
 	}
 	if err := lockExclusive(lockFile); err != nil {
 		lockFile.Close()
