@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -101,11 +102,13 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 		t.Fatalf("install did not print the [tls] line to add:\n%s", out)
 	}
 	pkiDir := filepath.Join(home, "pki")
-	if fi, _ := os.Stat(pkiDir); fi.Mode().Perm() != 0o700 {
+	// Mode checks are unix-only: Windows has no POSIX permission bits.
+	posixModes := runtime.GOOS != "windows"
+	if fi, _ := os.Stat(pkiDir); posixModes && fi.Mode().Perm() != 0o700 {
 		t.Fatalf("pki dir mode %v", fi.Mode().Perm())
 	}
 	for _, f := range []string{pki.InstanceCertFile, pki.RootCertFile, pki.CRLFile} {
-		if fi, err := os.Stat(filepath.Join(pkiDir, f)); err != nil || fi.Mode().Perm() != 0o600 {
+		if fi, err := os.Stat(filepath.Join(pkiDir, f)); err != nil || (posixModes && fi.Mode().Perm() != 0o600) {
 			t.Fatalf("%s: %v %v", f, fi, err)
 		}
 	}

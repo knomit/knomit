@@ -9,12 +9,19 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 var testPass = []byte("correct horse battery staple")
+
+// posixModes gates file-MODE assertions. Windows has no POSIX permission
+// bits — os.Stat reports 0666/0444 whatever WriteFile was asked for — so a
+// mode check there can neither pass nor mean anything. The existence and
+// content halves of those assertions still run everywhere.
+var posixModes = runtime.GOOS != "windows"
 
 func newTestRoot(t *testing.T) (string, Root) {
 	t.Helper()
@@ -71,7 +78,7 @@ func TestNewRoot_IsSelfSignedCAAndReloadsOnlyWithThePassphrase(t *testing.T) {
 	if _, _, err := LoadSigner(filepath.Join(dir, RootKeyFile)); err == nil {
 		t.Fatal("root.key parsed WITHOUT a passphrase; it must be encrypted")
 	}
-	if fi, _ := os.Stat(filepath.Join(dir, RootKeyFile)); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(filepath.Join(dir, RootKeyFile)); posixModes && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("root.key mode %v, want 0600", fi.Mode().Perm())
 	}
 	if c, err := LoadRootCert(filepath.Join(dir, RootCertFile)); err != nil || !c.Equal(r.Cert) {
@@ -178,7 +185,7 @@ func TestIssueInstance_LeafChainsToRootWithRoleInSANAndIsLogged(t *testing.T) {
 	if lines[0].Fingerprint != fp || lines[0].SAN != wantSAN || !lines[0].NotAfter.Equal(c.NotAfter) {
 		t.Fatalf("log record %+v", lines[0])
 	}
-	if fi, _ := os.Stat(filepath.Join(dir, IssuedLogFile)); fi.Mode().Perm() != 0o600 {
+	if fi, _ := os.Stat(filepath.Join(dir, IssuedLogFile)); posixModes && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("issued.jsonl mode %v", fi.Mode().Perm())
 	}
 
