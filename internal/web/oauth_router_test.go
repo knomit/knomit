@@ -254,7 +254,12 @@ func TestOAuthListener_NonCanonicalPathRefused(t *testing.T) {
 		"/api/v1/repos/alpha/branches/agent:test/mcp%2f..%2f..",
 		"/api/v1//repos",
 	} {
-		rec := serve(h, fromLoopback(httptest.NewRequest(http.MethodGet, target, nil)))
+		// A deadline, because if this guard regresses the ".." request can
+		// reach the MCP mount as a GET, which is an SSE stream that never
+		// ends: the test must fail, not hang.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		rec := serve(h, fromLoopback(httptest.NewRequestWithContext(ctx, http.MethodGet, target, nil)))
+		cancel()
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d, want 400", target, rec.Code)
 		}
