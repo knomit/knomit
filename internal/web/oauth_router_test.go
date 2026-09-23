@@ -344,3 +344,31 @@ func TestServerGrants_ApplyTheTokenCeiling(t *testing.T) {
 		t.Fatal("Server.grants() does not intersect a token principal's rows with its ceiling")
 	}
 }
+
+// An issuer WITH a path (https://host/knomit): the proxy strips /knomit, so
+// the listener sees /api/v1/...; the canonical URL is issuer + that path, and
+// the challenge names the INSERTED metadata URL, which the proxy forwards
+// unstripped.
+func TestOAuthListener_IssuerWithPath(t *testing.T) {
+	const issuer = "https://host.example/knomit"
+	f := newOAuthWebFixture(t, issuer)
+	h := f.s.OAuthHandler()
+	rec := serve(h, fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/repos", nil)))
+	want := `resource_metadata="https://host.example/.well-known/oauth-protected-resource/knomit/api/v1/repos"`
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Header().Get("WWW-Authenticate"), want) {
+		t.Fatalf("challenge %d %q; want %s", rec.Code, rec.Header().Get("WWW-Authenticate"), want)
+	}
+	root := f.mint(t, "laptop", issuer, []string{"read"}, auth.Read)
+	if rec := serve(withAuthorization(h, "Bearer "+root), fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/repos", nil))); rec.Code != http.StatusOK {
+		t.Fatalf("root token under a path issuer: %d %s", rec.Code, rec.Body.String())
+	}
+	// A token for the ORIGIN (not under the issuer path) is someone else's.
+	other := f.mint(t, "laptop", "https://host.example", []string{"read"}, auth.Read)
+	if rec := serve(withAuthorization(h, "Bearer "+other), fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/repos", nil))); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a token for the bare origin: %d", rec.Code)
+	}
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server/knomit", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"issuer":"`+issuer+`"`) {
+		t.Fatalf("inserted AS metadata: %d %s", rec.Code, rec.Body.String())
+	}
+}

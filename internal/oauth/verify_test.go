@@ -110,3 +110,15 @@ func TestVerifier_UnknownScopeFailsClosed(t *testing.T) {
 		t.Fatal("a token whose ceiling does not parse was accepted")
 	}
 }
+
+// The issuer gained a path (https://knomit.example.com → …/knomit): a token
+// minted for the bare origin must stop working, although every request URL
+// under the new issuer still "extends" the old resource.
+func TestVerifier_IssuerGainedAPath(t *testing.T) {
+	s, _ := newTestStore(t)
+	tok := mintFor(t, s, vIssuer, "read")
+	v := NewVerifier(vIssuer+"/knomit", s)
+	if _, _, err := v.Verify(context.Background(), tok, "/api/v1/repos"); !errors.Is(err, ErrWrongAudience) {
+		t.Fatalf("a token for the origin under a path issuer: %v", err)
+	}
+}

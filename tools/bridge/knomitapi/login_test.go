@@ -31,12 +31,21 @@ import (
 // verifier. tokenHits counts /oauth/token calls so "one refresh" is asserted.
 type issuerFixture struct {
 	srv       *httptest.Server
+	base      string // the issuer: srv.URL, or srv.URL+prefix behind the stripping proxy
 	iss       *oauth.Issuer
 	store     *oauth.Store
 	tokenHits atomic.Int32
 }
 
 func newIssuerFixture(t *testing.T, accessTTL time.Duration) *issuerFixture {
+	return newIssuerFixtureAt(t, accessTTL, "")
+}
+
+// newIssuerFixtureAt with a prefix plays the documented deployment for an
+// issuer WITH a path: the proxy strips the prefix from everything it
+// forwards, EXCEPT the RFC 8414 / 9728 well-known URLs, which carry the
+// prefix after the well-known segment and are forwarded unstripped.
+func newIssuerFixtureAt(t *testing.T, accessTTL time.Duration, prefix string) *issuerFixture {
 	t.Helper()
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
@@ -52,13 +61,21 @@ func newIssuerFixture(t *testing.T, accessTTL time.Duration) *issuerFixture {
 	var h http.Handler
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r) }))
 	t.Cleanup(f.srv.Close)
+	f.base = f.srv.URL + prefix
 	f.iss = oauth.NewIssuer(oauth.Options{
-		Issuer: f.srv.URL, Store: f.store, Grants: grants,
+		Issuer: f.base, Store: f.store, Grants: grants,
 		Clients: oauth.NewResolver(config.Defaults().OAuth.EffectiveClients()),
 	})
-	v := oauth.NewVerifier(f.srv.URL, f.store)
+	v := oauth.NewVerifier(f.base, f.store)
 	routes := f.iss.Routes()
 	h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if prefix != "" && !strings.HasPrefix(r.URL.Path, "/.well-known/") {
+			if !strings.HasPrefix(r.URL.Path, prefix+"/") {
+				http.NotFound(w, r)
+				return
+			}
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
+		}
 		switch {
 		case r.URL.Path == "/oauth/token":
 			f.tokenHits.Add(1)
@@ -111,7 +128,7 @@ func (f *issuerFixture) browser(t *testing.T, mutate func(*url.URL)) func(string
 				t.Error(err)
 				return
 			}
-			resp, err = noFollow.Get(f.srv.URL + "/oauth/authorize/" + list[0].ID + "/wait")
+			resp, err = noFollow.Get(f.base + "/oauth/authorize/" + list[0].ID + "/wait")
 			if err != nil {
 				t.Error(err)
 				return
@@ -140,7 +157,7 @@ func login(t *testing.T, f *issuerFixture, mutate func(*url.URL)) (*Credentials,
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return Login(ctx, f.srv.URL, LoginOptions{OpenBrowser: f.browser(t, mutate), Out: io.Discard})
+	return Login(ctx, f.base, LoginOptions{OpenBrowser: f.browser(t, mutate), Out: io.Discard})
 }
 
 func TestLogin_FullFlowWritesCredentialsAt0600(t *testing.T) {
@@ -482,5 +499,30 @@ func TestBearer_ConcurrentRefreshesAreSerialised(t *testing.T) {
 	}
 	if _, err := f.store.LookupAccess(context.Background(), got[0].AccessToken); err != nil {
 		t.Fatalf("the family did not survive: %v", err)
+	}
+}
+
+// The deployment rule for an issuer with a path, end to end: kb logs in at
+// https://host/knomit through a proxy that strips /knomit (and forwards the
+// inserted well-known URLs unstripped), and its requests then carry a token
+// whose audience is the issuer.
+func TestLogin_IssuerWithPathBehindAStrippingProxy(t *testing.T) {
+	useHome(t)
+	f := newIssuerFixtureAt(t, 2*time.Hour, "/knomit")
+	creds, err := login(t, f, nil)
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if creds.Issuer != f.base || creds.Resource != f.base || creds.TokenEndpoint != f.base+"/oauth/token" {
+		t.Fatalf("credentials = %+v", creds)
+	}
+	resp, err := NewHTTPClient("", true, 5*time.Second).Get(f.base + "/protected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(string(b), "host:laptop@token") {
+		t.Fatalf("through the proxy: %d %s", resp.StatusCode, b)
 	}
 }

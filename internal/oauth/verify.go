@@ -31,7 +31,10 @@ func (v *Verifier) Verify(ctx context.Context, token, path string) (auth.Princip
 	if err != nil {
 		return auth.Principal{}, nil, err
 	}
-	if !inAudience(fam.Resource, v.issuer+path) {
+	// Both halves: the token's resource must be THIS issuer's (a token
+	// minted before the issuer moved, or gained a path, is not), and the
+	// request must sit under that resource.
+	if !resourceUnder(v.issuer, fam.Resource) || !inAudience(fam.Resource, v.issuer+path) {
 		return auth.Principal{}, nil, ErrWrongAudience
 	}
 	ceiling, err := auth.ParseSet(fam.Scopes)
