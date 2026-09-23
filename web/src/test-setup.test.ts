@@ -45,8 +45,10 @@ describe('test environment EventSource', () => {
 describe('no test file removes the EventSource baseline itself', () => {
   it('every test file restores it through uninstallFakeEventSource', () => {
     const sources = import.meta.glob('./**/*.test.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-    expect(Object.keys(sources).length).toBeGreaterThan(50);
-    const removal = /delete\s*\(?\s*globalThis[^;]*EventSource/;
+    // A glob that silently lost part of the tree must not pass: there are ~120.
+    expect(Object.keys(sources).length).toBeGreaterThan(100);
+    // window too: under jsdom it is the same global object.
+    const removal = /delete\s*\(?\s*(globalThis|window)[^;]*EventSource/;
     const offenders = Object.entries(sources).filter(([, src]) => removal.test(src)).map(([path]) => path).sort();
     expect(offenders, 'these test files remove globalThis.EventSource in their own teardown. Call ' +
       'uninstallFakeEventSource() instead: it restores the FakeEventSource baseline test-setup.ts installs. ' +
