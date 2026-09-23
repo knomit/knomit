@@ -96,7 +96,17 @@ export function installFakeEventSource() {
   (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
 }
 
-/** Remove it again, so a file that does not install it sees jsdom's absence. */
+/**
+ * Hand back the baseline test-setup.ts installs for EVERY test: this same
+ * FakeEventSource class, with its default ready-on-connect behaviour. It used
+ * to DELETE the global, which left nothing for the setup file's cleanup() —
+ * which runs after a test file's own afterEach under vitest's "stack" hook
+ * order — when the unmount flushed a pending passive effect that constructs an
+ * EventSource: "EventSource is not defined" mid-teardown, and the
+ * half-torn-down tree leaking into the next test (knomit#270). Restoring the
+ * class needs no import of the setup file: the baseline IS this class.
+ */
 export function uninstallFakeEventSource() {
-  delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  FakeEventSource.emitReadyOnConnect = true;
+  (globalThis as unknown as { EventSource: unknown }).EventSource = FakeEventSource;
 }

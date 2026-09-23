@@ -20,3 +20,19 @@ describe('test environment Web Storage', () => {
     });
   }
 });
+
+// Guards the EventSource baseline test-setup.ts installs for EVERY test. A file
+// that installs the fake in beforeEach and uninstalls it in afterEach must hand
+// that baseline back, not delete it: the setup file's cleanup() runs LAST
+// (vitest's "stack" hook order) and can flush a pending passive effect that
+// constructs an EventSource. With the global deleted, that throws during
+// unmount and the half-torn-down tree leaks into the next test (knomit#270).
+describe('test environment EventSource', () => {
+  it('uninstallFakeEventSource restores the baseline rather than deleting it', async () => {
+    const { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } = await import('./testEventSource');
+    expect(globalThis.EventSource).toBe(FakeEventSource);
+    installFakeEventSource();
+    uninstallFakeEventSource();
+    expect(globalThis.EventSource).toBe(FakeEventSource);
+  });
+});
