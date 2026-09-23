@@ -148,6 +148,13 @@ func TestOAuthListener_BadAuthorizationIs401InvalidToken(t *testing.T) {
 			t.Errorf("Authorization %q: %d %q; want 401 invalid_token with the challenge", v, rec.Code, ch)
 		}
 	}
+	// Two Authorization headers, the first one valid: refused, not guessed.
+	req := fromLoopback(httptest.NewRequest(http.MethodGet, "/api/v1/repos", nil))
+	req.Header.Add("Authorization", "Bearer "+good)
+	req.Header.Add("Authorization", "Bearer garbage")
+	if rec := serve(h, req); rec.Code != http.StatusUnauthorized {
+		t.Errorf("two Authorization headers: %d, want 401", rec.Code)
+	}
 	// The scheme is case-insensitive (RFC 7235 §2.1).
 	if rec := serve(withAuthorization(h, "bearer "+good), httptest.NewRequest(http.MethodGet, "/api/v1/repos", nil)); rec.Code != http.StatusOK {
 		t.Fatalf("lower-case scheme: %d %s", rec.Code, rec.Body.String())

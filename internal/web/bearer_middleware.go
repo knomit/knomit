@@ -75,8 +75,10 @@ func BearerMiddleware(v BearerVerifier, issuer string) func(http.Handler) http.H
 }
 
 // bearerToken accepts exactly one Authorization header of the form
-// "Bearer <token>" (scheme case-insensitive, RFC 7235 §2.1) with a token of
-// RFC 6750 b64token characters and nothing after it.
+// "Bearer <token>", scheme case-insensitive (RFC 7235 §2.1). Two headers are
+// refused rather than one picked: which one a proxy added is not knowable.
+// The token's characters are not checked here — anything that is not a
+// token this issuer minted fails the lookup, which is the check.
 func bearerToken(values []string) (string, bool) {
 	if len(values) != 1 {
 		return "", false
@@ -84,14 +86,6 @@ func bearerToken(values []string) (string, bool) {
 	scheme, tok, ok := strings.Cut(values[0], " ")
 	if !ok || !strings.EqualFold(scheme, "Bearer") || tok == "" {
 		return "", false
-	}
-	for _, c := range tok {
-		switch {
-		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':
-		case strings.ContainsRune("-._~+/=", c):
-		default:
-			return "", false
-		}
 	}
 	return tok, true
 }
