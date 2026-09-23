@@ -123,7 +123,7 @@ func TestStore_UnknownAndWrongKind(t *testing.T) {
 	if _, err := s.LookupAccess(ctx, out.Refresh); !errors.Is(err, ErrUnknownToken) {
 		t.Fatalf("refresh presented as access: %v", err)
 	}
-	if _, err := s.Refresh(ctx, out.Access); !errors.Is(err, ErrUnknownToken) {
+	if _, err := s.Refresh(ctx, out.Access, "kb", ""); !errors.Is(err, ErrUnknownToken) {
 		t.Fatalf("access presented as refresh: %v", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestStore_RevokeKillsTheFamilyAndIsIdempotent(t *testing.T) {
 			if _, err := s.LookupAccess(ctx, out.Access); !errors.Is(err, ErrRevoked) {
 				t.Fatalf("access after revoke: %v", err)
 			}
-			if _, err := s.Refresh(ctx, out.Refresh); !errors.Is(err, ErrRevoked) {
+			if _, err := s.Refresh(ctx, out.Refresh, "kb", ""); !errors.Is(err, ErrRevoked) {
 				t.Fatalf("refresh after revoke: %v", err)
 			}
 			if err := s.Revoke(ctx, tok); err != nil {
@@ -178,7 +178,7 @@ func TestStore_RefreshRotatesAndReuseRevokesFamily(t *testing.T) {
 	ctx := context.Background()
 	first := issue(t, s)
 
-	second, err := s.Refresh(ctx, first.Refresh)
+	second, err := s.Refresh(ctx, first.Refresh, "kb", "")
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -192,13 +192,13 @@ func TestStore_RefreshRotatesAndReuseRevokesFamily(t *testing.T) {
 		t.Fatalf("new access: %v", err)
 	}
 
-	if _, err := s.Refresh(ctx, first.Refresh); !errors.Is(err, ErrReused) {
+	if _, err := s.Refresh(ctx, first.Refresh, "kb", ""); !errors.Is(err, ErrReused) {
 		t.Fatalf("reusing a rotated refresh token: want ErrReused, got %v", err)
 	}
 	if _, err := s.LookupAccess(ctx, second.Access); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("reuse must revoke the family's NEW access token too: %v", err)
 	}
-	if _, err := s.Refresh(ctx, second.Refresh); !errors.Is(err, ErrRevoked) {
+	if _, err := s.Refresh(ctx, second.Refresh, "kb", ""); !errors.Is(err, ErrRevoked) {
 		t.Fatalf("reuse must revoke the family's NEW refresh token too: %v", err)
 	}
 }
@@ -215,7 +215,7 @@ func TestStore_RefreshLifetimeIsAbsolute(t *testing.T) {
 	}
 
 	c.add(14*24*time.Hour - time.Hour)
-	next, err := s.Refresh(ctx, out.Refresh)
+	next, err := s.Refresh(ctx, out.Refresh, "kb", "")
 	if err != nil {
 		t.Fatalf("refresh inside the lifetime: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestStore_RefreshLifetimeIsAbsolute(t *testing.T) {
 	}
 
 	c.add(time.Hour)
-	if _, err := s.Refresh(ctx, next.Refresh); !errors.Is(err, ErrExpired) {
+	if _, err := s.Refresh(ctx, next.Refresh, "kb", ""); !errors.Is(err, ErrExpired) {
 		t.Fatalf("refresh at the family end: want ErrExpired, got %v", err)
 	}
 }
@@ -243,7 +243,7 @@ func TestStore_ConcurrentRefreshOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = s.Refresh(context.Background(), out.Refresh)
+			_, errs[i] = s.Refresh(context.Background(), out.Refresh, "kb", "")
 		}(i)
 	}
 	wg.Wait()

@@ -259,7 +259,13 @@ func (s *Store) LookupAccess(ctx context.Context, token string) (Family, error) 
 // two racing exchanges cannot both win. Presenting a token that was already
 // rotated means two parties hold it; the whole family is revoked (committed,
 // not rolled back) and ErrReused returned.
-func (s *Store) Refresh(ctx context.Context, refresh string) (Issued, error) {
+//
+// clientID must be the family's client (ErrWrongClient), and resource, when
+// not empty, the family's resource exactly (ErrWrongAudience); an empty
+// resource reuses the family's, because a refresh may omit it. Both are
+// checked BEFORE rotating, so a refused attempt does not cost the real owner
+// their token.
+func (s *Store) Refresh(ctx context.Context, refresh, clientID, resource string) (Issued, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Issued{}, err
@@ -274,6 +280,12 @@ func (s *Store) Refresh(ctx context.Context, refresh string) (Issued, error) {
 	}
 	if r.family.Revoked {
 		return Issued{}, ErrRevoked
+	}
+	if r.family.ClientID != clientID {
+		return Issued{}, ErrWrongClient
+	}
+	if resource != "" && resource != r.family.Resource {
+		return Issued{}, ErrWrongAudience
 	}
 	reuse := func() (Issued, error) {
 		if err := s.revokeFamilyTx(ctx, tx, r.family.ID); err != nil {
