@@ -2,6 +2,9 @@ package web
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +13,8 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
+	"knomit/internal/pki"
+	"knomit/internal/pki/pkitest"
 )
 
 // A read-only anonymous loopback caller can GET but not POST.
@@ -90,7 +95,7 @@ func TestWriteGate_SocketPrincipalNeedsGrant(t *testing.T) {
 
 	newPost := func() *http.Request {
 		p := httptest.NewRequest("POST", "/api/v1/repos", nil)
-		return p.WithContext(auth.WithPeer(p.Context(), 501, 7))
+		return p.WithContext(auth.WithPeer(p.Context(), testPeer(501, 7)))
 	}
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, newPost())
@@ -244,5 +249,104 @@ func TestMCPToolCall_WriteToolRefusedWithoutWritePermission(t *testing.T) {
 	if text, isErr := callToolAt(t, h, mount, sid, "knomit_query", `{"text":"anything"}`); isErr &&
 		strings.Contains(text, "permission denied") {
 		t.Fatalf("a read tool must not be permission-gated: %s", text)
+	}
+}
+
+// asTLSPeer makes every request look as if it arrived on the TLS listener
+// presenting c: the TLSConnContext mark and r.TLS as net/http fills it. The
+// real handshake is covered by TestTLSServer_* and the cmd end-to-end test;
+// this drives the MCP enforcement point with an instance principal.
+func asTLSPeer(h http.Handler, c *x509.Certificate) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{c}}
+		h.ServeHTTP(w, r.WithContext(auth.TLSConnContext(r.Context(), nil)))
+	})
+}
+
+// A chained instance holds read implicitly and nothing else: it is offered
+// the read tools, not knomit_learn. A write ROW for its principal flips that,
+// which proves the INSTANCE principal (not anonymous, not zero) is what the
+// MCP enforcement point sees. It does not isolate buildMCPHandler's explicit
+// principal copy: at mcp-go v0.45.0 the POST path already derives its context
+// from r.Context() (server/streamable_http.go:420), so that copy is not what
+// carries the principal here.
+func TestMCPToolsList_InstancePrincipalHoldsReadImplicitlyAndWriteByRow(t *testing.T) {
+	const mount = "/api/v1/repos/alpha/branches/agent:test/mcp"
+	f := pkitest.New(t)
+	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	principal := auth.InstancePrincipal(peer.Fingerprint()).String()
+
+	list := func(t *testing.T, rows auth.StaticGrants) string {
+		t.Helper()
+		s := &Server{
+			Manager: newTestManagerWithRepos(t, "alpha"),
+			// The anonymous default would grant write; an instance must NOT
+			// inherit it, so this also proves the TLS request is not anonymous.
+			Auth:   config.AuthConfig{LoopbackDefault: config.Defaults().Auth.LoopbackDefault},
+			Grants: rows,
+		}
+		h := asTLSPeer(s.Handler(), peer.Cert)
+		_, sid := rpcAt(t, h, mount, "",
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"auth-e2e","version":"1.0"}}}`)
+		out, _ := rpcAt(t, h, mount, sid, `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
+		raw, err := json.Marshal(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+
+	none := list(t, auth.StaticGrants{})
+	if strings.Contains(none, "knomit_learn") {
+		t.Fatalf("an instance with no rows must not be offered knomit_learn: %s", none)
+	}
+	if !strings.Contains(none, "knomit_query") {
+		t.Fatalf("an instance must be offered the read tools: %s", none)
+	}
+	withWrite := list(t, auth.StaticGrants{principal: {auth.Write: {}}})
+	if !strings.Contains(withWrite, "knomit_learn") {
+		t.Fatalf("a write row for %s must offer knomit_learn: %s", principal, withWrite)
+	}
+}
+
+// The HTTP enforcement point agrees: an instance with no rows is refused a
+// mutation, and the problem document names its full principal.
+func TestWriteGate_InstancePrincipalNeedsAWriteRow(t *testing.T) {
+	f := pkitest.New(t)
+	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	principal := auth.InstancePrincipal(peer.Fingerprint()).String()
+	s := &Server{
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		Auth:    config.AuthConfig{LoopbackDefault: config.Defaults().Auth.LoopbackDefault},
+		Grants:  auth.StaticGrants{},
+	}
+	h := asTLSPeer(s.Handler(), peer.Cert)
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/api/v1/repos/alpha/branches/agent:test/facts", strings.NewReader(`{}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden || !strings.Contains(rr.Body.String(), "Permission denied") || !strings.Contains(rr.Body.String(), principal) {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// Nothing in phase 1 or 2 ENFORCES read, so no request can observe the
+// implicit read; the wiring is pinned here instead. If grants() stopped
+// wrapping the store in CertGrants, an enrolled instance would silently hold
+// nothing, and the first read enforcement point added later would lock out
+// the whole fleet.
+func TestServerGrants_WrapTheStoreInCertGrants(t *testing.T) {
+	fp := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	s := &Server{Grants: auth.StaticGrants{}, Auth: config.AuthConfig{LoopbackDefault: []string{}}}
+	g := s.grants()
+	ctx := context.Background()
+	if !auth.Allowed(ctx, g, auth.InstancePrincipal(fp), auth.Read) {
+		t.Fatal("a chained instance does not hold read through Server.grants()")
+	}
+	if auth.Allowed(ctx, g, auth.InstancePrincipal(fp), auth.Write) {
+		t.Fatal("a chained instance holds write with no row")
+	}
+	if auth.Allowed(ctx, g, auth.OperatorPrincipal(fp), auth.Read) {
+		t.Fatal("an operator certificate got the instance's implicit read")
 	}
 }

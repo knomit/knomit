@@ -5,7 +5,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -251,6 +250,22 @@ type Config struct {
 	Log                 LogConfig          `toml:"log"`
 	Runtime             RuntimeConfig      `toml:"runtime"`
 	Auth                AuthConfig         `toml:"auth"`
+	TLS                 TLSConfig          `toml:"tls"`
+}
+
+// TLSConfig is the instance-to-instance listener (F19 phase 2): mutual TLS
+// for ENROLLED instances only, on its own port, beside the plaintext one,
+// which does not change.
+//
+// Addr empty (the default) means no TLS listener. A set Addr with no
+// certificate installed in Dir logs a WARN and serves plaintext only, so
+// configuring the listener before `knomit identity install` is harmless.
+//
+// Dir holds instance.crt, root.crt, crl.pem and crl.number. The instance KEY
+// is not here: it stays at [remote].ssh_key / <Home>/id_ed25519, the one copy.
+type TLSConfig struct {
+	Addr string `toml:"addr"` // e.g. "0.0.0.0:19279"; env KNOMIT_TLS_ADDR
+	Dir  string `toml:"dir"`  // default <Home>/pki; env KNOMIT_TLS_DIR
 }
 
 // AuthConfig governs who may do what on this instance (F19 phase 1).
@@ -303,7 +318,7 @@ type AuthConfig struct {
 // grant the full default set to someone who asked for none of it.
 //
 // Both enforcement-side callers go through this — web.Server.grants(), which
-// resolves what anonymous may do, and app.seedOwnUID, which seeds the server's
+// resolves what anonymous may do, and app.seedOwnPrincipal, which seeds the server's
 // own socket uid. They used to each carry their own copy of the nil check. If
 // one had ever been changed alone, boot would seed one set while the
 // middleware resolved another, and the two enforcement points would disagree
@@ -425,6 +440,8 @@ func Load() (Config, error) {
 	envOr("KNOMIT_HOST", &cfg.Host)
 	envOr("KNOMIT_PORT", &cfg.Port)
 	envOr("KNOMIT_SOCKET", &cfg.Socket)
+	envOr("KNOMIT_TLS_ADDR", &cfg.TLS.Addr)
+	envOr("KNOMIT_TLS_DIR", &cfg.TLS.Dir)
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
@@ -496,6 +513,7 @@ func Load() (Config, error) {
 		&cfg.Remote.SSHKey,
 		&cfg.Remote.KnownHosts,
 		&cfg.LocalOriginRoot,
+		&cfg.TLS.Dir,
 	} {
 		if err := expandTilde(p); err != nil {
 			return Config{}, fmt.Errorf("config: %w", err)
@@ -509,16 +527,28 @@ func Load() (Config, error) {
 		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
 	}
 
-	// Default the unix socket to <Home>/knomit.sock, for the same reason and
-	// at the same point as known_hosts: after tilde expansion, and only when
-	// nothing set it, so a TOML or KNOMIT_SOCKET value wins.
+	// Default the local authenticated listener to the one this platform uses
+	// under <Home>, for the same reason and at the same point as known_hosts:
+	// after tilde expansion, and only when nothing set it, so a TOML or
+	// KNOMIT_SOCKET value wins.
 	//
-	// The socket is the local bridge's credential -- the kernel tells the
-	// server which uid is on the other end (internal/auth.PeerCred) -- so it
-	// has to exist without being configured, and the directory mode is what
-	// guards it. Windows has no AF_UNIX default here.
-	if cfg.Socket == "" && runtime.GOOS != "windows" {
-		cfg.Socket = filepath.Join(cfg.Home, socketFile)
+	// It is the local bridge's credential -- the OS tells the server who is
+	// on the other end (internal/auth.PeerCred) -- so it has to exist without
+	// being configured. What guards it is the 0700 data root on unix and the
+	// pipe ACL on Windows (internal/auth.ListenLocal opens both).
+	//
+	// EVERY platform gets one now. Windows had no default here through phase
+	// 1, which is what made [auth].require = true a silent lockout there
+	// (knomit#245): app.checkLocalListener refuses that combination, and the
+	// pipe default is what lets Windows satisfy it.
+	if cfg.Socket == "" {
+		cfg.Socket = localListenerName(cfg.Home)
+	}
+
+	// Default [tls].dir to <Home>/pki, after tilde expansion like the two
+	// above. The listener itself stays off until [tls].addr is set.
+	if cfg.TLS.Dir == "" {
+		cfg.TLS.Dir = filepath.Join(cfg.Home, "pki")
 	}
 
 	if err := cfg.Validate(); err != nil {

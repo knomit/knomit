@@ -4,20 +4,22 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"strconv"
 
 	"knomit/internal/auth"
 	"knomit/internal/client/sessions"
 	"knomit/internal/config"
+	"knomit/internal/pki"
 	"knomit/internal/web/hal"
 )
 
 // AuthMiddleware is the ONE place a transport becomes a Principal (F19
 // revision 2, "Decision"). Order of evidence, strongest first:
 //
-//  1. Kernel peer credentials on a unix socket connection (auth.ConnContext
-//     put them there) — a bridge principal keyed by uid, with the kernel's
-//     pid carried alongside for the client_sessions row.
+//  1. Kernel peer credentials on a LOCAL connection — a unix socket, or a
+//     Windows named pipe (auth.ConnContext put them there) — as a bridge
+//     principal keyed by uid or SID, with the OS-reported pid carried
+//     alongside for the client_sessions row. Which of the two a platform
+//     uses is auth.LocalVia; this function never asks.
 //  2. Nothing, from loopback, with [auth].require = false — the ANONYMOUS
 //     principal, so an upgrade changes nobody's day. What it may do is the
 //     parsed [auth].loopback_default, resolved in Require through
@@ -27,15 +29,18 @@ import (
 //     still denies, because the zero principal holds nothing.
 //
 // The refusal is 403, never 401. RFC 7235 makes WWW-Authenticate mandatory on
-// a 401, and phase 1 has no scheme a TCP caller could satisfy — the socket is
-// the only credential, and it is not something a header can present. Phase 3
+// a 401, and phase 1 has no scheme a TCP caller could satisfy — the local
+// listener is the only credential, and it is not something a header can
+// present. Phase 3
 // introduces the 401 with a Bearer challenge on the routes a token unlocks.
 // The two 403s are told apart by TITLE: "Authentication required" here (no
 // principal at all) versus "Permission denied" in Require (a principal that
 // lacks the permission). Clients and tests key on the title, not the status.
 //
-// Certificates (phase 2) and bearer tokens (phase 3) slot in between 1 and 2
-// and produce the same Principal type, so nothing downstream changes.
+// 1b (phase 2) sits between 1 and 2: a request on the TLS listener becomes
+// the instance (or operator) principal of its verified client certificate,
+// and is refused outright if it has none. Bearer tokens (phase 3) will slot
+// in beside it and produce the same Principal type.
 func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,11 +50,43 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 					auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindAnonymous, Via: auth.ViaNone})))
 				return
 			}
-			if uid, pid, ok := auth.PeerFromContext(ctx); ok {
-				p := auth.Principal{Kind: auth.KindBridge, ID: "uid:" + strconv.Itoa(uid), Via: auth.ViaSocket}
-				ctx = auth.WithPrincipal(ctx, p)
-				ctx = sessions.WithVerifiedPID(ctx, pid)
+			if peer, ok := auth.PeerFromContext(ctx); ok {
+				// Peer.Principal, never a literal built here: app.seedOwnPrincipal
+				// seeds the grant with auth.LocalPrincipal, and the two have to
+				// render the same string or the seeded row matches no request
+				// (knomit#245, defect B). One formatting function per platform,
+				// fed from both ends.
+				ctx = auth.WithPrincipal(ctx, peer.Principal())
+				ctx = sessions.WithVerifiedPID(ctx, peer.PID)
 				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+			if auth.IsTLSListener(ctx) {
+				// 1b. The TLS listener (F19 phase 2) is NEVER anonymous, reads
+				// included, whatever cfg.Require says: it exists only for
+				// enrolled instances. Its tls.Config (pki.ServerConfig) uses
+				// RequireAnyClientCert and verifies EVERYTHING in
+				// VerifyConnection, which leaves VerifiedChains empty — so the
+				// principal is read from PeerCertificates[0], and that is safe
+				// only because no connection reaches here without the verifier
+				// having accepted it. The refusals below are the belt to that
+				// brace; nothing re-checks the chain or the CRL here.
+				if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+					hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
+						"the TLS listener accepts only enrolled instances; no client certificate on this request", r.URL.Path)
+					return
+				}
+				id, err := pki.IdentityOf(r.TLS.PeerCertificates[0])
+				if err != nil {
+					hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
+						"the TLS listener accepts only enrolled instances; the client certificate names no knomit identity", r.URL.Path)
+					return
+				}
+				p := auth.InstancePrincipal(id.Fingerprint)
+				if id.Role == pki.RoleOperator {
+					p = auth.OperatorPrincipal(id.Fingerprint)
+				}
+				next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(ctx, p)))
 				return
 			}
 			if !cfg.Require && isLoopback(r.RemoteAddr) {
@@ -59,7 +96,7 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 			}
 			if cfg.Require {
 				hal.WriteProblem(w, http.StatusForbidden, "Authentication required",
-					"this knomit instance requires a verified principal ([auth].require = true); connect over the unix socket",
+					"this knomit instance requires a verified principal ([auth].require = true); connect over the local authenticated listener (the unix socket, or the named pipe on Windows)",
 					r.URL.Path)
 				return
 			}

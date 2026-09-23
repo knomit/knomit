@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -221,23 +220,40 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
-			// Local authenticated listener (unix socket; see auth.ListenLocal).
-			ul, closeSocket, err := auth.ListenLocal(cfg.Socket)
-			switch {
-			case errors.Is(err, auth.ErrSocketInUse):
-				// Another knomit instance (normally the desktop app) owns the
-				// socket. Do not steal it: bridges belong to the instance that
-				// was there first. This process serves TCP only.
-				log.Warn().Err(err).Str("socket", cfg.Socket).Msg("unix socket in use by another knomit instance; serving TCP only")
-			case err != nil:
-				log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("unix socket listen failed")
+			// Local authenticated listener: a unix socket, or a named pipe on
+			// Windows. openLocalListener takes the WHOLE config rather than a
+			// path and a flag, so there is no pair of arguments here to wire up
+			// the wrong way round, and its policy is pinned by a test.
+			ul, closeSocket, err := openLocalListener(cfg)
+			if err != nil {
+				return err
 			}
 			defer closeSocket()
 			if ul != nil {
-				log.Info().Str("socket", cfg.Socket).Msg("unix socket listening")
+				// `via` names the MECHANISM, so the line says which credential
+				// a session over it will carry rather than assuming a socket.
+				log.Info().Str("socket", cfg.Socket).Str("via", string(auth.LocalVia)).
+					Msg("local authenticated listener listening")
 				go func() {
 					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {
-						log.Fatal().Err(err).Msg("unix socket serve failed")
+						log.Fatal().Err(err).Msg("local authenticated listener serve failed")
+					}
+				}()
+			}
+
+			// mTLS listener for enrolled instances (F19 phase 2): its OWN
+			// http.Server over the same handler, off until [tls].addr is set
+			// and `knomit identity install` has placed a certificate. The
+			// plaintext listener above is unchanged.
+			tlsSrv, tl, err := openTLSServer(cfg.TLS, a.KeyPath(), srv)
+			if err != nil {
+				log.Fatal().Err(err).Str("addr", cfg.TLS.Addr).Str("dir", cfg.TLS.Dir).Msg("tls listener failed") // fail closed
+			}
+			if tlsSrv != nil {
+				log.Info().Str("tls", "https://"+tl.Addr().String()).Str("dir", cfg.TLS.Dir).Msg("mTLS listener for enrolled instances")
+				go func() {
+					if err := tlsSrv.Serve(tl); err != nil && err != http.ErrServerClosed {
+						log.Fatal().Err(err).Msg("tls serve failed")
 					}
 				}()
 			}
@@ -246,6 +262,9 @@ func serveCmd() *cobra.Command {
 			// a.Close() runs via defer — shuts down repos and releases resources.
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			if tlsSrv != nil {
+				_ = tlsSrv.Shutdown(shutCtx)
+			}
 			return srv.Shutdown(shutCtx)
 		},
 	}

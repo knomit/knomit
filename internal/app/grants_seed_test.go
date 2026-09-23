@@ -2,16 +2,26 @@ package app
 
 import (
 	"context"
-	"os"
-	"strconv"
 	"testing"
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
 )
 
-func ownSocketPrincipal() auth.Principal {
-	return auth.Principal{Kind: auth.KindBridge, ID: "uid:" + strconv.Itoa(os.Getuid()), Via: auth.ViaSocket}
+// ownLocalPrincipal is who the boot seeds a grant for. It asks
+// auth.LocalPrincipal rather than rebuilding the string, because rebuilding
+// it is exactly the bug: a test that spelled the principal itself would keep
+// passing while the server and the middleware drifted apart (knomit#245).
+func ownLocalPrincipal(t *testing.T) auth.Principal {
+	t.Helper()
+	p, err := auth.LocalPrincipal()
+	if err != nil {
+		t.Fatalf("LocalPrincipal: %v", err)
+	}
+	if p.ID == "" {
+		t.Fatal("LocalPrincipal produced an empty ID; a grant seeded for it would name nobody")
+	}
+	return p
 }
 
 // The OS user running the server is its operator, so the socket path has to
@@ -27,7 +37,7 @@ func TestBoot_GrantsOwnUIDLoopbackDefaultOnce(t *testing.T) {
 		t.Fatalf("boot: %v", err)
 	}
 
-	me := ownSocketPrincipal()
+	me := ownLocalPrincipal(t)
 	set, err := a.server.Grants.For(ctx, me)
 	if err != nil {
 		t.Fatal(err)
