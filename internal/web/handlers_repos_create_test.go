@@ -530,3 +530,28 @@ func createBody(t *testing.T, mode, ontologyPreset, originURL string) string {
 	}
 	return string(b)
 }
+
+// POST /repos with an origin runs the same URL/auth check as PUT /origin and
+// the origin sessions, in the same words, before any job starts. Without it
+// the create path was the one edge that let knomit+https + token (or cert on
+// an https URL) through to fail later, or silently fetch anonymously.
+func TestPostRepos_OriginURLAuthMismatchIs400WithTheSharedWording(t *testing.T) {
+	for _, tc := range []struct{ url, method, want string }{
+		{"knomit+https://h:8443/git/kb", "token", "knomit+https origins authenticate with the instance certificate — use auth method cert"},
+		{"KNOMIT+HTTPS://h:8443/git/kb", "basic", "knomit+https origins authenticate with the instance certificate — use auth method cert"},
+		{"https://github.com/o/r.git", "cert", "cert auth is only valid with knomit+https:// URLs"},
+	} {
+		m := newRealManager(t)
+		s := &Server{Manager: m}
+		r := s.NewAPIRouter()
+		rec := httptest.NewRecorder()
+		body := `{"name":"kb","mode":"subscribe","origin":{"url":"` + tc.url + `","auth_method":"` + tc.method + `","auth_token":"ghp_x"}}`
+		r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos", strings.NewReader(body))))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("%s + %s: status %d body %s; want 400 naming %q", tc.url, tc.method, rec.Code, rec.Body, tc.want)
+		}
+		if jobs := m.CreateJobs(); len(jobs) != 0 {
+			t.Fatalf("%s + %s: a create job started despite the refusal: %d", tc.url, tc.method, len(jobs))
+		}
+	}
+}
