@@ -219,6 +219,10 @@ describe('App boot', () => {
       });
     });
     afterEach(() => {
+      // This hook runs BEFORE the file-level one (stack order), so it too would
+      // otherwise restore the poll and delete the boot globals under a mounted
+      // App. cleanup() is idempotent; the later calls are no-ops.
+      cleanup();
       restorePoll();
       delete (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__;
       delete (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__;
@@ -256,9 +260,11 @@ describe('App boot', () => {
       expect((window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__)
         .toBe('http://127.0.0.1:54321');
       await waitFor(() => expect(screen.queryByTestId('boot-screen')).toBeNull());
-      // End on the LAST thing the boot does, the branch event stream, not on
-      // the commit that drops the boot screen: that commit's own effects are
-      // still pending when it lands (#270).
+      // End on the branch event stream being constructed, not on the commit
+      // that drops the boot screen: that commit's own effects are still pending
+      // when it lands (#270). Construction is the settled point for the boot;
+      // FakeEventSource then emits open/ready in a queued microtask, which
+      // this does not wait for and does not need to.
       await waitFor(() => expect(eventSourceURLs().some((u) => u.includes('/branches/'))).toBe(true));
     });
 
@@ -279,16 +285,23 @@ describe('App boot', () => {
         { ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' },
       ];
       let sawBootScreen = false;
-      const bootScreenGone = new Promise<void>((resolve) => {
+      const bootScreenGone = new Promise<void>((resolve, reject) => {
         const mo = new MutationObserver(() => {
           const boot = document.querySelector('[data-testid="boot-screen"]');
           if (boot) sawBootScreen = true;
-          if (sawBootScreen && !boot) { mo.disconnect(); resolve(); }
+          if (sawBootScreen && !boot) { clearTimeout(timer); mo.disconnect(); resolve(); }
         });
         mo.observe(document.body, { childList: true, subtree: true });
+        // Fail, rather than hang to vitest's own timeout, if the boot screen
+        // never comes and goes.
+        const timer = setTimeout(() => {
+          mo.disconnect();
+          reject(new Error(`boot screen never ${sawBootScreen ? 'dropped' : 'appeared'}`));
+        }, 2000);
       });
       render(<App />);
       await bootScreenGone;
+      expect(sawBootScreen).toBe(true);
     });
 
     // THE CLASS, not the three instances. Gating api.repos was not enough: a
