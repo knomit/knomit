@@ -442,3 +442,45 @@ func TestCredentialsPath_WindowsSafeName(t *testing.T) {
 		}
 	}
 }
+
+// Several kb bridges hitting the expiry at once: the lock serialises them,
+// the first refreshes, the rest find its pair on disk. Exactly one refresh,
+// and the family survives. flock (and LockFileEx) conflict between two open
+// files even in ONE process, so goroutines stand in for processes here.
+func TestBearer_ConcurrentRefreshesAreSerialised(t *testing.T) {
+	useHome(t)
+	f := newIssuerFixture(t, 2*time.Hour)
+	creds, err := login(t, f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(f.srv.URL)
+	before := f.tokenHits.Load()
+	const n = 6
+	got := make([]*Credentials, n)
+	errs := make([]error, n)
+	done := make(chan int)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			got[i], errs[i] = refreshShared(context.Background(), u, creds.AccessToken)
+			done <- i
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		<-done
+	}
+	for i := range errs {
+		if errs[i] != nil {
+			t.Fatalf("refresh %d: %v", i, errs[i])
+		}
+		if got[i].AccessToken != got[0].AccessToken {
+			t.Fatalf("refresh %d got a different pair", i)
+		}
+	}
+	if hits := f.tokenHits.Load() - before; hits != 1 {
+		t.Fatalf("%d refreshes, want exactly one", hits)
+	}
+	if _, err := f.store.LookupAccess(context.Background(), got[0].AccessToken); err != nil {
+		t.Fatalf("the family did not survive: %v", err)
+	}
+}
