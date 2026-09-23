@@ -292,17 +292,22 @@ func assertNothingCreated(t *testing.T, path string) {
 // E5: the boundary itself. cap-1 bytes listens and dials; cap bytes is the
 // named error BEFORE any file is created.
 //
-// The KERNEL is the reference, not SunPathCap: a raw net.Listen, bypassing
+// NET.LISTEN is the reference, not SunPathCap: a raw net.Listen, bypassing
 // the pre-check, must accept SunPathCap()-1 bytes and refuse SunPathCap()
-// bytes. Without that, any cap no larger than the kernel's limit is
+// bytes. Without that, any cap no larger than net.Listen's limit is
 // self-consistent (cap-1 binds, cap is refused by the pre-check), and a
 // hardcoded 104 passed on linux (review F1, #268). Sabotage: 104 on linux
-// fails "the kernel refuses cap bytes" (it accepts 104); 108 on darwin fails
-// "the kernel accepts cap-1 bytes" (it refuses 107).
+// fails "net.Listen refuses cap bytes" (it accepts 104); 108 on darwin fails
+// "net.Listen accepts cap-1 bytes" (it refuses 107).
+//
+// The oracle is net.Listen, which is Go's syscall layer plus bind(2), NOT
+// the bare kernel. On linux the kernel would accept a 108-byte unterminated
+// path that Go refuses before the syscall (see SunPathCap). Net.Listen is the
+// right oracle because it is what knomit listens through.
 func TestListenLocal_PathLengthBoundaryIsTheSunPathCap(t *testing.T) {
-	// Kernel oracle, both directions.
-	//   too LOOSE a cap (108 on darwin): cap-1 = 107 bytes, the kernel refuses.
-	//   too STRICT a cap (104 on linux): cap = 104 bytes, the kernel accepts.
+	// net.Listen oracle, both directions.
+	//   too LOOSE a cap (108 on darwin): cap-1 = 107 bytes, net.Listen refuses.
+	//   too STRICT a cap (104 on linux): cap = 104 bytes, net.Listen accepts.
 	for _, tc := range []struct {
 		n      int
 		accept bool
@@ -313,7 +318,7 @@ func TestListenLocal_PathLengthBoundaryIsTheSunPathCap(t *testing.T) {
 			ln.Close()
 		}
 		if accepted := err == nil; accepted != tc.accept {
-			t.Fatalf("kernel on a %d-byte path: accepted=%v (err %v); SunPathCap()=%d does not match this platform's sun_path limit",
+			t.Fatalf("net.Listen on a %d-byte path: accepted=%v (err %v); SunPathCap()=%d does not match the limit net.Listen enforces on this platform",
 				tc.n, accepted, err, SunPathCap())
 		}
 	}

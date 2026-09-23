@@ -16,9 +16,16 @@ import (
 // platform: 104 on darwin, 108 on linux. It is READ from the struct the
 // kernel uses, never typed, so no platform's number can be baked into the
 // other's build. A path of SunPathCap bytes or more is refused with
-// ErrPathTooLong, which is exactly where bind(2) starts refusing on both
-// platforms: TestListenLocal_PathLengthBoundaryIsTheSunPathCap asks the
-// kernel on every run rather than trusting this function.
+// ErrPathTooLong, which is exactly where Go's net.Listen refuses on both
+// platforms, the layer knomit listens through. Two layers are involved, so
+// name them. On darwin Go (syscall_bsd.go, n >= len) and the kernel agree.
+// On linux the KERNEL would accept one more byte: an unterminated 108-byte
+// sun_path is legal to bind(2). But Go's syscall_linux.go refuses a
+// non-abstract name of exactly len(sun_path) before any syscall, and net
+// reports that as "bind: invalid argument". So a measurement made through
+// net.Listen names Go's limit, not the kernel's.
+// TestListenLocal_PathLengthBoundaryIsTheSunPathCap asks net.Listen on every
+// run rather than trusting this function.
 func SunPathCap() int { return len(syscall.RawSockaddrUnix{}.Path) }
 
 // fallbackBase is where FallbackSocketDir lives. It is the LITERAL /tmp on
