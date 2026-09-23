@@ -19,14 +19,17 @@ func newBridgesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "bridges --db <repo.db> [flags]",
 		Short: "Run bridge quality scorer and print component report + suggested floors",
-		Long: `bridges opens a knomit index read-only (no ONNX required), runs
+		Long: `bridges opens a knomit index through store.Open (no ONNX required), runs
 synthesize.BridgeComponentReport, and prints:
   1. A per-bridge component table (token, kind, members, coh, sep, gap, spec, Q, kept).
   2. Aggregates: mean Q, median Q, count Kept, total candidates.
   3. Suggested cohFloor and qualityFloor derived from the score distribution.
 
 The scorer reads precomputed SIMILAR_TO edges, Louvain clusters, derivation
-paths, and token frequencies — no embedding model is loaded or needed.`,
+paths, and token frequencies — no embedding model is loaded or needed.
+
+The index is NOT opened read-only: store.Open runs schema migrations and
+creates the file if it is missing. Point --db at a copy of a live index.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

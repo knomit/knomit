@@ -60,7 +60,11 @@ not re-listed in the tool.
 
 **Only thresholds ported on the same distribution may bound one interval.**
 `Dedup` and `ReflectNovelty` both come from `docDocSame`, so
-`(ReflectNovelty, Dedup)` is a coherent band. `SimilarTo` comes from
+`(ReflectNovelty, Dedup)` is a coherent band. This is a statement about
+calibration, not a description of the production gate. The learn-time
+same-subject check caps at `Dedup` only for candidates in the incoming fact's
+own category, and has no upper bound across categories
+(`internal/mcp/learn_same_subject.go`). `SimilarTo` comes from
 `docDocAll`, so `[SimilarTo, Dedup)` describes no region of either population
 (see knomit fact `decisions/mcp/learn/same-subject-band-endpoints`). This does
 not make `SimilarTo` wrong. It is calibrated for exactly one job: drawing
@@ -145,8 +149,14 @@ embedding model is loaded, so no ONNX env vars are needed. The scorer reads the
 precomputed SIMILAR_TO edges, Louvain clusters, derivation paths and token
 frequencies already in the index.
 
+**Unlike `embeddings`, this does not open the DB read-only.** It goes through
+`store.Open`, which runs schema migrations and creates the file if the path is
+wrong. Point `--db` at a copy of a live index, not the one a running server
+holds.
+
 ```sh
-go run ./tools/calibrate bridges --db ~/.knomit/repos/core.db --effort high
+cp ~/.knomit/repos/core.db /tmp/core-calib.db
+go run ./tools/calibrate bridges --db /tmp/core-calib.db --effort high
 ```
 
 For the entity/domain kinds it prints a population line, a per-bridge table
