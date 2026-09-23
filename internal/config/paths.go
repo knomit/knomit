@@ -115,6 +115,22 @@ func ResolveHome() (string, error) {
 	return DefaultHome()
 }
 
+// homeAndConfig is the data root the operator gets, tilde-expanded, and the
+// knomit.toml found for it ("" when there is none). Load and SocketPath both
+// start here, so "resolve, expand, then search" happens in one order in one
+// place: searching before expanding looks in a literal "~/..." directory and
+// silently skips the operator's knomit.toml.
+func homeAndConfig() (home, configPath string, err error) {
+	home, err = ResolveHome()
+	if err != nil {
+		return "", "", fmt.Errorf("config: cannot determine the knomit data root: %w", err)
+	}
+	if err := expandTilde(&home); err != nil {
+		return "", "", fmt.Errorf("config: %w", err)
+	}
+	return home, findConfigFile(home), nil
+}
+
 // SocketPath is the LOCAL AUTHENTICATED LISTENER for the resolved data root:
 // <data root>/knomit.sock on unix, and a named pipe called knomit-<hash of
 // the data root> in the machine's pipe namespace on Windows (see
@@ -123,16 +139,16 @@ func ResolveHome() (string, error) {
 // way — the OS tells the server who is dialling, so nothing has to be stored
 // or presented.
 //
-// It resolves the SAME three layers Load does, in the same order and through
-// the same function (socketFor): KNOMIT_SOCKET, else the `socket` key of the
-// knomit.toml Load would read, else the default under the tilde-expanded data
-// root from ResolveHome. That is the point of it being here rather than in the
-// bridge. This file's header records what happened last time each binary
-// worked a path out for itself: the answers drifted. A bridge that computed a
-// different socket path from the server would not fail loudly — it would find
-// no socket, fall back to TCP, and quietly lose the verified identity that is
-// the whole feature. Resolving only the default was exactly that drift for
-// every operator who had overridden it (knomit#271).
+// It resolves the SAME three layers Load does, from the same starting point
+// (homeAndConfig) and through the same function (socketFor): KNOMIT_SOCKET,
+// else the `socket` key of the knomit.toml Load reads, else the default under
+// the tilde-expanded data root. That is the point of it being here rather than
+// in the bridge. This file's header records what happened last time each
+// binary worked a path out for itself: the answers drifted. A bridge that
+// computed a different socket path from the server would not fail loudly — it
+// would find no socket, fall back to TCP, and quietly lose the verified
+// identity that is the whole feature. Resolving only the default was exactly
+// that drift for every operator who had overridden it (knomit#271).
 //
 // It is deliberately NOT Load. Load runs Validate and parses every other
 // KNOMIT_* variable, so a problem unrelated to the socket — or a bridge
@@ -148,37 +164,40 @@ func ResolveHome() (string, error) {
 // credential there at all (knomit#245); the pipe is the credential now, and
 // a caller that still treats "" as "Windows" would just keep using TCP.
 func SocketPath() (string, error) {
-	home, err := ResolveHome()
+	home, path, err := homeAndConfig()
 	if err != nil {
 		return "", err
 	}
-	if err := expandTilde(&home); err != nil {
-		return "", fmt.Errorf("config: %w", err)
-	}
-	var fromTOML struct {
-		Socket string `toml:"socket"`
-	}
-	if path := findConfigFile(home); path != "" {
+	// KNOWN GAP, accepted: findConfigFile looks beside os.Executable() before
+	// <home>/knomit.toml, and the bridge is not the server's executable. A
+	// knomit.toml beside only one of the two binaries is read by that one
+	// alone. They ship side by side (dist/, the .app), so in practice both see
+	// the same file; <home>/knomit.toml is read by both wherever they live.
+	var fromTOML Config
+	if path != "" {
 		if _, err := toml.DecodeFile(path, &fromTOML); err != nil {
 			return "", err
 		}
 	}
-	return socketFor(home, fromTOML.Socket), nil
+	return socketFor(home, fromTOML.Socket, os.Getenv("KNOMIT_SOCKET")), nil
 }
 
 // socketFor is the ONE place the local listener is decided from its inputs:
-// KNOMIT_SOCKET, else fromTOML (the knomit.toml `socket` key), else this
-// platform's default under home. Load and SocketPath both call it, so the
-// server and the bridge cannot order the layers differently.
+// fromEnv (KNOMIT_SOCKET), else fromTOML (the knomit.toml `socket` key), else
+// this platform's default under home. Load and SocketPath both call it, so
+// the server and the bridge cannot order the layers differently. It is pure:
+// callers read the environment and pass it in.
 //
 // home must already be tilde-expanded. The chosen value itself is NOT expanded
 // — Load never has expanded Socket, and doing it on one side only would be a
 // fresh disagreement.
-func socketFor(home, fromTOML string) string {
-	s := fromTOML
-	envOr("KNOMIT_SOCKET", &s)
-	if s == "" {
+func socketFor(home, fromTOML, fromEnv string) string {
+	switch {
+	case fromEnv != "":
+		return fromEnv
+	case fromTOML != "":
+		return fromTOML
+	default:
 		return localListenerName(home)
 	}
-	return s
 }

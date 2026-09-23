@@ -19,12 +19,18 @@ import (
 // Platform-neutral on purpose: KNOMIT_SOCKET and the TOML key are honoured on
 // Windows too.
 
-// isolateSocketEnv points every input either resolver reads at the test.
+// isolateSocketEnv points every input either resolver reads at the test, and
+// clears EVERY KNOMIT_* variable: requireAgreement runs the full Load, with
+// Validate, so a stray KNOMIT_LOG_* in a developer's shell would otherwise fail
+// a socket test for a reason that has nothing to do with the socket.
 func isolateSocketEnv(t *testing.T, home string) {
 	t.Helper()
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "KNOMIT_") {
+			t.Setenv(k, "")
+		}
+	}
 	t.Setenv("KNOMIT_HOME", home)
-	t.Setenv("KNOMIT_REPO", "")
-	t.Setenv("KNOMIT_SOCKET", "")
 }
 
 // requireAgreement asserts server and bridge resolve the same listener, and
@@ -101,6 +107,23 @@ func TestSocketPath_AgreesWithLoad_TildeInKnomitHome(t *testing.T) {
 	if strings.Contains(want, "~") {
 		t.Fatalf("listener %q still carries a literal ~", want)
 	}
+}
+
+// A data root spelled with "~/" finds its knomit.toml on BOTH sides. Load used
+// to look for the literal "~/kh/knomit.toml" before expanding Home, so it
+// ignored the file the bridge (which expands first) read — the two disagreed.
+func TestSocketPath_AgreesWithLoad_TildeHomeWithTOMLSocket(t *testing.T) {
+	osHome := t.TempDir()
+	t.Setenv("HOME", osHome)
+	t.Setenv("USERPROFILE", osHome)
+	expanded := filepath.Join(osHome, "kh")
+	if err := os.MkdirAll(expanded, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	isolateSocketEnv(t, "~/kh")
+	want := filepath.Join(t.TempDir(), "toml.sock")
+	writeSocketTOML(t, expanded, want)
+	requireAgreement(t, want)
 }
 
 // A knomit.toml the bridge cannot decode is an error from SocketPath, not a
