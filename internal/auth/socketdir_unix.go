@@ -18,12 +18,13 @@ import (
 // other's build. A path of SunPathCap bytes or more is refused with
 // ErrPathTooLong, which is exactly where Go's net.Listen refuses on both
 // platforms, the layer knomit listens through. Two layers are involved, so
-// name them. On darwin Go (syscall_bsd.go, n >= len) and the kernel agree.
-// On linux the KERNEL would accept one more byte: an unterminated 108-byte
-// sun_path is legal to bind(2). But Go's syscall_linux.go refuses a
-// non-abstract name of exactly len(sun_path) before any syscall, and net
-// reports that as "bind: invalid argument". So a measurement made through
-// net.Listen names Go's limit, not the kernel's.
+// name them. On BOTH platforms the KERNEL would accept one more byte: bind(2)
+// takes an unterminated path of exactly len(sun_path) (104 on darwin, 108 on
+// linux; each measured with a raw C bind during review of #268). Go refuses
+// that length before any syscall, in syscall_bsd.go (n >= len) and
+// syscall_linux.go (n == len for a non-abstract name), and net reports it as
+// "bind: invalid argument". So a measurement made through net.Listen names
+// Go's limit, not the kernel's.
 // TestListenLocal_PathLengthBoundaryIsTheSunPathCap asks net.Listen on every
 // run rather than trusting this function.
 func SunPathCap() int { return len(syscall.RawSockaddrUnix{}.Path) }
