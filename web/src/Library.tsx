@@ -710,6 +710,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     if (effectiveSort !== 'recent') return;
     if (loadingRef.current || facts.length >= total) return;
+    // Same double-fire window as the lens branch above: set it synchronously.
+    loadingRef.current = true;
     setLoading(true);
     api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, facts.length, {
       types: types.length ? types : undefined,
@@ -744,6 +746,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // every guard with a stale row count: it fetched the offset it had just
   // fetched (rows appended twice), or, after a scope change, still held the old
   // scope's exhausted flag and silently refused to page (knomit#270).
+  // This relies on SYNCHRONOUS (blocking-lane) rendering of paging updates: a
+  // paging state update wrapped in startTransition/useTransition could yield
+  // after the render-phase ref writes and before this commit, reopening the
+  // gap. web/src uses neither today; keep it that way here or revisit this.
   const loadMoreRef = useRef(loadMore);
   useLayoutEffect(() => { loadMoreRef.current = loadMore; });
 

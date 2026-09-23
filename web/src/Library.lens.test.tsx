@@ -692,7 +692,10 @@ describe('Library — the sentinel sees the current list at the commit that show
   beforeEach(() => { vi.clearAllMocks(); });
 
   const withCommitFire = async (
-    body: (h: { fireNow: () => void; fireWhen: (sel: string, n: number) => () => boolean }) => Promise<void>,
+    body: (h: {
+      fireNow: () => void; fireTwice: () => void; sentinelArmed: () => Promise<void>;
+      fireWhen: (sel: string, n: number) => () => boolean;
+    }) => Promise<void>,
   ) => {
     const callbacks: IntersectionObserverCallback[] = [];
     const orig = window.IntersectionObserver;
@@ -701,9 +704,16 @@ describe('Library — the sentinel sees the current list at the commit that show
       observe() {} disconnect() {} unobserve() {} takeRecords() { return []; }
       root = null; rootMargin = ''; thresholds = [];
     } as unknown as typeof IntersectionObserver;
-    const fireNow = () => act(() => {
-      callbacks[callbacks.length - 1](
-        [{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    const tick = () => callbacks[callbacks.length - 1](
+      [{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    const fireNow = () => act(() => { tick(); });
+    // Two ticks in one synchronous block, before React can re-render: what a
+    // burst of observer notifications does between two renders.
+    const fireTwice = () => act(() => { tick(); tick(); });
+    // The sentinel is on screen AND an observer is holding a callback for it.
+    const sentinelArmed = () => waitFor(() => {
+      expect(screen.getByTestId('recent-sentinel')).toBeTruthy();
+      expect(callbacks.length).toBeGreaterThan(0);
     });
     const observers: MutationObserver[] = [];
     // Fires once, synchronously, at the first commit that shows n rows; the
@@ -721,7 +731,7 @@ describe('Library — the sentinel sees the current list at the commit that show
       return () => fired;
     };
     try {
-      await body({ fireNow, fireWhen });
+      await body({ fireNow, fireTwice, sentinelArmed, fireWhen });
     } finally {
       observers.forEach(o => o.disconnect());
       window.IntersectionObserver = orig;
@@ -741,15 +751,17 @@ describe('Library — the sentinel sees the current list at the commit that show
       if (o.offset === 50) return { facts: rows(50, 40), total: 140 };
       return { facts: [], total: 140 };
     });
-    await withCommitFire(async ({ fireNow, fireWhen }) => {
+    await withCommitFire(async ({ fireNow, fireWhen, sentinelArmed }) => {
       render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
       await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
-      await new Promise(r => setTimeout(r, 20));
+      await sentinelArmed();
       const firedAt90 = fireWhen('lens-item', 90);
       fireNow();
       await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(90));
-      await new Promise(r => setTimeout(r, 30));
-      expect(firedAt90()).toBe(true);
+      // The tick at the commit issues any request synchronously, so once it
+      // has fired there is nothing more to wait for than one flush.
+      await waitFor(() => expect(firedAt90()).toBe(true));
+      await act(async () => {});
       expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toEqual([0, 50]);
     });
   });
@@ -757,13 +769,14 @@ describe('Library — the sentinel sees the current list at the commit that show
   it('a new scope pages from a tick at the commit that shows its first page', async () => {
     const { api } = await import('./api');
     (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ facts: rows(0, 1), total: 999 }));
-    await withCommitFire(async ({ fireNow, fireWhen }) => {
+    await withCommitFire(async ({ fireNow, fireWhen, sentinelArmed }) => {
       const { rerender } = render(<Library
         state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
         dispatch={vi.fn()} navigate={vi.fn()} />);
       await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
-      fireNow(); // scope 1 is exhausted by its short page
-      await new Promise(r => setTimeout(r, 20));
+      await sentinelArmed();
+      fireNow(); // scope 1 is exhausted by its short page: this must request nothing
+      await act(async () => {});
 
       (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(
         async (_l: string, o: { offset: number }) => ({ facts: rows(o.offset, 50), total: 999 }));
@@ -772,8 +785,8 @@ describe('Library — the sentinel sees the current list at the commit that show
         state={lensState({ filters: [{ category: 'domain', value: 'go' }] })}
         dispatch={vi.fn()} navigate={vi.fn()} />);
       await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
-      await new Promise(r => setTimeout(r, 30));
-      expect(firedAt50()).toBe(true);
+      await waitFor(() => expect(firedAt50()).toBe(true));
+      await act(async () => {});
       expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50);
     });
   });
@@ -787,15 +800,35 @@ describe('Library — the sentinel sees the current list at the commit that show
       if (offset === 50) return { facts: rows(50, 40), total: 90 };
       return { facts: [], total: 90 };
     });
-    await withCommitFire(async ({ fireNow, fireWhen }) => {
+    await withCommitFire(async ({ fireNow, fireWhen, sentinelArmed }) => {
       render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
       await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(50));
-      await new Promise(r => setTimeout(r, 20));
+      await sentinelArmed();
       const firedAt90 = fireWhen('chrono-item', 90);
       fireNow();
       await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(90));
-      await new Promise(r => setTimeout(r, 30));
-      expect(firedAt90()).toBe(true);
+      // The tick at the commit issues any request synchronously, so once it
+      // has fired there is nothing more to wait for than one flush.
+      await waitFor(() => expect(firedAt90()).toBe(true));
+      await act(async () => {});
+      expect((api.recent as ReturnType<typeof vi.fn>).mock.calls.map(c => c[5])).toEqual([0, 50]);
+    });
+  });
+
+  it('repo Recent: two ticks before a re-render request the next page once', async () => {
+    // The lens branch closes this with a synchronous lensLoadingRef write; the
+    // repo branch has to as well, or the second tick passes the loading guard
+    // before setLoading(true) has re-rendered the ref.
+    const { api } = await import('./api');
+    (api.recent as ReturnType<typeof vi.fn>).mockImplementation(async (
+      _r: string, _b: string, _p: string, _q: string, _limit: number, offset: number,
+    ) => ({ facts: rows(offset, 50), total: 200 }));
+    await withCommitFire(async ({ fireTwice, sentinelArmed }) => {
+      render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(50));
+      await sentinelArmed();
+      fireTwice();
+      await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(100));
       expect((api.recent as ReturnType<typeof vi.fn>).mock.calls.map(c => c[5])).toEqual([0, 50]);
     });
   });
