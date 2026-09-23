@@ -251,6 +251,7 @@ type Config struct {
 	Runtime             RuntimeConfig      `toml:"runtime"`
 	Auth                AuthConfig         `toml:"auth"`
 	TLS                 TLSConfig          `toml:"tls"`
+	OAuth               OAuthConfig        `toml:"oauth"`
 }
 
 // TLSConfig is the instance-to-instance listener (F19 phase 2): mutual TLS
@@ -363,6 +364,12 @@ func Defaults() Config {
 			// Everything a local operator could do before [auth] existed.
 			LoopbackDefault: []string{"read", "write", "push:own", "operator", "admin"},
 		},
+		// Off (no issuer, no addr). The TTLs are policy defaults.
+		OAuth: OAuthConfig{
+			AccessTTL:     2 * time.Hour,
+			RefreshTTL:    14 * 24 * time.Hour,
+			DefaultClient: true,
+		},
 		Session: SessionConfig{
 			ToolIdleTTL:       "15m",
 			PipelineIdleTTL:   "60m",
@@ -442,6 +449,8 @@ func Load() (Config, error) {
 	envOr("KNOMIT_SOCKET", &cfg.Socket)
 	envOr("KNOMIT_TLS_ADDR", &cfg.TLS.Addr)
 	envOr("KNOMIT_TLS_DIR", &cfg.TLS.Dir)
+	envOr("KNOMIT_OAUTH_ISSUER", &cfg.OAuth.Issuer)
+	envOr("KNOMIT_OAUTH_ADDR", &cfg.OAuth.Addr)
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
 	envOr("KNOMIT_LLM_MODEL", &cfg.LLM.Model)
 	envOr("KNOMIT_LLM_PROVIDER", &cfg.LLM.Provider)
@@ -551,6 +560,16 @@ func Load() (Config, error) {
 		cfg.TLS.Dir = filepath.Join(cfg.Home, "pki")
 	}
 
+	// One spelling of the issuer from here on: it is compared byte-for-byte
+	// against every token's audience and every `iss` a client checks.
+	if cfg.OAuth.Issuer != "" {
+		norm, err := NormalizeIssuer(cfg.OAuth.Issuer)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: %w", err)
+		}
+		cfg.OAuth.Issuer = norm
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -634,7 +653,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: log.level %q is not a valid level: %w", c.Log.Level, err)
 		}
 	}
-	return nil
+	return c.OAuth.validate()
 }
 
 // warnUndecoded reports every TOML key that decoded into nothing.
