@@ -239,12 +239,19 @@ jobs:
       # on macOS in `desktop`), so widening the pattern would add an unvetted
       # gate to a 30-minute job rather than free coverage. Widen it only after
       # making that suite pass here on purpose.
+      #
+      # TestBootServer_ was widened to deliberately (knomit#245). Since #248 the
+      # desktop opens cfg.Socket itself, and on Windows that is now a NAMED
+      # PIPE -- so boot_pipe_windows_test.go is the only coverage there is of
+      # the listener the normal Windows install actually serves, and it is
+      # compiled on no other platform. Made to pass here first, as the
+      # paragraph above asks; measured at 0.03s for the three pipe tests.
       - name: Desktop app compiles on Windows (-tags desktop)
         if: matrix.os == 'windows-2025'
         run: |
           CGO_ENABLED=1 go build -tags desktop -o NUL ./tools/desktop
           CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
-          CGO_ENABLED=1 go test -tags desktop -run TestWritable -count=1 ./tools/desktop/
+          CGO_ENABLED=1 go test -tags desktop -run 'TestWritable|TestBootServer_' -count=1 ./tools/desktop/
 
       # internal/config owns the data-root resolution, and it is per-OS code
       # whose branches only the matching runner reaches: the Windows
@@ -258,6 +265,11 @@ jobs:
       # below, via ./internal/platform/... — also on every matrix platform, so
       # the Windows branch is reached there too. BOTH halves are covered, and
       # each by a different step; if either moves, check the other still is.
+      # internal/auth joined this step in 29c5594f. Keeping it here matters
+      # doubly for knomit#245: its Windows named-pipe tests are the only
+      # coverage the pipe transport has, and they are compiled on no other
+      # platform, so a step that did not name the package would let them
+      # compile and never execute on windows-2025.
       #
       # internal/pki (F19 phase 2) is pure Go with in-process fixtures: every
       # root, key and certificate its tests use is generated in t.TempDir().

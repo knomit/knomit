@@ -3,41 +3,34 @@ package knomitapi
 import (
 	"bytes"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"knomit/internal/auth"
+	"knomit/internal/config"
 )
 
-// requireUnixSockets skips on Windows. The unix socket is the ONLY credential
-// this phase has, and Windows has no equivalent yet -- knomit/knomit#245 tracks
-// the named-pipe transport that will give it one. These tests are not
-// platform-agnostic tests that happen to fail there; they exercise a mechanism
-// that does not exist on that platform in this phase.
+// These tests used to skip on Windows (53a0c7b9, naming knomit/knomit#245):
+// the unix socket was the only credential phase 1 had, and Windows had no
+// equivalent. It has one now — a named pipe — so the suite is written against
+// the per-platform fixtures in dial_fixtures_{unix,windows}_test.go and RUNS
+// on both. Nothing here knows which transport it is on.
 //
-// They also need a SHORT socket path (os.MkdirTemp("/tmp", ...) rather than
-// t.TempDir()), because macOS caps sun_path at 104 bytes and t.TempDir()
-// overruns it -- and /tmp does not exist on Windows, which is how the missing
-// guard here first showed up, as a CI failure rather than a skip.
-func requireUnixSockets(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("no unix domain sockets on windows in this phase; named pipes are knomit/knomit#245")
-	}
-}
+// Every fixture that listens or dials asserts WHICH outcome it produced; the
+// phase 1 review found two socket fixtures that passed while proving nothing.
 
 // isolateHome points KNOMIT_HOME at an empty temp dir so nothing in this
-// package's suite can reach a socket that happens to exist on the developer's
-// machine. Without it a green run means "no socket at ~/.knomit right now",
-// not "this commit is good".
+// package's suite can reach a listener that happens to exist on the
+// developer's machine. Without it a green run means "no server at ~/.knomit
+// right now", not "this commit is good".
 func isolateHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -47,54 +40,101 @@ func isolateHome(t *testing.T) string {
 	return dir
 }
 
-// serveUnix starts an HTTP server on a unix socket that answers with body.
-// The path is short on purpose: macOS caps sun_path at 104 bytes and
-// t.TempDir() can exceed it.
-func serveUnix(t *testing.T, body string) string {
+// serveLocalAt starts an HTTP server on the local listener at path and
+// answers every request with body.
+//
+// It installs the SAME ConnContext hook the real server does, and holds every
+// request to the standard the transport exists for: a request that arrives
+// here must carry a verified peer whose pid is this test process's.
+//
+// Without that, this suite would prove only TRANSPORT SELECTION. It did: under
+// a forced failure that downgraded auth.DialLocal to the anonymous
+// impersonation level, internal/auth and internal/config went red and this
+// package stayed green -- the bridge still reached the listener, and was
+// simply nobody when it got there, which is the exact silent failure
+// knomit#245 is about.
+func serveLocalAt(t *testing.T, path, body string) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "kd")
-	if err != nil {
-		t.Fatal(err)
+	l := listenLocal(t, path)
+	var mu sync.Mutex
+	var served, identified int
+	srv := &http.Server{
+		ConnContext: auth.ConnContext,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			served++
+			if peer, ok := auth.PeerFromContext(r.Context()); ok && peer.ID != "" && peer.PID == os.Getpid() {
+				identified++
+			}
+			mu.Unlock()
+			_, _ = io.WriteString(w, body)
+		}),
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "knomit.sock")
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, body)
-	})}
 	go func() { _ = srv.Serve(l) }()
-	t.Cleanup(func() { srv.Close(); l.Close() })
-	return sock
+	t.Cleanup(func() {
+		srv.Close()
+		l.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		// served == 0 is not a failure: several tests here exist precisely to
+		// show the bridge did NOT come this way.
+		if served > 0 && identified != served {
+			t.Errorf("the bridge reached this listener %d time(s) but only %d carried a verified peer with our pid: "+
+				"the transport worked and the IDENTITY did not, which is the only reason to prefer it", served, identified)
+		}
+	})
 }
 
-// staleSocket creates a socket INODE with nothing accepting on it — what an
-// ungraceful server exit leaves behind, because cmd/serve.go only removes the
-// socket on a graceful one.
-func staleSocket(t *testing.T) string {
+// serveLocal starts a server on a listener path of this test's own.
+func serveLocal(t *testing.T, body string) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "ks")
+	path := localListenerPath(t)
+	serveLocalAt(t, path, body)
+	return path
+}
+
+// serveAtResolvedHome points KNOMIT_HOME at a data root this platform can
+// open a listener under, and serves on the listener config.SocketPath()
+// resolves for it. That is what the hooks-client tests need: they exercise
+// the path the BRIDGE would find on its own, not one handed to them.
+func serveAtResolvedHome(t *testing.T, body string) string {
+	t.Helper()
+	home := homeForLocalListener(t)
+	t.Setenv("KNOMIT_HOME", home)
+	t.Setenv("KNOMIT_REPO", "")
+	t.Setenv("KNOMIT_BASE_URL", "")
+	path, err := config.SocketPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "knomit.sock")
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
+	// Positive control: the bridge's own accessor has to agree, or these
+	// tests would serve one place and the client would look in another.
+	if got := SocketPath(); got != path {
+		t.Fatalf("the bridge resolves %q but config resolves %q", got, path)
 	}
-	// Go unlinks a unix socket on Close by default, which is precisely what a
-	// CRASHING server does not do. Turning that off reproduces the real
-	// leftover: the inode survives, so os.Stat still reports a socket and a
-	// dial gets ECONNREFUSED.
-	l.(*net.UnixListener).SetUnlinkOnClose(false)
-	l.Close()
-	if st, serr := os.Stat(sock); serr != nil || st.Mode()&os.ModeSocket == 0 {
-		t.Fatalf("expected a stale SOCKET to remain at %s (err=%v)", sock, serr)
-	}
-	return sock
+	serveLocalAt(t, path, body)
+	return path
+}
+
+func tcpServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "via-tcp")
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+// captureLog redirects the bridge's logger at DEBUG level, so a line emitted
+// at Warn by mistake and one emitted at Debug are both captured and can be
+// told apart. A logger that dropped Debug could not distinguish them.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	restore := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.DebugLevel)
+	t.Cleanup(func() { log.Logger = restore })
+	return &buf
 }
 
 func get(t *testing.T, c *http.Client, url string) string {
@@ -109,47 +149,41 @@ func get(t *testing.T, c *http.Client, url string) string {
 }
 
 func TestNewHTTPClient_DialsSocketWhenPresentAndNoExplicitURL(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	sock := serveUnix(t, "via-socket")
-	c := NewHTTPClient(sock, false, 2*time.Second)
-	// Port 1: nothing listens there, so ONLY the socket can answer this.
+	sock := serveLocal(t, "via-socket")
+	c := NewHTTPClient(sock, false, 5*time.Second)
+	// Port 1: nothing listens there, so ONLY the local listener can answer.
 	if got := get(t, c, "http://localhost:1/anything"); got != "via-socket" {
-		t.Fatalf("body=%q", got)
+		t.Fatalf("the %s must answer; body=%q", localListenerName, got)
 	}
 }
 
-// REGRESSION, blocking finding 1 of the 2026-09-22 review: a socket file that
-// exists but is not serving must cost the verified identity, not all
+// REGRESSION, blocking finding 1 of the 2026-09-22 review: a listener that
+// exists but cannot be used must cost the verified identity, not all
 // connectivity. Deciding the transport once from os.Stat installed a
 // socket-only transport and every request failed with "connection refused".
 func TestNewHTTPClient_StaleSocketFallsBackToLiveTCP(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-tcp")
-	}))
-	defer tcp.Close()
+	tcp := tcpServer(t)
+	sock := unreachableLocalListener(t)
 
-	sock := staleSocket(t)
+	// Falling back SILENTLY is the failure mode worth guarding, because a
+	// dead listener beside a live server then looks exactly like a healthy
+	// bridge.
+	logbuf := captureLog(t)
 
-	// Capture the bridge log: falling back SILENTLY is the failure mode worth
-	// guarding, because a dead socket beside a live server then looks exactly
-	// like a healthy bridge.
-	var logbuf bytes.Buffer
-	restore := log.Logger
-	log.Logger = zerolog.New(&logbuf)
-	t.Cleanup(func() { log.Logger = restore })
-
-	c := NewHTTPClient(sock, false, 2*time.Second)
+	c := NewHTTPClient(sock, false, 5*time.Second)
 	// Asserts WHICH server answered: a call that merely succeeded would pass
-	// even if the socket had been used.
+	// even if the local listener had been used.
 	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
-		t.Fatalf("a stale socket must fall back to the TCP target; body=%q", got)
+		t.Fatalf("an unreachable %s must fall back to the TCP target; body=%q", localListenerName, got)
 	}
 	out := logbuf.String()
-	if !strings.Contains(out, "falling back to TCP") || !strings.Contains(out, sock) {
-		t.Fatalf("the fallback must be logged with the socket path, got: %s", out)
+	if !strings.Contains(out, "falling back to TCP") || !strings.Contains(out, `"level":"warn"`) {
+		t.Fatalf("the fallback must be logged at WARN, got: %s", out)
+	}
+	if !strings.Contains(out, jsonEscaped(sock)) {
+		t.Fatalf("the warning must name the listener path %q, got: %s", sock, out)
 	}
 
 	// Once, not per dial. A second request must not repeat the warning.
@@ -161,146 +195,74 @@ func TestNewHTTPClient_StaleSocketFallsBackToLiveTCP(t *testing.T) {
 	}
 }
 
-// A path too long for sun_path fails with EINVAL, not ENOENT. That is a
-// misconfiguration and not the ordinary "no server running" case, so it must
-// still WARN — this pins that the quiet path is keyed on ENOENT specifically
-// and not on "any failure to reach the socket".
-func TestNewHTTPClient_OverlongSocketPathStillWarns(t *testing.T) {
-	requireUnixSockets(t)
-	if runtime.GOOS != "darwin" {
-		t.Skip("the sun_path cap that produces EINVAL here is a darwin limit")
-	}
-	isolateHome(t)
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-tcp")
-	}))
-	defer tcp.Close()
-
-	var logbuf bytes.Buffer
-	restore := log.Logger
-	log.Logger = zerolog.New(&logbuf).Level(zerolog.DebugLevel)
-	t.Cleanup(func() { log.Logger = restore })
-
-	overlong := filepath.Join(t.TempDir(), strings.Repeat("x", 120)+".sock")
-	c := NewHTTPClient(overlong, false, 2*time.Second)
-	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
-		t.Fatalf("it must still fall back; body=%q", got)
-	}
-	if !strings.Contains(logbuf.String(), "unreachable") {
-		t.Fatalf("an unusable socket path is an anomaly and must warn, got: %s", logbuf.String())
-	}
-}
-
-// Precedence is unchanged by the fallback: a socket that ANSWERS still wins
+// Precedence is unchanged by the fallback: a listener that ANSWERS still wins
 // over a live TCP server.
 func TestNewHTTPClient_LiveSocketWinsOverLiveTCP(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-tcp")
-	}))
-	defer tcp.Close()
-
-	c := NewHTTPClient(serveUnix(t, "via-socket"), false, 2*time.Second)
+	tcp := tcpServer(t)
+	c := NewHTTPClient(serveLocal(t, "via-socket"), false, 5*time.Second)
 	if got := get(t, c, tcp.URL+"/anything"); got != "via-socket" {
-		t.Fatalf("a live socket must win over a live TCP server; body=%q", got)
+		t.Fatalf("a live %s must win over a live TCP server; body=%q", localListenerName, got)
 	}
 }
 
 func TestNewHTTPClient_ExplicitURLIgnoresSocket(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-tcp")
-	}))
-	defer tcp.Close()
-
-	// The socket is LIVE and would win if this were not explicit.
-	c := NewHTTPClient(serveUnix(t, "via-socket"), true, 2*time.Second)
+	tcp := tcpServer(t)
+	// The local listener is LIVE and would win if this were not explicit.
+	c := NewHTTPClient(serveLocal(t, "via-socket"), true, 5*time.Second)
 	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
-		t.Fatalf("an explicit URL must not be rerouted onto the socket; body=%q", got)
+		t.Fatalf("an explicit URL must not be rerouted onto the %s; body=%q", localListenerName, got)
 	}
 }
 
-// A MISSING socket is the ordinary case — no server running, or one older
+// A MISSING listener is the ordinary case — no server running, or one older
 // than the socket. It must fall back silently: warning about it would dilute
-// the signal the WARN exists for, which is the stale-socket anomaly.
+// the signal the WARN exists for, which is the unreachable-listener anomaly.
 func TestNewHTTPClient_MissingSocketFallsBackToTCPWithoutWarning(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-tcp")
-	}))
-	defer tcp.Close()
+	tcp := tcpServer(t)
+	logbuf := captureLog(t)
 
-	var logbuf bytes.Buffer
-	restore := log.Logger
-	// Debug level, so a Debug line WOULD be captured if one were emitted at
-	// WARN by mistake -- the assertion below is about the level, and a
-	// logger that dropped Debug could not tell the two apart.
-	log.Logger = zerolog.New(&logbuf).Level(zerolog.DebugLevel)
-	t.Cleanup(func() { log.Logger = restore })
-
-	// A SHORT path: macOS caps sun_path at 104 bytes, and a path over that
-	// fails with EINVAL rather than ENOENT — which is a different thing and
-	// SHOULD still warn, so using t.TempDir() here would test the wrong case.
-	dir, err := os.MkdirTemp("/tmp", "ka")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	c := NewHTTPClient(filepath.Join(dir, "absent.sock"), false, 2*time.Second)
+	c := NewHTTPClient(absentLocalListenerPath(t), false, 5*time.Second)
 	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
-		t.Fatalf("a missing socket must fall back to TCP; body=%q", got)
+		t.Fatalf("a missing %s must fall back to TCP; body=%q", localListenerName, got)
 	}
 	out := logbuf.String()
 	if strings.Contains(out, "unreachable") || strings.Contains(out, `"level":"warn"`) {
-		t.Fatalf("an absent socket is ordinary and must not WARN, got: %s", out)
+		t.Fatalf("an absent %s is ordinary and must not WARN, got: %s", localListenerName, out)
 	}
 	// Positive control: it did take the fallback path, and said so quietly.
-	if !strings.Contains(out, `"level":"debug"`) || !strings.Contains(out, "no unix socket") {
-		t.Fatalf("the absent-socket fallback should still be visible at Debug, got: %s", out)
+	if !strings.Contains(out, `"level":"debug"`) || !strings.Contains(out, "no local listener") {
+		t.Fatalf("the absent-listener fallback should still be visible at Debug, got: %s", out)
 	}
 }
 
-// A path that exists but is NOT a socket (a stale regular file) must also
-// fall back rather than fail every request.
+// A path that exists but is NOT a local listener must also fall back rather
+// than fail every request. On unix that is a stale regular file where a
+// socket should be; on Windows it is any path outside the pipe namespace,
+// which must be refused rather than opened as a file.
 func TestNewHTTPClient_NonSocketPathFallsBackToTCP(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-tcp")
-	}))
-	defer tcp.Close()
-
-	notASocket := filepath.Join(t.TempDir(), "knomit.sock")
-	if err := os.WriteFile(notASocket, []byte("stale"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c := NewHTTPClient(notASocket, false, 2*time.Second)
+	tcp := tcpServer(t)
+	c := NewHTTPClient(notAListenerPath(t), false, 5*time.Second)
 	if got := get(t, c, tcp.URL+"/anything"); got != "via-tcp" {
-		t.Fatalf("a regular file must not be dialled as a socket; body=%q", got)
+		t.Fatalf("a non-listener path must not be dialled as one; body=%q", got)
 	}
 }
 
 // REGRESSION, blocking finding 2: the hooks client must read KNOMIT_BASE_URL
 // at DIAL time. A package-level var froze the transport at package init,
 // before any test body ran, so t.Setenv could not redirect it — and with a
-// live socket those tests reached the real local server and could pass for
+// live listener those tests reached the real local server and could pass for
 // the wrong reason.
 func TestClient_HonoursBaseURLSetAfterInit(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	// A LIVE socket at the resolved home: without per-dial resolution this is
-	// exactly the machine state that hijacks the call.
-	sock := serveUnix(t, "via-socket")
-	t.Setenv("KNOMIT_HOME", filepath.Dir(sock))
+	// A LIVE listener at the resolved home: without per-dial resolution this
+	// is exactly the machine state that hijacks the call.
+	serveAtResolvedHome(t, "via-socket")
 
-	tcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, "via-tcp")
-	}))
-	defer tcp.Close()
+	tcp := tcpServer(t)
 	t.Setenv("KNOMIT_BASE_URL", tcp.URL)
 
 	if got := get(t, Client(), tcp.URL+"/anything"); got != "via-tcp" {
@@ -309,33 +271,83 @@ func TestClient_HonoursBaseURLSetAfterInit(t *testing.T) {
 }
 
 // The counterpart: with no explicit URL, the same lazily-built client DOES
-// take the socket — so the test above is not passing merely because the
-// socket was never reachable.
+// take the local listener — so the test above is not passing merely because
+// the listener was never reachable.
 func TestClient_UsesTheSocketWhenNoBaseURLIsNamed(t *testing.T) {
-	requireUnixSockets(t)
 	isolateHome(t)
-	sock := serveUnix(t, "via-socket")
-	t.Setenv("KNOMIT_HOME", filepath.Dir(sock))
+	serveAtResolvedHome(t, "via-socket")
 
 	if got := get(t, Client(), "http://127.0.0.1:1/anything"); got != "via-socket" {
-		t.Fatalf("the hooks client must prefer the socket; body=%q", got)
+		t.Fatalf("the hooks client must prefer the %s; body=%q", localListenerName, got)
 	}
 }
 
 func TestTransportPreference_NeverClaimsUnixWithoutASocket(t *testing.T) {
-	if got := TransportPreference("/tmp/x.sock", true); got != "tcp" {
+	if got := TransportPreference(localListenerPath(t), true); got != "tcp" {
 		t.Fatalf("explicit = %q", got)
 	}
 	if got := TransportPreference("", false); got != "tcp" {
-		t.Fatalf("no socket path = %q", got)
+		t.Fatalf("no listener path = %q", got)
 	}
-	got := TransportPreference("/tmp/x.sock", false)
-	if got != "unix-preferred" {
-		t.Fatalf("socket path = %q", got)
-	}
+	got := TransportPreference(localListenerPath(t), false)
 	// The word matters: the startup line must not read as a fact about a
 	// connection that has not been made.
-	if got == "unix" || !strings.Contains(got, "preferred") {
+	if !strings.HasSuffix(got, "-preferred") {
 		t.Fatalf("the log value must say it is a preference, got %q", got)
+	}
+	// And it must name the MECHANISM, which is what tells a reader which
+	// credential a session on it will carry.
+	if got != "socket-preferred" && got != "pipe-preferred" {
+		t.Fatalf("listener path = %q, want socket-preferred or pipe-preferred", got)
+	}
+}
+
+// jsonEscaped is how a path appears inside a zerolog JSON line: Windows
+// separators are escaped there, so a raw strings.Contains on the path would
+// miss it and the "names the path" assertion would silently never fire.
+func jsonEscaped(s string) string {
+	return strings.ReplaceAll(s, `\`, `\\`)
+}
+
+// REGRESSION. The real bridge builds its client with Timeout 0 — no limit,
+// because it holds SSE long-polls open and a deadline would cut them
+// (tools/bridge/main.go). Zero must not become a zero-length budget for the
+// local dial: a context deadline of "now" fails every dial instantly, so the
+// bridge would never once use the pipe while looking perfectly healthy on TCP.
+//
+// This is not hypothetical. It is the state this branch was in until the
+// budget below was added, and NOTHING else in the suite caught it, because
+// every other test passes a real timeout.
+func TestNewHTTPClient_UnlimitedTimeoutStillPrefersTheLocalListener(t *testing.T) {
+	isolateHome(t)
+	sock := serveLocal(t, "via-socket")
+	c := NewHTTPClient(sock, false, 0) // exactly what tools/bridge/main.go does
+	if got := get(t, c, "http://localhost:1/anything"); got != "via-socket" {
+		t.Fatalf("with no overall timeout the %s must still answer; body=%q", localListenerName, got)
+	}
+}
+
+// The budget is a SLICE of the request's time, not all of it: a local dial
+// that spends the whole budget leaves the TCP fallback none, which is not a
+// fallback. On Windows this is what stops a BUSY pipe — which winio retries
+// every 10ms until the context expires rather than failing fast — from
+// consuming the entire request.
+func TestLocalDialBudget_LeavesRoomForTheFallback(t *testing.T) {
+	if got := localDialBudget(0); got != localDialCap {
+		t.Fatalf("no limit must become a bounded budget, got %v", got)
+	}
+	if got := localDialBudget(time.Hour); got != localDialCap {
+		t.Fatalf("a huge timeout must still be capped, got %v", got)
+	}
+	if got := localDialBudget(4 * time.Second); got != time.Second {
+		t.Fatalf("budget for 4s = %v, want 1s (a quarter, leaving 3s for TCP)", got)
+	}
+	// Never zero and never longer than the request itself: both would be
+	// worse than not trying the local listener at all.
+	for _, d := range []time.Duration{time.Nanosecond, time.Millisecond, time.Second, time.Minute} {
+		got := localDialBudget(d)
+		if got <= 0 || got > d {
+			t.Fatalf("budget for %v = %v, want a positive slice no longer than it", d, got)
+		}
 	}
 }

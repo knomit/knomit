@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"knomit/internal/auth"
@@ -61,11 +62,23 @@ func TestAuthMiddleware_NonLoopbackWithoutRequireHasNoPrincipal(t *testing.T) {
 	}
 }
 
+// testPeer is a peer credential as auth.ConnContext would have attached one.
+//
+// The ID and Via are LITERAL, and stay literal on every platform: since
+// knomit#245 the middleware COPIES them out of the Peer rather than
+// formatting a uid itself, so what these tests pin is the copying. Which
+// spelling a platform actually produces (uid: or sid:) is
+// auth.localID and auth.LocalVia, tested against the real OS in
+// internal/auth.
+func testPeer(uid, pid int) auth.Peer {
+	return auth.Peer{ID: "uid:" + strconv.Itoa(uid), Via: auth.ViaSocket, PID: pid}
+}
+
 func TestAuthMiddleware_SocketPeerBecomesBridgePrincipal(t *testing.T) {
 	h := AuthMiddleware(config.AuthConfig{Require: true}, false)(principalEcho())
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "@" // a unix conn has no ip; the peer in ctx is what counts
-	req = req.WithContext(auth.WithPeer(req.Context(), 501, 4242))
+	req = req.WithContext(auth.WithPeer(req.Context(), testPeer(501, 4242)))
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Body.String() != "bridge:uid:501@socket" {
@@ -83,7 +96,7 @@ func TestAuthMiddleware_SocketPeerCarriesVerifiedPID(t *testing.T) {
 	})
 	h := AuthMiddleware(config.AuthConfig{Require: true}, false)(inner)
 	req := httptest.NewRequest("GET", "/x", nil)
-	req = req.WithContext(auth.WithPeer(req.Context(), 501, 4242))
+	req = req.WithContext(auth.WithPeer(req.Context(), testPeer(501, 4242)))
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if !gotOK || gotPID != 4242 {
 		t.Fatalf("verified pid = %d ok=%v, want 4242", gotPID, gotOK)

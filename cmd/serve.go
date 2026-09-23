@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -221,23 +220,23 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
-			// Local authenticated listener (unix socket; see auth.ListenLocal).
-			ul, closeSocket, err := auth.ListenLocal(cfg.Socket)
-			switch {
-			case errors.Is(err, auth.ErrSocketInUse):
-				// Another knomit instance (normally the desktop app) owns the
-				// socket. Do not steal it: bridges belong to the instance that
-				// was there first. This process serves TCP only.
-				log.Warn().Err(err).Str("socket", cfg.Socket).Msg("unix socket in use by another knomit instance; serving TCP only")
-			case err != nil:
-				log.Fatal().Err(err).Str("socket", cfg.Socket).Msg("unix socket listen failed")
+			// Local authenticated listener: a unix socket, or a named pipe on
+			// Windows. openLocalListener takes the WHOLE config rather than a
+			// path and a flag, so there is no pair of arguments here to wire up
+			// the wrong way round, and its policy is pinned by a test.
+			ul, closeSocket, err := openLocalListener(cfg)
+			if err != nil {
+				return err
 			}
 			defer closeSocket()
 			if ul != nil {
-				log.Info().Str("socket", cfg.Socket).Msg("unix socket listening")
+				// `via` names the MECHANISM, so the line says which credential
+				// a session over it will carry rather than assuming a socket.
+				log.Info().Str("socket", cfg.Socket).Str("via", string(auth.LocalVia)).
+					Msg("local authenticated listener listening")
 				go func() {
 					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {
-						log.Fatal().Err(err).Msg("unix socket serve failed")
+						log.Fatal().Err(err).Msg("local authenticated listener serve failed")
 					}
 				}()
 			}

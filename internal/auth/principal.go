@@ -31,11 +31,18 @@ const (
 	ViaCert   Via = "cert"
 	ViaToken  Via = "token"
 	ViaSocket Via = "socket"
-	ViaNone   Via = "none"
+	// ViaPipe is a Windows named pipe: the same shape of credential as
+	// ViaSocket -- the OS names the caller, nothing is stored or presented --
+	// but a DIFFERENT mechanism, and the grants key carries the difference so
+	// a row or a log line can tell a SID read off a pipe from a uid read off
+	// a socket. internal/auth.LocalVia picks the one this platform uses.
+	ViaPipe Via = "pipe"
+	ViaNone Via = "none"
 )
 
 // Principal is a verified caller. ID is the stable identifier for the Kind:
-// a key fingerprint for an instance, "uid:<n>" for a socket peer, a token
+// a key fingerprint for an instance, "uid:<n>" or "sid:<SID>" for a local
+// peer (auth.LocalPrincipal and Peer.Principal are the only two spellings), a token
 // subject for a host. Via records which mechanism vouched for it, so a log
 // line or a grants row can tell a kernel-verified uid from a bearer token.
 type Principal struct {
@@ -87,8 +94,12 @@ func ParsePrincipal(s string) (Principal, error) {
 	default:
 		return Principal{}, fmt.Errorf("principal %q: unknown kind %q", s, kind)
 	}
+	// ViaPipe belongs here as much as ViaSocket: on Windows the local
+	// principal is ALWAYS bridge:sid:<SID>, so omitting it makes every
+	// `knomit grants` command on that platform reject the only local
+	// principal there is (knomit#245).
 	switch p.Via {
-	case ViaCert, ViaToken, ViaSocket, ViaNone:
+	case ViaCert, ViaToken, ViaSocket, ViaPipe, ViaNone:
 	default:
 		return Principal{}, fmt.Errorf("principal %q: unknown via %q", s, via)
 	}

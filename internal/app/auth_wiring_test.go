@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"knomit/internal/config"
@@ -31,6 +32,9 @@ func TestApp_AuthConfigReachesMiddleware(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Home = t.TempDir()
 	cfg.Auth.Require = true
+	// require = true with no local listener fails the boot
+	// (checkLocalListener); config.Defaults leaves Socket empty.
+	cfg.Socket = filepath.Join(cfg.Home, "knomit.sock")
 	cfg.Auth.LoopbackDefault = []string{"read"}
 
 	a, err := New(context.Background(), cfg, Options{APIOnly: true})
