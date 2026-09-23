@@ -115,6 +115,12 @@ var controlObjects = []string{
 	// client_session_peers has no index: it is read only by primary key,
 	// through the LEFT JOIN in sessions.Store.List.
 	"client_session_peers",
+	// OAuth issuer (F19 phase 3a). Tokens and codes are read by hash (their
+	// primary key); the family indexes serve family-wide revocation.
+	"oauth_pending", "oauth_pending_live",
+	"oauth_families",
+	"oauth_codes", "oauth_codes_family",
+	"oauth_tokens", "oauth_tokens_family",
 }
 
 // newestControlVersion is the highest numbered up-migration in the EMBEDDED
@@ -479,4 +485,29 @@ func TestControl_ClientSessionBindingsUpDown(t *testing.T) {
 
 	require.NoError(t, Control(db))
 	require.True(t, objectExists(t, db, "client_session_bindings"))
+}
+
+// The OAuth migration goes down and up again cleanly, and its down costs the
+// operator their tokens and pending requests, never the grants they hold.
+func TestControl_OAuthUpDown(t *testing.T) {
+	db := controlDB(t)
+	require.NoError(t, Control(db))
+	oauth := []string{"oauth_pending", "oauth_pending_live", "oauth_families",
+		"oauth_codes", "oauth_codes_family", "oauth_tokens", "oauth_tokens_family"}
+	for _, name := range oauth {
+		require.True(t, objectExists(t, db, name), "expected %q", name)
+	}
+
+	m, err := newMigrator(db, controlFS, "control")
+	require.NoError(t, err)
+	require.NoError(t, m.Migrate(9), "000010 must roll back")
+	for _, name := range oauth {
+		require.False(t, objectExists(t, db, name), "down must drop %q", name)
+	}
+	require.True(t, objectExists(t, db, "grants"), "grants must survive the rollback")
+
+	require.NoError(t, Control(db))
+	for _, name := range oauth {
+		require.True(t, objectExists(t, db, name), "up again must recreate %q", name)
+	}
 }
