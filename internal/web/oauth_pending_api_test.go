@@ -12,6 +12,8 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/oauth"
+	"knomit/internal/pki"
+	"knomit/internal/pki/pkitest"
 )
 
 // localPeer is the kernel-verified caller on the local listener, spelled the
@@ -129,6 +131,20 @@ func TestPendingAPI_OnlyLocalPrincipals(t *testing.T) {
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "local") {
 			t.Errorf("%s: %d %s; want 403 naming the local listener", name, rec.Code, rec.Body.String())
 		}
+	}
+	// An operator CERTIFICATE holding admin by row: a verified principal
+	// with an id, and still not a local one.
+	pk := pkitest.New(t)
+	op := pk.Enroll(t, "op", pki.RoleOperator)
+	opP := auth.OperatorPrincipal(op.Fingerprint())
+	for _, perm := range []auth.Permission{auth.Read, auth.Write, auth.Admin} {
+		if err := f.grants.Grant(context.Background(), opP, perm, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/oauth/pending/"+id+"/deny", nil)
+	if rec := serve(asTLSPeer(h, op.Cert), req); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), opP.String()) {
+		t.Errorf("operator certificate with admin: %d %s; want 403 naming it", rec.Code, rec.Body.String())
 	}
 	if list, _ := f.s.OAuthIssuer.Pending(context.Background()); len(list) != 1 {
 		t.Fatal("a refused call decided the request")

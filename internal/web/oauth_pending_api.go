@@ -23,7 +23,7 @@ import (
 func RequireLocalVia(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, _ := auth.FromContext(r.Context())
-		if p.Via != auth.LocalVia || p.ID == "" {
+		if p.Via != auth.LocalVia {
 			hal.WriteProblem(w, http.StatusForbidden, "Permission denied",
 				"this operation is only available over the local authenticated listener (the unix socket, or the named pipe on Windows); principal "+p.String()+" did not arrive over it",
 				r.URL.Path)
