@@ -707,3 +707,27 @@ func TestWait_KnownIDOneEntryRemovedAfter(t *testing.T) {
 		t.Fatalf("after an expired request: %d entries, want 0", n)
 	}
 }
+
+// A decision that lands between /wait's first read and its registration
+// notified nobody; the re-read after registering still sees it, so the
+// browser is answered at once rather than at the end of the window.
+func TestWait_DecisionBetweenReadAndRegisterIsSeen(t *testing.T) {
+	f := newIssuerFixture(t)
+	f.iss.waitTimeout = 5 * time.Second
+	_, ch := pkce()
+	id := f.authorize(t, f.authorizeQuery(ch))
+	f.iss.beforeRegister = func(got string) {
+		f.iss.beforeRegister = nil
+		if _, err := f.iss.Approve(context.Background(), got, "laptop", nil, "x"); err != nil {
+			t.Error(err)
+		}
+	}
+	start := time.Now()
+	resp := f.get(t, "/oauth/authorize/"+id+"/wait", nil)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("answered after %v: the decision in the gap was missed until the window closed", el)
+	}
+}

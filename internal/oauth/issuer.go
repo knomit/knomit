@@ -58,6 +58,10 @@ type Issuer struct {
 	grants      GrantWriter
 	waitTimeout time.Duration
 	waiters     waiters
+
+	// beforeRegister, when set (tests only), runs in /wait between the first
+	// read and the waiter registration — the window the re-read closes.
+	beforeRegister func(id string)
 }
 
 func NewIssuer(o Options) *Issuer {
@@ -238,6 +242,9 @@ func (i *Issuer) wait(w http.ResponseWriter, r *http.Request) {
 		if remaining <= 0 {
 			i.waitingPage(w, id)
 			return
+		}
+		if i.beforeRegister != nil {
+			i.beforeRegister(id)
 		}
 		ch, release := i.waiters.wait(id)
 		// Re-read once registered: a decision made between the read above and
