@@ -787,7 +787,9 @@ describe('Library — the sentinel sees the current list at the commit that show
       await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
       await waitFor(() => expect(firedAt50()).toBe(true));
       await act(async () => {});
-      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50);
+      // Exactly: scope 1's page, scope 2's first page, and ONE request for its
+      // second — not merely "50 appears somewhere".
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toEqual([0, 0, 50]);
     });
   });
 
