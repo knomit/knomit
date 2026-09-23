@@ -99,15 +99,42 @@ func body(t *testing.T, r *http.Response) string {
 // authorize parks a request and returns its pending id.
 func (f *issuerFixture) authorize(t *testing.T, q url.Values) string {
 	t.Helper()
+	before := pendingIDs(t, f.store)
 	resp := f.get(t, "/oauth/authorize", q)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("authorize: %d %s", resp.StatusCode, body(t, resp))
 	}
-	list, err := f.store.ListPending(context.Background())
-	if err != nil || len(list) == 0 {
-		t.Fatalf("no pending row: %v", err)
+	return newPendingID(t, before, pendingIDs(t, f.store))
+}
+
+// pendingIDs and newPendingID find the request a call just parked. Rows
+// created in the same second sort by their RANDOM id, so "the last row" is
+// not "the newest row".
+func pendingIDs(t *testing.T, s *Store) map[string]bool {
+	t.Helper()
+	list, err := s.ListPending(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	return list[len(list)-1].ID
+	out := map[string]bool{}
+	for _, p := range list {
+		out[p.ID] = true
+	}
+	return out
+}
+
+func newPendingID(t *testing.T, before, after map[string]bool) string {
+	t.Helper()
+	var found []string
+	for id := range after {
+		if !before[id] {
+			found = append(found, id)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one new pending request, got %v", found)
+	}
+	return found[0]
 }
 
 // approveAndCollect runs the whole browser leg and returns the code.

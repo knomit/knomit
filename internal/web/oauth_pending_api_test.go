@@ -31,16 +31,31 @@ func (f *oauthWebFixture) park(t *testing.T) string {
 		"code_challenge": {strings.Repeat("A", 43)}, "code_challenge_method": {"S256"},
 		"state": {"s"}, "scope": {"read"}, "resource": {testIssuer},
 	}
+	ids := func() map[string]bool {
+		list, err := f.s.OAuthIssuer.Pending(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, p := range list {
+			out[p.ID] = true
+		}
+		return out
+	}
+	before := ids()
 	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+q.Encode(), nil)
 	req.Header.Set("User-Agent", "park-test")
 	if rec := serve(f.s.OAuthHandler(), req); rec.Code != http.StatusOK {
 		t.Fatalf("authorize: %d %s", rec.Code, rec.Body.String())
 	}
-	list, err := f.s.OAuthIssuer.Pending(context.Background())
-	if err != nil || len(list) == 0 {
-		t.Fatalf("nothing pending: %v", err)
+	// Rows created in the same second sort by their random id: find the NEW one.
+	for id := range ids() {
+		if !before[id] {
+			return id
+		}
 	}
-	return list[len(list)-1].ID
+	t.Fatal("nothing new pending")
+	return ""
 }
 
 func newKBFixture(t *testing.T) *oauthWebFixture {
