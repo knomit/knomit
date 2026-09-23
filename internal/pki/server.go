@@ -40,8 +40,8 @@ type snapshot struct {
 }
 
 // reloader re-reads instance.crt, root.crt and crl.pem on every handshake
-// and adopts a changed set, so `knomit identity install` and a new CRL take
-// effect without a restart. It compares file BYTES rather than mtimes: the
+// (and, for a Server, on every tick of Run) and adopts a changed set, so
+// `knomit identity install` and a new CRL take effect without a restart. It compares file BYTES rather than mtimes: the
 // files are a few KB, and a byte comparison cannot be fooled by mtime
 // granularity or an inode reused by an atomic rename.
 type reloader struct {

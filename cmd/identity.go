@@ -349,7 +349,7 @@ func installBundle(out io.Writer, cfg config.Config, raw []byte, replaceRoot boo
 	if cfg.TLS.Addr == "" {
 		fmt.Fprintln(out, "the TLS listener is off; to accept enrolled peers add to knomit.toml:\n  [tls]\n  addr = \"0.0.0.0:19279\"")
 	} else {
-		fmt.Fprintln(out, "a running `knomit serve` picks this up on its next handshake; a stopped one on start")
+		fmt.Fprintln(out, "a running `knomit serve` picks this up within its recheck interval or on its next handshake; a stopped one on start")
 	}
 	return nil
 }
