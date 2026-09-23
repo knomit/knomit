@@ -203,3 +203,18 @@ func TestStore_RefreshChecksClientAndResourceBeforeRotating(t *testing.T) {
 		t.Fatalf("the owner, after two refused attempts: %v", err)
 	}
 }
+
+// An approval the browser collects only after the request expired is not
+// honoured: whoever was waiting has gone.
+func TestStore_CollectAfterExpiryRefused(t *testing.T) {
+	s, c := newTestStore(t)
+	ctx := context.Background()
+	p := createPending(t, s)
+	if err := s.Decide(ctx, p.ID, DecisionApproved, "laptop", []string{"read"}, "by"); err != nil {
+		t.Fatal(err)
+	}
+	c.add(pendingTTL)
+	if code, _, err := s.Collect(ctx, p.ID); !errors.Is(err, ErrExpired) || code != "" {
+		t.Fatalf("late collect = %q, %v", code, err)
+	}
+}
