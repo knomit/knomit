@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -256,4 +257,227 @@ func TestListenLocal_UnopenableLockIsARealError(t *testing.T) {
 	if n := strings.Count(err.Error(), path+".lock"); n != 1 {
 		t.Fatalf("lock path named %d times, want 1: %v", n, err)
 	}
+}
+
+// --- knomit#253: sun_path length and the fallback directory ---
+
+// capPath returns a path of EXACTLY n bytes inside a fresh short directory.
+// n is always derived from SunPathCap, never typed, so the test means the
+// same thing on darwin (104) and linux (108).
+func capPath(t *testing.T, n int) string {
+	t.Helper()
+	dir := shortSocketDir(t)
+	pad := n - len(dir) - 1 - len(".sock")
+	if pad < 1 {
+		t.Fatalf("short dir %q leaves no room for a %d-byte path", dir, n)
+	}
+	p := filepath.Join(dir, strings.Repeat("s", pad)+".sock")
+	if len(p) != n {
+		t.Fatalf("built a %d-byte path, want %d", len(p), n)
+	}
+	return p
+}
+
+func assertNothingCreated(t *testing.T, path string) {
+	t.Helper()
+	for _, p := range []string{path, path + ".lock"} {
+		// ENOTDIR is also "absent": the parent is a file, so nothing can be
+		// under it.
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			t.Errorf("%s exists after a refused ListenLocal (err=%v)", p, err)
+		}
+	}
+}
+
+// E5: the boundary itself. cap-1 bytes listens and dials; cap bytes is the
+// named error BEFORE any file is created.
+//
+// NET.LISTEN is the reference, not SunPathCap: a raw net.Listen, bypassing
+// the pre-check, must accept SunPathCap()-1 bytes and refuse SunPathCap()
+// bytes. Without that, any cap no larger than net.Listen's limit is
+// self-consistent (cap-1 binds, cap is refused by the pre-check), and a
+// hardcoded 104 passed on linux (review F1, #268). Sabotage: 104 on linux
+// fails "net.Listen refuses cap bytes" (it accepts 104); 108 on darwin fails
+// "net.Listen accepts cap-1 bytes" (it refuses 107).
+//
+// The oracle is net.Listen, which is Go's syscall layer plus bind(2), NOT
+// the bare kernel. On linux the kernel would accept a 108-byte unterminated
+// path that Go refuses before the syscall (see SunPathCap). Net.Listen is the
+// right oracle because it is what knomit listens through.
+func TestListenLocal_PathLengthBoundaryIsTheSunPathCap(t *testing.T) {
+	// net.Listen oracle, both directions.
+	//   too LOOSE a cap (108 on darwin): cap-1 = 107 bytes, net.Listen refuses.
+	//   too STRICT a cap (104 on linux): cap = 104 bytes, net.Listen accepts.
+	for _, tc := range []struct {
+		n      int
+		accept bool
+	}{{SunPathCap() - 1, true}, {SunPathCap(), false}} {
+		p := capPath(t, tc.n)
+		ln, err := net.Listen("unix", p)
+		if ln != nil {
+			ln.Close()
+		}
+		if accepted := err == nil; accepted != tc.accept {
+			t.Fatalf("net.Listen on a %d-byte path: accepted=%v (err %v); SunPathCap()=%d does not match the limit net.Listen enforces on this platform",
+				tc.n, accepted, err, SunPathCap())
+		}
+	}
+
+	under := capPath(t, SunPathCap()-1)
+	ln, cleanup, err := ListenLocal(under)
+	if err != nil {
+		t.Fatalf("ListenLocal(%d bytes, cap %d): %v", len(under), SunPathCap(), err)
+	}
+	defer cleanup()
+	go acceptAll(ln)
+	c, err := DialLocal(t.Context(), under, time.Second)
+	if err != nil {
+		t.Fatalf("dial the cap-1 socket: %v", err)
+	}
+	c.Close()
+
+	at := capPath(t, SunPathCap())
+	_, cleanup2, err := ListenLocal(at)
+	defer cleanup2()
+	if !errors.Is(err, ErrPathTooLong) {
+		t.Fatalf("ListenLocal(%d bytes) = %v, want ErrPathTooLong", len(at), err)
+	}
+	if errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("the refusal is a raw EINVAL from net.Listen, not the pre-check: %v", err)
+	}
+	assertNothingCreated(t, at)
+}
+
+func TestListenLocal_120ByteHomeIsErrPathTooLongNotEINVAL(t *testing.T) {
+	p := filepath.Join("/tmp", strings.Repeat("h", 120), "knomit.sock")
+	_, cleanup, err := ListenLocal(p)
+	defer cleanup()
+	if !errors.Is(err, ErrPathTooLong) {
+		t.Fatalf("ListenLocal(%d bytes) = %v, want ErrPathTooLong", len(p), err)
+	}
+	if !strings.Contains(err.Error(), p) {
+		t.Errorf("error %q does not name the path", err)
+	}
+	assertNothingCreated(t, p)
+}
+
+// withFallbackBase points the fallback directory at a private test base for
+// the test's duration, so no test touches the user's real /tmp/knomit-<uid>
+// (a running desktop may be listening there).
+func withFallbackBase(t *testing.T) string {
+	t.Helper()
+	base := shortSocketDir(t)
+	prev := fallbackBase
+	fallbackBase = base
+	t.Cleanup(func() { fallbackBase = prev })
+	return base
+}
+
+func TestFallbackSocketDir_IsLiteralTmpPerEUID(t *testing.T) {
+	want := filepath.Join("/tmp", "knomit-"+strconv.Itoa(os.Geteuid()))
+	if got := FallbackSocketDir(); got != want {
+		t.Fatalf("FallbackSocketDir() = %q, want %q", got, want)
+	}
+}
+
+func TestListenLocal_FallbackDirIsCreatedPrivate(t *testing.T) {
+	withFallbackBase(t)
+	p := filepath.Join(FallbackSocketDir(), "abcdef01.sock")
+	ln, cleanup, err := ListenLocal(p)
+	if err != nil {
+		t.Fatalf("ListenLocal in a fresh fallback dir: %v", err)
+	}
+	defer cleanup()
+	go acceptAll(ln)
+	fi, err := os.Lstat(FallbackSocketDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("fallback dir mode %v, want a 0700 directory", fi.Mode())
+	}
+	c, err := DialLocal(t.Context(), p, time.Second)
+	if err != nil {
+		t.Fatalf("dial through the checked fallback dir: %v", err)
+	}
+	c.Close()
+}
+
+// D7: a fallback directory the current user does not own with mode 0700 is
+// never used: the named error, and no socket or lock file inside it.
+func TestListenLocal_UnsafeFallbackDirIsRefused(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+	}{
+		{"group-and-world-readable", func(t *testing.T, dir string) {
+			if err := os.Mkdir(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			os.Chmod(dir, 0o755) // defeat the umask
+		}},
+		{"owned-by-another-uid", func(t *testing.T, dir string) {
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			// Nobody but root can chown to another uid, so the test moves
+			// who "we" are instead: the check must compare against this.
+			prev := socketDirOwner
+			socketDirOwner = func() int { return os.Geteuid() + 1 }
+			t.Cleanup(func() { socketDirOwner = prev })
+		}},
+		{"symlink-to-a-private-dir", func(t *testing.T, dir string) {
+			target := shortSocketDir(t) // 0700, ours: only the link is wrong
+			if err := os.Symlink(target, dir); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a-file-not-a-dir", func(t *testing.T, dir string) {
+			if err := os.WriteFile(dir, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withFallbackBase(t)
+			dir := FallbackSocketDir()
+			tc.setup(t, dir)
+			p := filepath.Join(dir, "abcdef01.sock")
+			_, cleanup, err := ListenLocal(p)
+			defer cleanup()
+			if !errors.Is(err, ErrUnsafeSocketDir) {
+				t.Fatalf("ListenLocal = %v, want ErrUnsafeSocketDir", err)
+			}
+			if _, err := DialLocal(t.Context(), p, time.Second); !errors.Is(err, ErrUnsafeSocketDir) {
+				t.Fatalf("DialLocal = %v, want ErrUnsafeSocketDir: the bridge must not dial into it either", err)
+			}
+			assertNothingCreated(t, p)
+		})
+	}
+}
+
+// A missing fallback dir is "no server here", the bridge's quiet case, not a
+// security refusal.
+func TestDialLocal_MissingFallbackDirIsNotExist(t *testing.T) {
+	withFallbackBase(t)
+	_, err := DialLocal(t.Context(), filepath.Join(FallbackSocketDir(), "abcdef01.sock"), time.Second)
+	if !errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrUnsafeSocketDir) {
+		t.Fatalf("DialLocal into a missing fallback dir = %v, want fs.ErrNotExist only", err)
+	}
+}
+
+// Scope: the ownership check is for the SHARED fallback base only. A data
+// root is the operator's own directory and keeps today's behaviour, whatever
+// its mode.
+func TestListenLocal_OrdinaryDirIsNotOwnershipChecked(t *testing.T) {
+	withFallbackBase(t)
+	dir := shortSocketDir(t)
+	os.Chmod(dir, 0o755)
+	ln, cleanup, err := ListenLocal(filepath.Join(dir, "knomit.sock"))
+	if err != nil {
+		t.Fatalf("ListenLocal in a 0755 non-fallback dir: %v", err)
+	}
+	defer cleanup()
+	ln.Close()
 }

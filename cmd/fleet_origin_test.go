@@ -103,7 +103,7 @@ func serveFleetNode(t *testing.T, handler http.Handler, keyPath string, tcfg con
 	}
 	go srv.Serve(pl)
 	t.Cleanup(func() { srv.Close() })
-	tlsSrv, tl, err := openTLSServer(tcfg, keyPath, srv)
+	tlsSrv, tl, err := openTLSServer(t.Context(), tcfg, keyPath, srv)
 	if err != nil || tlsSrv == nil {
 		t.Fatalf("openTLSServer: %v (server %v)", err, tlsSrv)
 	}

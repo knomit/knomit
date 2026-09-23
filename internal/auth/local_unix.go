@@ -6,6 +6,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 )
@@ -50,6 +51,15 @@ func LocalPrincipal() (Principal, error) {
 // cannot come to disagree about what the transport is, the way they once
 // disagreed about where the data root was.
 func DialLocal(ctx context.Context, path string, timeout time.Duration) (net.Conn, error) {
+	// The shared fallback directory is dialled only when it is private to
+	// this user: otherwise whatever listens there may not be knomit, and the
+	// bridge would hand it every request (ErrUnsafeSocketDir). A missing
+	// directory comes back as fs.ErrNotExist, the quiet "no server" case.
+	if inFallbackDir(path) {
+		if err := checkSocketDir(filepath.Dir(path)); err != nil {
+			return nil, err
+		}
+	}
 	d := &net.Dialer{Timeout: timeout}
 	return d.DialContext(ctx, "unix", path)
 }

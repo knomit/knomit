@@ -245,7 +245,7 @@ func serveCmd() *cobra.Command {
 			// http.Server over the same handler, off until [tls].addr is set
 			// and `knomit identity install` has placed a certificate. The
 			// plaintext listener above is unchanged.
-			tlsSrv, tl, err := openTLSServer(cfg.TLS, a.KeyPath(), srv)
+			tlsSrv, tl, err := openTLSServer(cmd.Context(), cfg.TLS, a.KeyPath(), srv)
 			if err != nil {
 				log.Fatal().Err(err).Str("addr", cfg.TLS.Addr).Str("dir", cfg.TLS.Dir).Msg("tls listener failed") // fail closed
 			}

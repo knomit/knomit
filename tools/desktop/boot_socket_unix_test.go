@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"knomit/internal/auth"
@@ -111,5 +112,39 @@ func TestBootServer_SocketFailureWritesNoLockfile(t *testing.T) {
 	}
 	if _, serr := os.Stat(lockPath); !errors.Is(serr, os.ErrNotExist) {
 		t.Fatalf("lockfile written despite socket failure: %v", serr)
+	}
+}
+
+// knomit#253: a local listener path too long for sun_path must not fail the
+// desktop's boot. It serves TCP only, and the lockfile is written because
+// TCP IS serving. With [auth].require it refuses, naming the cause. The
+// overlong path is explicit; a long data root alone gets config's short
+// fallback and never reaches this branch.
+func TestBootServer_PathTooLongServesTCPOnly(t *testing.T) {
+	long := "/tmp/" + strings.Repeat("d", 120) + "/knomit.sock"
+	lockPath := filepath.Join(t.TempDir(), "server.json")
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: long})
+	if err != nil {
+		t.Fatalf("an overlong socket path must not fail the boot: %v", err)
+	}
+	defer srv.shutdown()
+	if got := getBody(t, http.DefaultClient, fmt.Sprintf("http://127.0.0.1:%d/x", port)); got != wantNoPeer {
+		t.Errorf("TCP must still serve: got %q", got)
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("the lockfile must advertise the TCP port that IS serving: %v", err)
+	}
+
+	lockPath2 := filepath.Join(t.TempDir(), "server.json")
+	srv2, _, err := bootServer(context.Background(), peerEcho, lockPath2, "v", "", localListener{Path: long, Require: true})
+	if err == nil {
+		srv2.shutdown()
+		t.Fatal("require=true with no bindable local listener must refuse the boot")
+	}
+	if !errors.Is(err, auth.ErrPathTooLong) {
+		t.Fatalf("the refusal does not name ErrPathTooLong: %v", err)
+	}
+	if _, serr := os.Stat(lockPath2); !errors.Is(serr, os.ErrNotExist) {
+		t.Fatalf("lockfile written despite the refused boot: %v", serr)
 	}
 }

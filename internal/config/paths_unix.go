@@ -3,8 +3,11 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"path/filepath"
 
+	"knomit/internal/auth"
 	"knomit/internal/platform/userdirs"
 )
 
@@ -35,9 +38,26 @@ const socketFile = "knomit.sock"
 // given data root. On unix that is a socket file inside the root, so the
 // 0700 root above it is what guards it.
 //
+// UNLESS that path does not fit in a socket address (knomit#253): a data root
+// long enough that <root>/knomit.sock reaches auth.SunPathCap would make
+// every listen fail with EINVAL. Such a root gets
+// auth.FallbackSocketDir()/<first 8 hex of sha256(filepath.Clean(root))>.sock
+// instead — /tmp/knomit-<euid>/…, about 30 bytes. The server (Load) and the
+// bridge (SocketPath) both come through here, and the result depends on the
+// root and the euid ONLY, never on TMPDIR or XDG_RUNTIME_DIR, so a bridge
+// with a different environment still computes the server's path. The root is
+// cleaned before hashing so two spellings of one directory agree (the
+// Windows pipe name normalises for the same reason). /tmp is shared: auth
+// uses that directory only when this user owns it with mode 0700.
+//
 // The Windows half cannot do this, because a named pipe does not live in the
 // filesystem — hence one function per platform rather than a filepath.Join at
 // each call site.
 func localListenerName(home string) string {
-	return filepath.Join(home, socketFile)
+	p := filepath.Join(home, socketFile)
+	if len(p) < auth.SunPathCap() {
+		return p
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(home)))
+	return filepath.Join(auth.FallbackSocketDir(), hex.EncodeToString(sum[:])[:8]+".sock")
 }

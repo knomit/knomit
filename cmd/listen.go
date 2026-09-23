@@ -40,6 +40,15 @@ func openLocalListener(cfg config.Config) (net.Listener, func(), error) {
 		// first.
 		log.Warn().Err(err).Str("socket", cfg.Socket).
 			Msg("local listener path is held by another process; serving TCP only")
+	case errors.Is(err, auth.ErrPathTooLong), errors.Is(err, auth.ErrUnsafeSocketDir):
+		// knomit#253: the path cannot be a unix socket (the error names its
+		// length and this platform's cap), or it is in the shared fallback
+		// directory and that directory is not private to this user. Neither
+		// is a reason to refuse the boot: serve TCP only and say why. A long
+		// DATA ROOT alone never lands here (config falls back to a short
+		// path); an explicit overlong [socket] does.
+		log.Warn().Err(err).Str("socket", cfg.Socket).
+			Msg("no local authenticated listener; serving TCP only")
 	case err != nil:
 		closeSocket()
 		return nil, func() {}, err
@@ -50,8 +59,9 @@ func openLocalListener(cfg config.Config) (net.Listener, func(), error) {
 	// healthy — the silent lockout app.checkLocalListener refuses at config
 	// time, arriving through the one door it cannot see.
 	//
-	// err here is either nil or ErrSocketInUse -- anything else returned
-	// above -- so passing it straight through names the right cause.
+	// err here is nil, ErrSocketInUse, ErrPathTooLong or ErrUnsafeSocketDir
+	// -- anything else returned above -- so passing it straight through
+	// names the right cause.
 	if rerr := auth.RequireLocalListener(cfg.Auth.Require, ul, cfg.Socket, err); rerr != nil {
 		closeSocket()
 		return nil, func() {}, rerr

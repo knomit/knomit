@@ -24,6 +24,25 @@ import (
 // is no anonymous path, and carrying on here would serve nothing but 403s.
 var ErrSocketInUse = errors.New("local listener path is held by another live process")
 
+// ErrPathTooLong means the local listener's path does not fit in a unix
+// socket address (sun_path): 104 bytes on darwin, 108 on linux, and neither
+// number is typed anywhere (see SunPathCap). It is checked BEFORE anything is
+// created, so the caller gets this name rather than a raw EINVAL from
+// net.Listen. Callers treat it like ErrSocketInUse: WARN naming path and cap,
+// serve TCP only (knomit#253). It is declared on every platform so callers
+// compile everywhere; only the unix implementation returns it — a Windows pipe
+// name has no such cap.
+var ErrPathTooLong = errors.New("local listener path is too long for a unix socket address")
+
+// ErrUnsafeSocketDir means the SHARED fallback directory for the local
+// listener (FallbackSocketDir, under the literal /tmp) is not a directory the
+// current user owns with mode 0700: missing that, anyone who can write /tmp
+// could squat the lock or listen in the server's place and receive the
+// bridge's traffic. Neither ListenLocal nor DialLocal will use such a
+// directory. Callers treat it like ErrSocketInUse. Unix only, like
+// ErrPathTooLong.
+var ErrUnsafeSocketDir = errors.New("local listener directory is not private to this user")
+
 // ListenLocal is the ONE place the local authenticated listener is opened.
 // Both binaries that serve knomit — `knomit serve` (cmd/serve.go) and the
 // desktop app (tools/desktop/boot.go) — call it, because the desktop builds

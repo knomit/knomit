@@ -100,6 +100,13 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version,
 		// owner need not be knomit at all. Do not steal it either way; serve
 		// TCP only and say so.
 		fmt.Fprintf(os.Stderr, "desktop: %v; serving TCP only\n", err)
+	case errors.Is(err, auth.ErrPathTooLong), errors.Is(err, auth.ErrUnsafeSocketDir):
+		// knomit#253: the path cannot be a unix socket (the error names its
+		// length and this platform's cap), or it sits in the shared fallback
+		// directory and that directory is not private to this user. Same
+		// shape as the in-use branch: warn, serve TCP only, and let
+		// RequireLocalListener below refuse the boot if TCP-only is useless.
+		fmt.Fprintf(os.Stderr, "desktop: %v; serving TCP only\n", err)
 	case err != nil:
 		cancel()
 		_ = srv.Close()

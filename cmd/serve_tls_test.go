@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -68,7 +71,7 @@ func serveBoth(t *testing.T, handler http.Handler, keyPath string, tcfg config.T
 	go srv.Serve(pl)
 	t.Cleanup(func() { srv.Close() })
 
-	tlsSrv, tl, err := openTLSServer(tcfg, keyPath, srv)
+	tlsSrv, tl, err := openTLSServer(t.Context(), tcfg, keyPath, srv)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,17 +198,68 @@ func TestServeTLS_EndToEnd(t *testing.T) {
 	resp.Body.Close()
 }
 
+// knomit#258 through the production wiring: openTLSServer must hand the
+// http.Server the pki.Server's ConnState and start its ticker, or an
+// established connection from a revoked peer is never cut. One raw
+// connection, HTTP/1.1 written by hand, so http.Transport cannot retry on a
+// fresh connection and let a handshake do the refusing.
+//
+// Sabotage (run against the commit that added it): dropping ConnState from
+// the http.Server, or not starting Run, leaves the connection open and this
+// fails.
+func TestServeTLS_RevocationCutsAnEstablishedConnection(t *testing.T) {
+	prev := tlsRecheckInterval
+	tlsRecheckInterval = 50 * time.Millisecond
+	t.Cleanup(func() { tlsRecheckInterval = prev })
+	logs := captureLog(t)
+	cfg := config.Defaults()
+	cfg.Home = t.TempDir()
+	cfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: cfg.Home + "/pki"}
+	keyPath, _ := pkitest.NewKey(t)
+	handler := serverStack(t, cfg, keyPath)
+	f := pkitest.New(t)
+	f.Install(t, f.Enroll(t, "server", pki.RoleInstance, keyPath), cfg.TLS.Dir)
+	_, tlsAddr := serveBoth(t, handler, keyPath, cfg.TLS)
+
+	peer := f.Enroll(t, "peer", pki.RoleInstance)
+	c, err := tls.Dial("tcp", tlsAddr, f.Client(t, peer).Transport.(*http.Transport).TLSClientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	br := bufio.NewReader(c)
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(c, "GET /api/v1/repos HTTP/1.1\r\nHost: knomit\r\n\r\n")
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("peer GET before revocation: %v %v", resp, err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+
+	f.Revoke(t, peer, cfg.TLS.Dir)
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	_, err = br.ReadByte()
+	var ne net.Error
+	if err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+		t.Fatalf("the revoked peer's established connection was not cut (read err %v)\n%s", err, logs)
+	}
+	if !strings.Contains(logs.String(), "tls_conn_closed") || !strings.Contains(logs.String(), pki.ErrRevoked.Error()) {
+		t.Fatalf("the cut was not logged with its reason:\n%s", logs)
+	}
+}
+
 // [tls].addr set but no certificate installed: WARN, plaintext only, no error.
 func TestOpenTLSServer_ConfiguredWithoutCertificateIsOffAndWarns(t *testing.T) {
 	logs := captureLog(t)
-	srv, ln, err := openTLSServer(config.TLSConfig{Addr: "127.0.0.1:0", Dir: t.TempDir()}, "/nonexistent", &http.Server{})
+	srv, ln, err := openTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: t.TempDir()}, "/nonexistent", &http.Server{})
 	if err != nil || srv != nil || ln != nil {
 		t.Fatalf("srv=%v ln=%v err=%v; want all nil", srv, ln, err)
 	}
 	if !strings.Contains(logs.String(), "no instance certificate installed") {
 		t.Fatalf("no WARN logged:\n%s", logs)
 	}
-	if srv, ln, err := openTLSServer(config.TLSConfig{Dir: t.TempDir()}, "", &http.Server{}); srv != nil || ln != nil || err != nil {
+	if srv, ln, err := openTLSServer(t.Context(), config.TLSConfig{Dir: t.TempDir()}, "", &http.Server{}); srv != nil || ln != nil || err != nil {
 		t.Fatal("empty addr must mean off, silently")
 	}
 }
@@ -219,7 +273,7 @@ func TestOpenTLSServer_InstalledButCRLMissingIsAnError(t *testing.T) {
 	if err := removeFile(dir + "/" + pki.CRLFile); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := openTLSServer(config.TLSConfig{Addr: "127.0.0.1:0", Dir: dir}, self.KeyPath, &http.Server{}); err == nil {
+	if _, _, err := openTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: dir}, self.KeyPath, &http.Server{}); err == nil {
 		t.Fatal("opened a TLS listener with no CRL")
 	}
 }

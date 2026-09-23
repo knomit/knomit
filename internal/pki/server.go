@@ -2,6 +2,7 @@ package pki
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -9,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,8 +40,8 @@ type snapshot struct {
 }
 
 // reloader re-reads instance.crt, root.crt and crl.pem on every handshake
-// and adopts a changed set, so `knomit identity install` and a new CRL take
-// effect without a restart. It compares file BYTES rather than mtimes: the
+// (and, for a Server, on every tick of Run) and adopts a changed set, so
+// `knomit identity install` and a new CRL take effect without a restart. It compares file BYTES rather than mtimes: the
 // files are a few KB, and a byte comparison cannot be fooled by mtime
 // granularity or an inode reused by an atomic rename.
 type reloader struct {
@@ -66,16 +69,110 @@ type reloader struct {
 // It FAILS CLOSED at construction: a missing or malformed CRL, a certificate
 // that does not match the key, or a CRL older than the persisted crl.number
 // is an error, and no listener should be opened.
+//
+// It is the handshake half of a Server alone: nothing re-checks a connection
+// once it is established. A listener that serves peers uses NewServer, wires
+// its ConnState, and runs Run.
 func ServerConfig(dir, keyPath string, logf Logf) (*tls.Config, error) {
+	s, err := NewServer(dir, keyPath, logf, 0)
+	if err != nil {
+		return nil, err
+	}
+	return s.TLSConfig(), nil
+}
+
+// DefaultRecheckInterval is how often a Server re-reads its files and
+// re-judges established connections when the caller does not say.
+const DefaultRecheckInterval = 10 * time.Second
+
+// Server is the TLS listener's verification state: the reloader, and the
+// registry of established connections it re-judges (knomit#258).
+//
+// THE INVARIANT: a connection stays open only while a fresh handshake from
+// the same peer would be accepted, checked at most one interval late. The
+// check is snapshot.check, the one VerifyConnection runs, against the CURRENT
+// snapshot. So it cuts a revoked peer, a peer whose certificate expired
+// mid-connection, and every peer of the old fleet after `install
+// --replace-root` — all three are what a fresh handshake would refuse.
+//
+// Three things run the check on established connections:
+//   - the moment a connection is first tracked (ConnRegistry.ConnState),
+//     which catches a handshake verified under an older snapshot;
+//   - right after a handshake adopts a new file set;
+//   - every interval, from Run, which also adopts a changed file set when no
+//     peer is handshaking. Without the timer, adoption happens only on a
+//     ClientHello and an established connection is never reached.
+type Server struct {
+	r        *reloader
+	conns    *ConnRegistry
+	cfg      *tls.Config
+	interval time.Duration
+}
+
+// NewServer loads dir as ServerConfig does, failing closed the same way.
+// interval <= 0 means DefaultRecheckInterval.
+func NewServer(dir, keyPath string, logf Logf, interval time.Duration) (*Server, error) {
 	r, snap, err := newReloader(dir, keyPath, logf)
 	if err != nil {
 		return nil, err
 	}
-	base := r.configFor(snap)
-	base.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
-		return r.configFor(r.refresh()), nil
+	if interval <= 0 {
+		interval = DefaultRecheckInterval
 	}
-	return base, nil
+	s := &Server{r: r, interval: interval}
+	s.conns = NewConnRegistry(func(cs tls.ConnectionState) error {
+		return r.current().check(cs, UsageClient)
+	}, r.logf)
+	s.cfg = r.configFor(snap)
+	s.cfg.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+		return r.configFor(s.refresh()), nil
+	}
+	return s, nil
+}
+
+// TLSConfig is the listener's tls.Config.
+func (s *Server) TLSConfig() *tls.Config { return s.cfg }
+
+// ConnState is the listener's http.Server.ConnState hook. It must be set on
+// the http.Server that serves TLSConfig's listener, or established
+// connections are never re-judged.
+func (s *Server) ConnState(c net.Conn, st http.ConnState) { s.conns.ConnState(c, st) }
+
+// Run re-reads the files and re-judges every established connection once per
+// interval until ctx is done. The re-judging happens on every tick, not only
+// when the files changed: a connection tracked after the last adoption was
+// judged when tracked, but one whose certificate has since expired was not.
+func (s *Server) Run(ctx context.Context) {
+	t := time.NewTicker(s.interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.tick()
+		}
+	}
+}
+
+// tick is one interval's work: adopt a changed file set, then judge every
+// established connection against whatever is current. Exactly one sweep,
+// whether or not this tick adopted — the reloader's refresh never sweeps.
+func (s *Server) tick() {
+	s.r.refresh()
+	s.conns.Sweep()
+}
+
+// refresh adopts a changed file set and, when it did, re-judges every
+// established connection against it. The sweep runs after adopt has released
+// the reloader's lock, so closing connections never stalls a handshake.
+func (s *Server) refresh() *snapshot {
+	prev := s.r.current()
+	next := s.r.refresh()
+	if next != prev {
+		s.conns.Sweep()
+	}
+	return next
 }
 
 // newReloader loads and adopts the initial file set, failing closed.
@@ -121,29 +218,42 @@ func (r *reloader) configFor(s *snapshot) *tls.Config {
 }
 
 // verify is the ONE verifier for both directions: usage says whether the
-// peer is a client connecting to us or a server we connected to.
+// peer is a client connecting to us or a server we connected to. It logs
+// each refusal; the check itself is snapshot.check.
 func (r *reloader) verify(s *snapshot, cs tls.ConnectionState, usage Usage) error {
-	if len(cs.PeerCertificates) == 0 {
-		err := fmt.Errorf("%w: peer presented no certificate", ErrUntrustedRoot)
-		r.logf(err.Error(), "event", "tls_refused")
-		return err
-	}
-	// Runs on resumed connections too (crypto/tls calls VerifyConnection
-	// for every handshake), so a revoked peer cannot ride a session ticket
-	// issued before the revocation.
-	if _, err := VerifyInstanceChain(cs.PeerCertificates[0], cs.PeerCertificates[1:], s.root, s.crl, time.Now(), usage); err != nil {
+	if err := s.check(cs, usage); err != nil {
+		// Runs on resumed connections too (crypto/tls calls VerifyConnection
+		// for every handshake), so a revoked peer cannot ride a session
+		// ticket issued before the revocation.
 		r.logf(err.Error(), "event", "tls_refused", "resumed", cs.DidResume)
 		return err
 	}
 	return nil
 }
 
+// check is the verification itself, without logging: VerifyInstanceChain of
+// the peer's chain against this snapshot's root and CRL, now. It is what a
+// handshake runs (via verify) and what ConnRegistry re-runs on established
+// connections, so the two can never disagree about a peer.
+func (s *snapshot) check(cs tls.ConnectionState, usage Usage) error {
+	if len(cs.PeerCertificates) == 0 {
+		return fmt.Errorf("%w: peer presented no certificate", ErrUntrustedRoot)
+	}
+	_, err := VerifyInstanceChain(cs.PeerCertificates[0], cs.PeerCertificates[1:], s.root, s.crl, time.Now(), usage)
+	return err
+}
+
+// current is the snapshot in force.
+func (r *reloader) current() *snapshot {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cur
+}
+
 // refresh returns the snapshot to use for this handshake, adopting a changed
 // file set if it passes every check and keeping the current one otherwise.
 func (r *reloader) refresh() *snapshot {
-	r.mu.Lock()
-	cur := r.cur
-	r.mu.Unlock()
+	cur := r.current()
 
 	rawCert, errC := os.ReadFile(filepath.Join(r.dir, InstanceCertFile))
 	rawRoot, errR := os.ReadFile(filepath.Join(r.dir, RootCertFile))
