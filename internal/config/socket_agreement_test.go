@@ -104,8 +104,12 @@ func TestSocketPath_AgreesWithLoad_TildeInKnomitHome(t *testing.T) {
 
 	t.Setenv("KNOMIT_HOME", "~/kh")
 	requireAgreement(t, want)
-	if strings.Contains(want, "~") {
-		t.Fatalf("listener %q still carries a literal ~", want)
+	got, err := config.SocketPath()
+	if err != nil {
+		t.Fatalf("config.SocketPath: %v", err)
+	}
+	if strings.Contains(got, "~") {
+		t.Fatalf("SocketPath() = %q still carries a literal ~", got)
 	}
 }
 
@@ -132,10 +136,17 @@ func TestSocketPath_AgreesWithLoad_TildeHomeWithTOMLSocket(t *testing.T) {
 func TestSocketPath_MalformedTOMLIsAnError(t *testing.T) {
 	home := t.TempDir()
 	isolateSocketEnv(t, home)
-	if err := os.WriteFile(filepath.Join(home, "knomit.toml"), []byte("socket = [unterminated\n"), 0o600); err != nil {
+	path := filepath.Join(home, "knomit.toml")
+	if err := os.WriteFile(path, []byte("socket = [unterminated\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := config.SocketPath(); err == nil {
+	got, err := config.SocketPath()
+	if err == nil {
 		t.Fatalf("SocketPath() = %q with a malformed knomit.toml; want an error", got)
+	}
+	// findConfigFile may have picked the file beside the executable, so the
+	// operator needs to be told WHICH knomit.toml is broken.
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("error %q does not name the broken file %q", err, path)
 	}
 }

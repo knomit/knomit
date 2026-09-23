@@ -176,7 +176,7 @@ func SocketPath() (string, error) {
 	var fromTOML Config
 	if path != "" {
 		if _, err := toml.DecodeFile(path, &fromTOML); err != nil {
-			return "", err
+			return "", fmt.Errorf("config: %s: %w", path, err)
 		}
 	}
 	return socketFor(home, fromTOML.Socket, os.Getenv("KNOMIT_SOCKET")), nil
