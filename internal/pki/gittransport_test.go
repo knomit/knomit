@@ -19,10 +19,12 @@ package pki
 //   - RewriteEndpoint not rewriting Protocol: CloneAndFetch ("unsupported
 //     protocol scheme") and RedirectStaysHTTPS.
 //   - checkFleetEndpoint returning nil: TLSOptionsAndCredentialsAreRefused.
-//   - a reinstall with other files returning early (no swap):
-//     ReinstallWithOtherFilesSwapsTheIdentity (the server still sees A);
-//     a reinstall writing go-git's map again: the same test and
-//     ReinstallSameFilesIsANoOp (the sentinel entry is replaced).
+//   - (against f26b9208) a reinstall with other files returning early (no
+//     swap): ReinstallWithOtherFilesSwapsTheIdentity (the server still sees
+//     A) and cmd's ReinstallPresentsTheNewPrincipal; the map written on every
+//     call: ReinstallWithOtherFilesSwapsTheIdentity (the sentinel entry is
+//     replaced); the same-files early return removed:
+//     ReinstallSameFilesIsANoOp (the source is replaced and a line logged).
 //   - the source hashing only instance.crt (no rebuild on a CRL change):
 //     OurCRLChangeRebuildsTheClient (the kept-alive connection is reused).
 
