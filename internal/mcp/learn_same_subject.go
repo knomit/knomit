@@ -310,6 +310,7 @@ func checkSameSubjectCollisions(
 	ctx context.Context,
 	s mcpStore,
 	branch string,
+	ontology *fact.Ontology,
 	inputs []learnFactInput,
 	facts []fact.Fact,
 	topicCategories []string,
@@ -388,6 +389,14 @@ func checkSameSubjectCollisions(
 		// Private state is not knowledge, has no subject to collide on, and is
 		// unindexed — the search would return nothing anyway.
 		if topicCategories[i] == "" || touched[i] {
+			continue
+		}
+		// An incoming fact under a learn_dedup: off topic is near-identical to
+		// its neighbours by design and must land even when it shares an entity
+		// with one. INCOMING side only: the candidate side is F01's type skip in
+		// findSameSubjectCandidates, and the attribute deliberately does not
+		// govern candidates.
+		if ontology.LearnDedupOff(topicCategories[i]) {
 			continue
 		}
 		if i >= len(vecs) || len(vecs[i]) == 0 {

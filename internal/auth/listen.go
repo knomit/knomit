@@ -3,23 +3,26 @@ package auth
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
-	"os"
-	"runtime"
-	"sync"
 )
 
-// ErrSocketInUse means another knomit instance is ALIVE on the socket path.
-// The caller must not fail on it: log at WARN and serve TCP only. Taking the
-// path over would silently redirect every bridge away from the instance that
-// was there first — after phase 1c both `knomit serve` and the desktop app
-// open the same path.
-var ErrSocketInUse = errors.New("local socket is in use by a live knomit instance")
-
-// errLockHeld is what lockExclusive returns when another open file
-// description already holds the lock.
-var errLockHeld = errors.New("lock held")
+// ErrSocketInUse means another LIVE process holds the local listener path.
+// The caller must not fail on it merely because of that: log at WARN and
+// serve TCP only. Taking the path over would silently redirect every bridge
+// away from whatever was there first — after phase 1c both `knomit serve` and
+// the desktop app open the same path.
+//
+// It says "another process" and not "another knomit instance", which is all
+// that is actually KNOWN. On unix the lock file is knomit's own, so the owner
+// almost certainly is knomit; on Windows the pipe namespace is flat and
+// world-creatable and ERROR_ACCESS_DENIED is what the OS returns for ANY
+// foreign owner, so the name may be held by something with no relation to
+// knomit at all.
+//
+// It is benign ONLY while there is another way in. See RequireLocalListener,
+// which both callers consult straight after: with [auth].require = true there
+// is no anonymous path, and carrying on here would serve nothing but 403s.
+var ErrSocketInUse = errors.New("local listener path is held by another live process")
 
 // ListenLocal is the ONE place the local authenticated listener is opened.
 // Both binaries that serve knomit — `knomit serve` (cmd/serve.go) and the
@@ -28,70 +31,77 @@ var errLockHeld = errors.New("lock held")
 // socket in cmd/serve.go only, and a desktop-served machine never opened one
 // (issue #248).
 //
-// 0600 on the socket, under the 0700 data root, IS the credential: the kernel
-// vouches for the peer uid (PeerCred) and the mode decides which uids can
-// reach the socket at all.
+// WHAT the listener is differs by platform, and that is the only thing the
+// per-platform halves decide:
 //
-// Live or stale is NOT answered by dialing the socket: a live listener whose
-// accept backlog is full refuses with ECONNREFUSED exactly like a stale file,
-// so a probe would steal a busy server's socket. Instead the owner holds an
-// exclusive flock on <path>.lock for the life of the listener. The kernel
-// releases it on ANY exit, graceful or not, so "lock held" is exactly "owner
-// alive" (ErrSocketInUse, nothing touched) and "lock acquired" is exactly
-// "whatever sits at path is a leftover", which is removed.
+//   - unix: a domain socket. 0600 on it, under the 0700 data root, IS the
+//     credential: the kernel vouches for the peer uid (PeerCred) and the mode
+//     decides which uids can reach the socket at all.
+//   - windows: a named pipe, whose SDDL gates it in a similar way — this
+//     user's SID and SYSTEM, and nobody else (knomit#245). The parallel is
+//     not exact: the ACL gates who may OPEN the pipe, not who may CREATE that
+//     name, and \\.\pipe\ is world-creatable. See ownerOnlySDDL. A path that
+//     is not in the pipe namespace is an ERROR, never a silent nil: opening
+//     an ordinary path would create a FILE and the server would look up
+//     while accepting nothing.
 //
-// The returned cleanup closes the listener, unlinks the socket and releases
-// the lock; it is safe to call twice. It keeps the lock file reachable, so the
-// caller must hold on to it for the listener's life: a dropped cleanup lets
-// the GC finalizer close the descriptor and release the lock early.
+// LIVE OR STALE is never answered by dialling the path — a live listener with
+// a full accept backlog refuses exactly like a leftover, so a probe would
+// steal a busy server's socket. Each platform answers it with something the
+// OS maintains for us, and both map onto ErrSocketInUse:
 //
-// path == "" or a platform without unix sockets returns (nil, noop, nil), so
-// callers need no platform branch. Issue #245 adds the Windows named pipe
-// HERE, not in the callers.
+//   - unix: an exclusive flock on <path>.lock, held for the listener's life.
+//     The kernel releases it on ANY exit, graceful or not, so "lock held" is
+//     exactly "owner alive" and "lock acquired" is exactly "whatever sits at
+//     path is a leftover", which is then removed.
+//   - windows: the pipe namespace itself. A pipe name exists only while an
+//     instance of it is open, so nothing can be left behind for a successor
+//     to clear up, and winio.ListenPipe creates the first instance with the
+//     FILE_CREATE disposition, so a second listener on a live name is refused
+//     by the OS. There is no lock file on Windows and nothing for one to guard.
+//
+// The returned cleanup closes the listener and releases whatever the platform
+// held; it is safe to call twice. On unix it keeps the lock file reachable, so
+// the caller must hold on to it for the listener's life: a dropped cleanup
+// lets the GC finalizer close the descriptor and release the lock early.
+//
+// path == "" returns (nil, noop, nil), so callers need no platform branch.
 func ListenLocal(path string) (net.Listener, func(), error) {
-	noop := func() {}
-	if path == "" || runtime.GOOS == "windows" {
-		return nil, noop, nil
+	if path == "" {
+		return nil, func() {}, nil
 	}
-	lockPath := path + ".lock"
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, noop, fmt.Errorf("open socket lock: %w", err) // PathError already names lockPath
+	return listenLocal(path)
+}
+
+// RequireLocalListener refuses a boot that would answer every request 403.
+//
+// It is the SECOND DOOR on the property app.checkLocalListener guards, and it
+// exists because that one cannot see this. checkLocalListener asks whether a
+// local listener is CONFIGURED, at config time; this asks whether one was
+// actually BOUND, after ListenLocal has run. The gap between them is
+// ErrSocketInUse, which both callers treat as benign — warn, serve TCP only,
+// carry on — because a second instance must not steal the first one's
+// listener. With [auth].require = true that benign path produces exactly the
+// server Defect A exists to prevent: up, healthy-looking, and refusing
+// everything, which is harder to diagnose than a server that did not start.
+//
+// knomit#245 is what made it reachable. Before it, Windows had no socket
+// default, so require = true failed at checkLocalListener and never got here;
+// now cfg.Socket is always non-empty there, that check always passes, and the
+// pipe namespace is flat and world-creatable — ANY process holding the name
+// yields ERROR_ACCESS_DENIED, which isPipeNameTaken maps to ErrSocketInUse.
+// No attacker is needed.
+//
+// It takes listenErr so the refusal can say WHY there is no listener rather
+// than only that there is none.
+func RequireLocalListener(require bool, ln net.Listener, path string, listenErr error) error {
+	if !require || ln != nil {
+		return nil
 	}
-	if err := lockExclusive(lockFile); err != nil {
-		lockFile.Close()
-		if errors.Is(err, errLockHeld) {
-			return nil, noop, fmt.Errorf("%w: %s", ErrSocketInUse, path)
-		}
-		return nil, noop, fmt.Errorf("lock %s: %w", lockPath, err)
+	if listenErr != nil {
+		return fmt.Errorf("[auth].require = true but this process bound no local authenticated listener at %s: %w. "+
+			"Every request would be refused. Free that path, or set [auth].require = false", path, listenErr)
 	}
-	// From here every failure closes lockFile, which releases the lock.
-	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		lockFile.Close()
-		return nil, noop, fmt.Errorf("remove stale socket %s: %w", path, err)
-	}
-	ln, err := net.Listen("unix", path)
-	if err != nil {
-		lockFile.Close()
-		return nil, noop, fmt.Errorf("unix socket listen %s: %w", path, err)
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		ln.Close()
-		os.Remove(path)
-		lockFile.Close()
-		return nil, noop, fmt.Errorf("chmod socket %s: %w", path, err)
-	}
-	var once sync.Once
-	cleanup := func() {
-		once.Do(func() {
-			ln.Close()
-			os.Remove(path)
-			// Release the lock LAST, after the socket is gone, so a successor
-			// can never have its fresh socket unlinked by us. The .lock file
-			// itself is never unlinked: unlink-and-recreate would let two
-			// processes each lock a different inode and both own the socket.
-			lockFile.Close()
-		})
-	}
-	return ln, cleanup, nil
+	return fmt.Errorf("[auth].require = true but this process bound no local authenticated listener at %q: "+
+		"every request would be refused. Configure one, or set [auth].require = false", path)
 }

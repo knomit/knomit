@@ -1,3 +1,5 @@
+//go:build !windows
+
 package auth
 
 import "net"
@@ -11,14 +13,18 @@ import "net"
 //
 // ok is false for any connection that is not a *net.UnixConn and on any
 // syscall failure; callers treat false as "no credential", never as uid 0.
-func PeerCred(conn net.Conn) (uid, pid int, ok bool) {
+//
+// The Windows half of this pair is peercred_windows.go, which reads a named
+// pipe client's SID instead. Both return the same Peer, formatted by the same
+// localID their platform's LocalPrincipal uses.
+func PeerCred(conn net.Conn) (Peer, bool) {
 	uc, isUnix := conn.(*net.UnixConn)
 	if !isUnix {
-		return 0, 0, false
+		return Peer{}, false
 	}
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return 0, 0, false
+		return Peer{}, false
 	}
 	var (
 		gotUID, gotPID int
@@ -28,7 +34,7 @@ func PeerCred(conn net.Conn) (uid, pid int, ok bool) {
 		gotUID, gotPID, gotOK = peerCredFD(int(fd))
 	})
 	if ctrlErr != nil || !gotOK {
-		return 0, 0, false
+		return Peer{}, false
 	}
-	return gotUID, gotPID, true
+	return Peer{ID: localID(gotUID), Via: LocalVia, PID: gotPID}, true
 }

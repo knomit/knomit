@@ -3,7 +3,6 @@ package config
 import (
 	"math"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -529,30 +528,33 @@ func TestDefaults_AuthLoopbackIsFullLocalRights(t *testing.T) {
 	}
 }
 
-// The socket is the local credential, so it must exist without being asked
-// for: Load fills it in under Home when nothing set it.
+// The local listener is the local credential, so it must exist without being
+// asked for: Load fills it in from Home when nothing set it. EVERY platform,
+// since knomit#245 -- Windows having no default here is what made
+// [auth].require = true a silent lockout there.
 func TestLoad_SocketDefaultsUnderHome(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no AF_UNIX default on windows")
-	}
 	home := t.TempDir()
 	t.Setenv("KNOMIT_HOME", home)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Socket != filepath.Join(home, "knomit.sock") {
-		t.Fatalf("Socket = %q, want %q", cfg.Socket, filepath.Join(home, "knomit.sock"))
+	if cfg.Socket == "" {
+		t.Fatal("Load left Socket empty; with [auth].require = true that is a boot failure by design")
+	}
+	if want := localListenerName(home); cfg.Socket != want {
+		t.Fatalf("Socket = %q, want %q", cfg.Socket, want)
 	}
 }
 
 // An explicit socket path must survive: the default only fills a gap.
 func TestLoad_ExplicitSocketWins(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no AF_UNIX default on windows")
-	}
 	home := t.TempDir()
 	t.Setenv("KNOMIT_HOME", home)
+	// Not a valid listener path on either platform, which is the point: Load
+	// must not second-guess an operator, and app.checkLocalListener only asks
+	// whether one is configured. auth.ListenLocal is what refuses a bad one,
+	// at boot, loudly.
 	t.Setenv("KNOMIT_SOCKET", "/tmp/explicit.sock")
 	cfg, err := Load()
 	if err != nil {
@@ -566,9 +568,6 @@ func TestLoad_ExplicitSocketWins(t *testing.T) {
 // The bridge dials the socket the server opens. They resolve it through the
 // same helper precisely so they cannot drift; this pins that they agree.
 func TestSocketPath_AgreesWithTheResolvedConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no AF_UNIX default on windows")
-	}
 	home := t.TempDir()
 	t.Setenv("KNOMIT_HOME", home)
 
@@ -588,9 +587,6 @@ func TestSocketPath_AgreesWithTheResolvedConfig(t *testing.T) {
 // KNOMIT_REPO is the backward-compatible alias for the data root, and the
 // socket has to follow it too.
 func TestSocketPath_HonoursTheRepoAlias(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no AF_UNIX default on windows")
-	}
 	home := t.TempDir()
 	t.Setenv("KNOMIT_HOME", "")
 	t.Setenv("KNOMIT_REPO", home)
@@ -598,14 +594,14 @@ func TestSocketPath_HonoursTheRepoAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != filepath.Join(home, "knomit.sock") {
-		t.Fatalf("SocketPath() = %q", got)
+	if want := localListenerName(home); got != want {
+		t.Fatalf("SocketPath() = %q, want %q", got, want)
 	}
 }
 
 // The nil fallback has exactly one definition, because web.Server.grants()
-// and app.seedOwnUID both read it: if they ever disagreed, boot would seed
-// the server's own uid with one permission set while the middleware resolved
+// and app.seedOwnPrincipal both read it: if they ever disagreed, boot would seed
+// the server's own local principal with one permission set while the middleware resolved
 // anonymous to another.
 func TestEffectiveLoopbackDefault_ThreeCases(t *testing.T) {
 	// nil — the literal was built without config, which only tests do.

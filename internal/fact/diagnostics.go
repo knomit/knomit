@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -134,6 +136,12 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 			}
 		}
 	}
+	// Attributes are checked over the FULL tree (the key check above stops at
+	// one level of children). Unknown key → warning; bad value for a known key
+	// → error. See attributeRegistry.
+	for _, key := range sortedKeys(o.Topics) {
+		diags = append(diags, attributeDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
+	}
 	// Only a FATAL diagnostic withholds the ontology. Warnings travel back
 	// ALONGSIDE a usable document, which is what lets the open path read a repo
 	// whose ontology carries a key this binary does not declare.
@@ -146,6 +154,43 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 		return nil, append(diags, Diagnostic{Message: err.Error()})
 	}
 	return &o, diags
+}
+
+// attributeDiags checks the attributes of node (at topic path `path`) and of
+// every node below it. body is node's yaml VALUE node — the mapping holding
+// `attributes:` and `children:` — used only for positions; a nil body just
+// means line 0.
+//
+// An unknown key is a WARNING, like an unknown struct field and for the same
+// reason: it may come from a newer knomit, and ParseOntology on the open path
+// must not trade the repo's own ontology for the default over it. A bad value
+// for a KNOWN key is an error — see attributeRegistry for why, and for the
+// closed-value-set rule that follows from it.
+func attributeDiags(path string, node *OntologyNode, body *yaml.Node) []Diagnostic {
+	if node == nil {
+		return nil
+	}
+	var diags []Diagnostic
+	attrKeys := mappingChildren(valueForKey(body, "attributes"))
+	for _, k := range slices.Sorted(maps.Keys(node.Attributes)) {
+		spec, known := attributeRegistry[k]
+		if !known {
+			d := diagAt(attrKeys[k], fmt.Sprintf(
+				"parse ontology: unknown attribute %q in topic %q: not recognised by this knomit and ignored", k, path))
+			d.Severity = SeverityWarning
+			diags = append(diags, d)
+			continue
+		}
+		if v := node.Attributes[k]; !spec.valid(v) {
+			diags = append(diags, diagAt(attrKeys[k], fmt.Sprintf(
+				"parse ontology: attribute %q in topic %q must be %s, got %v (%T)", k, path, spec.accepts, v, v)))
+		}
+	}
+	children := valueForKey(body, "children")
+	for _, ck := range sortedKeys(node.Children) {
+		diags = append(diags, attributeDiags(path+"/"+ck, node.Children[ck], valueForKey(children, ck))...)
+	}
+	return diags
 }
 
 // documentRoot returns the mapping node inside a document node.

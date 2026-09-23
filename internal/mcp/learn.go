@@ -505,6 +505,18 @@ func dedupEmbed(ctx context.Context, batchEmb store.BatchEmbedder, facts []fact.
 	return vecs
 }
 
+// topicPathOf returns the ontology topic path ("topic/category/…") of an
+// on-disk fact path: the path with the ontology root and the file name removed.
+// The root is matched case-insensitively — the configured root keeps its real
+// case on disk — and a path outside it yields "", which resolves no attribute.
+func topicPathOf(ontologyRoot, path string) string {
+	prefix := ontologyRoot + "/"
+	if len(path) <= len(prefix) || !strings.EqualFold(path[:len(prefix)], prefix) {
+		return ""
+	}
+	return categoryDirOf(path[len(prefix):])
+}
+
 // applyDedupMerge searches each incoming fact's own category directory for a
 // near-duplicate and folds any match in, mutating facts and files in place.
 // Three outcomes per fact: no match (write as-is), the match is a hypothesis
@@ -519,6 +531,7 @@ func applyDedupMerge(
 	s mcpStore,
 	writeBranch string,
 	ontology *fact.Ontology,
+	ontologyRoot string,
 	batchEmb store.BatchEmbedder,
 	dedupVecs [][]float32,
 	facts []fact.Fact,
@@ -594,6 +607,26 @@ func applyDedupMerge(
 			donatePaths[i] = ""
 			continue
 		}
+		// learn_dedup: off (ontology attribute) — the topic holds facts that
+		// are near-identical BY DESIGN (templated protocol messages, two
+		// agents' takes of one task), so the search is skipped and the fact is
+		// written at its own freshly-minted path. This classifies the INCOMING
+		// fact and sits on the BEFORE-merge side: it reads only the topic path,
+		// which the merge never changes.
+		//
+		// Unlike the private-state skip above, the donation is KEPT: this fact
+		// is written at paths[i] and indexed like any other, so dedupVecs[i]
+		// describes exactly what upsert will embed. topicCategories[i] is the
+		// same string ValidateFact receives, which is what Attr expects.
+		//
+		// Because this skip sits BEFORE the search, a flagged fact also skips
+		// hypothesis subsumption below: an observation that settles a
+		// hypothesis under a flagged topic leaves BOTH live, and review never
+		// touches the topic either. Accepted — coordination topics do not carry
+		// hypotheses — but it is a consequence, not an accident.
+		if ontology.LearnDedupOff(topicCategories[i]) {
+			continue
+		}
 		// Search scope is derived from the on-disk path so the category
 		// directory carries the configured ontology root's real case.
 		categoryDir := categoryDirOf(paths[i])
@@ -612,6 +645,17 @@ func applyDedupMerge(
 		}
 
 		match := results[0]
+		// CANDIDATE side of the flag. The search scope is a raw path prefix
+		// (store's `path LIKE dir%`), so a search from ops/tasks also returns
+		// facts under ops/tasks/protocol/ — a flagged child — and under a
+		// sibling sharing the prefix. Merging there would rewrite a message
+		// the flag exists to keep intact, and validate the result against the
+		// wrong topic's rules. The match's topic path is derived the way
+		// topicCategories is: the on-disk path minus the ontology root and the
+		// file name.
+		if ontology.LearnDedupOff(topicPathOf(ontologyRoot, match.Path)) {
+			continue
+		}
 		if consumed[match.Path] {
 			// Already absorbed an earlier fact in this call — see `consumed`.
 			continue
@@ -833,7 +877,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Embedding happens HERE, once, because two stages need the same
 		// vectors: the dedup merge below and the same-subject gate after it.
 		dedupVecs := dedupEmbed(ctx, batchEmb, facts)
-		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, writeBranch, ontology, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID())
+		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID())
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -843,7 +887,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, writeBranch, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
+		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 

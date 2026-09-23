@@ -5,7 +5,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -319,7 +318,7 @@ type AuthConfig struct {
 // grant the full default set to someone who asked for none of it.
 //
 // Both enforcement-side callers go through this — web.Server.grants(), which
-// resolves what anonymous may do, and app.seedOwnUID, which seeds the server's
+// resolves what anonymous may do, and app.seedOwnPrincipal, which seeds the server's
 // own socket uid. They used to each carry their own copy of the nil check. If
 // one had ever been changed alone, boot would seed one set while the
 // middleware resolved another, and the two enforcement points would disagree
@@ -528,16 +527,22 @@ func Load() (Config, error) {
 		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
 	}
 
-	// Default the unix socket to <Home>/knomit.sock, for the same reason and
-	// at the same point as known_hosts: after tilde expansion, and only when
-	// nothing set it, so a TOML or KNOMIT_SOCKET value wins.
+	// Default the local authenticated listener to the one this platform uses
+	// under <Home>, for the same reason and at the same point as known_hosts:
+	// after tilde expansion, and only when nothing set it, so a TOML or
+	// KNOMIT_SOCKET value wins.
 	//
-	// The socket is the local bridge's credential -- the kernel tells the
-	// server which uid is on the other end (internal/auth.PeerCred) -- so it
-	// has to exist without being configured, and the directory mode is what
-	// guards it. Windows has no AF_UNIX default here.
-	if cfg.Socket == "" && runtime.GOOS != "windows" {
-		cfg.Socket = filepath.Join(cfg.Home, socketFile)
+	// It is the local bridge's credential -- the OS tells the server who is
+	// on the other end (internal/auth.PeerCred) -- so it has to exist without
+	// being configured. What guards it is the 0700 data root on unix and the
+	// pipe ACL on Windows (internal/auth.ListenLocal opens both).
+	//
+	// EVERY platform gets one now. Windows had no default here through phase
+	// 1, which is what made [auth].require = true a silent lockout there
+	// (knomit#245): app.checkLocalListener refuses that combination, and the
+	// pipe default is what lets Windows satisfy it.
+	if cfg.Socket == "" {
+		cfg.Socket = localListenerName(cfg.Home)
 	}
 
 	// Default [tls].dir to <Home>/pki, after tilde expansion like the two
