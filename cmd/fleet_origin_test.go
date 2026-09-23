@@ -45,10 +45,10 @@ import (
 // served on the real mTLS listener from openTLSServer. The pki tests prove
 // the transport against a minimal upload-pack server; this proves the pair.
 //
-// Only A, the fetcher, uses the client transport, and A is the only identity
-// this process ever installs: pki.InstallGitTransport registers once per
-// process, which is why this is ONE test and no other test in the package
-// installs.
+// Only the fetcher uses the client transport. pki.InstallGitTransport writes
+// go-git's protocol map once per process; a later call with another home
+// swaps the client source, which is what lets several tests here (and
+// -count=2) each install their own fetcher.
 
 // headerLog records every request that carried an Authorization header, and
 // whether it came in on the TLS listener.
@@ -146,25 +146,59 @@ func hasFact(t *testing.T, ri *repos.RepoInstance, name string) bool {
 	return found
 }
 
-func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
-	ctx := context.Background()
-	f := pkitest.New(t)
+// principalLog records the principal AuthMiddleware assigned to every /git
+// request that arrived on the TLS listener — the identity the server SAW.
+type principalLog struct {
+	mu   sync.Mutex
+	last string
+}
 
-	// B: the serving instance, the production stack on both listeners.
+func (p *principalLog) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if pr, ok := auth.FromContext(r.Context()); ok && r.TLS != nil {
+			p.mu.Lock()
+			p.last = pr.String()
+			p.mu.Unlock()
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (p *principalLog) get() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.last
+}
+
+const fleetServerAgent = "agent/bravo-00000000"
+
+type fleetServer struct {
+	cfg            config.Config
+	kb, kb2        *repos.RepoInstance
+	plain, tlsAddr string
+	hdrs           *headerLog
+	principals     *principalLog
+}
+
+// newFleetServer is B: enrolled in f, the production stack on both
+// listeners, serving repo kb (fact "first") and kb2 (fact "plainfact").
+func newFleetServer(t *testing.T, f *pkitest.Fleet) *fleetServer {
+	t.Helper()
+	ctx := context.Background()
 	bCfg := config.Defaults()
 	bCfg.Home = t.TempDir()
 	bCfg.OntologyRoot = "kb"
 	bCfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: filepath.Join(bCfg.Home, "pki")}
 	bKey, _ := pkitest.NewKey(t)
-	const bAgent = "agent/bravo-00000000"
-	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, AgentBranch: bAgent, DisableBackgroundSync: true})
+	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, AgentBranch: fleetServerAgent, DisableBackgroundSync: true})
 	if err := bMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { bMgr.Close() })
+	principals := &principalLog{}
 	bSrv := &web.Server{
 		Manager:    bMgr,
-		GitHandler: web.GitRemoteHandler(bMgr),
+		GitHandler: principals.wrap(web.GitRemoteHandler(bMgr)),
 		APIOnly:    true,
 		Auth:       bCfg.Auth,
 		Grants:     auth.NewSQLGrants(bMgr.ControlDB()),
@@ -173,24 +207,73 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	f.Install(t, f.Enroll(t, "bravo", pki.RoleInstance, bKey), bCfg.TLS.Dir)
 	plain, tlsAddr := serveFleetNode(t, hdrs.wrap(bSrv.Handler()), bKey, bCfg.TLS)
 
-	riB, err := bMgr.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
+	kb, err := bMgr.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "preset"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publish(t, riB, bAgent, "first")
-	riB2, err := bMgr.Create(ctx, repos.CreateSpec{Name: "kb2", Mode: "preset"}, nil)
+	publish(t, kb, fleetServerAgent, "first")
+	kb2, err := bMgr.Create(ctx, repos.CreateSpec{Name: "kb2", Mode: "preset"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publish(t, riB2, bAgent, "plainfact")
+	publish(t, kb2, fleetServerAgent, "plainfact")
+	return &fleetServer{cfg: bCfg, kb: kb, kb2: kb2, plain: plain, tlsAddr: tlsAddr, hdrs: hdrs, principals: principals}
+}
+
+// newFleetFetcherHome enrolls a fresh key in f and installs its files, as
+// `knomit identity install` would, returning the dir, key and principal.
+func newFleetFetcherHome(t *testing.T, f *pkitest.Fleet, host string) (dir, key string, m pkitest.Member, principal string) {
+	t.Helper()
+	home := t.TempDir()
+	key, _ = pkitest.NewKey(t)
+	dir = filepath.Join(home, "pki")
+	m = f.Enroll(t, host, pki.RoleInstance, key)
+	f.Install(t, m, dir)
+	return dir, key, m, auth.InstancePrincipal(m.Fingerprint()).String()
+}
+
+// A second InstallGitTransport with another home swaps the client source,
+// and the server's AuthMiddleware then sees the SECOND home's principal.
+// Also what lets this package run the e2e under -count=2.
+func TestFleetOrigin_ReinstallPresentsTheNewPrincipal(t *testing.T) {
+	ctx := context.Background()
+	f := pkitest.New(t)
+	b := newFleetServer(t, f)
+	url := pki.GitScheme + "://" + b.tlsAddr + "/git/kb"
+
+	for _, host := range []string{"alpha", "charlie"} {
+		dir, key, _, principal := newFleetFetcherHome(t, f, host)
+		if err := pki.InstallGitTransport(dir, key); err != nil {
+			t.Fatalf("install %s: %v", host, err)
+		}
+		mgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+			KeyPath: key, AgentBranch: "agent/" + host + "-00000000", DisableBackgroundSync: true})
+		if err := mgr.Start(); err != nil {
+			t.Fatal(err)
+		}
+		res, err := mgr.ProbeOrigin(ctx, repos.OriginSpec{URL: url, AuthMethod: "cert"})
+		mgr.Close()
+		if err != nil || !res.Reachable {
+			t.Fatalf("%s probe: %+v %v", host, res, err)
+		}
+		if got := b.principals.get(); got != principal {
+			t.Fatalf("after installing %s the server saw %q, want %q", host, got, principal)
+		}
+	}
+}
+
+func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
+	ctx := context.Background()
+	f := pkitest.New(t)
+
+	b := newFleetServer(t, f)
+	bCfg, riB, plain, tlsAddr, hdrs := b.cfg, b.kb, b.plain, b.tlsAddr, b.hdrs
+	const bAgent = fleetServerAgent
 
 	// A: the fetcher, enrolled in the same fleet, WITH a global forge token
 	// configured (KNOMIT_REMOTE_AUTH=token) that must never reach B.
 	aHome := t.TempDir()
-	aKey, _ := pkitest.NewKey(t)
-	aDir := filepath.Join(aHome, "pki")
-	aMember := f.Enroll(t, "alpha", pki.RoleInstance, aKey)
-	f.Install(t, aMember, aDir)
+	aDir, aKey, aMember, aPrincipal := newFleetFetcherHome(t, f, "alpha")
 	if err := pki.InstallGitTransport(aDir, aKey); err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -232,6 +315,10 @@ func TestFleetOrigin_SubscribeProbeSyncAndRevokeOverKnomitHTTPS(t *testing.T) {
 	}
 	if !hasFact(t, riA, "second") {
 		t.Fatal("A's sync did not bring B's second fact")
+	}
+
+	if got := b.principals.get(); got != aPrincipal {
+		t.Fatalf("the server saw %q, want A's principal %q", got, aPrincipal)
 	}
 
 	// 4. S1: not one request on the TLS listener carried an Authorization

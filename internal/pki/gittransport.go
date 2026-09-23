@@ -19,6 +19,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/rs/zerolog/log"
 )
 
 // GitScheme is the go-git URL scheme for a git origin that is another
@@ -109,31 +110,42 @@ var install struct {
 	dir, keyPath string
 }
 
-// InstallGitTransport registers the fleet transport under GitScheme, once
-// per process, resolving its client from dir and keyPath at each session.
-// client.Protocols is an unsynchronised map: call from app.New before
+// InstallGitTransport registers the fleet transport under GitScheme with
+// go-git EXACTLY ONCE per process, and points it at a client source for dir
+// and keyPath that is resolved at each session. client.Protocols is an
+// unsynchronised map: the first call must come from app.New before
 // Manager.Start and before any goroutine that may clone or sync. Call it
 // whether or not the instance is enrolled — the scheme must ALWAYS be
 // recognised, so an unenrolled instance fails a knomit+https origin with
 // ErrNotEnrolled instead of falling through to anything else.
 //
+// A later call with the SAME dir and keyPath is a no-op. A later call with a
+// DIFFERENT dir or keyPath swaps the client source (an atomic pointer; the
+// go-git registration is not touched again) and closes the old source's
+// idle connections, so the next session presents the new identity. It never
+// silently keeps the old one.
+//
 // The returned error describes the state NOW, for the boot log: nil when the
 // client builds, ErrNotEnrolled without a certificate, another error when the
-// files are unusable. The registration stands in every case. A second call
-// with the same files is a no-op; with other files it is an error and the
-// first registration stands.
+// files are unusable. The registration stands in every case.
 func InstallGitTransport(dir, keyPath string) error {
 	install.mu.Lock()
 	defer install.mu.Unlock()
-	if install.installed {
-		if install.dir != dir || install.keyPath != keyPath {
-			return fmt.Errorf("pki: %s transport already installed for %q; not re-installing for %q", GitScheme, install.dir, dir)
-		}
+	if install.installed && install.dir == dir && install.keyPath == keyPath {
 		return nil
 	}
 	src := &fleetSource{dir: dir, keyPath: keyPath}
-	activeSource.Store(src)
-	client.InstallProtocol(GitScheme, gitTransport{})
+	old := activeSource.Swap(src)
+	if old != nil {
+		old.mu.Lock()
+		old.dropLocked()
+		old.mu.Unlock()
+		log.Info().Str("old_dir", old.dir).Str("new_dir", dir).
+			Msg("knomit+https transport: client identity swapped to other pki files")
+	}
+	if !install.installed {
+		client.InstallProtocol(GitScheme, gitTransport{})
+	}
 	install.installed, install.dir, install.keyPath = true, dir, keyPath
 	_, err := src.transport()
 	return err

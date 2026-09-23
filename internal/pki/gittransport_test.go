@@ -19,11 +19,17 @@ package pki
 //   - RewriteEndpoint not rewriting Protocol: CloneAndFetch ("unsupported
 //     protocol scheme") and RedirectStaysHTTPS.
 //   - checkFleetEndpoint returning nil: TLSOptionsAndCredentialsAreRefused.
+//   - a reinstall with other files returning early (no swap):
+//     ReinstallWithOtherFilesSwapsTheIdentity (the server still sees A);
+//     a reinstall writing go-git's map again: the same test and
+//     ReinstallSameFilesIsANoOp (the sentinel entry is replaced).
 //   - the source hashing only instance.crt (no rebuild on a CRL change):
 //     OurCRLChangeRebuildsTheClient (the kept-alive connection is reused).
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/tls"
 	"errors"
 	"net"
@@ -45,6 +51,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // servedRepo is a repository on disk that a test server exposes at /git/kb.
@@ -150,6 +158,10 @@ func (l countingListener) Accept() (net.Conn, error) {
 
 var accepts = map[string]*atomic.Int32{}
 
+// seenPeers[addr] is the fingerprint of the client certificate on the most
+// recent request each test server answered.
+var seenPeers = map[string]*atomic.Value{}
+
 // startGitServer serves repo over a real TLS listener built from
 // ServerConfig for the instance whose files are in dir. accepts[addr] counts
 // its TCP connections.
@@ -166,7 +178,16 @@ func startGitServer(t *testing.T, dir, keyPath string, repo *servedRepo) (string
 	}
 	n := &atomic.Int32{}
 	accepts[ln.Addr().String()] = n
-	srv := &http.Server{Handler: gitHandler(repo), ErrorLog: discardLogger()}
+	seen := &atomic.Value{}
+	seenPeers[ln.Addr().String()] = seen
+	inner := gitHandler(repo)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			seen.Store(Fingerprint(r.TLS.PeerCertificates[0].PublicKey.(ed25519.PublicKey)))
+		}
+		inner.ServeHTTP(w, r)
+	})
+	srv := &http.Server{Handler: handler, ErrorLog: discardLogger()}
 	go srv.Serve(tls.NewListener(countingListener{ln, n}, cfg))
 	t.Cleanup(func() { srv.Close() })
 	return ln.Addr().String(), rec
@@ -541,12 +562,94 @@ func TestGitTransport_InstallIsIdempotentAndRaceFree(t *testing.T) {
 	if _, ok := client.Protocols[GitScheme].(gitTransport); !ok || src == nil || src.dir != x.aDir {
 		t.Fatalf("%s is %T with source %+v", GitScheme, client.Protocols[GitScheme], src)
 	}
-	if err := InstallGitTransport(x.bDir, x.b.keyPath); err == nil {
-		t.Fatal("a second install for other files succeeded silently")
+}
+
+// The same dir and keyPath again is a no-op: same source, no map write, no log.
+func TestGitTransport_ReinstallSameFilesIsANoOp(t *testing.T) {
+	resetInstall(t)
+	x := newTwoInstances(t)
+	if err := InstallGitTransport(x.aDir, x.a.keyPath); err != nil {
+		t.Fatal(err)
+	}
+	src := activeSource.Load()
+	sentinel := &gitTransportSentinel{}
+	client.Protocols[GitScheme] = sentinel // any write by the next call would replace it
+	logs := captureZerolog(t)
+	if err := InstallGitTransport(x.aDir, x.a.keyPath); err != nil {
+		t.Fatalf("same-files reinstall: %v", err)
+	}
+	if client.Protocols[GitScheme] != sentinel {
+		t.Fatal("a same-files reinstall wrote go-git's protocol map")
 	}
 	if activeSource.Load() != src {
-		t.Fatal("the second install replaced the first source")
+		t.Fatal("a same-files reinstall replaced the source")
 	}
+	if logs.Len() != 0 {
+		t.Fatalf("a same-files reinstall logged: %s", logs)
+	}
+}
+
+// Another dir and keyPath SWAPS the client source without writing go-git's
+// map again, logs one line naming both dirs, and the next fetch presents the
+// NEW identity to the server.
+func TestGitTransport_ReinstallWithOtherFilesSwapsTheIdentity(t *testing.T) {
+	resetInstall(t)
+	x := newTwoInstances(t)
+	c, cDir := x.f.clientSide(t, "charlie")
+
+	if err := InstallGitTransport(x.aDir, x.a.keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(x.addr)}); err != nil {
+		t.Fatalf("clone as A: %v", err)
+	}
+	if got := seenPeers[x.addr].Load(); got != Fingerprint(x.a.pub) {
+		t.Fatalf("server saw %v, want A %s", got, Fingerprint(x.a.pub))
+	}
+
+	registered := client.Protocols[GitScheme]
+	sentinel := &gitTransportSentinel{}
+	client.Protocols[GitScheme] = sentinel
+	logs := captureZerolog(t)
+	if err := InstallGitTransport(cDir, c.keyPath); err != nil {
+		t.Fatalf("install as C: %v", err)
+	}
+	if client.Protocols[GitScheme] != sentinel {
+		t.Fatal("the swap wrote go-git's protocol map a second time")
+	}
+	client.Protocols[GitScheme] = registered
+	if n := bytes.Count(logs.Bytes(), []byte("\n")); n != 1 || !bytes.Contains(logs.Bytes(), []byte(x.aDir)) || !bytes.Contains(logs.Bytes(), []byte(cDir)) {
+		t.Fatalf("want one log line naming %s and %s, got %d:\n%s", x.aDir, cDir, n, logs)
+	}
+
+	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(x.addr)}); err != nil {
+		t.Fatalf("clone as C: %v", err)
+	}
+	if got := seenPeers[x.addr].Load(); got != Fingerprint(c.pub) {
+		t.Fatalf("after the swap the server saw %v, want C %s (A is %s)", got, Fingerprint(c.pub), Fingerprint(x.a.pub))
+	}
+}
+
+// gitTransportSentinel stands in go-git's map to detect a write.
+type gitTransportSentinel struct{ failingSessions }
+
+type failingSessions struct{}
+
+func (failingSessions) NewUploadPackSession(*transport.Endpoint, transport.AuthMethod) (transport.UploadPackSession, error) {
+	return nil, errors.New("sentinel")
+}
+
+func (failingSessions) NewReceivePackSession(*transport.Endpoint, transport.AuthMethod) (transport.ReceivePackSession, error) {
+	return nil, errors.New("sentinel")
+}
+
+func captureZerolog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev := log.Logger
+	log.Logger = zerolog.New(buf)
+	t.Cleanup(func() { log.Logger = prev })
+	return buf
 }
 
 // go-git options that would edit the fleet tls.Config, or send a credential
