@@ -25,6 +25,9 @@ package pki
 //     call: ReinstallWithOtherFilesSwapsTheIdentity (the sentinel entry is
 //     replaced); the same-files early return removed:
 //     ReinstallSameFilesIsANoOp (the source is replaced and a line logged).
+//   - (against f9d7585c) the swap log emitted but the source NOT swapped:
+//     ReinstallWithOtherFilesSwapsTheIdentity fails on the fingerprint line
+//     (the server still sees A), before the log check is reached.
 //   - the source hashing only instance.crt (no rebuild on a CRL change):
 //     OurCRLChangeRebuildsTheClient (the kept-alive connection is reused).
 
@@ -621,6 +624,14 @@ func TestGitTransport_ReinstallWithOtherFilesSwapsTheIdentity(t *testing.T) {
 		t.Fatal("the swap wrote go-git's protocol map a second time")
 	}
 	client.Protocols[GitScheme] = registered
+	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(x.addr)}); err != nil {
+		t.Fatalf("clone as C: %v", err)
+	}
+	if got := seenPeers[x.addr].Load(); got != Fingerprint(c.pub) {
+		t.Fatalf("after the swap the server saw %v, want C %s (A is %s)", got, Fingerprint(c.pub), Fingerprint(x.a.pub))
+	}
+
+	// Only after the identity is proven at the server: the one log line.
 	// Decode rather than search the bytes: zerolog writes JSON, which escapes
 	// a Windows path's backslashes, so the raw path never appears verbatim.
 	var line struct {
@@ -632,13 +643,6 @@ func TestGitTransport_ReinstallWithOtherFilesSwapsTheIdentity(t *testing.T) {
 	}
 	if err := json.Unmarshal(logs.Bytes(), &line); err != nil || line.OldDir != x.aDir || line.NewDir != cDir {
 		t.Fatalf("log line %s: old_dir=%q new_dir=%q (err %v), want %q and %q", logs, line.OldDir, line.NewDir, err, x.aDir, cDir)
-	}
-
-	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(x.addr)}); err != nil {
-		t.Fatalf("clone as C: %v", err)
-	}
-	if got := seenPeers[x.addr].Load(); got != Fingerprint(c.pub) {
-		t.Fatalf("after the swap the server saw %v, want C %s (A is %s)", got, Fingerprint(c.pub), Fingerprint(x.a.pub))
 	}
 }
 
