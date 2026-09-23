@@ -16,16 +16,21 @@ package pki
 // one fails, which would let a new handshake do the refusing and make the
 // sweep look like it worked when it did not run.
 //
-// SABOTAGE CHECKS (run when this file was written; rerun after touching
-// Server, ConnRegistry or configFor):
-//   - Server.sweep made a no-op: the keep-alive and expiry tests fail (A is
-//     never cut).
-//   - Run's ticker loop removed (Run returns at once): the keep-alive test
-//     fails. It counts ClientHellos after the CRL write and requires zero, so
-//     a handshake cannot be what adopted the CRL.
-//   - ConnRegistry.ConnState no longer judges on first track: the late-active
-//     test fails only if it also outruns the tick; its interval is set long
-//     so that it does.
+// SABOTAGE CHECKS, run against 6d940317 (rerun after touching Server,
+// ConnRegistry or configFor). Each mutation, and the tests it turned red:
+//   - ConnRegistry.Sweep returns 0: KeepAlive, OneTick, Expiry, and
+//     TestConnRegistry_SweepClosesOnlyTheConnsTheCheckRefuses.
+//   - Server.tick refreshes without sweeping: KeepAlive, OneTick, Expiry.
+//   - Server.tick sweeps only when nothing was adopted (a bug this file
+//     caught during development): OneTick only — every multi-tick test
+//     still passes, which is why OneTick exists.
+//   - Run never ticks: KeepAlive, ConnActiveOnlyAfterAdoption, Expiry.
+//     KeepAlive counts ClientHellos after the CRL write and requires zero,
+//     so no handshake can be what adopted the CRL.
+//   - ConnRegistry.ConnState does not judge on first track:
+//     ConnActiveOnlyAfterAdoption, and
+//     TestConnRegistry_ChecksAConnectionWhenItIsFirstTracked.
+//   - The registry's check narrowed to IsRevoked: Expiry.
 
 import (
 	"bufio"
