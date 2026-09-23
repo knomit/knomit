@@ -326,6 +326,27 @@ func TestCIMD_Guards(t *testing.T) {
 		{"no redirect uris", func(f *cimdFixture, _ *cimdFetcher) {
 			f.serve(fmt.Sprintf(`{"client_id":%q}`, f.url), "")
 		}, nil},
+		// Nothing from a CIMD document reaches a terminal unescaped (review
+		// B2): a client_name or redirect URI carrying control or format
+		// characters is refused at ingest, by name.
+		{"client_name ESC", func(f *cimdFixture, _ *cimdFetcher) {
+			f.serve(hostileDoc(f.url, "Claude Code\\u001b[8m", "http://127.0.0.1/cb"), "")
+		}, errUnsafeClientMetadata},
+		{"client_name CR LF", func(f *cimdFixture, _ *cimdFetcher) {
+			f.serve(hostileDoc(f.url, "Claude Code\\r\\n  redirect\\thttp://127.0.0.1/cb", "http://127.0.0.1/cb"), "")
+		}, errUnsafeClientMetadata},
+		{"client_name TAB", func(f *cimdFixture, _ *cimdFetcher) {
+			f.serve(hostileDoc(f.url, "a\\tb", "http://127.0.0.1/cb"), "")
+		}, errUnsafeClientMetadata},
+		{"client_name bidi override", func(f *cimdFixture, _ *cimdFetcher) {
+			f.serve(hostileDoc(f.url, "edoC edualC\\u202e", "http://127.0.0.1/cb"), "")
+		}, errUnsafeClientMetadata},
+		{"client_name too long", func(f *cimdFixture, _ *cimdFetcher) {
+			f.serve(hostileDoc(f.url, strings.Repeat("n", maxClientNameRunes+1), "http://127.0.0.1/cb"), "")
+		}, errUnsafeClientMetadata},
+		{"redirect uri with a format character", func(f *cimdFixture, _ *cimdFetcher) {
+			f.serve(hostileDoc(f.url, "Example", "http://127.0.0.1/c\\u202eb"), "")
+		}, errUnsafeClientMetadata},
 		{"confidential client", func(f *cimdFixture, _ *cimdFetcher) {
 			f.serve(fmt.Sprintf(`{"client_id":%q,"redirect_uris":["http://127.0.0.1/cb"],"token_endpoint_auth_method":"private_key_jwt"}`, f.url), "")
 		}, nil},
@@ -383,5 +404,20 @@ func TestCIMD_OnlyHTTPS(t *testing.T) {
 	}
 	if f.hits.Load() != 0 {
 		t.Fatal("fetched over http")
+	}
+}
+
+// hostileDoc builds a document with JSON-escaped name and redirect.
+func hostileDoc(id, name, redirect string) string {
+	return `{"client_id":"` + id + `","client_name":"` + name + `","redirect_uris":["` + redirect + `"]}`
+}
+
+// A printable name, including non-ASCII letters, passes.
+func TestCIMD_PrintableNamePasses(t *testing.T) {
+	f := newCIMDFixture(t)
+	f.serve(hostileDoc(f.url, "Clóde Cöde — 日本", "http://127.0.0.1/cb"), "")
+	c, err := newResolverFor(f.fetcher(), &clock{t: time.Unix(1_790_000_000, 0)}).Resolve(context.Background(), f.url)
+	if err != nil || c.Name != "Clóde Cöde — 日本" {
+		t.Fatalf("%+v %v", c, err)
 	}
 }

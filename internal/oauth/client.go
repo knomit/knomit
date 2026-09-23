@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"knomit/internal/config"
 )
@@ -149,6 +151,9 @@ func (r *Resolver) Resolve(ctx context.Context, id string) (Client, error) {
 // isCIMDURL: https, a host, a path other than "/", and no userinfo, query or
 // fragment — the shape the CIMD draft requires of a client_id.
 func isCIMDURL(id string) bool {
+	if !printableASCII(id) {
+		return false
+	}
 	u, err := url.Parse(id)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
 		return false
@@ -164,7 +169,14 @@ func isCIMDURL(id string) bool {
 var (
 	errResolvedForbidden = errors.New("client metadata host resolves to a forbidden address")
 	errDialForbidden     = errors.New("refusing to connect to a forbidden address")
+	// errUnsafeClientMetadata: a displayed field of a CIMD carries a control
+	// or format character, or is too long. The document is refused whole.
+	errUnsafeClientMetadata = errors.New("client metadata carries a control or format character, or an over-long name")
 )
+
+// maxClientNameRunes caps client_name: long enough for any product name,
+// short enough that it cannot push the rest of the pending display away.
+const maxClientNameRunes = 100
 
 // cimdFetcher fetches a metadata document with the SSRF guards the MCP spec
 // now says the AUTHORIZATION SERVER needs, since the client_id is a URL an
@@ -302,11 +314,49 @@ func (f *cimdFetcher) fetch(ctx context.Context, id string) (Client, time.Durati
 	if len(doc.RedirectURIs) == 0 {
 		return Client{}, 0, errors.New("client metadata: no redirect_uris")
 	}
+	// Nothing from the document reaches the operator's terminal unless it is
+	// inert there: `knomit oauth pending` is the only consent screen, and an
+	// ESC in a name can conceal the lines that follow it (review B2). Refused
+	// here, at ingest, so nothing unsafe is ever stored.
+	if !displaySafe(doc.ClientName) || utf8.RuneCountInString(doc.ClientName) > maxClientNameRunes {
+		return Client{}, 0, fmt.Errorf("%w: client_name %q", errUnsafeClientMetadata, doc.ClientName)
+	}
+	for _, u := range doc.RedirectURIs {
+		if !printableASCII(u) {
+			return Client{}, 0, fmt.Errorf("%w: redirect_uri %q", errUnsafeClientMetadata, u)
+		}
+	}
 	if m := doc.TokenEndpointAuthMethod; m != "" && m != "none" {
 		return Client{}, 0, fmt.Errorf("client metadata: token_endpoint_auth_method %q; only public clients (none) are supported", m)
 	}
 	return Client{ID: id, Name: doc.ClientName, RedirectURIs: doc.RedirectURIs, Metadata: true},
 		maxAgeOf(resp.Header.Get("Cache-Control")), nil
+}
+
+// displaySafe: valid UTF-8 and every rune printable — no control (Cc) or
+// format (Cf, which includes the bidi overrides) character, no other
+// whitespace than the ASCII space.
+func displaySafe(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// printableASCII: every byte in 0x21..0x7e. What a URL shown to the operator
+// may contain.
+func printableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // maxAgeOf reads max-age from Cache-Control; no-store or no-cache, or no

@@ -141,13 +141,17 @@ func oauthPending(ctx context.Context, c *http.Client, out io.Writer) error {
 		if name == "" {
 			name = p.ClientID
 		}
+		// Every field is printed %q-quoted: this is the consent screen, and
+		// what it shows came from the requester. Ingest already refuses
+		// control and format characters in a CIMD; quoting here is what keeps
+		// a field added later, or a pre-registered name, from regressing.
 		fmt.Fprintf(out, "%s\n", p.ID)
 		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-		fmt.Fprintf(tw, "  client\t%s (%s)\n", name, p.ClientID)
-		fmt.Fprintf(tw, "  from\t%s  %s\n", p.RemoteAddr, p.UserAgent)
-		fmt.Fprintf(tw, "  redirect\t%s\n", p.RedirectURI)
-		fmt.Fprintf(tw, "  scopes\t%s\n", strings.Join(p.Scopes, " "))
-		fmt.Fprintf(tw, "  resource\t%s\n", p.Resource)
+		fmt.Fprintf(tw, "  client\t%q (%q)\n", name, p.ClientID)
+		fmt.Fprintf(tw, "  from\t%q  %q\n", p.RemoteAddr, p.UserAgent)
+		fmt.Fprintf(tw, "  redirect\t%q\n", p.RedirectURI)
+		fmt.Fprintf(tw, "  scopes\t%q\n", strings.Join(p.Scopes, " "))
+		fmt.Fprintf(tw, "  resource\t%q\n", p.Resource)
 		fmt.Fprintf(tw, "  expires in\t%s\n", time.Until(p.ExpiresAt).Round(time.Second))
 		_ = tw.Flush()
 	}

@@ -66,7 +66,7 @@ func NewIssuer(o Options) *Issuer {
 		wt = 30 * time.Second
 	}
 	return &Issuer{issuer: o.Issuer, store: o.Store, clients: o.Clients, grants: o.Grants, waitTimeout: wt,
-		waiters: waiters{m: map[string]waiter{}}}
+		waiters: waiters{m: map[string]*waiter{}}}
 }
 
 // Name returns the issuer URL.
@@ -103,7 +103,12 @@ func IsPublicPath(path string) bool {
 
 // --- /oauth/authorize ---------------------------------------------------------
 
-var challengeRE = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+// challengeRE is an S256 challenge; pendingIDRE a pending id (newSecret: 32
+// bytes, base64url). Same shape, different meanings.
+var (
+	challengeRE = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	pendingIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+)
 
 func (i *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -201,9 +206,16 @@ func (i *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 func (i *Issuer) wait(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	ctx := r.Context()
+	// This route is public on the proxied listener: an id that cannot be a
+	// pending id is refused before it touches the store or the waiters.
+	if !pendingIDRE.MatchString(id) {
+		errorPage(w, http.StatusNotFound, "No such authorization request.")
+		return
+	}
 	deadline := time.Now().Add(i.waitTimeout)
 	for {
-		ch := i.waiters.wait(id) // before reading, so a decision in between still wakes us
+		// Look up FIRST: only a request that exists and is undecided ever
+		// registers a waiter (review B1).
 		p, err := i.store.GetPending(ctx, id)
 		if errors.Is(err, ErrUnknownPending) {
 			errorPage(w, http.StatusNotFound, "No such authorization request.")
@@ -227,15 +239,24 @@ func (i *Issuer) wait(w http.ResponseWriter, r *http.Request) {
 			i.waitingPage(w, id)
 			return
 		}
+		ch, release := i.waiters.wait(id)
+		// Re-read once registered: a decision made between the read above and
+		// the registration notified nobody.
+		if q, err := i.store.GetPending(ctx, id); err == nil && q.Decision != "" {
+			release()
+			break
+		}
 		t := time.NewTimer(remaining)
 		select {
 		case <-ch:
 		case <-t.C:
 		case <-ctx.Done():
-			t.Stop()
-			return
 		}
 		t.Stop()
+		release()
+		if ctx.Err() != nil {
+			return
+		}
 	}
 
 	code, p, err := i.store.Collect(ctx, id)
@@ -254,42 +275,44 @@ func (i *Issuer) wait(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// waiters wakes /wait long-polls when an operator decides. Entries for
-// requests nobody decides are pruned once they are older than a request can
-// live; closing one early only makes its waiters re-read the store.
+// waiters wakes /wait long-polls when an operator decides. An entry exists
+// only while at least one browser is parked on a KNOWN, undecided request:
+// each wait holds a reference and releases it when it returns, and notify
+// closes and drops the entry. Every operation is O(1); there is nothing to
+// prune.
 type waiters struct {
 	mu sync.Mutex
-	m  map[string]waiter
+	m  map[string]*waiter
 }
 
 type waiter struct {
-	ch      chan struct{}
-	created time.Time
+	ch   chan struct{}
+	refs int
 }
 
-func (w *waiters) wait(id string) <-chan struct{} {
+func (w *waiters) wait(id string) (<-chan struct{}, func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.m) > 2*maxLivePending {
-		for k, e := range w.m {
-			if time.Since(e.created) > pendingTTL {
-				close(e.ch)
-				delete(w.m, k)
-			}
-		}
-	}
-	e, ok := w.m[id]
-	if !ok {
-		e = waiter{ch: make(chan struct{}), created: time.Now()}
+	e := w.m[id]
+	if e == nil {
+		e = &waiter{ch: make(chan struct{})}
 		w.m[id] = e
 	}
-	return e.ch
+	e.refs++
+	return e.ch, func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		e.refs--
+		if e.refs == 0 && w.m[id] == e {
+			delete(w.m, id)
+		}
+	}
 }
 
 func (w *waiters) notify(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if e, ok := w.m[id]; ok {
+	if e := w.m[id]; e != nil {
 		close(e.ch)
 		delete(w.m, id)
 	}

@@ -13,7 +13,7 @@ import (
 // endpoint for a client that names one.
 func resourceUnder(issuer, resource string) bool {
 	u, err := url.Parse(resource)
-	if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(resource, "?#") {
+	if err != nil || !printableASCII(resource) || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.ContainsAny(resource, "?#") {
 		return false
 	}
 	origin, ipath := issuerParts(issuer)

@@ -31,7 +31,7 @@ type oauthCLIFixture struct {
 	grants *auth.SQLGrants
 }
 
-func newOAuthCLIFixture(t *testing.T) *oauthCLIFixture {
+func newOAuthCLIFixture(t *testing.T, extra ...config.OAuthClient) *oauthCLIFixture {
 	t.Helper()
 	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
@@ -54,9 +54,11 @@ func newOAuthCLIFixture(t *testing.T) *oauthCLIFixture {
 		}
 	}
 	store := oauth.NewStore(db, 2*time.Hour, 14*24*time.Hour)
+	oc := config.Defaults().OAuth
+	oc.Clients = extra
 	f.iss = oauth.NewIssuer(oauth.Options{
 		Issuer: "http://127.0.0.1:19280", Store: store,
-		Clients: oauth.NewResolver(config.Defaults().OAuth.EffectiveClients()), Grants: f.grants,
+		Clients: oauth.NewResolver(oc.EffectiveClients()), Grants: f.grants,
 	})
 	s := &web.Server{
 		// No repo manager: the approval endpoints touch none.
@@ -179,5 +181,36 @@ func TestOAuthCLI_NoServer(t *testing.T) {
 	err := oauthPending(context.Background(), c, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "knomit serve") {
 		t.Fatalf("no server: %v", err)
+	}
+}
+
+// Whatever reaches the pending list, `knomit oauth pending` prints it inert:
+// a hostile client name (here a pre-registered one, which CIMD ingest never
+// checks) and a user agent with a bidi override come out escaped, and no raw
+// ESC or U+202E reaches the terminal (review B2).
+func TestOAuthCLI_PendingDisplayIsInert(t *testing.T) {
+	f := newOAuthCLIFixture(t, config.OAuthClient{ID: "evil", Name: "Claude Code\x1b[8m", RedirectURIs: []string{"http://127.0.0.1/cb"}})
+	q := url.Values{
+		"response_type": {"code"}, "client_id": {"evil"}, "redirect_uri": {"http://127.0.0.1:5555/cb"},
+		"code_challenge": {strings.Repeat("A", 43)}, "code_challenge_method": {"S256"},
+		"scope": {"read"}, "resource": {"http://127.0.0.1:19280"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+q.Encode(), nil)
+	req.Header.Set("User-Agent", "agent\u202eevil")
+	rec := httptest.NewRecorder()
+	f.iss.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authorize: %d %s", rec.Code, rec.Body.String())
+	}
+	var out bytes.Buffer
+	if err := oauthPending(context.Background(), localAPIClient(f.socket), &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x202e) {
+		t.Fatalf("raw control/format character reached the terminal:\n%q", got)
+	}
+	if !strings.Contains(got, `\x1b[8m`) || !strings.Contains(got, `\u202e`) {
+		t.Fatalf("hostile fields not shown escaped:\n%s", got)
 	}
 }

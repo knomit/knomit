@@ -637,3 +637,73 @@ func TestRevoke_IdempotentAndKillsTheFamily(t *testing.T) {
 		t.Fatalf("no token: %d", resp.StatusCode)
 	}
 }
+
+func (f *issuerFixture) waiterEntries() int {
+	f.iss.waiters.mu.Lock()
+	defer f.iss.waiters.mu.Unlock()
+	return len(f.iss.waiters.m)
+}
+
+// /wait is public on the proxied listener: an id nobody parked must cost
+// nothing that outlives the request — not a map entry, whatever its length
+// (review B1: 5000 unknown ids left 5000 entries; 512 KiB ids pinned 100 MiB).
+func TestWait_UnknownIDsLeaveNoWaiter(t *testing.T) {
+	f := newIssuerFixture(t)
+	for i := 0; i < 50; i++ {
+		id := strings.Repeat("A", 43) // the pending-id shape, but never parked
+		if i%2 == 1 {
+			id = strings.Repeat("x", 4096) // not the shape at all
+		}
+		if resp := f.get(t, "/oauth/authorize/"+id+"/wait", nil); resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("unknown id: %d", resp.StatusCode)
+		}
+	}
+	if n := f.waiterEntries(); n != 0 {
+		t.Fatalf("%d waiter entries after unknown ids, want 0", n)
+	}
+}
+
+// A known, undecided id registers exactly one entry while a browser waits,
+// and the entry is gone once that wait ends — by a decision, by the window
+// closing, or by the request having expired.
+func TestWait_KnownIDOneEntryRemovedAfter(t *testing.T) {
+	f := newIssuerFixture(t)
+	_, ch := pkce()
+	id := f.authorize(t, f.authorizeQuery(ch))
+	done := make(chan struct{})
+	go func() {
+		resp, err := f.browser.Get(f.srv.URL + "/oauth/authorize/" + id + "/wait")
+		if err == nil {
+			resp.Body.Close()
+		}
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for f.waiterEntries() != 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := f.waiterEntries(); n != 1 {
+		t.Fatalf("a parked wait holds %d entries, want 1", n)
+	}
+	if _, err := f.iss.Approve(context.Background(), id, "laptop", nil, "x"); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if n := f.waiterEntries(); n != 0 {
+		t.Fatalf("after the decision: %d entries, want 0", n)
+	}
+
+	// The window closing with no decision also removes it.
+	f.iss.waitTimeout = 50 * time.Millisecond
+	id2 := f.authorize(t, f.authorizeQuery(ch))
+	f.get(t, "/oauth/authorize/"+id2+"/wait", nil)
+	if n := f.waiterEntries(); n != 0 {
+		t.Fatalf("after an undecided window: %d entries, want 0", n)
+	}
+	// An expired request never registers one.
+	f.clock.add(pendingTTL)
+	f.get(t, "/oauth/authorize/"+id2+"/wait", nil)
+	if n := f.waiterEntries(); n != 0 {
+		t.Fatalf("after an expired request: %d entries, want 0", n)
+	}
+}
