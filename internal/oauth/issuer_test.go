@@ -199,6 +199,9 @@ func TestAuthorize_ErrorsAfterRedirectValidatesAreRedirects(t *testing.T) {
 		"admin scope":          {func(q url.Values) { q.Set("scope", "read admin") }, "invalid_scope"},
 		"unknown scope":        {func(q url.Values) { q.Set("scope", "everything") }, "invalid_scope"},
 		"duplicate state":      {func(q url.Values) { q.Add("state", "again") }, "invalid_request"},
+		// A repeated OPTIONAL parameter must not be dropped and the request
+		// parked as if it had not been sent.
+		"duplicate scope": {func(q url.Values) { q.Add("scope", "read") }, "invalid_request"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			q := f.authorizeQuery(ch)
@@ -566,6 +569,9 @@ func TestToken_BadRequests(t *testing.T) {
 	}
 	if status, doc := f.token(t, url.Values{"grant_type": {"refresh_token"}, "client_id": {"kb"}}); status != http.StatusBadRequest || doc["error"] != "invalid_request" {
 		t.Fatalf("no refresh_token: %d %v", status, doc)
+	}
+	if status, doc := f.token(t, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"a"}, "client_id": {"kb", "app"}}); status != http.StatusBadRequest || doc["error"] != "invalid_request" {
+		t.Fatalf("repeated client_id: %d %v", status, doc)
 	}
 	resp, _ := http.Get(f.srv.URL + "/oauth/token")
 	resp.Body.Close()

@@ -120,12 +120,10 @@ func (i *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 
 	// Until the client and its redirect URI validate, every error is a PAGE:
 	// sending anything to an unvalidated redirect URI is an open redirector.
-	clientID, ok1 := one("client_id")
-	redirect, ok2 := one("redirect_uri")
-	if !ok1 || !ok2 {
-		errorPage(w, http.StatusBadRequest, "client_id and redirect_uri must each appear once.")
-		return
-	}
+	// A repeated client_id or redirect_uri reads as "" here, and "" is
+	// refused just below as an unknown client or an unregistered redirect.
+	clientID, _ := one("client_id")
+	redirect, _ := one("redirect_uri")
 	client, err := i.clients.Resolve(r.Context(), clientID)
 	if err != nil {
 		log.Info().Err(err).Str("client_id", clientID).Msg("oauth: authorize refused: client")
