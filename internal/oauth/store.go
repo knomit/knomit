@@ -287,9 +287,8 @@ func (s *Store) Refresh(ctx context.Context, refresh string) (Issued, error) {
 	if r.rotated {
 		return reuse()
 	}
-	if !s.now().Before(r.family.RefreshExpiresAt) {
-		return Issued{}, ErrExpired
-	}
+	// The family's absolute end is checked once, in issuePairTx: past it,
+	// the error rolls this transaction back, rotation included.
 	res, err := tx.ExecContext(ctx,
 		`UPDATE oauth_tokens SET rotated_at = ? WHERE hash = ? AND rotated_at IS NULL`,
 		s.now().Unix(), hashSecret(refresh))
