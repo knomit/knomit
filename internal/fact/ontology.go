@@ -4,8 +4,10 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -97,7 +99,8 @@ func EmbeddedPresetByID(id string) *Ontology {
 // stored file. A repo that flags a preset topic `learn_dedup: off` has the
 // same taxonomy as the preset, but overwriting it would erase the flag on
 // every boot. So a stored attribute the preset does not carry, with the same
-// value, is divergence — the repo keeps its file and forgoes auto-upgrade,
+// value, is divergence (a value that behaves as absent, like learn_dedup: on,
+// is compared as absent) — the repo keeps its file and forgoes auto-upgrade,
 // exactly as it would for a custom topic or rule. See SubsetDivergence for
 // telling the two apart in a log.
 func (o *Ontology) IsSubsetOf(other *Ontology) bool {
@@ -119,36 +122,31 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 	if o == nil || other == nil {
 		return DivergenceShape
 	}
-	if !o.subsetOf(other, false) {
+	// Root-level validations: every name in o must exist in other.
+	if !validationsSubset(o.Validations, other.Validations) {
 		return DivergenceShape
 	}
-	if !o.subsetOf(other, true) {
+	// Every topic in o must exist in other, recursively. One walk: shape
+	// divergence stops it; attribute divergence is only noted, since a shape
+	// difference further on must still win.
+	attrsDiverge := false
+	for key, node := range o.Topics {
+		otherNode, ok := other.Topics[key]
+		if !ok || !nodeIsSubsetOf(node, otherNode, &attrsDiverge) {
+			return DivergenceShape
+		}
+	}
+	if attrsDiverge {
 		return DivergenceAttributes
 	}
 	return ""
 }
 
-func (o *Ontology) subsetOf(other *Ontology, attrs bool) bool {
-	// Root-level validations: every name in o must exist in other.
-	if !validationsSubset(o.Validations, other.Validations) {
-		return false
-	}
-	// Every topic in o must exist in other, recursively.
-	for key, node := range o.Topics {
-		otherNode, ok := other.Topics[key]
-		if !ok {
-			return false
-		}
-		if !nodeIsSubsetOf(node, otherNode, attrs) {
-			return false
-		}
-	}
-	return true
-}
-
-// nodeIsSubsetOf returns true if every Validation and child in n — and, when
-// attrs is set, every attribute with an equal value — also appears in other.
-func nodeIsSubsetOf(n, other *OntologyNode, attrs bool) bool {
+// nodeIsSubsetOf returns true if every Validation and child in n also appears
+// in other. It sets *attrsDiverge when an attribute of n is missing from other
+// or differs from it; a value that behaves as absent (learn_dedup: on) is
+// compared as absent, so spelling out the default never stops an upgrade.
+func nodeIsSubsetOf(n, other *OntologyNode, attrsDiverge *bool) bool {
 	if n == nil {
 		return true
 	}
@@ -158,12 +156,12 @@ func nodeIsSubsetOf(n, other *OntologyNode, attrs bool) bool {
 	if !validationsSubset(n.Validations, other.Validations) {
 		return false
 	}
-	if attrs {
-		for k, v := range n.Attributes {
-			ov, ok := other.Attributes[k]
-			if !ok || !reflect.DeepEqual(v, ov) {
-				return false
-			}
+	for k, v := range n.Attributes {
+		if attrIsAbsent(k, v) {
+			continue
+		}
+		if ov, ok := other.Attributes[k]; !ok || !reflect.DeepEqual(v, ov) {
+			*attrsDiverge = true
 		}
 	}
 	for key, child := range n.Children {
@@ -171,7 +169,7 @@ func nodeIsSubsetOf(n, other *OntologyNode, attrs bool) bool {
 		if !ok {
 			return false
 		}
-		if !nodeIsSubsetOf(child, otherChild, attrs) {
+		if !nodeIsSubsetOf(child, otherChild, attrsDiverge) {
 			return false
 		}
 	}
@@ -285,26 +283,49 @@ func (o *Ontology) buildRulesCache() error {
 // under the topic. It governs LEARN ONLY — review never reads it.
 const AttrLearnDedup = "learn_dedup"
 
-// attributeValidators is the ONLY place an attribute key is declared. Each
-// entry validates a value for its key and returns a description of what it
-// accepts when the value is wrong.
+// attributeSpec declares one attribute key: the values it accepts, and which
+// of them means the same as leaving the key out.
+type attributeSpec struct {
+	accepts string         // human description of the accepted values, for diagnostics
+	valid   func(any) bool // reports whether a decoded value is accepted
+	absent  any            // the value that behaves as absent; compared as absent by IsSubsetOf
+}
+
+// attributeRegistry is the ONLY place an attribute key is declared.
 //
 // A key missing from this map is NOT an error: it may have been written by a
 // newer knomit, and the open path must still read that ontology (see
 // ParseOntology). ValidateOntologyYAML reports it as a warning. A bad value
-// for a key that IS here is fatal — a binary that knows the key must not
-// guess what the author meant.
-var attributeValidators = map[string]func(v any) (accepts string, ok bool){
+// for a key that IS here is fatal, on the open path too: warning and treating
+// it as absent would make an older binary silently run dedup on a topic a
+// newer one switched off, which is the silent loss the flag exists to stop. A
+// repo that refuses writes with a named error is loud, and upgrading fixes it.
+//
+// CONSEQUENCE: each key's value set is CLOSED. A new behaviour ships as a NEW
+// key, never as a new value of an existing key — an older binary would reject
+// the new value and stop accepting writes to the repo.
+var attributeRegistry = map[string]attributeSpec{
 	// Exactly the strings "off" and "on"; "on" behaves as absent (and exists
 	// so a child can undo a parent's "off"). A yaml bool is rejected on
 	// purpose: `learn_dedup: false` reads as "dedup is off" to one person and
 	// "the off-switch is false" to another, and go-yaml v3 decodes the bare
 	// scalar `off` as the STRING "off" (YAML 1.2), so the unambiguous spelling
 	// is also the one that parses.
-	AttrLearnDedup: func(v any) (string, bool) {
-		s, isStr := v.(string)
-		return `"off" or "on"`, isStr && (s == "off" || s == "on")
+	AttrLearnDedup: {
+		accepts: `"off" or "on"`,
+		valid: func(v any) bool {
+			s, ok := v.(string)
+			return ok && (s == "off" || s == "on")
+		},
+		absent: "on",
 	},
+}
+
+// attrIsAbsent reports whether v is the value that means the same as leaving
+// key out. Unknown keys have no such value.
+func attrIsAbsent(key string, v any) bool {
+	spec, ok := attributeRegistry[key]
+	return ok && spec.absent != nil && reflect.DeepEqual(v, spec.absent)
 }
 
 // Attr resolves an attribute for a topic path by the same walk ValidateFact
@@ -358,7 +379,7 @@ type OntologyNode struct {
 	Validations []Validation             `yaml:"validations,omitempty"`
 	// Attributes switch store behaviour for facts under this node and every
 	// node below it that does not override them. Keys are declared in
-	// attributeValidators; resolve with Ontology.Attr, never by reading this
+	// attributeRegistry; resolve with Ontology.Attr, never by reading this
 	// map directly (it holds only this node's own values, not inherited ones).
 	Attributes map[string]any `yaml:"attributes,omitempty"`
 }
@@ -455,7 +476,9 @@ func (o *Ontology) Serialize() ([]byte, error) {
 	root.Content = append(root.Content, topicsKey, topicsVal)
 
 	for _, k := range sortedKeys(o.Topics) {
-		serializeNode(topicsVal, k, o.Topics[k])
+		if err := serializeNode(topicsVal, k, o.Topics[k]); err != nil {
+			return nil, fmt.Errorf("serialize ontology: topic %q: %w", k, err)
+		}
 	}
 
 	var buf strings.Builder
@@ -476,19 +499,21 @@ func (o *Ontology) Serialize() ([]byte, error) {
 // and seed). Dereferencing it here would be a remotely triggerable panic. The
 // key is still emitted, as an empty mapping, so a round trip does not silently
 // drop the topic the author declared.
-func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
+func serializeNode(parent *yaml.Node, key string, node *OntologyNode) error {
 	keyNode := &yaml.Node{Kind: yaml.ScalarNode, Value: key}
 	valNode := &yaml.Node{Kind: yaml.MappingNode}
 	parent.Content = append(parent.Content, keyNode, valNode)
 
 	if node == nil {
-		return
+		return nil
 	}
 
 	addScalar(valNode, "description", node.Description)
 
 	if len(node.Attributes) > 0 {
-		serializeAttributes(valNode, node.Attributes)
+		if err := serializeAttributes(valNode, node.Attributes); err != nil {
+			return err
+		}
 	}
 
 	if len(node.Validations) > 0 {
@@ -500,9 +525,12 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 		childVal := &yaml.Node{Kind: yaml.MappingNode}
 		valNode.Content = append(valNode.Content, childKey, childVal)
 		for _, ck := range sortedKeys(node.Children) {
-			serializeNode(childVal, ck, node.Children[ck])
+			if err := serializeNode(childVal, ck, node.Children[ck]); err != nil {
+				return fmt.Errorf("child %q: %w", ck, err)
+			}
 		}
 	}
+	return nil
 }
 
 // serializeAttributes emits the block with sorted keys. Without it Serialize
@@ -510,21 +538,17 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) {
 // serialize before committing, so a new repo would lose them. Values go
 // through the yaml encoder, which quotes "off"/"on" (YAML 1.1 bools) — they
 // still re-parse as the same strings.
-func serializeAttributes(parent *yaml.Node, attrs map[string]any) {
-	keys := make([]string, 0, len(attrs))
-	for k := range attrs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+func serializeAttributes(parent *yaml.Node, attrs map[string]any) error {
 	m := &yaml.Node{Kind: yaml.MappingNode}
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(attrs)) {
 		var v yaml.Node
 		if err := v.Encode(attrs[k]); err != nil {
-			continue
+			return fmt.Errorf("attribute %q: %w", k, err)
 		}
 		m.Content = append(m.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, &v)
 	}
 	parent.Content = append(parent.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "attributes"}, m)
+	return nil
 }
 
 func serializeValidations(parent *yaml.Node, vs []Validation) {

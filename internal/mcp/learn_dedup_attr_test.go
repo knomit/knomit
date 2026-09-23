@@ -165,7 +165,7 @@ func TestApplyDedupMerge_LearnDedupOffSkipsSearchKeepsDonation(t *testing.T) {
 	require.NoError(t, err)
 	defer release()
 	vecs := dedupEmbed(ctx, emb, facts)
-	embByPath, _, _, touched, err := applyDedupMerge(ctx, s, "agent/test", ont, emb, vecs, facts, tcs, paths, files, "x")
+	embByPath, _, _, touched, err := applyDedupMerge(ctx, s, "agent/test", ont, "kb", emb, vecs, facts, tcs, paths, files, "x")
 	require.NoError(t, err)
 
 	// Flagged: not touched, path unchanged, donation kept under its own path.
@@ -233,5 +233,104 @@ func TestLearnHandler_SameSubjectSkipsLearnDedupOffTopic(t *testing.T) {
 			require.Len(t, parsed.Commits, 1)
 			require.Equal(t, before+1, liveFactCount(t, svc))
 		})
+	}
+}
+
+// nestedDedupAttrOntologyYAML: an UNFLAGGED parent with a FLAGGED declared
+// child. The merge search is a raw path prefix (store's `path LIKE dir%`), so a
+// search from ops/tasks also returns facts in ops/tasks/protocol/.
+const nestedDedupAttrOntologyYAML = `id: t
+name: T
+topics:
+  ops:
+    description: x
+    children:
+      tasks:
+        description: x
+        children:
+          protocol:
+            description: x
+            attributes:
+              learn_dedup: off
+`
+
+func taskFactReqAt(topic, category string) mcpgo.CallToolRequest {
+	req := taskFactReq(topic)
+	req.Params.Arguments.(map[string]any)["facts"].([]any)[0].(map[string]any)["category"] = category
+	return req
+}
+
+// Candidate side of the merge: a knowledge fact learned at an unflagged parent
+// must NOT absorb a message living under a flagged child, even though the
+// prefix search returns it. Without the candidate check the child's message is
+// rewritten into a merge — the loss the flag exists to prevent.
+func TestApplyDedupMerge_NeverMergesIntoAFlaggedCandidate(t *testing.T) {
+	svc, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	emb := newLenEmbedder(t)
+	svc.SetEmbedder(emb)
+	require.NoError(t, svc.InitRepo(map[string]string{}, "agent/test"))
+	ont, err := fact.ParseOntology([]byte(nestedDedupAttrOntologyYAML))
+	require.NoError(t, err)
+	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
+		Name: "test", UID: nextTestRepoUID(), AgentBranch: "agent/test",
+		Svc: svc, Ontology: ont, OntologyRoot: "kb", Embedder: emb,
+	})
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+
+	r, err := LearnHandler(emb)(ctx, taskFactReqAt("ops", "tasks/protocol"))
+	require.NoError(t, err)
+	require.False(t, r.IsError, resultText(t, r))
+	childPath := mergedFactPath(t, r)
+	before, err := svc.Facts().ReadFact(context.Background(), "agent/test", childPath, nil)
+	require.NoError(t, err)
+
+	// Direct: the search DOES reach the child, and the merge must decline it.
+	conf, src := 0.8, 1
+	inputs := []learnFactInput{{
+		Topic: "ops", Category: "tasks",
+		Title: "Task ready for pickup", Body: "A task is ready for an agent to pick up.",
+		Type: "observation", Domain: []string{"queue"}, Confidence: &conf, Sources: &src,
+		Entities: []string{"task-queue"},
+	}}
+	facts, tcs, paths, files, err := validateAndBuildFacts(ont, "kb", inputs)
+	require.NoError(t, err)
+	s, release, err := storeIndices(ri)
+	require.NoError(t, err)
+	defer release()
+	res, err := s.factQuery.Search(ctx, "agent/test", store.SearchOptions{
+		Text: facts[0].Title + " " + facts[0].Body, Path: categoryDirOf(paths[0]), Limit: 1,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, res, "fixture must put the flagged child inside the parent's search scope")
+	require.Equal(t, childPath, res[0].Path)
+
+	minted := paths[0]
+	_, _, _, touched, err := applyDedupMerge(ctx, s, "agent/test", ont, "kb", emb, dedupEmbed(ctx, emb, facts), facts, tcs, paths, files, "x")
+	require.NoError(t, err)
+	require.Empty(t, touched, "an unflagged incoming fact must not merge into a flagged candidate")
+	require.Equal(t, minted, paths[0])
+
+	// Through the handler: both files exist and the child is byte-unchanged.
+	r2, err := LearnHandler(emb)(ctx, taskFactReqAt("ops", "tasks"))
+	require.NoError(t, err)
+	require.False(t, r2.IsError, resultText(t, r2))
+	require.NotEqual(t, childPath, mergedFactPath(t, r2))
+	after, err := svc.Facts().ReadFact(context.Background(), "agent/test", childPath, nil)
+	require.NoError(t, err)
+	require.Equal(t, before.Content, after.Content, "the flagged child's file must be untouched")
+}
+
+func TestTopicPathOf(t *testing.T) {
+	for _, c := range []struct{ root, path, want string }{
+		{"kb", "kb/ops/tasks/protocol/abc.md", "ops/tasks/protocol"},
+		{"kb", "kb/ops/abc.md", "ops"},
+		{"KB", "kb/ops/tasks/abc.md", "ops/tasks"}, // configured root keeps its case
+		{"kb", "kbx/ops/abc.md", ""},               // not under the root
+		{"kb", "other/ops/abc.md", ""},
+		{"kb", "kb/", ""},
+	} {
+		require.Equal(t, c.want, topicPathOf(c.root, c.path), "topicPathOf(%q, %q)", c.root, c.path)
 	}
 }

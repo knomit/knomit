@@ -1,6 +1,7 @@
 package fact
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -223,6 +224,11 @@ func TestOntologyAttr_AttributesAreDivergenceFromAPreset(t *testing.T) {
 	if flagged.IsSubsetOf(onValue) {
 		t.Error("a different value for the same key is divergence")
 	}
+	// `on` is defined as absent, so an explicit `on` must not stop upgrades.
+	explicitOn := mustParse(t, "id: x\nname: X\ntopics:\n  tasks:\n    description: d\n    attributes:\n      learn_dedup: on\n    children:\n      research:\n        description: d\n")
+	if !explicitOn.IsSubsetOf(plain) {
+		t.Errorf("learn_dedup: on is the default and must compare as absent; divergence = %q", explicitOn.SubsetDivergence(plain))
+	}
 	extraTopic := mustParse(t, "id: x\nname: X\ntopics:\n  other:\n    description: d\n    attributes:\n      learn_dedup: off\n")
 	if got := extraTopic.SubsetDivergence(plain); got != DivergenceShape {
 		t.Errorf("a missing topic must report shape divergence even when attributes also differ, got %q", got)
@@ -266,3 +272,17 @@ topics:
 		t.Fatal(err)
 	}
 }
+
+// A value the encoder cannot represent must fail Serialize, not vanish from
+// its output. Unreachable from YAML input; reachable from Go callers.
+func TestOntologyAttr_SerializeReturnsEncodeError(t *testing.T) {
+	o := mustParse(t, attrOntologyYAML)
+	o.Topics["notes"].Attributes = map[string]any{"learn_dedup": failingMarshaler{}}
+	if _, err := o.Serialize(); err == nil {
+		t.Fatal("Serialize must return the encode error rather than drop the key")
+	}
+}
+
+type failingMarshaler struct{}
+
+func (failingMarshaler) MarshalYAML() (any, error) { return nil, errors.New("boom") }

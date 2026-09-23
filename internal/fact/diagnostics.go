@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -137,7 +138,7 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 	}
 	// Attributes are checked over the FULL tree (the key check above stops at
 	// one level of children). Unknown key → warning; bad value for a known key
-	// → error. See attributeValidators.
+	// → error. See attributeRegistry.
 	for _, key := range sortedKeys(o.Topics) {
 		diags = append(diags, attributeDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
 	}
@@ -163,20 +164,16 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 // An unknown key is a WARNING, like an unknown struct field and for the same
 // reason: it may come from a newer knomit, and ParseOntology on the open path
 // must not trade the repo's own ontology for the default over it. A bad value
-// for a KNOWN key is an error.
+// for a KNOWN key is an error — see attributeRegistry for why, and for the
+// closed-value-set rule that follows from it.
 func attributeDiags(path string, node *OntologyNode, body *yaml.Node) []Diagnostic {
 	if node == nil {
 		return nil
 	}
 	var diags []Diagnostic
 	attrKeys := mappingChildren(valueForKey(body, "attributes"))
-	names := make([]string, 0, len(node.Attributes))
-	for k := range node.Attributes {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	for _, k := range names {
-		validate, known := attributeValidators[k]
+	for _, k := range slices.Sorted(maps.Keys(node.Attributes)) {
+		spec, known := attributeRegistry[k]
 		if !known {
 			d := diagAt(attrKeys[k], fmt.Sprintf(
 				"parse ontology: unknown attribute %q in topic %q: not recognised by this knomit and ignored", k, path))
@@ -184,10 +181,9 @@ func attributeDiags(path string, node *OntologyNode, body *yaml.Node) []Diagnost
 			diags = append(diags, d)
 			continue
 		}
-		v := node.Attributes[k]
-		if accepts, ok := validate(v); !ok {
+		if v := node.Attributes[k]; !spec.valid(v) {
 			diags = append(diags, diagAt(attrKeys[k], fmt.Sprintf(
-				"parse ontology: attribute %q in topic %q must be %s, got %v (%T)", k, path, accepts, v, v)))
+				"parse ontology: attribute %q in topic %q must be %s, got %v (%T)", k, path, spec.accepts, v, v)))
 		}
 	}
 	children := valueForKey(body, "children")
