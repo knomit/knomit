@@ -2,6 +2,7 @@ package config
 
 import (
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -621,5 +622,31 @@ func TestEffectiveLoopbackDefault_ThreeCases(t *testing.T) {
 	want := []string{"read"}
 	if got := (AuthConfig{LoopbackDefault: want}).EffectiveLoopbackDefault(); strings.Join(got, ",") != "read" {
 		t.Fatalf("a populated list must be returned as written, got %v", got)
+	}
+}
+
+// [tls] is OFF by default (no Addr) and its Dir follows Home, so enrolling
+// needs no config beyond turning the listener on.
+func TestLoad_TLSDefaultsOffWithDirUnderHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TLS.Addr != "" {
+		t.Fatalf("TLS.Addr must default empty (listener off), got %q", cfg.TLS.Addr)
+	}
+	if want := filepath.Join(home, "pki"); cfg.TLS.Dir != want {
+		t.Fatalf("TLS.Dir = %q, want %q", cfg.TLS.Dir, want)
+	}
+	t.Setenv("KNOMIT_TLS_ADDR", "0.0.0.0:19279")
+	t.Setenv("KNOMIT_TLS_DIR", "/srv/knomit/pki")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.TLS.Addr != "0.0.0.0:19279" || cfg.TLS.Dir != "/srv/knomit/pki" {
+		t.Fatalf("env overrides: %+v", cfg.TLS)
 	}
 }

@@ -34,6 +34,7 @@ export const typeStyles: Record<string, { color: string; bg: string; label: stri
   // Pragmatic (prescriptive — "what to do")
   policy:       { color: '#f97',  bg: '#2e1f1a', label: 'policy',     icon: '⚖' },
   heuristic:    { color: '#fc7', bg: '#2e2614', label: 'heuristic',   icon: '☼' },
+  signal:       { color: '#f63', bg: '#2e1a16', label: 'signal',      icon: '⇢' },
 };
 
 export const defaultTypeStyle = { color: '#666', bg: '#1a1a1a', label: 'unknown', icon: '·' };

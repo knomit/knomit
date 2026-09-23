@@ -27,6 +27,7 @@ type App struct {
 	manager     *repos.Manager
 	server      *web.Server
 	signer      ssh.Signer
+	keyPath     string
 	agentBranch string
 
 	closers []func()
@@ -36,6 +37,10 @@ func (a *App) Manager() *repos.Manager { return a.manager }
 func (a *App) Server() *web.Server     { return a.server }
 func (a *App) Signer() ssh.Signer      { return a.signer }
 func (a *App) AgentBranch() string     { return a.agentBranch }
+
+// KeyPath is the instance key file app.New resolved ([remote].ssh_key or
+// <Home>/id_ed25519) — the key the TLS certificate must wrap.
+func (a *App) KeyPath() string { return a.keyPath }
 
 // Options holds CLI-only overrides that are not persisted to config.
 type Options struct {
@@ -56,6 +61,16 @@ type Options struct {
 	LogTap *logging.Tap
 }
 
+// ResolveKeyPath is where the instance key lives: [remote].ssh_key, else
+// <Home>/id_ed25519. The ONE definition — New uses it, and so does
+// `knomit identity`, which must find the same key without booting the app.
+func ResolveKeyPath(cfg config.Config) string {
+	if cfg.Remote.SSHKey != "" {
+		return cfg.Remote.SSHKey
+	}
+	return filepath.Join(cfg.Home, "id_ed25519")
+}
+
 // New creates and boots the application from the given config and context.
 func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// First, before anything is opened or generated: a config that can only
@@ -67,15 +82,13 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a := &App{}
 
 	// SSH keypair.
-	keyPath := cfg.Remote.SSHKey
-	if keyPath == "" {
-		keyPath = filepath.Join(cfg.Home, "id_ed25519")
-	}
+	keyPath := ResolveKeyPath(cfg)
 	signer, keyFingerprint, err := ensureKeyPair(keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("ensure keypair: %w", err)
 	}
 	a.signer = signer
+	a.keyPath = keyPath
 	a.agentBranch = agentBranch(keyFingerprint)
 
 	// Embedder. Embeddings are MANDATORY: every fact is indexed with a vector

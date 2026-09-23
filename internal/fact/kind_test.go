@@ -17,15 +17,20 @@ func TestKind_AllowsType_Epistemic(t *testing.T) {
 	for _, ty := range AllEpistemicTypes() {
 		require.True(t, Epistemic.AllowsType(ty), "epistemic must allow %q", ty)
 	}
-	require.False(t, Epistemic.AllowsType(Policy))
-	require.False(t, Epistemic.AllowsType(Heuristic))
+	for _, ty := range AllPragmaticTypes() {
+		require.False(t, Epistemic.AllowsType(ty), "epistemic must reject pragmatic %q", ty)
+	}
 	require.False(t, Epistemic.AllowsType(""))
 	require.False(t, Epistemic.AllowsType(Type("nope")))
 }
 
 func TestKind_AllowsType_Pragmatic(t *testing.T) {
-	require.True(t, Pragmatic.AllowsType(Policy))
-	require.True(t, Pragmatic.AllowsType(Heuristic))
+	// Derived from AllPragmaticTypes rather than hard-coded: this test read
+	// as "pragmatic allows its types" while actually naming two of them, so
+	// adding a third left it passing and silent about the new one.
+	for _, ty := range AllPragmaticTypes() {
+		require.True(t, Pragmatic.AllowsType(ty), "pragmatic must allow %q", ty)
+	}
 	require.False(t, Pragmatic.AllowsType(Observation))
 	require.False(t, Pragmatic.AllowsType(Hypothesis))
 	require.False(t, Pragmatic.AllowsType(""))
@@ -50,6 +55,7 @@ func TestValidateKindAndType_AcceptsValidPairs(t *testing.T) {
 		{Epistemic, Hypothesis},
 		{Pragmatic, Policy},
 		{Pragmatic, Heuristic},
+		{Pragmatic, Signal},
 	}
 	for _, c := range cases {
 		t.Run(string(c.kind)+"/"+string(c.typ), func(t *testing.T) {
@@ -88,6 +94,30 @@ func TestValidateKindAndType_DefaultingHappensBeforeTypeCheck(t *testing.T) {
 	// Empty kind normalizes to Epistemic, then Policy fails the
 	// epistemic-allows-type check (not the kind check).
 	_, err := validateKindAndType("", Policy)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "epistemic")
+}
+
+// TestKindAllowsType_Signal pins both directions of the new leaf type in one
+// place, because the two halves fail for different reasons and only together
+// say "signal is pragmatic". A signal allowed under epistemic would defeat the
+// point of the type: kind is what keeps it out of synthesis
+// (synthesize.reviewStrategy.AcceptSeed tests Kind, not Type), so an epistemic
+// signal would seed the review pipeline and be rewritten on commit.
+func TestKindAllowsType_Signal(t *testing.T) {
+	require.True(t, Pragmatic.AllowsType(Signal), "signal is a pragmatic leaf type")
+	require.False(t, Epistemic.AllowsType(Signal), "signal must never be reachable under epistemic")
+
+	require.True(t, PragmaticTypes[Signal], "the authoritative set must carry signal")
+	require.Contains(t, AllPragmaticTypes(), Signal, "the ordered slice feeds the tool schema enum")
+
+	// Validation agrees with the switch, through the single entry point both
+	// ParseFact and SerializeFact use.
+	k, err := validateKindAndType(Pragmatic, Signal)
+	require.NoError(t, err)
+	require.Equal(t, Pragmatic, k)
+
+	_, err = validateKindAndType(Epistemic, Signal)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "epistemic")
 }

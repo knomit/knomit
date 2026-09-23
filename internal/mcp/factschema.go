@@ -14,7 +14,7 @@ import (
 // schema, the knomit_update JSON schema, the knomit_query filter descriptions,
 // the server instructions, and the Go request structs. Each copy drifted
 // independently — `type` had no enum at all in either schema while `kind` and
-// `origin` did, and the three prose enumerations of the twelve leaf types
+// `origin` did, and the three prose enumerations of the leaf types
 // disagreed on wording.
 //
 // The split of responsibility is deliberate:
@@ -35,7 +35,7 @@ import (
 // typeDoc is the tool-caller-facing documentation for one leaf fact type.
 type typeDoc struct {
 	// Gloss answers "what is this type for" in one clause. It is the only
-	// part that reaches the JSON schema, where the whole twelve-type
+	// part that reaches the JSON schema, where the whole leaf-type
 	// enumeration has to fit in one property description.
 	Gloss string
 	// Aside is the parenthetical elaboration — usually an illustrative fact
@@ -61,6 +61,7 @@ var factTypeDocs = map[fact.Type]typeDoc{
 	fact.Methodology: {"reasoning process lessons learned from hypothesis outcomes", "lives in meta/reasoning/"},
 	fact.Policy:      {"mandatory rule that should always be followed", `"Always rotate secrets quarterly"`},
 	fact.Heuristic:   {"rule-of-thumb to bias decisions, not absolute", `"Prefer small PRs"`},
+	fact.Signal:      {"coordination content consumed once, never believed — a task, message, ack or membership claim", "act on it once and never weigh its confidence; the verb is the topic (tasks, inbox, acks), the addressee is the path, the sender is the commit author, the task id is an entity"},
 }
 
 // allKinds enumerates the Kinds in a stable order. Unlike Type and Origin

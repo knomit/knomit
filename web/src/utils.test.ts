@@ -77,6 +77,34 @@ describe('typeStyles', () => {
     expect(typeStyles.insight.icon).toBe('✸');
   });
 
+  // The epistemic case above shipped alone, so nothing held the pragmatic half
+  // of the table to the same standard — which is how `signal` reached the Go
+  // enum, the spec and the MCP schema while the two web tables stayed at two
+  // entries.
+  //
+  // What this checks is that the three types named below have complete
+  // entries. It does NOT catch a fourth: expectedTypes is a hand-written list,
+  // exactly like the epistemic one above, so a new type has to be added here
+  // too. The only assertion in this file that covers a new entry on its own is
+  // the palette-distance test, which iterates Object.entries(typeStyles) — and
+  // it can only judge a colour that is already in the table, so it fires when
+  // the entry is wrong, never when it is missing.
+  it('has entries for all 3 pragmatic types', () => {
+    const expectedTypes = ['policy', 'heuristic', 'signal'];
+    for (const t of expectedTypes) {
+      expect(typeStyles[t]).toBeDefined();
+      expect(typeStyles[t].color).toBeTruthy();
+      expect(typeStyles[t].bg).toBeTruthy();
+      expect(typeStyles[t].label).toBe(t);
+      expect(typeStyles[t].icon).toBeTruthy();
+    }
+  });
+
+  it('signal has distinct styling', () => {
+    expect(typeStyles.signal.color).toBe('#f63');
+    expect(typeStyles.signal.icon).toBe('⇢');
+  });
+
   it('defaultTypeStyle has unknown label', () => {
     expect(defaultTypeStyle.label).toBe('unknown');
   });

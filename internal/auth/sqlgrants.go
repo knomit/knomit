@@ -60,3 +60,43 @@ func (g *SQLGrants) EverGranted(ctx context.Context, p Principal, perm Permissio
 		`SELECT COUNT(*) FROM grants WHERE principal = ? AND permission = ?`, p.String(), string(perm)).Scan(&n)
 	return n > 0, err
 }
+
+// Row is one grants row, live or revoked, as `knomit grants list` shows it.
+type Row struct {
+	Principal  string
+	Permission Permission
+	GrantedBy  string
+	GrantedAt  time.Time
+	RevokedAt  *time.Time // nil = live
+}
+
+// List returns every row, live and revoked, ordered by principal then
+// permission; principal "" means all principals.
+func (g *SQLGrants) List(ctx context.Context, principal string) ([]Row, error) {
+	rows, err := g.db.QueryContext(ctx, `
+SELECT principal, permission, granted_by, granted_at, revoked_at FROM grants
+WHERE ? = '' OR principal = ?
+ORDER BY principal, permission`, principal, principal)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Row
+	for rows.Next() {
+		var r Row
+		var perm string
+		var at int64
+		var rev sql.NullInt64
+		if err := rows.Scan(&r.Principal, &perm, &r.GrantedBy, &at, &rev); err != nil {
+			return nil, err
+		}
+		r.Permission = Permission(perm)
+		r.GrantedAt = time.Unix(at, 0).UTC()
+		if rev.Valid {
+			t := time.Unix(rev.Int64, 0).UTC()
+			r.RevokedAt = &t
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
