@@ -10,6 +10,7 @@ import (
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
 
 	"knomit/internal/config"
+	"knomit/internal/pki"
 	"knomit/internal/store"
 )
 
@@ -75,6 +76,13 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 		publicKeys.HostKeyCallback = cb
 		return publicKeys, nil
 
+	case "cert":
+		// The credential is the instance certificate, presented by the
+		// knomit+https transport itself (pki.InstallGitTransport), so there
+		// is no go-git AuthMethod. On a non-fleet URL this is anonymous;
+		// validateURLAuth refuses that combination at the API edge.
+		return nil, nil
+
 	case "", "none":
 		// "" = inferred-anonymous; "none" = explicitly anonymous (the caller
 		// chose no auth, so resolveAuthWithOrigin must not auto-promote to SSH).
@@ -87,7 +95,15 @@ func resolveAuth(cfg config.RemoteAuthConfig, defaultKeyPath string) (transport.
 
 // remoteAuthFromRecord builds a RemoteAuthConfig from a stored remote record,
 // falling back to the global config for fields not set in the record.
+//
+// A knomit+https origin inherits NOTHING from the fallback: the global
+// [remote] credential is a forge credential, and a fleet peer must never
+// receive it. Only the record's own method reaches resolveAuthWithOrigin,
+// which forces cert and refuses an explicit token or basic.
 func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig) config.RemoteAuthConfig {
+	if pki.IsFleetURL(remote.URL) {
+		return config.RemoteAuthConfig{AuthMethod: remote.AuthMethod}
+	}
 	cfg := fallback
 	if remote.AuthMethod != "" {
 		cfg.AuthMethod = remote.AuthMethod
@@ -106,8 +122,24 @@ func remoteAuthFromRecord(remote *store.Remote, fallback config.RemoteAuthConfig
 	return cfg
 }
 
-// resolveAuthWithOrigin resolves auth, auto-detecting SSH for git@ or ssh:// URLs.
+// resolveAuthWithOrigin resolves auth, auto-detecting SSH for git@ or ssh://
+// URLs and forcing cert for knomit+https URLs.
+//
+// The fleet rule is enforced in TWO layers on purpose. validateURLAuth (and
+// the wizard, which mirrors it) refuses a mismatched pair at the API edge
+// with a message the user can act on. This layer is the one every clone,
+// probe and sync goes through, including origins stored before the edge
+// check existed and the global [remote] fallback, which the edge never sees.
+// An explicit token or basic here is an error rather than being dropped, so
+// a misconfiguration is visible instead of silently changing what is sent.
 func resolveAuthWithOrigin(cfg config.RemoteAuthConfig, defaultKeyPath, originURL string) (transport.AuthMethod, error) {
+	if pki.IsFleetURL(originURL) {
+		switch cfg.AuthMethod {
+		case "token", "basic":
+			return nil, fmt.Errorf("%s origins authenticate with the instance certificate; auth method %q is refused", pki.GitScheme, cfg.AuthMethod)
+		}
+		return resolveAuth(config.RemoteAuthConfig{AuthMethod: "cert"}, defaultKeyPath)
+	}
 	if cfg.AuthMethod == "" && originURL != "" {
 		if strings.HasPrefix(originURL, "git@") || strings.HasPrefix(originURL, "ssh://") {
 			cfg.AuthMethod = "ssh"

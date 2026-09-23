@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -27,6 +28,13 @@ import (
 // scheme, so KNOMIT+HTTPS:// reaches this transport too; checks on the raw
 // URL string elsewhere must be case-insensitive for the same reason.
 const GitScheme = "knomit+https"
+
+// IsFleetURL reports whether u names a knomit+https origin. The scheme is
+// matched case-insensitively, as go-git (url.Parse) matches it.
+func IsFleetURL(u string) bool {
+	const prefix = GitScheme + "://"
+	return len(u) >= len(prefix) && strings.EqualFold(u[:len(prefix)], prefix)
+}
 
 // ErrNotEnrolled: this instance has no fleet certificate, so it cannot fetch
 // from a knomit+https origin.

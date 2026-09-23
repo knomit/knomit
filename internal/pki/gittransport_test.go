@@ -569,3 +569,20 @@ func TestGitTransport_TLSOptionsAndCredentialsAreRefused(t *testing.T) {
 		t.Fatalf("the server accepted %d connections; refusals must come before any dial", n)
 	}
 }
+
+func TestIsFleetURL(t *testing.T) {
+	for u, want := range map[string]bool{
+		"knomit+https://h/git/kb": true,
+		"KNOMIT+HTTPS://h/git/kb": true,
+		"Knomit+Https://h/git/kb": true,
+		"https://h/git/kb":        false,
+		"knomit+http://h/git/kb":  false,
+		"knomit+https:/h":         false,
+		"":                        false,
+		"xknomit+https://h":       false,
+	} {
+		if got := IsFleetURL(u); got != want {
+			t.Errorf("IsFleetURL(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
