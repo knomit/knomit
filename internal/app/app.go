@@ -17,6 +17,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
+	"knomit/internal/oauth"
 	"knomit/internal/pki"
 	"knomit/internal/platform/logging"
 	"knomit/internal/platform/memlimit"
@@ -292,6 +293,21 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		return nil, fmt.Errorf("seed grants: %w", err)
 	}
 
+	// The OAuth issuer (F19 phase 3a), on the same control.db and the same
+	// grants table, only when [oauth] is configured. The server then has an
+	// OAuthHandler for `knomit serve` to put on [oauth].addr, and the plain
+	// router gains the operator's approval endpoints (local principals only).
+	if cfg.OAuth.Enabled() {
+		store := oauth.NewStore(a.manager.ControlDB(), cfg.OAuth.AccessTTL, cfg.OAuth.RefreshTTL)
+		a.server.OAuthIssuer = oauth.NewIssuer(oauth.Options{
+			Issuer:  cfg.OAuth.Issuer,
+			Store:   store,
+			Clients: oauth.NewResolver(cfg.OAuth.EffectiveClients()),
+			Grants:  sqlGrants,
+		})
+		a.server.BearerVerifier = oauth.NewVerifier(cfg.OAuth.Issuer, store)
+	}
+
 	return a, nil
 }
 
@@ -371,6 +387,10 @@ func seedOwnPrincipal(ctx context.Context, g *auth.SQLGrants, cfg config.AuthCon
 func (a *App) Handler() http.Handler {
 	return a.server.Handler()
 }
+
+// OAuthHandler is the OAuth listener's router, or nil when [oauth] is not
+// configured.
+func (a *App) OAuthHandler() http.Handler { return a.server.OAuthHandler() }
 
 // Close shuts down repos and releases all resources.
 func (a *App) Close() {

@@ -258,12 +258,33 @@ func serveCmd() *cobra.Command {
 				}()
 			}
 
+			// OAuth listener (F19 phase 3a): its OWN http.Server over the
+			// OAuth router, off until [oauth].issuer and [oauth].addr are set.
+			// The only place a bearer token is judged; a reverse proxy with
+			// real TLS fronts it, never the plaintext port above.
+			oauthSrv, ol, err := openOAuthServer(cfg.OAuth, a.OAuthHandler(), srv)
+			if err != nil {
+				log.Fatal().Err(err).Msg("oauth listener failed")
+			}
+			if oauthSrv != nil {
+				log.Info().Str("addr", ol.Addr().String()).Str("issuer", cfg.OAuth.Issuer).
+					Msg("OAuth listener (bearer tokens only)")
+				go func() {
+					if err := oauthSrv.Serve(ol); err != nil && err != http.ErrServerClosed {
+						log.Fatal().Err(err).Msg("oauth serve failed")
+					}
+				}()
+			}
+
 			<-cmd.Context().Done()
 			// a.Close() runs via defer — shuts down repos and releases resources.
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if tlsSrv != nil {
 				_ = tlsSrv.Shutdown(shutCtx)
+			}
+			if oauthSrv != nil {
+				_ = oauthSrv.Shutdown(shutCtx)
 			}
 			return srv.Shutdown(shutCtx)
 		},
