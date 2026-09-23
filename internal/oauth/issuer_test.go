@@ -195,6 +195,7 @@ func TestAuthorize_ErrorsAfterRedirectValidatesAreRedirects(t *testing.T) {
 		"resource escapes":     {func(q url.Values) { q.Set("resource", f.srv.URL+"/api/../x") }, "invalid_target"},
 		"resource with query":  {func(q url.Values) { q.Set("resource", f.srv.URL+"/api?x=1") }, "invalid_target"},
 		"resource host suffix": {func(q url.Values) { q.Set("resource", f.srv.URL+"0/api") }, "invalid_target"},
+		"resource other host":  {func(q url.Values) { q.Set("resource", strings.Replace(f.srv.URL, "127.0.0.1", "127.0.0.2", 1)) }, "invalid_target"},
 		"admin scope":          {func(q url.Values) { q.Set("scope", "read admin") }, "invalid_scope"},
 		"unknown scope":        {func(q url.Values) { q.Set("scope", "everything") }, "invalid_scope"},
 		"duplicate state":      {func(q url.Values) { q.Add("state", "again") }, "invalid_request"},
@@ -309,6 +310,21 @@ func TestApprove_CeilingRules(t *testing.T) {
 	p, err := f.iss.Approve(ctx, id, "laptop", nil, "x")
 	if err != nil || strings.Join(p.Ceiling, " ") != "read" {
 		t.Fatalf("nothing requested: ceiling %v, %v; want read", p.Ceiling, err)
+	}
+
+	// Only read and write are granted by default, whatever else was asked.
+	q = f.authorizeQuery(ch)
+	q.Set("scope", "operator write push:own")
+	id = f.authorize(t, q)
+	if p, err := f.iss.Approve(ctx, id, "laptop", nil, "x"); err != nil || strings.Join(p.Ceiling, " ") != "write" {
+		t.Fatalf("operator+write+push:own requested: ceiling %v, %v; want write", p.Ceiling, err)
+	}
+
+	// An explicit --scopes may grant beyond read and write (never admin),
+	// and comes back in one canonical order.
+	id = f.authorize(t, f.authorizeQuery(ch))
+	if p, err := f.iss.Approve(ctx, id, "laptop", []string{"operator", "read"}, "x"); err != nil || strings.Join(p.Ceiling, " ") != "read operator" {
+		t.Fatalf("--scopes operator,read: %v, %v", p.Ceiling, err)
 	}
 
 	id = f.authorize(t, f.authorizeQuery(ch))
@@ -472,6 +488,8 @@ func TestToken_CodeExchangeRefusals(t *testing.T) {
 	}{
 		"verifier mismatch":     {func(_ *issuerFixture, v url.Values) { v.Set("code_verifier", strings.Repeat("w", 43)) }, "invalid_grant"},
 		"verifier missing":      {func(_ *issuerFixture, v url.Values) { v.Del("code_verifier") }, "invalid_request"},
+		"verifier too short":    {func(_ *issuerFixture, v url.Values) { v.Set("code_verifier", strings.Repeat("v", 42)) }, "invalid_request"},
+		"verifier bad chars":    {func(_ *issuerFixture, v url.Values) { v.Set("code_verifier", strings.Repeat("v", 42)+"!") }, "invalid_request"},
 		"redirect_uri mismatch": {func(_ *issuerFixture, v url.Values) { v.Set("redirect_uri", "http://127.0.0.1:1/callback") }, "invalid_grant"},
 		"client mismatch":       {func(_ *issuerFixture, v url.Values) { v.Set("client_id", "app") }, "invalid_grant"},
 		"resource mismatch":     {func(f *issuerFixture, v url.Values) { v.Set("resource", f.srv.URL+"/api/v1/other") }, "invalid_target"},

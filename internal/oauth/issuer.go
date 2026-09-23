@@ -215,10 +215,8 @@ func (i *Issuer) wait(w http.ResponseWriter, r *http.Request) {
 			errorPage(w, http.StatusInternalServerError, "The request could not be read.")
 			return
 		}
-		if p.Collected {
-			errorPage(w, http.StatusGone, "This authorization request has already been completed.")
-			return
-		}
+		// A collected request has a decision too, so it breaks out here and
+		// Collect answers ErrCollected: one place says "already completed".
 		if p.Decision != "" {
 			break
 		}
