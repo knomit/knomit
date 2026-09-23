@@ -463,9 +463,8 @@ jobs:
   # platform dependency, so it belongs on the cheapest runner. `npm run build`
   # is `tsc -b && vite build`, so it is the type check as well as the bundle.
   #
-  # Scoped deliberately to tools/desktop/ui. web/ has the same gap and is a
-  # separate decision — wiring it in here would silently make a much larger
-  # suite a merge gate.
+  # Scoped to tools/desktop/ui. web/ had the same gap and gets its own job,
+  # web-ui below, rather than being wired in here.
   desktop-ui:
     runs-on: ubuntu-latest
     defaults:
@@ -482,6 +481,42 @@ jobs:
         run: npm run build
       - name: Unit tests
         run: npm test
+
+  # Type-check + test the main web UI (web/). Its vitest suite ran in no job
+  # until #259, so it gated nothing: it sat at 98 failures on developer
+  # machines while every check here was green. Making this ~1700-test suite a
+  # merge gate (and, via release-stable's `needs: tests`, a release gate) is a
+  # deliberate decision, taken in the PR that closes #259.
+  #
+  # Two Node legs, and the second one is the point. The 98 failures were Node
+  # >= 25's own localStorage global shadowing jsdom's under vitest 4 (see the
+  # Storage block in web/src/test-setup.ts); on Node 22 alone the suite was
+  # green, so a single leg pinned to 22 like desktop-ui would never have seen
+  # them. 26 is the newest Node that developer machines run.
+  #
+  # `npx tsc -b`, not `tsc --noEmit`: web/tsconfig.json is a solution file with
+  # `files: []`, so only build mode checks anything.
+  web-ui:
+    name: web-ui (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '26']
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install (locked)
+        run: npm ci
+      - name: Type-check
+        run: npx tsc -b
+      - name: Unit tests
+        run: npx vitest run
 
   # In-process EmbeddingGemma inference smoke — the formal cross-platform
   # close-out from PoC #2. Downloads the real model (~600MB) once per OS, so it
