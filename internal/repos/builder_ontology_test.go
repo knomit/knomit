@@ -1,9 +1,12 @@
 package repos
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/config"
@@ -305,6 +308,53 @@ topics:
 	require.NoError(t, err)
 	require.Equal(t, divergedYAML, result.Content,
 		"the ontology on the agent branch must NOT be rewritten when the stored ontology has diverged from the preset")
+}
+
+// TestLoadOntology_AttributesSurviveBoot pins why IsSubsetOf compares
+// attributes. The stored ontology here is the stale subset every refresh test
+// uses, plus ONE attribute on a preset topic. Its taxonomy is a subset of
+// CodeOntology, so if attributes were ignored the refresh would write the
+// preset over it on every boot and the flag would be erased. It must instead
+// take the diverged path, keep the file byte-for-byte, and say in the log that
+// attributes are the reason auto-upgrade stopped.
+func TestLoadOntology_AttributesSurviveBoot(t *testing.T) {
+	const flaggedYAML = `id: source-code
+name: Source Code Knowledge
+description: stale but flagged
+topics:
+  invariants:
+    description: Load-bearing rules
+    attributes:
+      learn_dedup: off
+`
+	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, flaggedYAML)
+
+	var buf bytes.Buffer
+	origLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = origLogger })
+
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: dir},
+		AgentBranch: agentBranch,
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	require.NotNil(t, ri.Ontology())
+	require.True(t, ri.Ontology().LearnDedupOff("invariants/anything"),
+		"the attribute must be in force after boot, not refreshed away")
+	require.NotContains(t, ri.Ontology().Topics, "principles",
+		"an attribute is divergence: the preset must NOT have been written over the stored file")
+
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, OntologyPath, nil)
+	require.NoError(t, err)
+	require.Equal(t, flaggedYAML, result.Content, "the stored file must be left exactly as written")
+
+	require.Contains(t, buf.String(), `"reason":"attributes"`,
+		"the diverged warning must name attributes as the reason auto-upgrade stopped; got %s", buf.String())
 }
 
 // TestLoadOntology_UnknownKeyDoesNotSubstituteTheDefault is the open-path

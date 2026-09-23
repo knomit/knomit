@@ -499,9 +499,47 @@ topics:
 
 Schema: the root carries `id`, `name`, `description`, `topics`, and an
 optional `validations` list; each node carries `description`, optional
-`children`, and optional `validations`; each validation carries `name`,
-`message`, and `rule` (§3.4). Required: `id`, `name`, and at least one
-topic.
+`children`, optional `validations`, and optional `attributes`; each
+validation carries `name`, `message`, and `rule` (§3.4). Required: `id`,
+`name`, and at least one topic.
+
+`attributes` is a map on a topic or child node (not the root) that switches
+store behaviour for facts under that node. It resolves by the same walk as
+validation rules: root → topic → each declared child, stopping at the first
+undeclared segment; the nearest declared value wins, so an undeclared deeper
+category inherits from its deepest declared ancestor, and a child may
+override its parent. One key is defined:
+
+- `learn_dedup` — the string `off` or `on`. `off` makes a learn write under
+  the node skip both the category-directory auto-merge and the same-subject
+  refusal, so two near-identical facts land as two files. It also protects
+  facts under the node as merge TARGETS: an auto-merge search from a parent
+  directory never folds an incoming fact into an existing fact that lives
+  under a flagged node. Because the whole merge stage is skipped, a flagged
+  fact also skips hypothesis subsumption: an observation that settles a
+  hypothesis under a flagged node leaves both live. `on` behaves as absent (it
+  exists so a child can undo a parent's `off`). A YAML boolean (`false`,
+  `true`) is rejected: write the bare word `off`, which YAML 1.2 reads as a
+  string. It governs learn only; review ignores it, so review's prune can
+  still merge near-identical facts of a knowledge kind under a flagged node.
+
+```yaml
+topics:
+  tasks:
+    attributes:
+      learn_dedup: off
+    children:
+      research: {}   # inherits off
+```
+
+A bad value for a defined key makes the ontology invalid, including when an
+existing repository is opened: the repository refuses writes until the
+ontology is fixed or the implementation upgraded, rather than silently
+treating the key as absent. An attribute key the reader does not define is
+reported as a warning and ignored, so an ontology written by a newer
+implementation still opens. It follows that each key's value set is CLOSED:
+a new behaviour is introduced as a new key, never as a new value of an
+existing key, which an older reader would reject.
 
 Topic and category keys MUST match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase
 kebab-case) at every depth. Writers do not necessarily enforce the grammar
@@ -560,6 +598,15 @@ presets deliver fixes to existing rules) may be auto-refreshed to the newer
 preset. The refresh appears in history as a commit with message
 `ontology: refresh to embedded <id> preset` under operation token `updated`
 (§4.2). If the stored ontology has diverged, it wins and is left alone.
+
+`attributes` (§3.2) count as divergence. The refresh writes the preset over
+the stored file, so a stored attribute that the preset does not carry with an
+equal value would be erased; the stored ontology is therefore NOT a subset,
+and the implementation logs the skipped upgrade with reason `attributes`. A
+value that behaves as absent (`learn_dedup: on`) is compared as absent.
+Attributes the preset carries and the stored file lacks do not block a
+refresh. A repository that sets an attribute on a preset topic therefore stops
+receiving preset refreshes.
 
 ### 3.4 Validation Rules
 
