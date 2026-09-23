@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
+	"knomit/internal/pki"
 	"knomit/internal/platform/logging"
 	"knomit/internal/platform/memlimit"
 	"knomit/internal/repos"
@@ -71,6 +73,22 @@ func ResolveKeyPath(cfg config.Config) string {
 	return filepath.Join(cfg.Home, "id_ed25519")
 }
 
+// installGitTransport registers the knomit+https transport and logs the
+// instance's fleet state for it in one line. The registration stands whatever
+// the state; an unenrolled instance is picked up on its next fetch once
+// `knomit identity install` has run, with no restart.
+func installGitTransport(dir, keyPath string) {
+	err := pki.InstallGitTransport(dir, keyPath)
+	switch {
+	case err == nil:
+		log.Info().Str("dir", dir).Msg("knomit+https origins: enrolled, fetching over mutual TLS")
+	case errors.Is(err, pki.ErrNotEnrolled):
+		log.Info().Str("dir", dir).Msg("knomit+https origins: not enrolled; fetches from them fail until `knomit identity install`")
+	default:
+		log.Warn().Err(err).Str("dir", dir).Msg("knomit+https origins: fleet files unusable; fetches from them fail until fixed")
+	}
+}
+
 // New creates and boots the application from the given config and context.
 func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// First, before anything is opened or generated: a config that can only
@@ -90,6 +108,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	a.signer = signer
 	a.keyPath = keyPath
 	a.agentBranch = agentBranch(keyFingerprint)
+
+	// The knomit+https go-git transport, registered before anything can
+	// clone or sync (repos.New and Manager.Start are below): go-git's
+	// protocol registry is an unsynchronised map. Always registered, enrolled
+	// or not, so a fleet origin never falls through to another transport.
+	installGitTransport(cfg.TLS.Dir, keyPath)
 
 	// Embedder. Embeddings are MANDATORY: every fact is indexed with a vector
 	// and the per-model cosine thresholds are load-bearing for dedup, graph

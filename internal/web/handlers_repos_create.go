@@ -97,6 +97,14 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 				AuthToken:  req.Origin.AuthToken,
 			}
 		}
+		// The same URL/auth compatibility check PUT /origin and the origin
+		// sessions run, in the same words, before any job starts.
+		if spec.Origin != nil {
+			if err := validateURLAuth(spec.Origin.URL, spec.Origin.AuthMethod); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid origin", err.Error(), r.URL.Path)
+				return
+			}
+		}
 
 		// Preflight still runs on the REQUEST's context, and correctly so: it
 		// is the only part of a create the caller genuinely owns. Its refusals

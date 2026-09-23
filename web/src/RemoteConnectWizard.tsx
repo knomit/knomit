@@ -5,6 +5,7 @@ import { GlobeIcon } from './icons';
 import { btn, card } from './manageStyles';
 import { repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
 import { originURL } from './wizardState';
+import { isKnomitURL, isSSHURL, urlAuthMismatch } from './originAuth';
 
 type Step =
   | 'idle' | 'creating' | 'testing' | 'tested'
@@ -42,7 +43,8 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
   // '' = auto-detect (backend infers SSH for git@/ssh:// URLs, else anonymous).
   // 'none' forces anonymous even for SSH-style URLs. handleTest sends '' as an
   // omitted auth_method so the backend's auto-promotion can run.
-  const [authMethod, setAuthMethod] = useState<'' | 'none' | 'ssh' | 'token' | 'basic'>('');
+  // 'cert' = the instance certificate, offered only for knomit+https URLs.
+  const [authMethod, setAuthMethod] = useState<'' | 'none' | 'ssh' | 'token' | 'basic' | 'cert'>('');
   const [token, setToken] = useState('');
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
@@ -104,7 +106,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
       if (cancelled || !o) return;
       if (o.url) setUrl(o.url);
       const m = o.auth_method;
-      if (m === 'none' || m === 'ssh' || m === 'token' || m === 'basic') setAuthMethod(m);
+      if (m === 'none' || m === 'ssh' || m === 'token' || m === 'basic' || m === 'cert') setAuthMethod(m);
     }).catch(() => { /* leave blank */ });
     return () => { cancelled = true; };
   }, [repo]);
@@ -263,14 +265,13 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
     if (sessionId) { deleteSession(repo, sessionId).catch(() => {}); setSessionId(null); }
   };
 
-  const isSSHURL = sendURL.startsWith('git@') || sendURL.startsWith('ssh://');
-  const isHTTPURL = sendURL.startsWith('http://') || sendURL.startsWith('https://');
-  const authMismatch = (isHTTPURL && authMethod === 'ssh') ? 'SSH auth cannot be used with HTTP/HTTPS URLs'
-    : (isSSHURL && (authMethod === 'token' || authMethod === 'basic')) ? 'Token/basic auth cannot be used with SSH URLs' : '';
+  const isSSH = isSSHURL(sendURL);
+  const isKnomit = isKnomitURL(sendURL);
+  const authMismatch = urlAuthMismatch(sendURL, authMethod);
   // Non-blocking advisory: 'none' on an SSH-style URL is a deliberate override
   // (force anonymous), but it almost always fails to authenticate. Warn without
   // disabling Test so the override stays usable for the rare anonymous host.
-  const authWarning = (isSSHURL && authMethod === 'none')
+  const authWarning = (isSSH && authMethod === 'none')
     ? 'Anonymous auth on an SSH URL usually fails — choose SSH (knomit key) unless this host allows anonymous access.'
     : '';
   const canTest = !!url && !authMismatch && step === 'idle';
@@ -353,6 +354,7 @@ export function RemoteConnectWizard({ repo, onCancel, onDone, onBusyChange }: Pr
                   <option value="ssh">SSH (knomit key)</option>
                   <option value="token">Token</option>
                   <option value="basic">Basic (user / password)</option>
+                  {(isKnomit || authMethod === 'cert') && <option value="cert">Instance certificate</option>}
                 </select>
                 {authMethod === 'token' && (<>
                   <label style={label} htmlFor="wizard-token">Token</label>

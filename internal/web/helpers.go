@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+
+	"knomit/internal/pki"
 )
 
 // detailWithoutTitlePrefix renders err as a problem+json `detail`, dropping a
@@ -55,7 +57,21 @@ func isGitURL(s string) bool {
 }
 
 // validateURLAuth checks that the auth method is compatible with the URL scheme.
+//
+// knomit+https (another enrolled instance) authenticates ONLY with the
+// instance certificate: auth method cert, or "" which resolves to it. The
+// wizard's urlAuthMismatch (web/src/originAuth.ts) makes the same two
+// refusals in the same words, and both tests run one table. The repos layer
+// (resolveAuthWithOrigin) forces cert again for every clone and sync; this
+// edge check is the one that tells the user what to change.
 func validateURLAuth(u, authMethod string) error {
+	isKnomit := pki.IsFleetURL(u)
+	if isKnomit && authMethod != "cert" && authMethod != "" {
+		return fmt.Errorf("knomit+https origins authenticate with the instance certificate — use auth method cert")
+	}
+	if !isKnomit && authMethod == "cert" {
+		return fmt.Errorf("cert auth is only valid with knomit+https:// URLs")
+	}
 	isSSH := strings.HasPrefix(u, "git@") || strings.HasPrefix(u, "ssh://")
 	isHTTP := strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
 	if isHTTP && authMethod == "ssh" {
