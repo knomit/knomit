@@ -207,8 +207,11 @@ func TestOntologySchema_ServesFields(t *testing.T) {
 		} `json:"fields"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if len(got.Fields) != 11 {
-		t.Fatalf("fields = %d, want 11", len(got.Fields))
+	// Derived, not a literal: the endpoint must serve every field the schema
+	// declares, and fact.TestOntologySchema_CoversEveryYAMLTag already pins
+	// the schema to the structs.
+	if want := len(fact.OntologySchema()); len(got.Fields) != want {
+		t.Fatalf("fields = %d, want %d", len(got.Fields), want)
 	}
 }
 
