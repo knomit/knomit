@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, act } from '@testing-library/react';
 import App from './App';
 import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { setBootPollIntervalForTests } from './bootStatus';
@@ -85,7 +85,16 @@ function rememberRepo(name: string) {
 
 describe('App boot', () => {
   beforeEach(() => { installFakeEventSource(); localStorage.clear(); });
-  afterEach(() => { uninstallFakeEventSource(); vi.clearAllMocks(); localStorage.clear(); });
+  afterEach(() => {
+    // Unmount FIRST. vitest runs afterEach hooks in "stack" order (its
+    // sequence.hooks default), so the cleanup() test-setup.ts registers runs
+    // AFTER this one. Without this call the App is still mounted while the fake
+    // EventSource is removed and the mocks are cleared: a passive effect still
+    // pending from the test's last commit then runs against the missing global,
+    // and the half-torn-down App's later calls land in the next test (#270).
+    cleanup();
+    uninstallFakeEventSource(); vi.clearAllMocks(); localStorage.clear();
+  });
 
   it('fires getRepo for the remembered repo BEFORE the repo list resolves', async () => {
     const api = await primeApi([repoRow('alpha')]);
@@ -231,6 +240,9 @@ describe('App boot', () => {
 
     it('adopts the reported API base and continues the boot, with no reload', async () => {
       const api = await primeApi([repoRow('alpha')]);
+      // The boot runs to completion here, and completing it reads the repo's
+      // details; unstubbed, that effect throws after the test has asserted.
+      api.getRepo.mockResolvedValue({ name: 'alpha', read_branch: 'machine/test', branch: EMBEDDED });
       statuses = [
         { ready: false, phase: 'downloading-models' },
         { ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' },
@@ -244,6 +256,39 @@ describe('App boot', () => {
       expect((window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__)
         .toBe('http://127.0.0.1:54321');
       await waitFor(() => expect(screen.queryByTestId('boot-screen')).toBeNull());
+      // End on the LAST thing the boot does, the branch event stream, not on
+      // the commit that drops the boot screen: that commit's own effects are
+      // still pending when it lands (#270).
+      await waitFor(() => expect(eventSourceURLs().some((u) => u.includes('/branches/'))).toBe(true));
+    });
+
+    // knomit#270. A test that ends on the commit that drops the boot screen
+    // leaves that commit's passive effects (the SSE stream among them) still
+    // pending when teardown starts. That is what a loaded runner did to
+    // "adopts the reported API base", and it is forced here: the promise
+    // resolves at the commit itself, before React's passive flush. Teardown
+    // must unmount BEFORE it removes the fake EventSource or clears mocks, or
+    // the effect runs against a missing global and the half-torn-down App's
+    // later calls leak into the next test (which is why this one sits directly
+    // before "lets NOTHING leave the page").
+    it('tears down cleanly when a test ends at the commit that drops the boot screen', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      api.getRepo.mockResolvedValue({ name: 'alpha', read_branch: 'machine/test', branch: EMBEDDED });
+      statuses = [
+        { ready: false, phase: 'downloading-models' },
+        { ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' },
+      ];
+      let sawBootScreen = false;
+      const bootScreenGone = new Promise<void>((resolve) => {
+        const mo = new MutationObserver(() => {
+          const boot = document.querySelector('[data-testid="boot-screen"]');
+          if (boot) sawBootScreen = true;
+          if (sawBootScreen && !boot) { mo.disconnect(); resolve(); }
+        });
+        mo.observe(document.body, { childList: true, subtree: true });
+      });
+      render(<App />);
+      await bootScreenGone;
     });
 
     // THE CLASS, not the three instances. Gating api.repos was not enough: a
