@@ -156,10 +156,9 @@ func oauthPending(ctx context.Context, c *http.Client, out io.Writer) error {
 }
 
 func oauthApprove(ctx context.Context, c *http.Client, out io.Writer, id, subject string, scopes []string) error {
-	req := map[string]any{"subject": subject}
-	if scopes != nil {
-		req["scopes"] = scopes
-	}
+	// nil scopes encodes as null, which the server reads as "not given" and
+	// applies the default ceiling to; an empty non-nil list is refused there.
+	req := map[string]any{"subject": subject, "scopes": scopes}
 	var p pendingJSON
 	if err := localCall(ctx, c, http.MethodPost, "/oauth/pending/"+id+"/approve", req, &p); err != nil {
 		return err
