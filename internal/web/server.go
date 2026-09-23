@@ -15,6 +15,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/llm"
 	"knomit/internal/mcp"
+	"knomit/internal/oauth"
 	"knomit/internal/platform/logging"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -56,6 +57,13 @@ type Server struct {
 	// Auth mirrors the [auth] config section. LoopbackDefault is parsed once
 	// per Handler() in grants(), not per request.
 	Auth config.AuthConfig
+
+	// OAuthIssuer and BearerVerifier are set when [oauth] is configured
+	// (F19 phase 3a), and nil otherwise. They serve OAuthHandler — the
+	// OAuth listener's own router — and the operator's approval endpoints on
+	// this router. Handler() never judges a bearer token.
+	OAuthIssuer    *oauth.Issuer
+	BearerVerifier BearerVerifier
 
 	// authDisabled makes AuthMiddleware attach the anonymous principal
 	// whatever the remote address is, and writeGate a no-op. It is FORM B of
@@ -109,7 +117,8 @@ type Server struct {
 
 // grants is the Grants every enforcement point in this server consults: the
 // anonymous loopback principal from config, a chained instance's implicit
-// read from auth.CertGrants, and everything else from the store.
+// read from auth.CertGrants, a bearer token's ceiling from auth.TokenGrants,
+// and everything else from the store.
 // Building it once per Handler() means a bad permission name in config fails
 // at wiring time rather than once per request.
 //
@@ -123,7 +132,7 @@ func (s *Server) grants() auth.Grants {
 	if err != nil {
 		log.Fatal().Err(err).Msg("[auth].loopback_default invalid")
 	}
-	return loopbackGrants{anon: set, store: auth.CertGrants{Store: s.Grants}}
+	return loopbackGrants{anon: set, store: auth.CertGrants{Store: auth.TokenGrants{Inner: s.Grants}}}
 }
 
 // buildMCPHandler constructs the single MCP server instance, shared across

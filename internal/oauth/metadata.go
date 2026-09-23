@@ -114,3 +114,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// ResourceMetadataURL is the protected-resource metadata URL for a request
+// whose path, as the OAuth listener sees it, is p: the RFC 9728 path form
+// for the resource issuer + p. It is what a 401's resource_metadata names,
+// so a client that follows it asks for a token confined to that resource.
+func ResourceMetadataURL(issuer, p string) string {
+	origin, ipath := issuerParts(issuer)
+	return origin + prmWellKnown + ipath + p
+}
