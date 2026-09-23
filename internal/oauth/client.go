@@ -203,7 +203,6 @@ func newCIMDFetcher() *cimdFetcher {
 // first.
 func (f *cimdFetcher) dialer() *net.Dialer {
 	return &net.Dialer{
-		Timeout: f.timeout,
 		Control: func(_, address string, _ syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {
@@ -251,8 +250,9 @@ func (f *cimdFetcher) fetch(ctx context.Context, id string) (Client, time.Durati
 	}
 	pinned := net.JoinHostPort(ips[0].String(), port)
 	d := f.dialer()
+	// ONE deadline for the whole fetch — DNS, connect, TLS, headers, body —
+	// carried by ctx; no per-phase timeouts beside it.
 	client := &http.Client{
-		Timeout: f.timeout,
 		Transport: &http.Transport{
 			Proxy: nil,
 			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -261,10 +261,8 @@ func (f *cimdFetcher) fetch(ctx context.Context, id string) (Client, time.Durati
 			// ServerName comes from the request URL's host, so the
 			// certificate is verified against the NAME the client_id carries,
 			// not the pinned address.
-			TLSClientConfig:       &tls.Config{RootCAs: f.roots, MinVersion: tls.VersionTLS12},
-			TLSHandshakeTimeout:   f.timeout,
-			ResponseHeaderTimeout: f.timeout,
-			DisableKeepAlives:     true,
+			TLSClientConfig:   &tls.Config{RootCAs: f.roots, MinVersion: tls.VersionTLS12},
+			DisableKeepAlives: true,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("client metadata documents may not redirect")
@@ -353,13 +351,11 @@ var forbidden = func() []*net.IPNet {
 }()
 
 // forbiddenIP reports whether ip is in a forbidden range. An IPv4-mapped IPv6
-// address is judged as the IPv4 address it carries.
+// address is judged as the IPv4 address it carries: net.IPNet.Contains does
+// that conversion itself for a 4-byte network.
 func forbiddenIP(ip net.IP) bool {
 	if ip == nil {
 		return true
-	}
-	if v4 := ip.To4(); v4 != nil {
-		ip = v4
 	}
 	for _, n := range forbidden {
 		if n.Contains(ip) {

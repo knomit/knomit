@@ -231,7 +231,7 @@ func TestResolver_CacheCappedAtOneHour(t *testing.T) {
 
 func TestResolver_NoCacheWithoutMaxAge(t *testing.T) {
 	f := newCIMDFixture(t)
-	f.serve(f.document(f.url), "no-store")
+	f.serve(f.document(f.url), "max-age=600, no-store") // no-store wins over max-age
 	c := &clock{t: time.Unix(1_790_000_000, 0)}
 	r := newResolverFor(f.fetcher(), c)
 	_, _ = r.Resolve(context.Background(), f.url)
@@ -243,6 +243,10 @@ func TestResolver_NoCacheWithoutMaxAge(t *testing.T) {
 
 func TestResolver_UnknownClient(t *testing.T) {
 	r := NewResolver(nil)
+	r.fetch.lookup = func(_ context.Context, host string) ([]net.IP, error) {
+		t.Errorf("looked up %q: an id that is not a CIMD URL must be refused before any network", host)
+		return nil, errors.New("no")
+	}
 	for _, id := range []string{"", "some-app", "http://client.example/cimd.json", "https://client.example", "https://client.example/", "https://client.example/c#f", "https://u:p@client.example/c", "https://client.example/c?x=1"} {
 		if _, err := r.Resolve(context.Background(), id); !errors.Is(err, ErrInvalidClient) {
 			t.Errorf("Resolve(%q): want ErrInvalidClient, got %v", id, err)
@@ -293,6 +297,19 @@ func TestCIMD_Guards(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = w.Write([]byte(f.document(f.url)))
 			}))
+		}, nil},
+		// The deadline covers DNS too: a lookup that answers only after the
+		// timeout must not be waited for.
+		{"slow dns", func(_ *cimdFixture, fe *cimdFetcher) {
+			fe.timeout = 200 * time.Millisecond
+			fe.lookup = func(ctx context.Context, _ string) ([]net.IP, error) {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(2 * time.Second):
+					return []net.IP{net.ParseIP("127.0.0.1")}, nil
+				}
+			}
 		}, nil},
 		{"not json", func(f *cimdFixture, _ *cimdFetcher) {
 			f.handler.Store(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -354,6 +371,10 @@ func TestCIMD_DialerRechecksAddress(t *testing.T) {
 func TestCIMD_OnlyHTTPS(t *testing.T) {
 	f := newCIMDFixture(t)
 	fe := f.fetcher()
+	fe.lookup = func(context.Context, string) ([]net.IP, error) {
+		t.Error("an http client_id reached DNS: it must be refused as not-a-CIMD first")
+		return []net.IP{net.ParseIP("127.0.0.1")}, nil
+	}
 	r := newResolverFor(fe, &clock{t: time.Unix(1_790_000_000, 0)})
 	u, _ := url.Parse(f.url)
 	u.Scheme = "http"
