@@ -16,9 +16,9 @@ import (
 // platform: 104 on darwin, 108 on linux. It is READ from the struct the
 // kernel uses, never typed, so no platform's number can be baked into the
 // other's build. A path of SunPathCap bytes or more is refused with
-// ErrPathTooLong. On linux that is one byte stricter than the kernel, which
-// accepts an unterminated 108-byte path; one rule on every platform is worth
-// the byte.
+// ErrPathTooLong, which is exactly where bind(2) starts refusing on both
+// platforms: TestListenLocal_PathLengthBoundaryIsTheSunPathCap asks the
+// kernel on every run rather than trusting this function.
 func SunPathCap() int { return len(syscall.RawSockaddrUnix{}.Path) }
 
 // fallbackBase is where FallbackSocketDir lives. It is the LITERAL /tmp on

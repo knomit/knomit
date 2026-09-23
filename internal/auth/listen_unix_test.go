@@ -290,10 +290,34 @@ func assertNothingCreated(t *testing.T, path string) {
 }
 
 // E5: the boundary itself. cap-1 bytes listens and dials; cap bytes is the
-// named error BEFORE any file is created. Sabotage: typing 108 for the cap
-// passes on linux and fails the second half on darwin, and vice versa for
-// 104 — the reviewer runs the linux half in a container.
+// named error BEFORE any file is created.
+//
+// The KERNEL is the reference, not SunPathCap: a raw net.Listen, bypassing
+// the pre-check, must accept SunPathCap()-1 bytes and refuse SunPathCap()
+// bytes. Without that, any cap no larger than the kernel's limit is
+// self-consistent (cap-1 binds, cap is refused by the pre-check), and a
+// hardcoded 104 passed on linux (review F1, #268). Sabotage: 104 on linux
+// fails "the kernel refuses cap bytes" (it accepts 104); 108 on darwin fails
+// "the kernel accepts cap-1 bytes" (it refuses 107).
 func TestListenLocal_PathLengthBoundaryIsTheSunPathCap(t *testing.T) {
+	// Kernel oracle, both directions.
+	//   too LOOSE a cap (108 on darwin): cap-1 = 107 bytes, the kernel refuses.
+	//   too STRICT a cap (104 on linux): cap = 104 bytes, the kernel accepts.
+	for _, tc := range []struct {
+		n      int
+		accept bool
+	}{{SunPathCap() - 1, true}, {SunPathCap(), false}} {
+		p := capPath(t, tc.n)
+		ln, err := net.Listen("unix", p)
+		if ln != nil {
+			ln.Close()
+		}
+		if accepted := err == nil; accepted != tc.accept {
+			t.Fatalf("kernel on a %d-byte path: accepted=%v (err %v); SunPathCap()=%d does not match this platform's sun_path limit",
+				tc.n, accepted, err, SunPathCap())
+		}
+	}
+
 	under := capPath(t, SunPathCap()-1)
 	ln, cleanup, err := ListenLocal(under)
 	if err != nil {

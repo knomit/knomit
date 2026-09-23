@@ -31,6 +31,9 @@ package pki
 //     ConnActiveOnlyAfterAdoption, and
 //     TestConnRegistry_ChecksAConnectionWhenItIsFirstTracked.
 //   - The registry's check narrowed to IsRevoked: Expiry.
+//   - Server.refresh (the handshake path) no longer sweeps after adopting:
+//     HandshakeThatAdoptsTheCRLCutsAtOnce only (review F2 found it untested;
+//     added in the fix push, sabotage run against its commit).
 
 import (
 	"bufio"
@@ -220,6 +223,45 @@ func TestServer_OneTickAfterTheCRLWriteCutsTheConn(t *testing.T) {
 	}
 	if err := cb.get(); err != nil {
 		t.Fatalf("B's connection did not survive the tick: %v", err)
+	}
+}
+
+// The fast path (review F2, #268): when a ClientHello is what adopts the new
+// CRL, that same adoption cuts established connections at once, not one tick
+// later. The ticker never fires (interval one hour) and no tick() is driven:
+// the ONLY thing that can adopt the CRL here is B's fresh handshake, the
+// mirror image of the keep-alive test, which requires zero hellos.
+// Sabotage: deleting the sweep in Server.refresh leaves A open and this fails.
+func TestServer_HandshakeThatAdoptsTheCRLCutsAtOnce(t *testing.T) {
+	f := newFleet(t)
+	srvM := f.enroll(t, "server")
+	dir := f.install(t, srvM)
+	a, b := f.enroll(t, "peer-a"), f.enroll(t, "peer-b")
+	ss := startSweepServer(t, dir, srvM.keyPath, time.Hour)
+
+	ca := f.dialRaw(t, a, ss.addr)
+	if err := ca.get(); err != nil {
+		t.Fatalf("before revocation: %v\n%s", err, ss.rec)
+	}
+	hellosBefore := ss.hellos.Load()
+	f.revoke(t, a, dir)
+	if ss.rec.has("tls_reloaded") {
+		t.Fatalf("the CRL was adopted before any handshake; nothing but a ClientHello may adopt it here\n%s", ss.rec)
+	}
+
+	cb := f.dialRaw(t, b, ss.addr) // this ClientHello adopts the CRL
+	if n := ss.hellos.Load() - hellosBefore; n < 1 {
+		t.Fatalf("%d ClientHellos after the CRL write; the test needs B's to adopt it", n)
+	}
+	if !ca.cutWithin(2 * time.Second) {
+		t.Fatalf("the adoption by B's handshake did not cut A's established connection\n%s", ss.rec)
+	}
+	if !ss.rec.has("tls_reloaded") || !ss.rec.has(ErrRevoked.Error()) {
+		t.Fatalf("want the handshake-driven reload and a close naming %v:\n%s", ErrRevoked, ss.rec)
+	}
+	// Positive control: B, whose handshake did the adopting, is served.
+	if err := cb.get(); err != nil {
+		t.Fatalf("B after adopting the CRL: %v", err)
 	}
 }
 
