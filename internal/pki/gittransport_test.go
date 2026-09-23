@@ -25,7 +25,7 @@ package pki
 //     call: ReinstallWithOtherFilesSwapsTheIdentity (the sentinel entry is
 //     replaced); the same-files early return removed:
 //     ReinstallSameFilesIsANoOp (the source is replaced and a line logged).
-//   - (against f9d7585c) the swap log emitted but the source NOT swapped:
+//   - (against 2b0894a0; code identical) the swap log emitted but the source NOT swapped:
 //     ReinstallWithOtherFilesSwapsTheIdentity fails on the fingerprint line
 //     (the server still sees A), before the log check is reached.
 //   - the source hashing only instance.crt (no rebuild on a CRL change):
