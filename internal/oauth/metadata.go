@@ -55,7 +55,9 @@ func WellKnown(issuer string) http.Handler {
 		case raw == asWellKnown+ipath:
 			writeJSON(w, http.StatusOK, as)
 			return
-		case raw == prmWellKnown+ipath || strings.HasPrefix(raw, prmWellKnown+ipath+"/"):
+		case strings.HasPrefix(raw, prmWellKnown+ipath):
+			// canonicalPath is also the segment-boundary check: the suffix of
+			// ".../knomitx" is "x", which does not start with "/".
 			suffix := strings.TrimPrefix(raw, prmWellKnown+ipath)
 			if suffix != "" && !canonicalPath(suffix) {
 				break
