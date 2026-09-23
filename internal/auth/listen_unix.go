@@ -20,6 +20,15 @@ var errLockHeld = errors.New("lock held")
 // lock file decides liveness and why 0600 under a 0700 root is the credential.
 func listenLocal(path string) (net.Listener, func(), error) {
 	noop := func() {}
+	// Length first, before the lock file or anything else exists: a path
+	// the kernel cannot hold is refused by name, never as net.Listen's
+	// EINVAL after a .lock was already created beside it.
+	if len(path) >= SunPathCap() {
+		return nil, noop, fmt.Errorf("%w: %s is %d bytes, the cap on this platform is %d", ErrPathTooLong, path, len(path), SunPathCap())
+	}
+	if err := prepareSocketDir(path); err != nil {
+		return nil, noop, err
+	}
 	lockPath := path + ".lock"
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
