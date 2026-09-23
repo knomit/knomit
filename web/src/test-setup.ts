@@ -38,3 +38,20 @@ if (!Element.prototype.scrollIntoView) {
 // reason as IntersectionObserver above; a test that wants to drive events
 // imports FakeEventSource and reads its recorded instances.
 globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
+
+// Node >= 25 defines its own localStorage/sessionStorage accessors on
+// globalThis (localStorage is undefined without --localstorage-file), and
+// vitest 4's jsdom environment skips window keys the global already has, so
+// jsdom's Storage is never installed: every `localStorage.clear()` in a hook
+// throws and fails the whole file. Node 22 is unaffected. vitest 5 fixes this
+// upstream (vitest-dev/vitest#10293; the v4 backport was refused), so this
+// block can go once web/ is on vitest >= 5. Keyed on "is it jsdom's Storage",
+// not "is it defined": Node's in-memory sessionStorage is defined but is not
+// the jsdom one the tests are written against.
+declare const jsdom: { window: Window & typeof globalThis };
+for (const key of ['localStorage', 'sessionStorage'] as const) {
+  const own = jsdom.window[key];
+  if (globalThis[key] !== own) {
+    Object.defineProperty(globalThis, key, { value: own, configurable: true, writable: true });
+  }
+}
