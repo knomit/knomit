@@ -193,13 +193,13 @@ func TestStore_RefreshChecksClientAndResourceBeforeRotating(t *testing.T) {
 	s, _ := newTestStore(t)
 	ctx := context.Background()
 	out := issue(t, s)
-	if _, err := s.Refresh(ctx, out.Refresh, "someone-else", ""); !errors.Is(err, ErrWrongClient) {
+	if _, err := s.Refresh(ctx, out.Refresh, "someone-else", "", nil); !errors.Is(err, ErrWrongClient) {
 		t.Fatalf("other client: %v", err)
 	}
-	if _, err := s.Refresh(ctx, out.Refresh, "kb", "https://knomit.example.com/api/v1/other"); !errors.Is(err, ErrWrongAudience) {
+	if _, err := s.Refresh(ctx, out.Refresh, "kb", "https://knomit.example.com/api/v1/other", nil); !errors.Is(err, ErrWrongAudience) {
 		t.Fatalf("other resource: %v", err)
 	}
-	if _, err := s.Refresh(ctx, out.Refresh, "kb", ""); err != nil {
+	if _, err := s.Refresh(ctx, out.Refresh, "kb", "", nil); err != nil {
 		t.Fatalf("the owner, after two refused attempts: %v", err)
 	}
 }
