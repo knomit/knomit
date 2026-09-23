@@ -33,6 +33,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -620,8 +621,17 @@ func TestGitTransport_ReinstallWithOtherFilesSwapsTheIdentity(t *testing.T) {
 		t.Fatal("the swap wrote go-git's protocol map a second time")
 	}
 	client.Protocols[GitScheme] = registered
-	if n := bytes.Count(logs.Bytes(), []byte("\n")); n != 1 || !bytes.Contains(logs.Bytes(), []byte(x.aDir)) || !bytes.Contains(logs.Bytes(), []byte(cDir)) {
-		t.Fatalf("want one log line naming %s and %s, got %d:\n%s", x.aDir, cDir, n, logs)
+	// Decode rather than search the bytes: zerolog writes JSON, which escapes
+	// a Windows path's backslashes, so the raw path never appears verbatim.
+	var line struct {
+		OldDir string `json:"old_dir"`
+		NewDir string `json:"new_dir"`
+	}
+	if n := bytes.Count(logs.Bytes(), []byte("\n")); n != 1 {
+		t.Fatalf("want one log line, got %d:\n%s", n, logs)
+	}
+	if err := json.Unmarshal(logs.Bytes(), &line); err != nil || line.OldDir != x.aDir || line.NewDir != cDir {
+		t.Fatalf("log line %s: old_dir=%q new_dir=%q (err %v), want %q and %q", logs, line.OldDir, line.NewDir, err, x.aDir, cDir)
 	}
 
 	if _, err := git.PlainCloneContext(ctx10(t), t.TempDir(), false, &git.CloneOptions{URL: fleetURL(x.addr)}); err != nil {
