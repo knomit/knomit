@@ -248,6 +248,9 @@ describe('RepoManager', () => {
     // Let the spy's first frame land, so the release is judged against the
     // spy's settled answer every run, not only when the runner is slow.
     await act(async () => { await new Promise(r => requestAnimationFrame(() => r(undefined))); });
+    // Still pinned after the spy has settled, so what clears it below is the
+    // wheel and nothing else.
+    expect(screen.getByTestId('toc-index')).toHaveAttribute('aria-current', 'true');
 
     // A wheel is an instruction too — the pin holds against the smooth scroll
     // it triggered itself, not against the reader taking over.
