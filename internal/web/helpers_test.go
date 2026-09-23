@@ -53,7 +53,7 @@ func TestIsGitURL(t *testing.T) {
 // the two must not disagree. The fleet scheme is matched case-insensitively,
 // as go-git matches it.
 //
-// SABOTAGE (against 3ebcc688): isKnomit forced false turns this red; dropping
+// SABOTAGE (against d2382b76's code, before a comment-only amend): isKnomit forced false turns this red; dropping
 // the fleet line from urlAuthMismatch turns six rows of the vitest table and
 // the wizard render test red.
 func TestValidateURLAuth_FleetScheme(t *testing.T) {

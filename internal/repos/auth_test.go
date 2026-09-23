@@ -202,7 +202,7 @@ func TestResolveAuthWithOrigin_CertOnHTTPSIsLeftToTheEdge(t *testing.T) {
 	require.Nil(t, auth)
 }
 
-// SABOTAGE (run against 897505b3): deleting remoteAuthFromRecord's fleet
+// SABOTAGE (run against 800d35bc's code, before a comment-only amend): deleting remoteAuthFromRecord's fleet
 // early return turns this red; disabling resolveAuthWithOrigin's fleet branch
 // turns this and TestResolveAuthWithOrigin_FleetURLForcesCert red.
 //

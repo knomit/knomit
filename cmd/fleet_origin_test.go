@@ -23,11 +23,18 @@ import (
 // SABOTAGE (against the commit that added this file): ClassifyPeerError
 // returning err unchanged turns step 6 red ("remote error: tls: bad
 // certificate", unnamed). The global token is kept from a fleet peer by FOUR
-// layers — remoteAuthFromRecord's fleet return, resolveAuthWithOrigin's fleet
-// branch, the transport's auth != nil refusal, and the transport handing go-git
-// nil auth — and any one of them alone keeps step 4 green; with all four off,
-// step 4 goes red naming three requests (info/refs twice, upload-pack) that
-// carried the token. The repos and pki unit tests pin the layers one by one.
+// layers: remoteAuthFromRecord's fleet return and resolveAuthWithOrigin's
+// fleet branch (repos), the transport's refusal of a non-nil AuthMethod, and
+// the transport handing go-git nil auth. Measured:
+//   - both repos layers off: step 3 goes red LOUDLY — the transport refuses
+//     the credential by name ("a http-basic-auth credential is refused"). That
+//     loud refusal is deliberate; do not turn it into a silent drop.
+//   - repos layers AND the transport refusal off: green, because the last
+//     layer silently strips the credential. Nothing leaks, but nothing is
+//     said either, which is why the refusal above exists.
+//   - all four off: step 4 red, naming three requests (info/refs twice,
+//     upload-pack) that carried the token.
+// The repos and pki unit tests pin the layers one by one.
 // IdleTimeout 0 turns step 6 red with
 // a nil error — the kept-alive connection from before the revocation is
 // reused and the revoked instance still fetches.

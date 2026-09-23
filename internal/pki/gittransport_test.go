@@ -5,10 +5,10 @@ package pki
 // imports internal/pki (an import cycle), and internal/pki must stay pure Go
 // with no cgo for tests.yml's no-model unit step. These tests prove the
 // CLIENT transport; the real /git handler over knomit+https is proved in
-// internal/repos.
+// cmd/fleet_origin_test.go.
 //
-// SABOTAGE CHECKS (run against c4e5dd79; rerun after touching
-// gittransport.go). Each turned exactly these red:
+// SABOTAGE CHECKS (run against afbd3bab's code, before a comment-only amend;
+// re-run by the reviewer at efc0318e; rerun after touching gittransport.go). Each turned exactly these red:
 //   - ClassifyPeerError returning err unchanged: RevokedClient (a remote
 //     alert is not ErrRefusedByPeer) and NamedErrorSurvivesGoGitsUnexpected-
 //     Error. OtherRoot stays green: the advertisement request's error is a
