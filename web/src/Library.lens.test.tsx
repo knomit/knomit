@@ -676,3 +676,127 @@ describe('Library — lens union paging stops on a short page, not on `total`', 
     });
   });
 });
+
+// knomit#270. The sentinel can fire between a DOM commit and React's passive
+// flush — a whole Scheduler task later, and wider under load. waitFor returns
+// on the commit, so a test (or a browser's IntersectionObserver) acting then
+// used to reach the PREVIOUS loadMore: the loading flag, mirrored during
+// render, was already clear, while the loadMore mirror still held a closure
+// from before the page landed. That fetched the same offset twice (rows 50–89
+// appended twice) or, after a scope change, silently refused to page.
+//
+// These fire the sentinel AT the commit, from a MutationObserver (a microtask
+// after the DOM changes, before the passive flush), so the window is hit every
+// run rather than only on a loaded CI runner.
+describe('Library — the sentinel sees the current list at the commit that shows it', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const withCommitFire = async (
+    body: (h: { fireNow: () => void; fireWhen: (sel: string, n: number) => () => boolean }) => Promise<void>,
+  ) => {
+    const callbacks: IntersectionObserverCallback[] = [];
+    const orig = window.IntersectionObserver;
+    window.IntersectionObserver = class {
+      constructor(cb: IntersectionObserverCallback) { callbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {} takeRecords() { return []; }
+      root = null; rootMargin = ''; thresholds = [];
+    } as unknown as typeof IntersectionObserver;
+    const fireNow = () => act(() => {
+      callbacks[callbacks.length - 1](
+        [{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+    const observers: MutationObserver[] = [];
+    // Fires once, synchronously, at the first commit that shows n rows; the
+    // returned function reports whether it did.
+    const fireWhen = (sel: string, n: number) => {
+      let fired = false;
+      const mo = new MutationObserver(() => {
+        if (!fired && document.querySelectorAll(`[data-testid="${sel}"]`).length === n) {
+          fired = true;
+          fireNow();
+        }
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+      observers.push(mo);
+      return () => fired;
+    };
+    try {
+      await body({ fireNow, fireWhen });
+    } finally {
+      observers.forEach(o => o.disconnect());
+      window.IntersectionObserver = orig;
+    }
+  };
+
+  const rows = (start: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      path: `kb/p${start + i}.md`, title: `T${start + i}`, type: 'process',
+      committed_at: start + i, source: { repo: 'infra', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+    }));
+
+  it('a short page ends paging even for a tick at the commit that shows it', async () => {
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async (_l: string, o: { offset: number }) => {
+      if (o.offset === 0) return { facts: rows(0, 50), total: 140 };
+      if (o.offset === 50) return { facts: rows(50, 40), total: 140 };
+      return { facts: [], total: 140 };
+    });
+    await withCommitFire(async ({ fireNow, fireWhen }) => {
+      render(<Library state={lensState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+      await new Promise(r => setTimeout(r, 20));
+      const firedAt90 = fireWhen('lens-item', 90);
+      fireNow();
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(90));
+      await new Promise(r => setTimeout(r, 30));
+      expect(firedAt90()).toBe(true);
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toEqual([0, 50]);
+    });
+  });
+
+  it('a new scope pages from a tick at the commit that shows its first page', async () => {
+    const { api } = await import('./api');
+    (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ facts: rows(0, 1), total: 999 }));
+    await withCommitFire(async ({ fireNow, fireWhen }) => {
+      const { rerender } = render(<Library
+        state={lensState({ filters: [{ category: 'domain', value: 'ai' }] })}
+        dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(1));
+      fireNow(); // scope 1 is exhausted by its short page
+      await new Promise(r => setTimeout(r, 20));
+
+      (api.listLensFacts as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_l: string, o: { offset: number }) => ({ facts: rows(o.offset, 50), total: 999 }));
+      const firedAt50 = fireWhen('lens-item', 50);
+      rerender(<Library
+        state={lensState({ filters: [{ category: 'domain', value: 'go' }] })}
+        dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('lens-item').length).toBe(50));
+      await new Promise(r => setTimeout(r, 30));
+      expect(firedAt50()).toBe(true);
+      expect((api.listLensFacts as ReturnType<typeof vi.fn>).mock.calls.map(c => c[1].offset)).toContain(50);
+    });
+  });
+
+  it('repo Recent: a full list does not refetch its last page for a tick at the commit', async () => {
+    const { api } = await import('./api');
+    (api.recent as ReturnType<typeof vi.fn>).mockImplementation(async (
+      _r: string, _b: string, _p: string, _q: string, _limit: number, offset: number,
+    ) => {
+      if (offset === 0) return { facts: rows(0, 50), total: 90 };
+      if (offset === 50) return { facts: rows(50, 40), total: 90 };
+      return { facts: [], total: 90 };
+    });
+    await withCommitFire(async ({ fireNow, fireWhen }) => {
+      render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(50));
+      await new Promise(r => setTimeout(r, 20));
+      const firedAt90 = fireWhen('chrono-item', 90);
+      fireNow();
+      await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(90));
+      await new Promise(r => setTimeout(r, 30));
+      expect(firedAt90()).toBe(true);
+      expect((api.recent as ReturnType<typeof vi.fn>).mock.calls.map(c => c[5])).toEqual([0, 50]);
+    });
+  });
+});
