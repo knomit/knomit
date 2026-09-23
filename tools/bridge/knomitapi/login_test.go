@@ -65,6 +65,9 @@ func newIssuerFixture(t *testing.T, accessTTL time.Duration) *issuerFixture {
 			routes.ServeHTTP(w, r)
 		case oauth.IsPublicPath(r.URL.Path):
 			routes.ServeHTTP(w, r)
+		case r.URL.Path == "/proxy-challenge":
+			w.Header().Set("WWW-Authenticate", `Basic realm="proxy"`)
+			w.WriteHeader(http.StatusUnauthorized)
 		case r.URL.Path == "/protected":
 			tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 			p, _, err := v.Verify(r.Context(), tok, r.URL.Path)
@@ -274,6 +277,25 @@ func TestBearer_UsesARefreshAnotherProcessSaved(t *testing.T) {
 	}
 }
 
+// Only a 401 that says invalid_token is a reason to refresh: a 401 from
+// anything else (a proxy's own challenge) must not rotate the pair.
+func TestBearer_OnlyInvalidTokenRefreshes(t *testing.T) {
+	useHome(t)
+	f := newIssuerFixture(t, 2*time.Hour)
+	if _, err := login(t, f, nil); err != nil {
+		t.Fatal(err)
+	}
+	before := f.tokenHits.Load()
+	resp, err := NewHTTPClient("", true, 5*time.Second).Get(f.srv.URL + "/proxy-challenge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized || f.tokenHits.Load() != before {
+		t.Fatalf("status %d, token hits %d: a non-invalid_token 401 must not refresh", resp.StatusCode, f.tokenHits.Load()-before)
+	}
+}
+
 // No credentials for a host: the header is not sent at all.
 func TestBearer_NoCredentialsNoHeader(t *testing.T) {
 	useHome(t)
@@ -338,6 +360,12 @@ func TestLogin_DiscoveryRefusals(t *testing.T) {
 		base = srv.URL
 		return base
 	}
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		b := "http://" + r.Host
+		_, _ = io.WriteString(w, `{"issuer":"`+b+`","authorization_endpoint":"`+b+`/oauth/authorize","token_endpoint":"`+b+`/oauth/token","code_challenge_methods_supported":["S256"],"authorization_response_iss_parameter_supported":true}`)
+	}))
+	defer foreign.Close()
 	goodPRM := func(b string) string { return `{"resource":"` + b + `","authorization_servers":["` + b + `"]}` }
 	as := func(extra string) func(string) string {
 		return func(b string) string {
@@ -353,8 +381,10 @@ func TestLogin_DiscoveryRefusals(t *testing.T) {
 			return `{"issuer":"` + b + `/other","authorization_endpoint":"x","token_endpoint":"y","code_challenge_methods_supported":["S256"],"authorization_response_iss_parameter_supported":true}`
 		}},
 		"resource differs": {func(b string) string { return `{"resource":"` + b + `/x","authorization_servers":["` + b + `"]}` }, as(`,"code_challenge_methods_supported":["S256"],"authorization_response_iss_parameter_supported":true`)},
+		// A REACHABLE issuer with valid metadata at another origin: only the
+		// origin rule (and the unanswered Confirm) stops it.
 		"foreign issuer": {func(b string) string {
-			return `{"resource":"` + b + `","authorization_servers":["https://auth.example.com"]}`
+			return `{"resource":"` + b + `","authorization_servers":["` + foreign.URL + `"]}`
 		}, as(`,"code_challenge_methods_supported":["S256"],"authorization_response_iss_parameter_supported":true`)},
 	} {
 		t.Run(name, func(t *testing.T) {
