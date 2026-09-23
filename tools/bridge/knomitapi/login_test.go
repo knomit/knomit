@@ -361,10 +361,13 @@ func TestLogin_DiscoveryRefusals(t *testing.T) {
 			useHome(t)
 			base := serve(t, tc.prm, tc.as)
 			opened := false
+			// A short Timeout: if a refusal regresses, Login would otherwise
+			// wait ten minutes for a browser that never calls back.
 			_, err := Login(context.Background(), base, LoginOptions{
 				OpenBrowser: func(string) error { opened = true; return nil },
 				Out:         io.Discard,
 				Confirm:     func(string) bool { return false },
+				Timeout:     2 * time.Second,
 			})
 			if err == nil || opened {
 				t.Fatalf("err=%v opened=%v: discovery must refuse before any browser opens", err, opened)
