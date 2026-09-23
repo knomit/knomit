@@ -178,6 +178,13 @@ func main() {
 		}
 		return
 	}
+	if len(args) >= 1 && (args[0] == "login" || args[0] == "logout") {
+		if err := runLogin(args[0], args[1:], os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "kb %s: %v\n", args[0], err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(args) >= 1 && (args[0] == "antigravity" || args[0] == "agy") {
 		if err := antigravity.Run(args[1:]); err != nil {
 			fmt.Fprintf(os.Stderr, "knomit-bridge antigravity: %v\n", err)
@@ -206,6 +213,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "                          (alias: agy)\n\n")
 		fmt.Fprintf(os.Stderr, "  antigravity hook <event>  Execute an Antigravity hook (called by agy via hooks.json).\n")
 		fmt.Fprintf(os.Stderr, "                          event in: pre-invocation\n\n")
+		fmt.Fprintf(os.Stderr, "  login <base-url>        Authorize kb at a knomit OAuth listener (browser + operator approval)\n")
+		fmt.Fprintf(os.Stderr, "                          kb login [--no-browser] https://knomit.example.com\n\n")
+		fmt.Fprintf(os.Stderr, "  logout <base-url>       Revoke and forget the credentials kb login saved for that host\n\n")
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
@@ -591,7 +601,9 @@ func mcpURL(baseURL, repo, lens, encodedBranch string) string {
 // instead of hanging Claude Desktop.
 func discoverAgentBranch(baseURL, repo string) (string, error) {
 	repoURL := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
-	c := &http.Client{Timeout: 3 * time.Second}
+	// Explicit-URL client: plain TCP as before, plus the bearer token `kb
+	// login` saved for this host, if any.
+	c := knomitapi.NewHTTPClient("", true, 3*time.Second)
 	resp, err := c.Get(repoURL) //nolint:noctx
 	if err != nil {
 		return "", fmt.Errorf("GET %s: %w", repoURL, err)
