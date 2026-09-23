@@ -21,7 +21,15 @@ import (
 // resolving the data root itself: `knomit serve` opens exactly that path, and
 // a bridge that computed its own would not fail loudly — it would find no
 // listener, fall back to TCP, and quietly lose the verified identity the
-// listener exists to provide. "" when it cannot be resolved.
+// listener exists to provide. That includes the operator's overrides —
+// KNOMIT_SOCKET and the knomit.toml `socket` key — which config resolves in
+// the same order as the server (knomit#271); nothing here reads either.
+// "" when it cannot be resolved.
+//
+// The failure is logged at WARN, not debug: every cause — no resolvable data
+// root, a "~/" that cannot be expanded, a knomit.toml that does not decode —
+// is something the operator can fix, and each silently costs the verified
+// identity by sending the bridge over TCP.
 //
 // It used to be "" on Windows as well, because phase 1 had no credential
 // there. It is not any more (knomit#245); a caller still treating "" as "this
@@ -29,7 +37,7 @@ import (
 func SocketPath() string {
 	p, err := config.SocketPath()
 	if err != nil {
-		log.Debug().Err(err).Msg("bridge: cannot resolve the knomit local listener path; using TCP")
+		log.Warn().Err(err).Msg("bridge: cannot resolve the knomit local listener path; using TCP")
 		return ""
 	}
 	return p

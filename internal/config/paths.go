@@ -42,6 +42,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/BurntSushi/toml"
+
 	"knomit/internal/platform/userdirs"
 )
 
@@ -116,16 +118,31 @@ func ResolveHome() (string, error) {
 // SocketPath is the LOCAL AUTHENTICATED LISTENER for the resolved data root:
 // <data root>/knomit.sock on unix, and a named pipe called knomit-<hash of
 // the data root> in the machine's pipe namespace on Windows (see
-// paths_windows.go, which is where the shape of that name is decided).
-// It is the local bridge's credential either way — the OS tells the
-// server who is dialling, so nothing has to be stored or presented.
+// paths_windows.go, which is where the shape of that name is decided) —
+// unless the operator named one. It is the local bridge's credential either
+// way — the OS tells the server who is dialling, so nothing has to be stored
+// or presented.
 //
-// It resolves the data root through ResolveHome, the SAME way Load does, and
-// that is the point of it being here rather than in the bridge. This file's
-// header records what happened last time each binary worked a path out for
-// itself: the answers drifted. A bridge that computed a different socket path
-// from the server would not fail loudly — it would find no socket, fall back
-// to TCP, and quietly lose the verified identity that is the whole feature.
+// It resolves the SAME three layers Load does, in the same order and through
+// the same function (socketFor): KNOMIT_SOCKET, else the `socket` key of the
+// knomit.toml Load would read, else the default under the tilde-expanded data
+// root from ResolveHome. That is the point of it being here rather than in the
+// bridge. This file's header records what happened last time each binary
+// worked a path out for itself: the answers drifted. A bridge that computed a
+// different socket path from the server would not fail loudly — it would find
+// no socket, fall back to TCP, and quietly lose the verified identity that is
+// the whole feature. Resolving only the default was exactly that drift for
+// every operator who had overridden it (knomit#271).
+//
+// It is deliberately NOT Load. Load runs Validate and parses every other
+// KNOMIT_* variable, so a problem unrelated to the socket — or a bridge
+// launched with a different environment from the server's — would turn into
+// an error here, and the bridge would drop to TCP for a reason that has
+// nothing to do with where the listener is.
+//
+// A knomit.toml that cannot be decoded is an error, not a fall-through to the
+// default: Load refuses the same file, so the default would be a listener
+// nobody opened.
 //
 // It NO LONGER returns "" on Windows. That absence was phase 1 having no
 // credential there at all (knomit#245); the pipe is the credential now, and
@@ -135,5 +152,33 @@ func SocketPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return localListenerName(home), nil
+	if err := expandTilde(&home); err != nil {
+		return "", fmt.Errorf("config: %w", err)
+	}
+	var fromTOML struct {
+		Socket string `toml:"socket"`
+	}
+	if path := findConfigFile(home); path != "" {
+		if _, err := toml.DecodeFile(path, &fromTOML); err != nil {
+			return "", err
+		}
+	}
+	return socketFor(home, fromTOML.Socket), nil
+}
+
+// socketFor is the ONE place the local listener is decided from its inputs:
+// KNOMIT_SOCKET, else fromTOML (the knomit.toml `socket` key), else this
+// platform's default under home. Load and SocketPath both call it, so the
+// server and the bridge cannot order the layers differently.
+//
+// home must already be tilde-expanded. The chosen value itself is NOT expanded
+// — Load never has expanded Socket, and doing it on one side only would be a
+// fresh disagreement.
+func socketFor(home, fromTOML string) string {
+	s := fromTOML
+	envOr("KNOMIT_SOCKET", &s)
+	if s == "" {
+		return localListenerName(home)
+	}
+	return s
 }

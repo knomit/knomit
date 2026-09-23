@@ -439,7 +439,6 @@ func Load() (Config, error) {
 	// Overlay env vars.
 	envOr("KNOMIT_HOST", &cfg.Host)
 	envOr("KNOMIT_PORT", &cfg.Port)
-	envOr("KNOMIT_SOCKET", &cfg.Socket)
 	envOr("KNOMIT_TLS_ADDR", &cfg.TLS.Addr)
 	envOr("KNOMIT_TLS_DIR", &cfg.TLS.Dir)
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
@@ -527,10 +526,12 @@ func Load() (Config, error) {
 		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
 	}
 
-	// Default the local authenticated listener to the one this platform uses
-	// under <Home>, for the same reason and at the same point as known_hosts:
-	// after tilde expansion, and only when nothing set it, so a TOML or
-	// KNOMIT_SOCKET value wins.
+	// Decide the local authenticated listener: KNOMIT_SOCKET, else the TOML
+	// value decoded above, else the one this platform uses under <Home> --
+	// defaulted for the same reason and at the same point as known_hosts,
+	// after tilde expansion. socketFor is the one place those layers are
+	// ordered; config.SocketPath (the bridge's side) reaches it too, so the
+	// two cannot drift (knomit#271).
 	//
 	// It is the local bridge's credential -- the OS tells the server who is
 	// on the other end (internal/auth.PeerCred) -- so it has to exist without
@@ -541,9 +542,7 @@ func Load() (Config, error) {
 	// 1, which is what made [auth].require = true a silent lockout there
 	// (knomit#245): app.checkLocalListener refuses that combination, and the
 	// pipe default is what lets Windows satisfy it.
-	if cfg.Socket == "" {
-		cfg.Socket = localListenerName(cfg.Home)
-	}
+	cfg.Socket = socketFor(cfg.Home, cfg.Socket)
 
 	// Default [tls].dir to <Home>/pki, after tilde expansion like the two
 	// above. The listener itself stays off until [tls].addr is set.
