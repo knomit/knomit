@@ -133,6 +133,15 @@ func ApplyPruneDecisions(ctx context.Context,
 	// mergeGate is the one gate the merge outputs below go through, built once
 	// for the whole call.
 	mergeGate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
+	// Each merge's prior: its members' refs, SNAPSHOTTED NOW, before the
+	// decision loop's retracts and the earlier merges below delete members on
+	// this branch. Read at the tip later, a member retracted or consumed
+	// earlier in this same call contributes nothing, and a legacy ref the judge
+	// kept from it reads as newly added (knomit#249 review).
+	memberPrior := make([][]string, len(merges))
+	for i, m := range merges {
+		memberPrior[i] = memberRefs(ctx, gs, agentBranch, m.Paths)
+	}
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
 	// Apply decisions.
@@ -185,7 +194,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	}
 
 	// Apply merges.
-	for _, m := range merges {
+	for i, m := range merges {
 		mf := m.Merged
 		if err := validateOutputPath(mf.Path, ontologyRoot); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge rejected: %v", err)})
@@ -275,8 +284,7 @@ func ApplyPruneDecisions(ctx context.Context,
 		// member carried is the judge's own and is checked like any other.
 		// Passing nil made every carried legacy src ref read as new, and the
 		// whole merge was warn-and-skipped.
-		canonRefs, _, gerr := mergeGate.Apply(ctx, merged.Path(), mf.Refs,
-			memberRefs(ctx, gs, agentBranch, m.Paths))
+		canonRefs, _, gerr := mergeGate.Apply(ctx, merged.Path(), mf.Refs, memberPrior[i])
 		if gerr != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", merged.Path(), gerr)})
 			continue
@@ -740,19 +748,16 @@ func splitTopicPath(topicPath, ontologyRoot string) (topic, category string, err
 }
 
 // memberRefs is the union of the refs the facts at paths carry on branch: the
-// prior for a prune-merge that replaces them. A member that cannot be read or
-// parsed contributes nothing, which errs strict — its refs, if the judge kept
-// them, are then judged as new rather than waved through.
+// prior for a prune-merge that replaces them. ApplyPruneDecisions calls it
+// before deleting anything. A member that cannot be read or parsed contributes
+// nothing, which errs strict — its refs, if the judge kept them, are then
+// judged as new rather than waved through.
 func memberRefs(ctx context.Context, gs store.FactIndex, branch string, paths []string) []string {
 	var out []string
 	seen := make(map[string]bool)
 	for _, p := range paths {
-		res, err := gs.ReadFact(ctx, branch, p, nil)
-		if err != nil {
-			continue
-		}
-		f, err := fact.ParseFact(p, res.Content)
-		if err != nil {
+		f, ok := readFactAt(ctx, gs, branch, p)
+		if !ok {
 			continue
 		}
 		for _, r := range f.Refs {
