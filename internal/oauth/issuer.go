@@ -77,7 +77,7 @@ func NewIssuer(o Options) *Issuer {
 func (i *Issuer) Name() string { return i.issuer }
 
 // Routes serves the PUBLIC surface: both discovery documents, authorize,
-// wait, token and revoke. It carries no authentication by construction —
+// wait, a waiting request's description, token and revoke. It carries no authentication by construction —
 // the OAuth listener mounts it beside, never under, the bearer middleware.
 //
 // /.well-known/ is dispatched before the ServeMux, whose path cleaning would
@@ -88,6 +88,7 @@ func (i *Issuer) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /oauth/authorize", i.authorize)
 	mux.HandleFunc("GET /oauth/authorize/{id}/wait", i.wait)
+	mux.HandleFunc("GET /oauth/pending/{id}", i.describe)
 	mux.HandleFunc("POST /oauth/token", i.token)
 	mux.HandleFunc("POST /oauth/revoke", i.revoke)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
