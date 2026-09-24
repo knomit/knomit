@@ -78,7 +78,7 @@ var socketPathWarnOnce sync.Once
 // for the same reason.
 func NewHTTPClient(socketPath string, explicitURL bool, timeout time.Duration) *http.Client {
 	if explicitURL {
-		return &http.Client{Timeout: timeout}
+		return &http.Client{Timeout: timeout, Transport: withBearer(nil)}
 	}
 	return socketPreferringClient(timeout, func() string { return socketPath })
 }
@@ -111,7 +111,9 @@ func socketPreferringClient(timeout time.Duration, socketPath func() string) *ht
 	var warnOnce sync.Once
 	return &http.Client{
 		Timeout: timeout,
-		Transport: &http.Transport{
+		// withBearer: the token `kb login` saved for the request's host,
+		// if any. Over the local listener the server ignores it.
+		Transport: withBearer(&http.Transport{
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				p := socketPath()
 				if p == "" {
@@ -147,7 +149,7 @@ func socketPreferringClient(timeout time.Duration, socketPath func() string) *ht
 				})
 				return d.DialContext(ctx, network, addr)
 			},
-		},
+		}),
 	}
 }
 

@@ -29,18 +29,20 @@ import (
 //     still denies, because the zero principal holds nothing.
 //
 // The refusal is 403, never 401. RFC 7235 makes WWW-Authenticate mandatory on
-// a 401, and phase 1 has no scheme a TCP caller could satisfy — the local
-// listener is the only credential, and it is not something a header can
-// present. Phase 3
-// introduces the 401 with a Bearer challenge on the routes a token unlocks.
-// The two 403s are told apart by TITLE: "Authentication required" here (no
+// a 401, and no listener this middleware serves has a scheme a TCP caller
+// could satisfy — the local listener is the only credential, and it is not
+// something a header can present. The ONE 401 in knomit is on the OAuth
+// listener ([oauth].addr, F19 phase 3a), whose router never runs this
+// middleware: BearerMiddleware is its only edge. An Authorization header on
+// any listener served here is ignored. The two 403s are told apart by TITLE: "Authentication required" here (no
 // principal at all) versus "Permission denied" in Require (a principal that
 // lacks the permission). Clients and tests key on the title, not the status.
 //
 // 1b (phase 2) sits between 1 and 2: a request on the TLS listener becomes
 // the instance (or operator) principal of its verified client certificate,
-// and is refused outright if it has none. Bearer tokens (phase 3) will slot
-// in beside it and produce the same Principal type.
+// and is refused outright if it has none. Bearer tokens (phase 3) do NOT
+// slot in here: they are judged only on the OAuth listener, by
+// BearerMiddleware, and produce the same Principal type there.
 func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -274,8 +274,12 @@ jobs:
       # internal/pki (F19 phase 2) is pure Go with in-process fixtures: every
       # root, key and certificate its tests use is generated in t.TempDir().
       # A new package is not tested until it is named here.
+      #
+      # internal/oauth (F19 phase 3a) needs sqlite (control.db via
+      # internal/store/migrate) but no native runtime libs, and its CIMD tests
+      # run their own in-process HTTPS server with a generated CA.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/...
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/... ./internal/oauth/
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no

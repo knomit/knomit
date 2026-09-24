@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/auth"
 	"knomit/internal/web/hal"
 )
 
@@ -29,6 +30,23 @@ const APIBase = "/api/v1"
 // the route-group level where branches/repos appear in the path, not at
 // the router root.
 func (s *Server) NewAPIRouter() chi.Router {
+	r := s.apiRouter(AuthMiddleware(s.Auth, s.authDisabled), s.grants())
+	// The operator's approval endpoints live on THIS router only, never on
+	// the OAuth listener's, and only when [oauth] is configured.
+	if s.OAuthIssuer != nil {
+		s.mountOAuthPending(r)
+	}
+	return r
+}
+
+// apiRouter is the API and MCP tree behind ONE edge middleware — the thing
+// that turns a transport into a principal — and the Grants its write gate
+// consults. NewAPIRouter passes AuthMiddleware (socket, certificate,
+// loopback policy); OAuthHandler passes the bearer middleware and a Grants
+// that knows no anonymous principal. The OAuth router must never run
+// AuthMiddleware: for a loopback peer — a same-host reverse proxy — it would
+// replace the token principal with anonymous, which holds loopback_default.
+func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) chi.Router {
 	r := chi.NewRouter()
 	// Correlation id for slow-request warnings. chi echoes an inbound
 	// X-Request-Id verbatim and only generates one when the header is absent, so
@@ -50,7 +68,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	// so /git inherits a principal as well; running twice is idempotent — the
 	// same connection yields the same answer — and it keeps a
 	// directly-constructed API router authenticated.
-	r.Use(AuthMiddleware(s.Auth, s.authDisabled))
+	r.Use(edge)
 	r.Use(metricsMiddleware(nil, s.SlowRequestMS)) // nil → metrics.Default
 	r.Use(compressor())
 	if s.ReadOnly {
@@ -58,7 +76,7 @@ func (s *Server) NewAPIRouter() chi.Router {
 	}
 	// After readOnlyGate, so the instance-level message wins over the
 	// caller-level one when both would refuse.
-	r.Use(writeGate(s.grants(), s.authDisabled))
+	r.Use(writeGate(g, s.authDisabled))
 
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		hal.WriteProblem(w, http.StatusNotFound, "Not Found", "no resource at "+req.URL.Path, req.URL.Path)
