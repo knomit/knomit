@@ -95,10 +95,10 @@ type signIn struct {
 }
 
 func newIDPFlow(issuer string, o *IDPOptions) *idpFlow {
-	origin, p := issuerParts(issuer)
+	_, p := issuerParts(issuer)
 	fl := &idpFlow{
 		provider: o.Provider, label: providerLabel(o.Provider.Name()), allowed: map[string][]string{},
-		callback: issuer + "/oauth/idp/callback", origin: origin, path: p + "/oauth/idp/",
+		callback: issuer + "/oauth/idp/callback", origin: originOf(issuer), path: p + "/oauth/idp/",
 		secure: strings.HasPrefix(issuer, "https://"),
 		byID:   map[string]*signIn{}, byState: map[string]*signIn{}, byToken: map[string]*signIn{},
 	}
@@ -118,8 +118,12 @@ func providerLabel(name string) string {
 // live is the number of sign-ins held (tests).
 func (fl *idpFlow) live() int { fl.mu.Lock(); defer fl.mu.Unlock(); return len(fl.byID) }
 
+// drop forgets s. byID is cleared only if it still points at s: a sign-in
+// that a newer start replaced must not take its successor with it.
 func (fl *idpFlow) drop(s *signIn) {
-	delete(fl.byID, s.pendingID)
+	if fl.byID[s.pendingID] == s {
+		delete(fl.byID, s.pendingID)
+	}
 	delete(fl.byState, s.state)
 	if s.tokenHash != "" {
 		delete(fl.byToken, s.tokenHash)
@@ -276,6 +280,17 @@ func (i *Issuer) idpCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sub, err := fl.provider.Identify(r.Context(), q.Get("code"), s.verifier, fl.callback)
+	// A start in this browser while Identify ran replaced this sign-in (one
+	// live sign-in per request). The newer one is the one that counts: this
+	// callback decides nothing and touches none of the newer one's state
+	// (review I1).
+	fl.mu.Lock()
+	superseded := fl.byID[s.pendingID] != s
+	fl.mu.Unlock()
+	if superseded {
+		errorPage(w, http.StatusConflict, "A newer sign-in for this request replaced this one. Nothing was decided here; finish the newer one.")
+		return
+	}
 	if err != nil {
 		forget()
 		log.Info().Err(err).Str("id", p.ID).Msg("oauth idp: identity not confirmed")
@@ -324,11 +339,19 @@ func (i *Issuer) idpCallback(w http.ResponseWriter, r *http.Request) {
 	if p.ExpiresAt.Before(expires) {
 		expires = p.ExpiresAt
 	}
+	// R5: a subject granted before keeps the grants the operator left, and
+	// those cap the token below this ceiling; the page must not promise more.
+	prior, err := i.grants.EverGrantedAny(r.Context(), TokenPrincipal(sub.ID))
+	if err != nil {
+		forget()
+		errorPage(w, http.StatusInternalServerError, "The sign-in could not be completed.")
+		return
+	}
 	fl.mu.Lock()
 	s.tokenHash, s.subject, s.ceiling, s.confirmExpires = hashSecret(token), sub, ceiling, expires
 	fl.byToken[s.tokenHash] = s
 	fl.mu.Unlock()
-	i.consentPage(w, p, sub, ceiling, token)
+	i.consentPage(w, p, sub, ceiling, prior, token)
 }
 
 // --- POST /oauth/idp/decide -------------------------------------------------
@@ -410,8 +433,9 @@ var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html>
 <dt>Code goes to</dt><dd><code>{{.RedirectURI}}</code></dd>
 <dt>Client (as it describes itself)</dt><dd>{{.ClientName}}</dd>
 <dt>For</dt><dd><code>{{.Resource}}</code></dd>
-<dt>Access it will get</dt><dd><code>{{.Ceiling}}</code></dd>
+<dt>Access it will get, at most</dt><dd><code>{{.Ceiling}}</code></dd>
 </dl>
+{{if .Prior}}<p>{{.Subject}} was granted before on this instance, so its tokens keep the grants the operator left, which may be less than this. The operator widens them with <code>knomit grants add</code>.</p>{{end}}
 <p>You are signed in at {{.Label}} as <strong>{{.Login}}</strong> ({{.Subject}}).</p>
 <form method="post" action="{{.Action}}">
 <input type="hidden" name="token" value="{{.Token}}">
@@ -424,15 +448,38 @@ var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html>
 type consentData struct {
 	Host, ClientID, RedirectURI, ClientName, Resource, Ceiling string
 	Label, Login, Subject, Action, Token                       string
+	Prior                                                      bool
 }
 
-func (i *Issuer) consentPage(w http.ResponseWriter, p Pending, sub idp.Subject, ceiling []string, token string) {
+func (i *Issuer) consentPage(w http.ResponseWriter, p Pending, sub idp.Subject, ceiling []string, prior bool, token string) {
 	pageHeaders(w)
+	// NOT no-referrer here: under Fetch's "append a request Origin header",
+	// a form POST from a no-referrer page sends Origin: null even to its own
+	// origin, and the decide POST's Origin check would refuse every real
+	// browser (review C1, reproduced in Chromium). strict-origin still keeps
+	// this page's URL — the callback's query — from ever leaving as a
+	// Referer: at most the origin is sent.
+	w.Header().Set("Referrer-Policy", "strict-origin")
 	w.WriteHeader(http.StatusOK)
 	_ = consentTmpl.Execute(w, consentData{
 		Host: redirectHost(p.RedirectURI), ClientID: p.ClientID, RedirectURI: p.RedirectURI, ClientName: p.ClientName,
 		Resource: p.Resource, Ceiling: strings.Join(ceiling, " "),
-		Label: i.idp.label, Login: shownLogin(sub.Login), Subject: sub.ID,
+		Label: i.idp.label, Login: shownLogin(sub.Login), Subject: sub.ID, Prior: prior,
 		Action: i.issuer + "/oauth/idp/decide", Token: token,
 	})
+}
+
+// originOf is the issuer's origin as a browser serializes it in an
+// Origin header: without the scheme's default port, which an issuer may be
+// written with (review M4).
+func originOf(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return issuer
+	}
+	host := u.Host
+	if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+		host = strings.TrimSuffix(host, ":"+u.Port())
+	}
+	return u.Scheme + "://" + host
 }

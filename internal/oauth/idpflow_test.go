@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -43,6 +44,10 @@ type idpFixture struct {
 	gh      *idp.GitHub
 	dbPath  string
 	handler *handlerSwap
+	// pagePolicy is the Referrer-Policy of the last page the browser got
+	// from the callback: decide sends the Origin a browser would send from
+	// it (review C1).
+	pagePolicy string
 }
 
 // handlerSwap lets a test rebuild the issuer (a new allow list) behind the
@@ -171,7 +176,21 @@ func (f *idpFixture) signIn(t *testing.T, c *http.Client, id string) (*http.Resp
 		t.Fatalf("provider sent the browser to %q", cb)
 	}
 	resp, body = f.do(t, c, http.MethodGet, cb, nil, nil)
+	f.pagePolicy = resp.Header.Get("Referrer-Policy")
 	return resp, body, cb
+}
+
+// browserOrigin is the Origin a browser sends on a same-origin form POST
+// from a page served with the given Referrer-Policy. Fetch's "append a
+// request Origin header": for a POST that is not CORS, policy no-referrer
+// serializes the origin as "null" — even to the page's own origin (review
+// C1, reproduced in Chromium). The other policies keep the real origin for
+// a same-origin, same-scheme request.
+func browserOrigin(policy, origin string) string {
+	if strings.EqualFold(strings.TrimSpace(policy), "no-referrer") {
+		return "null"
+	}
+	return origin
 }
 
 var tokenInputRE = regexp.MustCompile(`name="token" value="([^"]+)"`)
@@ -191,7 +210,7 @@ func (f *idpFixture) origin() string { return f.srv.URL }
 func (f *idpFixture) decide(t *testing.T, c *http.Client, token, decision string, hdr map[string]string) (*http.Response, string) {
 	t.Helper()
 	if hdr == nil {
-		hdr = map[string]string{"Origin": f.origin()}
+		hdr = map[string]string{"Origin": browserOrigin(f.pagePolicy, f.origin())}
 	}
 	return f.do(t, c, http.MethodPost, f.srv.URL+"/oauth/idp/decide", url.Values{"token": {token}, "decision": {decision}}, hdr)
 }
@@ -744,4 +763,113 @@ func captureLog(t *testing.T) *logBuf {
 	log.Logger = zerolog.New(b)
 	t.Cleanup(func() { log.Logger = orig })
 	return b
+}
+
+// Review C1: the consent page's own Referrer-Policy must let a browser send
+// the real Origin on its POST — no-referrer makes it "null", and every real
+// approval would be refused while tests that set Origin by hand stayed
+// green. The fixture's decide now derives Origin from this header.
+func TestIDP_ConsentPagePolicyKeepsTheOrigin(t *testing.T) {
+	f := newIDPFixture(t, "github-583231")
+	id := f.park(t, f.browser, "read")
+	resp, _, _ := f.signIn(t, f.browser, id)
+	pol := resp.Header.Get("Referrer-Policy")
+	if browserOrigin(pol, f.origin()) != f.origin() {
+		t.Fatalf("consent page Referrer-Policy %q makes a browser POST Origin: null", pol)
+	}
+	// And nothing on the page leaks its URL (the callback query) off-origin.
+	if pol != "strict-origin" && pol != "same-origin" {
+		t.Fatalf("consent page Referrer-Policy %q: want strict-origin or same-origin", pol)
+	}
+}
+
+// gatedProvider holds Identify until released, to open the window between
+// a callback's state lookup and its consent page.
+type gatedProvider struct {
+	*idp.GitHub
+	entered, release chan struct{}
+}
+
+func (g *gatedProvider) Identify(ctx context.Context, code, v, r string) (idp.Subject, error) {
+	g.entered <- struct{}{}
+	<-g.release
+	return g.GitHub.Identify(ctx, code, v, r)
+}
+
+// Review I1 (reproduced by the final reviewer): a start that replaces a
+// sign-in whose callback is still in Identify. The replaced callback must
+// not produce a token that decides, and it must not drop the NEW sign-in's
+// bookkeeping (which prune, walking byID, would then never free).
+func TestIDP_StartDuringCallbackSupersedesIt(t *testing.T) {
+	f := newIDPFixture(t, "github-583231")
+	gp := &gatedProvider{GitHub: f.gh, entered: make(chan struct{}), release: make(chan struct{})}
+	f.iss = NewIssuer(Options{Issuer: f.srv.URL, Store: f.store, Clients: f.iss.clients, Grants: f.grants,
+		WaitTimeout: time.Second, IDP: &IDPOptions{Provider: gp, Allowed: allowedList("github-583231")}})
+	f.handler.set(f.iss.Routes())
+
+	id := f.park(t, f.browser, "read")
+	resp, _ := f.do(t, f.browser, http.MethodGet, f.srv.URL+"/oauth/idp/start/"+id, nil, nil)
+	resp, _ = f.do(t, f.browser, http.MethodGet, resp.Header.Get("Location"), nil, nil)
+	cb1 := resp.Header.Get("Location")
+	done := make(chan string)
+	go func() {
+		r, b := f.do(t, f.browser, http.MethodGet, cb1, nil, nil)
+		done <- strconv.Itoa(r.StatusCode) + " " + b
+	}()
+	<-gp.entered
+	if r, _ := f.do(t, f.browser, http.MethodGet, f.srv.URL+"/oauth/idp/start/"+id, nil, nil); r.StatusCode != http.StatusFound {
+		t.Fatalf("second start: %d", r.StatusCode)
+	}
+	close(gp.release)
+	page := <-done
+	if strings.Contains(page, `name="token"`) || !strings.Contains(page, "newer sign-in") {
+		t.Fatalf("the replaced callback must not render a deciding page: %.300s", page)
+	}
+	if got := f.pending(t, id).Decision; got != "" {
+		t.Fatalf("row decided %q by the replaced sign-in", got)
+	}
+	fl := f.iss.idp
+	fl.mu.Lock()
+	byID, byState := len(fl.byID), len(fl.byState)
+	fl.mu.Unlock()
+	if byID != 1 || byState != 1 {
+		t.Fatalf("after the superseded callback: byID=%d byState=%d; want the second sign-in alone", byID, byState)
+	}
+}
+
+// Review M4 (re-graded Important: it breaks every decide): browsers send
+// Origin without a default port, and an issuer may be written with one.
+func TestIDP_OriginIgnoresTheDefaultPort(t *testing.T) {
+	gh := idp.NewGitHub("x", config.NewIDPSecret("s"))
+	for issuer, want := range map[string]string{
+		"https://h.example:443/knomit": "https://h.example",
+		"http://localhost:80":          "http://localhost",
+		"https://h.example:8443":       "https://h.example:8443",
+		"http://127.0.0.1:19280":       "http://127.0.0.1:19280",
+	} {
+		if got := newIDPFlow(issuer, &IDPOptions{Provider: gh}).origin; got != want {
+			t.Errorf("origin of %q = %q, want %q", issuer, got, want)
+		}
+	}
+}
+
+// Review M1 (re-graded Important: the consent page is the defence, so it
+// must not overstate): the ceiling is an upper bound, and a subject
+// granted before keeps the grants the operator left (R5) — the page says
+// so instead of promising the ceiling.
+func TestIDP_ConsentPageDoesNotOverstateAccess(t *testing.T) {
+	f := newIDPFixture(t, "github-583231")
+	id := f.park(t, f.browser, "read write")
+	_, page, _ := f.signIn(t, f.browser, id)
+	if !strings.Contains(page, "at most") || strings.Contains(page, "granted before") {
+		t.Fatalf("first approval page:\n%s", page)
+	}
+	if err := f.grants.Grant(context.Background(), TokenPrincipal("github-583231"), auth.Read, "op"); err != nil {
+		t.Fatal(err)
+	}
+	id = f.park(t, f.browser, "read write")
+	_, page, _ = f.signIn(t, f.browser, id)
+	if !strings.Contains(page, "granted before") {
+		t.Fatalf("a previously granted subject's page must say its grants stand:\n%s", page)
+	}
 }
