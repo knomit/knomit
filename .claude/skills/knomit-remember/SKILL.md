@@ -80,7 +80,7 @@ the same call may cite each other in any order — including circularly. Only
 citations ACROSS calls must point at facts that already exist. When writing a
 set of interlinked facts, write them in one call.
 
-Example: `src://7b4887ce51d9/internal/store/service.go@4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e`
+Example: `src://7b4887ce51d9/internal/store/service.go@4154e92c8ff333435fd00c442489e855e4c3331e:94c996962d571f00e46483fc8d27e897fcd9f79c`
 
 NEVER write bare paths like `internal/store/service.go` — knomit's ref resolver treats unscheme'd strings as local fact paths and lookups will fail or clash.
 
