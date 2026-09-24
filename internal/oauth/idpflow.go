@@ -99,7 +99,7 @@ func newIDPFlow(issuer string, o *IDPOptions) *idpFlow {
 	fl := &idpFlow{
 		provider: o.Provider, label: providerLabel(o.Provider.Name()), allowed: map[string][]string{},
 		callback: issuer + "/oauth/idp/callback", origin: originOf(issuer), path: p + "/oauth/idp/",
-		secure: strings.HasPrefix(issuer, "https://"),
+		secure: issuerScheme(issuer) == "https",
 		byID:   map[string]*signIn{}, byState: map[string]*signIn{}, byToken: map[string]*signIn{},
 	}
 	for _, a := range o.Allowed {
@@ -492,4 +492,13 @@ func originOf(issuer string) string {
 		host = strings.TrimSuffix(host, ":"+u.Port())
 	}
 	return u.Scheme + "://" + host
+}
+
+// issuerScheme is the issuer's URL scheme ("https", or "http" on loopback).
+func issuerScheme(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme
 }
