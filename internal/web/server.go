@@ -152,32 +152,42 @@ func (s *Server) buildMCPHandler() {
 	} else {
 		mcpSrv = mcp.NewServer(s.OntologyRoot, s.Manager, s.ReadOnly, g)
 	}
-	// mcp-go does not put the *http.Request in the context it hands to hooks,
-	// so the initialize hook — the only place the declared clientInfo exists —
-	// would otherwise be unable to see the ip and User-Agent of the request
-	// carrying it, and would derive every direct-HTTP client's identity from
-	// two empty strings.
 	s.mcpHandler = mcpserver.NewStreamableHTTPServer(mcpSrv,
-		mcpserver.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-			ctx = sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
-			// DEFENSIVE, not load-bearing at mcp-go v0.45.0: this func is
-			// called only on the POST path (server/streamable_http.go:420-422),
-			// and there ctx is already derived from r.Context(), so the
-			// principal AuthMiddleware attached is present; the GET/SSE path
-			// (handleGet) never calls it and dispatches no tool calls. The copy
-			// guards a future mcp-go that builds this ctx from scratch, in
-			// which case every MCP call would arrive with no principal and the
-			// tool gate would deny everything. Keep it; the MCP auth tests
-			// cannot tell a redundant copy from an absent one today.
-			if p, ok := auth.FromContext(r.Context()); ok {
-				ctx = auth.WithPrincipal(ctx, p)
-			}
-			if pid, ok := sessions.VerifiedPIDFromContext(r.Context()); ok {
-				ctx = sessions.WithVerifiedPID(ctx, pid)
-			}
-			return ctx
-		}),
+		mcpserver.WithHTTPContextFunc(mcpHTTPContext),
 	)
+}
+
+// mcpHTTPContext is the MCP server's HTTPContextFunc. mcp-go does not put the
+// *http.Request in the context it hands to hooks, so the initialize hook —
+// the only place the declared clientInfo exists — would otherwise be unable
+// to see the ip and User-Agent of the request carrying it, and would derive
+// every direct-HTTP client's identity from two empty strings.
+func mcpHTTPContext(ctx context.Context, r *http.Request) context.Context {
+	ctx = sessions.WithHTTPInfo(ctx, r.RemoteAddr, r.Header.Get("User-Agent"))
+	// DEFENSIVE, not load-bearing at mcp-go v0.45.0: this func is called only
+	// on the POST path (server/streamable_http.go:420-422), and there ctx is
+	// already derived from r.Context(), so the principal AuthMiddleware
+	// attached is present; the GET/SSE path (handleGet) never calls it and
+	// dispatches no tool calls. The copy guards a future mcp-go that builds
+	// this ctx from scratch, in which case every MCP call would arrive with no
+	// principal and the tool gate would deny everything. Keep it; the MCP auth
+	// tests cannot tell a redundant copy from an absent one today.
+	//
+	// The bearer CEILING travels with the principal (3a review N6): without
+	// it, TokenGrants would see a token principal with no ceiling and grant
+	// it nothing, so the same future mcp-go would fail every bearer call
+	// closed. Copied for the same defensive reason, and pinned by a unit
+	// test of this function, the only place its absence is observable today.
+	if p, ok := auth.FromContext(r.Context()); ok {
+		ctx = auth.WithPrincipal(ctx, p)
+	}
+	if c, ok := auth.CeilingFromContext(r.Context()); ok {
+		ctx = auth.WithCeiling(ctx, c)
+	}
+	if pid, ok := sessions.VerifiedPIDFromContext(r.Context()); ok {
+		ctx = sessions.WithVerifiedPID(ctx, pid)
+	}
+	return ctx
 }
 
 // Handler returns the chi router with all routes mounted.
