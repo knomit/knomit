@@ -20,6 +20,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/sync/singleflight"
+
 	"knomit/internal/config"
 )
 
@@ -93,6 +95,11 @@ type Resolver struct {
 
 	mu    sync.Mutex
 	cache map[string]cachedClient
+
+	// N1: concurrent resolutions of one id share a fetch, and at most
+	// maxCIMDFetches fetches are in flight at all.
+	flight singleflight.Group
+	slots  chan struct{}
 }
 
 type cachedClient struct {
@@ -110,8 +117,13 @@ const cimdMaxAge = time.Hour
 // then the whole cache if still full (it is only a cache).
 const cimdCacheEntries = 256
 
+// maxCIMDFetches bounds CIMD fetches in flight across ALL client ids (3a
+// review N1): /oauth/authorize is public and fetches before any cap applies.
+const maxCIMDFetches = 4
+
 func NewResolver(clients []config.OAuthClient) *Resolver {
-	r := &Resolver{static: map[string]Client{}, fetch: newCIMDFetcher(), now: time.Now, cache: map[string]cachedClient{}}
+	r := &Resolver{static: map[string]Client{}, fetch: newCIMDFetcher(), now: time.Now, cache: map[string]cachedClient{},
+		slots: make(chan struct{}, maxCIMDFetches)}
 	for _, c := range clients {
 		r.static[c.ID] = Client{ID: c.ID, Name: c.Name, RedirectURIs: append([]string(nil), c.RedirectURIs...)}
 	}
@@ -133,10 +145,36 @@ func (r *Resolver) Resolve(ctx context.Context, id string) (Client, error) {
 	}
 	r.mu.Unlock()
 
-	c, maxAge, err := r.fetch.fetch(ctx, id)
-	if err != nil {
-		return Client{}, fmt.Errorf("%w: %w", ErrInvalidClient, err)
+	type fetched struct {
+		c      Client
+		maxAge time.Duration
 	}
+	// The shared fetch runs detached from any ONE caller's cancellation — a
+	// browser that gives up must not fail the others waiting on the same id
+	// — and is bounded instead by the fetcher's own timeout, which also
+	// bounds the wait for a slot.
+	ch := r.flight.DoChan(id, func() (any, error) {
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.fetch.timeout)
+		defer cancel()
+		select {
+		case r.slots <- struct{}{}:
+			defer func() { <-r.slots }()
+		case <-fctx.Done():
+			return nil, fmt.Errorf("too many client metadata fetches in flight: %w", fctx.Err())
+		}
+		c, maxAge, err := r.fetch.fetch(fctx, id)
+		return fetched{c, maxAge}, err
+	})
+	var res singleflight.Result
+	select {
+	case res = <-ch:
+	case <-ctx.Done():
+		return Client{}, fmt.Errorf("%w: %w", ErrInvalidClient, ctx.Err())
+	}
+	if res.Err != nil {
+		return Client{}, fmt.Errorf("%w: %w", ErrInvalidClient, res.Err)
+	}
+	c, maxAge := res.Val.(fetched).c, res.Val.(fetched).maxAge
 	if maxAge > cimdMaxAge {
 		maxAge = cimdMaxAge
 	}
