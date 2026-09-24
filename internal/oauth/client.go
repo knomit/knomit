@@ -45,10 +45,17 @@ type Client struct {
 }
 
 // RedirectAllowed matches uri against the registered list: exactly, except
-// that a registered http://127.0.0.1/... or http://[::1]/... accepts any port
-// (RFC 8252 §7.3), because a native client listens on an ephemeral one.
-// localhost is NOT treated that way: a name can be re-pointed, an IP literal
-// cannot, and the RFC recommends the literal for exactly that reason.
+// that a registered http://127.0.0.1/..., http://[::1]/... or
+// http://localhost/... accepts any port (RFC 8252 §7.3), because a native
+// client listens on an ephemeral one. The host must be the SAME spelling on
+// both sides, and path, query and scheme stay exact.
+//
+// localhost is included since phase 3b (ruling R1, reversing 3a): RFC 8252
+// §8.3 only PREFERS the literal, and the MCP client ecosystem registers
+// localhost — Claude Code's CIMD lists http://localhost/callback and sends
+// http://localhost:<random>/callback. The added risk is nil in practice: the
+// code is PKCE-bound, so a re-pointed name receives a code it cannot redeem,
+// and local-process impersonation is the same for every loopback spelling.
 func (c Client) RedirectAllowed(uri string) bool {
 	req, err := url.Parse(uri)
 	if err != nil || uri == "" || req.Fragment != "" || strings.Contains(uri, "#") {
@@ -59,7 +66,7 @@ func (c Client) RedirectAllowed(uri string) bool {
 			return true
 		}
 		ru, err := url.Parse(reg)
-		if err != nil || ru.Scheme != "http" || !isLoopbackLiteral(ru.Hostname()) {
+		if err != nil || ru.Scheme != "http" || !isLoopbackHost(ru.Hostname()) {
 			continue
 		}
 		if req.Scheme == "http" && req.Hostname() == ru.Hostname() &&
@@ -71,7 +78,10 @@ func (c Client) RedirectAllowed(uri string) bool {
 	return false
 }
 
-func isLoopbackLiteral(h string) bool { return h == "127.0.0.1" || h == "::1" }
+// isLoopbackHost: the three spellings a registered redirect may use to mean
+// "this machine, any port" — exactly these, so localhost., LOCALHOST and
+// sub.localhost are ordinary hosts that match only exactly.
+func isLoopbackHost(h string) bool { return h == "127.0.0.1" || h == "::1" || h == "localhost" }
 
 // Resolver turns a client_id into a Client: a pre-registered client first,
 // then a CIMD when the id is an https URL, else ErrInvalidClient. Dynamic

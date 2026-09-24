@@ -182,12 +182,12 @@ func TestAuthorize_ErrorsBeforeRedirectValidatesArePages(t *testing.T) {
 	f := newIssuerFixture(t)
 	_, ch := pkce()
 	for name, mut := range map[string]func(url.Values){
-		"unknown client":         func(q url.Values) { q.Set("client_id", "nobody") },
-		"missing redirect_uri":   func(q url.Values) { q.Del("redirect_uri") },
-		"unregistered redirect":  func(q url.Values) { q.Set("redirect_uri", "https://evil.example/cb") },
-		"localhost not wildcard": func(q url.Values) { q.Set("redirect_uri", "http://localhost:54321/callback") },
-		"duplicate client_id":    func(q url.Values) { q.Add("client_id", "kb") },
-		"duplicate redirect_uri": func(q url.Values) { q.Add("redirect_uri", "http://127.0.0.1:1/callback") },
+		"unknown client":                      func(q url.Values) { q.Set("client_id", "nobody") },
+		"missing redirect_uri":                func(q url.Values) { q.Del("redirect_uri") },
+		"unregistered redirect":               func(q url.Values) { q.Set("redirect_uri", "https://evil.example/cb") },
+		"localhost vs 127.0.0.1 registration": func(q url.Values) { q.Set("redirect_uri", "http://localhost:54321/callback") },
+		"duplicate client_id":                 func(q url.Values) { q.Add("client_id", "kb") },
+		"duplicate redirect_uri":              func(q url.Values) { q.Add("redirect_uri", "http://127.0.0.1:1/callback") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			q := f.authorizeQuery(ch)
