@@ -20,6 +20,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/sync/singleflight"
+
 	"knomit/internal/config"
 )
 
@@ -45,10 +47,17 @@ type Client struct {
 }
 
 // RedirectAllowed matches uri against the registered list: exactly, except
-// that a registered http://127.0.0.1/... or http://[::1]/... accepts any port
-// (RFC 8252 §7.3), because a native client listens on an ephemeral one.
-// localhost is NOT treated that way: a name can be re-pointed, an IP literal
-// cannot, and the RFC recommends the literal for exactly that reason.
+// that a registered http://127.0.0.1/..., http://[::1]/... or
+// http://localhost/... accepts any port (RFC 8252 §7.3), because a native
+// client listens on an ephemeral one. The host must be the SAME spelling on
+// both sides, and path, query and scheme stay exact.
+//
+// localhost is included since phase 3b (ruling R1, reversing 3a): RFC 8252
+// §8.3 only PREFERS the literal, and the MCP client ecosystem registers
+// localhost — Claude Code's CIMD lists http://localhost/callback and sends
+// http://localhost:<random>/callback. The added risk is nil in practice: the
+// code is PKCE-bound, so a re-pointed name receives a code it cannot redeem,
+// and local-process impersonation is the same for every loopback spelling.
 func (c Client) RedirectAllowed(uri string) bool {
 	req, err := url.Parse(uri)
 	if err != nil || uri == "" || req.Fragment != "" || strings.Contains(uri, "#") {
@@ -59,7 +68,7 @@ func (c Client) RedirectAllowed(uri string) bool {
 			return true
 		}
 		ru, err := url.Parse(reg)
-		if err != nil || ru.Scheme != "http" || !isLoopbackLiteral(ru.Hostname()) {
+		if err != nil || ru.Scheme != "http" || !isLoopbackHost(ru.Hostname()) {
 			continue
 		}
 		if req.Scheme == "http" && req.Hostname() == ru.Hostname() &&
@@ -71,7 +80,10 @@ func (c Client) RedirectAllowed(uri string) bool {
 	return false
 }
 
-func isLoopbackLiteral(h string) bool { return h == "127.0.0.1" || h == "::1" }
+// isLoopbackHost: the three spellings a registered redirect may use to mean
+// "this machine, any port" — exactly these, so localhost., LOCALHOST and
+// sub.localhost are ordinary hosts that match only exactly.
+func isLoopbackHost(h string) bool { return h == "127.0.0.1" || h == "::1" || h == "localhost" }
 
 // Resolver turns a client_id into a Client: a pre-registered client first,
 // then a CIMD when the id is an https URL, else ErrInvalidClient. Dynamic
@@ -83,6 +95,11 @@ type Resolver struct {
 
 	mu    sync.Mutex
 	cache map[string]cachedClient
+
+	// N1: concurrent resolutions of one id share a fetch, and at most
+	// maxCIMDFetches fetches are in flight at all.
+	flight singleflight.Group
+	slots  chan struct{}
 }
 
 type cachedClient struct {
@@ -100,8 +117,13 @@ const cimdMaxAge = time.Hour
 // then the whole cache if still full (it is only a cache).
 const cimdCacheEntries = 256
 
+// maxCIMDFetches bounds CIMD fetches in flight across ALL client ids (3a
+// review N1): /oauth/authorize is public and fetches before any cap applies.
+const maxCIMDFetches = 4
+
 func NewResolver(clients []config.OAuthClient) *Resolver {
-	r := &Resolver{static: map[string]Client{}, fetch: newCIMDFetcher(), now: time.Now, cache: map[string]cachedClient{}}
+	r := &Resolver{static: map[string]Client{}, fetch: newCIMDFetcher(), now: time.Now, cache: map[string]cachedClient{},
+		slots: make(chan struct{}, maxCIMDFetches)}
 	for _, c := range clients {
 		r.static[c.ID] = Client{ID: c.ID, Name: c.Name, RedirectURIs: append([]string(nil), c.RedirectURIs...)}
 	}
@@ -123,10 +145,36 @@ func (r *Resolver) Resolve(ctx context.Context, id string) (Client, error) {
 	}
 	r.mu.Unlock()
 
-	c, maxAge, err := r.fetch.fetch(ctx, id)
-	if err != nil {
-		return Client{}, fmt.Errorf("%w: %w", ErrInvalidClient, err)
+	type fetched struct {
+		c      Client
+		maxAge time.Duration
 	}
+	// The shared fetch runs detached from any ONE caller's cancellation — a
+	// browser that gives up must not fail the others waiting on the same id
+	// — and is bounded instead by the fetcher's own timeout, which also
+	// bounds the wait for a slot.
+	ch := r.flight.DoChan(id, func() (any, error) {
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.fetch.timeout)
+		defer cancel()
+		select {
+		case r.slots <- struct{}{}:
+			defer func() { <-r.slots }()
+		case <-fctx.Done():
+			return nil, fmt.Errorf("too many client metadata fetches in flight: %w", fctx.Err())
+		}
+		c, maxAge, err := r.fetch.fetch(fctx, id)
+		return fetched{c, maxAge}, err
+	})
+	var res singleflight.Result
+	select {
+	case res = <-ch:
+	case <-ctx.Done():
+		return Client{}, fmt.Errorf("%w: %w", ErrInvalidClient, ctx.Err())
+	}
+	if res.Err != nil {
+		return Client{}, fmt.Errorf("%w: %w", ErrInvalidClient, res.Err)
+	}
+	c, maxAge := res.Val.(fetched).c, res.Val.(fetched).maxAge
 	if maxAge > cimdMaxAge {
 		maxAge = cimdMaxAge
 	}

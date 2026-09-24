@@ -1723,7 +1723,88 @@ async function deleteLens(name: string): Promise<void> {
   }
 }
 
+// --- OAuth approval (F19 phase 3b) -----------------------------------------
+//
+// The operator's side of an OAuth login: a client such as Claude Code parked
+// a request on the OAuth listener, and this instance's operator approves or
+// denies it. The server admits these calls from the browser only with the
+// same-origin proof (internal/web/oauth_pending_api.go, browserProof): the
+// custom header below, the Origin the browser adds to a POST by itself, and a
+// JSON body type on every mutation. ONLY these calls send the header — on the
+// desktop, where every call is cross-origin, adding it anywhere else would
+// give that call a CORS preflight it does not need.
+
+// The spelling the server checks; a test on each side pins it.
+export const KNOMIT_CLIENT_HEADER = 'X-Knomit-Client';
+export const KNOMIT_CLIENT_WEB = 'web';
+
+// OAuthPending is one parked authorization request, as the server lists it.
+// client_name, client_id, redirect_uri and resource come from the REQUESTER
+// (a metadata document, or the authorize URL): render them as text, never
+// as markup. remote_addr and user_agent describe the BROWSER that opened the
+// authorization link, not the client program.
+export interface OAuthPending {
+  id: string;
+  client_id: string;
+  client_name: string;
+  redirect_uri: string;
+  scopes: string[];
+  resource: string;
+  remote_addr: string;
+  user_agent: string;
+  created_at: string;
+  expires_at: string;
+}
+
+function oauthHeaders(mutation: boolean): Record<string, string> {
+  const h: Record<string, string> = { [KNOMIT_CLIENT_HEADER]: KNOMIT_CLIENT_WEB };
+  if (mutation) h['Content-Type'] = 'application/json';
+  return h;
+}
+
+async function oauthFailure(r: Response): Promise<Error> {
+  let detail = r.statusText;
+  try {
+    detail = errorText(await r.json(), detail);
+  } catch {
+    // Non-JSON body; keep the statusText.
+  }
+  return new Error(detail);
+}
+
+// listOAuthPending returns the undecided requests, or null when this server
+// has no OAuth issuer (404: [oauth] unset, or the desktop, which never opens
+// the OAuth listener). null is what hides the Manage tab.
+async function listOAuthPending(): Promise<OAuthPending[] | null> {
+  const r = await fetch(apiUrl('/api/v1/oauth/pending'), { headers: oauthHeaders(false) });
+  if (r.status === 404) return null;
+  if (!r.ok) throw await oauthFailure(r);
+  const data = (await r.json()) as { pending?: OAuthPending[] };
+  return data.pending ?? [];
+}
+
+async function approveOAuthPending(id: string, subject: string, scopes: string[]): Promise<void> {
+  const r = await fetch(apiUrl(`/api/v1/oauth/pending/${encodeURIComponent(id)}/approve`), {
+    method: 'POST',
+    headers: oauthHeaders(true),
+    body: JSON.stringify({ subject, scopes }),
+  });
+  if (!r.ok) throw await oauthFailure(r);
+}
+
+async function denyOAuthPending(id: string): Promise<void> {
+  const r = await fetch(apiUrl(`/api/v1/oauth/pending/${encodeURIComponent(id)}/deny`), {
+    method: 'POST',
+    headers: oauthHeaders(true),
+    body: '{}',
+  });
+  if (!r.ok) throw await oauthFailure(r);
+}
+
 export const api = {
+  listOAuthPending,
+  approveOAuthPending,
+  denyOAuthPending,
   listClientSessions,
   getAgentBranch,
   getRepo,

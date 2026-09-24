@@ -42,6 +42,8 @@ vi.mock('./api', async (importOriginal) => {
     deleteSession: vi.fn().mockResolvedValue(undefined),
     api: {
       listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
+    // null = this server has no OAuth issuer (404), so no Authorizations tab.
+    listOAuthPending: vi.fn().mockResolvedValue(null),
       repos: vi.fn(), listLenses: vi.fn(), listArchived: vi.fn(), getAgentBranch: vi.fn(),
       status: vi.fn(), getOrigin: vi.fn(), getLens: vi.fn(), browse: vi.fn(), recent: vi.fn(),
       search: vi.fn(), stats: vi.fn(), activity: vi.fn(), explain: vi.fn(), completions: vi.fn(),

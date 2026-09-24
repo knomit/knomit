@@ -1,6 +1,7 @@
 package knomitapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -134,7 +135,7 @@ func DeleteCredentials(u *url.URL) error {
 // PROCESSES. Several kb bridges (one per agent session) share the file, and
 // the server revokes a whole family when a rotated refresh token is presented
 // again — so two processes refreshing at once would log everyone out.
-func withCredentialsLock(u *url.URL, fn func() error) error {
+func withCredentialsLock(ctx context.Context, u *url.URL, fn func() error) error {
 	p, err := CredentialsPath(u)
 	if err != nil {
 		return err
@@ -147,7 +148,7 @@ func withCredentialsLock(u *url.URL, fn func() error) error {
 		return err
 	}
 	defer f.Close()
-	if err := lockFile(f); err != nil {
+	if err := lockFile(ctx, f); err != nil {
 		return err
 	}
 	defer unlockFile(f)

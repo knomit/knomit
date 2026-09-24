@@ -49,6 +49,23 @@ var appIcon []byte
 // uses http). Both are allowed for CORS since the API binds looknomitck-only.
 var wailsOrigins = []string{"wails://localhost", "http://wails.localhost"}
 
+// desktopAppOptions are the app options the desktop boots with.
+func desktopAppOptions() knomitapp.Options {
+	return knomitapp.Options{
+		APIOnly:     true,
+		CORSOrigins: wailsOrigins,
+		// The desktop never opens the OAuth listener, so it builds no
+		// issuer: the pending endpoints are 404 and the web UI hides its
+		// panel (F19 phase 3b, W3).
+		NoOAuth: true,
+		// The Logs tab streams from this, through the very API base
+		// configInjectingHandler injects below. Serving it from the in-process
+		// server is what keeps the log stream part of the API rather than a
+		// second, desktop-only transport.
+		LogTap: logTap,
+	}
+}
+
 // run boots the in-process server and the Wails desktop shell.
 func run(ctx context.Context) error {
 	lockPath, err := paths.LockfilePath()
@@ -438,15 +455,7 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhas
 	}
 
 	// In-process server: API/MCP/git only (no UI), CORS for the Wails origin.
-	a, err := knomitapp.New(ctx, cfg, knomitapp.Options{
-		APIOnly:     true,
-		CORSOrigins: wailsOrigins,
-		// The Logs tab streams from this, through the very API base
-		// configInjectingHandler injects below. Serving it from the in-process
-		// server is what keeps the log stream part of the API rather than a
-		// second, desktop-only transport.
-		LogTap: logTap,
-	})
+	a, err := knomitapp.New(ctx, cfg, desktopAppOptions())
 	if err != nil {
 		return "", nil, err
 	}
