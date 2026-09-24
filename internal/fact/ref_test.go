@@ -218,3 +218,19 @@ func TestID12AndQualify(t *testing.T) {
 		t.Errorf("QualifyKBPath = %q", got)
 	}
 }
+
+// #249 review: the src scheme is matched case-insensitively (RFC 3986 §3.1),
+// so an upper- or mixed-case scheme still classifies as source, not as an
+// opaque external URL that no rule looks at.
+func TestClassifyRef_SrcSchemeIsCaseInsensitive(t *testing.T) {
+	full := "7b4887ce51d9/internal/x.go@4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e"
+	for _, scheme := range []string{"SRC://", "Src://", "sRc://"} {
+		r := ClassifyRef(scheme+full, "")
+		if r.Kind != RefSourceCode {
+			t.Errorf("%s…: kind = %s, want %s", scheme, r.Kind, RefSourceCode)
+		}
+		if r.Raw != scheme+full {
+			t.Errorf("Raw must stay byte-identical to the input, got %q", r.Raw)
+		}
+	}
+}

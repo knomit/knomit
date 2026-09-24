@@ -16,11 +16,8 @@ fetched, and invisible to peers.
 
 ## Preflight — the tool may not be there
 
-`knomit_experiment` ships in #236. If the tool is absent from your MCP tool
-list, the lens server you are connected to predates it: say so and stop rather
-than falling back to writing on the agent branch, which is the exact
-attribution this skill exists to prevent. Restarting the server against a
-post-#236 build is the fix, and that is the user's call.
+If `knomit_experiment` is absent from your tool list, say so and stop; do not
+fall back to writing on the agent branch.
 
 ## When to use — trigger phrases
 

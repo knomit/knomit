@@ -131,6 +131,112 @@ var badResolutionBodies = []struct {
 		body: "---\ntype: observation\nrefs: ['kb/does/not/exist/00000000.md']\n---\n# demo fact\n\nbody\n",
 		want: "resolv",
 	},
+	{
+		name: "a placeholder src ref is caught by the refs gate",
+		// knomit#249. A non-hex repo id makes this ref classify as LEGACY,
+		// which SerializeFact's shape rule accepts unconditionally — so only
+		// the gate's full-form rule for newly added src refs refuses it.
+		body: "---\ntype: observation\nrefs: ['src://REPO_ID/internal/x.go@" + resGateCommit + ":" + resGateBlob +
+			"']\n---\n# demo fact\n\nbody\n",
+		want: "full form",
+	},
+}
+
+const (
+	resGateCommit = "4154e92c8ff333435fd00c442489e855e4c3331e"
+	resGateBlob   = "36b1d45187d6a2c6ad18d591142227ad2a02a66e"
+	// carriedLegacy is a pre-#249 src ref: legal when it was written, refused
+	// if added anew.
+	carriedLegacy = "src://knomit/internal/legacy.go@ca1c272"
+)
+
+// conflictedFactWithRefs is conflictedFact whose three versions carry the
+// given refs, each list COMPLETE for its version: fork is the agent-branch
+// version the experiment forks from, exp and agent are what each side then
+// writes. The refs are written straight into the store — a legacy src ref, or
+// a local ref to a fact that never existed, could not be written through any
+// tool, and those are exactly the carried refs at stake.
+func conflictedFactWithRefs(t *testing.T, m *repos.Manager, expName string, fork, exp, agent []string) string {
+	t.Helper()
+	ctx := context.Background()
+	ri := m.Get(resolutionRepo)
+	require.NotNil(t, ri)
+
+	const path = "kb/architecture/demo/bbbbbbbb.md"
+	body := func(line string, refs []string) string {
+		return "---\ntype: observation\nconfidence: 0.9\n" + refsYAML(refs) + "---\n# demo fact\n\n" + line + "\n"
+	}
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, err := svc.Facts().WriteFact(ctx, "agent/test", path, body("original", fork), "seed", "learn")
+		require.NoError(t, err)
+		_, err = svc.Experiments().OpenExperiment(ctx, expName, "", "agent/test")
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(ctx, store.ExperimentBranch(expName), path,
+			body("changed in the experiment", exp), "exp edit", "update")
+		require.NoError(t, err)
+		_, err = svc.Facts().WriteFact(ctx, "agent/test", path,
+			body("changed on the agent branch", agent), "agent edit", "update")
+		require.NoError(t, err)
+	}))
+	return path
+}
+
+func refsYAML(refs []string) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	return "refs: ['" + strings.Join(refs, "', '") + "']\n"
+}
+
+// knomit#249, option A: a resolution's prior is the union of the refs that
+// path carries at the fork, on the agent branch and on the experiment. Each of
+// those versions was accepted when it was written, so a resolution that keeps
+// their refs is not adding anything — and must not have their legacy src refs
+// refused. Before this, the resolution passed prior = nil and every carried
+// legacy ref would have read as newly added.
+func TestResolutionBody_CarriedLegacySrcRefsAreNotRejudged(t *testing.T) {
+	onFork := carriedLegacy
+	onExp := "src://knomit/internal/exp-side.go@ca1c272"
+	onAgent := "src://knomit/internal/agent-side.go@ca1c272"
+	merged := "---\ntype: observation\nconfidence: 0.9\n" +
+		refsYAML([]string{onFork, onExp, onAgent}) + "---\n# demo fact\n\nreconciled\n"
+
+	t.Run("REST", func(t *testing.T) {
+		h, m := experimentServer(t)
+		path := conflictedFactWithRefs(t, m, "legacyrest", []string{onFork}, []string{onExp}, []string{onAgent})
+		code, body := commitViaREST(t, h, "legacyrest", path, merged)
+		require.Equal(t, http.StatusNoContent, code,
+			"refs carried by the fork, experiment or agent version must not be re-judged: %s", body)
+	})
+	t.Run("MCP", func(t *testing.T) {
+		h, m := experimentServer(t)
+		path := conflictedFactWithRefs(t, m, "legacymcp", []string{onFork}, []string{onExp}, []string{onAgent})
+		text, isErr := commitViaMCP(t, h, "legacymcp", path, merged)
+		require.False(t, isErr, "carried legacy refs must not be re-judged: %s", text)
+	})
+}
+
+// The exemption is per-ref: a legacy src ref that NO version carried is being
+// added by the resolver, and is refused like any other fresh one.
+func TestResolutionBody_FreshLegacySrcRefIsRefused(t *testing.T) {
+	fresh := "src://knomit/internal/invented.go@ca1c272"
+	body := "---\ntype: observation\nconfidence: 0.9\n" +
+		refsYAML([]string{carriedLegacy, fresh}) + "---\n# demo fact\n\nreconciled\n"
+
+	h, m := experimentServer(t)
+	path := conflictedFactWithRefs(t, m, "freshlegacy",
+		[]string{carriedLegacy}, []string{carriedLegacy}, []string{carriedLegacy})
+	code, text := commitViaREST(t, h, "freshlegacy", path, body)
+	require.NotEqual(t, http.StatusNoContent, code, "a fresh legacy src ref must be refused: %s", text)
+	require.Contains(t, text, fresh)
+	require.NotContains(t, text, "legacy.go", "the carried ref is not a problem")
+
+	ri := m.Get(resolutionRepo)
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		_, ok, err := svc.Experiments().GetExperiment(context.Background(), "freshlegacy")
+		require.NoError(t, err)
+		require.True(t, ok, "a refused resolution performs no commit")
+	}))
 }
 
 func TestResolutionBody_REST_RunsTheFullUpdateChain(t *testing.T) {
@@ -202,4 +308,22 @@ func TestResolutionBody_GoodBodyIsAcceptedAndSerialized(t *testing.T) {
 			"the committed bytes are SerializeFact's output, which ends in a newline — "+
 				"the raw body did not")
 	}))
+}
+
+// #249 review, item 7. The prior also exempts LOCAL fact refs a merged version
+// carried: a kb/ ref the fork version cited is not existence-checked when the
+// resolution keeps it, even though both tips have since dropped it and its
+// target resolves nowhere. That is historical-not-current applied to the
+// merge — the fork version was accepted when written — and it is a change
+// from prior = nil, which existence-checked every local ref in the body.
+func TestResolutionBody_LocalRefCarriedOnlyByTheForkIsNotExistenceChecked(t *testing.T) {
+	gone := "kb/never/written/00000000.md"
+	body := "---\ntype: observation\nconfidence: 0.9\n" + refsYAML([]string{gone}) +
+		"---\n# demo fact\n\nreconciled\n"
+
+	h, m := experimentServer(t)
+	path := conflictedFactWithRefs(t, m, "forklocal", []string{gone}, nil, nil)
+	code, text := commitViaREST(t, h, "forklocal", path, body)
+	require.Equal(t, http.StatusNoContent, code,
+		"a local ref the fork version carried is prior, not newly added: %s", text)
 }

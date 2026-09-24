@@ -65,6 +65,30 @@ type Ref struct {
 	Err    string // set only when Kind == RefMalformed
 }
 
+// IsFullSource reports whether r is a src:// ref in the full form
+// src://<12-hex>/<path>@<40-hex>:<40-hex> — the only form refs.Gate accepts
+// for a src ref a write ADDS (knomit#249). A legacy ref is not full form, and
+// neither is a new-form ref with an abbreviated or non-hex hash.
+//
+// This is a statement about SHAPE only. A well-formed hash that names no
+// object passes, because nothing here has the source repo to ask.
+//
+// The scheme itself must be the canonical lowercase "src://". ClassifyRef
+// accepts any case (RFC 3986 §3.1), so "SRC://…" is still a source ref, but
+// not one written in the full form.
+func (r Ref) IsFullSource() bool {
+	return r.Kind == RefSourceCode && !r.Legacy && strings.HasPrefix(r.Raw, SrcScheme) &&
+		len(r.Commit) == gitHashLen && isLowerHex(r.Commit) &&
+		len(r.Blob) == gitHashLen && isLowerHex(r.Blob)
+}
+
+// HasSrcScheme reports whether raw starts with the src:// scheme in any case.
+// URI schemes are case-insensitive (RFC 3986 §3.1); matching only lowercase
+// let "SRC://…" classify as an external URL that no rule looks at.
+func HasSrcScheme(raw string) bool {
+	return len(raw) >= len(SrcScheme) && strings.EqualFold(raw[:len(SrcScheme)], SrcScheme)
+}
+
 // ClassifyRef is THE answer to "what is this ref?" — the single authority the
 // write gate, the edge builder, replay, knomit_explain, the fact API, and the
 // web client all consume. Pure: no I/O, no corpus lookup, no git.
@@ -95,7 +119,7 @@ func ClassifyRef(raw, localRepoID string) Ref {
 			r.Kind = RefForeignFact
 		}
 
-	case strings.HasPrefix(raw, SrcScheme):
+	case HasSrcScheme(raw):
 		return classifySrc(raw)
 
 	case hasScheme(raw):
@@ -125,7 +149,7 @@ func classifySrc(raw string) Ref {
 		}
 	}
 
-	rest := strings.TrimPrefix(raw, SrcScheme)
+	rest := raw[len(SrcScheme):] // the scheme matched case-insensitively
 
 	// Only a well-formed line range is treated as a fragment; '#' is legal in a
 	// filename, so anything else stays part of the path.
@@ -311,7 +335,7 @@ func ValidateRefs(refs []string) error {
 		"  kb/<topic>/…/<id>.md                      a fact in this repo\n"+
 		"  kb://<12-hex-repo-id>/<path>              a fact in this or another repo\n"+
 		"  src://<12-hex-repo-id>/<path>@<40-hex-commit>:<40-hex-blob>[#L1-L9]\n"+
-		"  src://<repo-name>/<path>[@<commit>]       legacy source form, still accepted\n"+
+		"  src://<repo-name>/<path>[@<commit>]       short form: leave it where a fact has it; never add one\n"+
 		"  https://… or file:///…                    external",
 		strings.Join(problems, "\n  "))
 }

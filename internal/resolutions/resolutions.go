@@ -32,6 +32,7 @@ package resolutions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -100,15 +101,23 @@ func normalizeOne(
 		}
 	}
 
-	// 3. The refs gate. Every ref in the body is treated as newly added: a
-	// resolution replaces the fact wholesale and the caller composed this text
-	// just now, so there is no earlier version whose citations it inherited
-	// without choosing them.
+	// 3. The refs gate. Only refs the resolver ADDS are judged: prior is every
+	// ref this path carries at the fork point, on the parent and on the
+	// experiment. Each of those versions was accepted by a write path when it
+	// was written, so its refs resolved at their own commit and are never
+	// re-judged (historical-not-current). Keeping them is merging, not
+	// authoring. Passing nil here, as this once did, made every carried ref
+	// read as new — which since knomit#249 refuses any resolution of a fact
+	// that carries a legacy src ref.
 	gate, err := resolveGate(ctx, ri, parent, experiment)
 	if err != nil {
 		return nil, err
 	}
-	canonRefs, _, err := gate.Apply(ctx, file, f.Refs, nil)
+	prior, err := carriedRefs(ctx, ri, parent, experiment, file)
+	if err != nil {
+		return nil, err
+	}
+	canonRefs, _, err := gate.Apply(ctx, file, f.Refs, prior)
 	if err != nil {
 		return nil, fmt.Errorf("resolution body for %q has unresolvable references: %w", file, err)
 	}
@@ -131,6 +140,80 @@ func normalizeOne(
 		return nil, fmt.Errorf("resolution body for %q could not be serialized: %w", file, err)
 	}
 	return []byte(serialized), nil
+}
+
+// carriedRefs is the union of the refs path carries on each version a
+// resolution merges: the experiment's fork point, the parent tip and the
+// experiment tip.
+//
+// The FORK version is included, not just the two tips, because a resolution
+// may restore what the fork had: that is choosing the base side, and the base
+// was accepted when it was written. Its commit comes from the experiment's
+// record; after a sync the actual merge base is newer, and every version
+// between the two is on one of the tips' histories.
+//
+// This exempts LOCAL fact refs as well as src refs: a kb/ ref any of the three
+// versions carried is not existence-checked again, the same way knomit_update
+// never re-checks a ref the fact already had (historical-not-current).
+//
+// A version that does not exist (store.ErrPathNotFound) contributes nothing —
+// a path added on one side only, or not yet present at the fork. Any OTHER
+// read error fails the resolution rather than shrinking prior: a smaller prior
+// would refuse refs the fact legitimately carries and blame the resolver.
+func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment, file string) ([]string, error) {
+	var (
+		out    []string
+		seen   = map[string]bool{}
+		outErr error
+	)
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		type version struct {
+			branch string
+			opts   *store.ReadFactOpts
+		}
+		var versions []version
+		if name, ok := strings.CutPrefix(experiment, store.ExperimentPrefix); ok {
+			exp, found, err := svc.Experiments().GetExperiment(ctx, name)
+			if err != nil {
+				outErr = fmt.Errorf("resolution for %q: read experiment: %w", file, err)
+				return
+			}
+			if found && exp.ForkCommit != "" {
+				versions = append(versions, version{parent, &store.ReadFactOpts{AtCommit: exp.ForkCommit}})
+			}
+		}
+		for _, branch := range slices.Compact([]string{parent, experiment}) {
+			if branch != "" {
+				versions = append(versions, version{branch, nil})
+			}
+		}
+		for _, v := range versions {
+			res, err := svc.Facts().ReadFact(ctx, v.branch, file, v.opts)
+			if errors.Is(err, store.ErrPathNotFound) {
+				continue
+			}
+			if err != nil {
+				outErr = fmt.Errorf("resolution for %q: read prior version: %w", file, err)
+				return
+			}
+			f, err := knomitfact.ParseFact(file, res.Content)
+			if err != nil {
+				continue // an unparseable version carried nothing we can name
+			}
+			for _, r := range f.Refs {
+				if !seen[r] {
+					seen[r] = true
+					out = append(out, r)
+				}
+			}
+		}
+	}); aerr != nil {
+		return nil, aerr
+	}
+	return out, outErr
 }
 
 // resolveGate builds the ref gate for a resolution: a local fact resolves if it

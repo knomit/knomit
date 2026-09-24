@@ -103,7 +103,9 @@ func TestGate_AcceptsQualifiedRefToAnotherFactInThisRepo(t *testing.T) {
 	}
 }
 
-// Foreign, source, and external refs are never gated — knomit cannot check them.
+// Foreign, source, and external refs are never RESOLVED — knomit cannot check
+// whether their targets exist. (A src:// ref's FORM is still gated; see
+// TestGate_RejectsNewSrcRefNotInFullForm.)
 func TestGate_IgnoresUncheckableKinds(t *testing.T) {
 	g := newGate()
 	batch := map[string][]string{
@@ -111,7 +113,6 @@ func TestGate_IgnoresUncheckableKinds(t *testing.T) {
 			"kb://7b4887ce51d9/kb/somewhere/else.md",
 			"src://7b4887ce51d9/internal/x.go@" +
 				"4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e",
-			"src://knomit/internal/legacy.go@ca1c272",
 			"https://example.com/x",
 			"file:///tmp/x",
 		},
@@ -435,5 +436,139 @@ func TestGate_CarriedSelfRefPlusNewRef_ReinforceShape(t *testing.T) {
 	batch[self] = []string{self, "kb/typo.md"}
 	if err := g.CheckBatch(context.Background(), batch, prior); err == nil {
 		t.Fatal("an unresolvable NEW ref must still be rejected alongside a carried self-ref")
+	}
+}
+
+// knomit#249. A src:// ref this write ADDS must be the full form
+// src://<12-hex>/<path>@<40-hex>:<40-hex>. Every shape below is something an
+// agent has typed or could type in place of a computed value, and each one was
+// accepted before: the first because nothing checked a src ref here at all, the
+// rest because anything short of the full form classifies as Legacy and the
+// shape rule in internal/fact accepts Legacy unconditionally.
+//
+// An invented but well-formed 40-hex blob is NOT on this list: no syntactic
+// check can tell it from a real one.
+func TestGate_RejectsNewSrcRefNotInFullForm(t *testing.T) {
+	const (
+		commit = "4154e92c8ff333435fd00c442489e855e4c3331e"
+		blob   = "36b1d45187d6a2c6ad18d591142227ad2a02a66e"
+	)
+	cases := map[string]string{
+		"non-hex blob":       "src://7b4887ce51d9/internal/x.go@" + commit + ":<blob>",
+		"short blob":         "src://7b4887ce51d9/internal/x.go@" + commit + ":36b1d45",
+		"non-12-hex repo id": "src://knomit/internal/x.go@" + commit + ":" + blob,
+		"missing :blob":      "src://7b4887ce51d9/internal/x.go@" + commit,
+		"legacy form":        "src://knomit/internal/legacy.go@ca1c272",
+		"no version at all":  "src://7b4887ce51d9/internal/x.go",
+		"uppercase repo id":  "src://7B4887CE51D9/internal/x.go@" + commit + ":" + blob,
+		"short commit":       "src://7b4887ce51d9/internal/x.go@4154e92:" + blob,
+	}
+	for name, ref := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := newGate().CheckBatch(context.Background(),
+				map[string][]string{"kb/y/new.md": {ref}}, nil)
+			if err == nil {
+				t.Fatalf("a newly added %s src ref must be rejected: %s", name, ref)
+			}
+			msg := err.Error()
+			// The agent must be able to string-match its own payload, and must
+			// be handed the commands that produce a correct value rather than
+			// a restatement of the rule.
+			for _, want := range []string{
+				ref,
+				"git rev-list --max-parents=0 HEAD | cut -c1-12",
+				"git rev-parse HEAD",
+				"git rev-parse <commit>:<path>",
+			} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("error does not mention %q:\n%s", want, msg)
+				}
+			}
+		})
+	}
+}
+
+func TestGate_AcceptsNewSrcRefInFullForm(t *testing.T) {
+	ref := "src://7b4887ce51d9/internal/x.go@" +
+		"4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e#L3-L9"
+	if err := newGate().CheckBatch(context.Background(),
+		map[string][]string{"kb/y/new.md": {ref}}, nil); err != nil {
+		t.Fatalf("a full-form src ref must be accepted, got %v", err)
+	}
+}
+
+// historical-not-current, applied to src refs: a legacy ref the fact already
+// CARRIED was legal when it was written and is never re-judged, so the 279
+// legacy-citing facts in knomit-kb stay editable. The exemption is per-ref: a
+// legacy ref added in the same write is still refused.
+func TestGate_CarriedLegacySrcRefIsNotRejudged(t *testing.T) {
+	legacy := "src://knomit/internal/legacy.go@ca1c272"
+	full := "src://7b4887ce51d9/internal/x.go@" +
+		"4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e"
+	prior := map[string][]string{"kb/citing.md": {legacy}}
+
+	batch := map[string][]string{"kb/citing.md": {legacy, full}}
+	if err := newGate().CheckBatch(context.Background(), batch, prior); err != nil {
+		t.Fatalf("a carried legacy src ref must not be re-judged, got %v", err)
+	}
+
+	added := "src://knomit/internal/other.go@ca1c272"
+	batch["kb/citing.md"] = []string{legacy, added}
+	err := newGate().CheckBatch(context.Background(), batch, prior)
+	if err == nil {
+		t.Fatal("a legacy src ref ADDED beside a carried one must still be rejected")
+	}
+	if strings.Contains(err.Error(), "legacy.go") {
+		t.Errorf("the carried ref must not be named as a problem:\n%v", err)
+	}
+}
+
+// One round trip: a write with both a bad src ref and an unresolvable local ref
+// names both, rather than making the agent fix one and discover the other.
+func TestGate_ReportsSrcFormAndUnresolvableTogether(t *testing.T) {
+	bad := "src://7b4887ce51d9/internal/x.go@4154e92"
+	err := newGate().CheckBatch(context.Background(),
+		map[string][]string{"kb/y/new.md": {bad, "kb/nope.md"}}, nil)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{bad, "kb/nope.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q:\n%v", want, err)
+		}
+	}
+}
+
+// #249 review. The self-reference section used to return early, dropping any
+// src-form problem in the same batch: the agent fixed the self-ref, retried,
+// and only then learned about the src ref. Every section is reported at once.
+func TestGate_ReportsSelfRefAndSrcFormTogether(t *testing.T) {
+	self := "kb/y/new.md"
+	bad := "src://7b4887ce51d9/internal/x.go@4154e92"
+	err := newGate().CheckBatch(context.Background(),
+		map[string][]string{self: {self, bad, "kb/nope.md"}}, nil)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"may not reference itself", bad, "kb/nope.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q:\n%v", want, err)
+		}
+	}
+}
+
+// #249 review. URI schemes are case-insensitive (RFC 3986 §3.1). A src ref
+// written "SRC://" or "Src://" used to classify as an external URL and skip
+// the gate entirely.
+func TestGate_SrcSchemeIsCaseInsensitive(t *testing.T) {
+	for _, ref := range []string{
+		"SRC://knomit/internal/x.go@ca1c272",
+		"Src://7b4887ce51d9/internal/x.go@4154e92c8ff333435fd00c442489e855e4c3331e",
+	} {
+		err := newGate().CheckBatch(context.Background(),
+			map[string][]string{"kb/y/new.md": {ref}}, nil)
+		if err == nil || !strings.Contains(err.Error(), ref) {
+			t.Errorf("%s must be judged as a src ref and refused, got %v", ref, err)
+		}
 	}
 }

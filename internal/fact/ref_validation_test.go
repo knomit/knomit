@@ -50,8 +50,9 @@ func TestValidateRefs(t *testing.T) {
 // The error is read by an agent that must fix the refs and retry, so it must
 // report EVERY problem (not just the first) and say how to obtain the right
 // value — one problem per round-trip is the difference between one retry and
-// five. It must also state that the legacy src form is still accepted, or an
-// agent hitting one bad ref will "helpfully" rewrite the legacy ones too.
+// five. It must also state that legacy src refs a fact carries are kept, or an
+// agent hitting one bad ref will "helpfully" rewrite the legacy ones too — and,
+// since knomit#249, that a legacy ref may not be ADDED.
 func TestValidateRefs_ErrorIsActionable(t *testing.T) {
 	err := ValidateRefs([]string{
 		"kb://abc/x.md",
@@ -69,7 +70,8 @@ func TestValidateRefs_ErrorIsActionable(t *testing.T) {
 		"got 7 chars",                          // says how far off the commit is
 		"git rev-parse ca1c272",                // the remedy, with the real value
 		"git rev-parse <commit>:internal/x.go", // the remedy for the blob
-		"legacy source form, still accepted",   // do not rewrite legacy refs
+		"leave it where a fact has it",         // do not rewrite short-form refs
+		"never add one",                        // #249: refs.Gate refuses a new one
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error missing %q\n--- got ---\n%s", want, msg)
