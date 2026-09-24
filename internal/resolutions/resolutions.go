@@ -32,6 +32,7 @@ package resolutions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -151,36 +152,29 @@ func normalizeOne(
 // record; after a sync the actual merge base is newer, and every version
 // between the two is on one of the tips' histories.
 //
-// A version that does not exist contributes nothing — a path added on one side
-// only, or an experiment record that has gone. The two TIPS fail loudly when
-// a read errors, rather than shrinking prior: a smaller prior would refuse refs
-// the fact legitimately carries and blame the resolver for them. The fork read
-// cannot tell "not at that commit" from other failures, so it is treated as
-// absent; that errs strict, never lax.
+// This exempts LOCAL fact refs as well as src refs: a kb/ ref any of the three
+// versions carried is not existence-checked again, the same way knomit_update
+// never re-checks a ref the fact already had (historical-not-current).
+//
+// A version that does not exist (store.ErrPathNotFound) contributes nothing —
+// a path added on one side only, or not yet present at the fork. Any OTHER
+// read error fails the resolution rather than shrinking prior: a smaller prior
+// would refuse refs the fact legitimately carries and blame the resolver.
 func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment, file string) ([]string, error) {
 	var (
-		out     []string
-		seen    = map[string]bool{}
-		outErr  error
-		reads   []store.ReadFactOpts
-		sources []string
+		out    []string
+		seen   = map[string]bool{}
+		outErr error
 	)
-	collect := func(content string) {
-		f, err := knomitfact.ParseFact(file, content)
-		if err != nil {
-			return // an unparseable version carried nothing we can name
-		}
-		for _, r := range f.Refs {
-			if !seen[r] {
-				seen[r] = true
-				out = append(out, r)
-			}
-		}
-	}
 	if aerr := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			return
 		}
+		type version struct {
+			branch string
+			opts   *store.ReadFactOpts
+		}
+		var versions []version
 		if name, ok := strings.CutPrefix(experiment, store.ExperimentPrefix); ok {
 			exp, found, err := svc.Experiments().GetExperiment(ctx, name)
 			if err != nil {
@@ -188,37 +182,33 @@ func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment
 				return
 			}
 			if found && exp.ForkCommit != "" {
-				reads = append(reads, store.ReadFactOpts{AtCommit: exp.ForkCommit})
-				sources = append(sources, parent)
+				versions = append(versions, version{parent, &store.ReadFactOpts{AtCommit: exp.ForkCommit}})
 			}
 		}
 		for _, branch := range slices.Compact([]string{parent, experiment}) {
 			if branch != "" {
-				reads = append(reads, store.ReadFactOpts{})
-				sources = append(sources, branch)
+				versions = append(versions, version{branch, nil})
 			}
 		}
-		for i, opts := range reads {
-			exists := true
-			if opts.AtCommit == "" {
-				var err error
-				if exists, err = svc.Facts().FactExists(ctx, sources[i], file); err != nil {
-					outErr = fmt.Errorf("resolution for %q: %w", file, err)
-					return
-				}
-			}
-			if !exists {
+		for _, v := range versions {
+			res, err := svc.Facts().ReadFact(ctx, v.branch, file, v.opts)
+			if errors.Is(err, store.ErrPathNotFound) {
 				continue
 			}
-			res, err := svc.Facts().ReadFact(ctx, sources[i], file, &opts)
 			if err != nil {
-				if opts.AtCommit != "" {
-					continue // not present at the fork: added since, on one side
-				}
-				outErr = fmt.Errorf("resolution for %q: read %s: %w", file, sources[i], err)
+				outErr = fmt.Errorf("resolution for %q: read prior version: %w", file, err)
 				return
 			}
-			collect(res.Content)
+			f, err := knomitfact.ParseFact(file, res.Content)
+			if err != nil {
+				continue // an unparseable version carried nothing we can name
+			}
+			for _, r := range f.Refs {
+				if !seen[r] {
+					seen[r] = true
+					out = append(out, r)
+				}
+			}
 		}
 	}); aerr != nil {
 		return nil, aerr
