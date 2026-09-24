@@ -179,7 +179,7 @@ func TestApp_IDPWiredOnlyWhenConfigured(t *testing.T) {
 			cfg.OAuth.IDP = &config.OAuthIDPConfig{Provider: "github", ClientID: "Iv1.x", Secret: config.NewIDPSecret("s"),
 				AllowedSubjects: []string{"github-1"}}
 		}
-		a, err := New(context.Background(), cfg, Options{APIOnly: true})
+		a, err := New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 		if err != nil {
 			t.Fatalf("boot (idp=%v): %v", withIDP, err)
 		}
