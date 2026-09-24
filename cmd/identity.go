@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -419,18 +418,12 @@ func identityRevokeCmd() *cobra.Command {
 // A serial the master never issued is refused: a typo must not quietly
 // revoke nothing.
 func serialsToRevoke(dir, serialHex, fp string) ([]*big.Int, error) {
-	f, err := os.Open(filepath.Join(dir, pki.IssuedLogFile))
+	issued, err := readIssued(dir)
 	if err != nil {
-		return nil, fmt.Errorf("issuance log: %w", err)
+		return nil, err
 	}
-	defer f.Close()
 	var out []*big.Int
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		var rec pki.Issued
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			return nil, fmt.Errorf("%s: %w", pki.IssuedLogFile, err)
-		}
+	for _, rec := range issued {
 		if (serialHex != "" && strings.EqualFold(rec.Serial, strings.TrimPrefix(serialHex, "0x"))) || (fp != "" && rec.Fingerprint == fp) {
 			s, ok := new(big.Int).SetString(rec.Serial, 16)
 			if !ok {
@@ -438,9 +431,6 @@ func serialsToRevoke(dir, serialHex, fp string) ([]*big.Int, error) {
 			}
 			out = append(out, s)
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return nil, err
 	}
 	if len(out) == 0 {
 		return nil, errors.New("no certificate in issued.jsonl matches; nothing revoked")

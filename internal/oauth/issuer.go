@@ -387,6 +387,15 @@ func (i *Issuer) Approve(ctx context.Context, id, subject string, scopes []strin
 	return i.store.GetPending(ctx, id)
 }
 
+// DefaultCeiling is the ceiling an approval gets when it names no scopes
+// (3a ruling D13): requested ∩ {read, write}, else read, in canonical order.
+// `knomit oauth approve --sign` signs it explicitly when the operator gives
+// no --scopes, so the signed statement always carries the scopes it grants.
+func DefaultCeiling(requested []string) []string {
+	c, _ := ceilingFor(requested, nil)
+	return c
+}
+
 func ceilingFor(requested, given []string) ([]string, error) {
 	var want []string
 	switch {
