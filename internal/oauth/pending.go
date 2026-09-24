@@ -55,6 +55,11 @@ type Pending struct {
 	Ceiling   []string // set on approval
 	DecidedBy string
 	Collected bool
+
+	// GrantsUnchanged is set by Issuer.Approve only, never stored: the
+	// subject had been granted before, so the approval wrote no grants and
+	// the token is capped by the grants the operator left in place.
+	GrantsUnchanged bool
 }
 
 // Expired reports whether an UNDECIDED request can no longer be decided.

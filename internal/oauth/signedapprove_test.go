@@ -179,6 +179,24 @@ func TestSignedApprove_ApprovesAndTheBrowserCollects(t *testing.T) {
 	}
 }
 
+// Path 2 follows R5 like every path: a subject granted before keeps its
+// grants, and the answer says so, so the CLI can name the way to widen.
+func TestSignedApprove_ReportsGrantsUnchanged(t *testing.T) {
+	f := newSignedFixture(t)
+	ctx := context.Background()
+	if err := f.grants.Grant(ctx, TokenPrincipal("laptop"), "read", "op"); err != nil {
+		t.Fatal(err)
+	}
+	code, body := f.post(t, f.sign(t, f.statement(VerbApprove), f.root.priv))
+	if code != http.StatusOK || !strings.Contains(body, `"grants_unchanged":true`) {
+		t.Fatalf("approve: %d %s", code, body)
+	}
+	set, _ := f.grants.For(ctx, TokenPrincipal("laptop"))
+	if set.Has("write") {
+		t.Fatalf("grants = %v; a signed re-approval must not add write", set)
+	}
+}
+
 func TestSignedApprove_Deny(t *testing.T) {
 	f := newSignedFixture(t)
 	code, body := f.post(t, f.sign(t, f.statement(VerbDeny), f.root.priv))

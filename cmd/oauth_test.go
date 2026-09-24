@@ -175,6 +175,30 @@ func TestOAuthCLI_ScopesAndErrors(t *testing.T) {
 	}
 }
 
+// A re-approval leaves the subject's grants as the operator left them (F19
+// 3c R5), and the CLI says so with the way to widen — otherwise an operator
+// who approved --scopes read,write would be left guessing why write fails.
+func TestOAuthCLI_ReapprovalNamesTheWayToWiden(t *testing.T) {
+	f := newOAuthCLIFixture(t)
+	ctx := context.Background()
+	c := localAPIClient(f.socket)
+	var out bytes.Buffer
+	if err := oauthApprove(ctx, c, &out, f.park(t, "read"), "laptop", nil); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "grants unchanged") {
+		t.Fatalf("a first approval writes grants: %s", out.String())
+	}
+	out.Reset()
+	if err := oauthApprove(ctx, c, &out, f.park(t, "read write"), "laptop", []string{"read", "write"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "grants unchanged; widen with `knomit grants add \"host:laptop@token\" <perm>`"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("re-approval output lacks %q:\n%s", want, out.String())
+	}
+}
+
 // Nothing listening: the error says to start the server, not a raw dial error.
 func TestOAuthCLI_NoServer(t *testing.T) {
 	c := localAPIClient(oauthLocalListenerPath(t))

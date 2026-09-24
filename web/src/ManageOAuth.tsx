@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type OAuthPending } from './api';
+import { api, type OAuthApproval, type OAuthPending } from './api';
 import { btn, card, cardLabel } from './manageStyles';
 
 // ManageOAuth is the operator's side of an OAuth login (F19 phase 3b): a
@@ -57,7 +57,7 @@ const mono: React.CSSProperties = { fontFamily: 'ui-monospace, monospace', fontS
 const dim: React.CSSProperties = { color: '#888', fontSize: 12 };
 const errText: React.CSSProperties = { color: '#f87171', fontSize: 12, marginTop: 6 };
 
-function PendingRow({ p, onDone }: { p: OAuthPending; onDone: () => void }) {
+function PendingRow({ p, onDone, onApproved }: { p: OAuthPending; onDone: () => void; onApproved: (a: OAuthApproval) => void }) {
   const [subject, setSubject] = useState('');
   const [scopes, setScopes] = useState<string[]>(() => defaultScopes(p.scopes));
   const [busy, setBusy] = useState(false);
@@ -98,7 +98,9 @@ function PendingRow({ p, onDone }: { p: OAuthPending; onDone: () => void }) {
 
       <div style={{ ...cardLabel, marginTop: 10 }}>The browser that opened the link</div>
       <div style={dim}>
-        <span style={mono}>{p.remote_addr}</span> · {p.user_agent} · {timeLeft(p.expires_at, Date.now())}
+        {/* <bdi>: a U+202E in the user agent must not reorder its neighbours (3b review N1). */}
+        <span style={mono}>{p.remote_addr}</span> · <bdi data-testid="oauth-user-agent">{p.user_agent}</bdi> ·{' '}
+        {timeLeft(p.expires_at, Date.now())}
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 12 }}>
@@ -119,7 +121,7 @@ function PendingRow({ p, onDone }: { p: OAuthPending; onDone: () => void }) {
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
         <button type="button" style={btn(!canApprove, 'primary')} disabled={!canApprove}
-          onClick={() => act(() => api.approveOAuthPending(p.id, subject.trim(), scopes))}>
+          onClick={() => act(async () => onApproved(await api.approveOAuthPending(p.id, subject.trim(), scopes)))}>
           Approve
         </button>
         <button type="button" style={btn(busy, 'danger')} disabled={busy}
@@ -135,6 +137,9 @@ function PendingRow({ p, onDone }: { p: OAuthPending; onDone: () => void }) {
 export function ManageOAuth({ onCount }: { onCount?: (n: number) => void }) {
   const [rows, setRows] = useState<OAuthPending[] | null>(null);
   const [err, setErr] = useState('');
+  // The last approval that left a known subject's grants alone: the row is
+  // gone after the reload, so the note lives here.
+  const [unchanged, setUnchanged] = useState('');
 
   const load = useCallback(() => {
     api.listOAuthPending()
@@ -162,7 +167,16 @@ export function ManageOAuth({ onCount }: { onCount?: (n: number) => void }) {
       {rows !== null && rows.length === 0 && !err && (
         <div style={{ ...dim, marginTop: 14 }}>No authorization requests are waiting.</div>
       )}
-      {rows?.map(p => <PendingRow key={p.id} p={p} onDone={load} />)}
+      {unchanged && (
+        <div data-testid="oauth-grants-unchanged" style={{ ...dim, marginTop: 10 }}>
+          Approved. host:{unchanged}@token had been granted before, so its grants were left as they are and may cap
+          this token below the scopes you checked. Widen them with{' '}
+          <span style={mono}>knomit grants add host:{unchanged}@token &lt;perm&gt;</span>.
+        </div>
+      )}
+      {rows?.map(p => (
+        <PendingRow key={p.id} p={p} onDone={load} onApproved={a => setUnchanged(a.grantsUnchanged ? a.subject : '')} />
+      ))}
     </div>
   );
 }

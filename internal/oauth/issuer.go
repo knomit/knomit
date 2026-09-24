@@ -31,6 +31,9 @@ var (
 // command (`knomit grants` can narrow them later).
 type GrantWriter interface {
 	Grant(ctx context.Context, p auth.Principal, perm auth.Permission, grantedBy string) error
+	// EverGrantedAny reports whether the principal has ANY grants row, live
+	// or revoked. Approve writes grants only when it is false.
+	EverGrantedAny(ctx context.Context, p auth.Principal) (bool, error)
 }
 
 // TokenPrincipal is the one spelling of a token subject's principal:
@@ -350,9 +353,17 @@ func (i *Issuer) Pending(ctx context.Context) ([]Pending, error) { return i.stor
 
 // Approve decides a request in favour of subject. The ceiling is scopes when
 // given (any supported permission name, never admin), else the requested
-// scopes ∩ {read, write}, else read. It writes the grants for
-// host:<subject>@token first, recorded as granted by `by`, and then the
-// decision — so a decision that loses a race leaves grants the operator
+// scopes ∩ {read, write}, else read.
+//
+// Grants are written only on the subject's FIRST approval (F19 3c R5): if
+// host:<subject>@token has ever held any grant, live or revoked, they are
+// left exactly as they are and the result says GrantsUnchanged — the
+// ceiling still caps the token, but a narrowing the operator made with
+// `knomit grants revoke` is never undone by a re-approval, whichever
+// consent path it comes from. Widening is `knomit grants add`.
+//
+// A first approval writes the grants, recorded as granted by `by`, BEFORE
+// the decision — so a decision that loses a race leaves grants the operator
 // intended anyway, never a token with nothing behind it.
 func (i *Issuer) Approve(ctx context.Context, id, subject string, scopes []string, by string) (Pending, error) {
 	if !subjectRE.MatchString(subject) {
@@ -373,9 +384,15 @@ func (i *Issuer) Approve(ctx context.Context, id, subject string, scopes []strin
 		return Pending{}, err
 	}
 	principal := TokenPrincipal(subject)
-	for _, perm := range ceiling {
-		if err := i.grants.Grant(ctx, principal, auth.Permission(perm), by); err != nil {
-			return Pending{}, err
+	granted, err := i.grants.EverGrantedAny(ctx, principal)
+	if err != nil {
+		return Pending{}, err
+	}
+	if !granted {
+		for _, perm := range ceiling {
+			if err := i.grants.Grant(ctx, principal, auth.Permission(perm), by); err != nil {
+				return Pending{}, err
+			}
 		}
 	}
 	if err := i.store.Decide(ctx, id, DecisionApproved, subject, ceiling, by); err != nil {
@@ -383,8 +400,10 @@ func (i *Issuer) Approve(ctx context.Context, id, subject string, scopes []strin
 	}
 	i.waiters.notify(id)
 	log.Info().Str("id", id).Str("principal", principal.String()).Strs("ceiling", ceiling).Str("by", by).
-		Msg("oauth: authorization request approved")
-	return i.store.GetPending(ctx, id)
+		Bool("grants_unchanged", granted).Msg("oauth: authorization request approved")
+	out, err := i.store.GetPending(ctx, id)
+	out.GrantsUnchanged = granted
+	return out, err
 }
 
 // DefaultCeiling is the ceiling an approval gets when it names no scopes

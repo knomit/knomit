@@ -33,7 +33,7 @@ const claude = (over: Partial<OAuthPending> = {}): OAuthPending => ({
 beforeEach(() => {
   vi.useFakeTimers({ now, shouldAdvanceTime: true });
   vi.mocked(api.listOAuthPending).mockResolvedValue([claude()]);
-  vi.mocked(api.approveOAuthPending).mockResolvedValue(undefined);
+  vi.mocked(api.approveOAuthPending).mockResolvedValue({ subject: 'laptop', grantsUnchanged: false });
   vi.mocked(api.denyOAuthPending).mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -102,6 +102,40 @@ describe('ManageOAuth', () => {
     fireEvent.click(approve);
     await waitFor(() => expect(api.approveOAuthPending).toHaveBeenCalledWith(claude().id, 'laptop', ['read']));
     await waitFor(() => expect(api.listOAuthPending).toHaveBeenCalledTimes(2));
+  });
+
+  it('after a re-approval, says the grants were left alone and names how to widen them (F19 3c R5)', async () => {
+    vi.mocked(api.approveOAuthPending).mockResolvedValue({ subject: 'laptop', grantsUnchanged: true });
+    vi.mocked(api.listOAuthPending).mockResolvedValueOnce([claude()]).mockResolvedValue([]);
+    render(<ManageOAuth />);
+    const r = await row();
+    fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
+    fireEvent.click(within(r).getByRole('button', { name: /approve/i }));
+    const note = await screen.findByTestId('oauth-grants-unchanged');
+    expect(note).toHaveTextContent('host:laptop@token');
+    expect(note).toHaveTextContent('knomit grants add host:laptop@token <perm>');
+  });
+
+  it('says nothing about grants after a first approval', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValueOnce([claude()]).mockResolvedValue([]);
+    render(<ManageOAuth />);
+    const r = await row();
+    fireEvent.change(within(r).getByLabelText(/subject/i), { target: { value: 'laptop' } });
+    fireEvent.click(within(r).getByRole('button', { name: /approve/i }));
+    await waitFor(() => expect(api.listOAuthPending).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTestId('oauth-grants-unchanged')).toBeNull();
+  });
+
+  // 3b review N1: React escapes markup, but a U+202E in the user agent still
+  // reorders the text around it on screen. The user agent is isolated in a
+  // <bdi> so its direction cannot leak into the address or the time left.
+  it('isolates the user agent so a bidi override cannot reorder its neighbours (3b N1)', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValue([claude({ user_agent: 'agent\u202eevil' })]);
+    render(<ManageOAuth />);
+    const r = await row();
+    const ua = within(r).getByTestId('oauth-user-agent');
+    expect(ua.tagName).toBe('BDI');
+    expect(ua.textContent).toBe('agent\u202eevil');
   });
 
   it('cannot approve with no scope checked', async () => {

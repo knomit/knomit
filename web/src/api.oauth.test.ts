@@ -60,6 +60,13 @@ describe('OAuth approval api', () => {
     expect(JSON.parse(init.body)).toEqual({ subject: 'laptop', scopes: ['read', 'write'] });
   });
 
+  it('returns whether the approval left the subject\'s grants unchanged (F19 3c R5)', async () => {
+    mockFetch(200, { id: 'p1', decision: 'approved', subject: 'laptop', grants_unchanged: true });
+    await expect(api.approveOAuthPending('p1', 'laptop', ['read'])).resolves.toEqual({ subject: 'laptop', grantsUnchanged: true });
+    mockFetch(200, { id: 'p1', decision: 'approved', subject: 'laptop' });
+    await expect(api.approveOAuthPending('p1', 'laptop', ['read'])).resolves.toEqual({ subject: 'laptop', grantsUnchanged: false });
+  });
+
   it('denies with the JSON type and the header (the gate requires both on every mutation)', async () => {
     const f = mockFetch(204, null);
     await api.denyOAuthPending('p/1');

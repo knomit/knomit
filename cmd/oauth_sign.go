@@ -255,12 +255,19 @@ func oauthDeliver(cmd *cobra.Command, src, issuerFlag string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("%q refused the statement (%d): %s", issuer, resp.StatusCode, fromIssuer(body))
 	}
-	var r struct{ ID, Decision string }
+	var r struct {
+		ID, Decision    string
+		GrantsUnchanged bool `json:"grants_unchanged"`
+	}
 	_ = json.Unmarshal(body, &r)
 	// The decision and id come from whoever answered at issuer, which for a
 	// blob is its UNSIGNED issuer field: quoted, and next to the URL it was
 	// actually posted to, so a rewritten issuer cannot pass for the instance.
 	fmt.Fprintf(cmd.OutOrStdout(), "%q answered %q for request %q\n", issuer, r.Decision, r.ID)
+	if r.GrantsUnchanged && ss.Verb == oauth.VerbApprove {
+		// The principal comes from the SIGNED statement, not the answer.
+		fmt.Fprintf(cmd.OutOrStdout(), "grants unchanged; widen with `knomit grants add %q <perm>`\n", "host:"+ss.Subject+"@token")
+	}
 	return nil
 }
 

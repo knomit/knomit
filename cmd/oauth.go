@@ -164,6 +164,8 @@ type pendingJSON struct {
 	ExpiresAt   time.Time `json:"expires_at"`
 	Subject     string    `json:"subject"`
 	Ceiling     []string  `json:"ceiling"`
+
+	GrantsUnchanged bool `json:"grants_unchanged"`
 }
 
 func oauthPending(ctx context.Context, c *http.Client, out io.Writer) error {
@@ -208,8 +210,14 @@ func oauthApprove(ctx context.Context, c *http.Client, out io.Writer, id, subjec
 	if err := localCall(ctx, c, http.MethodPost, "/oauth/pending/"+id+"/approve", req, &p); err != nil {
 		return err
 	}
+	principal := "host:" + p.Subject + "@token"
 	fmt.Fprintf(out, "approved %s: the token acts as %q with ceiling %q\n",
-		id, "host:"+p.Subject+"@token", strings.Join(p.Ceiling, " "))
+		id, principal, strings.Join(p.Ceiling, " "))
+	if p.GrantsUnchanged {
+		// The subject was granted before: its grants stand as they are and
+		// cap this token below the ceiling if they were narrowed.
+		fmt.Fprintf(out, "grants unchanged; widen with `knomit grants add %q <perm>`\n", principal)
+	}
 	return nil
 }
 
