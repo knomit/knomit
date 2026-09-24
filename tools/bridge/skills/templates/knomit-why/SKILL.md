@@ -43,7 +43,7 @@ Cross-check that referenced files still exist at HEAD — if any are gone, **fla
 ## Interpreting refs in returned facts
 
 - `src://<repo-id>/<path>@<commit>:<blob>` — source code, blob-anchored. `git cat-file blob <blob>` returns the exact bytes the fact was written about, even after a rename or delete.
-- `src://<name>/<path>[@<commit>]` — legacy source form, still accepted. Resolve by hand against that repo's checkout.
+- `src://<name>/<path>[@<commit>]` — legacy source form, kept on facts that already carry it (refused when added anew). Resolve by hand against that repo's checkout.
 - `https://…`, `http://…` — external URL
 - Anything else (no scheme, no `://`) — a local knomit fact path
 

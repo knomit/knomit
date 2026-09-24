@@ -118,7 +118,7 @@ worth checking against the corpus before you act on it.
 ## Interpreting refs in returned facts
 
 - `src://<repo-id>/<path>@<commit>:<blob>` — source code. `<repo-id>` is the first 12 hex of that repo's root commit; `<commit>` and `<blob>` are full 40-hex. Retrieve the exact bytes with `git cat-file blob <blob>` — this works even if the file was later renamed or deleted.
-- `src://<name>/<path>[@<commit>]` — legacy source form, still accepted and still resolvable by hand. Not written for new facts.
+- `src://<name>/<path>[@<commit>]` — legacy source form, kept on facts that already carry it and still resolvable by hand. Refused when added anew (knomit#249).
 - `https://…` / `http://…` — external URL.
 - No scheme — local knomit fact path.
 

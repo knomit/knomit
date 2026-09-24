@@ -97,7 +97,7 @@ func TestLearn_KbRefsStoredAsGiven(t *testing.T) {
 	// The kb:// ref names B's REAL mounted id — exactly what an agent copies out
 	// of a federated query result. The src:// ref is a non-.md external ref.
 	kbRef := federate.QualifyPath(federate.ID12(repoB.ID()), "kb/x/y/z.md") // kb://<federate.ID12(B)>/kb/x/y/z.md
-	srcRef := "src://other/path@abc123"
+	srcRef := "src://7b4887ce51d9/other/path@4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e"
 	given := []string{kbRef, srcRef}
 
 	path := learnFactVia(t, b, "seed-refs", "mission/store", "RefHolder", given)
@@ -149,10 +149,10 @@ func TestUpdate_KbRefsReplacedVerbatim(t *testing.T) {
 	)
 
 	// Start with an unrelated external ref, then replace wholesale.
-	path := learnFactVia(t, b, "seed-upd", "mission/store", "UpdHolder", []string{"src://old/ref@000000"})
+	path := learnFactVia(t, b, "seed-upd", "mission/store", "UpdHolder", []string{"src://7b4887ce51d9/old/ref@4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e"})
 
 	newKbRef := federate.QualifyPath(federate.ID12(repoB.ID()), "kb/a/b/c.md")
-	newSrcRef := "src://new/ref@def456"
+	newSrcRef := "src://7b4887ce51d9/new/ref@4154e92c8ff333435fd00c442489e855e4c3331e:36b1d45187d6a2c6ad18d591142227ad2a02a66e#L1-L2"
 	replacement := []string{newKbRef, newSrcRef}
 	updateRefsVia(t, b, path, "swap-refs", replacement)
 

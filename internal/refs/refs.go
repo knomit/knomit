@@ -126,9 +126,16 @@ func (g Gate) LocalRepoID() string { return g.localRepoID }
 // walk-back afterwards. A parameter that can never change an outcome is worse
 // than no parameter, because it reads like it is load-bearing.
 //
-// Only fact.RefLocalFact is gated. A foreign kb:// ref may name an unmounted
+// Only fact.RefLocalFact is RESOLVED. A foreign kb:// ref may name an unmounted
 // repo; a src:// ref names source objects knomit never holds; an external URL
-// is opaque. None is checkable here, so none is gated.
+// is opaque. None is resolvable here, so none is checked for existence.
+//
+// A newly added src:// ref is checked for FORM (knomit#249): it must be the full
+// src://<12-hex>/<path>@<40-hex>:<40-hex>, per fact.Ref.IsFullSource. Legacy
+// src refs a fact already carried are exempt, like every other carried ref —
+// which makes `prior` load-bearing for src refs too: a caller that passes nil
+// while carrying refs forward from existing facts will have their legacy refs
+// refused.
 //
 // Callers pass the authoritative on-disk path (which preserves the configured
 // ontology root verbatim, possibly uppercase); comparison is case-folded here
@@ -150,12 +157,32 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 	}
 	sort.Strings(sources)
 
-	var selfRefs []problem
+	var selfRefs, srcForm []problem
 	for _, from := range sources {
 		carried := g.pathSet(prior[from])
+		carriedSrc := srcSet(prior[from])
 		self := fact.ClassifyRef(from, g.localRepoID).Path
 		for _, raw := range batch[from] {
 			r := fact.ClassifyRef(raw, g.localRepoID)
+
+			// SOURCE REF FORM (#249). A src ref this write ADDS must be the
+			// full <12-hex>/<path>@<40-hex>:<40-hex> form. Anything shorter
+			// classifies as Legacy, which internal/fact's shape rule accepts
+			// unconditionally — so a placeholder in the repo id, or a dropped
+			// :blob, used to land silently.
+			//
+			// NEWLY-ADDED refs only, for the same reason as the self-ref rule
+			// below: a legacy ref a fact already carried was legal when it was
+			// written (historical-not-current), and hundreds of facts carry
+			// one. Re-judging them would make every one of those facts
+			// uneditable. Compared on the raw string: src refs are never
+			// canonicalized, so a carried one comes back byte-identical.
+			if strings.HasPrefix(raw, fact.SrcScheme) {
+				if !carriedSrc[raw] && !r.IsFullSource() {
+					srcForm = append(srcForm, problem{from, raw})
+				}
+				continue
+			}
 
 			// SELF-REFERENCE (#132) — checked FIRST, and the order is
 			// load-bearing. A self-ref is by definition in inBatch (the fact
@@ -225,26 +252,61 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 		return fmt.Errorf("%s", b.String())
 	}
 
-	if len(problems) == 0 {
+	if len(problems) == 0 && len(srcForm) == 0 {
 		return nil
 	}
 
 	// The reader is an agent that must fix the refs and retry, so name every
-	// problem at once, echo each ref exactly as it was sent (so the agent can
-	// string-match its own payload), and say what the three fixes are.
+	// problem at once — both sections in one error, one round trip — echo each
+	// ref exactly as it was sent (so the agent can string-match its own
+	// payload), and say what the fixes are.
 	var b strings.Builder
-	b.WriteString("unresolvable fact references — nothing was written:\n")
-	for _, p := range problems {
-		fmt.Fprintf(&b, "  %s cites %s, which does not exist\n", p.from, p.ref)
+	if len(srcForm) > 0 {
+		b.WriteString("source refs not in the full form — nothing was written:\n")
+		for _, p := range srcForm {
+			fmt.Fprintf(&b, "  %s cites %s\n", p.from, p.ref)
+		}
+		b.WriteString("\nA src:// ref must be src://<12-hex-repo-id>/<path>@<40-hex-commit>:<40-hex-blob>" +
+			"[#L1-L9]. Compute every part with git in the checkout you are citing — never " +
+			"type or copy one:\n" +
+			"  repo id:  git rev-list --max-parents=0 HEAD | cut -c1-12\n" +
+			"  commit:   git rev-parse HEAD\n" +
+			"  blob:     git rev-parse <commit>:<path>\n" +
+			"The older src://<name>/<path>@<commit> form is kept on facts that already " +
+			"carry it, but may not be added anew.")
 	}
-	b.WriteString("\nEither write the referenced fact in THIS SAME call (all facts in one " +
-		"call are committed together, so they may reference each other in any order, " +
-		"including circularly), write it first in an earlier call, or fix the path if " +
-		"it is a typo.\nOnly refs this write ADDS are checked; refs the fact already " +
-		"carried resolve at their own commit and are never re-judged.\nReferences to " +
-		"other repos (kb://<other-id>/…), to source (src://…), and to URLs are not " +
-		"checked and never rejected.")
+	if len(problems) > 0 {
+		if len(srcForm) > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString("unresolvable fact references — nothing was written:\n")
+		for _, p := range problems {
+			fmt.Fprintf(&b, "  %s cites %s, which does not exist\n", p.from, p.ref)
+		}
+		b.WriteString("\nEither write the referenced fact in THIS SAME call (all facts in one " +
+			"call are committed together, so they may reference each other in any order, " +
+			"including circularly), write it first in an earlier call, or fix the path if " +
+			"it is a typo.")
+	}
+	b.WriteString("\nOnly refs this write ADDS are checked; refs the fact already " +
+		"carried resolve at their own commit and are never re-judged.\nWhether a " +
+		"source ref's object exists, references to other repos (kb://<other-id>/…), " +
+		"and URLs are not checked.")
 	return fmt.Errorf("%s", b.String())
+}
+
+// srcSet indexes the src:// refs a fact already carried, by raw string.
+func srcSet(refs []string) map[string]bool {
+	var set map[string]bool
+	for _, raw := range refs {
+		if strings.HasPrefix(raw, fact.SrcScheme) {
+			if set == nil {
+				set = make(map[string]bool)
+			}
+			set[raw] = true
+		}
+	}
+	return set
 }
 
 // pathSet indexes refs by their classified local path, so a ref carried in one

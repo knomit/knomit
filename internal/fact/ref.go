@@ -65,6 +65,19 @@ type Ref struct {
 	Err    string // set only when Kind == RefMalformed
 }
 
+// IsFullSource reports whether r is a src:// ref in the full form
+// src://<12-hex>/<path>@<40-hex>:<40-hex> — the only form refs.Gate accepts
+// for a src ref a write ADDS (knomit#249). A legacy ref is not full form, and
+// neither is a new-form ref with an abbreviated or non-hex hash.
+//
+// This is a statement about SHAPE only. A well-formed hash that names no
+// object passes, because nothing here has the source repo to ask.
+func (r Ref) IsFullSource() bool {
+	return r.Kind == RefSourceCode && !r.Legacy &&
+		len(r.Commit) == gitHashLen && isLowerHex(r.Commit) &&
+		len(r.Blob) == gitHashLen && isLowerHex(r.Blob)
+}
+
 // ClassifyRef is THE answer to "what is this ref?" — the single authority the
 // write gate, the edge builder, replay, knomit_explain, the fact API, and the
 // web client all consume. Pure: no I/O, no corpus lookup, no git.
@@ -311,7 +324,7 @@ func ValidateRefs(refs []string) error {
 		"  kb/<topic>/…/<id>.md                      a fact in this repo\n"+
 		"  kb://<12-hex-repo-id>/<path>              a fact in this or another repo\n"+
 		"  src://<12-hex-repo-id>/<path>@<40-hex-commit>:<40-hex-blob>[#L1-L9]\n"+
-		"  src://<repo-name>/<path>[@<commit>]       legacy source form, still accepted\n"+
+		"  src://<repo-name>/<path>[@<commit>]       legacy source form, kept on facts that carry it (never add one)\n"+
 		"  https://… or file:///…                    external",
 		strings.Join(problems, "\n  "))
 }
