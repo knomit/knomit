@@ -335,7 +335,7 @@ func ValidateRefs(refs []string) error {
 		"  kb/<topic>/…/<id>.md                      a fact in this repo\n"+
 		"  kb://<12-hex-repo-id>/<path>              a fact in this or another repo\n"+
 		"  src://<12-hex-repo-id>/<path>@<40-hex-commit>:<40-hex-blob>[#L1-L9]\n"+
-		"  src://<repo-name>/<path>[@<commit>]       legacy source form, kept on facts that carry it (never add one)\n"+
+		"  src://<repo-name>/<path>[@<commit>]       short form: leave it where a fact has it; never add one\n"+
 		"  https://… or file:///…                    external",
 		strings.Join(problems, "\n  "))
 }

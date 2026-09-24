@@ -119,11 +119,9 @@ file. The blob is what makes the citation durable: `git cat-file blob <blob>`
 returns the exact bytes even after the file is renamed or deleted, which a
 commit-only ref cannot.
 
-The older `src://<name>/<path>@<commit>` form is kept on facts that already
-carry it and is never rewritten — don't "fix" existing refs in that form. But a
-src ref you ADD must be the full form above: knomit refuses a newly added legacy
-ref, a missing `:<blob>`, or an abbreviated or placeholder hash (knomit#249). It
-cannot tell an invented 40-hex hash from a real one, so compute it; never type it.
+A `src://` ref you add is `src://<repo-id>/<path>@<commit>:<blob>`, all three
+values computed with the commands above, never typed or abbreviated. Leave refs
+already on a fact as they are.
 
 A `kb/…` ref must resolve when the call lands, or knomit REJECTS the whole call.
 All facts in ONE knomit_learn call are committed together, so facts written in

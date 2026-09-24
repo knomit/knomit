@@ -274,8 +274,7 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			"  repo id:  git rev-list --max-parents=0 HEAD | cut -c1-12\n" +
 			"  commit:   git rev-parse HEAD\n" +
 			"  blob:     git rev-parse <commit>:<path>\n" +
-			"The older src://<name>/<path>@<commit> form is kept on facts that already " +
-			"carry it, but may not be added anew.")
+			"Leave src refs already on a fact as they are.")
 		sections = append(sections, b.String())
 	}
 	if len(problems) > 0 {

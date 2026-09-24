@@ -92,9 +92,8 @@ Pick the 3–5 facts whose specific claims (thresholds, ordering, struct shapes,
   `git rev-parse HEAD:<path>`. Equal means the fact is still current; different
   means the file changed, and `git diff <blob> HEAD:<path>` shows exactly what.
   If `<path>` is gone at HEAD, `git log --find-object=<blob>` locates where it went.
-- If the ref carries only a commit (the legacy form): `git show <commit>:<path>`,
-  and note this fails outright if the file did not exist at that commit — one of
-  the failure modes the blob form removes.
+- If the ref carries only a commit: `git show <commit>:<path>`. This fails
+  outright if the file did not exist at that commit.
 - If it has only external (`https://`) refs: sanity-check via the actual source file before relying.
 - If it has no refs at all: lower your trust accordingly; prefer reading the relevant code directly.
 
@@ -118,8 +117,8 @@ worth checking against the corpus before you act on it.
 ## Interpreting refs in returned facts
 
 - `src://<repo-id>/<path>@<commit>:<blob>` — source code. `<repo-id>` is the first 12 hex of that repo's root commit; `<commit>` and `<blob>` are full 40-hex. Retrieve the exact bytes with `git cat-file blob <blob>` — this works even if the file was later renamed or deleted.
-- `src://<name>/<path>[@<commit>]` — legacy source form, kept on facts that already carry it and still resolvable by hand. Refused when added anew (knomit#249).
+- `src://<name>/<path>[@<commit>]` — the short form, with a repo name and no blob. Resolve by hand against that repo's checkout.
 - `https://…` / `http://…` — external URL.
 - No scheme — local knomit fact path.
 
-For a legacy `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surface it as "in repo `<name>`" rather than trying to open locally. For the current form, `<repo-id>` is a root commit: `git rev-list --max-parents=0 HEAD | cut -c1-12` in a candidate checkout tells you whether it is the right repo.
+For a `src://<name>/…` ref whose `<name>` you cannot map to a checkout, surface it as "in repo `<name>`" rather than trying to open the path locally. For the current form, `<repo-id>` is a root commit: `git rev-list --max-parents=0 HEAD | cut -c1-12` in a candidate checkout tells you whether it is the right repo.

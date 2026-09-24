@@ -78,3 +78,39 @@ func ownRepo(id string, roots []string) bool {
 	}
 	return false
 }
+
+// issueRef matches an issue or PR reference: "knomit#249", "#236", "(#98)".
+var issueRef = regexp.MustCompile(`knomit#\d+|(^|[^\w&/])#\d{2,}\b`)
+
+// Skill templates are instructions to an agent, not a changelog. An issue
+// number tells the reader nothing it can act on, and it invites the history
+// around it ("since #249 …", "before #236 …") into text whose only job is to
+// say what to do now. Code fences are exempt: an example may quote real output.
+func TestTemplates_CarryNoIssueReferences(t *testing.T) {
+	err := fs.WalkDir(FS, Root, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil || d.IsDir() {
+			return werr
+		}
+		body, rerr := fs.ReadFile(FS, p)
+		if rerr != nil {
+			return rerr
+		}
+		inFence := false
+		for i, line := range strings.Split(string(body), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "```") {
+				inFence = !inFence
+				continue
+			}
+			if inFence {
+				continue
+			}
+			if m := issueRef.FindString(line); m != "" {
+				t.Errorf("%s:%d: issue reference %q in agent-facing text: %s", p, i+1, strings.TrimSpace(m), line)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

@@ -70,7 +70,7 @@ func TestValidateRefs_ErrorIsActionable(t *testing.T) {
 		"got 7 chars",                          // says how far off the commit is
 		"git rev-parse ca1c272",                // the remedy, with the real value
 		"git rev-parse <commit>:internal/x.go", // the remedy for the blob
-		"kept on facts that carry it",          // do not rewrite legacy refs
+		"leave it where a fact has it",         // do not rewrite short-form refs
 		"never add one",                        // #249: refs.Gate refuses a new one
 	} {
 		if !strings.Contains(msg, want) {
