@@ -415,6 +415,10 @@ func applyDiscoveredProposals(
 		// bridge proposal is a NEW claim over facts that stay alive — so there
 		// is no retraction list. A rejection warns and skips this one proposal,
 		// matching every other gate in this loop.
+		// prior stays nil DELIBERATELY: a discovered fact is a new claim that
+		// CITES its seeds and inherits none of their refs, so every ref here
+		// is authored now (knomit#249). Contrast the prune-merge in
+		// decision.go, which replaces its members and passes their refs.
 		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), citedSeeds, nil)
 		if gerr != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("discovery %s rejected: %v", f.Path(), gerr)})

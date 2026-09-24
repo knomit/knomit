@@ -17,6 +17,7 @@ import (
 	"knomit/internal/oauth"
 	"knomit/internal/pki"
 	"knomit/internal/pki/pkitest"
+	"knomit/test/testenv"
 )
 
 // [oauth] off (the default): no OAuth router exists at all, so `knomit
@@ -25,7 +26,7 @@ import (
 func TestApp_OAuthWiredOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Home = t.TempDir()
-	a, err := New(context.Background(), cfg, Options{APIOnly: true})
+	a, err := New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestApp_OAuthWiredOnlyWhenConfigured(t *testing.T) {
 	cfg = config.Defaults()
 	cfg.Home = t.TempDir()
 	cfg.OAuth.Issuer, cfg.OAuth.Addr = "http://127.0.0.1:19280", "127.0.0.1:0"
-	a, err = New(context.Background(), cfg, Options{APIOnly: true})
+	a, err = New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot with [oauth]: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestApp_NoOAuthBuildsNoIssuer(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Home = t.TempDir()
 	cfg.OAuth.Issuer, cfg.OAuth.Addr = "http://127.0.0.1:19280", "127.0.0.1:0"
-	a, err := New(context.Background(), cfg, Options{APIOnly: true, NoOAuth: true})
+	a, err := New(context.Background(), cfg, Options{APIOnly: true, NoOAuth: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestApp_SignedApprovalWired(t *testing.T) {
 	cfg.Home = t.TempDir()
 	cfg.TLS.Dir = filepath.Join(cfg.Home, "pki")
 	cfg.OAuth.Issuer, cfg.OAuth.Addr = "http://127.0.0.1:19280", "127.0.0.1:0"
-	a, err := New(context.Background(), cfg, Options{APIOnly: true})
+	a, err := New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}

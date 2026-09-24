@@ -133,6 +133,15 @@ func ApplyPruneDecisions(ctx context.Context,
 	// mergeGate is the one gate the merge outputs below go through, built once
 	// for the whole call.
 	mergeGate := refs.New(localRepoID, refs.FromFactQuery(idx, agentBranch))
+	// Each merge's prior: its members' refs, SNAPSHOTTED NOW, before the
+	// decision loop's retracts and the earlier merges below delete members on
+	// this branch. Read at the tip later, a member retracted or consumed
+	// earlier in this same call contributes nothing, and a legacy ref the judge
+	// kept from it reads as newly added (knomit#249 review).
+	memberPrior := make([][]string, len(merges))
+	for i, m := range merges {
+		memberPrior[i] = memberRefs(ctx, gs, agentBranch, m.Paths)
+	}
 	log.Info().Int("decisions", len(decisions)).Int("merges", len(merges)).Msg("prune: applying results")
 
 	// Apply decisions.
@@ -185,7 +194,7 @@ func ApplyPruneDecisions(ctx context.Context,
 	}
 
 	// Apply merges.
-	for _, m := range merges {
+	for i, m := range merges {
 		mf := m.Merged
 		if err := validateOutputPath(mf.Path, ontologyRoot); err != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge rejected: %v", err)})
@@ -264,11 +273,18 @@ func ApplyPruneDecisions(ctx context.Context,
 		merged.Motifs = fact.DropInvalidMotifs(mf.Motifs)
 		merged.EvidenceWeight = weight
 
-		// Same gate as every other write path. The merged fact is NEW and its
-		// refs are wholly LLM-authored, so there is nothing carried forward to
-		// exempt. Citing the facts it subsumes (deleted just below) resolves:
-		// they are live at the pre-write head and stay reachable by walk-back.
-		canonRefs, _, gerr := mergeGate.Apply(ctx, merged.Path(), mf.Refs, nil)
+		// Same gate as every other write path. Citing the facts it subsumes
+		// (deleted just below) resolves: they are live at the pre-write head
+		// and stay reachable by walk-back.
+		//
+		// prior is the union of the MEMBERS' refs (knomit#249). The merged
+		// fact replaces them, and the refs the judge carries over from them
+		// were accepted when they were written, so they resolved at their own
+		// commit and are not re-judged (historical-not-current). A ref no
+		// member carried is the judge's own and is checked like any other.
+		// Passing nil made every carried legacy src ref read as new, and the
+		// whole merge was warn-and-skipped.
+		canonRefs, _, gerr := mergeGate.Apply(ctx, merged.Path(), mf.Refs, memberPrior[i])
 		if gerr != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge %s rejected: %v", merged.Path(), gerr)})
 			continue
@@ -447,6 +463,11 @@ func ApplyDistillDecisions(ctx context.Context,
 		// A rejection warns and skips this one fact, matching how every other
 		// validation failure here behaves — one bad proposal must not abort a
 		// review that produced good ones.
+		//
+		// prior stays nil DELIBERATELY — do not "fix" it to the cited facts'
+		// refs the way the prune-merge above does. A distilled fact is a NEW
+		// claim that CITES its sources; it does not replace them and inherits
+		// none of their refs. Every ref here is authored now (knomit#249).
 		canonRefs, _, gerr := gate.Apply(ctx, f.Path(), df.Refs, nil)
 		if gerr != nil {
 			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("distill %s rejected: %v", f.Path(), gerr)})
@@ -724,4 +745,27 @@ func splitTopicPath(topicPath, ontologyRoot string) (topic, category string, err
 		return "", "", fmt.Errorf("topic_path %q must contain both topic and category (e.g. \"meta/reasoning\")", topicPath)
 	}
 	return parts[0], parts[1], nil
+}
+
+// memberRefs is the union of the refs the facts at paths carry on branch: the
+// prior for a prune-merge that replaces them. ApplyPruneDecisions calls it
+// before deleting anything. A member that cannot be read or parsed contributes
+// nothing, which errs strict — its refs, if the judge kept them, are then
+// judged as new rather than waved through.
+func memberRefs(ctx context.Context, gs store.FactIndex, branch string, paths []string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, p := range paths {
+		f, ok := readFactAt(ctx, gs, branch, p)
+		if !ok {
+			continue
+		}
+		for _, r := range f.Refs {
+			if !seen[r] {
+				seen[r] = true
+				out = append(out, r)
+			}
+		}
+	}
+	return out
 }

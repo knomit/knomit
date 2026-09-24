@@ -321,10 +321,15 @@ jobs:
       #
       # They are here rather than in slow-tests because they are cheap even on
       # the slow platform: 93s for all of them on Windows, of which cmd is 57s.
-      - name: Bridge, platform + cmd tests
+      #
+      # internal/app is the boot wiring (app.New) and was in NO list here from
+      # PR #243 to PR #284: its wiring tests ran only in race.yml, post-merge,
+      # where they failed for a week on an ONNX dlopen that no PR job could
+      # see. They boot through Options.Embedder now, so no model and no ORT.
+      - name: Bridge, platform, app + cmd tests
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test ./tools/bridge/... ./internal/platform/... ./cmd/
+          CGO_ENABLED=1 go test ./tools/bridge/... ./internal/platform/... ./internal/app/ ./cmd/
 
       # Origin-sync fault matrix: build-tagged contract cells drive the real
       # product clone/sync/push path over an in-process fault-injecting git
