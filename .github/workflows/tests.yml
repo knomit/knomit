@@ -321,7 +321,7 @@ jobs:
       # the slow platform: 93s for all of them on Windows, of which cmd is 57s.
       #
       # internal/app is the boot wiring (app.New) and was in NO list here from
-      # PR #243 to PR #279: its wiring tests ran only in race.yml, post-merge,
+      # PR #243 to PR #284: its wiring tests ran only in race.yml, post-merge,
       # where they failed for a week on an ONNX dlopen that no PR job could
       # see. They boot through Options.Embedder now, so no model and no ORT.
       - name: Bridge, platform, app + cmd tests
