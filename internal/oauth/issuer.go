@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -46,6 +47,14 @@ type Options struct {
 	// WaitTimeout is how long one /wait long-poll parks before answering
 	// "still waiting" (the page then polls again). Zero means 30 s.
 	WaitTimeout time.Duration
+	// InstanceFingerprint is this instance's pki.Fingerprint, which a
+	// master-key approval statement must name (phase 3b, Task 3).
+	InstanceFingerprint string
+	// FleetRoot returns the fleet root's public key, read fresh on every
+	// signed approval so a root installed or swapped after boot is used at
+	// once; an fs.ErrNotExist error means "not enrolled". nil disables
+	// signed approval (ErrNoFleetRoot).
+	FleetRoot func() (ed25519.PublicKey, error)
 }
 
 // Issuer is the authorization server: the public OAuth routes, and the
@@ -58,6 +67,9 @@ type Issuer struct {
 	grants      GrantWriter
 	waitTimeout time.Duration
 	waiters     waiters
+	instanceFP  string
+	fleetRoot   func() (ed25519.PublicKey, error)
+	replays     *replayTable
 
 	// beforeRegister, when set (tests only), runs in /wait between the first
 	// read and the waiter registration — the window the re-read closes.
@@ -70,14 +82,16 @@ func NewIssuer(o Options) *Issuer {
 		wt = 30 * time.Second
 	}
 	return &Issuer{issuer: o.Issuer, store: o.Store, clients: o.Clients, grants: o.Grants, waitTimeout: wt,
-		waiters: waiters{m: map[string]*waiter{}}}
+		waiters: waiters{m: map[string]*waiter{}}, instanceFP: o.InstanceFingerprint, fleetRoot: o.FleetRoot,
+		replays: newReplayTable(replayTableMax)}
 }
 
 // Name returns the issuer URL.
 func (i *Issuer) Name() string { return i.issuer }
 
 // Routes serves the PUBLIC surface: both discovery documents, authorize,
-// wait, a waiting request's description, token and revoke. It carries no authentication by construction —
+// wait, a waiting request's description, a master-key signed decision, token
+// and revoke. It carries no authentication by construction —
 // the OAuth listener mounts it beside, never under, the bearer middleware.
 //
 // /.well-known/ is dispatched before the ServeMux, whose path cleaning would
@@ -89,6 +103,7 @@ func (i *Issuer) Routes() http.Handler {
 	mux.HandleFunc("GET /oauth/authorize", i.authorize)
 	mux.HandleFunc("GET /oauth/authorize/{id}/wait", i.wait)
 	mux.HandleFunc("GET /oauth/pending/{id}", i.describe)
+	mux.HandleFunc("POST /oauth/approve", i.signedApprove)
 	mux.HandleFunc("POST /oauth/token", i.token)
 	mux.HandleFunc("POST /oauth/revoke", i.revoke)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

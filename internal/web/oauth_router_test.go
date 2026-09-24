@@ -287,6 +287,16 @@ func TestOAuthListener_PublicRoutesNeedNoToken(t *testing.T) {
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unsupported_grant_type") {
 		t.Fatalf("token endpoint: %d %s; want the OAuth error, not an auth refusal", rec.Code, rec.Body.String())
 	}
+	// Phase 3b: a waiting request's description and the master-key signed
+	// decision are public too — their answers are the issuer's own, not 401.
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/oauth/pending/"+strings.Repeat("A", 43), nil))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no such waiting") {
+		t.Fatalf("describe: %d %s; want the issuer's 404", rec.Code, rec.Body.String())
+	}
+	rec = serve(h, httptest.NewRequest(http.MethodPost, "/oauth/approve", strings.NewReader("{")))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "malformed approval statement") {
+		t.Fatalf("signed approve: %d %s; want the issuer's 400", rec.Code, rec.Body.String())
+	}
 }
 
 // Only the API/MCP tree and the public OAuth routes live on this listener:

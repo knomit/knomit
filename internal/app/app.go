@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net/http"
@@ -305,11 +306,35 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// router gains the operator's approval endpoints (local principals only).
 	if cfg.OAuth.Enabled() && !opts.NoOAuth {
 		store := oauth.NewStore(a.manager.ControlDB(), cfg.OAuth.AccessTTL, cfg.OAuth.RefreshTTL)
+		// Consent path 2 (phase 3b): a master-key statement must name THIS
+		// instance's pki fingerprint and verify against the fleet root in
+		// [tls].dir, read per statement so an instance enrolled after boot
+		// verifies at once. A missing root.crt is fs.ErrNotExist, which the
+		// issuer answers as "not enrolled".
+		instanceFP := ""
+		if _, pub, err := pki.LoadSigner(keyPath); err == nil {
+			instanceFP = pki.Fingerprint(pub)
+		} else {
+			log.Warn().Err(err).Msg("oauth: cannot read the instance key; master-key approvals will be refused")
+		}
+		rootPath := filepath.Join(cfg.TLS.Dir, pki.RootCertFile)
 		a.server.OAuthIssuer = oauth.NewIssuer(oauth.Options{
-			Issuer:  cfg.OAuth.Issuer,
-			Store:   store,
-			Clients: oauth.NewResolver(cfg.OAuth.EffectiveClients()),
-			Grants:  sqlGrants,
+			Issuer:              cfg.OAuth.Issuer,
+			Store:               store,
+			Clients:             oauth.NewResolver(cfg.OAuth.EffectiveClients()),
+			Grants:              sqlGrants,
+			InstanceFingerprint: instanceFP,
+			FleetRoot: func() (ed25519.PublicKey, error) {
+				c, err := pki.LoadRootCert(rootPath)
+				if err != nil {
+					return nil, err
+				}
+				pub, ok := c.PublicKey.(ed25519.PublicKey)
+				if !ok {
+					return nil, fmt.Errorf("fleet root %s is not an Ed25519 key", rootPath)
+				}
+				return pub, nil
+			},
 		})
 		a.server.BearerVerifier = oauth.NewVerifier(cfg.OAuth.Issuer, store)
 	}
