@@ -710,6 +710,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     }
     if (effectiveSort !== 'recent') return;
     if (loadingRef.current || facts.length >= total) return;
+    // Same double-fire window as the lens branch above: set it synchronously.
+    loadingRef.current = true;
     setLoading(true);
     api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, facts.length, {
       types: types.length ? types : undefined,
@@ -736,11 +738,20 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   // `0 >= 0` and silently no-op'd, so the page was never fetched. One observer
   // for the life of the list, always calling the freshest loadMore, removes the
   // generation entirely.
-  // Mirrored in an effect rather than during render (unlike loadingRef above,
-  // which the loadMore guard has to read synchronously): an IntersectionObserver
-  // callback only ever fires after a commit, so post-commit freshness is enough.
+  // Mirrored in a LAYOUT effect, which runs inside the commit. A passive
+  // effect is not enough: React can flush passive effects a whole Scheduler
+  // task after the commit (longer under load), and an IntersectionObserver
+  // callback can fire in that gap. By then loadingRef/lensLoadingRef (mirrored
+  // during render) already read "not loading", so the PREVIOUS loadMore passed
+  // every guard with a stale row count: it fetched the offset it had just
+  // fetched (rows appended twice), or, after a scope change, still held the old
+  // scope's exhausted flag and silently refused to page (knomit#270).
+  // This relies on SYNCHRONOUS (blocking-lane) rendering of paging updates: a
+  // paging state update wrapped in startTransition/useTransition could yield
+  // after the render-phase ref writes and before this commit, reopening the
+  // gap. web/src uses neither today; keep it that way here or revisit this.
   const loadMoreRef = useRef(loadMore);
-  useEffect(() => { loadMoreRef.current = loadMore; });
+  useLayoutEffect(() => { loadMoreRef.current = loadMore; });
 
   useEffect(() => {
     if (!paged) return;

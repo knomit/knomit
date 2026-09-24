@@ -237,13 +237,25 @@ describe('RepoManager', () => {
   it('releases the selection when you scroll under your own steam', async () => {
     render(<RepoManager {...baseProps} />);
     await selectRepo();
-    fireEvent.click(await screen.findByTestId('toc-danger'));
-    expect(screen.getByTestId('toc-danger')).toHaveAttribute('aria-current', 'true');
+    // NOT the last section. jsdom has no layout (every scroll metric is 0), so
+    // SettingsPage's scroll-spy always decides "scrolled to the end" and spies
+    // the LAST block, which here is danger. Once its first frame has run,
+    // releasing a pin on danger leaves danger current by the spy's own account.
+    // A danger-pinned version of this test could only pass by beating that
+    // frame, so under load it flaked (knomit#270). Pin a middle section instead.
+    fireEvent.click(await screen.findByTestId('toc-index'));
+    expect(screen.getByTestId('toc-index')).toHaveAttribute('aria-current', 'true');
+    // Let the spy's first frame land, so the release is judged against the
+    // spy's settled answer every run, not only when the runner is slow.
+    await act(async () => { await new Promise(r => requestAnimationFrame(() => r(undefined))); });
+    // Still pinned after the spy has settled, so what clears it below is the
+    // wheel and nothing else.
+    expect(screen.getByTestId('toc-index')).toHaveAttribute('aria-current', 'true');
 
     // A wheel is an instruction too — the pin holds against the smooth scroll
     // it triggered itself, not against the reader taking over.
     fireEvent.wheel(window);
-    await waitFor(() => expect(screen.getByTestId('toc-danger')).not.toHaveAttribute('aria-current'));
+    await waitFor(() => expect(screen.getByTestId('toc-index')).not.toHaveAttribute('aria-current'));
   });
 
   // With zero repositories the create form is the FALLBACK selection, not

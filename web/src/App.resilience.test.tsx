@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { uninstallFakeEventSource } from './testEventSource';
 
 // P1.7 evidence + resilience tests for the App shell:
 //   1. a diagnostic line costs ZERO panel renders;
@@ -159,7 +160,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  // Restore the shared baseline, never delete it: this afterEach runs before
+  // test-setup.ts's cleanup() (vitest "stack" hook order), see
+  // uninstallFakeEventSource.
+  uninstallFakeEventSource();
   errorSpy.mockRestore();
 });
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { uninstallFakeEventSource } from './testEventSource';
 
 // Zero repos is an ordinary state, not an error: a fresh install creates none,
 // and the last repo can be archived. The empty screen must therefore be a
@@ -69,7 +70,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  // Restore the shared baseline, never delete it: this afterEach runs before
+  // test-setup.ts's cleanup() (vitest "stack" hook order), see
+  // uninstallFakeEventSource.
+  uninstallFakeEventSource();
 });
 
 describe('the zero-repo screen', () => {

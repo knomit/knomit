@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, act } from '@testing-library/react';
 import App from './App';
 import { FakeEventSource, installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 import { setBootPollIntervalForTests } from './bootStatus';
@@ -85,7 +85,16 @@ function rememberRepo(name: string) {
 
 describe('App boot', () => {
   beforeEach(() => { installFakeEventSource(); localStorage.clear(); });
-  afterEach(() => { uninstallFakeEventSource(); vi.clearAllMocks(); localStorage.clear(); });
+  afterEach(() => {
+    // Unmount FIRST. vitest runs afterEach hooks in "stack" order (its
+    // sequence.hooks default), so the cleanup() test-setup.ts registers runs
+    // AFTER this one. Without this call the App is still mounted while the fake
+    // EventSource is removed and the mocks are cleared: a passive effect still
+    // pending from the test's last commit then runs against the missing global,
+    // and the half-torn-down App's later calls land in the next test (#270).
+    cleanup();
+    uninstallFakeEventSource(); vi.clearAllMocks(); localStorage.clear();
+  });
 
   it('fires getRepo for the remembered repo BEFORE the repo list resolves', async () => {
     const api = await primeApi([repoRow('alpha')]);
@@ -210,6 +219,10 @@ describe('App boot', () => {
       });
     });
     afterEach(() => {
+      // This hook runs BEFORE the file-level one (stack order), so it too would
+      // otherwise restore the poll and delete the boot globals under a mounted
+      // App. cleanup() is idempotent; the later calls are no-ops.
+      cleanup();
       restorePoll();
       delete (window as Window & { __KNOMIT_BOOTING__?: boolean }).__KNOMIT_BOOTING__;
       delete (window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__;
@@ -231,6 +244,9 @@ describe('App boot', () => {
 
     it('adopts the reported API base and continues the boot, with no reload', async () => {
       const api = await primeApi([repoRow('alpha')]);
+      // The boot runs to completion here, and completing it reads the repo's
+      // details; unstubbed, that effect throws after the test has asserted.
+      api.getRepo.mockResolvedValue({ name: 'alpha', read_branch: 'machine/test', branch: EMBEDDED });
       statuses = [
         { ready: false, phase: 'downloading-models' },
         { ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' },
@@ -244,6 +260,49 @@ describe('App boot', () => {
       expect((window as Window & { __KNOMIT_API_BASE__?: string }).__KNOMIT_API_BASE__)
         .toBe('http://127.0.0.1:54321');
       await waitFor(() => expect(screen.queryByTestId('boot-screen')).toBeNull());
+      // End on the branch event stream being constructed, not on the commit
+      // that drops the boot screen: that commit's own effects are still pending
+      // when it lands (#270). Construction is the settled point for the boot;
+      // FakeEventSource then emits open/ready in a queued microtask, which
+      // this does not wait for and does not need to.
+      await waitFor(() => expect(eventSourceURLs().some((u) => u.includes('/branches/'))).toBe(true));
+    });
+
+    // knomit#270. A test that ends on the commit that drops the boot screen
+    // leaves that commit's passive effects (the SSE stream among them) still
+    // pending when teardown starts. That is what a loaded runner did to
+    // "adopts the reported API base", and it is forced here: the promise
+    // resolves at the commit itself, before React's passive flush. Teardown
+    // must unmount BEFORE it removes the fake EventSource or clears mocks, or
+    // the effect runs against a missing global and the half-torn-down App's
+    // later calls leak into the next test (which is why this one sits directly
+    // before "lets NOTHING leave the page").
+    it('tears down cleanly when a test ends at the commit that drops the boot screen', async () => {
+      const api = await primeApi([repoRow('alpha')]);
+      api.getRepo.mockResolvedValue({ name: 'alpha', read_branch: 'machine/test', branch: EMBEDDED });
+      statuses = [
+        { ready: false, phase: 'downloading-models' },
+        { ready: true, phase: 'ready', api_base: 'http://127.0.0.1:54321' },
+      ];
+      let sawBootScreen = false;
+      const bootScreenGone = new Promise<void>((resolve, reject) => {
+        const mo = new MutationObserver(() => {
+          const boot = document.querySelector('[data-testid="boot-screen"]');
+          if (boot) sawBootScreen = true;
+          if (sawBootScreen && !boot) { clearTimeout(timer); mo.disconnect(); resolve(); }
+        });
+        mo.observe(document.body, { childList: true, subtree: true });
+        // Fail, rather than hang to vitest's own timeout, if the boot screen
+        // never comes and goes.
+        const timer = setTimeout(() => {
+          mo.disconnect();
+          reject(new Error(`boot screen never ${sawBootScreen ? 'dropped' : 'appeared'}`));
+        }, 2000);
+      });
+      render(<App />);
+      await bootScreenGone;
+      // Nothing to assert here: the test's subject is the TEARDOWN that
+      // follows, which fails this test if it throws.
     });
 
     // THE CLASS, not the three instances. Gating api.repos was not enough: a

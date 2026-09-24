@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App from './App';
-import { installFakeEventSource } from './testEventSource';
+import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
 
 // Manage is a MODE, not a dialog. These pin the three claims that distinguish
 // the two, because each was a deliberate design call and each is easy to undo
@@ -91,7 +91,10 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+  // Restore the shared baseline, never delete it: this afterEach runs before
+  // test-setup.ts's cleanup() (vitest "stack" hook order), see
+  // uninstallFakeEventSource.
+  uninstallFakeEventSource();
 });
 
 describe('Manage as a mode', () => {
