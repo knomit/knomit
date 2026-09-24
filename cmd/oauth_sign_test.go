@@ -254,3 +254,75 @@ func TestOAuthSigned_Delivers(t *testing.T) {
 		t.Fatalf("--signed -: %v %s", err, out)
 	}
 }
+
+// Review B1 (3b gate): every byte the CLI receives from an issuer is
+// attacker-chosen in path 2's threat model — the issuer URL reaches the
+// operator from whoever relays the request, and --signed posts to the
+// UNSIGNED `issuer` field of a blob anyone who carried it can rewrite — so
+// none of it reaches the master-key machine's terminal unescaped: not in an
+// error (cobra prints it to stderr), not on success. These are the gate
+// reviewer's probes, adopted; they were red at 71cf5353.
+const hostileBody = "no such request\x1b[8m\x1b]0;pwned\x07 ‮"
+
+func assertInert(t *testing.T, what, s string) {
+	t.Helper()
+	if strings.ContainsRune(s, 0x1b) || strings.ContainsRune(s, 0x07) || strings.ContainsRune(s, '‮') {
+		t.Errorf("raw control/bidi bytes from the issuer reached %s: %q", what, s)
+	}
+}
+
+func TestOAuthSign_IssuerErrorBodyIsEscaped(t *testing.T) {
+	dir, passFile, fp := signSetup(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(hostileBody))
+	}))
+	defer srv.Close()
+	stdout, stderr, err := runSplit(t, "", "oauth", "approve", signID, "--sign", srv.URL, "--dir", dir,
+		"--instance", fp, "--as", "laptop", "--passphrase-file", passFile, "--yes")
+	if err == nil {
+		t.Fatal("want an error for a 404 description")
+	}
+	assertInert(t, "the error", err.Error())
+	assertInert(t, "stderr", stderr)
+	assertInert(t, "stdout", stdout)
+	if !strings.Contains(err.Error(), `\x1b[8m`) {
+		t.Errorf("the body should still be shown, escaped: %q", err.Error())
+	}
+}
+
+func TestOAuthSigned_IssuerErrorBodyIsEscaped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte("refused\x1b[8m"))
+	}))
+	defer srv.Close()
+	blob := `{"verb":"deny","instance":"` + strings.Repeat("a", 64) + `","id":"` + signID + `","digest":"` + strings.Repeat("b", 64) + `","expires":1,"signature":"x","issuer":"` + srv.URL + `"}`
+	stdout, stderr, err := runSplit(t, blob, "oauth", "approve", "--signed", "-")
+	if err == nil {
+		t.Fatal("want an error for a 409")
+	}
+	assertInert(t, "the error", err.Error())
+	assertInert(t, "stderr", stderr)
+	assertInert(t, "stdout", stdout)
+}
+
+// On success the decision and id also come from the issuer; a rewritten
+// `issuer` could otherwise print anything, including a fake "approved". The
+// CLI quotes them and names the URL it actually posted to.
+func TestOAuthSigned_SuccessOutputIsEscapedAndNamesTheIssuer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"x\u001b[8m","decision":"approved‮"}`))
+	}))
+	defer srv.Close()
+	blob := `{"verb":"deny","instance":"` + strings.Repeat("a", 64) + `","id":"` + signID + `","digest":"` + strings.Repeat("b", 64) + `","expires":1,"signature":"x","issuer":"` + srv.URL + `"}`
+	stdout, stderr, err := runSplit(t, blob, "oauth", "approve", "--signed", "-")
+	if err != nil {
+		t.Fatalf("delivery: %v", err)
+	}
+	assertInert(t, "stdout", stdout)
+	assertInert(t, "stderr", stderr)
+	if !strings.Contains(stdout, srv.URL) {
+		t.Errorf("stdout does not name the issuer it posted to: %q", stdout)
+	}
+}

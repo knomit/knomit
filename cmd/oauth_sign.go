@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -71,7 +72,7 @@ func oauthSign(cmd *cobra.Command, id string, o signOpts) error {
 	digest := oauth.RequestDigest(oauth.Pending{ClientID: d.ClientID, ClientName: d.ClientName,
 		RedirectURI: d.RedirectURI, Resource: d.Resource, Scopes: d.Scopes})
 	if digest != d.Digest || d.ID != id {
-		return fmt.Errorf("the description from %s is inconsistent (its digest does not cover its own fields); not signing", issuer)
+		return fmt.Errorf("the description from %q is inconsistent (its digest does not cover its own fields); not signing", issuer)
 	}
 
 	stmt := oauth.ApprovalStatement{Verb: o.verb, Instance: o.instance, ID: id, Digest: digest,
@@ -128,7 +129,7 @@ func printDescription(w io.Writer, d oauth.Description, s oauth.ApprovalStatemen
 	if u, err := url.Parse(d.RedirectURI); err == nil && u.Host != "" {
 		redirectHost = u.Host
 	}
-	fmt.Fprintf(w, "About to sign: %s request %s on instance %s (%s…)\n", strings.ToUpper(s.Verb), d.ID, host, s.Instance[:8])
+	fmt.Fprintf(w, "About to sign: %s request %q on instance %q (%s…)\n", strings.ToUpper(s.Verb), d.ID, host, s.Instance[:8])
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(tw, "  code goes to\t%q\n", redirectHost)
 	fmt.Fprintf(tw, "  redirect\t%q\n", d.RedirectURI)
@@ -149,16 +150,16 @@ func fetchDescription(ctx context.Context, issuer, id string) (oauth.Description
 	}
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
-		return oauth.Description{}, fmt.Errorf("fetch the request's description: %w", err)
+		return oauth.Description{}, fmt.Errorf("fetch the request's description from %q: %w", issuer, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
-		return oauth.Description{}, fmt.Errorf("%s answered %d for request %s: %s", issuer, resp.StatusCode, id, strings.TrimSpace(string(body)))
+		return oauth.Description{}, fmt.Errorf("%q answered %d for request %q: %s", issuer, resp.StatusCode, id, fromIssuer(body))
 	}
 	var d oauth.Description
 	if err := json.Unmarshal(body, &d); err != nil {
-		return oauth.Description{}, fmt.Errorf("the description from %s is not JSON: %w", issuer, err)
+		return oauth.Description{}, fmt.Errorf("the description from %q is not JSON: %w", issuer, err)
 	}
 	return d, nil
 }
@@ -247,15 +248,34 @@ func oauthDeliver(cmd *cobra.Command, src, issuerFlag string) error {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
-		return fmt.Errorf("deliver to %s: %w", issuer, err)
+		return fmt.Errorf("deliver to %q: %w", issuer, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s refused the statement (%d): %s", issuer, resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("%q refused the statement (%d): %s", issuer, resp.StatusCode, fromIssuer(body))
 	}
 	var r struct{ ID, Decision string }
 	_ = json.Unmarshal(body, &r)
-	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", r.Decision, r.ID)
+	// The decision and id come from whoever answered at issuer, which for a
+	// blob is its UNSIGNED issuer field: quoted, and next to the URL it was
+	// actually posted to, so a rewritten issuer cannot pass for the instance.
+	fmt.Fprintf(cmd.OutOrStdout(), "%q answered %q for request %q\n", issuer, r.Decision, r.ID)
 	return nil
+}
+
+// fromIssuer renders bytes received from an issuer for a terminal (review
+// B1). In path 2's threat model every one of them is attacker-chosen — the
+// issuer URL reaches the operator from whoever relayed the request, and a
+// --signed blob's issuer field is unsigned — and they are printed on the
+// machine that holds the fleet master key. So they are %q-quoted, which turns
+// every control, format and bidi character (ESC, OSC, U+202E, invalid UTF-8)
+// into an escape, and capped.
+func fromIssuer(b []byte) string {
+	const maxShown = 512
+	s := strings.TrimSpace(string(b))
+	if len(s) > maxShown {
+		return strconv.Quote(s[:maxShown]) + "…"
+	}
+	return strconv.Quote(s)
 }

@@ -170,7 +170,7 @@ func TestOAuthCLI_ScopesAndErrors(t *testing.T) {
 	if err := oauthApprove(ctx, c, &out, id, "laptop", []string{"read"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "ceiling read") {
+	if !strings.Contains(out.String(), `ceiling "read"`) { // quoted since the 3b review (B1)
 		t.Fatalf("--scopes read: %s", out.String())
 	}
 }

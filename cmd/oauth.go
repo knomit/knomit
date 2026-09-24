@@ -186,7 +186,7 @@ func oauthPending(ctx context.Context, c *http.Client, out io.Writer) error {
 		// what it shows came from the requester. Ingest already refuses
 		// control and format characters in a CIMD; quoting here is what keeps
 		// a field added later, or a pre-registered name, from regressing.
-		fmt.Fprintf(out, "%s\n", p.ID)
+		fmt.Fprintf(out, "%q\n", p.ID)
 		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(tw, "  client\t%q (%q)\n", name, p.ClientID)
 		fmt.Fprintf(tw, "  from\t%q  %q\n", p.RemoteAddr, p.UserAgent)
@@ -208,8 +208,8 @@ func oauthApprove(ctx context.Context, c *http.Client, out io.Writer, id, subjec
 	if err := localCall(ctx, c, http.MethodPost, "/oauth/pending/"+id+"/approve", req, &p); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "approved %s: the token acts as host:%s@token with ceiling %s\n",
-		id, p.Subject, strings.Join(p.Ceiling, " "))
+	fmt.Fprintf(out, "approved %s: the token acts as %q with ceiling %q\n",
+		id, "host:"+p.Subject+"@token", strings.Join(p.Ceiling, " "))
 	return nil
 }
 
@@ -257,7 +257,9 @@ func localCall(ctx context.Context, c *http.Client, method, path string, in, out
 		if prob.Detail == "" {
 			prob.Detail = resp.Status
 		}
-		return fmt.Errorf("%s", prob.Detail)
+		// The detail can echo requester-supplied text; quoted like every
+		// other field this command prints.
+		return fmt.Errorf("%q", prob.Detail)
 	}
 	if out == nil {
 		return nil
