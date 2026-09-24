@@ -104,6 +104,14 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		itemID := int64(req.GetFloat("item_id", 0))
 		completionToken := req.GetString("completion_token", "")
 
+		// An answer or a page fetch belongs to a session, so without one it is
+		// refused rather than read as a start. Treating it as a start abandoned
+		// the caller's own session and re-served the same first item, so an
+		// agent that dropped session_id looped with no error and no progress.
+		if sessionID == "" && (response != "" || itemID != 0 || completionToken != "" || page > 0) {
+			return mcpgo.NewToolResultError(errContinuationWithoutSession), nil
+		}
+
 		var result *synthesize.ReviewResult
 
 		switch {
@@ -129,6 +137,12 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		return mcpgo.NewToolResultText(string(resultJSON)), nil
 	}
 }
+
+// errContinuationWithoutSession is the refusal for a response, item_id,
+// completion_token or page sent without session_id.
+const errContinuationWithoutSession = "session_id is required with response, item_id, completion_token or page: " +
+	"pass the session_id from the result you are answering. Nothing was applied, and no session was started or abandoned. " +
+	"Call knomit_review with none of these arguments only to start a session."
 
 // parseEffortAndScope resolves the shared 'effort' + 'domain'/'entities'
 // arguments that both knomit_review and knomit_hypothesize accept. An empty
