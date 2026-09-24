@@ -21,6 +21,8 @@ vi.mock('./api', async importOriginal => ({
   deleteSession: vi.fn().mockResolvedValue(undefined),
   api: {
     listClientSessions: vi.fn().mockResolvedValue({ truncated: false, sessions: [], policy: { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 } }),
+    // null = this server has no OAuth issuer (404), so no Authorizations tab.
+    listOAuthPending: vi.fn().mockResolvedValue(null),
     listArchived: vi.fn().mockResolvedValue([
       { id: 'old.1', name: 'old', origin: '', archivedAt: '2026-06-01T00:00:00Z' },
     ]),
@@ -1568,6 +1570,9 @@ describe('Manage tabs', () => {
     ended_at: null, request_count: 3,
   });
   const POLICY = { dead_after_s: 3600, hidden_after_s: 10800, retention_s: 604800, live_window_s: 360, limit: 500, max_limit: 2000 };
+  // The Authorizations tests narrow this; put the no-issuer default back so
+  // test order cannot matter.
+  beforeEach(() => { vi.mocked(api.listOAuthPending).mockResolvedValue(null); });
 
   it('badges the live count, and lights NEITHER tab once an entity is selected', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
@@ -1787,6 +1792,36 @@ describe('Manage tabs', () => {
     render(<RepoManager {...baseProps} readOnly />);
     await screen.findByTestId('repomgr-sessions');
     expect(screen.queryByTestId('repomgr-logs')).not.toBeInTheDocument();
+  });
+
+  // F19 phase 3b: the Authorizations tab exists only where the server has an
+  // OAuth issuer. The list call is the probe: 404 (null) means no tab, which
+  // is the default everywhere else in this file and the desktop's case.
+  it('renders no Authorizations tab when the server has no OAuth issuer', async () => {
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-sessions');
+    await waitFor(() => expect(api.listOAuthPending).toHaveBeenCalled());
+    expect(screen.queryByTestId('repomgr-oauth')).not.toBeInTheDocument();
+  });
+
+  it('opens the Authorizations page full width, badged with the waiting count', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValue([
+      { id: 'p1', client_id: 'kb', client_name: 'kb', redirect_uri: 'http://127.0.0.1:1/callback', scopes: ['read'], resource: 'http://localhost:1', remote_addr: '127.0.0.1:2', user_agent: 'ua', created_at: '2026-09-24T12:00:00Z', expires_at: '2026-09-24T12:10:00Z' },
+    ]);
+    render(<RepoManager {...baseProps} />);
+    expect(await screen.findByTestId('repomgr-oauth-badge')).toHaveTextContent('1');
+    fireEvent.click(screen.getByTestId('repomgr-oauth'));
+    expect(await screen.findByTestId('oauth-row')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-oauth')).toHaveAttribute('aria-selected', 'true');
+    // A server page: no entity rail.
+    expect(screen.queryByTestId('repomgr-item-core')).not.toBeInTheDocument();
+  });
+
+  it('renders no Authorizations tab on a read-only instance', async () => {
+    vi.mocked(api.listOAuthPending).mockResolvedValue([]);
+    render(<RepoManager {...baseProps} readOnly />);
+    await screen.findByTestId('repomgr-sessions');
+    expect(screen.queryByTestId('repomgr-oauth')).not.toBeInTheDocument();
   });
 
   it('renders no badge at zero, and none when the count cannot be read', async () => {

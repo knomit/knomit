@@ -22,7 +22,11 @@ func corsMiddleware(allowed []string) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Add("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+				// X-Knomit-Client: the web UI sends it on the OAuth approval
+				// calls (phase 3b). Allowing it here keeps the desktop's own
+				// preflights working; it does not make a Wails origin "own
+				// origin" for the approval gate, which refuses it anyway.
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, "+KnomitClientHeader)
 			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

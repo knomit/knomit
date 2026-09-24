@@ -19,6 +19,7 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
+	"knomit/internal/oauth"
 )
 
 // oauthCmd is `knomit oauth`: the operator's side of consent path 1 (F19
@@ -45,21 +46,43 @@ func oauthCmd() *cobra.Command {
 	}
 	var subject string
 	var scopes []string
+	var approveSign, denySign signOpts
+	var signed, deliverTo string
 	approve := &cobra.Command{
 		Use:   "approve <id> --as <subject>",
 		Short: "Approve a request; the token acts as host:<subject>@token",
 		Long: "Approve a waiting request. --as names the subject the token acts as (its principal is\n" +
 			"host:<subject>@token). --scopes sets the token's ceiling (default: what the client asked\n" +
 			"for, limited to read and write; read if it asked for neither). The subject's grants are\n" +
-			"written for the ceiling; `knomit grants` can narrow them later.",
-		Args: cobra.ExactArgs(1),
+			"written for the ceiling; `knomit grants` can narrow them later.\n\n" +
+			"On the instance this talks to the local listener. From ANOTHER machine, with the fleet\n" +
+			"master key: `approve <id> --sign <issuer> --dir <master> --instance <fingerprint> --as ...`\n" +
+			"prints the request for you to read, then a signed statement; `approve --signed <file|->`\n" +
+			"delivers it (so does one POST of that JSON to <issuer>/oauth/approve).",
+		Args: func(cmd *cobra.Command, args []string) error {
+			if signed != "" {
+				return cobra.NoArgs(cmd, args)
+			}
+			return cobra.ExactArgs(1)(cmd, args)
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if signed != "" {
+				return oauthDeliver(cmd, signed, deliverTo)
+			}
+			if subject == "" {
+				return errors.New("--as <subject> is required")
+			}
 			var sc []string
 			if cmd.Flags().Changed("scopes") {
 				sc = scopes
 				if sc == nil {
 					sc = []string{}
 				}
+			}
+			if approveSign.issuer != "" {
+				o := approveSign
+				o.verb, o.subject, o.scopes, o.scopesGiven = oauth.VerbApprove, subject, sc, cmd.Flags().Changed("scopes")
+				return oauthSign(cmd, args[0], o)
 			}
 			return withLocalAPI(func(c *http.Client) error {
 				return oauthApprove(cmd.Context(), c, cmd.OutOrStdout(), args[0], subject, sc)
@@ -68,17 +91,35 @@ func oauthCmd() *cobra.Command {
 	}
 	approve.Flags().StringVar(&subject, "as", "", "the subject the token acts as (required)")
 	approve.Flags().StringSliceVar(&scopes, "scopes", nil, "the token's ceiling, e.g. read,write (never admin)")
-	_ = approve.MarkFlagRequired("as")
+	approve.Flags().StringVar(&signed, "signed", "", "deliver a signed statement (a file, or - for stdin) to its issuer")
+	approve.Flags().StringVar(&deliverTo, "issuer", "", "with --signed: deliver here instead of the issuer the statement names")
+	signFlags(approve, &approveSign)
 	deny := &cobra.Command{
 		Use:   "deny <id>",
 		Short: "Deny a request; the client is told access_denied",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if denySign.issuer != "" {
+				o := denySign
+				o.verb = oauth.VerbDeny
+				return oauthSign(cmd, args[0], o)
+			}
 			return withLocalAPI(func(c *http.Client) error { return oauthDeny(cmd.Context(), c, cmd.OutOrStdout(), args[0]) })
 		},
 	}
+	signFlags(deny, &denySign)
 	c.AddCommand(pending, approve, deny)
 	return c
+}
+
+// signFlags adds the master-key signing flags (consent path 2) to approve
+// and deny.
+func signFlags(c *cobra.Command, o *signOpts) {
+	c.Flags().StringVar(&o.issuer, "sign", "", "sign with the fleet master key instead, for the instance at this issuer URL (run on the master's machine)")
+	c.Flags().StringVar(&o.dir, "dir", "", "with --sign: the master directory (root.key, issued.jsonl)")
+	c.Flags().StringVar(&o.instance, "instance", "", "with --sign: the instance's full fingerprint; it must be issued by this master and not revoked")
+	c.Flags().StringVar(&o.passFile, "passphrase-file", "", "with --sign: file holding the master passphrase (- = stdin, read AFTER the request is shown)")
+	c.Flags().BoolVar(&o.yes, "yes", false, "with --sign and a passphrase FILE: sign without a confirmation")
 }
 
 // localAPIBase is the URL the local API client addresses. The host is never
@@ -145,7 +186,7 @@ func oauthPending(ctx context.Context, c *http.Client, out io.Writer) error {
 		// what it shows came from the requester. Ingest already refuses
 		// control and format characters in a CIMD; quoting here is what keeps
 		// a field added later, or a pre-registered name, from regressing.
-		fmt.Fprintf(out, "%s\n", p.ID)
+		fmt.Fprintf(out, "%q\n", p.ID)
 		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		fmt.Fprintf(tw, "  client\t%q (%q)\n", name, p.ClientID)
 		fmt.Fprintf(tw, "  from\t%q  %q\n", p.RemoteAddr, p.UserAgent)
@@ -167,8 +208,8 @@ func oauthApprove(ctx context.Context, c *http.Client, out io.Writer, id, subjec
 	if err := localCall(ctx, c, http.MethodPost, "/oauth/pending/"+id+"/approve", req, &p); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "approved %s: the token acts as host:%s@token with ceiling %s\n",
-		id, p.Subject, strings.Join(p.Ceiling, " "))
+	fmt.Fprintf(out, "approved %s: the token acts as %q with ceiling %q\n",
+		id, "host:"+p.Subject+"@token", strings.Join(p.Ceiling, " "))
 	return nil
 }
 
@@ -216,7 +257,9 @@ func localCall(ctx context.Context, c *http.Client, method, path string, in, out
 		if prob.Detail == "" {
 			prob.Detail = resp.Status
 		}
-		return fmt.Errorf("%s", prob.Detail)
+		// The detail can echo requester-supplied text; quoted like every
+		// other field this command prints.
+		return fmt.Errorf("%q", prob.Detail)
 	}
 	if out == nil {
 		return nil

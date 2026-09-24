@@ -47,13 +47,65 @@ func TestClient_RedirectAllowed(t *testing.T) {
 		"http://127.0.0.1:54321/callback?": false,
 		"https://127.0.0.1:54321/callback": false, // scheme still exact
 		"http://localhost:8765/cb":         true,  // exact match of what is registered
-		"http://localhost:9999/cb":         false, // localhost is NOT a port wildcard
+		"http://localhost:9999/cb":         true,  // phase 3b R1: localhost is a port wildcard too
+		"http://localhost:9999/other":      false,
 		"http://127.0.0.1:54321/callback#": false,
 		"":                                 false,
 	} {
 		if got := c.RedirectAllowed(uri); got != want {
 			t.Errorf("RedirectAllowed(%q) = %v, want %v", uri, got, want)
 		}
+	}
+}
+
+// Phase 3b R1: a registered http://localhost[:port]/<path> accepts any port,
+// as the loopback literals do, because Claude Code's CIMD registers
+// http://localhost/callback and presents http://localhost:<random>/callback.
+// Everything else stays exact: the host must be the same loopback spelling
+// (localhost never matches a 127.0.0.1 registration or the reverse), and
+// nothing that merely looks like localhost is loopback.
+//
+// Sabotage (run 2026-09-24): dropping "localhost" from isLoopbackHost fails
+// the first row and the Claude Code CIMD test; widening it to
+// strings.HasPrefix(h, "localhost") fails only the LOOKALIKE REGISTRATION
+// block below — a lookalike REDIRECT is already refused by the same-host
+// comparison, so the rows above cannot see that sabotage.
+func TestClient_RedirectAllowed_LocalhostAnyPort(t *testing.T) {
+	c := Client{ID: "cc", RedirectURIs: []string{"http://localhost/callback"}}
+	for uri, want := range map[string]bool{
+		"http://localhost:52346/callback":              true,
+		"http://localhost/callback":                    true,
+		"http://localhost:52346/callback/":             false, // path exact
+		"http://localhost:52346/callback?x=1":          false, // query exact
+		"https://localhost:52346/callback":             false, // scheme exact
+		"http://127.0.0.1:52346/callback":              false, // another loopback spelling is another URI
+		"http://localhost.:52346/callback":             false,
+		"http://LOCALHOST:52346/callback":              false,
+		"http://localhost.evil.example:52346/callback": false,
+		"http://sub.localhost:52346/callback":          false,
+		"http://user@localhost:52346/callback":         false,
+	} {
+		if got := c.RedirectAllowed(uri); got != want {
+			t.Errorf("RedirectAllowed(%q) = %v, want %v", uri, got, want)
+		}
+	}
+	// A registration that merely looks like localhost is an ordinary host:
+	// exact match only, never a port wildcard.
+	for _, reg := range []string{
+		"http://localhost./callback", "http://localhost.evil.example/callback",
+		"http://localhostx/callback", "http://LOCALHOST/callback",
+	} {
+		look := Client{ID: "look", RedirectURIs: []string{reg}}
+		u, _ := url.Parse(reg)
+		other := "http://" + u.Hostname() + ":52346/callback"
+		if look.RedirectAllowed(other) {
+			t.Errorf("registration %q became a port wildcard: accepted %q", reg, other)
+		}
+	}
+	// And a 127.0.0.1 registration still refuses a localhost redirect.
+	lit := Client{ID: "kb", RedirectURIs: []string{"http://127.0.0.1/callback"}}
+	if lit.RedirectAllowed("http://localhost:52346/callback") {
+		t.Error("a 127.0.0.1 registration accepted a localhost redirect")
 	}
 }
 
@@ -184,6 +236,26 @@ func TestResolver_PreRegisteredWins(t *testing.T) {
 	}
 	if f.hits.Load() != 0 {
 		t.Fatal("pre-registered client fetched a metadata document")
+	}
+}
+
+// claudeCodeCIMD is Claude Code's client metadata document exactly as
+// https://claude.ai/oauth/claude-code-client-metadata served it on
+// 2026-09-24 (Claude Code 2.1.281), with only client_id swapped for the
+// fixture's URL. Claude Code then sent redirect_uri
+// http://localhost:52346/callback (phase 3b worker notes, Q4).
+const claudeCodeCIMD = `{"client_id":%q,"client_name":"Claude Code","client_uri":"https://claude.ai","redirect_uris":["http://localhost/callback","http://127.0.0.1/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}`
+
+func TestResolver_ClaudeCodeCIMDAcceptsItsLocalhostRedirect(t *testing.T) {
+	f := newCIMDFixture(t)
+	f.serve(fmt.Sprintf(claudeCodeCIMD, f.url), "public, max-age=300")
+	r := newResolverFor(f.fetcher(), &clock{t: time.Unix(1_790_000_000, 0)})
+	got, err := r.Resolve(context.Background(), f.url)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got.Name != "Claude Code" || !got.RedirectAllowed("http://localhost:52346/callback") {
+		t.Fatalf("client %+v refuses Claude Code's redirect http://localhost:52346/callback", got)
 	}
 }
 

@@ -74,7 +74,7 @@ func withToken(req *http.Request, token string, body io.ReadCloser) *http.Reques
 // refresh token would make the server revoke the whole family.
 func refreshShared(ctx context.Context, u *url.URL, sentAccess string) (*Credentials, error) {
 	var out *Credentials
-	err := withCredentialsLock(u, func() error {
+	err := withCredentialsLock(ctx, u, func() error {
 		cur, err := LoadCredentials(u)
 		if err != nil {
 			return err

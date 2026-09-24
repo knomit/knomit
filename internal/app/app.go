@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"net/http"
@@ -73,6 +74,12 @@ type Options struct {
 	// because nil takes the production path and that path still fails the
 	// boot when no embedder can be built (TestNew_EmbedderRequired).
 	Embedder store.BatchEmbedder
+	// NoOAuth leaves the OAuth issuer unbuilt even when [oauth] is
+	// configured. The desktop sets it (F19 phase 3b, W3): it never opens the
+	// OAuth listener — only `knomit serve` does — so no request could ever
+	// be parked there, and the approval endpoints must be 404 (which is
+	// what hides the web UI's pending panel) rather than an empty queue.
+	NoOAuth bool
 }
 
 // ResolveKeyPath is where the instance key lives: [remote].ssh_key, else
@@ -247,13 +254,37 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// grants table, only when [oauth] is configured. The server then has an
 	// OAuthHandler for `knomit serve` to put on [oauth].addr, and the plain
 	// router gains the operator's approval endpoints (local principals only).
-	if cfg.OAuth.Enabled() {
+	if cfg.OAuth.Enabled() && !opts.NoOAuth {
 		store := oauth.NewStore(a.manager.ControlDB(), cfg.OAuth.AccessTTL, cfg.OAuth.RefreshTTL)
+		// Consent path 2 (phase 3b): a master-key statement must name THIS
+		// instance's pki fingerprint and verify against the fleet root in
+		// [tls].dir, read per statement so an instance enrolled after boot
+		// verifies at once. A missing root.crt is fs.ErrNotExist, which the
+		// issuer answers as "not enrolled".
+		instanceFP := ""
+		if _, pub, err := pki.LoadSigner(keyPath); err == nil {
+			instanceFP = pki.Fingerprint(pub)
+		} else {
+			log.Warn().Err(err).Msg("oauth: cannot read the instance key; master-key approvals will be refused")
+		}
+		rootPath := filepath.Join(cfg.TLS.Dir, pki.RootCertFile)
 		a.server.OAuthIssuer = oauth.NewIssuer(oauth.Options{
-			Issuer:  cfg.OAuth.Issuer,
-			Store:   store,
-			Clients: oauth.NewResolver(cfg.OAuth.EffectiveClients()),
-			Grants:  sqlGrants,
+			Issuer:              cfg.OAuth.Issuer,
+			Store:               store,
+			Clients:             oauth.NewResolver(cfg.OAuth.EffectiveClients()),
+			Grants:              sqlGrants,
+			InstanceFingerprint: instanceFP,
+			FleetRoot: func() (ed25519.PublicKey, error) {
+				c, err := pki.LoadRootCert(rootPath)
+				if err != nil {
+					return nil, err
+				}
+				pub, ok := c.PublicKey.(ed25519.PublicKey)
+				if !ok {
+					return nil, fmt.Errorf("fleet root %s is not an Ed25519 key", rootPath)
+				}
+				return pub, nil
+			},
 		})
 		a.server.BearerVerifier = oauth.NewVerifier(cfg.OAuth.Issuer, store)
 	}
