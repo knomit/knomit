@@ -94,7 +94,19 @@ func New(t testing.TB, clientID, clientSecret string) *Fake {
 	return f
 }
 
-func (f *Fake) SetUser(u User)             { f.mu.Lock(); f.user = u; f.users[u.Login] = u; f.mu.Unlock() }
+func (f *Fake) SetUser(u User) {
+	f.mu.Lock()
+	f.user = u
+	f.users[strings.ToLower(u.Login)] = u
+	f.mu.Unlock()
+}
+
+// SetLookup makes GET /users/{login} answer u for login (any case).
+func (f *Fake) SetLookup(login string, u User) {
+	f.mu.Lock()
+	f.users[strings.ToLower(login)] = u
+	f.mu.Unlock()
+}
 func (f *Fake) SetDeny(b bool)             { f.mu.Lock(); f.deny = b; f.mu.Unlock() }
 func (f *Fake) SetExpiringTokens(b bool)   { f.mu.Lock(); f.expiring = b; f.mu.Unlock() }
 func (f *Fake) SetTokenError(code string)  { f.mu.Lock(); f.tokenError = code; f.mu.Unlock() }
@@ -241,7 +253,7 @@ func (f *Fake) me(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(body))
 		return
 	}
-	_, _ = w.Write([]byte(`{"login":` + strconv.Quote(u.Login) + `,"id":` + strconv.FormatInt(u.ID, 10) + `,"type":"User"}`))
+	_, _ = w.Write([]byte(`{"login":` + jsonString(u.Login) + `,"id":` + strconv.FormatInt(u.ID, 10) + `,"type":"User"}`))
 }
 
 func (f *Fake) revoke(w http.ResponseWriter, r *http.Request) {
@@ -281,5 +293,12 @@ func (f *Fake) lookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write([]byte(`{"login":` + strconv.Quote(u.Login) + `,"id":` + strconv.FormatInt(u.ID, 10) + `}`))
+	_, _ = w.Write([]byte(`{"login":` + jsonString(u.Login) + `,"id":` + strconv.FormatInt(u.ID, 10) + `}`))
+}
+
+// jsonString encodes s as a JSON string (strconv.Quote's \x escapes are
+// not JSON).
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }
