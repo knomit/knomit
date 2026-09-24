@@ -310,7 +310,15 @@ func main() {
 	explicitURL := arg != "" || os.Getenv("KNOMIT_BASE_URL") != ""
 	// Timeout 0, matching the http.Client{} this replaces: the proxy holds SSE
 	// long-polls open and a deadline here would cut them.
-	socketPath := knomitapi.SocketPath()
+	//
+	// An explicit URL never uses the local listener, so its path is not even
+	// resolved: a broken local knomit.toml would otherwise log a misleading
+	// "cannot resolve the local listener" for a bridge aimed at another server.
+	// newLazyHooksClient skips it for the same reason.
+	var socketPath string
+	if !explicitURL {
+		socketPath = knomitapi.SocketPath()
+	}
 	client := knomitapi.NewHTTPClient(socketPath, explicitURL, 0)
 	// PREFERENCE, not fact: the transport is chosen per dial, and a socket
 	// that does not answer falls back to TCP with its own warning. Logging

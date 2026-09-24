@@ -21,7 +21,19 @@ import (
 // resolving the data root itself: `knomit serve` opens exactly that path, and
 // a bridge that computed its own would not fail loudly — it would find no
 // listener, fall back to TCP, and quietly lose the verified identity the
-// listener exists to provide. "" when it cannot be resolved.
+// listener exists to provide. That includes the operator's overrides —
+// KNOMIT_SOCKET and the knomit.toml `socket` key — which config resolves in
+// the same order as the server (knomit#271); nothing here reads either.
+// "" when it cannot be resolved.
+//
+// The failure is logged at WARN, not debug: every cause — no resolvable data
+// root, a "~/" that cannot be expanded, a knomit.toml that does not decode —
+// is something the operator can fix, and each silently costs the verified
+// identity by sending the bridge over TCP. It is logged ONCE per process: the
+// lazy hooks client calls this on every dial, and a broken knomit.toml would
+// otherwise repeat the line per connection. Only the WARNING is once — the
+// path itself is resolved on every call, never cached, so nothing here freezes
+// the environment at first use (see kb/gotchas/testing/ambient-state-at-package-init).
 //
 // It used to be "" on Windows as well, because phase 1 had no credential
 // there. It is not any more (knomit#245); a caller still treating "" as "this
@@ -29,11 +41,17 @@ import (
 func SocketPath() string {
 	p, err := config.SocketPath()
 	if err != nil {
-		log.Debug().Err(err).Msg("bridge: cannot resolve the knomit local listener path; using TCP")
+		socketPathWarnOnce.Do(func() {
+			log.Warn().Err(err).Msg("bridge: cannot resolve the knomit local listener path; using TCP")
+		})
 		return ""
 	}
 	return p
 }
+
+// socketPathWarnOnce limits SocketPath's resolution-failure warning to one per
+// process.
+var socketPathWarnOnce sync.Once
 
 // NewHTTPClient prefers the local listener: it is the credential-free path —
 // the OS tells the server who is calling, so nothing is stored or presented —

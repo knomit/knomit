@@ -418,15 +418,20 @@ func Load() (Config, error) {
 	// path is the worse failure: it looks like a fresh install, so the models
 	// download again and a second SSH identity is generated under a root
 	// nobody will think to look in.
-	home, err := ResolveHome()
+	//
+	// homeAndConfig also tilde-expands the root BEFORE looking for knomit.toml
+	// in it, and SocketPath goes through the same helper. Expanding afterwards
+	// (as Load once did) searched a literal "~/..." directory, ignored the
+	// operator's knomit.toml, and disagreed with the bridge (knomit#271).
+	home, path, err := homeAndConfig()
 	if err != nil {
-		return Config{}, fmt.Errorf("config: cannot determine the knomit data root: %w", err)
+		return Config{}, err
 	}
 	cfg.Home = home
 
-	// Find and decode TOML file.
+	// Decode the TOML file.
 	homeBefore := cfg.Home
-	if path := findConfigFile(cfg.Home); path != "" {
+	if path != "" {
 		md, err := toml.DecodeFile(path, &cfg)
 		if err != nil {
 			return Config{}, err
@@ -439,7 +444,7 @@ func Load() (Config, error) {
 	// Overlay env vars.
 	envOr("KNOMIT_HOST", &cfg.Host)
 	envOr("KNOMIT_PORT", &cfg.Port)
-	envOr("KNOMIT_SOCKET", &cfg.Socket)
+	// KNOMIT_SOCKET is applied in socketFor, below — not here.
 	envOr("KNOMIT_TLS_ADDR", &cfg.TLS.Addr)
 	envOr("KNOMIT_TLS_DIR", &cfg.TLS.Dir)
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
@@ -506,9 +511,9 @@ func Load() (Config, error) {
 		}
 	}
 
-	// Expand tildes in path fields.
+	// Expand tildes in path fields. Home is not among them: homeAndConfig
+	// expanded it, once, before the knomit.toml search.
 	for _, p := range []*string{
-		&cfg.Home,
 		&cfg.ONNXLibPath,
 		&cfg.Remote.SSHKey,
 		&cfg.Remote.KnownHosts,
@@ -527,10 +532,12 @@ func Load() (Config, error) {
 		cfg.Remote.KnownHosts = filepath.Join(cfg.Home, "known_hosts")
 	}
 
-	// Default the local authenticated listener to the one this platform uses
-	// under <Home>, for the same reason and at the same point as known_hosts:
-	// after tilde expansion, and only when nothing set it, so a TOML or
-	// KNOMIT_SOCKET value wins.
+	// Decide the local authenticated listener: KNOMIT_SOCKET, else the TOML
+	// value decoded above, else the one this platform uses under <Home> --
+	// defaulted for the same reason and at the same point as known_hosts,
+	// after tilde expansion. socketFor is the one place those layers are
+	// ordered; config.SocketPath (the bridge's side) reaches it too, so the
+	// two cannot drift (knomit#271).
 	//
 	// It is the local bridge's credential -- the OS tells the server who is
 	// on the other end (internal/auth.PeerCred) -- so it has to exist without
@@ -541,9 +548,7 @@ func Load() (Config, error) {
 	// 1, which is what made [auth].require = true a silent lockout there
 	// (knomit#245): app.checkLocalListener refuses that combination, and the
 	// pipe default is what lets Windows satisfy it.
-	if cfg.Socket == "" {
-		cfg.Socket = localListenerName(cfg.Home)
-	}
+	cfg.Socket = socketFor(cfg.Home, cfg.Socket, os.Getenv("KNOMIT_SOCKET"))
 
 	// Default [tls].dir to <Home>/pki, after tilde expansion like the two
 	// above. The listener itself stays off until [tls].addr is set.
