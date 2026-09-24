@@ -13,10 +13,11 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, TreeIcon, BroadcastIcon, ScrollIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, TreeIcon, BroadcastIcon, ScrollIcon, GlobeIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
 import { ManageLogs } from './ManageLogs';
+import { ManageOAuth } from './ManageOAuth';
 import { useClientSessionChanges } from './useClientSessionChanges';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { ExperimentsPanel } from './ExperimentsPanel';
@@ -66,6 +67,9 @@ type Selection =
   // Logs is the server's own output: the same shape of page as Sessions, and
   // the second member of isServerPage.
   | { kind: 'logs' }
+  // OAuth requests waiting for the operator (F19 phase 3b): server-level like
+  // Sessions and Logs, and present only where the server has an OAuth issuer.
+  | { kind: 'oauth' }
   // focus names a settings block to land on, set when arriving from an Overview
   // cell so the thing you clicked is what you see.
   | { kind: 'repo'; name: string; focus?: string }
@@ -95,7 +99,7 @@ type Selection =
 // same repo and lens pages.
 // See kb/decisions/web/manage/rail-only-for-entity-pages.
 function isServerPage(v: Selection): boolean {
-  return v?.kind === 'sessions' || v?.kind === 'logs';
+  return v?.kind === 'sessions' || v?.kind === 'logs' || v?.kind === 'oauth';
 }
 
 export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly, hideRemoteConfig, onChanged, onBrowse, onEnterBranch, onBusyChange }: Props) {
@@ -256,6 +260,33 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
     setLiveTruncated(truncated === true);
   }, []);
 
+  // The Authorizations tab (F19 phase 3b). The list call is the probe: null
+  // (404) means this server has no OAuth issuer — [oauth] unset, or the
+  // desktop, which never opens the OAuth listener — and then there is no tab.
+  // A refusal (403: say, loopback-anonymous without admin) still shows the
+  // tab, because the page is where the reason is explained. Not polled while
+  // the page is open: it polls for itself and reports through onCount.
+  const [oauthAvailable, setOAuthAvailable] = useState(false);
+  const [oauthCount, setOAuthCount] = useState<number | null>(null);
+  const oauthOpen = sel?.kind === 'oauth';
+  useEffect(() => {
+    if (!open || readOnly || !wantLiveCount || oauthOpen) return;
+    let cancelled = false;
+    const probe = () => {
+      api.listOAuthPending()
+        .then(list => {
+          if (cancelled) return;
+          setOAuthAvailable(list !== null);
+          setOAuthCount(list === null ? null : list.length);
+        })
+        .catch(() => { if (!cancelled) { setOAuthAvailable(true); setOAuthCount(null); } });
+    };
+    probe();
+    const t = setInterval(probe, 30_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [open, readOnly, wantLiveCount, oauthOpen]);
+  const handleOAuthCount = useCallback((n: number) => setOAuthCount(n), []);
+
   if (!open) return null;
 
   // Manage lands on Overview: it is the only screen that answers "which of my
@@ -343,6 +374,23 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
               onClick={() => setSel({ kind: 'logs' })}
             >
               <ScrollIcon color="currentColor" size={12} /> Logs
+            </button>
+          )}
+          {!readOnly && oauthAvailable && (
+            <button
+              type="button"
+              role="tab"
+              data-testid="repomgr-oauth"
+              aria-selected={view.kind === 'oauth'}
+              onMouseDown={noMouseFocus}
+              style={tabBtn(view.kind === 'oauth')}
+              disabled={connectBusy}
+              onClick={() => setSel({ kind: 'oauth' })}
+            >
+              <GlobeIcon color="currentColor" size={12} /> Authorizations
+              {oauthCount !== null && oauthCount > 0 && (
+                <span data-testid="repomgr-oauth-badge" style={tabBadge}>{oauthCount}</span>
+              )}
             </button>
           )}
         </div>
@@ -536,6 +584,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
             )}
             {view.kind === 'sessions' && <ManageSessions onLiveCount={handleLiveCount} />}
             {view.kind === 'logs' && <ManageLogs />}
+            {view.kind === 'oauth' && <ManageOAuth onCount={handleOAuthCount} />}
             {/* An unavailable repo gets its own pane rather than the settings
                 page. RepoDetail's every read (description, agent branch, remote,
                 mounts) resolves through the repo endpoints, which answer 409 for
