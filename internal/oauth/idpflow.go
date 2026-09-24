@@ -283,7 +283,8 @@ func (i *Issuer) idpCallback(w http.ResponseWriter, r *http.Request) {
 	// A start in this browser while Identify ran replaced this sign-in (one
 	// live sign-in per request). The newer one is the one that counts: this
 	// callback decides nothing and touches none of the newer one's state
-	// (review I1).
+	// (review I1). This early check saves the work below; the binding one is
+	// made again, atomically with the token registration, at the end.
 	fl.mu.Lock()
 	superseded := fl.byID[s.pendingID] != s
 	fl.mu.Unlock()
@@ -347,7 +348,16 @@ func (i *Issuer) idpCallback(w http.ResponseWriter, r *http.Request) {
 		errorPage(w, http.StatusInternalServerError, "The sign-in could not be completed.")
 		return
 	}
+	// The superseded check and the registration are ONE locked step, after
+	// every read above: a start landing anywhere before this point replaces
+	// this sign-in, and one landing after it drops the token registered here
+	// (3c gate B1; the earlier check after Identify only saves the work).
 	fl.mu.Lock()
+	if fl.byID[s.pendingID] != s {
+		fl.mu.Unlock()
+		errorPage(w, http.StatusConflict, "A newer sign-in for this request replaced this one. Nothing was decided here; finish the newer one.")
+		return
+	}
 	s.tokenHash, s.subject, s.ceiling, s.confirmExpires = hashSecret(token), sub, ceiling, expires
 	fl.byToken[s.tokenHash] = s
 	fl.mu.Unlock()

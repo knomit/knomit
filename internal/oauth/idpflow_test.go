@@ -888,3 +888,62 @@ func TestIDP_PagesCarryNoFormAction(t *testing.T) {
 		t.Fatalf("consent page CSP %q", csp)
 	}
 }
+
+// gatedGrants holds the FIRST EverGrantedAny: the callback's prior-grants
+// read, the last I/O before it registers the confirmation token.
+type gatedGrants struct {
+	*auth.SQLGrants
+	entered, release chan struct{}
+	armed            bool
+}
+
+func (g *gatedGrants) EverGrantedAny(ctx context.Context, p auth.Principal) (bool, error) {
+	if g.armed {
+		g.armed = false
+		g.entered <- struct{}{}
+		<-g.release
+	}
+	return g.SQLGrants.EverGrantedAny(ctx, p)
+}
+
+// 3c gate B1 (the reviewer's probe, adopted): the I1 window's later half. A
+// start that lands after Identify returned but before the callback
+// registers its token must still supersede it — the superseded check and
+// the registration are ONE locked step, so the replaced callback renders no
+// consent page, decides nothing, and leaves the newer sign-in intact.
+func TestIDP_StartAfterIdentifyStillSupersedes(t *testing.T) {
+	f := newIDPFixture(t, "github-583231")
+	gg := &gatedGrants{SQLGrants: f.grants, entered: make(chan struct{}), release: make(chan struct{}), armed: true}
+	f.iss = NewIssuer(Options{Issuer: f.srv.URL, Store: f.store, Clients: f.iss.clients, Grants: gg,
+		WaitTimeout: time.Second, IDP: &IDPOptions{Provider: f.gh, Allowed: allowedList("github-583231")}})
+	f.handler.set(f.iss.Routes())
+
+	id := f.park(t, f.browser, "read")
+	resp, _ := f.do(t, f.browser, http.MethodGet, f.srv.URL+"/oauth/idp/start/"+id, nil, nil)
+	resp, _ = f.do(t, f.browser, http.MethodGet, resp.Header.Get("Location"), nil, nil)
+	cb1 := resp.Header.Get("Location")
+	done := make(chan string)
+	go func() {
+		_, b := f.do(t, f.browser, http.MethodGet, cb1, nil, nil)
+		done <- b
+	}()
+	<-gg.entered
+	if r2, _ := f.do(t, f.browser, http.MethodGet, f.srv.URL+"/oauth/idp/start/"+id, nil, nil); r2.StatusCode != http.StatusFound {
+		t.Fatalf("second start: %d", r2.StatusCode)
+	}
+	close(gg.release)
+	page := <-done
+	if strings.Contains(page, `name="token"`) || !strings.Contains(page, "newer sign-in") {
+		t.Fatalf("the replaced callback rendered a deciding page: %.300s", page)
+	}
+	if p := f.pending(t, id); p.Decision != "" {
+		t.Fatalf("row decided %q by the replaced sign-in", p.Decision)
+	}
+	fl := f.iss.idp
+	fl.mu.Lock()
+	byID, byState, byToken := len(fl.byID), len(fl.byState), len(fl.byToken)
+	fl.mu.Unlock()
+	if byID != 1 || byState != 1 || byToken != 0 {
+		t.Fatalf("maps byID=%d byState=%d byToken=%d; want the newer sign-in alone", byID, byState, byToken)
+	}
+}
