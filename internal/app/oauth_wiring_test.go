@@ -57,3 +57,28 @@ func TestApp_OAuthWiredOnlyWhenConfigured(t *testing.T) {
 		t.Fatalf("plain handler changed by [oauth]: %d", rr.Code)
 	}
 }
+
+// W3 (F19 phase 3b): the desktop never opens the OAuth listener, so it sets
+// NoOAuth and the issuer is not built even with [oauth] configured: no OAuth
+// router, and the approval endpoints the web UI's pending panel probes are
+// 404, which is what hides the panel.
+func TestApp_NoOAuthBuildsNoIssuer(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Home = t.TempDir()
+	cfg.OAuth.Issuer, cfg.OAuth.Addr = "http://127.0.0.1:19280", "127.0.0.1:0"
+	a, err := New(context.Background(), cfg, Options{APIOnly: true, NoOAuth: true})
+	if err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	defer a.Close()
+	if a.OAuthHandler() != nil {
+		t.Fatal("NoOAuth built an OAuth router")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/oauth/pending", nil)
+	req.RemoteAddr = "127.0.0.1:1"
+	rr := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("pending with NoOAuth: %d %s; want 404", rr.Code, rr.Body.String())
+	}
+}

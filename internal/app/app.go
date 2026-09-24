@@ -62,6 +62,12 @@ type Options struct {
 	// nil is valid and means the endpoint answers 503: a binary that serves no
 	// UI has no reason to carry a log ring.
 	LogTap *logging.Tap
+	// NoOAuth leaves the OAuth issuer unbuilt even when [oauth] is
+	// configured. The desktop sets it (F19 phase 3b, W3): it never opens the
+	// OAuth listener — only `knomit serve` does — so no request could ever
+	// be parked there, and the approval endpoints must be 404 (which is
+	// what hides the web UI's pending panel) rather than an empty queue.
+	NoOAuth bool
 }
 
 // ResolveKeyPath is where the instance key lives: [remote].ssh_key, else
@@ -297,7 +303,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// grants table, only when [oauth] is configured. The server then has an
 	// OAuthHandler for `knomit serve` to put on [oauth].addr, and the plain
 	// router gains the operator's approval endpoints (local principals only).
-	if cfg.OAuth.Enabled() {
+	if cfg.OAuth.Enabled() && !opts.NoOAuth {
 		store := oauth.NewStore(a.manager.ControlDB(), cfg.OAuth.AccessTTL, cfg.OAuth.RefreshTTL)
 		a.server.OAuthIssuer = oauth.NewIssuer(oauth.Options{
 			Issuer:  cfg.OAuth.Issuer,
