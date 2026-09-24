@@ -6,6 +6,7 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
+	"knomit/test/testenv"
 )
 
 // ownLocalPrincipal is who the boot seeds a grant for. It asks
@@ -32,7 +33,7 @@ func TestBoot_GrantsOwnUIDLoopbackDefaultOnce(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Home = t.TempDir()
 
-	a, err := New(ctx, cfg, Options{APIOnly: true})
+	a, err := New(ctx, cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestBoot_GrantsOwnUIDLoopbackDefaultOnce(t *testing.T) {
 	a.Close()
 
 	// Same home, second New(): the revocation must survive it.
-	a2, err := New(ctx, cfg, Options{APIOnly: true})
+	a2, err := New(ctx, cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("reboot: %v", err)
 	}

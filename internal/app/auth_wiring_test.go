@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"knomit/internal/config"
+	"knomit/test/testenv"
 )
 
 // TestApp_AuthConfigReachesMiddleware is what makes the nil-LoopbackDefault
@@ -37,7 +38,7 @@ func TestApp_AuthConfigReachesMiddleware(t *testing.T) {
 	cfg.Socket = filepath.Join(cfg.Home, "knomit.sock")
 	cfg.Auth.LoopbackDefault = []string{"read"}
 
-	a, err := New(context.Background(), cfg, Options{APIOnly: true})
+	a, err := New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -70,7 +71,7 @@ func TestApp_AuthConfigReachesMiddleware(t *testing.T) {
 	cfg2.Auth.Require = false
 	cfg2.Auth.LoopbackDefault = []string{"read"}
 
-	a2, err := New(context.Background(), cfg2, Options{APIOnly: true})
+	a2, err := New(context.Background(), cfg2, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot 2: %v", err)
 	}

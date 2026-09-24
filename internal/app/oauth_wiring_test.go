@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"knomit/internal/config"
+	"knomit/test/testenv"
 )
 
 // [oauth] off (the default): no OAuth router exists at all, so `knomit
@@ -16,7 +17,7 @@ import (
 func TestApp_OAuthWiredOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Home = t.TempDir()
-	a, err := New(context.Background(), cfg, Options{APIOnly: true})
+	a, err := New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestApp_OAuthWiredOnlyWhenConfigured(t *testing.T) {
 	cfg = config.Defaults()
 	cfg.Home = t.TempDir()
 	cfg.OAuth.Issuer, cfg.OAuth.Addr = "http://127.0.0.1:19280", "127.0.0.1:0"
-	a, err = New(context.Background(), cfg, Options{APIOnly: true})
+	a, err = New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot with [oauth]: %v", err)
 	}
