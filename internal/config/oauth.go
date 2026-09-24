@@ -35,6 +35,9 @@ type OAuthConfig struct {
 	DefaultClient bool `toml:"default_client"`
 
 	Clients []OAuthClient `toml:"client"`
+
+	// IDP is consent path 3, nil unless [oauth.idp] is present.
+	IDP *OAuthIDPConfig `toml:"idp"`
 }
 
 // OAuthClient is a pre-registered client. Redirect URIs match exactly, except
@@ -117,6 +120,11 @@ func NormalizeIssuer(s string) (string, error) {
 func (o OAuthConfig) validate() error {
 	if (o.Issuer == "") != (o.Addr == "") {
 		return errors.New("config: [oauth].issuer and [oauth].addr must be set together (both empty turns OAuth off)")
+	}
+	if o.IDP != nil {
+		if err := o.IDP.validate(o.Issuer != ""); err != nil {
+			return err
+		}
 	}
 	if o.Issuer == "" {
 		return nil
