@@ -538,3 +538,37 @@ func TestGate_ReportsSrcFormAndUnresolvableTogether(t *testing.T) {
 		}
 	}
 }
+
+// #249 review. The self-reference section used to return early, dropping any
+// src-form problem in the same batch: the agent fixed the self-ref, retried,
+// and only then learned about the src ref. Every section is reported at once.
+func TestGate_ReportsSelfRefAndSrcFormTogether(t *testing.T) {
+	self := "kb/y/new.md"
+	bad := "src://7b4887ce51d9/internal/x.go@4154e92"
+	err := newGate().CheckBatch(context.Background(),
+		map[string][]string{self: {self, bad, "kb/nope.md"}}, nil)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"may not reference itself", bad, "kb/nope.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q:\n%v", want, err)
+		}
+	}
+}
+
+// #249 review. URI schemes are case-insensitive (RFC 3986 §3.1). A src ref
+// written "SRC://" or "Src://" used to classify as an external URL and skip
+// the gate entirely.
+func TestGate_SrcSchemeIsCaseInsensitive(t *testing.T) {
+	for _, ref := range []string{
+		"SRC://knomit/internal/x.go@ca1c272",
+		"Src://7b4887ce51d9/internal/x.go@4154e92c8ff333435fd00c442489e855e4c3331e",
+	} {
+		err := newGate().CheckBatch(context.Background(),
+			map[string][]string{"kb/y/new.md": {ref}}, nil)
+		if err == nil || !strings.Contains(err.Error(), ref) {
+			t.Errorf("%s must be judged as a src ref and refused, got %v", ref, err)
+		}
+	}
+}

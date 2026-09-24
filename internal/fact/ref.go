@@ -72,10 +72,21 @@ type Ref struct {
 //
 // This is a statement about SHAPE only. A well-formed hash that names no
 // object passes, because nothing here has the source repo to ask.
+//
+// The scheme itself must be the canonical lowercase "src://". ClassifyRef
+// accepts any case (RFC 3986 §3.1), so "SRC://…" is still a source ref, but
+// not one written in the full form.
 func (r Ref) IsFullSource() bool {
-	return r.Kind == RefSourceCode && !r.Legacy &&
+	return r.Kind == RefSourceCode && !r.Legacy && strings.HasPrefix(r.Raw, SrcScheme) &&
 		len(r.Commit) == gitHashLen && isLowerHex(r.Commit) &&
 		len(r.Blob) == gitHashLen && isLowerHex(r.Blob)
+}
+
+// HasSrcScheme reports whether raw starts with the src:// scheme in any case.
+// URI schemes are case-insensitive (RFC 3986 §3.1); matching only lowercase
+// let "SRC://…" classify as an external URL that no rule looks at.
+func HasSrcScheme(raw string) bool {
+	return len(raw) >= len(SrcScheme) && strings.EqualFold(raw[:len(SrcScheme)], SrcScheme)
 }
 
 // ClassifyRef is THE answer to "what is this ref?" — the single authority the
@@ -108,7 +119,7 @@ func ClassifyRef(raw, localRepoID string) Ref {
 			r.Kind = RefForeignFact
 		}
 
-	case strings.HasPrefix(raw, SrcScheme):
+	case HasSrcScheme(raw):
 		return classifySrc(raw)
 
 	case hasScheme(raw):
@@ -138,7 +149,7 @@ func classifySrc(raw string) Ref {
 		}
 	}
 
-	rest := strings.TrimPrefix(raw, SrcScheme)
+	rest := raw[len(SrcScheme):] // the scheme matched case-insensitively
 
 	// Only a well-formed line range is treated as a fragment; '#' is legal in a
 	// filename, so anything else stays part of the path.

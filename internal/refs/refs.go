@@ -177,7 +177,7 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			// one. Re-judging them would make every one of those facts
 			// uneditable. Compared on the raw string: src refs are never
 			// canonicalized, so a carried one comes back byte-identical.
-			if strings.HasPrefix(raw, fact.SrcScheme) {
+			if fact.HasSrcScheme(raw) {
 				if !carriedSrc[raw] && !r.IsFullSource() {
 					srcForm = append(srcForm, problem{from, raw})
 				}
@@ -234,11 +234,22 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 		}
 	}
 
-	// Reported separately from unresolvable refs, and FIRST, because the two
-	// need opposite fixes: an unresolvable ref means "write the target"; a
-	// self-ref means "delete this ref, there is nothing to write". Folding
-	// them into one list would tell an agent to create a fact that already
+	if len(selfRefs) == 0 && len(srcForm) == 0 && len(problems) == 0 {
+		return nil
+	}
+
+	// The reader is an agent that must fix the refs and retry, so EVERY
+	// problem goes in one error — one round trip, never fix-one-find-the-next
+	// — with each ref echoed exactly as it was sent (so the agent can
+	// string-match its own payload) and the fix for each kind.
+	//
+	// Each kind is its own section, and self-refs come FIRST, because the kinds
+	// need different fixes: an unresolvable ref means "write the target"; a
+	// self-ref means "delete this ref, there is nothing to write"; a src ref
+	// not in the full form means "compute it with git". Folding self-refs into
+	// the unresolvable list would tell an agent to create a fact that already
 	// exists — it is the one being written.
+	var sections []string
 	if len(selfRefs) > 0 {
 		var b strings.Builder
 		b.WriteString("a fact may not reference itself — nothing was written:\n")
@@ -249,19 +260,10 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			"history is already recorded by the commit that writes it.\nRefs to OTHER " +
 			"facts are unaffected, including facts this one supersedes or that have " +
 			"since been retracted — citing those is lineage and stays valid.")
-		return fmt.Errorf("%s", b.String())
+		sections = append(sections, b.String())
 	}
-
-	if len(problems) == 0 && len(srcForm) == 0 {
-		return nil
-	}
-
-	// The reader is an agent that must fix the refs and retry, so name every
-	// problem at once — both sections in one error, one round trip — echo each
-	// ref exactly as it was sent (so the agent can string-match its own
-	// payload), and say what the fixes are.
-	var b strings.Builder
 	if len(srcForm) > 0 {
+		var b strings.Builder
 		b.WriteString("source refs not in the full form — nothing was written:\n")
 		for _, p := range srcForm {
 			fmt.Fprintf(&b, "  %s cites %s\n", p.from, p.ref)
@@ -274,11 +276,10 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			"  blob:     git rev-parse <commit>:<path>\n" +
 			"The older src://<name>/<path>@<commit> form is kept on facts that already " +
 			"carry it, but may not be added anew.")
+		sections = append(sections, b.String())
 	}
 	if len(problems) > 0 {
-		if len(srcForm) > 0 {
-			b.WriteString("\n\n")
-		}
+		var b strings.Builder
 		b.WriteString("unresolvable fact references — nothing was written:\n")
 		for _, p := range problems {
 			fmt.Fprintf(&b, "  %s cites %s, which does not exist\n", p.from, p.ref)
@@ -287,19 +288,22 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			"call are committed together, so they may reference each other in any order, " +
 			"including circularly), write it first in an earlier call, or fix the path if " +
 			"it is a typo.")
+		sections = append(sections, b.String())
 	}
-	b.WriteString("\nOnly refs this write ADDS are checked; refs the fact already " +
-		"carried resolve at their own commit and are never re-judged.\nWhether a " +
-		"source ref's object exists, references to other repos (kb://<other-id>/…), " +
-		"and URLs are not checked.")
-	return fmt.Errorf("%s", b.String())
+	if len(srcForm) > 0 || len(problems) > 0 {
+		sections = append(sections, "Only refs this write ADDS are checked; refs the fact already "+
+			"carried resolve at their own commit and are never re-judged.\nWhether a "+
+			"source ref's object exists, references to other repos (kb://<other-id>/…), "+
+			"and URLs are not checked.")
+	}
+	return fmt.Errorf("%s", strings.Join(sections, "\n\n"))
 }
 
 // srcSet indexes the src:// refs a fact already carried, by raw string.
 func srcSet(refs []string) map[string]bool {
 	var set map[string]bool
 	for _, raw := range refs {
-		if strings.HasPrefix(raw, fact.SrcScheme) {
+		if fact.HasSrcScheme(raw) {
 			if set == nil {
 				set = make(map[string]bool)
 			}
