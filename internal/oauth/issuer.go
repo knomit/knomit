@@ -58,6 +58,8 @@ type Options struct {
 	// once; an fs.ErrNotExist error means "not enrolled". nil disables
 	// signed approval (ErrNoFleetRoot).
 	FleetRoot func() (ed25519.PublicKey, error)
+	// IDP turns on consent path 3 (F19 phase 3c); nil leaves it off.
+	IDP *IDPOptions
 }
 
 // Issuer is the authorization server: the public OAuth routes, and the
@@ -73,6 +75,7 @@ type Issuer struct {
 	instanceFP  string
 	fleetRoot   func() (ed25519.PublicKey, error)
 	replays     *replayTable
+	idp         *idpFlow // nil unless consent path 3 is configured
 
 	// beforeRegister, when set (tests only), runs in /wait between the first
 	// read and the waiter registration — the window the re-read closes.
@@ -84,9 +87,17 @@ func NewIssuer(o Options) *Issuer {
 	if wt == 0 {
 		wt = 30 * time.Second
 	}
-	return &Issuer{issuer: o.Issuer, store: o.Store, clients: o.Clients, grants: o.Grants, waitTimeout: wt,
+	i := &Issuer{issuer: o.Issuer, store: o.Store, clients: o.Clients, grants: o.Grants, waitTimeout: wt,
 		waiters: waiters{m: map[string]*waiter{}}, instanceFP: o.InstanceFingerprint, fleetRoot: o.FleetRoot,
 		replays: newReplayTable(replayTableMax)}
+	if o.IDP != nil {
+		i.idp = newIDPFlow(o.Issuer, o.IDP)
+	}
+	// Installed with or without a provider: a family approved through one
+	// stops refreshing when its id leaves the allow list, or the provider
+	// is removed altogether (3c ruling W9).
+	o.Store.SetRefreshCheck(i.refreshAllowed)
+	return i
 }
 
 // Name returns the issuer URL.
@@ -109,6 +120,11 @@ func (i *Issuer) Routes() http.Handler {
 	mux.HandleFunc("POST /oauth/approve", i.signedApprove)
 	mux.HandleFunc("POST /oauth/token", i.token)
 	mux.HandleFunc("POST /oauth/revoke", i.revoke)
+	if i.idp != nil {
+		mux.HandleFunc("GET /oauth/idp/start/{id}", i.idpStart)
+		mux.HandleFunc("GET /oauth/idp/callback", i.idpCallback)
+		mux.HandleFunc("POST /oauth/idp/decide", i.idpDecide)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/.well-known/") {
 			wk.ServeHTTP(w, r)
@@ -205,11 +221,25 @@ func (i *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	p, err := i.store.CreatePending(r.Context(), Pending{
+	// With a provider configured, the request is bound to THIS browser: the
+	// provider sign-in for it is honoured only where this cookie is (3c W1).
+	var binding string
+	if i.idp != nil {
+		var err error
+		if binding, err = newSecret(); err != nil {
+			errorPage(w, http.StatusInternalServerError, "The request could not be recorded.")
+			return
+		}
+	}
+	pending := Pending{
 		ClientID: client.ID, ClientName: client.Name, RedirectURI: redirect, Scopes: scopes,
 		CodeChallenge: vals["code_challenge"], Resource: vals["resource"], State: state,
 		RemoteAddr: r.RemoteAddr, UserAgent: r.UserAgent(),
-	})
+	}
+	if binding != "" {
+		pending.IDPBinding = hashSecret(binding)
+	}
+	p, err := i.store.CreatePending(r.Context(), pending)
 	if errors.Is(err, ErrTooManyPending) {
 		fail("temporarily_unavailable", "too many authorization requests are waiting; try again later")
 		return
@@ -221,7 +251,10 @@ func (i *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info().Str("id", p.ID).Str("client_id", p.ClientID).Str("remote", p.RemoteAddr).
 		Msg("oauth: authorization request waiting for approval")
-	i.waitingPage(w, p.ID)
+	if binding != "" {
+		http.SetCookie(w, i.idp.bindingCookie(p.ID, binding))
+	}
+	i.waitingPage(w, p)
 }
 
 // --- /oauth/authorize/{id}/wait -------------------------------------------------
@@ -259,7 +292,7 @@ func (i *Issuer) wait(w http.ResponseWriter, r *http.Request) {
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			i.waitingPage(w, id)
+			i.waitingPage(w, p)
 			return
 		}
 		if i.beforeRegister != nil {
@@ -563,7 +596,7 @@ func (i *Issuer) token(w http.ResponseWriter, r *http.Request) {
 
 // isStoreFailure tells a database failure (a 500) from a refusal (a 400).
 func isStoreFailure(err error) bool {
-	for _, known := range []error{ErrUnknownToken, ErrExpired, ErrRevoked, ErrReused, ErrWrongClient, ErrWrongAudience, ErrInvalidScope} {
+	for _, known := range []error{ErrUnknownToken, ErrExpired, ErrRevoked, ErrReused, ErrWrongClient, ErrWrongAudience, ErrInvalidScope, ErrNoLongerAllowed} {
 		if errors.Is(err, known) {
 			return false
 		}
@@ -629,6 +662,8 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 </head><body>
 <h1>knomit</h1>
 <p>{{.Message}}</p>
+{{if .Host}}<p>This request would send a login code to <strong>{{.Host}}</strong> for client <code>{{.ClientID}}</code> ({{.ClientName}}).</p>{{end}}
+{{if .SignIn}}<p><a href="{{.SignIn}}">Sign in with {{.Label}} to approve it yourself</a>, if your {{.Label}} account is allowed to on this instance.</p>{{end}}
 {{if .ID}}<p>Request <code>{{.ID}}</code> is waiting for approval on the instance. The operator approves it with</p>
 <pre>knomit oauth approve {{.ID}} --as &lt;name&gt;</pre>
 <p>This page continues by itself once it is decided.</p>
@@ -636,27 +671,46 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 </body></html>
 `))
 
-func (i *Issuer) waitingPage(w http.ResponseWriter, id string) {
-	renderPage(w, http.StatusOK, pageData{
+// waitingPage names the request. With a provider configured it also says
+// what is asked (redirect host first) and links to the provider sign-in,
+// which works only in the browser that parked the request.
+func (i *Issuer) waitingPage(w http.ResponseWriter, p Pending) {
+	d := pageData{
 		Message: "Authorization requested.",
-		ID:      id,
-		Refresh: i.issuer + "/oauth/authorize/" + url.PathEscape(id) + "/wait",
-	})
+		ID:      p.ID,
+		Refresh: i.issuer + "/oauth/authorize/" + url.PathEscape(p.ID) + "/wait",
+	}
+	if i.idp != nil {
+		d.Host, d.ClientID, d.ClientName = redirectHost(p.RedirectURI), p.ClientID, p.ClientName
+		d.SignIn, d.Label = i.issuer+"/oauth/idp/start/"+url.PathEscape(p.ID), i.idp.label
+	}
+	renderPage(w, http.StatusOK, d)
 }
 
 func errorPage(w http.ResponseWriter, status int, msg string) {
 	renderPage(w, status, pageData{Message: msg})
 }
 
-type pageData struct{ Message, ID, Refresh string }
+type pageData struct {
+	Message, ID, Refresh string
+	// With a provider configured (3c): the request's redirect host and
+	// client, and the sign-in link.
+	Host, ClientID, ClientName, SignIn, Label string
+}
 
-func renderPage(w http.ResponseWriter, status int, d pageData) {
+// pageHeaders are every OAuth page's: no caching, no framing, no script,
+// forms only to this origin, no referrer.
+func pageHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
 	h.Set("Referrer-Policy", "no-referrer")
+}
+
+func renderPage(w http.ResponseWriter, status int, d pageData) {
+	pageHeaders(w)
 	w.WriteHeader(status)
 	_ = pageTmpl.Execute(w, d)
 }
