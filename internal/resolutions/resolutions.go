@@ -100,15 +100,23 @@ func normalizeOne(
 		}
 	}
 
-	// 3. The refs gate. Every ref in the body is treated as newly added: a
-	// resolution replaces the fact wholesale and the caller composed this text
-	// just now, so there is no earlier version whose citations it inherited
-	// without choosing them.
+	// 3. The refs gate. Only refs the resolver ADDS are judged: prior is every
+	// ref this path carries at the fork point, on the parent and on the
+	// experiment. Each of those versions was accepted by a write path when it
+	// was written, so its refs resolved at their own commit and are never
+	// re-judged (historical-not-current). Keeping them is merging, not
+	// authoring. Passing nil here, as this once did, made every carried ref
+	// read as new — which since knomit#249 refuses any resolution of a fact
+	// that carries a legacy src ref.
 	gate, err := resolveGate(ctx, ri, parent, experiment)
 	if err != nil {
 		return nil, err
 	}
-	canonRefs, _, err := gate.Apply(ctx, file, f.Refs, nil)
+	prior, err := carriedRefs(ctx, ri, parent, experiment, file)
+	if err != nil {
+		return nil, err
+	}
+	canonRefs, _, err := gate.Apply(ctx, file, f.Refs, prior)
 	if err != nil {
 		return nil, fmt.Errorf("resolution body for %q has unresolvable references: %w", file, err)
 	}
@@ -131,6 +139,91 @@ func normalizeOne(
 		return nil, fmt.Errorf("resolution body for %q could not be serialized: %w", file, err)
 	}
 	return []byte(serialized), nil
+}
+
+// carriedRefs is the union of the refs path carries on each version a
+// resolution merges: the experiment's fork point, the parent tip and the
+// experiment tip.
+//
+// The FORK version is included, not just the two tips, because a resolution
+// may restore what the fork had: that is choosing the base side, and the base
+// was accepted when it was written. Its commit comes from the experiment's
+// record; after a sync the actual merge base is newer, and every version
+// between the two is on one of the tips' histories.
+//
+// A version that does not exist contributes nothing — a path added on one side
+// only, or an experiment record that has gone. The two TIPS fail loudly when
+// a read errors, rather than shrinking prior: a smaller prior would refuse refs
+// the fact legitimately carries and blame the resolver for them. The fork read
+// cannot tell "not at that commit" from other failures, so it is treated as
+// absent; that errs strict, never lax.
+func carriedRefs(ctx context.Context, ri *repos.RepoInstance, parent, experiment, file string) ([]string, error) {
+	var (
+		out     []string
+		seen    = map[string]bool{}
+		outErr  error
+		reads   []store.ReadFactOpts
+		sources []string
+	)
+	collect := func(content string) {
+		f, err := knomitfact.ParseFact(file, content)
+		if err != nil {
+			return // an unparseable version carried nothing we can name
+		}
+		for _, r := range f.Refs {
+			if !seen[r] {
+				seen[r] = true
+				out = append(out, r)
+			}
+		}
+	}
+	if aerr := ri.WithRead(func(svc *store.Service) {
+		if svc == nil {
+			return
+		}
+		if name, ok := strings.CutPrefix(experiment, store.ExperimentPrefix); ok {
+			exp, found, err := svc.Experiments().GetExperiment(ctx, name)
+			if err != nil {
+				outErr = fmt.Errorf("resolution for %q: read experiment: %w", file, err)
+				return
+			}
+			if found && exp.ForkCommit != "" {
+				reads = append(reads, store.ReadFactOpts{AtCommit: exp.ForkCommit})
+				sources = append(sources, parent)
+			}
+		}
+		for _, branch := range slices.Compact([]string{parent, experiment}) {
+			if branch != "" {
+				reads = append(reads, store.ReadFactOpts{})
+				sources = append(sources, branch)
+			}
+		}
+		for i, opts := range reads {
+			exists := true
+			if opts.AtCommit == "" {
+				var err error
+				if exists, err = svc.Facts().FactExists(ctx, sources[i], file); err != nil {
+					outErr = fmt.Errorf("resolution for %q: %w", file, err)
+					return
+				}
+			}
+			if !exists {
+				continue
+			}
+			res, err := svc.Facts().ReadFact(ctx, sources[i], file, &opts)
+			if err != nil {
+				if opts.AtCommit != "" {
+					continue // not present at the fork: added since, on one side
+				}
+				outErr = fmt.Errorf("resolution for %q: read %s: %w", file, sources[i], err)
+				return
+			}
+			collect(res.Content)
+		}
+	}); aerr != nil {
+		return nil, aerr
+	}
+	return out, outErr
 }
 
 // resolveGate builds the ref gate for a resolution: a local fact resolves if it
