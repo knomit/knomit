@@ -23,9 +23,10 @@ import (
 // full default permission set and no test would notice. This test is what
 // notices.
 //
-// It boots a real App — app.New requires a working embedder, so there is no
-// cheaper way to exercise the production wiring — and asserts BOTH halves of
-// [auth] arrived: Require and LoopbackDefault, each through the handler.
+// It boots a real App through Options.Embedder — the production wiring with
+// a deterministic embedder in place of the ONNX one, so no model download and
+// no native runtime (PR #284) — and asserts BOTH halves of [auth] arrived:
+// Require and LoopbackDefault, each through the handler.
 // The two need separate boots because they are mutually exclusive: with
 // require = true there is no anonymous principal for a loopback default to
 // apply to.
