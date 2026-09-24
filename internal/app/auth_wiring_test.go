@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"knomit/internal/config"
+	"knomit/test/testenv"
 )
 
 // TestApp_AuthConfigReachesMiddleware is what makes the nil-LoopbackDefault
@@ -22,9 +23,10 @@ import (
 // full default permission set and no test would notice. This test is what
 // notices.
 //
-// It boots a real App — app.New requires a working embedder, so there is no
-// cheaper way to exercise the production wiring — and asserts BOTH halves of
-// [auth] arrived: Require and LoopbackDefault, each through the handler.
+// It boots a real App through Options.Embedder — the production wiring with
+// a deterministic embedder in place of the ONNX one, so no model download and
+// no native runtime (PR #284) — and asserts BOTH halves of [auth] arrived:
+// Require and LoopbackDefault, each through the handler.
 // The two need separate boots because they are mutually exclusive: with
 // require = true there is no anonymous principal for a loopback default to
 // apply to.
@@ -37,7 +39,7 @@ func TestApp_AuthConfigReachesMiddleware(t *testing.T) {
 	cfg.Socket = filepath.Join(cfg.Home, "knomit.sock")
 	cfg.Auth.LoopbackDefault = []string{"read"}
 
-	a, err := New(context.Background(), cfg, Options{APIOnly: true})
+	a, err := New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestApp_AuthConfigReachesMiddleware(t *testing.T) {
 	cfg2.Auth.Require = false
 	cfg2.Auth.LoopbackDefault = []string{"read"}
 
-	a2, err := New(context.Background(), cfg2, Options{APIOnly: true})
+	a2, err := New(context.Background(), cfg2, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
 	if err != nil {
 		t.Fatalf("boot 2: %v", err)
 	}

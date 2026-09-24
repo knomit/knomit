@@ -71,15 +71,21 @@ jobs:
       # -count=1 because a cached PASS proves nothing about a race: the race
       # detector has to actually execute the code.
       #
-      # -timeout 30m is MEASURED, not guessed. go test defaults to 10 minutes
-      # PER PACKAGE, and internal/synthesize under -race takes 744s (12.4 min)
-      # on an Apple-Silicon dev machine — so the default makes that package
-      # panic with `test timed out after 10m0s` and the job goes red for a
-      # reason that is not a race. That is the wallpaper failure this job exists
-      # to avoid, and it is how the first draft of this workflow behaved.
-      # 30m is ~2.4x the measured figure, headroom for a CI runner slower than
-      # the machine it was measured on. If a package ever legitimately needs
-      # longer, RE-MEASURE and raise this — do not round it up on a hunch.
+      # -timeout 45m is MEASURED, not guessed. go test defaults to 10 minutes
+      # PER PACKAGE, and internal/synthesize under -race is the package that
+      # blows it — so the default makes that package panic with `test timed
+      # out after 10m0s` and the job goes red for a reason that is not a race.
+      # That is the wallpaper failure this job exists to avoid, and it is how
+      # the first draft of this workflow behaved.
+      #
+      # The first figure was 744s on an Apple-Silicon dev machine, and 30m was
+      # set as ~2.4x of that. The MACHINE THAT MATTERS is ubuntu-latest, and
+      # across the eleven runs of 2026-09-19..24 it took internal/synthesize
+      # 1006s–1643s (runs 35458319863..36025605402), i.e. up to 27.4 min
+      # against a 30 min limit: 157s of headroom on the worst run. 45m is
+      # ~1.65x the worst observed CI figure. If a package ever legitimately
+      # needs longer, RE-MEASURE on the runner and raise this — do not round it
+      # up on a hunch, and do not size it from a dev machine again.
       #
       # NO -skip. The diff-based MN5 check that needed one is gone: it asked a
       # question about the checkout rather than about the file, so it could not
@@ -89,4 +95,4 @@ jobs:
       - name: go test -race ./...
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test -race -count=1 -timeout 30m ./...
+          CGO_ENABLED=1 go test -race -count=1 -timeout 45m ./...

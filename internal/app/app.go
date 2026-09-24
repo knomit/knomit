@@ -23,6 +23,7 @@ import (
 	"knomit/internal/platform/logging"
 	"knomit/internal/platform/memlimit"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 	"knomit/internal/web"
 )
 
@@ -63,6 +64,16 @@ type Options struct {
 	// nil is valid and means the endpoint answers 503: a binary that serves no
 	// UI has no reason to carry a log ring.
 	LogTap *logging.Tap
+	// Embedder, when non-nil, is used INSTEAD of the production ONNX embedder:
+	// no model lookup, no ONNX runtime, no model download, and New does not
+	// own its lifetime (nothing is appended to closers). It exists for tests
+	// that need the real boot wiring — [auth] into the middleware, the grants
+	// seed, the OAuth listener — without the 600 MB model those boots would
+	// otherwise fetch into a fresh t.TempDir(). Neither production caller
+	// (cmd/serve, tools/desktop) sets it; embeddings stay mandatory there,
+	// because nil takes the production path and that path still fails the
+	// boot when no embedder can be built (TestNew_EmbedderRequired).
+	Embedder store.BatchEmbedder
 	// NoOAuth leaves the OAuth issuer unbuilt even when [oauth] is
 	// configured. The desktop sets it (F19 phase 3b, W3): it never opens the
 	// OAuth listener — only `knomit serve` does — so no request could ever
@@ -127,81 +138,20 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	// and the per-model cosine thresholds are load-bearing for dedup, graph
 	// density, and search recall. A service running without an embedder would
 	// silently write vectorless facts and mis-tune retrieval, so failure to
-	// build one is fatal rather than a degraded mode.
-	model, err := embeddings.Lookup(cfg.Embeddings.Model)
-	if err != nil {
-		return nil, fmt.Errorf("embedder model config invalid (embeddings.model=%q): %w", cfg.Embeddings.Model, err)
-	}
-	// 0 is the documented auto sentinel for embeddings.max_batch_tokens, resolved
-	// here rather than in Defaults() because Defaults() runs before the TOML and
-	// env layers and so cannot tell "operator chose this value" from "operator
-	// set nothing" — the same reason remote.known_hosts resolves after the
-	// overlay. Resolution lives at the app layer so the config package needs no
-	// /sys/fs/cgroup dependency.
-	//
-	// Auto-sizing clamps DOWN only: a small host or a memory-capped container
-	// gets a smaller budget, but no machine ever raises the shipped default.
-	// memlimit.Detect never fails — an undetectable ceiling yields the fixed
-	// default, because embeddings are mandatory and must not be blocked by an
-	// unknown amount of memory.
-	lim := memlimit.Detect()
-	budget := embeddings.ResolveBudget(cfg.Embeddings.MaxBatchTokens, lim)
-	maxBatchTokens := budget.Tokens
-	// Warn rather than reject: both bounds are judgement, not correctness.
-	// The low warning catches a predictable operator error — the constant this
-	// replaced was 32 DOCUMENTS, so someone reading a changelog may well set 32
-	// here and get one max-length document per inference with no other signal.
-	if n := cfg.Embeddings.MaxBatchTokens; n > 0 && n < 2048 {
-		log.Warn().Int("max_batch_tokens", n).
-			Msg("embeddings.max_batch_tokens is below one document's maximum length — the unit is PADDED TOKENS, not documents; every max-length document will run alone")
-	}
-	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"),
-		embeddings.WithMaxBatchTokens(maxBatchTokens),
-		embeddings.WithBatchConcurrency(budget.BatchConcurrency))
-	if err != nil {
-		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
-	}
-	a.closers = append(a.closers, embedder.Close)
-	// The budget's provenance is logged, not just its value: a machine-derived
-	// number with no explanation makes "why is re-embed slow HERE" unanswerable
-	// without access to the box.
-	log.Info().Str("model", model.ID).Int("dim", model.Dim).
-		Int("max_batch_tokens", maxBatchTokens).
-		Str("batch_budget_source", budget.Source).
-		Str("batch_budget_clamped", budget.Clamped).
-		Int64("memory_limit_bytes", budget.LimitBytes).
-		Int("batch_concurrency", budget.BatchConcurrency).
-		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
-	if budget.BatchConcurrency == 0 {
-		// The one class with no memory bound at all. An operator on a host we
-		// could not measure is exactly who needs telling, and a bare
-		// batch_concurrency=0 field on the line above does not say it.
-		log.Warn().Str("batch_budget_source", budget.Source).
-			Msg("could not determine this host's memory ceiling, so concurrent embedding batches are UNBOUNDED and the batch budget is the shipped default; set embeddings.max_batch_tokens explicitly if this host is memory-constrained")
-	}
-	if budget.BatchConcurrency > 0 {
-		log.Info().Int("max_batch_tokens", maxBatchTokens).
-			Str("batch_budget_source", budget.Source).
-			Int("batch_concurrency", budget.BatchConcurrency).
-			Msg("concurrent embedding batches capped — this host's memory does not absorb unbounded overlap; interactive search is unaffected, since single-row inference bypasses the cap")
-	}
-	// The explicit-budget warning and the cap share one threshold deliberately.
-	// Three separate thresholds on this axis previously left a band that was
-	// modelled but neither warned nor bounded.
-	if n := cfg.Embeddings.MaxBatchTokens; n > embeddings.DefaultMaxBatchTokens {
-		log.Warn().Int("max_batch_tokens", n).
-			Msg("embeddings.max_batch_tokens is above the shipped default; batch inference is serialized to compensate, and beyond 32768 tokens the memory cost is not covered by any measurement")
-	}
-	// FloorClass, not budget.Clamped: Clamped is always "none" for an explicit
-	// budget, so an operator pinning a value on a small host would get no warning
-	// at all — and for a cgroup source Clamped derives from a different fraction
-	// and a different ceiling, so it answers a different question. The warning
-	// should track the MACHINE, which is what FloorClass computes.
-	if embeddings.FloorClass(lim) {
-		log.Warn().Int("max_batch_tokens", maxBatchTokens).
-			Str("batch_budget_source", budget.Source).
-			Int64("memory_limit_bytes", budget.LimitBytes).
-			Msg("this host has room for barely one full-length document per embedding inference; re-embedding will be slow and memory is the binding constraint")
+	// build one is fatal rather than a degraded mode. Options.Embedder is the
+	// one exception, and it is a test seam, not a degraded mode: see its doc.
+	var embedder store.BatchEmbedder
+	if opts.Embedder != nil {
+		embedder = opts.Embedder
+		log.Warn().Str("model", embedder.ID()).Int("dim", embedder.Dim()).
+			Msg("embedder INJECTED via Options.Embedder — the production ONNX embedder was not built; this is a test seam")
+	} else {
+		e, err := newProductionEmbedder(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		embedder = e
+		a.closers = append(a.closers, e.Close)
 	}
 
 	// LLM adapter.
@@ -431,4 +381,87 @@ func (a *App) Close() {
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		a.closers[i]()
 	}
+}
+
+// newProductionEmbedder builds the ONNX embedder New uses when
+// Options.Embedder is nil: model lookup, memory-derived batch budget, ONNX
+// runtime init and (on first use of a model) the model download into
+// <Home>/models. Every warning about the batch budget lives here because the
+// budget is only meaningful for the real model.
+func newProductionEmbedder(ctx context.Context, cfg config.Config) (*embeddings.Embedder, error) {
+	model, err := embeddings.Lookup(cfg.Embeddings.Model)
+	if err != nil {
+		return nil, fmt.Errorf("embedder model config invalid (embeddings.model=%q): %w", cfg.Embeddings.Model, err)
+	}
+	// 0 is the documented auto sentinel for embeddings.max_batch_tokens, resolved
+	// here rather than in Defaults() because Defaults() runs before the TOML and
+	// env layers and so cannot tell "operator chose this value" from "operator
+	// set nothing" — the same reason remote.known_hosts resolves after the
+	// overlay. Resolution lives at the app layer so the config package needs no
+	// /sys/fs/cgroup dependency.
+	//
+	// Auto-sizing clamps DOWN only: a small host or a memory-capped container
+	// gets a smaller budget, but no machine ever raises the shipped default.
+	// memlimit.Detect never fails — an undetectable ceiling yields the fixed
+	// default, because embeddings are mandatory and must not be blocked by an
+	// unknown amount of memory.
+	lim := memlimit.Detect()
+	budget := embeddings.ResolveBudget(cfg.Embeddings.MaxBatchTokens, lim)
+	maxBatchTokens := budget.Tokens
+	// Warn rather than reject: both bounds are judgement, not correctness.
+	// The low warning catches a predictable operator error — the constant this
+	// replaced was 32 DOCUMENTS, so someone reading a changelog may well set 32
+	// here and get one max-length document per inference with no other signal.
+	if n := cfg.Embeddings.MaxBatchTokens; n > 0 && n < 2048 {
+		log.Warn().Int("max_batch_tokens", n).
+			Msg("embeddings.max_batch_tokens is below one document's maximum length — the unit is PADDED TOKENS, not documents; every max-length document will run alone")
+	}
+	embedder, err := embeddings.NewEmbedder(ctx, model, filepath.Join(cfg.Home, "models"),
+		embeddings.WithMaxBatchTokens(maxBatchTokens),
+		embeddings.WithBatchConcurrency(budget.BatchConcurrency))
+	if err != nil {
+		return nil, fmt.Errorf("embedder init failed for model %q (embeddings are required — check ONNX model files / network): %w", model.ID, err)
+	}
+	// The budget's provenance is logged, not just its value: a machine-derived
+	// number with no explanation makes "why is re-embed slow HERE" unanswerable
+	// without access to the box.
+	log.Info().Str("model", model.ID).Int("dim", model.Dim).
+		Int("max_batch_tokens", maxBatchTokens).
+		Str("batch_budget_source", budget.Source).
+		Str("batch_budget_clamped", budget.Clamped).
+		Int64("memory_limit_bytes", budget.LimitBytes).
+		Int("batch_concurrency", budget.BatchConcurrency).
+		Msg("embedder enabled — facts indexed with vectors; semantic search and methodology vector ranking active")
+	if budget.BatchConcurrency == 0 {
+		// The one class with no memory bound at all. An operator on a host we
+		// could not measure is exactly who needs telling, and a bare
+		// batch_concurrency=0 field on the line above does not say it.
+		log.Warn().Str("batch_budget_source", budget.Source).
+			Msg("could not determine this host's memory ceiling, so concurrent embedding batches are UNBOUNDED and the batch budget is the shipped default; set embeddings.max_batch_tokens explicitly if this host is memory-constrained")
+	}
+	if budget.BatchConcurrency > 0 {
+		log.Info().Int("max_batch_tokens", maxBatchTokens).
+			Str("batch_budget_source", budget.Source).
+			Int("batch_concurrency", budget.BatchConcurrency).
+			Msg("concurrent embedding batches capped — this host's memory does not absorb unbounded overlap; interactive search is unaffected, since single-row inference bypasses the cap")
+	}
+	// The explicit-budget warning and the cap share one threshold deliberately.
+	// Three separate thresholds on this axis previously left a band that was
+	// modelled but neither warned nor bounded.
+	if n := cfg.Embeddings.MaxBatchTokens; n > embeddings.DefaultMaxBatchTokens {
+		log.Warn().Int("max_batch_tokens", n).
+			Msg("embeddings.max_batch_tokens is above the shipped default; batch inference is serialized to compensate, and beyond 32768 tokens the memory cost is not covered by any measurement")
+	}
+	// FloorClass, not budget.Clamped: Clamped is always "none" for an explicit
+	// budget, so an operator pinning a value on a small host would get no warning
+	// at all — and for a cgroup source Clamped derives from a different fraction
+	// and a different ceiling, so it answers a different question. The warning
+	// should track the MACHINE, which is what FloorClass computes.
+	if embeddings.FloorClass(lim) {
+		log.Warn().Int("max_batch_tokens", maxBatchTokens).
+			Str("batch_budget_source", budget.Source).
+			Int64("memory_limit_bytes", budget.LimitBytes).
+			Msg("this host has room for barely one full-length document per embedding inference; re-embedding will be slow and memory is the binding constraint")
+	}
+	return embedder, nil
 }
