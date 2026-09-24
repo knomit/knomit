@@ -873,3 +873,18 @@ func TestIDP_ConsentPageDoesNotOverstateAccess(t *testing.T) {
 		t.Fatalf("a previously granted subject's page must say its grants stand:\n%s", page)
 	}
 }
+
+// Every OAuth page's CSP has NO form-action. Chromium applies form-action to
+// the whole redirect chain of a form submission, and the consent POST's
+// chain ends at the CLIENT's redirect_uri (decide → 303 /wait → 302
+// client): with form-action 'self' the browser blocked that last hop and
+// the client never got its code — seen in a real Chromium run of the flow,
+// invisible to an http.Client.
+func TestIDP_PagesCarryNoFormAction(t *testing.T) {
+	f := newIDPFixture(t, "github-583231")
+	id := f.park(t, f.browser, "read")
+	resp, _, _ := f.signIn(t, f.browser, id)
+	if csp := resp.Header.Get("Content-Security-Policy"); strings.Contains(csp, "form-action") || !strings.Contains(csp, "default-src 'none'") {
+		t.Fatalf("consent page CSP %q", csp)
+	}
+}

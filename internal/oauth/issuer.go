@@ -699,13 +699,16 @@ type pageData struct {
 }
 
 // pageHeaders are every OAuth page's: no caching, no framing, no script,
-// forms only to this origin, no referrer.
+// no referrer. Deliberately NO form-action: browsers apply it to the whole
+// redirect chain of a form submission, and the consent POST's chain ends at
+// the client's redirect_uri, another origin (the pages hold no injectable
+// markup, which is what form-action would guard).
 func pageHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
-	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
 	h.Set("Referrer-Policy", "no-referrer")
 }
 
