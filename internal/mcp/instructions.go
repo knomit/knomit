@@ -251,7 +251,7 @@ Call this tool to review and maintain the knowledge base. It works as a multi-tu
 2. You'll receive a prompt describing facts to evaluate and a response_schema
 3. Reason about the facts, then call knomit_review again with:
    - session_id: the ID from the previous response (required on every call after the first)
-   - item_id: the item's id
+   - item_id: the item's id (required with every response)
    - response: your JSON decisions matching the response_schema
    The result's "next" line names exactly what to pass.
 4. Repeat until the response contains "done": true

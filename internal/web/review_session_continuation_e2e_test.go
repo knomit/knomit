@@ -350,3 +350,34 @@ func TestReviewE2E_EveryResultNamesTheSessionToContinue(t *testing.T) {
 	require.True(t, done.Done)
 	require.Contains(t, done.Next, "finished")
 }
+
+// Every answer names its item: without item_id the answer is refused and the
+// item stays open.
+func TestReviewE2E_AnswerWithoutItemIDIsRefused(t *testing.T) {
+	e := newReviewE2E(t)
+	sid, handle := e.client()
+	first := e.start(sid, handle)
+
+	_, errText := e.review(sid, map[string]any{
+		"binding": handle, "session_id": first.SessionID, "response": declineAnswer,
+	})
+	require.Contains(t, errText, "item_id is required")
+
+	next, errText := e.review(sid, answerArgs(handle, first))
+	require.Empty(t, errText, "the item is still open to a proper answer")
+	require.Equal(t, 1, next.Progress.Completed)
+}
+
+// session_id with no response re-serves the current item and changes nothing.
+func TestReviewE2E_SessionIDAloneServesTheCurrentItem(t *testing.T) {
+	e := newReviewE2E(t)
+	sid, handle := e.client()
+	first := e.start(sid, handle)
+
+	again, errText := e.review(sid, map[string]any{"binding": handle, "session_id": first.SessionID})
+	require.Empty(t, errText)
+	require.Equal(t, first.SessionID, again.SessionID)
+	require.Equal(t, first.Item.ID, again.Item.ID)
+	require.Equal(t, first.Progress.Completed, again.Progress.Completed)
+	require.Contains(t, again.Next, first.SessionID)
+}

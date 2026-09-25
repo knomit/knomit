@@ -192,6 +192,45 @@ func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.Pipeline
 	return nil
 }
 
+// currentItemHint tells a refused review caller how to get the current item.
+// Only knomit_review serves the current item for a session_id with no
+// response.
+func (p *Pipeline) currentItemHint(sessionID string) string {
+	if p.strategy.Tool() != reviewTool {
+		return ""
+	}
+	return fmt.Sprintf(" Call knomit_review with session_id=%q and no response to get the current item.", sessionID)
+}
+
+// Current serves the session's outstanding item again, from page 1, without
+// answering it. With nothing outstanding it takes the session's next step, as
+// the next answer would have.
+func (p *Pipeline) Current(ctx context.Context, sessionID string) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
+	d := p.deps()
+	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	if err != nil {
+		return nil, wrapf(tool, err, "get session")
+	}
+	if sess == nil {
+		return nil, errf(tool, "session %q not found", sessionID)
+	}
+	if sess.Status != "active" {
+		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+	}
+	if sess.Planning {
+		return nil, errStillPlanning(tool, sessionID)
+	}
+	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
+	if err != nil {
+		return nil, wrapf(tool, err, "current work item")
+	}
+	if item == nil {
+		return p.nextItem(ctx, sess)
+	}
+	return p.renderWorkItem(ctx, d, sess, item)
+}
+
 // errStillPlanning refuses a call on a session whose start has not finished
 // planning: its queue is empty only because nothing is queued yet.
 func errStillPlanning(tool, sessionID string) error {
@@ -439,6 +478,13 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 		return nil, wrapf(tool, err, "next work item")
 	}
 	if item == nil {
+		// An answer naming an item, when none is outstanding, answers
+		// something already answered: refuse it rather than turn it into the
+		// session's next step.
+		if itemID != 0 {
+			return nil, errf(tool, "item %d is no longer outstanding in session %q; nothing was applied.%s",
+				itemID, sessionID, p.currentItemHint(sessionID))
+		}
 		// No unanswered items — let the dispatcher handle phase advancement
 		// (work→reflect→done as appropriate). Don't short-circuit to
 		// completeSession: that would skip the reflect phase entirely on
@@ -451,8 +497,8 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	// against a different item's facts, so applying it here would validate it
 	// against the wrong input paths.
 	if itemID != 0 && itemID != item.ID {
-		return nil, errf(tool, "response targets work item %d but item %d is current; "+
-			"re-read the current item and answer that one", itemID, item.ID)
+		return nil, errf(tool, "response targets work item %d but item %d is current; nothing was applied.%s",
+			itemID, item.ID, p.currentItemHint(sessionID))
 	}
 
 	// Accumulate-then-respond guard, ahead of Decode and therefore ahead of the
@@ -493,6 +539,7 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	// concurrent caller, or by an earlier attempt of this very submission
 	// whose response reached the DB. Its mutations are already applied, so
 	// re-applying them here is exactly the duplication P0.4 exists to kill.
+	beforeClaim(ctx, item.ID)
 	claimed, err := d.Pipeline.AnswerPipelineWorkItem(ctx, item.ID, normalized)
 	if err != nil {
 		// UNCOVERED: no test exercises this branch, and there is currently no
@@ -512,6 +559,13 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	if !claimed {
 		log.Info().Str("tool", tool).Str("session", sessionID).Int64("item", item.ID).
 			Msg("pipeline: work item already answered; skipping apply")
+		// A caller that named its item and lost the claim answered the same
+		// item as another caller; handing it the next item would read as
+		// though its own answer had landed.
+		if itemID != 0 {
+			return nil, errf(tool, "item %d was answered by another caller; nothing was applied.%s",
+				item.ID, p.currentItemHint(sessionID))
+		}
 		return p.nextItem(ctx, sess)
 	}
 
@@ -1192,6 +1246,11 @@ func (p *Pipeline) startKey() string {
 	return fmt.Sprintf("effort=%s;domain=%s;entities=%s",
 		p.effort, strings.Join(dom, ","), strings.Join(ent, ","))
 }
+
+// beforeClaim runs between an answer's checks and its claim. A test seam: it
+// lets a test answer the item in that gap, which is the only way to lose the
+// claim deterministically.
+var beforeClaim = func(context.Context, int64) {}
 
 // maxSlotRetries bounds StartOrResumeSession's re-reads when a concurrent
 // start changes the slot between its read and its write. Each retry follows a

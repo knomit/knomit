@@ -159,3 +159,84 @@ func TestStartOrResume_AfterPlanningResumes(t *testing.T) {
 	require.True(t, second.Resumed)
 	require.Equal(t, first.SessionID, second.SessionID)
 }
+
+// answerFor is a well-formed answer to the item a start served.
+func answerFor(t *testing.T, res *ReviewResult) string {
+	t.Helper()
+	require.NotNil(t, res.Item)
+	switch res.Item.Type {
+	case "distill":
+		return `{"synthesize":[],"retract":[],"declined_reason":"no-shared-mechanism"}`
+	case "prune":
+		return `{"decisions":[],"merges":[]}`
+	}
+	t.Fatalf("no canned answer for item type %q", res.Item.Type)
+	return ""
+}
+
+// Two callers answer the same item and both pass the item check; the one
+// that loses the claim is told so, and is not handed the next item as though
+// its answer had landed.
+func TestContinue_LostClaimIsAnError(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	res, err := f.r.StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err)
+	require.NotNil(t, res.Item)
+	itemID := res.Item.ID
+
+	beforeClaim = func(context.Context, int64) {
+		claimed, cerr := f.svc.Pipeline().AnswerPipelineWorkItem(ctx, itemID, `"the other caller"`)
+		require.NoError(t, cerr)
+		require.True(t, claimed)
+	}
+	t.Cleanup(func() { beforeClaim = func(context.Context, int64) {} })
+
+	_, err = f.r.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), itemID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "answered by another caller")
+	require.Contains(t, err.Error(), "nothing was applied")
+}
+
+// An answer naming an item when nothing is outstanding is stale; it is
+// refused, not silently turned into the session's next step.
+func TestContinue_StaleItemWithEmptyQueueIsAnError(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	sess := manualSession(t, f.svc, resumeBranch)
+
+	_, err := f.r.ContinueSessionForItem(ctx, sess.ID, `{"decisions":[],"merges":[]}`, 5)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "item 5 is no longer outstanding")
+	require.Contains(t, err.Error(), "no response")
+	require.Equal(t, "active", f.status(t, sess.ID), "a refused answer must not advance the session")
+}
+
+// The item-mismatch refusal says how to get the current item.
+func TestContinue_StaleItemSaysHowToGetTheCurrentOne(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	res, err := f.r.StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err)
+
+	_, err = f.r.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), res.Item.ID+100)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is current")
+	require.Contains(t, err.Error(), "no response")
+}
+
+// Current serves the outstanding item again without answering or advancing
+// anything.
+func TestCurrent_ServesTheOutstandingItemWithoutAdvancing(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	res, err := f.r.StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err)
+
+	again, err := f.r.Current(ctx, res.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, res.SessionID, again.SessionID)
+	require.Equal(t, res.Item.ID, again.Item.ID)
+	require.Equal(t, res.Progress.Completed, again.Progress.Completed)
+	require.NotEmpty(t, again.Item.Prompt, "the whole item, from page 1")
+}

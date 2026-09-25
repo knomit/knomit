@@ -21,13 +21,13 @@ import (
 // timeout. Clients without task support get the original synchronous behavior.
 func reviewTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_review",
-		mcpgo.WithDescription("Maintain the existing knowledge base: prune redundant facts, distill clusters into higher-order synthesis facts, and reflect on hypothesis transitions to record methodology. Does NOT generate new hypotheses — that is a separate explicit operation via knomit_hypothesize. When a user asks for a 'review', they want only this tool; do not chain to knomit_hypothesize unless the user explicitly requests hypothesis generation. Call with no arguments to start: this opens a review session, or resumes the one already in progress on this knowledge base (the result then has resumed: true). Continue by passing session_id, item_id and response: session_id is required on every call after the first, and the result's `next` line names it. The binding selects the knowledge base; it does not identify the review session. If a start is refused because a session with a different scope or effort is in progress, continue that session with its session_id, or start again with takeover: true to abandon it. STOP when the result has done: true — the session is finished and that session_id can no longer be continued; calling with it again is an error. A start call may return done: true immediately when there is nothing to review; that is a normal, complete outcome, not a reason to retry. PAGED ITEMS: a work item whose facts exceed one tool result arrives split across pages. If a result has more_available: true, you have NOT seen the whole item — do not answer it. Call again with session_id, item_id and page = <next page> until more_available is false, accumulating every page, then answer once using the completion_token from the final page. Answering a paged item early is rejected."),
+		mcpgo.WithDescription("Maintain the existing knowledge base: prune redundant facts, distill clusters into higher-order synthesis facts, and reflect on hypothesis transitions to record methodology. Does NOT generate new hypotheses — that is a separate explicit operation via knomit_hypothesize. When a user asks for a 'review', they want only this tool; do not chain to knomit_hypothesize unless the user explicitly requests hypothesis generation. Call with no arguments to start: this opens a review session, or resumes the one already in progress on this knowledge base (the result then has resumed: true). Continue by passing session_id, item_id and response: session_id is required on every call after the first, item_id with every response, and session_id alone serves the current item again, and the result's `next` line names it. The binding selects the knowledge base; it does not identify the review session. If a start is refused because a session with a different scope or effort is in progress, continue that session with its session_id, or start again with takeover: true to abandon it. STOP when the result has done: true — the session is finished and that session_id can no longer be continued; calling with it again is an error. A start call may return done: true immediately when there is nothing to review; that is a normal, complete outcome, not a reason to retry. PAGED ITEMS: a work item whose facts exceed one tool result arrives split across pages. If a result has more_available: true, you have NOT seen the whole item — do not answer it. Call again with session_id, item_id and page = <next page> until more_available is false, accumulating every page, then answer once using the completion_token from the final page. Answering a paged item early is rejected."),
 		bindingArg(true),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from the result you are answering. Required on every call after the first; omit it only to start.")),
 		mcpgo.WithString("response", mcpgo.Description("Your JSON decisions for the previous work item.")),
 		mcpgo.WithNumber("page", mcpgo.Description("Fetch another page of the CURRENT work item, without answering it. Large items are delivered across several pages: when a result carries more_available: true, call again with session_id, item_id and page = <the next page number> until more_available is false, THEN answer. Paging does not answer or advance anything, so pages may be re-fetched freely. Omit when submitting a response.")),
 		mcpgo.WithString("completion_token", mcpgo.Description("Echo back the completion_token from the FINAL page of a multi-page work item. Required to answer such an item: it is the server's proof you read every page, and a response without it is rejected (the item stays available, so you can page properly and resubmit). Not needed for items delivered in a single page — those carry no token.")),
-		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Optional but strongly recommended: applying a distill item enqueues follow-up items, so the current item can change between calls — echoing the id lets the server reject a stale answer instead of applying it to a different item.")),
+		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Required with every response, so an answer can only ever apply to the item it was written for.")),
 		mcpgo.WithBoolean("takeover", mcpgo.Description("Start only: abandon the review session already in progress on this branch and start a new one. Needed only when a start is refused because a live session was opened with a different scope or effort.")),
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default — pre-discovery behaviour), 'medium', or 'high'. Medium/high engage the structural-bridge engine to surface emergent synthesis facts from cross-cluster bridges.")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the seed pool to facts in these domains. Empty = whole corpus.")),
@@ -133,7 +133,9 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			// still assembling.
 			result, err = reviewer.PageItem(ctx, sessionID, itemID, page)
 		case response == "":
-			return mcpgo.NewToolResultError("response is required when continuing a session (or pass page=N to read another page of the current item)"), nil
+			result, err = reviewer.Current(ctx, sessionID)
+		case itemID == 0:
+			return mcpgo.NewToolResultError(errAnswerWithoutItem), nil
 		default:
 			result, err = reviewer.ContinueSessionForItemPaged(ctx, sessionID, response, itemID, completionToken)
 		}
@@ -177,6 +179,10 @@ func reviewNext(res *synthesize.ReviewResult, unscoped bool) string {
 		"session_id is required on every call after the first.",
 		it.ID, res.SessionID, it.ID, token, binding)
 }
+
+// errAnswerWithoutItem is the refusal for a response sent without item_id.
+const errAnswerWithoutItem = "item_id is required with response: echo item.id from the item you are answering. " +
+	"Nothing was applied. Call knomit_review with session_id and no response to get the current item."
 
 // errContinuationWithoutSession is the refusal for a response, item_id,
 // completion_token or page sent without session_id.

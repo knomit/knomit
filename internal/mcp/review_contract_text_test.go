@@ -16,6 +16,9 @@ func TestReviewAndBindDescriptions_StateTheContinuationContract(t *testing.T) {
 	require.Contains(t, review, "session_id is required on every call after the first")
 	require.Contains(t, review, "takeover")
 	require.Contains(t, review, "resumes")
+	require.Contains(t, review, "item_id with every response")
+	item := reviewTool().InputSchema.Properties["item_id"].(map[string]any)["description"].(string)
+	require.Contains(t, item, "Required with every response")
 
 	bind := bindTool().Description
 	require.Contains(t, bind, "carries no review state")

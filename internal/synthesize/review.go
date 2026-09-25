@@ -98,6 +98,11 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	return reviewResult(r.p.StartSession(ctx))
 }
 
+// Current serves the session's outstanding item again, from page 1.
+func (r *Reviewer) Current(ctx context.Context, sessionID string) (*ReviewResult, error) {
+	return reviewResult(r.p.Current(ctx, sessionID))
+}
+
 // StartOrResumeSession starts a review session, or resumes the live one on
 // the same branch; see Pipeline.StartOrResumeSession.
 func (r *Reviewer) StartOrResumeSession(ctx context.Context, opts StartOptions) (*ReviewResult, error) {
