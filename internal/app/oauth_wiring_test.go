@@ -56,6 +56,7 @@ func TestApp_OAuthWiredOnlyWhenConfigured(t *testing.T) {
 	rr = httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/repos", nil)
 	req.RemoteAddr = "127.0.0.1:1"
+	req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("API without a token on the OAuth router: %d", rr.Code)
@@ -86,6 +87,7 @@ func TestApp_NoOAuthBuildsNoIssuer(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/oauth/pending", nil)
 	req.RemoteAddr = "127.0.0.1:1"
+	req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	a.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {

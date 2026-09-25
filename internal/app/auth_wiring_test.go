@@ -80,6 +80,7 @@ func TestApp_AuthConfigReachesMiddleware(t *testing.T) {
 
 	post := httptest.NewRequest("POST", "/api/v1/repos", nil)
 	post.RemoteAddr = "127.0.0.1:1"
+	post.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr = httptest.NewRecorder()
 	a2.Handler().ServeHTTP(rr, post)
 	if rr.Code != http.StatusForbidden || !bytes.Contains(rr.Body.Bytes(), []byte("Permission denied")) {
@@ -90,6 +91,7 @@ func TestApp_AuthConfigReachesMiddleware(t *testing.T) {
 	// the permission gate and not a broken boot.
 	get := httptest.NewRequest("GET", "/api/v1/repos", nil)
 	get.RemoteAddr = "127.0.0.1:1"
+	get.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr = httptest.NewRecorder()
 	a2.Handler().ServeHTTP(rr, get)
 	if rr.Code != http.StatusOK {

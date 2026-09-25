@@ -27,6 +27,7 @@ func TestWriteGate_AnonymousLoopbackWithReadOnlyDefaultCannotMutate(t *testing.T
 
 	get := httptest.NewRequest("GET", "/api/v1/repos", nil)
 	get.RemoteAddr = "127.0.0.1:1"
+	get.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, get)
 	if rr.Code != 200 {
@@ -35,6 +36,7 @@ func TestWriteGate_AnonymousLoopbackWithReadOnlyDefaultCannotMutate(t *testing.T
 
 	post := httptest.NewRequest("POST", "/api/v1/repos", nil)
 	post.RemoteAddr = "127.0.0.1:1"
+	post.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, post)
 	if rr.Code != http.StatusForbidden {
@@ -54,6 +56,7 @@ func TestWriteGate_EmptyLoopbackDefaultGrantsNothing(t *testing.T) {
 	}
 	post := httptest.NewRequest("POST", "/api/v1/repos", nil)
 	post.RemoteAddr = "127.0.0.1:1"
+	post.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, post)
 	if rr.Code != http.StatusForbidden {
@@ -68,6 +71,7 @@ func TestWriteGate_DefaultLoopbackMayMutate(t *testing.T) {
 	// The body is irrelevant: we assert only that the GATE did not answer.
 	post := httptest.NewRequest("POST", "/api/v1/repos", nil)
 	post.RemoteAddr = "127.0.0.1:1"
+	post.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, post)
 	if rr.Code == http.StatusForbidden {
@@ -81,6 +85,7 @@ func TestWriteGate_NilLoopbackDefaultFallsBackToDefaults(t *testing.T) {
 	s := &Server{Manager: newTestManagerWithRepos(t, "alpha")}
 	post := httptest.NewRequest("POST", "/api/v1/repos", nil)
 	post.RemoteAddr = "127.0.0.1:1"
+	post.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, post)
 	if rr.Code == http.StatusForbidden {
@@ -128,6 +133,7 @@ func TestWriteGate_MCPRoutesAreNotMethodGated(t *testing.T) {
 	} {
 		req := httptest.NewRequest("POST", path, bytes.NewReader([]byte(`{}`)))
 		req.RemoteAddr = "127.0.0.1:1"
+		req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
 		if rr.Code == http.StatusForbidden && bytes.Contains(rr.Body.Bytes(), []byte("Permission denied")) {
@@ -150,6 +156,7 @@ func TestWriteGate_GitUploadPackExemptReceivePackGated(t *testing.T) {
 	for _, path := range []string{"/git/alpha/git-upload-pack", "/git/alpha.git/git-upload-pack"} {
 		req := httptest.NewRequest("POST", path, nil)
 		req.RemoteAddr = "127.0.0.1:1"
+		req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
 		if rr.Code != 299 {
@@ -159,6 +166,7 @@ func TestWriteGate_GitUploadPackExemptReceivePackGated(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/git/alpha/git-receive-pack", nil)
 	req.RemoteAddr = "127.0.0.1:1"
+	req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden || !bytes.Contains(rr.Body.Bytes(), []byte("Permission denied")) {
@@ -176,6 +184,7 @@ func TestReadOnlyGate_StillWinsOverWriteGate(t *testing.T) {
 	}
 	post := httptest.NewRequest("POST", "/api/v1/repos", nil)
 	post.RemoteAddr = "127.0.0.1:1"
+	post.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, post)
 	if rr.Code != http.StatusForbidden || !bytes.Contains(rr.Body.Bytes(), []byte("Read-only instance")) {
