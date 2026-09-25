@@ -15,6 +15,10 @@ import (
 func serve(t *testing.T, s *Server, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, target, nil)
+	// httptest's defaults — RemoteAddr 192.0.2.1:1234 and Host example.com —
+	// are exactly what guard refuses. Make it what curl on this machine sends.
+	req.RemoteAddr = "127.0.0.1:50000"
+	req.Host = "127.0.0.1:6060"
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, req)
 	return rr
