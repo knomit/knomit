@@ -166,3 +166,33 @@ func TestApp_SignedApprovalWired(t *testing.T) {
 		t.Fatalf("after enrolment: %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+// [oauth.idp] reaches the issuer: /oauth/authorize sets the per-request
+// binding cookie and the sign-in route exists; without the section neither
+// does (F19 3c).
+func TestApp_IDPWiredOnlyWhenConfigured(t *testing.T) {
+	for _, withIDP := range []bool{false, true} {
+		cfg := config.Defaults()
+		cfg.Home = t.TempDir()
+		cfg.OAuth.Issuer, cfg.OAuth.Addr = "http://127.0.0.1:19280", "127.0.0.1:0"
+		if withIDP {
+			cfg.OAuth.IDP = &config.OAuthIDPConfig{Provider: "github", ClientID: "Iv1.x", Secret: config.NewIDPSecret("s"),
+				AllowedSubjects: []string{"github-1"}}
+		}
+		a, err := New(context.Background(), cfg, Options{APIOnly: true, Embedder: &testenv.DeterministicEmbedder{}})
+		if err != nil {
+			t.Fatalf("boot (idp=%v): %v", withIDP, err)
+		}
+		h := a.OAuthHandler()
+		q := url.Values{"response_type": {"code"}, "client_id": {"kb"}, "redirect_uri": {"http://127.0.0.1:5555/callback"},
+			"code_challenge": {strings.Repeat("A", 43)}, "code_challenge_method": {"S256"}, "resource": {"http://127.0.0.1:19280"}}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/oauth/authorize?"+q.Encode(), nil))
+		cookie := len(rr.Result().Cookies()) == 1
+		link := strings.Contains(rr.Body.String(), "/oauth/idp/start/")
+		a.Close()
+		if rr.Code != http.StatusOK || cookie != withIDP || link != withIDP {
+			t.Fatalf("idp=%v: status %d, cookie %v, sign-in link %v", withIDP, rr.Code, cookie, link)
+		}
+	}
+}

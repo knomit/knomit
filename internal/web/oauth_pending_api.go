@@ -101,6 +101,9 @@ type pendingView struct {
 	Decision    string         `json:"decision,omitempty"`
 	Subject     string         `json:"subject,omitempty"`
 	Ceiling     []string       `json:"ceiling,omitempty"`
+	// GrantsUnchanged is true on an approval that wrote no grants because
+	// the subject had been granted before (F19 3c R5).
+	GrantsUnchanged bool `json:"grants_unchanged,omitempty"`
 }
 
 func viewPending(p oauth.Pending) pendingView {
@@ -116,7 +119,7 @@ func viewPending(p oauth.Pending) pendingView {
 		ID: p.ID, ClientID: p.ClientID, ClientName: p.ClientName, RedirectURI: p.RedirectURI,
 		Scopes: scopes, Resource: p.Resource, RemoteAddr: p.RemoteAddr, UserAgent: p.UserAgent,
 		CreatedAt: p.CreatedAt.UTC(), ExpiresAt: p.ExpiresAt.UTC(),
-		Decision: p.Decision, Subject: p.Subject, Ceiling: p.Ceiling,
+		Decision: p.Decision, Subject: p.Subject, Ceiling: p.Ceiling, GrantsUnchanged: p.GrantsUnchanged,
 	}
 }
 

@@ -326,3 +326,23 @@ func TestOAuthSigned_SuccessOutputIsEscapedAndNamesTheIssuer(t *testing.T) {
 		t.Errorf("stdout does not name the issuer it posted to: %q", stdout)
 	}
 }
+
+// A signed approval of a subject granted before leaves its grants alone
+// (F19 3c R5); the delivering CLI says so, naming the principal from the
+// SIGNED statement, never from the issuer's answer.
+func TestOAuthSigned_ReportsGrantsUnchanged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"` + signID + `","decision":"approved","grants_unchanged":true}`))
+	}))
+	defer srv.Close()
+	blob := `{"verb":"approve","instance":"` + strings.Repeat("a", 64) + `","id":"` + signID + `","digest":"` + strings.Repeat("b", 64) +
+		`","subject":"laptop","scopes":["read","write"],"expires":1,"signature":"x","issuer":"` + srv.URL + `"}`
+	stdout, _, err := runSplit(t, blob, "oauth", "approve", "--signed", "-")
+	if err != nil {
+		t.Fatalf("delivery: %v", err)
+	}
+	want := "grants unchanged; widen with `knomit grants add \"host:laptop@token\" <perm>`"
+	if !strings.Contains(stdout, want) {
+		t.Fatalf("stdout lacks %q:\n%s", want, stdout)
+	}
+}

@@ -31,6 +31,9 @@ var (
 	ErrRevoked       = errors.New("oauth: token revoked")
 	ErrReused        = errors.New("oauth: rotated refresh token presented again; family revoked")
 	ErrWrongAudience = errors.New("oauth: token not issued for this resource")
+	// ErrNoLongerAllowed: the family's approval no longer stands (its
+	// identity-provider subject left the allow list); it has been revoked.
+	ErrNoLongerAllowed = errors.New("oauth: the approval behind this token no longer stands; family revoked")
 )
 
 const (
@@ -47,7 +50,14 @@ type Store struct {
 	accessTTL  time.Duration
 	refreshTTL time.Duration
 	now        func() time.Time
+	// refreshCheck, when set, must accept a family for its refresh token
+	// to be exchanged; a refused family is revoked (SetRefreshCheck).
+	refreshCheck func(Family) bool
 }
+
+// SetRefreshCheck installs the check every refresh must pass. Call it once,
+// before serving.
+func (s *Store) SetRefreshCheck(ok func(Family) bool) { s.refreshCheck = ok }
 
 func NewStore(db *sql.DB, accessTTL, refreshTTL time.Duration) *Store {
 	return &Store{db: db, accessTTL: accessTTL, refreshTTL: refreshTTL, now: time.Now}
@@ -60,6 +70,9 @@ type FamilySpec struct {
 	Subject  string
 	Scopes   []string
 	Resource string
+	// ApprovedBy is the decided_by of the request the family came from
+	// ("" for a family minted before 3c).
+	ApprovedBy string
 }
 
 // Family is one login. It is the unit of revocation.
@@ -118,11 +131,16 @@ func (s *Store) createFamilyTx(ctx context.Context, tx *sql.Tx, spec FamilySpec)
 	}
 	now := s.now()
 	f := Family{FamilySpec: spec, ID: id, CreatedAt: now, RefreshExpiresAt: now.Add(s.refreshTTL)}
-	_, err = tx.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 INSERT INTO oauth_families (id, client_id, subject, scope, resource, created_at, refresh_expires_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		f.ID, spec.ClientID, spec.Subject, strings.Join(spec.Scopes, " "), spec.Resource,
-		now.Unix(), f.RefreshExpiresAt.Unix())
+		now.Unix(), f.RefreshExpiresAt.Unix()); err != nil {
+		return Family{}, err
+	}
+	if spec.ApprovedBy != "" {
+		_, err = tx.ExecContext(ctx, `INSERT INTO oauth_family_approvals (family_id, approved_by) VALUES (?, ?)`, f.ID, spec.ApprovedBy)
+	}
 	return f, err
 }
 
@@ -188,7 +206,8 @@ type querier interface {
 	QueryRowContext(ctx context.Context, q string, args ...any) *sql.Row
 }
 
-const familyCols = `f.id, f.client_id, f.subject, f.scope, f.resource, f.created_at, f.refresh_expires_at, f.revoked_at`
+const familyCols = `f.id, f.client_id, f.subject, f.scope, f.resource, f.created_at, f.refresh_expires_at, f.revoked_at,
+  COALESCE((SELECT approved_by FROM oauth_family_approvals a WHERE a.family_id = f.id), '')`
 
 func scanFamily(scan func(...any) error, extra ...any) (Family, error) {
 	var (
@@ -197,7 +216,7 @@ func scanFamily(scan func(...any) error, extra ...any) (Family, error) {
 		created, refreshTo int64
 		revoked            sql.NullInt64
 	)
-	dest := append([]any{&f.ID, &f.ClientID, &f.Subject, &scope, &f.Resource, &created, &refreshTo, &revoked}, extra...)
+	dest := append([]any{&f.ID, &f.ClientID, &f.Subject, &scope, &f.Resource, &created, &refreshTo, &revoked, &f.ApprovedBy}, extra...)
 	if err := scan(dest...); err != nil {
 		return Family{}, err
 	}
@@ -295,14 +314,21 @@ func (s *Store) Refresh(ctx context.Context, refresh, clientID, resource string,
 			return Issued{}, ErrInvalidScope
 		}
 	}
-	reuse := func() (Issued, error) {
+	revokeWith := func(e error) (Issued, error) {
 		if err := s.revokeFamilyTx(ctx, tx, r.family.ID); err != nil {
 			return Issued{}, err
 		}
 		if err := tx.Commit(); err != nil {
 			return Issued{}, err
 		}
-		return Issued{}, ErrReused
+		return Issued{}, e
+	}
+	reuse := func() (Issued, error) { return revokeWith(ErrReused) }
+	// The family's approval must still stand (3c ruling W9): a family
+	// approved through the identity provider by someone no longer on the
+	// allow list is revoked here, all of it, not merely refused.
+	if s.refreshCheck != nil && !s.refreshCheck(r.family) {
+		return revokeWith(ErrNoLongerAllowed)
 	}
 	if r.rotated {
 		return reuse()

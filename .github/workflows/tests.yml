@@ -277,9 +277,11 @@ jobs:
       #
       # internal/oauth (F19 phase 3a) needs sqlite (control.db via
       # internal/store/migrate) but no native runtime libs, and its CIMD tests
-      # run their own in-process HTTPS server with a generated CA.
+      # run their own in-process HTTPS server with a generated CA. The `...`
+      # takes in internal/oauth/idp (F19 phase 3c), whose tests drive the
+      # in-process fake provider in internal/oauth/idp/idptest.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/... ./internal/oauth/
+        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/... ./internal/oauth/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no

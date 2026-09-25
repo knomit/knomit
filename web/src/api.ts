@@ -1783,13 +1783,23 @@ async function listOAuthPending(): Promise<OAuthPending[] | null> {
   return data.pending ?? [];
 }
 
-async function approveOAuthPending(id: string, subject: string, scopes: string[]): Promise<void> {
+// OAuthApproval is what an approval reports back. grantsUnchanged: the
+// subject had been granted before, so the server wrote no grants and the
+// operator's earlier narrowing stands (F19 3c R5).
+export interface OAuthApproval {
+  subject: string;
+  grantsUnchanged: boolean;
+}
+
+async function approveOAuthPending(id: string, subject: string, scopes: string[]): Promise<OAuthApproval> {
   const r = await fetch(apiUrl(`/api/v1/oauth/pending/${encodeURIComponent(id)}/approve`), {
     method: 'POST',
     headers: oauthHeaders(true),
     body: JSON.stringify({ subject, scopes }),
   });
   if (!r.ok) throw await oauthFailure(r);
+  const data = (await r.json()) as { subject?: string; grants_unchanged?: boolean };
+  return { subject: data.subject ?? subject, grantsUnchanged: data.grants_unchanged === true };
 }
 
 async function denyOAuthPending(id: string): Promise<void> {

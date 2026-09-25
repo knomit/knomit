@@ -47,14 +47,22 @@ type Pending struct {
 	State         string
 	RemoteAddr    string
 	UserAgent     string
-	CreatedAt     time.Time
-	ExpiresAt     time.Time
+	// IDPBinding is the hex SHA-256 of the browser-binding cookie set when
+	// the request was parked with [oauth.idp] configured, "" otherwise.
+	IDPBinding string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
 
 	Decision  string   // "", DecisionApproved, DecisionDenied
 	Subject   string   // set on approval
 	Ceiling   []string // set on approval
 	DecidedBy string
 	Collected bool
+
+	// GrantsUnchanged is set by Issuer.Approve only, never stored: the
+	// subject had been granted before, so the approval wrote no grants and
+	// the token is capped by the grants the operator left in place.
+	GrantsUnchanged bool
 }
 
 // Expired reports whether an UNDECIDED request can no longer be decided.
@@ -70,6 +78,9 @@ func (s *Store) CreatePending(ctx context.Context, p Pending) (Pending, error) {
 	defer tx.Rollback()
 	now := s.now()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM oauth_pending WHERE expires_at <= ?`, now.Unix()); err != nil {
+		return Pending{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM oauth_pending_idp WHERE pending_id NOT IN (SELECT id FROM oauth_pending)`); err != nil {
 		return Pending{}, err
 	}
 	var live int
@@ -92,11 +103,17 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.State, p.RemoteAddr, p.UserAgent, now.Unix(), p.ExpiresAt.Unix()); err != nil {
 		return Pending{}, err
 	}
+	if p.IDPBinding != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO oauth_pending_idp (pending_id, binding) VALUES (?, ?)`, p.ID, p.IDPBinding); err != nil {
+			return Pending{}, err
+		}
+	}
 	return p, tx.Commit()
 }
 
 const pendingCols = `id, client_id, client_name, redirect_uri, scope, code_challenge, resource, state,
-  remote_addr, user_agent, created_at, expires_at, decision, subject, ceiling, decided_by, collected_at`
+  remote_addr, user_agent, created_at, expires_at, decision, subject, ceiling, decided_by, collected_at,
+  COALESCE((SELECT binding FROM oauth_pending_idp b WHERE b.pending_id = oauth_pending.id), '')`
 
 func scanPending(scan func(...any) error) (Pending, error) {
 	var (
@@ -106,7 +123,7 @@ func scanPending(scan func(...any) error) (Pending, error) {
 		collected        sql.NullInt64
 	)
 	if err := scan(&p.ID, &p.ClientID, &p.ClientName, &p.RedirectURI, &scope, &p.CodeChallenge, &p.Resource, &p.State,
-		&p.RemoteAddr, &p.UserAgent, &created, &expires, &p.Decision, &p.Subject, &ceiling, &p.DecidedBy, &collected); err != nil {
+		&p.RemoteAddr, &p.UserAgent, &created, &expires, &p.Decision, &p.Subject, &ceiling, &p.DecidedBy, &collected, &p.IDPBinding); err != nil {
 		return Pending{}, err
 	}
 	p.Scopes, p.Ceiling = strings.Fields(scope), strings.Fields(ceiling)
@@ -203,7 +220,7 @@ func (s *Store) Collect(ctx context.Context, id string) (string, Pending, error)
 	}
 	var code string
 	if p.Decision == DecisionApproved {
-		f, err := s.createFamilyTx(ctx, tx, FamilySpec{ClientID: p.ClientID, Subject: p.Subject, Scopes: p.Ceiling, Resource: p.Resource})
+		f, err := s.createFamilyTx(ctx, tx, FamilySpec{ClientID: p.ClientID, Subject: p.Subject, Scopes: p.Ceiling, Resource: p.Resource, ApprovedBy: p.DecidedBy})
 		if err != nil {
 			return "", Pending{}, err
 		}

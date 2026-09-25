@@ -61,6 +61,17 @@ func (g *SQLGrants) EverGranted(ctx context.Context, p Principal, perm Permissio
 	return n > 0, err
 }
 
+// EverGrantedAny reports whether any row exists for the principal, of any
+// permission, live or revoked. An OAuth approval writes grants only when it
+// is false (F19 3c R5): once the operator has granted or narrowed a
+// subject, a later approval must never revive what they revoked.
+func (g *SQLGrants) EverGrantedAny(ctx context.Context, p Principal) (bool, error) {
+	var n int
+	err := g.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM grants WHERE principal = ?`, p.String()).Scan(&n)
+	return n > 0, err
+}
+
 // Row is one grants row, live or revoked, as `knomit grants list` shows it.
 type Row struct {
 	Principal  string

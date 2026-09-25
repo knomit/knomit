@@ -731,3 +731,71 @@ func TestWait_DecisionBetweenReadAndRegisterIsSeen(t *testing.T) {
 		t.Fatalf("answered after %v: the decision in the gap was missed until the window closed", el)
 	}
 }
+
+// R5 (3c reviewer B5, reproduced): Approve writes grants only on a
+// subject's FIRST approval. Before, a second approval re-granted every
+// ceiling permission, and SQLGrants.Grant's upsert cleared revoked_at, so a
+// narrowing the operator made with `knomit grants revoke` was undone by the
+// next approval — and with consent path 3 that approval is self-service.
+// Sabotage: always writing grants in Approve turns this red on the write
+// check and on GrantsUnchanged.
+func TestApprove_ReapprovalNeverRevivesARevokedGrant(t *testing.T) {
+	f := newIssuerFixture(t)
+	ctx := context.Background()
+	_, ch := pkce()
+	principal := TokenPrincipal("laptop")
+
+	first, err := f.iss.Approve(ctx, f.authorize(t, f.authorizeQuery(ch)), "laptop", nil, "bridge:uid:501@socket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.GrantsUnchanged {
+		t.Fatal("a first approval writes grants; GrantsUnchanged must be false")
+	}
+	if err := f.grants.Revoke(ctx, principal, auth.Write); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := f.iss.Approve(ctx, f.authorize(t, f.authorizeQuery(ch)), "laptop", []string{"read", "write"}, "bridge:uid:501@socket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.GrantsUnchanged {
+		t.Fatal("a re-approval must report that it left grants unchanged")
+	}
+	if strings.Join(second.Ceiling, " ") != "read write" {
+		t.Fatalf("the ceiling still records what was approved: %v", second.Ceiling)
+	}
+	set, err := f.grants.For(ctx, principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !set.Has(auth.Read) || set.Has(auth.Write) {
+		t.Fatalf("grants after re-approval = %v; the operator's revocation of write must stand", set)
+	}
+}
+
+// A subject whose only rows are REVOKED was still granted before: history,
+// not absence (the same rule boot seeding follows), so nothing is revived.
+func TestApprove_FullyRevokedSubjectStaysRevoked(t *testing.T) {
+	f := newIssuerFixture(t)
+	ctx := context.Background()
+	_, ch := pkce()
+	principal := TokenPrincipal("laptop")
+	if _, err := f.iss.Approve(ctx, f.authorize(t, f.authorizeQuery(ch)), "laptop", nil, "op"); err != nil {
+		t.Fatal(err)
+	}
+	for _, perm := range []auth.Permission{auth.Read, auth.Write} {
+		if err := f.grants.Revoke(ctx, principal, perm); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := f.iss.Approve(ctx, f.authorize(t, f.authorizeQuery(ch)), "laptop", nil, "op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, _ := f.grants.For(ctx, principal)
+	if len(set) != 0 || !p.GrantsUnchanged {
+		t.Fatalf("grants = %v, unchanged = %v; want none revived", set, p.GrantsUnchanged)
+	}
+}

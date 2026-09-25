@@ -270,7 +270,7 @@ func (i *Issuer) signedApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"id": p.ID, "decision": p.Decision})
+	_ = json.NewEncoder(w).Encode(map[string]any{"id": p.ID, "decision": p.Decision, "grants_unchanged": p.GrantsUnchanged})
 }
 
 // replayTable remembers applied statements (by the hash of their bytes)

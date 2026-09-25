@@ -31,6 +31,9 @@ var (
 // command (`knomit grants` can narrow them later).
 type GrantWriter interface {
 	Grant(ctx context.Context, p auth.Principal, perm auth.Permission, grantedBy string) error
+	// EverGrantedAny reports whether the principal has ANY grants row, live
+	// or revoked. Approve writes grants only when it is false.
+	EverGrantedAny(ctx context.Context, p auth.Principal) (bool, error)
 }
 
 // TokenPrincipal is the one spelling of a token subject's principal:
@@ -55,6 +58,8 @@ type Options struct {
 	// once; an fs.ErrNotExist error means "not enrolled". nil disables
 	// signed approval (ErrNoFleetRoot).
 	FleetRoot func() (ed25519.PublicKey, error)
+	// IDP turns on consent path 3 (F19 phase 3c); nil leaves it off.
+	IDP *IDPOptions
 }
 
 // Issuer is the authorization server: the public OAuth routes, and the
@@ -70,6 +75,7 @@ type Issuer struct {
 	instanceFP  string
 	fleetRoot   func() (ed25519.PublicKey, error)
 	replays     *replayTable
+	idp         *idpFlow // nil unless consent path 3 is configured
 
 	// beforeRegister, when set (tests only), runs in /wait between the first
 	// read and the waiter registration — the window the re-read closes.
@@ -81,9 +87,17 @@ func NewIssuer(o Options) *Issuer {
 	if wt == 0 {
 		wt = 30 * time.Second
 	}
-	return &Issuer{issuer: o.Issuer, store: o.Store, clients: o.Clients, grants: o.Grants, waitTimeout: wt,
+	i := &Issuer{issuer: o.Issuer, store: o.Store, clients: o.Clients, grants: o.Grants, waitTimeout: wt,
 		waiters: waiters{m: map[string]*waiter{}}, instanceFP: o.InstanceFingerprint, fleetRoot: o.FleetRoot,
 		replays: newReplayTable(replayTableMax)}
+	if o.IDP != nil {
+		i.idp = newIDPFlow(o.Issuer, o.IDP)
+	}
+	// Installed with or without a provider: a family approved through one
+	// stops refreshing when its id leaves the allow list, or the provider
+	// is removed altogether (3c ruling W9).
+	o.Store.SetRefreshCheck(i.refreshAllowed)
+	return i
 }
 
 // Name returns the issuer URL.
@@ -106,6 +120,11 @@ func (i *Issuer) Routes() http.Handler {
 	mux.HandleFunc("POST /oauth/approve", i.signedApprove)
 	mux.HandleFunc("POST /oauth/token", i.token)
 	mux.HandleFunc("POST /oauth/revoke", i.revoke)
+	if i.idp != nil {
+		mux.HandleFunc("GET /oauth/idp/start/{id}", i.idpStart)
+		mux.HandleFunc("GET /oauth/idp/callback", i.idpCallback)
+		mux.HandleFunc("POST /oauth/idp/decide", i.idpDecide)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/.well-known/") {
 			wk.ServeHTTP(w, r)
@@ -202,11 +221,25 @@ func (i *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	p, err := i.store.CreatePending(r.Context(), Pending{
+	// With a provider configured, the request is bound to THIS browser: the
+	// provider sign-in for it is honoured only where this cookie is (3c W1).
+	var binding string
+	if i.idp != nil {
+		var err error
+		if binding, err = newSecret(); err != nil {
+			errorPage(w, http.StatusInternalServerError, "The request could not be recorded.")
+			return
+		}
+	}
+	pending := Pending{
 		ClientID: client.ID, ClientName: client.Name, RedirectURI: redirect, Scopes: scopes,
 		CodeChallenge: vals["code_challenge"], Resource: vals["resource"], State: state,
 		RemoteAddr: r.RemoteAddr, UserAgent: r.UserAgent(),
-	})
+	}
+	if binding != "" {
+		pending.IDPBinding = hashSecret(binding)
+	}
+	p, err := i.store.CreatePending(r.Context(), pending)
 	if errors.Is(err, ErrTooManyPending) {
 		fail("temporarily_unavailable", "too many authorization requests are waiting; try again later")
 		return
@@ -218,7 +251,10 @@ func (i *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info().Str("id", p.ID).Str("client_id", p.ClientID).Str("remote", p.RemoteAddr).
 		Msg("oauth: authorization request waiting for approval")
-	i.waitingPage(w, p.ID)
+	if binding != "" {
+		http.SetCookie(w, i.idp.bindingCookie(p.ID, binding))
+	}
+	i.waitingPage(w, p)
 }
 
 // --- /oauth/authorize/{id}/wait -------------------------------------------------
@@ -256,7 +292,7 @@ func (i *Issuer) wait(w http.ResponseWriter, r *http.Request) {
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			i.waitingPage(w, id)
+			i.waitingPage(w, p)
 			return
 		}
 		if i.beforeRegister != nil {
@@ -350,9 +386,17 @@ func (i *Issuer) Pending(ctx context.Context) ([]Pending, error) { return i.stor
 
 // Approve decides a request in favour of subject. The ceiling is scopes when
 // given (any supported permission name, never admin), else the requested
-// scopes ∩ {read, write}, else read. It writes the grants for
-// host:<subject>@token first, recorded as granted by `by`, and then the
-// decision — so a decision that loses a race leaves grants the operator
+// scopes ∩ {read, write}, else read.
+//
+// Grants are written only on the subject's FIRST approval (F19 3c R5): if
+// host:<subject>@token has ever held any grant, live or revoked, they are
+// left exactly as they are and the result says GrantsUnchanged — the
+// ceiling still caps the token, but a narrowing the operator made with
+// `knomit grants revoke` is never undone by a re-approval, whichever
+// consent path it comes from. Widening is `knomit grants add`.
+//
+// A first approval writes the grants, recorded as granted by `by`, BEFORE
+// the decision — so a decision that loses a race leaves grants the operator
 // intended anyway, never a token with nothing behind it.
 func (i *Issuer) Approve(ctx context.Context, id, subject string, scopes []string, by string) (Pending, error) {
 	if !subjectRE.MatchString(subject) {
@@ -373,9 +417,15 @@ func (i *Issuer) Approve(ctx context.Context, id, subject string, scopes []strin
 		return Pending{}, err
 	}
 	principal := TokenPrincipal(subject)
-	for _, perm := range ceiling {
-		if err := i.grants.Grant(ctx, principal, auth.Permission(perm), by); err != nil {
-			return Pending{}, err
+	granted, err := i.grants.EverGrantedAny(ctx, principal)
+	if err != nil {
+		return Pending{}, err
+	}
+	if !granted {
+		for _, perm := range ceiling {
+			if err := i.grants.Grant(ctx, principal, auth.Permission(perm), by); err != nil {
+				return Pending{}, err
+			}
 		}
 	}
 	if err := i.store.Decide(ctx, id, DecisionApproved, subject, ceiling, by); err != nil {
@@ -383,8 +433,10 @@ func (i *Issuer) Approve(ctx context.Context, id, subject string, scopes []strin
 	}
 	i.waiters.notify(id)
 	log.Info().Str("id", id).Str("principal", principal.String()).Strs("ceiling", ceiling).Str("by", by).
-		Msg("oauth: authorization request approved")
-	return i.store.GetPending(ctx, id)
+		Bool("grants_unchanged", granted).Msg("oauth: authorization request approved")
+	out, err := i.store.GetPending(ctx, id)
+	out.GrantsUnchanged = granted
+	return out, err
 }
 
 // DefaultCeiling is the ceiling an approval gets when it names no scopes
@@ -544,7 +596,7 @@ func (i *Issuer) token(w http.ResponseWriter, r *http.Request) {
 
 // isStoreFailure tells a database failure (a 500) from a refusal (a 400).
 func isStoreFailure(err error) bool {
-	for _, known := range []error{ErrUnknownToken, ErrExpired, ErrRevoked, ErrReused, ErrWrongClient, ErrWrongAudience, ErrInvalidScope} {
+	for _, known := range []error{ErrUnknownToken, ErrExpired, ErrRevoked, ErrReused, ErrWrongClient, ErrWrongAudience, ErrInvalidScope, ErrNoLongerAllowed} {
 		if errors.Is(err, known) {
 			return false
 		}
@@ -610,6 +662,8 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 </head><body>
 <h1>knomit</h1>
 <p>{{.Message}}</p>
+{{if .Host}}<p>This request would send a login code to <strong>{{.Host}}</strong> for client <code>{{.ClientID}}</code> ({{.ClientName}}).</p>{{end}}
+{{if .SignIn}}<p><a href="{{.SignIn}}">Sign in with {{.Label}} to approve it yourself</a>, if your {{.Label}} account is allowed to on this instance.</p>{{end}}
 {{if .ID}}<p>Request <code>{{.ID}}</code> is waiting for approval on the instance. The operator approves it with</p>
 <pre>knomit oauth approve {{.ID}} --as &lt;name&gt;</pre>
 <p>This page continues by itself once it is decided.</p>
@@ -617,27 +671,49 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 </body></html>
 `))
 
-func (i *Issuer) waitingPage(w http.ResponseWriter, id string) {
-	renderPage(w, http.StatusOK, pageData{
+// waitingPage names the request. With a provider configured it also says
+// what is asked (redirect host first) and links to the provider sign-in,
+// which works only in the browser that parked the request.
+func (i *Issuer) waitingPage(w http.ResponseWriter, p Pending) {
+	d := pageData{
 		Message: "Authorization requested.",
-		ID:      id,
-		Refresh: i.issuer + "/oauth/authorize/" + url.PathEscape(id) + "/wait",
-	})
+		ID:      p.ID,
+		Refresh: i.issuer + "/oauth/authorize/" + url.PathEscape(p.ID) + "/wait",
+	}
+	if i.idp != nil {
+		d.Host, d.ClientID, d.ClientName = redirectHost(p.RedirectURI), p.ClientID, p.ClientName
+		d.SignIn, d.Label = i.issuer+"/oauth/idp/start/"+url.PathEscape(p.ID), i.idp.label
+	}
+	renderPage(w, http.StatusOK, d)
 }
 
 func errorPage(w http.ResponseWriter, status int, msg string) {
 	renderPage(w, status, pageData{Message: msg})
 }
 
-type pageData struct{ Message, ID, Refresh string }
+type pageData struct {
+	Message, ID, Refresh string
+	// With a provider configured (3c): the request's redirect host and
+	// client, and the sign-in link.
+	Host, ClientID, ClientName, SignIn, Label string
+}
 
-func renderPage(w http.ResponseWriter, status int, d pageData) {
+// pageHeaders are every OAuth page's: no caching, no framing, no script,
+// no referrer. Deliberately NO form-action: browsers apply it to the whole
+// redirect chain of a form submission, and the consent POST's chain ends at
+// the client's redirect_uri, another origin (the pages hold no injectable
+// markup, which is what form-action would guard).
+func pageHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
 	h.Set("Referrer-Policy", "no-referrer")
+}
+
+func renderPage(w http.ResponseWriter, status int, d pageData) {
+	pageHeaders(w)
 	w.WriteHeader(status)
 	_ = pageTmpl.Execute(w, d)
 }

@@ -87,6 +87,36 @@ func TestSQLGrants_EverGrantedSurvivesRevocation(t *testing.T) {
 	}
 }
 
+// EverGrantedAny asks about the PRINCIPAL, any permission, live or
+// revoked: OAuth approval (3c R5) writes grants only for a principal it
+// has never granted anything. It must not match another principal whose
+// string merely shares a prefix.
+func TestSQLGrants_EverGrantedAnyIsPerPrincipal(t *testing.T) {
+	ctx := context.Background()
+	g := NewSQLGrants(openGrantsDB(t))
+	p := Principal{Kind: KindHost, ID: "github-7", Via: ViaToken}
+	longer := Principal{Kind: KindHost, ID: "github-77", Via: ViaToken}
+
+	if ever, err := g.EverGrantedAny(ctx, p); err != nil || ever {
+		t.Fatalf("never granted must be false: %v %v", ever, err)
+	}
+	if err := g.Grant(ctx, longer, Read, "op"); err != nil {
+		t.Fatal(err)
+	}
+	if ever, err := g.EverGrantedAny(ctx, p); err != nil || ever {
+		t.Fatalf("a grant to %s must not count for %s: %v %v", longer, p, ever, err)
+	}
+	if err := g.Grant(ctx, p, PushOwn, "op"); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Revoke(ctx, p, PushOwn); err != nil {
+		t.Fatal(err)
+	}
+	if ever, err := g.EverGrantedAny(ctx, p); err != nil || !ever {
+		t.Fatalf("a revoked row of any permission must count: %v %v", ever, err)
+	}
+}
+
 // The via is part of the key: the same uid over a token is a different
 // principal from the same uid over the socket, and must not inherit grants.
 func TestSQLGrants_ViaIsPartOfTheKey(t *testing.T) {
