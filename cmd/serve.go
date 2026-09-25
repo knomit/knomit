@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -143,6 +144,15 @@ func serveCmd() *cobra.Command {
 			listenAddr := cfg.Host + ":" + cfg.Port
 			httpAddr := "http://" + listenAddr
 
+			// Bind BEFORE "knomit ready": a taken port is then an error RunE
+			// returns while nothing else is serving, not a failure that
+			// arrives after the server has already announced itself.
+			ln, err := listenTCP(listenAddr)
+			if err != nil {
+				log.Error().Err(err).Msg("listen failed")
+				return err
+			}
+
 			startupLog := log.Info().
 				Str("http", httpAddr).
 				Str("api", httpAddr+"/api/v1/repos/{repo}").
@@ -179,11 +189,16 @@ func serveCmd() *cobra.Command {
 				ConnContext: auth.ConnContext,
 			}
 
-			go func() {
-				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					log.Fatal().Err(err).Msg("listen failed")
-				}
-			}()
+			// Every listener's Serve reports into errCh and serveUntil returns
+			// the first failure, instead of the failure ending the process:
+			// an exit skips RunE's defers, and the crash marker's release is
+			// one of them, so the next boot would report a crash that never
+			// happened (#261). One slot per listener below, so no send blocks.
+			errCh := make(chan error, 4)
+			// Stops the plaintext server on every early return below; after
+			// serveUntil's graceful Shutdown it has nothing left to do.
+			defer srv.Close()
+			serveInto(errCh, "listen", srv, ln)
 
 			// Runtime diagnostics port (localhost only, off unless configured):
 			// /runtime/* controls + /debug/pprof + /debug/vars + /metrics.
@@ -234,11 +249,7 @@ func serveCmd() *cobra.Command {
 				// a session over it will carry rather than assuming a socket.
 				log.Info().Str("socket", cfg.Socket).Str("via", string(auth.LocalVia)).
 					Msg("local authenticated listener listening")
-				go func() {
-					if err := srv.Serve(ul); err != nil && err != http.ErrServerClosed {
-						log.Fatal().Err(err).Msg("local authenticated listener serve failed")
-					}
-				}()
+				serveInto(errCh, "local authenticated listener", srv, ul)
 			}
 
 			// mTLS listener for enrolled instances (F19 phase 2): its OWN
@@ -247,15 +258,15 @@ func serveCmd() *cobra.Command {
 			// plaintext listener above is unchanged.
 			tlsSrv, tl, err := openTLSServer(cmd.Context(), cfg.TLS, a.KeyPath(), srv)
 			if err != nil {
-				log.Fatal().Err(err).Str("addr", cfg.TLS.Addr).Str("dir", cfg.TLS.Dir).Msg("tls listener failed") // fail closed
+				// Fail closed: serve does not run without a listener it was
+				// configured to open. Returning exits 1 like before, but after
+				// RunE's defers have run.
+				log.Error().Err(err).Str("addr", cfg.TLS.Addr).Str("dir", cfg.TLS.Dir).Msg("tls listener failed")
+				return fmt.Errorf("tls listener on %s: %w", cfg.TLS.Addr, err)
 			}
 			if tlsSrv != nil {
 				log.Info().Str("tls", "https://"+tl.Addr().String()).Str("dir", cfg.TLS.Dir).Msg("mTLS listener for enrolled instances")
-				go func() {
-					if err := tlsSrv.Serve(tl); err != nil && err != http.ErrServerClosed {
-						log.Fatal().Err(err).Msg("tls serve failed")
-					}
-				}()
+				serveInto(errCh, "tls listener", tlsSrv, tl)
 			}
 
 			// OAuth listener (F19 phase 3a): its OWN http.Server over the
@@ -264,29 +275,18 @@ func serveCmd() *cobra.Command {
 			// real TLS fronts it, never the plaintext port above.
 			oauthSrv, ol, err := openOAuthServer(cfg.OAuth, a.OAuthHandler(), srv)
 			if err != nil {
-				log.Fatal().Err(err).Msg("oauth listener failed")
+				// Fail closed, as for the TLS listener above.
+				log.Error().Err(err).Msg("oauth listener failed")
+				return fmt.Errorf("oauth listener on %s: %w", cfg.OAuth.Addr, err)
 			}
 			if oauthSrv != nil {
 				log.Info().Str("addr", ol.Addr().String()).Str("issuer", cfg.OAuth.Issuer).
 					Msg("OAuth listener (bearer tokens only)")
-				go func() {
-					if err := oauthSrv.Serve(ol); err != nil && err != http.ErrServerClosed {
-						log.Fatal().Err(err).Msg("oauth serve failed")
-					}
-				}()
+				serveInto(errCh, "oauth listener", oauthSrv, ol)
 			}
 
-			<-cmd.Context().Done()
 			// a.Close() runs via defer — shuts down repos and releases resources.
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if tlsSrv != nil {
-				_ = tlsSrv.Shutdown(shutCtx)
-			}
-			if oauthSrv != nil {
-				_ = oauthSrv.Shutdown(shutCtx)
-			}
-			return srv.Shutdown(shutCtx)
+			return serveUntil(cmd.Context(), errCh, 5*time.Second, srv, tlsSrv, oauthSrv)
 		},
 	}
 	cmd.Flags().StringVar(&portOverride, "port", "", "override the listen port (default: from config)")
@@ -296,4 +296,47 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().IntVar(&logMaxBackups, "log-max-backups", 3, "max number of rotated log files to keep")
 	cmd.Flags().IntVar(&logMaxAgeDays, "log-max-age", 7, "max age in days to keep rotated log files")
 	return cmd
+}
+
+// listenTCP binds the plaintext listener. It is separate from http.Server's
+// ListenAndServe so serve can bind synchronously, before it reports ready, and
+// return the error.
+func listenTCP(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("plaintext listener: %w", err) // err names the address
+	}
+	return ln, nil
+}
+
+// serveInto runs srv.Serve(ln) in a goroutine and sends any failure to errCh,
+// named by what. http.ErrServerClosed is what Serve returns once Shutdown or
+// Close has been called, so it is a clean stop and is never sent.
+func serveInto(errCh chan<- error, what string, srv *http.Server, ln net.Listener) {
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("%s: %w", what, err)
+		}
+	}()
+}
+
+// serveUntil blocks until ctx is done (SIGINT/SIGTERM) or a listener fails,
+// then shuts the servers down within grace. others (nil entries skipped) go
+// first and their Shutdown errors are ignored; primary's is returned, joined
+// with the listener failure that ended the wait, if any.
+func serveUntil(ctx context.Context, errCh <-chan error, grace time.Duration, primary *http.Server, others ...*http.Server) error {
+	var serveErr error
+	select {
+	case <-ctx.Done():
+	case serveErr = <-errCh:
+		log.Error().Err(serveErr).Msg("listener failed; shutting down")
+	}
+	shutCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	for _, s := range others {
+		if s != nil {
+			_ = s.Shutdown(shutCtx)
+		}
+	}
+	return errors.Join(serveErr, primary.Shutdown(shutCtx))
 }
