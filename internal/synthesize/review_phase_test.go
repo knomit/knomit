@@ -465,3 +465,31 @@ func TestReviewer_ReflectGap_SecondCallerDoesNotComplete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, res.Item.ID, cur.Item.ID, "after the gap, the second caller gets the same reflect item")
 }
+
+// A phase hook that panics (recovered by the transport) must not leave the
+// session advancing: every caller would be told to retry forever, and each
+// retry's heartbeat would keep the session from going stale.
+func TestReviewer_PanickingPhaseHookStillFinishesTheAdvance(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+	branch := "agent/test"
+	seedHypothesisTransition(t, svc, branch)
+	sess := manualSession(t, svc, branch)
+
+	r.p.hooks.afterAdvance = func(context.Context, string, string) { panic("phase hook blew up") }
+	func() {
+		defer func() { _ = recover() }()
+		fresh, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+		require.NoError(t, err)
+		_, _ = r.nextItem(ctx, fresh)
+	}()
+
+	got, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.False(t, got.Advancing, "the advance must be finished after its hook panicked")
+}
+
+// The advancing refusal says how to break a wedge.
+func TestReviewer_AdvancingRefusalOffersTakeover(t *testing.T) {
+	require.Contains(t, errAdvancing("review", "s").Error(), "takeover:true")
+}
