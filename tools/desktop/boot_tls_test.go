@@ -48,7 +48,13 @@ import (
 //  6. bind the plaintext listener on 0.0.0.0           -> PlaintextStaysLoopback
 //  7. swap Dir/Addr or drop KeyPath in tlsListenerFrom -> TestTLSListenerFrom_CarriesAddrDirKey
 //  8. (PR 2, enrolment UI; not in this PR)
-//  9. RequireAnyClientCert -> RequestClientCert        -> TLSRefusesNoClientCert
+//  9. weaken the TLS layer's no-certificate refusal    -> TLSRefusesNoClientCert
+//     (measured at 31f4072d: that refusal is TWO checks, and weakening ONE
+//     leaves this green because the other still refuses at the TLS layer —
+//     ClientAuth RequireAnyClientCert in pki's configFor, and snapshot.check's
+//     "peer presented no certificate". Weakening BOTH — RequestClientCert
+//     and check returning nil on no certificate — turns this red: the
+//     request then reaches the middleware, whose 403 does not count.)
 // 10. drop closeTLS on the lockfile.Write error path   -> TLSAddrFreeAfterLockfileFailure
 // 11. open TLS before RequireLocalListener, no close   -> TLSAddrFreeAfterRequireRefusal
 // 12. drop ReadTimeout / copy it from like             -> internal/app TestOpenTLSServer_OwnsItsTimeouts
@@ -217,9 +223,9 @@ func TestBootServer_TLSPeerIsTheInstancePrincipal(t *testing.T) {
 // M3: refused at the TLS layer, not by the middleware. The client's own
 // Handshake() is not the signal — in TLS 1.3 it completes before the server
 // judges the client certificate — so the proof is that no HTTP response ever
-// arrives AND not one request reached the HTTP layer. With the config
-// weakened to RequestClientCert, the request gets through to the middleware
-// (which answers 403) and the counter moves: that is what this must catch.
+// arrives AND not one request reached the HTTP layer. If the TLS layer let a
+// certificate-less client through, the middleware would answer 403 and the
+// counter would move: that is what this must catch (sabotage 9 above).
 func TestBootServer_TLSRefusesNoClientCert(t *testing.T) {
 	n := newTLSNode(t, "127.0.0.1:0")
 	srv := n.boot(t)
