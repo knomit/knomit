@@ -165,6 +165,10 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 // green, which is precisely the stale-reserve failure this exists to prevent.
 func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 	one := sizedFacts(1, 16)
+	// Enough facts that the item pages: page 1 then also carries page, pages,
+	// more_available, the item's own paging line, and the longer "read on"
+	// form of `next`.
+	many := sizedFacts(40, 2048)
 
 	// stepType is the item's PRODUCTION type and is deliberately separate from
 	// the subtest name. They were one field until review caught it: naming the
@@ -173,17 +177,25 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 	// larger than production ever produces. A fixture that measures a payload
 	// the system cannot emit reports a number about itself.
 	for _, tc := range []struct {
-		name     string
-		stepType string
-		content  func() (*WorkItemContent, error)
+		name      string
+		stepType  string
+		content   func() (*WorkItemContent, error)
+		multipage bool
 	}{
 		{"distill-cluster", "distill", func() (*WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), false)
-		}},
+		}, false},
 		{"distill-remainder", "distill", func() (*WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), true)
-		}},
-		{"prune", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }},
+		}, false},
+		{"prune", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }, false},
+		{"distill-cluster-multipage", "distill", func() (*WorkItemContent, error) {
+			return RenderDistillWorkItem(many, "kb", maxMethodologySection(), false)
+		}, true},
+		{"distill-remainder-multipage", "distill", func() (*WorkItemContent, error) {
+			return RenderDistillWorkItem(many, "kb", maxMethodologySection(), true)
+		}, true},
+		{"prune-multipage", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(many, "kb") }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content, err := tc.content()
@@ -200,6 +212,8 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 			}
 			out, err := reviewResultPage(res, 1)
 			require.NoError(t, err)
+			require.Equalf(t, tc.multipage, out.Item.MoreAvailable,
+				"%s: precondition: the fixture must page exactly when the case says so", tc.name)
 			// Everything else a page-1 result can carry rides the same page: a
 			// start result's identity and displacement fields at realistic
 			// lengths, and the `next` line in its longest form, the unscoped
@@ -217,6 +231,7 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 			delivered, err := json.MarshalIndent(out, "", "  ")
 			require.NoError(t, err)
 			envelope := len(delivered) - deliveredFactsLen(out.Item.Facts)
+			t.Logf("%s: envelope %d of %d", tc.name, envelope, pageEnvelopeReserveBytes)
 
 			require.LessOrEqualf(t, envelope, pageEnvelopeReserveBytes,
 				"%s: the non-facts part of a delivered page is %d bytes, over the %d reserved for it; "+

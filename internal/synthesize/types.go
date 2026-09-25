@@ -235,9 +235,12 @@ const maxDeliveredItemBytes = 32 * 1024
 //
 // The envelope also carries what a page-1 START result adds: the repo
 // identity and abandoned_* fields, and the `next` line every result carries
-// (longest on the unscoped endpoint). Measured with those, the distill
-// remainder page is 12,302 bytes, over 12 KiB; the reserve is 12.5 KiB,
-// leaving 498. Trim prose before raising it again, and re-measure.
+// (longest on the unscoped endpoint). On a multi-page item page 1 also carries
+// page, pages, more_available, the item's paging line and the longer "read
+// on" `next`. Measured with all of those, the worst case is page 1 of a
+// multi-page distill remainder at 12,432 bytes (a single-page one is 12,302),
+// over 12 KiB; the reserve is 12.5 KiB, leaving 368. Trim prose before raising
+// it again, and re-measure.
 const pageEnvelopeReserveBytes = 12*1024 + 512
 
 // maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
