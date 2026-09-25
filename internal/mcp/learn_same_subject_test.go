@@ -121,8 +121,9 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 					results: []store.SearchResult{hit("kb/a.md", "A", band, "Ramp")},
 				},
 				{
-					// SAME category directory: applyDedupMerge searches exactly
-					// there, so it really has already folded this one.
+					// SAME category directory: inside applyDedupMerge's prefix
+					// scope (`path LIKE dir%`, #260), so it really has already
+					// folded this one.
 					name:    "(b) same-category hit at the auto-merge floor belongs to applyDedupMerge",
 					f:       incoming,
 					results: []store.SearchResult{hit(incomingDir+"/a.md", "A", ts.th.Dedup, "Ramp")},
@@ -203,9 +204,11 @@ func TestFindSameSubjectCandidates(t *testing.T) {
 	}
 }
 
-// The band is the whole POINT of this stage: today's dedup searches only the
-// incoming fact's own category directory, which is exactly why one event filed
-// under two categories never collides. A Path here would reintroduce that.
+// The band is the whole POINT of this stage: applyDedupMerge searches only
+// under the incoming fact's category-directory PREFIX (`path LIKE dir%`, #260),
+// never another topic or an unrelated category, which is exactly why one event
+// filed under two categories never collides there. A Path here would
+// reintroduce that.
 func TestFindSameSubjectCandidates_SearchesWholeBranchAtTheBandFloor(t *testing.T) {
 	for _, ts := range thresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {

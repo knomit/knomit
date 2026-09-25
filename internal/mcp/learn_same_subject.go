@@ -64,11 +64,16 @@ func dfCeilingForFacts(n int) int { return synthesize.DFCeiling(n) }
 // failure kb/decisions/lens/no-write-time-coherence-gate names.
 //
 // THE UPPER BOUND IS SCOPE-CONDITIONAL, and that is the whole of decision 9d.
-// "A hit at or above Dedup belongs to applyDedupMerge" is true only INSIDE the
-// incoming fact's own category directory, because that is the only place
-// applyDedupMerge looks (it searches with Path: categoryDir). Outside it, no
-// merge has folded anything and no other stage will, so a cross-category
-// candidate has NO upper bound: everything above ReflectNovelty is a candidate.
+// "A hit at or above Dedup belongs to applyDedupMerge" is assumed only for a
+// candidate in EXACTLY the incoming fact's category directory (sameCategoryDir).
+// applyDedupMerge actually searches a wider, raw path prefix (Path:
+// categoryDir, i.e. `path LIKE dir%`, which also reaches descendants, prefix
+// siblings, `_` wildcards and ASCII-case variants) — by design, see #260. A
+// fact the merge folded is touched and never reaches this gate. Outside the
+// exact directory no upper bound applies: everything above ReflectNovelty is a
+// candidate, including a prefix sibling or descendant the merge could have
+// reached but did not take. That asymmetry is accepted; sameCategoryDir
+// spells it out.
 //
 // The first version capped both cases at Dedup, and measurement against the
 // real corpus showed what that costs: of the four known collision pairs, three
@@ -160,13 +165,15 @@ func findSameSubjectCandidates(
 }
 
 // categoryDirOf is the category directory of an on-disk fact path: the ONE
-// definition of "the scope applyDedupMerge searches".
+// definition of "the incoming fact's category directory".
 //
-// It is shared deliberately. applyDedupMerge uses it to SET its search scope,
-// and the same-subject gate uses it to decide whether a candidate falls inside
-// that scope — so the two must mean the same thing by construction. Two
-// derivations that drifted would put the gate's upper bound somewhere the merge
-// does not actually cover, which is decision 9d's defect all over again.
+// It is shared deliberately. applyDedupMerge passes it as its search PREFIX,
+// and the same-subject gate compares against it EXACTLY (sameCategoryDir) —
+// so, for ASCII paths, the gate's exact-directory cap always sits inside the
+// merge's prefix scope, never outside it (EqualFold folds Unicode, LIKE folds
+// only ASCII). Two derivations that drifted would put the gate's
+// upper bound somewhere the merge does not cover, which is decision 9d's
+// defect all over again.
 //
 // Derived from the on-disk path rather than fact.Path() so the directory
 // carries the configured ontology root's real case.
@@ -178,10 +185,27 @@ func categoryDirOf(path string) string {
 	return path[:i]
 }
 
-// sameCategoryDir reports whether an existing fact sits in the directory
-// applyDedupMerge would have searched for the incoming fact — the ONLY scope in
-// which "the merge already folded this" is true. Compared case-insensitively
-// because fact paths are lowercase-canonical, the same reason namedIn folds.
+// sameCategoryDir reports whether an existing fact sits in EXACTLY the incoming
+// fact's category directory. The gate caps only these candidates at the
+// auto-merge floor.
+//
+// This is NARROWER than the merge's reach, so the two stages do NOT agree on
+// scope. applyDedupMerge searches the raw prefix `path LIKE dir%`, which also
+// reaches descendants, prefix siblings, `_` wildcards and ASCII-case variants
+// (intended; see #260). When the merge folds a candidate, the incoming fact is
+// touched and this gate never runs for it. But for a candidate at or above
+// Dedup that the merge did NOT take, the outcome depends on where it sits:
+//   - in the exact directory, it is skipped here;
+//   - as a prefix sibling or descendant, it is still eligible for a
+//     same-subject refusal.
+//
+// The merge does not take a candidate when it was not the top-1 hit, was
+// already consumed by an earlier fact in the call, was declined by the
+// candidate-side LearnDedupOff check, or was starved out of the KNN k-window.
+// This asymmetry is known and accepted under #260 (closed won't-fix).
+//
+// Compared case-insensitively because fact paths are lowercase-canonical, the
+// same reason namedIn folds.
 func sameCategoryDir(candidatePath, categoryDir string) bool {
 	if categoryDir == "" {
 		return false
