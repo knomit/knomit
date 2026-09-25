@@ -494,3 +494,16 @@ func TestStartOrResume_UnattributedMCPSessionIsNotCalledInProcess(t *testing.T) 
 	require.Contains(t, err.Error(), sess.ID)
 	require.NotContains(t, err.Error(), "in-process")
 }
+
+// A session that completes inside its own planning (nothing to review) is a
+// normal done result, not a displacement.
+func TestPlanning_CompletingDuringPlanningIsNotDisplaced(t *testing.T) {
+	ctx := context.Background()
+	r, _ := newPhaseTestReviewer(t)
+	res, err := r.StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err)
+	require.True(t, res.Done)
+	res, err = r.StartSession(ctx)
+	require.NoError(t, err)
+	require.True(t, res.Done)
+}

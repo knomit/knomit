@@ -216,7 +216,16 @@ func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.Pipeline
 		return wrapf(p.strategy.Tool(), err, "mark session planned")
 	}
 	if !ok {
-		return errf(p.strategy.Tool(), "session %q was displaced (taken over by another start) while it planned; there is nothing to continue", sess.ID)
+		// Not active any more. A session can complete inside its own first
+		// step (nothing to review), which is a normal outcome; only an
+		// abandoned one was displaced.
+		now, gerr := d.Pipeline.GetPipelineSession(ctx, sess.ID)
+		if gerr != nil {
+			return wrapf(p.strategy.Tool(), gerr, "re-read session")
+		}
+		if now == nil || now.Status != "completed" {
+			return errf(p.strategy.Tool(), "session %q was displaced (taken over by another start) while it planned; there is nothing to continue", sess.ID)
+		}
 	}
 	sess.Planning = false
 	return nil
