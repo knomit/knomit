@@ -182,11 +182,27 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 
 	// Own transaction on the session DB. We deliberately do NOT consult any
 	// ctx-carried tx (it would belong to the main db).
-	tx, err := pi.sessionDB.BeginTx(ctx, nil)
+	//
+	// BEGIN IMMEDIATE, on a connection of its own: the transaction reads the
+	// slot and then writes it, and a DEFERRED transaction that read under a
+	// snapshot another start has since committed past fails its first write
+	// with SQLITE_BUSY_SNAPSHOT, which the busy timeout cannot wait out. Taking
+	// the write lock up front makes a concurrent start wait, then read the
+	// session the winner created and answer ErrPipelineSlotChanged.
+	tx, err := pi.sessionDB.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("CreatePipelineSession: begin tx: %w", err)
+		return nil, fmt.Errorf("CreatePipelineSession: conn: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Close()
+	if _, err := tx.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return nil, fmt.Errorf("CreatePipelineSession: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = tx.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+		}
+	}()
 
 	// Abandon any active session for this tool+branch.
 	//
@@ -236,9 +252,10 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return nil, err
+	if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("CreatePipelineSession commit: %w", err)
 	}
+	committed = true
 	return s, nil
 }
 
