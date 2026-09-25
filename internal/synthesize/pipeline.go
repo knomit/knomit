@@ -23,11 +23,15 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/fact/textnorm"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -50,6 +54,8 @@ type Pipeline struct {
 	effort   Effort
 	scope    ScopeFilter
 	strategy Strategy
+	// hooks are test seams; zero in production.
+	hooks pipelineHooks
 	// branch OVERRIDES the branch a session is opened against. Empty means
 	// "this repo's agent branch", which is what every caller meant before
 	// experiments existed. It is set from the caller's BINDING — a session
@@ -146,10 +152,10 @@ func (p *Pipeline) deps() Deps {
 // StartSession creates a session, scans for seed facts, asks the strategy to
 // plan work over them, and returns the first item.
 //
-// This is the ONLY place the engine resolves the session's branch, and still
-// the ONLY place it can reach ri.AgentBranch(). The value becomes sess.Branch
-// and travels with the session for the rest of its lifetime; every method
-// below reads it back off the row
+// The session's branch is resolved in opener, the ONLY place the engine can
+// reach ri.AgentBranch(), shared with StartOrResumeSession. The value becomes
+// sess.Branch and travels with the session for the rest of its lifetime;
+// every method below reads it back off the row
 // (invariants/synthesize/session-branch-binding). The caller's correlation
 // handle is bound at the same moment and for the same reason — see actor.go.
 //
@@ -159,21 +165,156 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	totalStart := time.Now()
 	d := p.deps()
-	branch := p.branch
-	if branch == "" {
-		branch = p.ri.AgentBranch()
-	}
-	// Read ONCE, here, for the same reason the branch is: the value describes
-	// the call that opened the session, and the MCP handler builds a fresh
-	// engine per continue call, so a later read would see a different request
-	// (or none). It goes onto the row and is never read from the context again
-	// (knomit#123). Empty is normal for in-process callers.
-	actor := actorFromContext(ctx)
+	branch, actor := p.opener(ctx)
 
 	sess, err := d.Pipeline.CreatePipelineSession(ctx, tool, branch, actor)
 	if err != nil {
 		return nil, wrapf(tool, err, "create session")
 	}
+	return p.planSession(ctx, d, sess, branch, totalStart)
+}
+
+// opener resolves what a new session is bound to at creation: its branch and
+// the opening caller's correlation handle. The one place either is read, for
+// StartSession and StartOrResumeSession alike.
+//
+// Both are read ONCE, at start: the value describes the call that opened the
+// session, and the MCP handler builds a fresh engine per continue call, so a
+// later read would see a different request (or none). They go onto the row
+// and are never read from ri or the context again (knomit#123). An empty
+// actor is normal for in-process callers.
+func (p *Pipeline) opener(ctx context.Context) (branch, actor string) {
+	branch = p.branch
+	if branch == "" {
+		branch = p.ri.AgentBranch()
+	}
+	return branch, actorFromContext(ctx)
+}
+
+// pipelineHooks are test seams on one Pipeline, never set in production. They
+// open the gaps a second caller can only hit by timing, so a test can hit them
+// deterministically: beforeClaim runs between an answer's checks and its
+// claim, duringApply between the claim and the apply.
+type pipelineHooks struct {
+	beforeClaim func(ctx context.Context, itemID int64)
+	duringApply func(ctx context.Context, itemID int64)
+	// afterAdvance runs between a won phase CAS and the strategy's
+	// OnPhaseAdvance, the gap in which the next phase's work is not queued yet.
+	afterAdvance func(ctx context.Context, from, to string)
+	// beforePlan runs when a created session starts planning.
+	beforePlan func(ctx context.Context, sessionID string)
+}
+
+// markPlanned clears a session's planning mark once its work is queued and
+// its first item rendered, so a second start may resume it from here on.
+func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.PipelineSession) error {
+	if !sess.Planning {
+		return nil
+	}
+	ok, err := d.Pipeline.MarkPipelineSessionPlanned(ctx, sess.ID)
+	if err != nil {
+		return wrapf(p.strategy.Tool(), err, "mark session planned")
+	}
+	if !ok {
+		// Not active any more. A session can complete inside its own first
+		// step (nothing to review), which is a normal outcome; only an
+		// abandoned one was displaced.
+		now, gerr := d.Pipeline.GetPipelineSession(ctx, sess.ID)
+		if gerr != nil {
+			return wrapf(p.strategy.Tool(), gerr, "re-read session")
+		}
+		if now == nil {
+			return errf(p.strategy.Tool(), "session %q was reaped while it planned; there is nothing to continue", sess.ID)
+		}
+		if now.Status != "completed" {
+			return errf(p.strategy.Tool(), "session %q was displaced (taken over by another start) while it planned; there is nothing to continue", sess.ID)
+		}
+	}
+	sess.Planning = false
+	return nil
+}
+
+// currentItemHint tells a refused caller how to get the current item.
+// knomit_review serves it for a session_id with no response; knomit_hypothesize,
+// where an empty response is a real answer, serves it for current=true.
+func (p *Pipeline) currentItemHint(sessionID string) string {
+	tool := p.strategy.Tool()
+	if tool == reviewTool {
+		return fmt.Sprintf(" Call knomit_review with session_id=%q and no response to get the current item.", sessionID)
+	}
+	return fmt.Sprintf(" Call knomit_%s with session_id=%q and current=true to get the current item.", tool, sessionID)
+}
+
+// activeSession loads a session a call is about to act on, refusing one that
+// is missing, no longer active, or still planning.
+func (p *Pipeline) activeSession(ctx context.Context, d Deps, sessionID string) (*store.PipelineSession, error) {
+	tool := p.strategy.Tool()
+	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	if err != nil {
+		return nil, wrapf(tool, err, "get session")
+	}
+	if sess == nil {
+		return nil, errf(tool, "session %q not found", sessionID)
+	}
+	if sess.Status != "active" {
+		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+	}
+	if sess.Planning {
+		return nil, errStillPlanning(tool, sessionID)
+	}
+	return sess, nil
+}
+
+// Current serves the session's outstanding item again, from page 1, without
+// answering it. With nothing outstanding it takes the session's next step, as
+// the next answer would have.
+func (p *Pipeline) Current(ctx context.Context, sessionID string) (*PipelineResult, error) {
+	sess, err := p.activeSession(ctx, p.deps(), sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return p.nextItem(ctx, sess)
+}
+
+// errAdvancing refuses a step on a session another caller is moving to its
+// next phase: until that caller's phase hook has queued the new phase's work,
+// the phase only looks empty.
+func errAdvancing(tool, sessionID string) error {
+	return errf(tool, "session %q is moving to its next phase for another caller; retry shortly, or start with takeover:true to abandon the session", sessionID)
+}
+
+// errStillPlanning refuses a call on a session whose start has not finished
+// planning: its queue is empty only because nothing is queued yet.
+func errStillPlanning(tool, sessionID string) error {
+	return errf(tool, "session %q is still planning; retry shortly, or start with takeover:true to abandon it", sessionID)
+}
+
+// planSession plans a session its caller just created, for both start
+// paths. A plan that fails, by error or panic, abandons the session while it
+// is still planning: otherwise it would hold the slot, refusing every start
+// as still planning until the reaper took it.
+func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (res *PipelineResult, err error) {
+	planned := false
+	defer func() {
+		if planned {
+			return
+		}
+		if aerr := d.Pipeline.AbandonPlanningPipelineSession(context.WithoutCancel(ctx), sess.ID); aerr != nil {
+			log.Warn().Err(aerr).Str("session", sess.ID).Msg("pipeline: abandoning a session whose planning failed")
+		}
+	}()
+	res, err = p.plan(ctx, d, sess, branch, totalStart)
+	planned = err == nil
+	return res, err
+}
+
+// plan is StartSession after the session row exists: mark scope, scan
+// seeds, plan, and serve the first item.
+func (p *Pipeline) plan(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (*PipelineResult, error) {
+	if p.hooks.beforePlan != nil {
+		p.hooks.beforePlan(ctx, sess.ID)
+	}
+	tool := p.strategy.Tool()
 
 	// Persist the scoped flag on the session row so completeSession can
 	// suppress watermark advancement, even though the MCP handler reconstructs
@@ -238,6 +379,9 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 			if err != nil {
 				return nil, err
 			}
+			if err := p.markPlanned(ctx, d, sess); err != nil {
+				return nil, err
+			}
 			// The same health contract the planned path below keeps: the
 			// descriptors ride the FIRST result. emptySeedHealth still goes on,
 			// because "nothing has CHANGED" remains true and is the sentence
@@ -276,6 +420,11 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 
 	res, err := p.nextItem(ctx, sess)
 	if err != nil {
+		return nil, err
+	}
+	// Planned only once the first item is rendered: until then a failure
+	// abandons this session, and nobody else can have resumed it.
+	if err := p.markPlanned(ctx, d, sess); err != nil {
 		return nil, err
 	}
 	// Health descriptors recorded during Plan ride the FIRST result — the turn
@@ -378,15 +527,9 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	tool := p.strategy.Tool()
 	d := p.deps()
 
-	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	sess, err := p.activeSession(ctx, d, sessionID)
 	if err != nil {
-		return nil, wrapf(tool, err, "get session")
-	}
-	if sess == nil {
-		return nil, errf(tool, "session %q not found", sessionID)
-	}
-	if sess.Status != "active" {
-		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+		return nil, err
 	}
 
 	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
@@ -394,6 +537,13 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 		return nil, wrapf(tool, err, "next work item")
 	}
 	if item == nil {
+		// An answer naming an item, when none is outstanding, answers
+		// something already answered: refuse it rather than turn it into the
+		// session's next step.
+		if itemID != 0 {
+			return nil, errf(tool, "item %d is no longer outstanding in session %q; nothing was applied.%s",
+				itemID, sessionID, p.currentItemHint(sessionID))
+		}
 		// No unanswered items — let the dispatcher handle phase advancement
 		// (work→reflect→done as appropriate). Don't short-circuit to
 		// completeSession: that would skip the reflect phase entirely on
@@ -406,8 +556,8 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	// against a different item's facts, so applying it here would validate it
 	// against the wrong input paths.
 	if itemID != 0 && itemID != item.ID {
-		return nil, errf(tool, "response targets work item %d but item %d is current; "+
-			"re-read the current item and answer that one", itemID, item.ID)
+		return nil, errf(tool, "response targets work item %d but item %d is current; nothing was applied.%s",
+			itemID, item.ID, p.currentItemHint(sessionID))
 	}
 
 	// Accumulate-then-respond guard, ahead of Decode and therefore ahead of the
@@ -448,6 +598,9 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	// concurrent caller, or by an earlier attempt of this very submission
 	// whose response reached the DB. Its mutations are already applied, so
 	// re-applying them here is exactly the duplication P0.4 exists to kill.
+	if p.hooks.beforeClaim != nil {
+		p.hooks.beforeClaim(ctx, item.ID)
+	}
 	claimed, err := d.Pipeline.AnswerPipelineWorkItem(ctx, item.ID, normalized)
 	if err != nil {
 		// UNCOVERED: no test exercises this branch, and there is currently no
@@ -467,11 +620,40 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	if !claimed {
 		log.Info().Str("tool", tool).Str("session", sessionID).Int64("item", item.ID).
 			Msg("pipeline: work item already answered; skipping apply")
+		// A caller that named its item and lost the claim answered the same
+		// item as another caller; handing it the next item would read as
+		// though its own answer had landed.
+		if itemID != 0 {
+			return nil, errf(tool, "item %d was already answered (by another caller or an earlier attempt of this call); nothing was applied by this call; if you sent this answer before, it was applied.%s",
+				item.ID, p.currentItemHint(sessionID))
+		}
 		return p.nextItem(ctx, sess)
 	}
 
-	if err := p.strategy.Apply(ctx, d, sess, item, dec); err != nil {
-		return nil, err
+	// The item holds the session's phase from the claim until its apply
+	// returns, so nobody advances past follow-ups the apply is still
+	// enqueueing. It is finished explicitly below, before this call steps the
+	// session, and by the deferred call on every other way out, a panic
+	// included: an item left applying would hold the phase for good.
+	finished := false
+	defer func() {
+		if finished {
+			return
+		}
+		if err := d.Pipeline.FinishPipelineWorkItem(context.WithoutCancel(ctx), item.ID); err != nil {
+			log.Warn().Err(err).Int64("item", item.ID).Msg("pipeline: finishing an item whose apply did not return")
+		}
+	}()
+	if p.hooks.duringApply != nil {
+		p.hooks.duringApply(ctx, item.ID)
+	}
+	applyErr := p.strategy.Apply(ctx, d, sess, item, dec)
+	if err := d.Pipeline.FinishPipelineWorkItem(context.WithoutCancel(ctx), item.ID); err != nil && applyErr == nil {
+		applyErr = wrapf(tool, err, "finish work item %d", item.ID)
+	}
+	finished = true
+	if applyErr != nil {
+		return nil, applyErr
 	}
 
 	res, err := p.nextItem(ctx, sess)
@@ -815,15 +997,9 @@ func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int
 	tool := p.strategy.Tool()
 	d := p.deps()
 
-	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	sess, err := p.activeSession(ctx, d, sessionID)
 	if err != nil {
-		return nil, wrapf(tool, err, "get session")
-	}
-	if sess == nil {
-		return nil, errf(tool, "session %q not found", sessionID)
-	}
-	if sess.Status != "active" {
-		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+		return nil, err
 	}
 
 	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
@@ -936,13 +1112,58 @@ func (p *Pipeline) handlePhase(ctx context.Context, sess *store.PipelineSession,
 	if err != nil {
 		return nil, wrapf(tool, err, "advance %s→%s", from, to)
 	}
+	if !advanced {
+		// The advance refuses while any item is unanswered or still being
+		// applied. Serve an item queued since the read above; report one
+		// another caller is applying; otherwise another caller advanced the
+		// phase, and the refetch below dispatches from where it now is.
+		if item, err := d.Pipeline.NextPipelineWorkItem(ctx, sess.ID); err != nil {
+			return nil, wrapf(tool, err, "next item")
+		} else if item != nil {
+			return p.renderWorkItem(ctx, d, sess, item)
+		}
+		applying, err := d.Pipeline.ApplyingPipelineWorkItem(ctx, sess.ID)
+		if err != nil {
+			return nil, wrapf(tool, err, "applying item")
+		}
+		if applying != 0 {
+			return nil, errf(tool, "item %d is being applied by another caller; retry shortly, or start with takeover:true to abandon the session", applying)
+		}
+		if now, err := d.Pipeline.GetPipelineSession(ctx, sess.ID); err != nil {
+			return nil, wrapf(tool, err, "re-read session")
+		} else if now != nil && now.Advancing {
+			return nil, errAdvancing(tool, sess.ID)
+		}
+	}
 	if advanced {
 		log.Info().Str("tool", tool).Str("session", sess.ID).Str("from", from).Str("to", to).
 			Msg("pipeline: phase transition")
 		// Only the CAS winner runs the hook, which is what makes an insert
-		// made inside it at-most-once per session per transition.
-		if err := p.strategy.OnPhaseAdvance(ctx, d, sess, from, to); err != nil {
-			return nil, err
+		// made inside it at-most-once per session per transition. The CAS also
+		// marked the session advancing: until the hook has queued the new
+		// phase's work, the next advance and any completion wait. The mark is
+		// cleared explicitly once the hook returns, and by the deferred call
+		// on every other way out, a panic included: a mark left set would
+		// hold the session for good.
+		finished := false
+		defer func() {
+			if finished {
+				return
+			}
+			if err := d.Pipeline.FinishPipelineSessionAdvance(context.WithoutCancel(ctx), sess.ID); err != nil {
+				log.Warn().Err(err).Str("session", sess.ID).Msg("pipeline: finishing an advance whose hook did not return")
+			}
+		}()
+		if p.hooks.afterAdvance != nil {
+			p.hooks.afterAdvance(ctx, from, to)
+		}
+		hookErr := p.strategy.OnPhaseAdvance(ctx, d, sess, from, to)
+		if err := d.Pipeline.FinishPipelineSessionAdvance(context.WithoutCancel(ctx), sess.ID); err != nil && hookErr == nil {
+			hookErr = wrapf(tool, err, "finish advance %s→%s", from, to)
+		}
+		finished = true
+		if hookErr != nil {
+			return nil, hookErr
 		}
 	}
 	return p.refetchAndDispatch(ctx, sess.ID)
@@ -1015,8 +1236,26 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSess
 	d := p.deps()
 	branch := sess.Branch
 
-	if err := d.Pipeline.CompletePipelineSession(ctx, sess.ID); err != nil {
+	ended, err := d.Pipeline.CompletePipelineSession(ctx, sess.ID)
+	if err != nil {
 		return nil, wrapf(tool, err, "complete session")
+	}
+	// Not active any more. Completed by a concurrent caller: that caller
+	// advanced the watermark, and this one reports the same done result
+	// without advancing it again. Displaced: the slot is someone else's, and
+	// advancing the watermark would move it past seeds their session is still
+	// serving.
+	if !ended {
+		now, gerr := d.Pipeline.GetPipelineSession(ctx, sess.ID)
+		if gerr != nil {
+			return nil, wrapf(tool, gerr, "re-read session")
+		}
+		if now != nil && now.Status == "active" && now.Advancing {
+			return nil, errAdvancing(tool, sess.ID)
+		}
+		if now == nil || now.Status != "completed" {
+			return nil, errf(tool, "session %q is no longer active; nothing was completed", sess.ID)
+		}
 	}
 
 	// A scoped run only processed a subset of facts. Advancing the watermark
@@ -1026,7 +1265,7 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSess
 	// engine with empty scope on the completing continue call, so p.scope is
 	// unreliable here. This is the write half of the scoped exemption whose
 	// read half is in dirtyFacts; the two must always agree.
-	if !sess.Scoped {
+	if ended && !sess.Scoped {
 		headHash, err := d.Branches.HeadCommit(ctx, branch)
 		if err != nil {
 			log.Warn().Err(err).Str("tool", tool).Msg("pipeline: could not get HEAD for watermark")
@@ -1098,4 +1337,164 @@ func recordStats(ctx context.Context, tool string, d Deps, sess *store.PipelineS
 		log.Warn().Err(err).Str("tool", tool).Str("session", sess.ID).
 			Msg("pipeline: could not record session stats")
 	}
+}
+
+// StartOptions govern how StartOrResumeSession treats a session already
+// active on the same tool and branch.
+type StartOptions struct {
+	// Takeover abandons a live session and starts a new one, whatever its
+	// scope and effort.
+	Takeover bool
+	// ResumeWindow is how recently the active session must have served a work
+	// item to count as live. An older one is displaced.
+	ResumeWindow time.Duration
+}
+
+// LiveSessionError refuses a start that would displace a live session it
+// cannot resume, because the two were opened with a different effort or scope.
+type LiveSessionError struct {
+	Tool      string
+	Branch    string
+	SessionID string
+	CreatedBy string
+	LastUsed  time.Time
+	// InProcess marks a session opened without a resume policy (RunAll, the
+	// web synthesis job): no agent can continue it, so its id is not offered.
+	InProcess bool
+}
+
+func (e *LiveSessionError) Error() string {
+	if e.InProcess {
+		return fmt.Sprintf("an in-process %s is running on this branch; wait for it to finish, "+
+			"or start with takeover:true to abandon it", e.Tool)
+	}
+	by := e.CreatedBy
+	if by == "" {
+		by = "an unattributed caller"
+	}
+	return fmt.Sprintf("a %s session with a different scope or effort is already in progress on branch %q: "+
+		"session_id=%q, opened by %s, last used %s (%s ago). "+
+		"Continue it by passing that session_id, wait for it to finish, "+
+		"or start again with takeover:true to abandon it and start a new session",
+		e.Tool, e.Branch, e.SessionID, by, e.LastUsed.UTC().Format(time.RFC3339),
+		time.Since(e.LastUsed).Round(time.Second))
+}
+
+// startKey is what a start must match to resume a live session: the effort
+// and the scope, each list folded the way the scope filter compares tags
+// (store.CanonicalizeTag for domains, textnorm.Fold for entities), deduped,
+// sorted, and JSON-encoded as a list, so order, case and repeats do not make
+// two scopes different and a comma inside one value never equals two values.
+func (p *Pipeline) startKey() string {
+	key, err := json.Marshal(struct {
+		Effort   Effort   `json:"effort"`
+		Domain   []string `json:"domain"`
+		Entities []string `json:"entities"`
+	}{p.effort, canonicalScopeList(p.scope.Domain, store.CanonicalizeTag), canonicalScopeList(p.scope.Entities, textnorm.Fold)})
+	if err != nil {
+		// Marshalling strings cannot fail; a key nobody matches is the safe
+		// answer if it ever did.
+		return ""
+	}
+	return string(key)
+}
+
+// canonicalScopeList folds, dedupes and sorts a scope list.
+func canonicalScopeList(in []string, fold func(string) string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = fold(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// maxSlotRetries bounds StartOrResumeSession's re-reads when a concurrent
+// start changes the slot between its read and its write. Each retry follows a
+// write that some other start won, so it is not reachable by a single caller.
+const maxSlotRetries = 3
+
+// StartOrResumeSession is StartSession for callers that must not silently
+// displace one another (the knomit_review handler). When the tool and branch
+// already have an active session:
+//
+//   - opts.Takeover: it is abandoned and a new session starts, naming it in
+//     abandoned_session;
+//   - still planning: refused, whatever its age (only takeover or the reaper
+//     displaces it);
+//   - idle longer than opts.ResumeWindow: displaced as for takeover;
+//   - live, with the same effort and scope: it is RESUMED — the result is its
+//     current item under its own session_id, flagged Resumed;
+//   - live, with a different effort or scope, or opened in-process:
+//     *LiveSessionError.
+func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
+	totalStart := time.Now()
+	d := p.deps()
+	branch, actor := p.opener(ctx)
+	key := p.startKey()
+
+	for attempt := 0; attempt < maxSlotRetries; attempt++ {
+		active, err := d.Pipeline.ActivePipelineSession(ctx, tool, branch)
+		if err != nil {
+			return nil, wrapf(tool, err, "read active session")
+		}
+		replace := ""
+		// Set when replace is displaced as stale: the create re-checks it.
+		var idleBefore time.Time
+		// A session still planning is never resumed and never stale by the
+		// window; only takeover, or the reaper, displaces it.
+		if active != nil && active.Planning && !opts.Takeover {
+			return nil, errStillPlanning(tool, active.ID)
+		}
+		if active != nil {
+			lastUsed, perr := time.Parse(time.RFC3339, active.LastUsedAt)
+			live := perr == nil && time.Since(lastUsed) <= opts.ResumeWindow
+			switch {
+			case opts.Takeover:
+				replace = active.ID
+			case !live:
+				replace = active.ID
+				idleBefore = time.Now().Add(-opts.ResumeWindow)
+			case active.StartKey == key:
+				resumed, rerr := d.Pipeline.ResumePipelineSession(ctx, active.ID)
+				if rerr != nil {
+					return nil, wrapf(tool, rerr, "resume session")
+				}
+				if !resumed {
+					continue // it ended between the read and the claim
+				}
+				log.Info().Str("tool", tool).Str("session", active.ID).Str("resumed_by", actor).
+					Msg("pipeline: session resumed")
+				res, nerr := p.nextItem(ctx, active)
+				if nerr != nil {
+					return nil, nerr
+				}
+				res.Resumed = true
+				p.stampIdentity(res, active)
+				return res, nil
+			default:
+				return nil, &LiveSessionError{
+					Tool: tool, Branch: branch, SessionID: active.ID,
+					CreatedBy: active.CreatedBy, LastUsed: lastUsed,
+					InProcess: active.StartKey == "",
+				}
+			}
+		}
+		sess, err := d.Pipeline.CreatePipelineSessionReplacing(ctx, tool, branch, actor, key, replace, idleBefore)
+		if errors.Is(err, store.ErrPipelineSlotChanged) {
+			continue
+		}
+		if err != nil {
+			return nil, wrapf(tool, err, "create session")
+		}
+		return p.planSession(ctx, d, sess, branch, totalStart)
+	}
+	return nil, errf(tool, "the %s session on branch %q kept changing under concurrent starts; call again", tool, branch)
 }

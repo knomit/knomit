@@ -247,11 +247,13 @@ Each fact has YAML frontmatter with:
 
 Call this tool to review and maintain the knowledge base. It works as a multi-turn conversation:
 
-1. Call knomit_review with no arguments to start a review session
+1. Call knomit_review with no arguments to start a review session. If one is already in progress on this knowledge base, the start resumes it (resumed: true) and you continue it the same way.
 2. You'll receive a prompt describing facts to evaluate and a response_schema
 3. Reason about the facts, then call knomit_review again with:
-   - session_id: the ID from the previous response
+   - session_id: the ID from the previous response (required on every call after the first)
+   - item_id: the item's id (required with every response)
    - response: your JSON decisions matching the response_schema
+   The result's "next" line names exactly what to pass.
 4. Repeat until the response contains "done": true
 
 You may stop at any time — progress is saved and the next session picks up remaining work.

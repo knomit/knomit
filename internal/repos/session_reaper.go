@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -19,6 +20,10 @@ type sessionReaperConfig struct {
 	ToolIdleTTL     time.Duration
 	PipelineIdleTTL time.Duration
 	SweepInterval   time.Duration
+	// PipelineResumeWindow is not a reaper knob, but it is validated here
+	// because it is only meaningful below PipelineIdleTTL: a session idle
+	// longer than the TTL is already gone.
+	PipelineResumeWindow time.Duration
 }
 
 // Session reaper defaults. Unlike the cluster checker (where 0 disables the
@@ -31,6 +36,12 @@ const (
 	defaultPipelineIdleTTL = 60 * time.Minute
 	defaultSweepInterval   = 5 * time.Minute
 )
+
+// DefaultPipelineResumeWindow is session.pipeline_resume_window when unset.
+// Far above the time an agent spends on one work item between calls, far below
+// the idle TTL, so a session whose caller crashed is displaced within minutes
+// rather than blocking the next start for an hour.
+const DefaultPipelineResumeWindow = 10 * time.Minute
 
 // parseSessionReaperConfig parses the raw config.SessionConfig duration strings.
 // A malformed value is an error (surfaced at boot, not at first sweep); an
@@ -49,11 +60,29 @@ func parseSessionReaperConfig(raw config.SessionConfig) (sessionReaperConfig, er
 	if err != nil {
 		return sessionReaperConfig{}, err
 	}
-	return sessionReaperConfig{
+	out := sessionReaperConfig{
 		ToolIdleTTL:     orDefaultDur(tool, defaultToolIdleTTL),
 		PipelineIdleTTL: orDefaultDur(pipeline, defaultPipelineIdleTTL),
 		SweepInterval:   orDefaultDur(sweep, defaultSweepInterval),
-	}, nil
+	}
+	// Unset, the default is clamped under a short idle TTL so a config that
+	// predates this key keeps booting; a value set explicitly is validated as
+	// given.
+	def := DefaultPipelineResumeWindow
+	if def >= out.PipelineIdleTTL {
+		def = out.PipelineIdleTTL / 2
+	}
+	resume, err := parseConfigDur("session", "pipeline_resume_window", raw.PipelineResumeWindow, def)
+	if err != nil {
+		return sessionReaperConfig{}, err
+	}
+	if resume <= 0 || resume >= out.PipelineIdleTTL {
+		return sessionReaperConfig{}, fmt.Errorf(
+			"session.pipeline_resume_window: %s must be positive and shorter than session.pipeline_idle_ttl (%s)",
+			resume, out.PipelineIdleTTL)
+	}
+	out.PipelineResumeWindow = resume
+	return out, nil
 }
 
 // orDefaultDur returns def when d is non-positive, else d.

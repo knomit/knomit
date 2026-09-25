@@ -94,8 +94,23 @@ func (r *Reviewer) Effort() Effort { return r.p.Effort() }
 // becomes sess.Branch at this moment and travels with the session for the
 // rest of its lifetime. Nothing downstream reads either source again
 // (invariants/synthesize/session-branch-binding).
+//
+// It displaces any active session on the branch unconditionally. The
+// knomit_review handler uses StartOrResumeSession; this form is used by
+// tests and in-process callers that own the branch.
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	return reviewResult(r.p.StartSession(ctx))
+}
+
+// Current serves the session's outstanding item again, from page 1.
+func (r *Reviewer) Current(ctx context.Context, sessionID string) (*ReviewResult, error) {
+	return reviewResult(r.p.Current(ctx, sessionID))
+}
+
+// StartOrResumeSession starts a review session, or resumes the live one on
+// the same branch; see Pipeline.StartOrResumeSession.
+func (r *Reviewer) StartOrResumeSession(ctx context.Context, opts StartOptions) (*ReviewResult, error) {
+	return reviewResult(r.p.StartOrResumeSession(ctx, opts))
 }
 
 // ContinueSession processes the model's response for the current work item
@@ -183,6 +198,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 		WriteBranch:               res.WriteBranch,
 		AbandonedSession:          res.AbandonedSession,
 		AbandonedSessionCreatedBy: res.AbandonedSessionCreatedBy,
+		Resumed:                   res.Resumed,
 		Done:                      res.Done,
 		Summary:                   res.Summary,
 		Progress:                  res.Progress,
@@ -245,6 +261,11 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 			"Final page (%d of %d). You have now seen every fact in this item. Submit your response with item_id=%d and completion_token=%q.",
 			page, len(pages), res.Item.ID, out.Item.CompletionToken)
 	}
+
+	// The `next` line in its longest form, the unscoped endpoint's. The MCP
+	// handler replaces it with the form for its endpoint, which is never
+	// longer, so the measurement below covers what is delivered.
+	out.Next = ReviewNext(out, true)
 
 	// Last line of defence, and deliberately a measurement of the finished
 	// artifact rather than another prediction of it. maxPageFactBytes bounds the
@@ -318,3 +339,29 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, branch string, tr
 
 // compile-time assertion that the review strategy satisfies the engine seam.
 var _ Strategy = reviewStrategy{}
+
+// ReviewNext is a review result's `next` line: what to call now, naming the
+// session_id. On the unscoped endpoint it also says to pass the binding and
+// that the binding is not the session. It rides every page, inside the page
+// envelope reserve, so it is kept short.
+func ReviewNext(res *ReviewResult, unscoped bool) string {
+	if res.Done {
+		return "Session finished. Do not call knomit_review with this session_id again."
+	}
+	if res.Item == nil {
+		return ""
+	}
+	binding := ""
+	if unscoped {
+		binding = " binding=<handle; not the session>"
+	}
+	it := res.Item
+	if it.MoreAvailable {
+		return fmt.Sprintf("Read on: knomit_review session_id=%q item_id=%d page=%d%s", res.SessionID, it.ID, it.Page+1, binding)
+	}
+	token := ""
+	if it.CompletionToken != "" {
+		token = " completion_token=<from this page>"
+	}
+	return fmt.Sprintf("Answer: knomit_review session_id=%q item_id=%d%s response=<JSON>%s", res.SessionID, it.ID, token, binding)
+}

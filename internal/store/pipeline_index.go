@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,9 +60,27 @@ type PipelineSession struct {
 	// rather than a follow-up UPDATE: a crash between two writes would leave
 	// exactly the unattributable row this column exists to prevent.
 	CreatedBy string
+	// StartKey is what a later start must match to resume this session; see
+	// the start_key column. Empty for an in-process start.
+	StartKey string
+	// Planning is set by every create and cleared once its start has planned
+	// the work and rendered the first item (MarkPipelineSessionPlanned).
+	Planning bool
+	// Advancing is set by a won phase advance until its phase hook returns
+	// (FinishPipelineSessionAdvance).
+	Advancing bool
 	CreatedAt string
 	UpdatedAt string
+	// LastUsedAt is the heartbeat the idle reaper and the resume window read:
+	// bumped whenever the session serves a work item.
+	LastUsedAt string
 }
+
+// ErrPipelineSlotChanged is returned by CreatePipelineSessionReplacing when
+// the active session for the tool+branch is not the one the caller decided to
+// replace: another start got there between the caller's read and its write.
+// Nothing was written; the caller re-reads the slot and decides again.
+var ErrPipelineSlotChanged = errors.New("the active pipeline session changed")
 
 // PipelineSessionStats are the running totals of what a session's applied work
 // items actually changed in the corpus.
@@ -147,15 +166,49 @@ func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 // layer that knows what the claim is made of. Empty is a legitimate value: an
 // in-process caller has no request to attribute to.
 func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error) {
+	return pi.createPipelineSession(ctx, tool, branch, createdBy, "", anyActive, time.Time{})
+}
+
+// anyActive is createPipelineSession's "replace whatever is active" sentinel.
+// It cannot collide with a session id, which is a uuid.
+const anyActive = "\x00any"
+
+// CreatePipelineSessionReplacing creates a session with startKey, but only if
+// the tool+branch's active session is exactly replace ("" meaning none), which
+// it abandons. A non-zero idleBefore also requires that session's
+// last_used_at to be before it, for a displacement decided on staleness. Any other active session fails the call with
+// ErrPipelineSlotChanged and writes nothing, so a caller that decided from a
+// read of the slot never displaces a session it did not see.
+func (pi *pipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
+	return pi.createPipelineSession(ctx, tool, branch, createdBy, startKey, replace, idleBefore)
+}
+
+func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Own transaction on the session DB. We deliberately do NOT consult any
 	// ctx-carried tx (it would belong to the main db).
-	tx, err := pi.sessionDB.BeginTx(ctx, nil)
+	//
+	// BEGIN IMMEDIATE, on a connection of its own: the transaction reads the
+	// slot and then writes it, and a DEFERRED transaction that read under a
+	// snapshot another start has since committed past fails its first write
+	// with SQLITE_BUSY_SNAPSHOT, which the busy timeout cannot wait out. Taking
+	// the write lock up front makes a concurrent start wait, then read the
+	// session the winner created and answer ErrPipelineSlotChanged.
+	tx, err := pi.sessionDB.Conn(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("CreatePipelineSession: begin tx: %w", err)
+		return nil, fmt.Errorf("CreatePipelineSession: conn: %w", err)
 	}
-	defer tx.Rollback()
+	defer tx.Close()
+	if _, err := tx.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return nil, fmt.Errorf("CreatePipelineSession: begin: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = tx.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+		}
+	}()
 
 	// Abandon any active session for this tool+branch.
 	//
@@ -166,12 +219,23 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 	// continue call is rejected, after spending a turn composing an answer to
 	// an item that no longer exists. Nothing here can notify the loser, so the
 	// least this can do is let the winner's result say what it displaced.
-	var abandoned, abandonedBy string
+	var abandoned, abandonedBy, abandonedLastUsed string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT id, created_by FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`,
+		`SELECT id, created_by, last_used_at FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`,
 		tool, branch,
-	).Scan(&abandoned, &abandonedBy); err != nil && err != sql.ErrNoRows {
+	).Scan(&abandoned, &abandonedBy, &abandonedLastUsed); err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("CreatePipelineSession find active: %w", err)
+	}
+	if replace != anyActive && abandoned != replace {
+		return nil, ErrPipelineSlotChanged
+	}
+	// Displacing as stale: re-check the staleness here, under the write lock.
+	// A session used again since the caller's read is live and stays.
+	if abandoned != "" && !idleBefore.IsZero() {
+		lastUsed, perr := time.Parse(time.RFC3339, abandonedLastUsed)
+		if perr == nil && !lastUsed.Before(idleBefore) {
+			return nil, ErrPipelineSlotChanged
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE tool = ? AND branch = ? AND status = 'active'`,
@@ -189,43 +253,122 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 		Abandoned:          abandoned,
 		AbandonedCreatedBy: abandonedBy,
 		CreatedBy:          createdBy,
+		StartKey:           startKey,
+		Planning:           true,
 		CreatedAt:          now,
 		UpdatedAt:          now,
+		LastUsedAt:         now,
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_by, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedBy, s.CreatedAt, s.UpdatedAt, now,
+		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_by, start_key, planning, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedBy, s.StartKey, s.Planning, s.CreatedAt, s.UpdatedAt, now,
 	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
+	if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
+		return nil, fmt.Errorf("CreatePipelineSession commit: %w", err)
+	}
+	committed = true
+	return s, nil
+}
+
+const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, planning, advancing,
+		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
+		        created_at, updated_at, last_used_at`
+
+func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
+	var s PipelineSession
+	var scoped, planning, advancing int
+	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &planning, &advancing,
+		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
+		&s.CreatedAt, &s.UpdatedAt, &s.LastUsedAt)
+	if err != nil {
 		return nil, err
 	}
-	return s, nil
+	s.Scoped = scoped != 0
+	s.Planning = planning != 0
+	s.Advancing = advancing != 0
+	return &s, nil
 }
 
 // GetPipelineSession returns the session with the given ID, or nil if not found.
 func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
-	var s PipelineSession
-	var scoped int
-	err := pi.sessionDB.QueryRowContext(ctx,
-		`SELECT id, tool, branch, status, phase, scoped, created_by,
-		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
-		        created_at, updated_at
-		 FROM pipeline_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy,
-		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
-		&s.CreatedAt, &s.UpdatedAt)
+	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
+		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions WHERE id = ?`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetPipelineSession: %w", err)
 	}
-	s.Scoped = scoped != 0
-	return &s, nil
+	return s, nil
+}
+
+// ActivePipelineSession returns the tool+branch's active session, or nil when
+// there is none.
+func (pi *pipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
+	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
+		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions
+		 WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`, tool, branch))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ActivePipelineSession: %w", err)
+	}
+	return s, nil
+}
+
+// MarkPipelineSessionPlanned records that a session's planning has queued its
+// work, and bumps its heartbeat: planning time is not idle time. marked=false
+// means the session was no longer active: displaced while it planned.
+func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) (marked bool, err error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET planning = 0, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
+		now, now, id)
+	if err != nil {
+		return false, fmt.Errorf("MarkPipelineSessionPlanned: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("MarkPipelineSessionPlanned rows: %w", err)
+	}
+	return n == 1, nil
+}
+
+// AbandonPlanningPipelineSession abandons a session that is still planning.
+// Used when a start fails after creating its session, so the slot is not held
+// by a session nobody will ever plan. Once planned, anyone may have resumed
+// it, so the abandon is then a no-op.
+func (pi *pipelineIndex) AbandonPlanningPipelineSession(ctx context.Context, id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE id = ? AND status = 'active' AND planning = 1`,
+		now, id); err != nil {
+		return fmt.Errorf("AbandonPlanningPipelineSession: %w", err)
+	}
+	return nil
+}
+
+// ResumePipelineSession bumps an active, planned session's heartbeat for a
+// resuming caller. resumed=false means it is no longer resumable: it completed, was
+// displaced, or is still planning.
+func (pi *pipelineIndex) ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active' AND planning = 0`,
+		now, now, id)
+	if err != nil {
+		return false, fmt.Errorf("ResumePipelineSession: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("ResumePipelineSession: %w", err)
+	}
+	return n == 1, nil
 }
 
 // MarkPipelineSessionScoped marks a session as having been started with a
@@ -259,8 +402,10 @@ func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id strin
 func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET phase = ?, updated_at = ? WHERE id = ? AND phase = ?`,
-		to, now, id, from,
+		`UPDATE pipeline_sessions SET phase = ?, advancing = 1, updated_at = ? WHERE id = ? AND status = 'active' AND phase = ? AND advancing = 0
+		 AND NOT EXISTS (SELECT 1 FROM pipeline_work_items
+		                 WHERE session_id = ? AND (response IS NULL OR applying = 1))`,
+		to, now, id, from, id,
 	)
 	if err != nil {
 		return false, fmt.Errorf("AdvancePipelineSessionPhase: %w", err)
@@ -272,17 +417,59 @@ func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, fr
 	return n == 1, nil
 }
 
-// CompletePipelineSession marks the session as completed.
-func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string) error {
+// FinishPipelineSessionAdvance records that a won phase advance's hook has
+// returned, whether it succeeded or failed.
+func (pi *pipelineIndex) FinishPipelineSessionAdvance(ctx context.Context, id string) error {
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET advancing = 0 WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("FinishPipelineSessionAdvance: %w", err)
+	}
+	return nil
+}
+
+// FinishPipelineWorkItem records that a claimed item's apply has returned,
+// whether it succeeded or failed.
+func (pi *pipelineIndex) FinishPipelineWorkItem(ctx context.Context, id int64) error {
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_work_items SET applying = 0 WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("FinishPipelineWorkItem: %w", err)
+	}
+	return nil
+}
+
+// ApplyingPipelineWorkItem returns the id of an item of this session that is
+// claimed and still being applied, or 0.
+func (pi *pipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error) {
+	var id int64
+	err := pi.sessionDB.QueryRowContext(ctx,
+		`SELECT id FROM pipeline_work_items WHERE session_id = ? AND applying = 1 ORDER BY id LIMIT 1`,
+		sessionID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("ApplyingPipelineWorkItem: %w", err)
+	}
+	return id, nil
+}
+
+// CompletePipelineSession marks an ACTIVE session completed. completed=false
+// means it was no longer active (displaced or already completed), and the
+// caller must not act on its completion, the watermark advance above all.
+func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string) (completed bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ?`,
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active' AND advancing = 0`,
 		now, id,
 	)
 	if err != nil {
-		return fmt.Errorf("CompletePipelineSession: %w", err)
+		return false, fmt.Errorf("CompletePipelineSession: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("CompletePipelineSession rows: %w", err)
+	}
+	return n == 1, nil
 }
 
 // InsertPipelineWorkItem inserts a new work item into the pipeline_work_items table.
@@ -348,7 +535,7 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 // synthesized facts.
 func (pi *pipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (bool, error) {
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_work_items SET response = ? WHERE id = ? AND response IS NULL`,
+		`UPDATE pipeline_work_items SET response = ?, applying = 1 WHERE id = ? AND response IS NULL`,
 		response, id,
 	)
 	if err != nil {

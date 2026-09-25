@@ -69,6 +69,19 @@ CREATE TABLE pipeline_sessions (
     -- (pipeline_idle_ttl, 1h) an unexpected session is one query rather than a
     -- forensic pass over checkpointed DB copies.
     created_by   TEXT NOT NULL DEFAULT '',
+    -- What a start must match to RESUME this session instead of being refused:
+    -- the opening call's effort and scope, canonicalised by the engine. Empty
+    -- for sessions opened without a resume policy (in-process runs), which
+    -- therefore never match.
+    start_key    TEXT NOT NULL DEFAULT '',
+    -- 1 from every create until its start has planned the work and rendered
+    -- the first item. A session still planning is never resumed and never stale by the
+    -- resume window: its queue is empty only because nothing is queued yet.
+    planning     INTEGER NOT NULL DEFAULT 0,
+    -- 1 from a won phase advance until the strategy's phase hook has queued
+    -- the new phase's work. The next advance and completion wait on it: until
+    -- then the new phase only LOOKS empty.
+    advancing    INTEGER NOT NULL DEFAULT 0,
     -- Running work-item stat totals. They live on the row, not in memory, because
     -- the engine is per-call stateless: the MCP handler builds a fresh Reviewer
     -- for every continue call, so nothing accumulated on that struct survives.
@@ -89,9 +102,17 @@ CREATE TABLE pipeline_work_items (
     cluster_key TEXT NOT NULL,
     facts_json  TEXT NOT NULL,
     response    TEXT,
+    -- 1 from the claim (response set) until the claimant's apply returns. An
+    -- item being applied is still outstanding: its apply may enqueue follow-up
+    -- items, so the session's phase must not advance past it.
+    applying    INTEGER NOT NULL DEFAULT 0,
     priority    REAL NOT NULL,
     depth       INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL
 );
 
 CREATE INDEX pipeline_sessions_last_used ON pipeline_sessions(last_used_at);
+-- The outstanding-item probes: the next unanswered item, the item being
+-- applied, and the phase advance's NOT EXISTS guard.
+CREATE INDEX pipeline_work_items_session_state ON pipeline_work_items(session_id, response, applying);
+CREATE INDEX pipeline_sessions_slot ON pipeline_sessions(tool, branch, status);

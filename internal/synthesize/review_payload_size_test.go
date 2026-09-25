@@ -165,6 +165,10 @@ func TestDistillWorkItem_EveryPageFitsDeliveredCap(t *testing.T) {
 // green, which is precisely the stale-reserve failure this exists to prevent.
 func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 	one := sizedFacts(1, 16)
+	// Enough facts that the item pages: page 1 then also carries page, pages,
+	// more_available, the item's own paging line, and the longer "read on"
+	// form of `next`.
+	many := sizedFacts(40, 2048)
 
 	// stepType is the item's PRODUCTION type and is deliberately separate from
 	// the subtest name. They were one field until review caught it: naming the
@@ -173,17 +177,25 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 	// larger than production ever produces. A fixture that measures a payload
 	// the system cannot emit reports a number about itself.
 	for _, tc := range []struct {
-		name     string
-		stepType string
-		content  func() (*WorkItemContent, error)
+		name      string
+		stepType  string
+		content   func() (*WorkItemContent, error)
+		multipage bool
 	}{
 		{"distill-cluster", "distill", func() (*WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), false)
-		}},
+		}, false},
 		{"distill-remainder", "distill", func() (*WorkItemContent, error) {
 			return RenderDistillWorkItem(one, "kb", maxMethodologySection(), true)
-		}},
-		{"prune", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }},
+		}, false},
+		{"prune", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(one, "kb") }, false},
+		{"distill-cluster-multipage", "distill", func() (*WorkItemContent, error) {
+			return RenderDistillWorkItem(many, "kb", maxMethodologySection(), false)
+		}, true},
+		{"distill-remainder-multipage", "distill", func() (*WorkItemContent, error) {
+			return RenderDistillWorkItem(many, "kb", maxMethodologySection(), true)
+		}, true},
+		{"prune-multipage", "prune", func() (*WorkItemContent, error) { return RenderPruneWorkItem(many, "kb") }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content, err := tc.content()
@@ -200,10 +212,26 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 			}
 			out, err := reviewResultPage(res, 1)
 			require.NoError(t, err)
+			require.Equalf(t, tc.multipage, out.Item.MoreAvailable,
+				"%s: precondition: the fixture must page exactly when the case says so", tc.name)
+			// Everything else a page-1 result can carry rides the same page: a
+			// start result's identity and displacement fields at realistic
+			// lengths, and the `next` line in its longest form, the unscoped
+			// endpoint's. `resumed` is left false because a resume displaces
+			// nothing: it and the abandoned_* pair never share a result, and
+			// the pair is the larger.
+			out.Repo = "a-knowledge-base-name"
+			out.RepoID = "3ec012f5b4d2"
+			out.WriteBranch = "agent/h1v302-8215ac8f"
+			out.AbandonedSession = "00000000-0000-0000-0000-000000000001"
+			out.AbandonedSessionCreatedBy = "mcp-session:00000000-0000-0000-0000-000000000002 client:claude-code/2.1.282"
+			out.Next = ReviewNext(out, true)
+			require.NotEmpty(t, out.Next)
 
 			delivered, err := json.MarshalIndent(out, "", "  ")
 			require.NoError(t, err)
 			envelope := len(delivered) - deliveredFactsLen(out.Item.Facts)
+			t.Logf("%s: envelope %d of %d", tc.name, envelope, pageEnvelopeReserveBytes)
 
 			require.LessOrEqualf(t, envelope, pageEnvelopeReserveBytes,
 				"%s: the non-facts part of a delivered page is %d bytes, over the %d reserved for it; "+
@@ -285,4 +313,19 @@ func TestRenderDistillWorkItem_FactsAreStructuralNotSerializedIntoThePrompt(t *t
 	require.Len(t, round, 1)
 	require.Equal(t, "SENTINEL-BODY-must-not-appear-inside-the-prompt", round[0].Body,
 		"splitting facts out of the prompt must not drop or alter them")
+}
+
+// The runtime size check in reviewResultPage measures the page with its
+// `next` line on, in the longest (unscoped) form, as the envelope test does:
+// a line attached after the check would be a byte the check never saw.
+func TestReviewResultPage_MeasuresWithNext(t *testing.T) {
+	content, err := RenderPruneWorkItem(sizedFacts(1, 16), "kb")
+	require.NoError(t, err)
+	out, err := reviewResultPage(&PipelineResult{
+		SessionID: "00000000-0000-0000-0000-000000000000",
+		Item: &PipelineItem{ID: 7, Type: "prune", Prompt: content.Prompt,
+			ResponseSchema: content.ResponseSchema, Facts: content.Facts, FactsJSON: content.Facts},
+	}, 1)
+	require.NoError(t, err)
+	require.Equal(t, ReviewNext(out, true), out.Next)
 }

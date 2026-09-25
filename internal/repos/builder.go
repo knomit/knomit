@@ -38,6 +38,7 @@ type repoBuilder struct {
 	subscribed            bool
 	embedder              store.BatchEmbedder
 	keyPath               string
+	resumeWindow          time.Duration
 	ctx                   context.Context
 	disableBackgroundSync bool
 
@@ -584,6 +585,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		clusterResolution:             clusterResolutionOrDefault(b.cfg.ClusterCache.Resolution),
 		clusterMinCommunity:           clusterMinCommunityOrDefault(b.cfg.ClusterCache.MinCommunitySize),
 		discoveryEffortDefault:        b.cfg.Discovery.EffortDefault,
+		pipelineResumeWindow:          b.resumeWindow,
 		discoveryConfidenceThreshold:  b.cfg.Discovery.ConfidenceThreshold,
 		discoveryBlastRadiusThreshold: b.cfg.Discovery.BlastRadiusThreshold,
 		discoveryBridge:               b.cfg.Discovery.Bridge,

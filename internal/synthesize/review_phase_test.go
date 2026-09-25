@@ -187,22 +187,33 @@ func TestReviewer_ConcurrentContinuations_EnqueueReflectOnce(t *testing.T) {
 	}
 	wg.Wait()
 
+	// Each caller is served the reflect item, or, if it arrived while the
+	// winner's hook was still queueing it, told to retry. Nobody gets past
+	// the reflect phase.
+	served := 0
 	for i, err := range errs {
-		require.NoErrorf(t, err, "caller %d errored", i)
-		require.NotNilf(t, results[i], "caller %d returned nil result", i)
+		if err != nil {
+			require.Containsf(t, err.Error(), "retry shortly", "caller %d failed for an unexpected reason", i)
+			continue
+		}
+		require.NotNilf(t, results[i].Item, "caller %d was not served the reflect item", i)
+		require.Equal(t, "reflect", results[i].Item.Type)
+		served++
 	}
+	require.GreaterOrEqual(t, served, 1, "the CAS winner is always served the reflect item")
 
-	// The CAS guarantee: pipeline_work_items has at most one row for this
-	// session regardless of who won. If the winner finished its insert
-	// before the loser's reflect→done CAS, both callers see the reflect
-	// item; if the loser raced past, the session is already done and the
-	// winner's insert lands in a completed session — still one row, just
-	// orphan. Two rows would mean the CAS broke.
+	// The guarantee: exactly one reflect item, still open, in a session still
+	// active in the reflect phase. The work→reflect CAS lets one caller
+	// enqueue, and the advancing mark stops anyone completing the session
+	// before that item exists.
 	completed, remaining, err := svc.Pipeline().PipelineWorkItemStats(ctx, sess.ID)
 	require.NoError(t, err)
-	require.LessOrEqualf(t, completed+remaining, 1,
-		"CAS broken: more than one reflect item enqueued (completed=%d remaining=%d)",
-		completed, remaining)
+	require.Equal(t, 0, completed)
+	require.Equal(t, 1, remaining, "exactly one reflect item is queued")
+	got, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Equal(t, "active", got.Status)
+	require.Equal(t, "reflect", got.Phase)
 }
 
 // TestReviewer_ReflectAppliesReinforce is the end-to-end test for the new
@@ -344,13 +355,18 @@ func newPhaseTestReviewer(t *testing.T) (*Reviewer, *store.Service) {
 	return NewReviewer(ri, nil), svc
 }
 
-// manualSession creates a pipeline_sessions row directly via the index,
-// bypassing StartSession (which clusters dirty facts and is heavy for tests
+// manualSession creates a planned pipeline_sessions row directly via the
+// index, bypassing StartSession (which clusters dirty facts and is heavy for tests
 // that just want to exercise the dispatcher).
 func manualSession(t *testing.T, svc *store.Service, branch string) *store.PipelineSession {
 	t.Helper()
 	sess, err := svc.Pipeline().CreatePipelineSession(context.Background(), "review", branch, "")
 	require.NoError(t, err)
+	// Planned, as a start leaves it: every create is planning until then, and
+	// continue refuses a session still planning.
+	_, markErr := svc.Pipeline().MarkPipelineSessionPlanned(context.Background(), sess.ID)
+	require.NoError(t, markErr)
+	sess.Planning = false
 	return sess
 }
 
@@ -408,4 +424,72 @@ func seedHypothesisTransition(t *testing.T, svc *store.Service, branch string) {
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteFact(ctx, branch, path, prom, "promote-hypothesis", "")
 	require.NoError(t, err)
+}
+
+// Between the work→reflect CAS and the reflect item being queued, the reflect
+// phase looks empty. A second caller in that gap must not advance reflect→done
+// and complete the session: the reflect item would land in a completed
+// session and the watermark would move without it.
+func TestReviewer_ReflectGap_SecondCallerDoesNotComplete(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+	branch := "agent/test"
+	seedHypothesisTransition(t, svc, branch)
+	sess := manualSession(t, svc, branch)
+	other := NewReviewer(r.p.ri, nil)
+
+	gapHit := false
+	r.p.hooks.afterAdvance = func(ctx context.Context, from, to string) {
+		if from != "work" {
+			return
+		}
+		gapHit = true
+		_, err := other.Current(ctx, sess.ID)
+		require.Error(t, err, "the second caller must not step the session in the gap")
+		require.Contains(t, err.Error(), "retry shortly")
+		got, gerr := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+		require.NoError(t, gerr)
+		require.Equal(t, "active", got.Status)
+		require.Equal(t, "reflect", got.Phase)
+	}
+
+	fresh, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+	require.NoError(t, err)
+	res, err := r.nextItem(ctx, fresh)
+	require.NoError(t, err)
+	require.True(t, gapHit, "precondition: the work→reflect gap was reached")
+	require.NotNil(t, res.Item, "the first caller is served the reflect item")
+	require.Equal(t, "reflect", res.Item.Type)
+
+	cur, err := other.Current(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Equal(t, res.Item.ID, cur.Item.ID, "after the gap, the second caller gets the same reflect item")
+}
+
+// A phase hook that panics (recovered by the transport) must not leave the
+// session advancing: every caller would be told to retry forever, and each
+// retry's heartbeat would keep the session from going stale.
+func TestReviewer_PanickingPhaseHookStillFinishesTheAdvance(t *testing.T) {
+	r, svc := newPhaseTestReviewer(t)
+	ctx := context.Background()
+	branch := "agent/test"
+	seedHypothesisTransition(t, svc, branch)
+	sess := manualSession(t, svc, branch)
+
+	r.p.hooks.afterAdvance = func(context.Context, string, string) { panic("phase hook blew up") }
+	func() {
+		defer func() { _ = recover() }()
+		fresh, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+		require.NoError(t, err)
+		_, _ = r.nextItem(ctx, fresh)
+	}()
+
+	got, err := svc.Pipeline().GetPipelineSession(ctx, sess.ID)
+	require.NoError(t, err)
+	require.False(t, got.Advancing, "the advance must be finished after its hook panicked")
+}
+
+// The advancing refusal says how to break a wedge.
+func TestReviewer_AdvancingRefusalOffersTakeover(t *testing.T) {
+	require.Contains(t, errAdvancing("review", "s").Error(), "takeover:true")
 }

@@ -232,7 +232,16 @@ const maxDeliveredItemBytes = 32 * 1024
 // Measure with the item's PRODUCTION step type. An earlier reading said 11,857
 // because the test's subtest name had been reused as Item.Type, which is
 // delivered on the page — a fixture measuring a payload the system never emits.
-const pageEnvelopeReserveBytes = 12 * 1024
+//
+// The envelope also carries what a page-1 START result adds: the repo
+// identity and abandoned_* fields, and the `next` line every result carries
+// (longest on the unscoped endpoint). On a multi-page item page 1 also carries
+// page, pages, more_available, the item's paging line and the longer "read
+// on" `next`. Measured with all of those, the worst case is page 1 of a
+// multi-page distill remainder at 12,432 bytes (a single-page one is 12,302),
+// over 12 KiB; the reserve is 12.5 KiB, leaving 368. Trim prose before raising
+// it again, and re-measure.
+const pageEnvelopeReserveBytes = 12*1024 + 512
 
 // maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
 // — after the indentation json.MarshalIndent applies in internal/mcp/review.go,
@@ -323,14 +332,21 @@ type ReviewResult struct {
 	// the loser's row is reapable and a resuming caller cannot look it up
 	// later. Read it as a correlation handle, not an identity: see the
 	// created_by column comment (knomit#123).
-	AbandonedSessionCreatedBy string          `json:"abandoned_session_created_by,omitempty"`
-	Item                      *ReviewItem     `json:"item,omitempty"`
-	Done                      bool            `json:"done,omitempty"`
-	Summary                   *ReviewStats    `json:"summary,omitempty"`
-	Progress                  *ReviewProgress `json:"progress,omitempty"`
+	AbandonedSessionCreatedBy string `json:"abandoned_session_created_by,omitempty"`
+	// Resumed is true when a start joined the session already in progress on
+	// this branch instead of opening one; session_id and item are that
+	// session's.
+	Resumed  bool            `json:"resumed,omitempty"`
+	Item     *ReviewItem     `json:"item,omitempty"`
+	Done     bool            `json:"done,omitempty"`
+	Summary  *ReviewStats    `json:"summary,omitempty"`
+	Progress *ReviewProgress `json:"progress,omitempty"`
 	// Health carries corpus-health descriptors for this session. Read by the
 	// agent, by nothing in the engine.
 	Health []string `json:"health,omitempty"`
+	// Next says what to call now, naming the session_id to pass. Set by the
+	// MCP handler, which knows whether the caller must also pass a binding.
+	Next string `json:"next,omitempty"`
 }
 
 // ReviewItem describes a single work item for the hosting model.

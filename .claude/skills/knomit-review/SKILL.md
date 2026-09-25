@@ -28,14 +28,16 @@ DON'T invoke:
 
 `knomit_review` is a **work-stealing session**, not an async task. The tool returns ONE work item at a time. The calling model burns its own cycles processing each item until the queue drains.
 
-1. First call: `knomit_review` with no args.
-   - Returns `{session_id, work_item: {prompt, response_schema}}` for the first item, OR `{session_id, done: true}` if nothing dirty.
+1. First call: `knomit_review` with no args (plus `binding` on the unscoped endpoint).
+   - Returns `{session_id, item: {id, prompt, response_schema}, next}` for the first item, OR `{session_id, done: true}` if nothing dirty.
+   - If a review is already in progress on this knowledge base, the start resumes it (`resumed: true`): continue it exactly as below.
+   - If the start is refused because a session with a different scope or effort is in progress, continue that session by its `session_id`, or start again with `takeover: true` to abandon it.
 2. Process the work item:
    - Read the `prompt` and produce a JSON response matching `response_schema`.
    - For prune items: decide which facts to merge (and the merged content) vs keep distinct.
    - For distill items: decide whether to synthesize a higher-level fact from the cluster, and write its content.
    - For reflect items: emit hypothesis transitions and optionally one methodology.
-3. Continue: `knomit_review` with `session_id` and `response`.
+3. Continue: `knomit_review` with `session_id`, `item_id` and `response` (plus `binding` on the unscoped endpoint). `session_id` is required on every call after the first, and `item_id` with every response: the binding selects the knowledge base and does not identify the session. The result's `next` line names exactly what to pass. To see the current item again, call with `session_id` alone (when nothing is outstanding this takes the session's next step).
    - Server applies your decisions (writes new facts, retracts duplicates) and returns the next work item.
 4. Loop until response includes `done: true` — that completes the session and advances the watermark.
 

@@ -28,7 +28,7 @@ For each item:
 
 1. Read the synthesis fact.
 2. Decide: is there a concrete, falsifiable prediction that follows? **Skipping is the EXPECTED outcome for most synth facts** — only write when you can articulate a real prediction.
-3. Continue with `session_id` + `response` until the queue drains.
+3. Continue with `session_id`, `item_id` and `response` (plus `binding` on the unscoped endpoint) until the queue drains. `session_id` is required on every call after the first; the result's `next` line names exactly what to pass. To see the current item again, call with `session_id` and `current: true`.
 
 ## What counts as a hypothesis
 

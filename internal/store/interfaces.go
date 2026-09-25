@@ -233,16 +233,44 @@ type ToolSessionIndex interface {
 // PipelineIndex is the interface for pipeline session management. Implemented by *pipelineIndex.
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error)
+	// CreatePipelineSessionReplacing is CreatePipelineSession that abandons
+	// only the named active session ("" meaning none), and otherwise fails
+	// with ErrPipelineSlotChanged without writing.
+	CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
+	ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
+	// ResumePipelineSession bumps an active, planned session's heartbeat for a
+	// resuming caller; false when it is no longer resumable.
+	ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error)
+	// MarkPipelineSessionPlanned clears the planning mark and bumps the
+	// heartbeat once a session's work is queued; false when the session was
+	// no longer active (displaced while it planned).
+	MarkPipelineSessionPlanned(ctx context.Context, id string) (marked bool, err error)
+	// AbandonPlanningPipelineSession abandons one session still planning.
+	AbandonPlanningPipelineSession(ctx context.Context, id string) error
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
+	// AdvancePipelineSessionPhase moves from→to only while no item of the
+	// session is unanswered or still being applied and no other advance's hook
+	// is running; a won advance marks the session advancing.
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
-	CompletePipelineSession(ctx context.Context, id string) error
+	// CompletePipelineSession completes an ACTIVE session that is not mid
+	// advance; false otherwise, in which case nothing of the completion may
+	// follow.
+	CompletePipelineSession(ctx context.Context, id string) (completed bool, err error)
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
 	// AnswerPipelineWorkItem atomically claims and answers an item.
 	// claimed=false means another caller already answered it — a benign
 	// no-op. Only the claim winner may apply the response's mutations.
 	AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (claimed bool, err error)
+	// FinishPipelineWorkItem ends a claimed item's applying state, after its
+	// apply returns. Until then the item holds the session's phase.
+	FinishPipelineWorkItem(ctx context.Context, id int64) error
+	// FinishPipelineSessionAdvance clears the advancing mark once the phase
+	// hook has returned. Until then the next advance and completion wait.
+	FinishPipelineSessionAdvance(ctx context.Context, id string) error
+	// ApplyingPipelineWorkItem returns a claimed item still being applied, or 0.
+	ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error)
 	// AddPipelineSessionStats accumulates an applied item's corpus-change
 	// counts onto the session row, which is where a per-call-stateless
 	// engine's running totals have to live.
