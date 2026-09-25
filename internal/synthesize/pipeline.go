@@ -1168,8 +1168,23 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSess
 	d := p.deps()
 	branch := sess.Branch
 
-	if err := d.Pipeline.CompletePipelineSession(ctx, sess.ID); err != nil {
+	ended, err := d.Pipeline.CompletePipelineSession(ctx, sess.ID)
+	if err != nil {
 		return nil, wrapf(tool, err, "complete session")
+	}
+	// Not active any more. Completed by a concurrent caller: that caller
+	// advanced the watermark, and this one reports the same done result
+	// without advancing it again. Displaced: the slot is someone else's, and
+	// advancing the watermark would move it past seeds their session is still
+	// serving.
+	if !ended {
+		now, gerr := d.Pipeline.GetPipelineSession(ctx, sess.ID)
+		if gerr != nil {
+			return nil, wrapf(tool, gerr, "re-read session")
+		}
+		if now == nil || now.Status != "completed" {
+			return nil, errf(tool, "session %q is no longer active; nothing was completed", sess.ID)
+		}
 	}
 
 	// A scoped run only processed a subset of facts. Advancing the watermark
@@ -1179,7 +1194,7 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSess
 	// engine with empty scope on the completing continue call, so p.scope is
 	// unreliable here. This is the write half of the scoped exemption whose
 	// read half is in dirtyFacts; the two must always agree.
-	if !sess.Scoped {
+	if ended && !sess.Scoped {
 		headHash, err := d.Branches.HeadCommit(ctx, branch)
 		if err != nil {
 			log.Warn().Err(err).Str("tool", tool).Msg("pipeline: could not get HEAD for watermark")

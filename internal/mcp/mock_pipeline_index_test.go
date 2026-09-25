@@ -145,11 +145,12 @@ func (mr *MockPipelineIndexMockRecorder) ApplyingPipelineWorkItem(ctx, sessionID
 }
 
 // CompletePipelineSession mocks base method.
-func (m *MockPipelineIndex) CompletePipelineSession(ctx context.Context, id string) error {
+func (m *MockPipelineIndex) CompletePipelineSession(ctx context.Context, id string) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CompletePipelineSession", ctx, id)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // CompletePipelineSession indicates an expected call of CompletePipelineSession.

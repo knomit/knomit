@@ -251,7 +251,9 @@ type PipelineIndex interface {
 	// AdvancePipelineSessionPhase moves from→to only while no item of the
 	// session is unanswered or still being applied.
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
-	CompletePipelineSession(ctx context.Context, id string) error
+	// CompletePipelineSession completes an ACTIVE session; false when it was
+	// no longer active, in which case nothing of the completion may follow.
+	CompletePipelineSession(ctx context.Context, id string) (completed bool, err error)
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
 	// AnswerPipelineWorkItem atomically claims and answers an item.

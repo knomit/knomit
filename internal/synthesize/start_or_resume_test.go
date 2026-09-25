@@ -325,3 +325,21 @@ func TestPlanning_InProcessCreateIsPlanningUntilPlanned(t *testing.T) {
 	require.Equal(t, "active", f.status(t, sess.ID))
 	require.Equal(t, before, f.watermark(t))
 }
+
+// A planner displaced by takeover must not complete the row it no longer owns
+// or move the watermark while the taker plans over the same seeds.
+func TestComplete_DisplacedPlannerCompletesNothing(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	displaced := f.planningSession(t)
+	before := f.watermark(t)
+
+	taken, err := f.another().StartOrResumeSession(ctx, StartOptions{ResumeWindow: 10 * time.Minute, Takeover: true})
+	require.NoError(t, err)
+	require.Equal(t, displaced.ID, taken.AbandonedSession)
+
+	_, _ = f.r.p.completeSession(ctx, displaced)
+	require.Equal(t, "abandoned", f.status(t, displaced.ID), "the displaced row stays abandoned")
+	require.Equal(t, before, f.watermark(t), "and the watermark does not move")
+	require.Equal(t, "active", f.status(t, taken.SessionID))
+}

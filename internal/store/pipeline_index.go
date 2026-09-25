@@ -315,7 +315,7 @@ func (pi *pipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch
 func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET planning = 0, last_used_at = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE pipeline_sessions SET planning = 0, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
 		now, now, id); err != nil {
 		return fmt.Errorf("MarkPipelineSessionPlanned: %w", err)
 	}
@@ -426,17 +426,23 @@ func (pi *pipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID
 	return id, nil
 }
 
-// CompletePipelineSession marks the session as completed.
-func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string) error {
+// CompletePipelineSession marks an ACTIVE session completed. completed=false
+// means it was no longer active (displaced or already completed), and the
+// caller must not act on its completion, the watermark advance above all.
+func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string) (completed bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ?`,
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active'`,
 		now, id,
 	)
 	if err != nil {
-		return fmt.Errorf("CompletePipelineSession: %w", err)
+		return false, fmt.Errorf("CompletePipelineSession: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("CompletePipelineSession rows: %w", err)
+	}
+	return n == 1, nil
 }
 
 // InsertPipelineWorkItem inserts a new work item into the pipeline_work_items table.
