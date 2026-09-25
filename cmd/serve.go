@@ -326,7 +326,7 @@ func listenTCP(addr string) (net.Listener, error) {
 // set, and returns nil, nil, nil when it is not. config.Validate has already
 // refused a non-loopback addr unless [runtime].allow_remote.
 //
-// Its http.Server copies like's ReadHeaderTimeout and BaseContext, so the
+// Its http.Server copies like's read and idle timeouts and BaseContext, so the
 // one cancel in serveUntil also ends a running /debug/pprof/profile or trace.
 // No ConnContext: the port has no principal, and a TCP peer address is not a
 // credential. The guard (diag.Server.guard) admits the Host names the main
@@ -354,7 +354,15 @@ func openDiagServer(cfg config.Config, like *http.Server, statusExtra func() map
 		Addr:              cfg.Runtime.Addr,
 		Handler:           rt.Handler(),
 		ReadHeaderTimeout: like.ReadHeaderTimeout,
-		BaseContext:       like.BaseContext,
+		ReadTimeout:       like.ReadTimeout,
+		IdleTimeout:       like.IdleTimeout,
+		// WriteTimeout stays 0 (no limit), deliberately NOT copied from like.
+		// /debug/pprof/profile and /trace would survive a limit — net/http/pprof
+		// pushes the write deadline out by ?seconds= itself — but the other
+		// dumps (heap, goroutine?debug=2, allocs) get no such extension, and a
+		// large process's dump would be cut off mid-write.
+		WriteTimeout: 0,
+		BaseContext:  like.BaseContext,
 	}, ln, nil
 }
 

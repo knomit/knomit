@@ -46,14 +46,22 @@ func TestOpenDiagServer_GuardIsWired(t *testing.T) {
 	cfg.Runtime.Addr = "127.0.0.1:0"
 	like := &http.Server{
 		ReadHeaderTimeout: 7 * time.Second,
+		ReadTimeout:       11 * time.Second,
+		IdleTimeout:       13 * time.Second,
+		WriteTimeout:      17 * time.Second, // must NOT be copied
 		BaseContext:       func(net.Listener) context.Context { return context.Background() },
 	}
 	srv, ln, err := openDiagServer(cfg, like, nil)
 	if err != nil || srv == nil || ln == nil {
 		t.Fatalf("open: %v %v %v", srv, ln, err)
 	}
-	if srv.ReadHeaderTimeout != 7*time.Second || srv.BaseContext == nil {
-		t.Fatalf("timeouts/base context not copied: %v %v", srv.ReadHeaderTimeout, srv.BaseContext == nil)
+	if srv.ReadHeaderTimeout != 7*time.Second || srv.ReadTimeout != 11*time.Second ||
+		srv.IdleTimeout != 13*time.Second || srv.BaseContext == nil {
+		t.Fatalf("timeouts/base context not copied: header=%v read=%v idle=%v base=%v",
+			srv.ReadHeaderTimeout, srv.ReadTimeout, srv.IdleTimeout, srv.BaseContext != nil)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %v, want 0: a limit would cut off large heap and goroutine dumps", srv.WriteTimeout)
 	}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
