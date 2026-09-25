@@ -112,4 +112,7 @@ CREATE TABLE pipeline_work_items (
 );
 
 CREATE INDEX pipeline_sessions_last_used ON pipeline_sessions(last_used_at);
+-- The outstanding-item probes: the next unanswered item, the item being
+-- applied, and the phase advance's NOT EXISTS guard.
+CREATE INDEX pipeline_work_items_session_state ON pipeline_work_items(session_id, response, applying);
 CREATE INDEX pipeline_sessions_slot ON pipeline_sessions(tool, branch, status);

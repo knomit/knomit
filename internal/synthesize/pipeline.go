@@ -612,7 +612,7 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 		// item as another caller; handing it the next item would read as
 		// though its own answer had landed.
 		if itemID != 0 {
-			return nil, errf(tool, "item %d was already answered (by another caller or an earlier attempt of this call); nothing was applied.%s",
+			return nil, errf(tool, "item %d was already answered (by another caller or an earlier attempt of this call); nothing was applied by this call; if you sent this answer before, it was applied.%s",
 				item.ID, p.currentItemHint(sessionID))
 		}
 		return p.nextItem(ctx, sess)
@@ -1346,7 +1346,7 @@ func (e *LiveSessionError) Error() string {
 	}
 	by := e.CreatedBy
 	if by == "" {
-		by = "an in-process caller"
+		by = "an unattributed caller"
 	}
 	return fmt.Sprintf("a %s session with a different scope or effort is already in progress on branch %q: "+
 		"session_id=%q, opened by %s, last used %s (%s ago). "+

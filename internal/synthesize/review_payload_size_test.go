@@ -314,3 +314,18 @@ func TestRenderDistillWorkItem_FactsAreStructuralNotSerializedIntoThePrompt(t *t
 	require.Equal(t, "SENTINEL-BODY-must-not-appear-inside-the-prompt", round[0].Body,
 		"splitting facts out of the prompt must not drop or alter them")
 }
+
+// The runtime size check in reviewResultPage measures the page with its
+// `next` line on, in the longest (unscoped) form, as the envelope test does:
+// a line attached after the check would be a byte the check never saw.
+func TestReviewResultPage_MeasuresWithNext(t *testing.T) {
+	content, err := RenderPruneWorkItem(sizedFacts(1, 16), "kb")
+	require.NoError(t, err)
+	out, err := reviewResultPage(&PipelineResult{
+		SessionID: "00000000-0000-0000-0000-000000000000",
+		Item: &PipelineItem{ID: 7, Type: "prune", Prompt: content.Prompt,
+			ResponseSchema: content.ResponseSchema, Facts: content.Facts, FactsJSON: content.Facts},
+	}, 1)
+	require.NoError(t, err)
+	require.Equal(t, ReviewNext(out, true), out.Next)
+}

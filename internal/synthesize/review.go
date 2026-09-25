@@ -262,6 +262,11 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 			page, len(pages), res.Item.ID, out.Item.CompletionToken)
 	}
 
+	// The `next` line in its longest form, the unscoped endpoint's. The MCP
+	// handler replaces it with the form for its endpoint, which is never
+	// longer, so the measurement below covers what is delivered.
+	out.Next = ReviewNext(out, true)
+
 	// Last line of defence, and deliberately a measurement of the finished
 	// artifact rather than another prediction of it. maxPageFactBytes bounds the
 	// facts, but two things on a page are not the pager's to bound: the prompt

@@ -198,7 +198,7 @@ func TestContinue_LostClaimIsAnError(t *testing.T) {
 	_, err = f.r.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), itemID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "already answered (by another caller or an earlier attempt of this call)")
-	require.Contains(t, err.Error(), "nothing was applied")
+	require.Contains(t, err.Error(), "nothing was applied by this call; if you sent this answer before, it was applied")
 	require.Contains(t, err.Error(), "no response to get the current item")
 }
 
@@ -476,4 +476,21 @@ func TestPlanning_DisplacedPlannerIsToldAtStart(t *testing.T) {
 	_, err := f.r.StartOrResumeSession(ctx, liveWindow)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "displaced")
+}
+
+// A session opened over MCP without a correlation handle is attributed to an
+// unattributed caller, never mistaken for an in-process run.
+func TestStartOrResume_UnattributedMCPSessionIsNotCalledInProcess(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	sess, err := f.svc.Pipeline().CreatePipelineSessionReplacing(ctx, "review", resumeBranch, "", "another-scope", "", time.Time{})
+	require.NoError(t, err)
+	_, markErr := f.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
+	require.NoError(t, markErr)
+
+	_, err = f.r.StartOrResumeSession(ctx, liveWindow)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "opened by an unattributed caller")
+	require.Contains(t, err.Error(), sess.ID)
+	require.NotContains(t, err.Error(), "in-process")
 }
