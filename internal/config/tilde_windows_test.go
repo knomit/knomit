@@ -35,3 +35,22 @@ func TestLoad_BackslashTildeInPathField(t *testing.T) {
 		t.Fatalf("Remote.KnownHosts = %q, want %q", cfg.Remote.KnownHosts, want)
 	}
 }
+
+// A "~/" on Windows joins onto the home directory with the platform
+// separator, so it names the same file as the `~\` spelling.
+func TestLoad_ForwardSlashTildeJoinsOnWindows(t *testing.T) {
+	osHome := setOSHome(t)
+	home := t.TempDir()
+	isolateSocketEnv(t, home)
+	body := "[remote]\nknown_hosts = '~/kh'\n"
+	if err := os.WriteFile(filepath.Join(home, "knomit.toml"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if want := filepath.Join(osHome, "kh"); cfg.Remote.KnownHosts != want {
+		t.Fatalf("Remote.KnownHosts = %q, want %q", cfg.Remote.KnownHosts, want)
+	}
+}

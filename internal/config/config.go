@@ -892,6 +892,6 @@ func expandTilde(s *string) error {
 	if err != nil {
 		return fmt.Errorf("cannot expand %q: %w", *s, err)
 	}
-	*s = home + (*s)[1:]
+	*s = filepath.Join(home, (*s)[2:])
 	return nil
 }

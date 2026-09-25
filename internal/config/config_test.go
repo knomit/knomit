@@ -572,16 +572,13 @@ func TestLoad_SocketDefaultsUnderHome(t *testing.T) {
 func TestLoad_ExplicitSocketWins(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KNOMIT_HOME", home)
-	// Not a valid listener path on either platform, which is the point: Load
-	// must not second-guess an operator, and app.checkLocalListener only asks
-	// whether one is configured. auth.ListenLocal is what refuses a bad one,
-	// at boot, loudly.
-	t.Setenv("KNOMIT_SOCKET", "/tmp/explicit.sock")
+	want := ExplicitSocket(t, "explicit")
+	t.Setenv("KNOMIT_SOCKET", want)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Socket != "/tmp/explicit.sock" {
+	if cfg.Socket != want {
 		t.Fatalf("Socket = %q, want the explicit path", cfg.Socket)
 	}
 }
