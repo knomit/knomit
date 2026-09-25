@@ -168,11 +168,6 @@ func SocketPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// KNOWN GAP, accepted: findConfigFile looks beside os.Executable() before
-	// <home>/knomit.toml, and the bridge is not the server's executable. A
-	// knomit.toml beside only one of the two binaries is read by that one
-	// alone. They ship side by side (dist/, the .app), so in practice both see
-	// the same file; <home>/knomit.toml is read by both wherever they live.
 	var fromTOML Config
 	if path != "" {
 		if _, err := toml.DecodeFile(path, &fromTOML); err != nil {

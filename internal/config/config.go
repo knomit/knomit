@@ -772,14 +772,13 @@ func warnUndecoded(path string, keys []toml.Key) {
 	}
 }
 
-// findConfigFile looks for knomit.toml next to the binary, then in homePath.
+// findConfigFile returns <homePath>/knomit.toml if it exists, else "".
+//
+// The data root is the ONLY place it looks. The server and the bridge are
+// different executables, so a knomit.toml beside either binary would be read
+// by that one alone and the two could resolve different local listeners. The
+// desktop's Settings dialog writes <home>/knomit.toml too.
 func findConfigFile(homePath string) string {
-	if exe, err := os.Executable(); err == nil {
-		p := filepath.Join(filepath.Dir(exe), "knomit.toml")
-		if fileExists(p) {
-			return p
-		}
-	}
 	p := filepath.Join(homePath, "knomit.toml")
 	if fileExists(p) {
 		return p

@@ -805,3 +805,34 @@ func TestLoad_RuntimeAllowRemoteFromTOML(t *testing.T) {
 		t.Fatalf("runtime = %+v", cfg.Runtime)
 	}
 }
+
+// knomit.toml is read from the data root and nowhere else. The server and the
+// bridge are different executables, so a file beside either one would be seen
+// by that binary alone and the two could resolve different sockets. The file
+// is planted beside THIS test binary, the one os.Executable names.
+func TestFindConfigFile_OnlyHome(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("os.Executable: %v", err)
+	}
+	beside := filepath.Join(filepath.Dir(exe), "knomit.toml")
+	if _, err := os.Stat(beside); err == nil {
+		t.Skipf("%s already exists; not overwriting it", beside)
+	}
+	if err := os.WriteFile(beside, []byte("socket = '/beside/exe.sock'\n"), 0o600); err != nil {
+		t.Skipf("cannot write beside the test binary: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(beside) })
+
+	home := t.TempDir()
+	if got := findConfigFile(home); got != "" {
+		t.Fatalf("findConfigFile(%q) = %q with no <home>/knomit.toml; want \"\"", home, got)
+	}
+	inHome := filepath.Join(home, "knomit.toml")
+	if err := os.WriteFile(inHome, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := findConfigFile(home); got != inHome {
+		t.Fatalf("findConfigFile(%q) = %q, want %q", home, got, inHome)
+	}
+}

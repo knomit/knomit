@@ -144,8 +144,7 @@ func TestSocketPath_MalformedTOMLIsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("SocketPath() = %q with a malformed knomit.toml; want an error", got)
 	}
-	// findConfigFile may have picked the file beside the executable, so the
-	// operator needs to be told WHICH knomit.toml is broken.
+	// The operator needs to be told WHICH knomit.toml is broken.
 	if !strings.Contains(err.Error(), path) {
 		t.Fatalf("error %q does not name the broken file %q", err, path)
 	}

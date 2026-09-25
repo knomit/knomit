@@ -153,8 +153,8 @@ func run(ctx context.Context) error {
 	}
 
 	// The Settings dialog reads and writes through this service, over Wails IPC
-	// only. configPath is the file config.findConfigFile falls through to, which
-	// on a bundle is the only one there is.
+	// only. configPath is <cfg.Home>/knomit.toml, the only file config.Load
+	// reads.
 	nativeSvc := newNativeService(
 		filepath.Join(cfg.Home, "knomit.toml"), logFile, autostart.New())
 	// Restarting must release this process's single-instance lockfile before
