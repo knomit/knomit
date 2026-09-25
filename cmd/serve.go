@@ -358,8 +358,9 @@ func openDiagServer(cfg config.Config, like *http.Server, statusExtra func() map
 		IdleTimeout:       like.IdleTimeout,
 		// WriteTimeout stays 0 (no limit), deliberately NOT copied from like.
 		// /debug/pprof/profile and /trace would survive a limit — net/http/pprof
-		// pushes the write deadline out by ?seconds= itself — but the other
-		// dumps (heap, goroutine?debug=2, allocs) get no such extension, and a
+		// pushes the write deadline out by ?seconds= itself, as it does for
+		// any delta profile — but the snapshot dumps (heap, allocs,
+		// goroutine?debug=2 without ?seconds=) get no such extension, and a
 		// large process's dump would be cut off mid-write.
 		WriteTimeout: 0,
 		BaseContext:  like.BaseContext,

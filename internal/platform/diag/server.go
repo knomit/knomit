@@ -50,8 +50,8 @@ type Options struct {
 	// [auth].loopback_hosts, bind host included. See hostguard.LoopbackHostOK.
 	// The list is SHARED with the main listener: a name added there for this
 	// port also becomes a Host under which a loopback peer on the main
-	// listener is the anonymous principal. That is safe only because the
-	// operator owns the names they list.
+	// listener is the anonymous principal (unless [auth].require). That is
+	// safe only because the operator owns the names they list.
 	LoopbackHosts []string
 	// AllowRemotePeers turns off guard's first check, the loopback-peer
 	// refusal. It is [runtime].allow_remote: the operator who binds this
@@ -142,7 +142,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		if !hostguard.LoopbackHostOK(r.Host, s.opts.LoopbackHosts) {
 			http.Error(w, "the runtime diagnostics port does not answer Host "+strconv.Quote(r.Host)+
 				"; use localhost or an IP address, or add the name to [auth].loopback_hosts"+
-				" (shared with the main listener: a name listed there also acts as the anonymous local user on it)", http.StatusMisdirectedRequest)
+				" (shared with the main listener, where a loopback request carrying that Host is treated as the anonymous local user)", http.StatusMisdirectedRequest)
 			return
 		}
 		next.ServeHTTP(w, r)
