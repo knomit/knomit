@@ -303,3 +303,25 @@ func TestApplying_ItemBeingAppliedHoldsThePhase(t *testing.T) {
 	require.NotNil(t, cur.Item, "after A's apply, B is served A's follow-up")
 	require.Equal(t, followUp, cur.Item.ID)
 }
+
+// Every create is planning until planned, including the in-process start
+// (RunAll, the web synthesis job). A caller handed such a session's id cannot
+// run its empty queue to completion, and a start does not resume it.
+func TestPlanning_InProcessCreateIsPlanningUntilPlanned(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	sess, err := f.svc.Pipeline().CreatePipelineSession(ctx, "review", resumeBranch, "")
+	require.NoError(t, err)
+	before := f.watermark(t)
+
+	_, err = f.r.Current(ctx, sess.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "still planning")
+
+	_, err = f.r.StartOrResumeSession(ctx, liveWindow)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "still planning")
+
+	require.Equal(t, "active", f.status(t, sess.ID))
+	require.Equal(t, before, f.watermark(t))
+}

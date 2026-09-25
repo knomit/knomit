@@ -198,8 +198,8 @@ type pipelineHooks struct {
 	duringApply func(ctx context.Context, itemID int64)
 }
 
-// markPlanned clears a resumable session's planning mark once its work is
-// queued, so a second start may resume it from here on.
+// markPlanned clears a session's planning mark once its work is queued and
+// its first item rendered, so a second start may resume it from here on.
 func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.PipelineSession) error {
 	if !sess.Planning {
 		return nil
@@ -320,11 +320,11 @@ func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.Pipeline
 		if planned {
 			log.Info().Str("tool", tool).Str("session", sess.ID).
 				Msg("pipeline: dirty set empty but the corpus's own state has standing work; planning it")
-			if err := p.markPlanned(ctx, d, sess); err != nil {
-				return nil, err
-			}
 			res, err := p.nextItem(ctx, sess)
 			if err != nil {
+				return nil, err
+			}
+			if err := p.markPlanned(ctx, d, sess); err != nil {
 				return nil, err
 			}
 			// The same health contract the planned path below keeps: the
@@ -363,11 +363,13 @@ func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.Pipeline
 		Str("effort", string(p.effort)).Dur("total", time.Since(totalStart)).
 		Msg("pipeline: session started")
 
-	if err := p.markPlanned(ctx, d, sess); err != nil {
-		return nil, err
-	}
 	res, err := p.nextItem(ctx, sess)
 	if err != nil {
+		return nil, err
+	}
+	// Planned only once the first item is rendered: until then a failure
+	// abandons this session, and nobody else can have resumed it.
+	if err := p.markPlanned(ctx, d, sess); err != nil {
 		return nil, err
 	}
 	// Health descriptors recorded during Plan ride the FIRST result — the turn
@@ -1383,7 +1385,7 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 		if err != nil {
 			// A session whose planning failed would hold the slot, refusing
 			// every start as still planning until the reaper took it.
-			if aerr := d.Pipeline.AbandonPipelineSession(context.WithoutCancel(ctx), sess.ID); aerr != nil {
+			if aerr := d.Pipeline.AbandonPlanningPipelineSession(context.WithoutCancel(ctx), sess.ID); aerr != nil {
 				log.Warn().Err(aerr).Str("session", sess.ID).Msg("pipeline: abandoning a session whose planning failed")
 			}
 			return nil, err

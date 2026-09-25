@@ -344,13 +344,17 @@ func newPhaseTestReviewer(t *testing.T) (*Reviewer, *store.Service) {
 	return NewReviewer(ri, nil), svc
 }
 
-// manualSession creates a pipeline_sessions row directly via the index,
-// bypassing StartSession (which clusters dirty facts and is heavy for tests
+// manualSession creates a planned pipeline_sessions row directly via the
+// index, bypassing StartSession (which clusters dirty facts and is heavy for tests
 // that just want to exercise the dispatcher).
 func manualSession(t *testing.T, svc *store.Service, branch string) *store.PipelineSession {
 	t.Helper()
 	sess, err := svc.Pipeline().CreatePipelineSession(context.Background(), "review", branch, "")
 	require.NoError(t, err)
+	// Planned, as a start leaves it: every create is planning until then, and
+	// continue refuses a session still planning.
+	require.NoError(t, svc.Pipeline().MarkPipelineSessionPlanned(context.Background(), sess.ID))
+	sess.Planning = false
 	return sess
 }
 

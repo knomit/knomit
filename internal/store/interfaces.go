@@ -245,8 +245,8 @@ type PipelineIndex interface {
 	// MarkPipelineSessionPlanned clears the planning mark and bumps the
 	// heartbeat once a session's work is queued.
 	MarkPipelineSessionPlanned(ctx context.Context, id string) error
-	// AbandonPipelineSession abandons one active session.
-	AbandonPipelineSession(ctx context.Context, id string) error
+	// AbandonPlanningPipelineSession abandons one session still planning.
+	AbandonPlanningPipelineSession(ctx context.Context, id string) error
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
 	// AdvancePipelineSessionPhase moves from→to only while no item of the
 	// session is unanswered or still being applied.

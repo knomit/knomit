@@ -248,6 +248,7 @@ func progressionEnv(t *testing.T, clusterKey string) (*restatementEnv, *Pipeline
 
 	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
+	require.NoError(t, env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID))
 
 	facts := []factForLLM{
 		{File: "kb/prog/alpha.md", Title: "alpha", Body: "body of alpha", Type: "observation"},
@@ -395,6 +396,7 @@ func planFixture(t *testing.T, n int) (*restatementEnv, *store.PipelineSession, 
 
 	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
+	require.NoError(t, env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID))
 	d := env.deps()
 	d.Search = edgeReadFails{env.svc.Search()}
 	require.NoError(t, reviewStrategy{}.Plan(ctx, d, sess, seeds))
@@ -455,6 +457,7 @@ func TestProgression_PlanStillEnqueuesTheRemainder(t *testing.T) {
 	}
 	sess, err := env.svc.Pipeline().CreatePipelineSession(ctx, reviewTool, env.branch, "")
 	require.NoError(t, err)
+	require.NoError(t, env.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID))
 	d := env.deps()
 	d.Search = edgeReadFails{env.svc.Search()}
 	require.NoError(t, reviewStrategy{}.Plan(ctx, d, sess, seeds))

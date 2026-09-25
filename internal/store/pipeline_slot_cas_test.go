@@ -50,3 +50,26 @@ func TestCreatePipelineSessionReplacing_ConcurrentStartsSerialise(t *testing.T) 
 		require.Equal(t, 1, changed, "round %d: the other is told the slot changed", round)
 	}
 }
+
+// A failed start abandons its own session only while it is still planning:
+// once planned, another caller may have resumed it, and the abandon must be a
+// no-op.
+func TestAbandonPlanningPipelineSession_OnlyWhilePlanning(t *testing.T) {
+	ctx := context.Background()
+	pi := newPhaseTestService(t).Pipeline()
+
+	planning, err := pi.CreatePipelineSessionReplacing(ctx, "review", "agent/a", "p", "key", "")
+	require.NoError(t, err)
+	require.NoError(t, pi.AbandonPlanningPipelineSession(ctx, planning.ID))
+	got, err := pi.GetPipelineSession(ctx, planning.ID)
+	require.NoError(t, err)
+	require.Equal(t, "abandoned", got.Status, "a session still planning is abandoned")
+
+	planned, err := pi.CreatePipelineSessionReplacing(ctx, "review", "agent/b", "p", "key", "")
+	require.NoError(t, err)
+	require.NoError(t, pi.MarkPipelineSessionPlanned(ctx, planned.ID))
+	require.NoError(t, pi.AbandonPlanningPipelineSession(ctx, planned.ID))
+	got, err = pi.GetPipelineSession(ctx, planned.ID)
+	require.NoError(t, err)
+	require.Equal(t, "active", got.Status, "a planned session is left alone")
+}

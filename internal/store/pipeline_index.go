@@ -64,8 +64,8 @@ type PipelineSession struct {
 	// the start_key column. Shared is set once a second start resumed it.
 	StartKey string
 	Shared   bool
-	// Planning is set from a resumable start's create until its planning has
-	// queued the work (MarkPipelineSessionPlanned).
+	// Planning is set by every create and cleared once its start has planned
+	// the work and rendered the first item (MarkPipelineSessionPlanned).
 	Planning  bool
 	CreatedAt string
 	UpdatedAt string
@@ -243,7 +243,7 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 		AbandonedCreatedBy: abandonedBy,
 		CreatedBy:          createdBy,
 		StartKey:           startKey,
-		Planning:           replace != anyActive,
+		Planning:           true,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 		LastUsedAt:         now,
@@ -322,15 +322,16 @@ func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id stri
 	return nil
 }
 
-// AbandonPipelineSession abandons one active session. Used when a start fails
-// after creating its session, so the slot is not held by a session nobody
-// will ever plan or continue.
-func (pi *pipelineIndex) AbandonPipelineSession(ctx context.Context, id string) error {
+// AbandonPlanningPipelineSession abandons a session that is still planning.
+// Used when a start fails after creating its session, so the slot is not held
+// by a session nobody will ever plan. Once planned, anyone may have resumed
+// it, so the abandon is then a no-op.
+func (pi *pipelineIndex) AbandonPlanningPipelineSession(ctx context.Context, id string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE id = ? AND status = 'active'`,
+		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE id = ? AND status = 'active' AND planning = 1`,
 		now, id); err != nil {
-		return fmt.Errorf("AbandonPipelineSession: %w", err)
+		return fmt.Errorf("AbandonPlanningPipelineSession: %w", err)
 	}
 	return nil
 }
