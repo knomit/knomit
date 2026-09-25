@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strconv"
 
 	"knomit/internal/auth"
 	"knomit/internal/client/sessions"
@@ -21,7 +22,10 @@ import (
 //     alongside for the client_sessions row. Which of the two a platform
 //     uses is auth.LocalVia; this function never asks.
 //  2. Nothing, from loopback, with [auth].require = false — the ANONYMOUS
-//     principal, so an upgrade changes nobody's day. What it may do is the
+//     principal, so an upgrade changes nobody's day — provided the Host
+//     header names this machine (localhost, an IP literal, the bind host or
+//     an [auth].loopback_hosts name; loopbackHostOK). Any other Host is a
+//     DNS-rebound page and gets 421 (#281). What it may do is the
 //     parsed [auth].loopback_default, resolved in Require through
 //     loopbackGrants rather than here: this function decides WHO, never WHAT.
 //  3. Nothing, otherwise — no principal on the context at all. With
@@ -92,6 +96,22 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 				return
 			}
 			if !cfg.Require && isLoopback(r.RemoteAddr) {
+				// #281: the anonymous principal is for a person at this
+				// machine. A DNS-rebound web page is ALSO a loopback peer —
+				// its browser connects to 127.0.0.1 — but its Host names the
+				// attacker's domain, and it would otherwise read and write
+				// everything loopback_default allows. Refused here, before a
+				// principal exists, rather than in a separate middleware:
+				// this branch runs exactly when anonymous is about to be
+				// minted, after the socket and TLS listeners have returned
+				// above, and the OAuth listener never runs this middleware.
+				if !loopbackHostOK(r.Host, cfg.LoopbackHosts) {
+					hal.WriteProblem(w, http.StatusMisdirectedRequest, "Misdirected Request",
+						"this knomit instance does not answer loopback requests for Host "+strconv.Quote(r.Host)+
+							"; a web page served from that name may not act as the local user. If this is your own proxy or tunnel, add the name to [auth].loopback_hosts in knomit.toml — anyone who reaches knomit through it then holds [auth].loopback_default",
+						r.URL.Path)
+					return
+				}
 				ctx = auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindAnonymous, Via: auth.ViaNone})
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

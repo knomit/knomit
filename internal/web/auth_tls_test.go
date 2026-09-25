@@ -75,6 +75,7 @@ func TestAuthMiddleware_TLSListenerWithoutCertIsRefusedEvenWithRequireFalse(t *t
 	// anonymous principal, so the refusal above is the marker's doing.
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
+	req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	req.TLS = &tls.ConnectionState{}
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)

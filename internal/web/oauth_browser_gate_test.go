@@ -163,16 +163,31 @@ func TestBrowserGate_EachMissingProofRefuses(t *testing.T) {
 		{"no Content-Type", post(func(r *http.Request) { r.Header.Del("Content-Type") }), "Content-Type"},
 		{"non-loopback peer", get(func(r *http.Request) { r.RemoteAddr = "192.0.2.1:5000" }), ""},
 	}
+	// These rows are 421, not 403. Their Host is a DNS name that is not
+	// localhost, so since #281 AuthMiddleware refuses them one step EARLIER,
+	// before any principal exists, and the request never reaches this gate.
+	// They stay here because the property this test pins still holds:
+	// refused, the reason names the Host, and the request stays undecided.
+	// The rows whose Host is an IP literal or the wrong port pass
+	// AuthMiddleware and still meet this gate's 403.
+	refusedEarlier := map[string]bool{
+		"rebinding": true, "rebinding GET": true, "Host 127.0.0.1.nip.io": true,
+		"Host localhost.": true, "Host sub.localhost": true,
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newKBFixture(t)
 			id := f.park(t)
+			want := http.StatusForbidden
+			if refusedEarlier[c.name] {
+				want = http.StatusMisdirectedRequest
+			}
 			rec := serve(f.s.Handler(), c.req(id))
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("%d %s; want 403", rec.Code, rec.Body.String())
+			if rec.Code != want {
+				t.Fatalf("%d %s; want %d", rec.Code, rec.Body.String(), want)
 			}
 			if !strings.Contains(rec.Body.String(), c.reason) {
-				t.Fatalf("403 body %s does not name %q", rec.Body.String(), c.reason)
+				t.Fatalf("%d body %s does not name %q", want, rec.Body.String(), c.reason)
 			}
 			if list, _ := f.s.OAuthIssuer.Pending(context.Background()); len(list) != 1 || list[0].Decision != "" {
 				t.Fatalf("a refused request decided it: %+v", list)

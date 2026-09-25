@@ -30,6 +30,7 @@ func TestAuthMiddleware_LoopbackWithoutRequireIsAnonymous(t *testing.T) {
 	h := AuthMiddleware(config.AuthConfig{Require: false}, false)(principalEcho())
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
+	req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != 200 || rr.Body.String() != "anonymous@none" {
@@ -41,6 +42,7 @@ func TestAuthMiddleware_RequireRefusesUnauthenticated(t *testing.T) {
 	h := AuthMiddleware(config.AuthConfig{Require: true}, false)(principalEcho())
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.RemoteAddr = "127.0.0.1:5555"
+	req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusForbidden || !bytes.Contains(rr.Body.Bytes(), []byte("Authentication required")) {

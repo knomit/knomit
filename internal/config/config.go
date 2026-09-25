@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -306,6 +307,45 @@ type AuthConfig struct {
 	// thing. An empty (but present) list is honoured as "anonymous holds
 	// nothing" -- only an absent one falls back to the defaults.
 	LoopbackDefault []string `toml:"loopback_default"`
+	// LoopbackHosts lists extra DNS names that a loopback peer may put in its
+	// Host header and still be the anonymous principal (#281). Without it,
+	// a loopback TCP request whose Host is a DNS name other than localhost
+	// or the bind host is refused with 421: that is what a DNS-rebound web
+	// page looks like, and it would otherwise hold LoopbackDefault.
+	//
+	// List the name a same-host proxy forwards unchanged — code-server
+	// reached over Tailscale, `tailscale serve`, a Codespaces or dev-tunnel
+	// name, an nginx that keeps Host. Exact names only: no port, scheme or
+	// pattern. Listing a name gives everyone who reaches knomit through it
+	// LoopbackDefault, and a name is only as safe as whoever answers DNS
+	// for it: never list one you do not control, and prefer a name your own
+	// resolver answers over a .local mDNS name any LAN host can claim.
+	//
+	// Read it through EffectiveLoopbackHosts, which adds the bind host.
+	// Older knomit versions only warn about the key, so it can be added
+	// before upgrading.
+	LoopbackHosts []string `toml:"loopback_hosts"`
+}
+
+// EffectiveLoopbackHosts is LoopbackHosts lower-cased, plus bindHost when
+// that is a DNS name: the operator already named it as the address to
+// serve, which is the same act as listing it. A wildcard or an IP literal
+// adds nothing (IP literals pass the Host check anyway: DNS rebinding needs
+// a name).
+//
+// bindHost must be the EFFECTIVE bind host: `knomit serve --host` is
+// applied after Load (cmd/serve.go), so this is called where the Server is
+// built (internal/app), never at load, or the flag would be missed.
+func (a AuthConfig) EffectiveLoopbackHosts(bindHost string) []string {
+	out := make([]string, 0, len(a.LoopbackHosts)+1)
+	for _, h := range a.LoopbackHosts {
+		out = append(out, strings.ToLower(h))
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(bindHost, "["), "]")
+	if name != "" && net.ParseIP(name) == nil {
+		out = append(out, strings.ToLower(name))
+	}
+	return out
 }
 
 // EffectiveLoopbackDefault is the permission list the anonymous loopback
@@ -661,6 +701,14 @@ func (c Config) Validate() error {
 	if c.Log.Level != "" {
 		if _, err := zerolog.ParseLevel(c.Log.Level); err != nil {
 			return fmt.Errorf("config: log.level %q is not a valid level: %w", c.Log.Level, err)
+		}
+	}
+	// auth.loopback_hosts entries are exact DNS names. A port, a scheme, a
+	// wildcard or a stray space would otherwise match nothing — or, for a
+	// pattern, far more than the operator meant — so fail at boot.
+	for _, h := range c.Auth.LoopbackHosts {
+		if h == "" || strings.HasPrefix(h, ".") || strings.ContainsAny(h, ":/*@ \t") {
+			return fmt.Errorf("config: auth.loopback_hosts entry %q is not a DNS name (exact names only: no port, scheme, wildcard or space)", h)
 		}
 	}
 	return c.OAuth.validate()
