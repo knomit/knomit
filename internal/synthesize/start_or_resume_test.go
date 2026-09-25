@@ -240,3 +240,17 @@ func TestCurrent_ServesTheOutstandingItemWithoutAdvancing(t *testing.T) {
 	require.Equal(t, res.Progress.Completed, again.Progress.Completed)
 	require.NotEmpty(t, again.Item.Prompt, "the whole item, from page 1")
 }
+
+// The start key compares scopes the way the scope filter reads them: case and
+// repetition do not make two scopes different.
+func TestStartKey_IgnoresCaseOrderAndRepeats(t *testing.T) {
+	key := func(domain, entities []string) string {
+		return (&Pipeline{effort: EffortNormal, scope: ScopeFilter{Domain: domain, Entities: entities}}).startKey()
+	}
+	require.Equal(t,
+		key([]string{"mcp", "store"}, []string{"knomit_review"}),
+		key([]string{"Store", "MCP", "mcp"}, []string{"KNOMIT_REVIEW", "knomit_review"}))
+	require.NotEqual(t, key([]string{"mcp"}, nil), key([]string{"store"}, nil))
+	require.NotEqual(t, key(nil, nil),
+		(&Pipeline{effort: EffortHigh}).startKey(), "effort is part of the key")
+}

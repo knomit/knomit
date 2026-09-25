@@ -145,39 +145,11 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		if result != nil {
-			result.Next = reviewNext(result, repos.SessionScoped(ctx))
+			result.Next = synthesize.ReviewNext(result, repos.SessionScoped(ctx))
 		}
 		resultJSON, _ := json.MarshalIndent(result, "", "  ")
 		return mcpgo.NewToolResultText(string(resultJSON)), nil
 	}
-}
-
-// reviewNext is a result's `next` line: what to call now, naming the
-// session_id. On the unscoped endpoint it also says to pass the binding and
-// that the binding is not the session.
-func reviewNext(res *synthesize.ReviewResult, unscoped bool) string {
-	if res.Done {
-		return "This review session is finished. Do not call knomit_review with this session_id again."
-	}
-	if res.Item == nil {
-		return ""
-	}
-	binding := ""
-	if unscoped {
-		binding = ", and your binding (it selects the knowledge base; it does not identify this review session)"
-	}
-	it := res.Item
-	if it.MoreAvailable {
-		return fmt.Sprintf("Read the rest of item %d before answering: call knomit_review with session_id=%q, item_id=%d and page=%d%s.",
-			it.ID, res.SessionID, it.ID, it.Page+1, binding)
-	}
-	token := ""
-	if it.CompletionToken != "" {
-		token = fmt.Sprintf(", completion_token=%q", it.CompletionToken)
-	}
-	return fmt.Sprintf("Answer item %d: call knomit_review with session_id=%q, item_id=%d%s and response (JSON matching response_schema)%s. "+
-		"session_id is required on every call after the first.",
-		it.ID, res.SessionID, it.ID, token, binding)
 }
 
 // errAnswerWithoutItem is the refusal for a response sent without item_id.

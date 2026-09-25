@@ -339,11 +339,10 @@ func TestReviewE2E_EveryResultNamesTheSessionToContinue(t *testing.T) {
 	sid, handle := e.client()
 	first := e.start(sid, handle)
 
-	require.Contains(t, first.Next, first.SessionID)
-	require.Contains(t, first.Next, "session_id")
+	require.Contains(t, first.Next, fmt.Sprintf("session_id=%q", first.SessionID))
 	require.Contains(t, first.Next, fmt.Sprintf("item_id=%d", first.Item.ID))
-	require.Contains(t, first.Next, "binding")
-	require.Contains(t, first.Next, "does not identify this review session")
+	require.Contains(t, first.Next, "binding=")
+	require.Contains(t, first.Next, "not the session")
 
 	done, errText := e.review(sid, answerArgs(handle, first))
 	require.Empty(t, errText)

@@ -200,6 +200,19 @@ func TestDeliveredPage_EnvelopeFitsItsReserve(t *testing.T) {
 			}
 			out, err := reviewResultPage(res, 1)
 			require.NoError(t, err)
+			// Everything else a page-1 result can carry rides the same page: a
+			// start result's identity and displacement fields at realistic
+			// lengths, and the `next` line in its longest form, the unscoped
+			// endpoint's. `resumed` is left false because a resume displaces
+			// nothing: it and the abandoned_* pair never share a result, and
+			// the pair is the larger.
+			out.Repo = "a-knowledge-base-name"
+			out.RepoID = "3ec012f5b4d2"
+			out.WriteBranch = "agent/h1v302-8215ac8f"
+			out.AbandonedSession = "00000000-0000-0000-0000-000000000001"
+			out.AbandonedSessionCreatedBy = "mcp-session:00000000-0000-0000-0000-000000000002 client:claude-code/2.1.282"
+			out.Next = ReviewNext(out, true)
+			require.NotEmpty(t, out.Next)
 
 			delivered, err := json.MarshalIndent(out, "", "  ")
 			require.NoError(t, err)

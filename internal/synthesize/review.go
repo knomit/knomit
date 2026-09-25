@@ -330,3 +330,29 @@ func (r *Reviewer) loadReflectMethodology(ctx context.Context, branch string, tr
 
 // compile-time assertion that the review strategy satisfies the engine seam.
 var _ Strategy = reviewStrategy{}
+
+// ReviewNext is a review result's `next` line: what to call now, naming the
+// session_id. On the unscoped endpoint it also says to pass the binding and
+// that the binding is not the session. It rides every page, inside the page
+// envelope reserve, so it is kept short.
+func ReviewNext(res *ReviewResult, unscoped bool) string {
+	if res.Done {
+		return "Session finished. Do not call knomit_review with this session_id again."
+	}
+	if res.Item == nil {
+		return ""
+	}
+	binding := ""
+	if unscoped {
+		binding = " binding=<handle; not the session>"
+	}
+	it := res.Item
+	if it.MoreAvailable {
+		return fmt.Sprintf("Read on: knomit_review session_id=%q item_id=%d page=%d%s", res.SessionID, it.ID, it.Page+1, binding)
+	}
+	token := ""
+	if it.CompletionToken != "" {
+		token = " completion_token=<from this page>"
+	}
+	return fmt.Sprintf("Answer: knomit_review session_id=%q item_id=%d%s response=<JSON>%s", res.SessionID, it.ID, token, binding)
+}

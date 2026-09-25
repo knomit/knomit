@@ -232,7 +232,13 @@ const maxDeliveredItemBytes = 32 * 1024
 // Measure with the item's PRODUCTION step type. An earlier reading said 11,857
 // because the test's subtest name had been reused as Item.Type, which is
 // delivered on the page — a fixture measuring a payload the system never emits.
-const pageEnvelopeReserveBytes = 12 * 1024
+//
+// The envelope also carries what a page-1 START result adds: the repo
+// identity and abandoned_* fields, and the `next` line every result carries
+// (longest on the unscoped endpoint). Measured with those, the distill
+// remainder page is 12,302 bytes, over 12 KiB; the reserve is 12.5 KiB,
+// leaving 498. Trim prose before raising it again, and re-measure.
+const pageEnvelopeReserveBytes = 12*1024 + 512
 
 // maxPageFactBytes bounds the facts carried on ONE page, measured AS DELIVERED
 // — after the indentation json.MarshalIndent applies in internal/mcp/review.go,

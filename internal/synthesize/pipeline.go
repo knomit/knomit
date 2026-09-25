@@ -1237,14 +1237,27 @@ func (e *LiveSessionError) Error() string {
 }
 
 // startKey is what a start must match to resume a live session: the effort
-// and the scope, canonicalised so argument order does not matter.
+// and the scope, canonicalised so argument order, case and repeats do not
+// matter — the scope filter matches case-insensitively too.
 func (p *Pipeline) startKey() string {
-	dom := append([]string(nil), p.scope.Domain...)
-	ent := append([]string(nil), p.scope.Entities...)
-	sort.Strings(dom)
-	sort.Strings(ent)
 	return fmt.Sprintf("effort=%s;domain=%s;entities=%s",
-		p.effort, strings.Join(dom, ","), strings.Join(ent, ","))
+		p.effort, canonicalScopeList(p.scope.Domain), canonicalScopeList(p.scope.Entities))
+}
+
+// canonicalScopeList lowercases, dedupes and sorts a scope list.
+func canonicalScopeList(in []string) string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }
 
 // beforeClaim runs between an answer's checks and its claim. A test seam: it
