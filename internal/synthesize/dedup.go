@@ -76,10 +76,22 @@ func loserCorroborations(loser factForLLM) int {
 // list, the refs the two operands already carried — the `prior` the ref gate
 // exempts from re-judging.
 //
-// The two are computed from the SAME three inputs and are therefore equal
-// today: a mechanical merge introduces no citation, so every element of the
-// write list was carried by the winner, carried by the loser, or is the
-// loser's own path. They are nonetheless built separately, and that is the
+// The write list drops every ref that names the WINNER itself, in either
+// stored form: the loser may cite the winner canonically
+// (kb://<own-id>/kb/x/y.md) while winnerPath is bare (kb/x/y.md), so the
+// comparison is on the CLASSIFIED path, exactly as mcp.mergeFacts filters its
+// own self-refs (#132). Without this the union grafted a loser's citation of
+// the winner onto the winner, and the survivor cited itself (#280). The gate
+// could not catch it: its self-ref check exempts carried refs, and this ref
+// WAS carried, by the loser. The ref to the loser's own path stays — it is the
+// record of the merge.
+//
+// The two lists are computed from the SAME three operands, so the write list
+// is a subset of the carried set: a mechanical merge introduces no citation,
+// so every element of the write list was carried by the winner, carried by the
+// loser, or is the loser's own path. The carried set is deliberately NOT
+// self-filtered — it is the operands' snapshot, and what it exempts is only
+// ever checked against what is written. They are built separately, and that is the
 // whole point of this function. Handing the write list to Gate.Apply in both
 // argument positions would read identically and behave identically now, and
 // would exempt whatever a later change appends to the write list at the call
@@ -88,8 +100,16 @@ func loserCorroborations(loser factForLLM) int {
 // to diverge from `refs` for the check to mean what it says, so the carried
 // set is derived from the operands, where "this was already carried" is
 // provably true, and never from the list being written.
-func dedupMergeRefs(winnerRefs, loserRefs []string, loserPath string) (write, carried []string) {
-	write = fact.UnionStrings(winnerRefs, loserRefs)
+func dedupMergeRefs(winnerRefs, loserRefs []string, winnerPath, loserPath, localRepoID string) (write, carried []string) {
+	self := fact.ClassifyRef(winnerPath, localRepoID).Path
+	union := fact.UnionStrings(winnerRefs, loserRefs)
+	write = make([]string, 0, len(union)+1)
+	for _, r := range union {
+		if c := fact.ClassifyRef(r, localRepoID); c.Kind == fact.RefLocalFact && c.Path == self {
+			continue
+		}
+		write = append(write, r)
+	}
 	write = fact.AppendUnique(write, loserPath)
 
 	carried = fact.UnionStrings(winnerRefs, loserRefs)
@@ -298,7 +318,7 @@ func dedupCluster(
 		fullWinner.EvidenceWeight = mergedWeight
 		// Refs = union of both refs + loser's path, and — separately — the
 		// snapshot of what the two operands already carried.
-		mergedRefs, carriedRefs := dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, loserFact.File)
+		mergedRefs, carriedRefs := dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, winnerFact.File, loserFact.File, localRepoID)
 
 		// Same gate as every other write path — but this merge ADDS no
 		// citation, so the whole carried set goes in as prior.

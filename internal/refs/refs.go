@@ -202,13 +202,19 @@ func (g Gate) CheckBatch(ctx context.Context, batch, prior map[string][]string) 
 			// facts uneditable — bricking a record nobody in reach can fix, to
 			// prevent a state that no longer has a producer.
 			//
-			// Safe because the producer is gone: mergeFacts no longer emits a
-			// self-ref by either route (append, or a union entry the retarget
-			// turns self-referential), so nothing legitimate introduces a NEW
-			// one and this check is defence in depth. And the legacy rows are
-			// inert on read — localEvidenceRefs drops the self-path before it
-			// can reach a weight, and the recursive walks absorb it as a
-			// back-edge.
+			// Safe only because every PRODUCER filters its own output, and there
+			// were two. mcp.mergeFacts drops a self-ref by either route (append,
+			// or a union entry the retarget turns self-referential; #132).
+			// synthesize.dedupMergeRefs was the second producer until #280: it
+			// grafted a loser's citation of the winner onto the winner, and
+			// because the LOSER carried that ref, this carried exemption let
+			// it through — a self-ref no check here could see. It now filters
+			// the winner's own path the same way (#280). So this check is
+			// defence in depth, not the guarantee: a new write path that
+			// unions refs from another fact must filter its own path itself.
+			// The legacy rows are inert on read — localEvidenceRefs drops the
+			// self-path before it can reach a weight, and the recursive walks
+			// absorb it as a back-edge.
 			if r.Kind == fact.RefLocalFact && r.Path == self && !carried[r.Path] {
 				selfRefs = append(selfRefs, problem{from, raw})
 				continue
