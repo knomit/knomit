@@ -210,3 +210,52 @@ func TestSynthesisToolsAdvertiseOptionalTaskSupport(t *testing.T) {
 		})
 	}
 }
+
+// An answer without its session_id is refused and changes nothing; it is never
+// read as a start that abandons the caller's own session.
+func TestHypothesizeHandler_AnswerWithoutSessionIDIsRefused(t *testing.T) {
+	ctx, svc := newHypothesizeHandlerCtx(t)
+	_, err := svc.Facts().WriteFact(ctx, "agent/test", "kb/arch/a.md",
+		synthFactContent(t, "kb/arch/a.md", "T"), "seed", "")
+	require.NoError(t, err)
+	start := callHypothesize(t, ctx, map[string]interface{}{})
+	require.NotNil(t, start.Item)
+
+	for name, params := range map[string]map[string]interface{}{
+		"response":         {"response": "ack"},
+		"response+item_id": {"response": "ack", "item_id": float64(start.Item.ID)},
+		"item_id":          {"item_id": float64(start.Item.ID)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := HypothesizeHandler()(ctx, mcpToolRequest(t, params))
+			require.NoError(t, err)
+			require.True(t, res.IsError, "must be refused")
+			text, _ := mcpgo.AsTextContent(res.Content[0])
+			require.Contains(t, text.Text, "session_id")
+			require.Contains(t, text.Text, "Nothing was applied")
+		})
+	}
+
+	sess, err := svc.Pipeline().GetPipelineSession(ctx, start.SessionID)
+	require.NoError(t, err)
+	require.Equal(t, "active", sess.Status, "the live session was not displaced")
+}
+
+// Every result names what to call next and the session_id to pass.
+func TestHypothesizeHandler_ResultNamesTheSessionToContinue(t *testing.T) {
+	ctx, svc := newHypothesizeHandlerCtx(t)
+	_, err := svc.Facts().WriteFact(ctx, "agent/test", "kb/arch/a.md",
+		synthFactContent(t, "kb/arch/a.md", "T"), "seed", "")
+	require.NoError(t, err)
+
+	start := callHypothesize(t, ctx, map[string]interface{}{})
+	require.NotNil(t, start.Item)
+	require.Contains(t, start.Next, start.SessionID)
+	require.Contains(t, start.Next, "session_id is required on every call after the first")
+
+	done := callHypothesize(t, ctx, map[string]interface{}{
+		"session_id": start.SessionID, "response": "ack", "item_id": float64(start.Item.ID),
+	})
+	require.True(t, done.Done)
+	require.Contains(t, done.Next, "finished")
+}
