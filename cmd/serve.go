@@ -139,41 +139,6 @@ func serveCmd() *cobra.Command {
 
 			router := a.Handler()
 
-			// Runtime diagnostics port (localhost only, off unless configured):
-			// /runtime/* controls + /debug/pprof + /debug/vars + /metrics.
-			if cfg.Runtime.Addr != "" {
-				rt := diag.NewServer(diag.Options{
-					StartedAt:   time.Now(),
-					HeapDumpDir: filepath.Join(cfg.Home, "dumps"),
-					StatusExtra: func() map[string]any {
-						return map[string]any{
-							"repos":     a.Manager().Names(),
-							"read_only": cfg.ReadOnly,
-							"branch":    a.AgentBranch(),
-						}
-					},
-				})
-				rtSrv := &http.Server{
-					Addr:              cfg.Runtime.Addr,
-					Handler:           rt.Handler(),
-					ReadHeaderTimeout: 10 * time.Second,
-				}
-				go func() {
-					log.Info().Str("runtime", "http://"+cfg.Runtime.Addr+"/runtime/status").
-						Str("pprof", "http://"+cfg.Runtime.Addr+"/debug/pprof/").
-						Str("metrics", "http://"+cfg.Runtime.Addr+"/metrics").
-						Msg("runtime diagnostics port listening")
-					if err := rtSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-						log.Warn().Err(err).Msg("runtime diagnostics server failed")
-					}
-				}()
-				defer func() {
-					shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-					defer cancel()
-					_ = rtSrv.Shutdown(shutCtx)
-				}()
-			}
-
 			// Every listener is BOUND before "knomit ready" and before any of
 			// them serves. A taken port or a failed TLS/OAuth setup is then an
 			// error RunE returns while nothing is serving yet, and the deferred
@@ -254,6 +219,25 @@ func serveCmd() *cobra.Command {
 				defer ol.Close()
 			}
 
+			// Runtime diagnostics port (#288): /runtime/* controls, pprof,
+			// expvar and /metrics, off until [runtime].addr is set. Bound
+			// here with the others so a taken port fails the boot, instead
+			// of a warning from a goroutine after "knomit ready".
+			diagSrv, dl, err := openDiagServer(cfg, srv, func() map[string]any {
+				return map[string]any{
+					"repos":     a.Manager().Names(),
+					"read_only": cfg.ReadOnly,
+					"branch":    a.AgentBranch(),
+				}
+			})
+			if err != nil {
+				log.Error().Err(err).Msg("runtime diagnostics listener failed")
+				return err
+			}
+			if dl != nil {
+				defer dl.Close()
+			}
+
 			// Startup summary: everything above is bound.
 			pubKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(a.Signer().PublicKey())))
 			httpAddr := "http://" + listenAddr
@@ -282,7 +266,7 @@ func serveCmd() *cobra.Command {
 			// on return (LIFO) the servers stop first and no Serve sees its
 			// listener, or the socket file, disappear underneath it. After
 			// serveUntil's graceful Shutdown the Closes have nothing to do.
-			errCh := make(chan error, 4)
+			errCh := make(chan error, 5)
 			serveInto(errCh, "listen", srv, ln)
 			if ul != nil {
 				// `via` names the MECHANISM, so the line says which credential
@@ -303,9 +287,19 @@ func serveCmd() *cobra.Command {
 				serveInto(errCh, "oauth listener", oauthSrv, ol)
 				defer oauthSrv.Close()
 			}
+			if diagSrv != nil {
+				base := "http://" + dl.Addr().String()
+				log.Info().Str("runtime", base+"/runtime/status").
+					Str("pprof", base+"/debug/pprof/").
+					Str("metrics", base+"/metrics").
+					Bool("allow_remote", cfg.Runtime.AllowRemote).
+					Msg("runtime diagnostics listener")
+				serveInto(errCh, "runtime diagnostics listener", diagSrv, dl)
+				defer diagSrv.Close()
+			}
 
 			// a.Close() runs via defer — shuts down repos and releases resources.
-			return serveUntil(cmd.Context(), errCh, cancelServe, 5*time.Second, srv, tlsSrv, oauthSrv)
+			return serveUntil(cmd.Context(), errCh, cancelServe, 5*time.Second, srv, tlsSrv, oauthSrv, diagSrv)
 		},
 	}
 	cmd.Flags().StringVar(&portOverride, "port", "", "override the listen port (default: from config)")
@@ -326,6 +320,42 @@ func listenTCP(addr string) (net.Listener, error) {
 		return nil, fmt.Errorf("plaintext listener: %w", err) // err names the address
 	}
 	return ln, nil
+}
+
+// openDiagServer binds the runtime diagnostics listener when [runtime].addr is
+// set, and returns nil, nil, nil when it is not. config.Validate has already
+// refused a non-loopback addr unless [runtime].allow_remote.
+//
+// Its http.Server copies like's ReadHeaderTimeout and BaseContext, so the
+// one cancel in serveUntil also ends a running /debug/pprof/profile or trace.
+// No ConnContext: the port has no principal, and a TCP peer address is not a
+// credential. The guard (diag.Server.guard) admits the Host names the main
+// listener's AuthMiddleware admits, plus the runtime addr's own name.
+func openDiagServer(cfg config.Config, like *http.Server, statusExtra func() map[string]any) (*http.Server, net.Listener, error) {
+	if cfg.Runtime.Addr == "" {
+		return nil, nil, nil
+	}
+	hosts := cfg.Auth.EffectiveLoopbackHosts(cfg.Host)
+	if h, _, err := net.SplitHostPort(cfg.Runtime.Addr); err == nil {
+		hosts = append(hosts, config.AuthConfig{}.EffectiveLoopbackHosts(h)...)
+	}
+	rt := diag.NewServer(diag.Options{
+		StartedAt:        time.Now(),
+		HeapDumpDir:      filepath.Join(cfg.Home, "dumps"),
+		StatusExtra:      statusExtra,
+		LoopbackHosts:    hosts,
+		AllowRemotePeers: cfg.Runtime.AllowRemote,
+	})
+	ln, err := net.Listen("tcp", cfg.Runtime.Addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime diagnostics listener: %w", err) // err names the address
+	}
+	return &http.Server{
+		Addr:              cfg.Runtime.Addr,
+		Handler:           rt.Handler(),
+		ReadHeaderTimeout: like.ReadHeaderTimeout,
+		BaseContext:       like.BaseContext,
+	}, ln, nil
 }
 
 // serveInto runs srv.Serve(ln) in a goroutine and sends any failure to errCh,
