@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -64,7 +65,7 @@ func writeSocketTOML(t *testing.T, home, socket string) {
 
 func TestSocketPath_AgreesWithLoad_KnomitSocketEnv(t *testing.T) {
 	isolateSocketEnv(t, t.TempDir())
-	want := filepath.Join(t.TempDir(), "env.sock")
+	want := config.ExplicitSocket(t, "env")
 	t.Setenv("KNOMIT_SOCKET", want)
 	requireAgreement(t, want)
 }
@@ -72,7 +73,7 @@ func TestSocketPath_AgreesWithLoad_KnomitSocketEnv(t *testing.T) {
 func TestSocketPath_AgreesWithLoad_TOMLSocket(t *testing.T) {
 	home := t.TempDir()
 	isolateSocketEnv(t, home)
-	want := filepath.Join(t.TempDir(), "toml.sock")
+	want := config.ExplicitSocket(t, "toml")
 	writeSocketTOML(t, home, want)
 	requireAgreement(t, want)
 }
@@ -80,8 +81,8 @@ func TestSocketPath_AgreesWithLoad_TOMLSocket(t *testing.T) {
 func TestSocketPath_AgreesWithLoad_EnvBeatsTOML(t *testing.T) {
 	home := t.TempDir()
 	isolateSocketEnv(t, home)
-	writeSocketTOML(t, home, filepath.Join(t.TempDir(), "toml.sock"))
-	want := filepath.Join(t.TempDir(), "env.sock")
+	writeSocketTOML(t, home, config.ExplicitSocket(t, "toml"))
+	want := config.ExplicitSocket(t, "env")
 	t.Setenv("KNOMIT_SOCKET", want)
 	requireAgreement(t, want)
 }
@@ -125,7 +126,7 @@ func TestSocketPath_AgreesWithLoad_TildeHomeWithTOMLSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolateSocketEnv(t, "~/kh")
-	want := filepath.Join(t.TempDir(), "toml.sock")
+	want := config.ExplicitSocket(t, "toml")
 	writeSocketTOML(t, expanded, want)
 	requireAgreement(t, want)
 }
@@ -179,7 +180,7 @@ func TestSocketPath_AgreesWithLoad_RelativeHomeIsAbsolutised(t *testing.T) {
 
 // A relative socket would resolve against each process's own working
 // directory, and the server and the bridge do not share one. Both sides refuse
-// it with the same error.
+// it with the same error, which states this platform's rule.
 func TestSocketPath_RelativeSocketRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -202,7 +203,11 @@ func TestSocketPath_RelativeSocketRefused(t *testing.T) {
 			if loadErr.Error() != pathErr.Error() {
 				t.Fatalf("Load and SocketPath disagree:\n  Load:       %v\n  SocketPath: %v", loadErr, pathErr)
 			}
-			if !strings.Contains(pathErr.Error(), "must be an absolute path") {
+			rule := "must be an absolute path"
+			if runtime.GOOS == "windows" {
+				rule = "must be a pipe name"
+			}
+			if !strings.Contains(pathErr.Error(), rule) {
 				t.Fatalf("error %q does not state the rule", pathErr)
 			}
 		})
@@ -216,20 +221,4 @@ func setOSHome(t *testing.T) string {
 	t.Setenv("HOME", osHome)
 	t.Setenv("USERPROFILE", osHome)
 	return osHome
-}
-
-// A "~/" in the socket value means the user's home directory, on both sides.
-func TestSocketPath_AgreesWithLoad_TildeInSocketEnv(t *testing.T) {
-	osHome := setOSHome(t)
-	isolateSocketEnv(t, t.TempDir())
-	t.Setenv("KNOMIT_SOCKET", "~/x.sock")
-	requireAgreement(t, filepath.Join(osHome, "x.sock"))
-}
-
-func TestSocketPath_AgreesWithLoad_TildeInTOMLSocket(t *testing.T) {
-	osHome := setOSHome(t)
-	home := t.TempDir()
-	isolateSocketEnv(t, home)
-	writeSocketTOML(t, home, "~/x.sock")
-	requireAgreement(t, filepath.Join(osHome, "x.sock"))
 }

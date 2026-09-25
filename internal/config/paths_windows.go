@@ -5,8 +5,11 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"strings"
+
+	"knomit/internal/auth"
 )
 
 // defaultHome is %LOCALAPPDATA%\knomit\home — a level BELOW the state
@@ -27,16 +30,11 @@ func defaultHome() (string, error) {
 	return filepath.Join(state, homeSubdir), nil
 }
 
-// pipeNamePrefix is the Windows pipe namespace prefix plus knomit's own
-// marker. The namespace half is spelled again as internal/auth.PipePrefix,
-// which is what RECOGNISES a pipe path when opening or dialling one; this is
-// what BUILDS it. TestSocketPath_IsOpenableAndDialableByAuth pins the two
-// together — by round-tripping a real listener through both and reading a peer
-// off it, not by comparing constants — so the two spellings of an OS constant
-// cannot drift apart unnoticed. They are apart at all because internal/auth has no
-// knomit dependencies by design, and making config import it — or it import
-// config — to share nine characters would invert that.
-const pipeNamePrefix = `\\.\pipe\knomit-`
+// pipeNamePrefix is the Windows pipe namespace (auth.PipePrefix, which is
+// what RECOGNISES a pipe path when opening or dialling one) plus knomit's own
+// marker. TestSocketPath_IsOpenableAndDialableByAuth still round-trips a real
+// listener through both, reading a peer off it.
+const pipeNamePrefix = auth.PipePrefix + "knomit-"
 
 // localListenerName is the path of the local authenticated listener for a
 // given data root: a named pipe, because Windows has no credential-carrying
@@ -65,9 +63,14 @@ func localListenerName(home string) string {
 	return pipeNamePrefix + hex.EncodeToString(sum[:8])
 }
 
-// isAbsListener reports whether a configured local listener names the same
-// place from every working directory: a pipe name (the machine-wide pipe
-// namespace, internal/auth.PipePrefix) or an absolute path.
-func isAbsListener(p string) bool {
-	return strings.HasPrefix(p, `\\.\pipe\`) || filepath.IsAbs(p)
+// checkExplicitSocket is the Windows rule for an operator-named socket: it must
+// be a pipe name. auth.ListenLocal and auth.DialLocal refuse anything else, so
+// a file path here would pass config and fail at listen time. A tilde is not
+// expanded: a `~\` value could only ever be a file.
+func checkExplicitSocket(sock string) (string, error) {
+	if !strings.HasPrefix(sock, auth.PipePrefix) {
+		return "", fmt.Errorf("socket %q must be a pipe name %s<name>; set KNOMIT_SOCKET or the knomit.toml socket key to one",
+			sock, auth.PipePrefix)
+	}
+	return sock, nil
 }

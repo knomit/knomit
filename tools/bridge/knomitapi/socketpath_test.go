@@ -2,6 +2,7 @@ package knomitapi
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"knomit/internal/config"
@@ -15,6 +16,10 @@ func TestSocketPath_DelegatesToConfig_KnomitSocketEnv(t *testing.T) {
 	t.Setenv("KNOMIT_HOME", t.TempDir())
 	t.Setenv("KNOMIT_REPO", "")
 	want := filepath.Join(t.TempDir(), "env.sock")
+	if runtime.GOOS == "windows" {
+		// An explicit socket on Windows must be a pipe name.
+		want = `\\.\pipe\knomit-test-env`
+	}
 	t.Setenv("KNOMIT_SOCKET", want)
 
 	fromConfig, err := config.SocketPath()

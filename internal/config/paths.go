@@ -191,14 +191,14 @@ func SocketPath() (string, error) {
 // socketFor is the ONE place the local listener is decided from its inputs:
 // fromEnv (KNOMIT_SOCKET), else fromTOML (the knomit.toml `socket` key), else
 // this platform's default under home. Load and SocketPath both call it, so
-// the server and the bridge cannot order the layers differently. It is pure:
-// callers read the environment and pass it in.
+// the server and the bridge cannot order the layers differently. Callers read
+// the environment and pass it in, but it is not pure: checkExplicitSocket may
+// expand a leading ~ against os.UserHomeDir.
 //
-// home must already be tilde-expanded and absolute. The chosen value is
-// tilde-expanded here, so both sides expand it or neither does. One that is
-// then not an absolute path (or, on Windows, a pipe name) is an error: it
-// would resolve against each process's own working directory, and the server
-// and the bridge do not share one.
+// home must already be tilde-expanded and absolute. An explicit value goes
+// through checkExplicitSocket, this platform's rule for what an operator may
+// name (paths_unix.go, paths_windows.go); anything it refuses would resolve
+// differently per process, or could never be listened on.
 func socketFor(home, fromTOML, fromEnv string) (string, error) {
 	var sock string
 	switch {
@@ -209,11 +209,5 @@ func socketFor(home, fromTOML, fromEnv string) (string, error) {
 	default:
 		return localListenerName(home), nil
 	}
-	if err := expandTilde(&sock); err != nil {
-		return "", err
-	}
-	if !isAbsListener(sock) {
-		return "", fmt.Errorf("socket %q must be an absolute path; set KNOMIT_SOCKET or the knomit.toml socket key to one", sock)
-	}
-	return sock, nil
+	return checkExplicitSocket(sock)
 }
