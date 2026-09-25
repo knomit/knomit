@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"strconv"
 
@@ -10,6 +9,7 @@ import (
 	"knomit/internal/client/sessions"
 	"knomit/internal/config"
 	"knomit/internal/pki"
+	"knomit/internal/platform/hostguard"
 	"knomit/internal/web/hal"
 )
 
@@ -137,8 +137,7 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 // RemoteAddr to 127.0.0.1 — httptest.NewRequest defaults to 192.0.2.1:1234,
 // which is documentation space and deliberately not loopback.
 func isLoopback(remoteAddr string) bool {
-	ip := net.ParseIP(sessions.RemoteIP(remoteAddr))
-	return ip != nil && ip.IsLoopback()
+	return hostguard.LoopbackPeer(remoteAddr)
 }
 
 // loopbackGrants answers the anonymous principal from config and everyone

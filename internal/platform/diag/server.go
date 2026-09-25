@@ -4,6 +4,11 @@
 // and off unless explicitly enabled, so it carries zero steady-state cost and
 // is never reachable from the public API. Pure stdlib.
 //
+// Every route sits behind guard (#288): the port has no principal and no
+// authentication, so what keeps it local is refusing, in order, a peer that
+// is not loopback, a request a browser made, and a Host a DNS-rebound page
+// would send.
+//
 // This was internal/runtimeobs. It is named diag rather than runtime because it
 // imports stdlib runtime, runtime/pprof and expvar — a package named after any
 // of those would force an alias at every use inside its own files.
@@ -26,6 +31,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"knomit/internal/platform/hostguard"
 	"knomit/internal/platform/metrics"
 )
 
@@ -39,6 +45,20 @@ type Options struct {
 	StatusExtra func() map[string]any
 	// HeapDumpDir is where /runtime/heapdump writes heap profiles.
 	HeapDumpDir string
+	// LoopbackHosts are the DNS names, already lower-cased, that a request's
+	// Host may carry besides localhost and IP literals: the effective
+	// [auth].loopback_hosts, bind host included. See hostguard.LoopbackHostOK.
+	// The list is SHARED with the main listener: a name added there for this
+	// port also becomes a Host under which a loopback peer on the main
+	// listener is the anonymous principal (unless [auth].require). That is
+	// safe only because the operator owns the names they list.
+	LoopbackHosts []string
+	// AllowRemotePeers turns off guard's first check, the loopback-peer
+	// refusal. It is [runtime].allow_remote: the operator who binds this
+	// port off loopback (to be scraped by a remote Prometheus, say) has
+	// asked for remote peers, and refusing them would make that setting
+	// bind a port nobody can use. The browser and Host checks still apply.
+	AllowRemotePeers bool
 }
 
 // Server holds the diagnostics mux.
@@ -69,7 +89,7 @@ var publishMetricsExpvar sync.Once
 // Handler builds the diagnostics mux: /runtime/* controls, /debug/pprof/*,
 // /debug/vars (expvar), and /metrics. It mounts pprof explicitly rather than
 // relying on the http.DefaultServeMux side-effect registration, so these
-// endpoints exist ONLY on this gated port.
+// endpoints exist ONLY on this gated port. Every route is behind guard.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -88,7 +108,52 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/debug/vars", expvar.Handler())
 	mux.HandleFunc("/metrics", s.handleMetrics)
 
-	return mux
+	return s.guard(mux)
+}
+
+// guard refuses, before any route runs:
+//
+//  1. a peer that is not loopback (403), unless AllowRemotePeers. The port
+//     is for this machine; binding it anywhere else needs
+//     [runtime].allow_remote, which is also what sets AllowRemotePeers.
+//  2. a request a browser made (403): one carrying Origin, or Sec-Fetch-Site
+//     other than none/same-origin. The POST controls take their arguments
+//     in the query string, so a page's fetch(url, {method: "POST", mode:
+//     "no-cors"}) is a CORS simple request: the browser sends it without a
+//     preflight, and the side effect happens whether or not the page can
+//     read the answer. That needs no DNS rebinding and its Host is an IP
+//     literal, so checks 1 and 3 both pass it. curl, Prometheus and
+//     go tool pprof send neither header.
+//  3. a Host naming something other than this machine (421): a DNS-rebound
+//     page, which is same-origin with itself and so passes check 2.
+//
+// Loopback is a TCP address here, never a credential: this port has no
+// principal at all.
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.opts.AllowRemotePeers && !hostguard.LoopbackPeer(r.RemoteAddr) {
+			http.Error(w, "the runtime diagnostics port answers only loopback peers; set [runtime].allow_remote = true to serve others", http.StatusForbidden)
+			return
+		}
+		if r.Header.Get("Origin") != "" || !browserSafeFetchSite(r.Header.Get("Sec-Fetch-Site")) {
+			http.Error(w, "the runtime diagnostics port refuses requests made by a web browser (Origin or cross-site Sec-Fetch-Site present); use curl or go tool pprof", http.StatusForbidden)
+			return
+		}
+		if !hostguard.LoopbackHostOK(r.Host, s.opts.LoopbackHosts) {
+			http.Error(w, "the runtime diagnostics port does not answer Host "+strconv.Quote(r.Host)+
+				"; use localhost or an IP address, or add the name to [auth].loopback_hosts"+
+				" (shared with the main listener, where a loopback request carrying that Host is treated as the anonymous local user)", http.StatusMisdirectedRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// browserSafeFetchSite admits an absent Sec-Fetch-Site (not a browser, or an
+// old one) and the two values a browser sends when the user, not a page, made
+// the request: "none" (typed into the address bar) and "same-origin".
+func browserSafeFetchSite(v string) bool {
+	return v == "" || v == "none" || v == "same-origin"
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
