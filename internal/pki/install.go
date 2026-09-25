@@ -73,9 +73,12 @@ type RootDiffersError struct {
 	Bundle    RootInfo
 }
 
+// Error names the two roots by fingerprint only. A CommonName is free text
+// chosen by whoever minted the root, so a front-end that shows one formats
+// it itself (the CLI does, %q-quoted); this text is safe to log as is.
 func (e *RootDiffersError) Error() string {
-	return fmt.Sprintf("this instance is enrolled under root %q and the bundle is from a different root %q; pass --replace-root to move it to the other fleet",
-		e.Installed.CommonName, e.Bundle.CommonName)
+	return fmt.Sprintf("pki: bundle is from a different fleet root (installed %s, bundle %s)",
+		e.Installed.Fingerprint, e.Bundle.Fingerprint)
 }
 
 func (e *RootDiffersError) Is(target error) bool { return target == ErrRootDiffers }
@@ -137,8 +140,11 @@ func SplitBundle(raw []byte) (Bundle, error) {
 }
 
 // InstallBundle is `identity install`: it installs raw into dir for the key
-// at keyPath. Every check runs BEFORE anything is written, so a refusal
-// leaves dir exactly as it was.
+// at keyPath. Every check runs BEFORE anything is written — the directory
+// itself included — so a VERIFICATION failure leaves dir exactly as it was.
+// An I/O failure between the three renames can leave a mixed set; the
+// reloader adopts only a set that verifies together, and the next install
+// repairs it.
 func InstallBundle(dir, keyPath string, raw []byte, replaceRoot bool) (Identity, error) {
 	b, err := SplitBundle(raw)
 	if err != nil {
@@ -157,19 +163,23 @@ func InstallBundle(dir, keyPath string, raw []byte, replaceRoot bool) (Identity,
 	if err != nil {
 		return Identity{}, err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return Identity{}, err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return Identity{}, err
-	}
 	// A different root is a different fleet: refuse unless asked. Nothing is
 	// reset when it is asked: the CRL watermark is kept PER ROOT
 	// (AcceptedNumber), so the new fleet's CRL #1 is judged against the
 	// new root's entry, while an old bundle of a root seen before — after a
 	// detour A -> B -> A — is still judged against that root's own entry and
 	// refused if older.
-	if cur, err := LoadRootCert(filepath.Join(dir, RootCertFile)); err == nil && !cur.Equal(root) && !replaceRoot {
+	//
+	// Only a MISSING root.crt means "no root installed". One that exists but
+	// does not load fails closed unless replacing: reading it as "none" would
+	// skip this check and admit any fleet's bundle.
+	switch cur, err := LoadRootCert(filepath.Join(dir, RootCertFile)); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		if !replaceRoot {
+			return Identity{}, fmt.Errorf("the installed root certificate cannot be read, so the bundle cannot be compared with it: %w", err)
+		}
+	case !cur.Equal(root) && !replaceRoot:
 		return Identity{}, &RootDiffersError{Installed: rootInfo(cur), Bundle: rootInfo(root)}
 	}
 	last, err := AcceptedNumber(dir, root) // the BUNDLE's root, not the installed one
@@ -184,6 +194,16 @@ func InstallBundle(dir, keyPath string, raw []byte, replaceRoot bool) (Identity,
 			e.class = ErrCRLInvalid
 		}
 		return Identity{}, e
+	}
+	// Every check has passed: only now is the directory created (or its mode
+	// reset), so a refused bundle leaves <pki> exactly as it was — on a fresh
+	// home, absent. AcceptedNumber and LoadRootCert above read a missing dir
+	// as "nothing installed".
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return Identity{}, err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return Identity{}, err
 	}
 	for _, f := range []struct {
 		name string

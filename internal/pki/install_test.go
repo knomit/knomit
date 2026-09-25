@@ -3,6 +3,7 @@ package pki_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ func bumpCRL(t *testing.T, f *pkitest.Fleet, n int64) {
 	}
 }
 
-// snapshot is every file under dir with its bytes, so "nothing changed" can
+// snapshot is every file under dir with its mode, mtime and bytes, so "nothing changed" can
 // be asserted as equality rather than as the absence of one expected file.
 func snapshot(t *testing.T, dir string) map[string]string {
 	t.Helper()
@@ -51,7 +52,7 @@ func snapshot(t *testing.T, dir string) map[string]string {
 		}
 		b, _ := os.ReadFile(p)
 		rel, _ := filepath.Rel(dir, p)
-		out[rel] = string(b)
+		out[rel] = fmt.Sprintf("%v %d %s", fi.Mode(), fi.ModTime().UnixNano(), b)
 		return nil
 	})
 	return out
@@ -150,17 +151,20 @@ func TestInstallBundle_RefusalsAreClassifiedAndWriteNothing(t *testing.T) {
 		name   string
 		raw    []byte
 		class  error
-		phrase string // the CLI's wording, kept
+		phrase string // the wording the CLI prints, kept
 	}{
 		{"another key", bundleFor(t, f, other), pki.ErrKeyMismatch, "not this instance's"},
 		{"older CRL", oldCRL, pki.ErrCRLRollback, "older"},
-		{"different root", bundleFor(t, f1, foreign), pki.ErrRootDiffers, "pass --replace-root"},
+		{"different root", bundleFor(t, f1, foreign), pki.ErrRootDiffers, "different fleet root"},
 		{"private key block", []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"), pki.ErrMalformedBundle, "unexpected"},
 		{"not PEM", []byte("hello"), pki.ErrMalformedBundle, "must hold"},
 		{"two roots", append(bundleFor(t, f, m), bundleFor(t, f1, foreign)[len(foreign.CertPEM):]...), pki.ErrMalformedBundle, "two root"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// An enrolled home: every file, and the dir's own mode, as it was.
+			os.Chmod(dir, 0o750) // a mode the install would reset, so a stray Chmod shows
 			before := snapshot(t, dir)
+			beforeDir, _ := os.Stat(dir)
 			_, err := pki.InstallBundle(dir, m.KeyPath, tc.raw, false)
 			if !errors.Is(err, tc.class) {
 				t.Fatalf("err %v, want class %v", err, tc.class)
@@ -169,6 +173,23 @@ func TestInstallBundle_RefusalsAreClassifiedAndWriteNothing(t *testing.T) {
 				t.Fatalf("err %q lost the CLI wording %q", err, tc.phrase)
 			}
 			sameTree(t, before, snapshot(t, dir))
+			if afterDir, _ := os.Stat(dir); afterDir.Mode() != beforeDir.Mode() {
+				t.Fatalf("pki dir mode %v -> %v on a refusal", beforeDir.Mode(), afterDir.Mode())
+			}
+			os.Chmod(dir, 0o700)
+
+			// A fresh home: a refusal creates no pki dir at all. (Root-differs
+			// needs an installed root, so it has no fresh-home case.)
+			if tc.class == pki.ErrRootDiffers || tc.class == pki.ErrCRLRollback {
+				return
+			}
+			fresh := filepath.Join(t.TempDir(), "pki")
+			if _, err := pki.InstallBundle(fresh, m.KeyPath, tc.raw, false); !errors.Is(err, tc.class) {
+				t.Fatalf("fresh home: err %v, want class %v", err, tc.class)
+			}
+			if _, err := os.Stat(fresh); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a refused install created %s (%v)", fresh, err)
+			}
 		})
 	}
 }
@@ -194,9 +215,11 @@ func TestInstallBundle_RootDiffersNamesBothRoots(t *testing.T) {
 	if rd.Installed.Fingerprint != wantOld || rd.Bundle.Fingerprint != wantNew || wantOld == wantNew {
 		t.Fatalf("root fingerprints %s -> %s, want %s -> %s", rd.Installed.Fingerprint, rd.Bundle.Fingerprint, wantOld, wantNew)
 	}
-	want := `this instance is enrolled under root "knomit-master-test" and the bundle is from a different root "knomit-master-test"; pass --replace-root to move it to the other fleet`
-	if err.Error() != want {
-		t.Fatalf("CLI text changed:\n got %s\nwant %s", err, want)
+	// pki's own text names the fingerprints and no CLI flag: the CLI formats
+	// its message from the typed error (cmd/identity.go), the desktop from
+	// the class.
+	if strings.Contains(err.Error(), "--replace-root") || !strings.Contains(err.Error(), wantOld) || !strings.Contains(err.Error(), wantNew) {
+		t.Fatalf("root-differs text: %s", err)
 	}
 
 	// With replaceRoot the same bundle installs, judged against the NEW
@@ -286,5 +309,31 @@ func TestStatus_KeyUnreadableIsAnError(t *testing.T) {
 func TestPrincipalKind(t *testing.T) {
 	if pki.PrincipalKind(pki.RoleOperator) != "operator" || pki.PrincipalKind(pki.RoleInstance) != "instance" {
 		t.Fatal("principal kinds")
+	}
+}
+
+// An installed root.crt that exists but does not load is NOT "no root
+// installed": treating it so would skip the same-root check and let any
+// fleet's bundle in. It fails closed, and nothing is written.
+func TestInstallBundle_UnreadableInstalledRootFailsClosed(t *testing.T) {
+	f, f1 := pkitest.New(t), pkitest.New(t)
+	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	dir := filepath.Join(t.TempDir(), "pki")
+	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pki.RootCertFile), []byte("garbled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshot(t, dir)
+	foreign := bundleFor(t, f1, f1.Enroll(t, "laptop", pki.RoleInstance, m.KeyPath))
+	_, err := pki.InstallBundle(dir, m.KeyPath, foreign, false)
+	if err == nil || errors.Is(err, pki.ErrRootDiffers) {
+		t.Fatalf("installed over an unreadable root.crt: %v", err)
+	}
+	sameTree(t, before, snapshot(t, dir))
+	// With replaceRoot the operator has said "whatever is there, replace it".
+	if _, err := pki.InstallBundle(dir, m.KeyPath, foreign, true); err != nil {
+		t.Fatalf("replace over an unreadable root.crt: %v", err)
 	}
 }

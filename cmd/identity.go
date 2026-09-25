@@ -233,6 +233,11 @@ func identityInstallCmd() *cobra.Command {
 func installBundle(out io.Writer, cfg config.Config, raw []byte, replaceRoot bool) error {
 	dir := cfg.TLS.Dir
 	id, err := pki.InstallBundle(dir, app.ResolveKeyPath(cfg), raw, replaceRoot)
+	var rd *pki.RootDiffersError
+	if errors.As(err, &rd) {
+		return fmt.Errorf("this instance is enrolled under root %q and the bundle is from a different root %q; pass --replace-root to move it to the other fleet",
+			rd.Installed.CommonName, rd.Bundle.CommonName)
+	}
 	if err != nil {
 		return err
 	}
