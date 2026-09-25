@@ -37,7 +37,7 @@ DON'T invoke:
    - For prune items: decide which facts to merge (and the merged content) vs keep distinct.
    - For distill items: decide whether to synthesize a higher-level fact from the cluster, and write its content.
    - For reflect items: emit hypothesis transitions and optionally one methodology.
-3. Continue: `knomit_review` with `session_id`, `item_id` and `response` (plus `binding` on the unscoped endpoint). `session_id` is required on every call after the first, and `item_id` with every response: the binding selects the knowledge base and does not identify the session. The result's `next` line names exactly what to pass. To see the current item again, call with `session_id` alone.
+3. Continue: `knomit_review` with `session_id`, `item_id` and `response` (plus `binding` on the unscoped endpoint). `session_id` is required on every call after the first, and `item_id` with every response: the binding selects the knowledge base and does not identify the session. The result's `next` line names exactly what to pass. To see the current item again, call with `session_id` alone (when nothing is outstanding this takes the session's next step).
    - Server applies your decisions (writes new facts, retracts duplicates) and returns the next work item.
 4. Loop until response includes `done: true` — that completes the session and advances the watermark.
 

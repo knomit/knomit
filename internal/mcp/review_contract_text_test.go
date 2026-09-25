@@ -17,6 +17,7 @@ func TestReviewAndBindDescriptions_StateTheContinuationContract(t *testing.T) {
 	require.Contains(t, review, "takeover")
 	require.Contains(t, review, "resumes")
 	require.Contains(t, review, "item_id with every response")
+	require.Contains(t, review, "session_id alone returns the current item, and may advance the session when nothing is outstanding")
 	item := reviewTool().InputSchema.Properties["item_id"].(map[string]any)["description"].(string)
 	require.Contains(t, item, "Required with every response")
 

@@ -59,6 +59,7 @@ func hypothesizeTool() mcpgo.Tool {
 		bindingArg(true),
 		mcpgo.WithString("session_id", mcpgo.Description("Session ID from the result you are answering. Required on every call after the first; omit it only to start.")),
 		mcpgo.WithString("response", mcpgo.Description("Your response/acknowledgement for the previous work item.")),
+		mcpgo.WithBoolean("current", mcpgo.Description("With session_id and no response: return the current item again without answering it (it may advance the session when nothing is outstanding).")),
 		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Optional but strongly recommended: it lets the server reject a response aimed at a stale item instead of applying it to a different one.")),
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
@@ -121,6 +122,7 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		sessionID := req.GetString("session_id", "")
 		response := req.GetString("response", "")
 		itemID := int64(req.GetFloat("item_id", 0))
+		current := req.GetBool("current", false)
 
 		// An answer belongs to a session, so without one it is refused rather
 		// than read as a start that would abandon the caller's own session.
@@ -128,9 +130,16 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 			return mcpgo.NewToolResultError(errHypothesizeWithoutSession), nil
 		}
 
+		if current && (sessionID == "" || response != "" || itemID != 0) {
+			return mcpgo.NewToolResultError("current=true takes session_id alone: it returns the current item and answers nothing"), nil
+		}
+
 		var result *synthesize.PipelineResult
 
-		if sessionID == "" {
+		if current {
+			result, err = synthesize.NewHypothesizer(ri, logProgress, synthesize.DefaultEffort, synthesize.ScopeFilter{}).
+				Current(ctx, sessionID)
+		} else if sessionID == "" {
 			effort, scope, perr := parseEffortAndScope(req, ri)
 			if perr != nil {
 				return mcpgo.NewToolResultError(perr.Error()), nil

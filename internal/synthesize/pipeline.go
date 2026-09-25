@@ -213,22 +213,21 @@ func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.Pipeline
 	return nil
 }
 
-// currentItemHint tells a refused review caller how to get the current item.
-// Only knomit_review serves the current item for a session_id with no
-// response.
+// currentItemHint tells a refused caller how to get the current item.
+// knomit_review serves it for a session_id with no response; knomit_hypothesize,
+// where an empty response is a real answer, serves it for current=true.
 func (p *Pipeline) currentItemHint(sessionID string) string {
-	if p.strategy.Tool() != reviewTool {
-		return ""
+	tool := p.strategy.Tool()
+	if tool == reviewTool {
+		return fmt.Sprintf(" Call knomit_review with session_id=%q and no response to get the current item.", sessionID)
 	}
-	return fmt.Sprintf(" Call knomit_review with session_id=%q and no response to get the current item.", sessionID)
+	return fmt.Sprintf(" Call knomit_%s with session_id=%q and current=true to get the current item.", tool, sessionID)
 }
 
-// Current serves the session's outstanding item again, from page 1, without
-// answering it. With nothing outstanding it takes the session's next step, as
-// the next answer would have.
-func (p *Pipeline) Current(ctx context.Context, sessionID string) (*PipelineResult, error) {
+// activeSession loads a session a call is about to act on, refusing one that
+// is missing, no longer active, or still planning.
+func (p *Pipeline) activeSession(ctx context.Context, d Deps, sessionID string) (*store.PipelineSession, error) {
 	tool := p.strategy.Tool()
-	d := p.deps()
 	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
 	if err != nil {
 		return nil, wrapf(tool, err, "get session")
@@ -242,14 +241,18 @@ func (p *Pipeline) Current(ctx context.Context, sessionID string) (*PipelineResu
 	if sess.Planning {
 		return nil, errStillPlanning(tool, sessionID)
 	}
-	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
+	return sess, nil
+}
+
+// Current serves the session's outstanding item again, from page 1, without
+// answering it. With nothing outstanding it takes the session's next step, as
+// the next answer would have.
+func (p *Pipeline) Current(ctx context.Context, sessionID string) (*PipelineResult, error) {
+	sess, err := p.activeSession(ctx, p.deps(), sessionID)
 	if err != nil {
-		return nil, wrapf(tool, err, "current work item")
+		return nil, err
 	}
-	if item == nil {
-		return p.nextItem(ctx, sess)
-	}
-	return p.renderWorkItem(ctx, d, sess, item)
+	return p.nextItem(ctx, sess)
 }
 
 // errStillPlanning refuses a call on a session whose start has not finished
@@ -474,18 +477,9 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	tool := p.strategy.Tool()
 	d := p.deps()
 
-	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	sess, err := p.activeSession(ctx, d, sessionID)
 	if err != nil {
-		return nil, wrapf(tool, err, "get session")
-	}
-	if sess == nil {
-		return nil, errf(tool, "session %q not found", sessionID)
-	}
-	if sess.Status != "active" {
-		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
-	}
-	if sess.Planning {
-		return nil, errStillPlanning(tool, sessionID)
+		return nil, err
 	}
 
 	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
@@ -580,7 +574,7 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 		// item as another caller; handing it the next item would read as
 		// though its own answer had landed.
 		if itemID != 0 {
-			return nil, errf(tool, "item %d was answered by another caller; nothing was applied.%s",
+			return nil, errf(tool, "item %d was already answered (by another caller or an earlier attempt of this call); nothing was applied.%s",
 				item.ID, p.currentItemHint(sessionID))
 		}
 		return p.nextItem(ctx, sess)
@@ -941,18 +935,9 @@ func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int
 	tool := p.strategy.Tool()
 	d := p.deps()
 
-	sess, err := d.Pipeline.GetPipelineSession(ctx, sessionID)
+	sess, err := p.activeSession(ctx, d, sessionID)
 	if err != nil {
-		return nil, wrapf(tool, err, "get session")
-	}
-	if sess == nil {
-		return nil, errf(tool, "session %q not found", sessionID)
-	}
-	if sess.Status != "active" {
-		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
-	}
-	if sess.Planning {
-		return nil, errStillPlanning(tool, sessionID)
+		return nil, err
 	}
 
 	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)

@@ -197,8 +197,9 @@ func TestContinue_LostClaimIsAnError(t *testing.T) {
 
 	_, err = f.r.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), itemID)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "answered by another caller")
+	require.Contains(t, err.Error(), "already answered (by another caller or an earlier attempt of this call)")
 	require.Contains(t, err.Error(), "nothing was applied")
+	require.Contains(t, err.Error(), "no response to get the current item")
 }
 
 // An answer naming an item when nothing is outstanding is stale; it is
@@ -390,4 +391,14 @@ func TestStartKey_EncodesListsAndFoldsLikeTheFilter(t *testing.T) {
 	require.Equal(t, key([]string{"caf\u00e9"}, nil), key([]string{"cafe\u0301"}, nil))
 	require.False(t, store.EntityTagMatches("caf\u00e9", "cafe\u0301"))
 	require.NotEqual(t, key(nil, []string{"caf\u00e9"}), key(nil, []string{"cafe\u0301"}))
+}
+
+// Every refusal ends with a next step: review serves the current item for a
+// session_id with no response; hypothesize, where an empty response is a real
+// answer, asks for it with current=true.
+func TestCurrentItemHint_NamesEachToolsOwnFetch(t *testing.T) {
+	review := (&Pipeline{strategy: reviewStrategy{}}).currentItemHint("s1")
+	require.Contains(t, review, `knomit_review with session_id="s1" and no response`)
+	hyp := (&Pipeline{strategy: hypothesizeStrategy{}}).currentItemHint("s2")
+	require.Contains(t, hyp, `knomit_hypothesize with session_id="s2" and current=true`)
 }

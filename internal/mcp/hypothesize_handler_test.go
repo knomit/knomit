@@ -259,3 +259,25 @@ func TestHypothesizeHandler_ResultNamesTheSessionToContinue(t *testing.T) {
 	require.True(t, done.Done)
 	require.Contains(t, done.Next, "finished")
 }
+
+// current=true re-serves the outstanding item without answering it.
+func TestHypothesizeHandler_CurrentServesTheOutstandingItem(t *testing.T) {
+	ctx, svc := newHypothesizeHandlerCtx(t)
+	_, err := svc.Facts().WriteFact(ctx, "agent/test", "kb/arch/a.md",
+		synthFactContent(t, "kb/arch/a.md", "T"), "seed", "")
+	require.NoError(t, err)
+	start := callHypothesize(t, ctx, map[string]interface{}{})
+	require.NotNil(t, start.Item)
+
+	again := callHypothesize(t, ctx, map[string]interface{}{"session_id": start.SessionID, "current": true})
+	require.Equal(t, start.SessionID, again.SessionID)
+	require.NotNil(t, again.Item)
+	require.Equal(t, start.Item.ID, again.Item.ID)
+	require.Equal(t, start.Progress.Completed, again.Progress.Completed)
+
+	res, err := HypothesizeHandler()(ctx, mcpToolRequest(t, map[string]interface{}{
+		"session_id": start.SessionID, "current": true, "response": "ack",
+	}))
+	require.NoError(t, err)
+	require.True(t, res.IsError, "current is a read; it takes no response")
+}
