@@ -245,18 +245,7 @@ func serveCmd() *cobra.Command {
 			// http.Server over the same handler, off until [tls].addr is set
 			// and `knomit identity install` has placed a certificate. The
 			// plaintext listener above is unchanged.
-			tlsSrv, tl, err := openTLSServer(cmd.Context(), cfg.TLS, a.KeyPath(), srv)
-			if err != nil {
-				log.Fatal().Err(err).Str("addr", cfg.TLS.Addr).Str("dir", cfg.TLS.Dir).Msg("tls listener failed") // fail closed
-			}
-			if tlsSrv != nil {
-				log.Info().Str("tls", "https://"+tl.Addr().String()).Str("dir", cfg.TLS.Dir).Msg("mTLS listener for enrolled instances")
-				go func() {
-					if err := tlsSrv.Serve(tl); err != nil && err != http.ErrServerClosed {
-						log.Fatal().Err(err).Msg("tls serve failed")
-					}
-				}()
-			}
+			tlsSrv := startTLSServer(cmd.Context(), cfg.TLS, a.KeyPath(), srv)
 
 			// OAuth listener (F19 phase 3a): its OWN http.Server over the
 			// OAuth router, off until [oauth].issuer and [oauth].addr are set.
@@ -296,4 +285,27 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().IntVar(&logMaxBackups, "log-max-backups", 3, "max number of rotated log files to keep")
 	cmd.Flags().IntVar(&logMaxAgeDays, "log-max-age", 7, "max age in days to keep rotated log files")
 	return cmd
+}
+
+// startTLSServer opens and serves the mTLS listener for `knomit serve`. EVERY
+// error is fatal, app.ErrTLSAddrInUse included: a server that was asked to
+// serve the fleet and cannot must not come up looking healthy. The desktop
+// makes the other choice for a held address (knomit#256) — it is a whole
+// app, not a fleet node — and this is where the two deliberately differ;
+// TestServeTLS_BindConflictIsFatal pins this side. nil means the listener is
+// off.
+func startTLSServer(ctx context.Context, tcfg config.TLSConfig, keyPath string, srv *http.Server) *http.Server {
+	tlsSrv, tl, err := app.OpenTLSServer(ctx, tcfg, keyPath, srv)
+	if err != nil {
+		log.Fatal().Err(err).Str("addr", tcfg.Addr).Str("dir", tcfg.Dir).Msg("tls listener failed") // fail closed
+	}
+	if tlsSrv != nil {
+		log.Info().Str("tls", "https://"+tl.Addr().String()).Str("dir", tcfg.Dir).Msg("mTLS listener for enrolled instances")
+		go func() {
+			if err := tlsSrv.Serve(tl); err != nil && err != http.ErrServerClosed {
+				log.Fatal().Err(err).Msg("tls serve failed")
+			}
+		}()
+	}
+	return tlsSrv
 }

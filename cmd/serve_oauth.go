@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 
+	"knomit/internal/app"
 	"knomit/internal/config"
 )
 
@@ -38,6 +39,6 @@ func openOAuthServer(o config.OAuthConfig, h http.Handler, like *http.Server) (*
 		WriteTimeout:      like.WriteTimeout,
 		IdleTimeout:       like.IdleTimeout,
 		BaseContext:       like.BaseContext,
-		ErrorLog:          stdlog.New(warnWriter{}, "", 0),
+		ErrorLog:          stdlog.New(app.WarnWriter{}, "", 0),
 	}, ln, nil
 }

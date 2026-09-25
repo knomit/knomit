@@ -1,4 +1,4 @@
-package cmd
+package app
 
 import (
 	"bufio"
@@ -55,7 +55,7 @@ func captureLog(t *testing.T) *syncBuffer {
 }
 
 // serveBoth starts what `knomit serve` starts for these two listeners: the
-// plaintext http.Server over handler and, through openTLSServer, the TLS one
+// plaintext http.Server over handler and, through OpenTLSServer, the TLS one
 // beside it. It returns both addresses.
 func serveBoth(t *testing.T, handler http.Handler, keyPath string, tcfg config.TLSConfig) (plain, tlsAddr string) {
 	t.Helper()
@@ -71,12 +71,12 @@ func serveBoth(t *testing.T, handler http.Handler, keyPath string, tcfg config.T
 	go srv.Serve(pl)
 	t.Cleanup(func() { srv.Close() })
 
-	tlsSrv, tl, err := openTLSServer(t.Context(), tcfg, keyPath, srv)
+	tlsSrv, tl, err := OpenTLSServer(t.Context(), tcfg, keyPath, srv)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tlsSrv == nil {
-		t.Fatal("openTLSServer did not open the listener with a certificate installed")
+		t.Fatal("OpenTLSServer did not open the listener with a certificate installed")
 	}
 	go tlsSrv.Serve(tl)
 	t.Cleanup(func() { tlsSrv.Close() })
@@ -88,20 +88,21 @@ func serveBoth(t *testing.T, handler http.Handler, keyPath string, tcfg config.T
 // app.New itself is not used because it DOWNLOADS the embedding model into
 // <Home>/models, which a cmd test on every CI platform must not do; its own
 // wiring of Auth and Grants is pinned by internal/app's tests.
-func serverStack(t *testing.T, cfg config.Config, keyPath string) http.Handler {
+func serverStack(t *testing.T, cfg config.Config, keyPath string) (http.Handler, *auth.SQLGrants) {
 	t.Helper()
 	mgr := repos.New(context.Background(), repos.Deps{Cfg: cfg, KeyPath: keyPath, AgentBranch: "agent/test-00000000"})
 	if err := mgr.Start(); err != nil {
 		t.Fatalf("manager start: %v", err)
 	}
 	t.Cleanup(func() { mgr.Close() })
+	grants := auth.NewSQLGrants(mgr.ControlDB())
 	s := &web.Server{
 		Manager: mgr,
 		APIOnly: true,
 		Auth:    cfg.Auth,
-		Grants:  auth.NewSQLGrants(mgr.ControlDB()),
+		Grants:  grants,
 	}
-	return s.Handler()
+	return s.Handler(), grants
 }
 
 func status(t *testing.T, c *http.Client, method, url string) (int, string, error) {
@@ -129,7 +130,7 @@ func TestServeTLS_EndToEnd(t *testing.T) {
 	cfg.Home = t.TempDir()
 	cfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: cfg.Home + "/pki"}
 	keyPath, _ := pkitest.NewKey(t)
-	handler := serverStack(t, cfg, keyPath)
+	handler, grants := serverStack(t, cfg, keyPath)
 
 	f := pkitest.New(t)
 	self := f.Enroll(t, "server", pki.RoleInstance, keyPath) // the server's OWN key
@@ -155,9 +156,7 @@ func TestServeTLS_EndToEnd(t *testing.T) {
 
 	// 3. A write row (what `knomit grants add` writes) lets the same request
 	//    past the gate; the handler then judges the empty body on its own.
-	if err := withGrantsAt(cfg, func(g *auth.SQLGrants) error { // what `knomit grants add` does
-		return g.Grant(context.Background(), auth.InstancePrincipal(peer.Fingerprint()), auth.Write, "test")
-	}); err != nil {
+	if err := grants.Grant(context.Background(), auth.InstancePrincipal(peer.Fingerprint()), auth.Write, "test"); err != nil {
 		t.Fatal(err)
 	}
 	code, body, err = status(t, pc, "POST", "https://"+tlsAddr+"/api/v1/repos")
@@ -198,7 +197,7 @@ func TestServeTLS_EndToEnd(t *testing.T) {
 	resp.Body.Close()
 }
 
-// knomit#258 through the production wiring: openTLSServer must hand the
+// knomit#258 through the production wiring: OpenTLSServer must hand the
 // http.Server the pki.Server's ConnState and start its ticker, or an
 // established connection from a revoked peer is never cut. One raw
 // connection, HTTP/1.1 written by hand, so http.Transport cannot retry on a
@@ -216,7 +215,7 @@ func TestServeTLS_RevocationCutsAnEstablishedConnection(t *testing.T) {
 	cfg.Home = t.TempDir()
 	cfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: cfg.Home + "/pki"}
 	keyPath, _ := pkitest.NewKey(t)
-	handler := serverStack(t, cfg, keyPath)
+	handler, _ := serverStack(t, cfg, keyPath)
 	f := pkitest.New(t)
 	f.Install(t, f.Enroll(t, "server", pki.RoleInstance, keyPath), cfg.TLS.Dir)
 	_, tlsAddr := serveBoth(t, handler, keyPath, cfg.TLS)
@@ -252,14 +251,14 @@ func TestServeTLS_RevocationCutsAnEstablishedConnection(t *testing.T) {
 // [tls].addr set but no certificate installed: WARN, plaintext only, no error.
 func TestOpenTLSServer_ConfiguredWithoutCertificateIsOffAndWarns(t *testing.T) {
 	logs := captureLog(t)
-	srv, ln, err := openTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: t.TempDir()}, "/nonexistent", &http.Server{})
+	srv, ln, err := OpenTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: t.TempDir()}, "/nonexistent", &http.Server{})
 	if err != nil || srv != nil || ln != nil {
 		t.Fatalf("srv=%v ln=%v err=%v; want all nil", srv, ln, err)
 	}
 	if !strings.Contains(logs.String(), "no instance certificate installed") {
 		t.Fatalf("no WARN logged:\n%s", logs)
 	}
-	if srv, ln, err := openTLSServer(t.Context(), config.TLSConfig{Dir: t.TempDir()}, "", &http.Server{}); srv != nil || ln != nil || err != nil {
+	if srv, ln, err := OpenTLSServer(t.Context(), config.TLSConfig{Dir: t.TempDir()}, "", &http.Server{}); srv != nil || ln != nil || err != nil {
 		t.Fatal("empty addr must mean off, silently")
 	}
 }
@@ -273,9 +272,77 @@ func TestOpenTLSServer_InstalledButCRLMissingIsAnError(t *testing.T) {
 	if err := removeFile(dir + "/" + pki.CRLFile); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := openTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: dir}, self.KeyPath, &http.Server{}); err == nil {
+	if _, _, err := OpenTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: dir}, self.KeyPath, &http.Server{}); err == nil {
 		t.Fatal("opened a TLS listener with no CRL")
 	}
 }
 
 func removeFile(p string) error { return os.Remove(p) }
+
+// knomit#256 M1: the TLS server's timeouts are its OWN, not like's. like here
+// has every timeout zero — the desktop's plaintext server has no ReadTimeout
+// — and the TLS server must still get the values `knomit serve` has always
+// given it. Handler and BaseContext DO come from like.
+//
+// Sabotage: dropping ReadTimeout from OpenTLSServer, or going back to copying
+// it from like, fails this.
+func TestOpenTLSServer_OwnsItsTimeouts(t *testing.T) {
+	f := pkitest.New(t)
+	self := f.Enroll(t, "server", pki.RoleInstance)
+	dir := t.TempDir()
+	f.Install(t, self, dir)
+	h := http.NewServeMux()
+	baseCalled := false
+	like := &http.Server{Handler: h, BaseContext: func(net.Listener) context.Context { baseCalled = true; return context.Background() }}
+
+	srv, ln, err := OpenTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: dir}, self.KeyPath, like)
+	if err != nil || srv == nil {
+		t.Fatalf("OpenTLSServer: srv=%v err=%v", srv, err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	if srv.ReadHeaderTimeout != 10*time.Second || srv.ReadTimeout != 30*time.Second ||
+		srv.WriteTimeout != 0 || srv.IdleTimeout != 60*time.Second {
+		t.Fatalf("timeouts = header %v read %v write %v idle %v; want 10s 30s 0 60s",
+			srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
+	}
+	if srv.Handler != like.Handler {
+		t.Fatal("the TLS server does not serve like's Handler")
+	}
+	srv.BaseContext(ln)
+	if !baseCalled {
+		t.Fatal("the TLS server does not use like's BaseContext")
+	}
+}
+
+// knomit#256: a held [tls].addr is ErrTLSAddrInUse — an availability failure
+// the desktop survives — and a TRUST failure is NOT, so it can never be
+// survived by accident. Both fixtures reach the branch they claim: the first
+// has a loadable certificate (so only the bind can fail), the second has a
+// free address (so only the CRL can).
+func TestOpenTLSServer_AddrInUseIsTypedAndTrustFailureIsNot(t *testing.T) {
+	f := pkitest.New(t)
+	self := f.Enroll(t, "server", pki.RoleInstance)
+	dir := t.TempDir()
+	f.Install(t, self, dir)
+
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	srv, ln, err := OpenTLSServer(t.Context(), config.TLSConfig{Addr: held.Addr().String(), Dir: dir}, self.KeyPath, &http.Server{})
+	if !errors.Is(err, ErrTLSAddrInUse) || srv != nil || ln != nil {
+		t.Fatalf("held addr: srv=%v ln=%v err=%v; want ErrTLSAddrInUse and nothing opened", srv, ln, err)
+	}
+	if !strings.Contains(err.Error(), held.Addr().String()) {
+		t.Fatalf("the error does not name the address: %v", err)
+	}
+
+	if err := removeFile(dir + "/" + pki.CRLFile); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = OpenTLSServer(t.Context(), config.TLSConfig{Addr: "127.0.0.1:0", Dir: dir}, self.KeyPath, &http.Server{})
+	if err == nil || errors.Is(err, ErrTLSAddrInUse) {
+		t.Fatalf("missing CRL: err=%v; want a non-ErrTLSAddrInUse error", err)
+	}
+}
