@@ -57,8 +57,11 @@ func TestIsMutatingRequest(t *testing.T) {
 	}
 }
 
+// Both read-only router tests carry a REAL (empty) Manager, never a nil one.
+// See TestReadOnlyRouter_FactRouteBypassRegression for why that is a heap-
+// safety requirement on Windows and not a nicety.
 func TestReadOnlyRouter_GatesMutations(t *testing.T) {
-	s := &Server{ReadOnly: true}
+	s := &Server{ReadOnly: true, Manager: newTestManagerWithRepos(t)}
 	h := s.Handler()
 
 	post := httptest.NewRecorder()
@@ -77,8 +80,22 @@ func TestReadOnlyRouter_GatesMutations(t *testing.T) {
 // TestReadOnlyRouter_FactRouteBypassRegression is the authoritative end-to-end
 // regression test for the unanchored-regex bypass: a crafted fact path that
 // contains a /branches/X/mcp segment must NOT bypass the read-only gate.
+//
+// THE MANAGER MUST NOT BE NIL, and the reason is not test hygiene. The two
+// non-gated MCP requests below pass the gate on purpose and reach
+// RepoMiddleware, which locks the Manager. With a nil Manager that is a nil
+// dereference: on unix a recovered panic, but on windows/amd64 a hardware
+// access violation whose kernel-side exception dispatch writes ~11.6 KiB
+// below the goroutine's stack on AMX-capable Intel hosts, against a 4 KiB
+// runtime reserve (golang/go#81238, open; no released Go fixes it). The heap
+// span under the stack is corrupted and a LATER GC dies with "found pointer
+// to free object". That is knomit#279: five Windows CI runs crashed right
+// after this test's two faults, on unrelated PRs. An empty Manager answers
+// 404 instead, which is also the stronger assertion — not 403 AND not a
+// recovered-panic 500 — and the guard step in tests.yml fails the Windows
+// leg if any test takes a real fault again.
 func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
-	s := &Server{ReadOnly: true}
+	s := &Server{ReadOnly: true, Manager: newTestManagerWithRepos(t)}
 	h := s.Handler()
 
 	// The exploit path: PUT to a fact URL whose key happens to contain
@@ -92,20 +109,22 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 
 	// Confirm we did not over-correct: a legitimate MCP dispatch POST must still
 	// bypass the gate (read-only enforcement for MCP is done inside mcp.NewServer).
-	// We only assert it is NOT 403; the actual status depends on the MCP handler.
+	// The actual status depends on the MCP handler, so the assertion is NOT
+	// 403 and NOT 500: a 500 here would mean the request passed the gate only
+	// to die in a recovered panic, which is what a nil Manager produced.
 	mcp := httptest.NewRecorder()
 	h.ServeHTTP(mcp, fromLoopback(httptest.NewRequest("POST",
 		"/api/v1/repos/core/branches/main/mcp", nil)))
-	if mcp.Code == http.StatusForbidden {
-		t.Errorf("POST legitimate MCP path: got 403, want non-403 (gate must not block MCP)")
+	if mcp.Code == http.StatusForbidden || mcp.Code == http.StatusInternalServerError {
+		t.Errorf("POST legitimate MCP path: got %d, want neither 403 (gate must not block MCP) nor 500 (no recovered panic)", mcp.Code)
 	}
 
 	// Lens-scoped MCP dispatch is also POST-for-reads and must not be gated by
 	// method (regression: the branch-only regex 403'd lens MCP on read-only).
 	lensMCP := httptest.NewRecorder()
 	h.ServeHTTP(lensMCP, fromLoopback(httptest.NewRequest("POST", "/api/v1/lenses/myview/mcp", nil)))
-	if lensMCP.Code == http.StatusForbidden {
-		t.Errorf("POST lens MCP path: got 403, want non-403 (gate must not block lens MCP)")
+	if lensMCP.Code == http.StatusForbidden || lensMCP.Code == http.StatusInternalServerError {
+		t.Errorf("POST lens MCP path: got %d, want neither 403 (gate must not block lens MCP) nor 500 (no recovered panic)", lensMCP.Code)
 	}
 
 	// But the lens REST CRUD must stay gated in read-only mode.
