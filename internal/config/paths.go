@@ -105,7 +105,24 @@ func withHomeHint(err error) error {
 // ResolveHome is the data root the operator actually gets: KNOMIT_HOME, else
 // the KNOMIT_REPO alias, else DefaultHome. Load layers TOML and the rest on
 // top, but WHICH directory is the root is decided here and only here.
+//
+// The result is tilde-expanded and absolute, for every caller. A relative
+// root would be resolved against each process's own working directory, and
+// the server, the bridge, the hooks and `kb login` are started from different
+// ones; searching before expanding would look in a literal "~/..." directory.
 func ResolveHome() (string, error) {
+	home, err := rawHome()
+	if err != nil {
+		return "", err
+	}
+	if err := expandTilde(&home); err != nil {
+		return "", err
+	}
+	return filepath.Abs(home)
+}
+
+// rawHome is the data root as the operator spelled it.
+func rawHome() (string, error) {
 	if v := os.Getenv("KNOMIT_HOME"); v != "" {
 		return v, nil
 	}
@@ -115,25 +132,13 @@ func ResolveHome() (string, error) {
 	return DefaultHome()
 }
 
-// homeAndConfig is the data root the operator gets, tilde-expanded and made
-// absolute, and the
-// knomit.toml found for it ("" when there is none). Load and SocketPath both
-// start here, so "resolve, expand, then search" happens in one order in one
-// place: searching before expanding looks in a literal "~/..." directory and
-// silently skips the operator's knomit.toml.
+// homeAndConfig is the data root (ResolveHome) and the knomit.toml found for
+// it ("" when there is none). Load and SocketPath both start here, so the two
+// cannot look for different files.
 func homeAndConfig() (home, configPath string, err error) {
 	home, err = ResolveHome()
 	if err != nil {
 		return "", "", fmt.Errorf("config: cannot determine the knomit data root: %w", err)
-	}
-	if err := expandTilde(&home); err != nil {
-		return "", "", fmt.Errorf("config: %w", err)
-	}
-	// Absolute before anything is derived from it. A relative root would be
-	// resolved against each process's own working directory, and the server,
-	// the bridge and the hooks are started from different ones.
-	if home, err = filepath.Abs(home); err != nil {
-		return "", "", fmt.Errorf("config: cannot make the knomit data root absolute: %w", err)
 	}
 	return home, findConfigFile(home), nil
 }

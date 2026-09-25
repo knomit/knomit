@@ -502,10 +502,10 @@ func Load() (Config, error) {
 	// download again and a second SSH identity is generated under a root
 	// nobody will think to look in.
 	//
-	// homeAndConfig also tilde-expands the root BEFORE looking for knomit.toml
-	// in it, and SocketPath goes through the same helper. Expanding afterwards
-	// (as Load once did) searched a literal "~/..." directory, ignored the
-	// operator's knomit.toml, and disagreed with the bridge (knomit#271).
+	// ResolveHome (via homeAndConfig) tilde-expands the root and makes it
+	// absolute BEFORE knomit.toml is looked for in it, and SocketPath and the
+	// bridge's credentials go through the same function, so no caller can
+	// search a literal "~/..." directory or one relative to its own cwd.
 	home, path, err := homeAndConfig()
 	if err != nil {
 		return Config{}, err
@@ -600,7 +600,7 @@ func Load() (Config, error) {
 		}
 	}
 
-	// Expand tildes in path fields. Home is not among them: homeAndConfig
+	// Expand tildes in path fields. Home is not among them: ResolveHome
 	// expanded it, once, before the knomit.toml search.
 	for _, p := range []*string{
 		&cfg.ONNXLibPath,
