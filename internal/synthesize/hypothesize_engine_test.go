@@ -241,7 +241,8 @@ func TestHypothesizer_DiscoverParseFailure_NonFatal(t *testing.T) {
 
 	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID))
+	_, markErr := svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
+	require.NoError(t, markErr)
 	insertManualDiscoverItem(t, svc, sess.ID)
 
 	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{})
@@ -308,7 +309,8 @@ func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 
 	sess, err := svc.Pipeline().CreatePipelineSession(ctx, "hypothesize", "agent/test", "")
 	require.NoError(t, err)
-	require.NoError(t, svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID))
+	_, markErr := svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
+	require.NoError(t, markErr)
 	insertSeededDiscoverItem(t, svc, sess.ID)
 
 	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{})

@@ -364,7 +364,8 @@ func manualSession(t *testing.T, svc *store.Service, branch string) *store.Pipel
 	require.NoError(t, err)
 	// Planned, as a start leaves it: every create is planning until then, and
 	// continue refuses a session still planning.
-	require.NoError(t, svc.Pipeline().MarkPipelineSessionPlanned(context.Background(), sess.ID))
+	_, markErr := svc.Pipeline().MarkPipelineSessionPlanned(context.Background(), sess.ID)
+	require.NoError(t, markErr)
 	sess.Planning = false
 	return sess
 }

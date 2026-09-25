@@ -352,7 +352,8 @@ func TestStartOrResume_InProcessSessionIsNamedAsSuch(t *testing.T) {
 	f := newResumeFixture(t)
 	sess, err := f.svc.Pipeline().CreatePipelineSession(ctx, "review", resumeBranch, "")
 	require.NoError(t, err)
-	require.NoError(t, f.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID))
+	_, markErr := f.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID)
+	require.NoError(t, markErr)
 
 	_, err = f.r.StartOrResumeSession(ctx, liveWindow)
 	require.Error(t, err)
@@ -401,4 +402,78 @@ func TestCurrentItemHint_NamesEachToolsOwnFetch(t *testing.T) {
 	require.Contains(t, review, `knomit_review with session_id="s1" and no response`)
 	hyp := (&Pipeline{strategy: hypothesizeStrategy{}}).currentItemHint("s2")
 	require.Contains(t, hyp, `knomit_hypothesize with session_id="s2" and current=true`)
+}
+
+// An apply that panics (and is recovered by the transport) must not leave its
+// item applying forever: that would hold the session's phase for good, and
+// every refusal's heartbeat would keep the session from ever going stale.
+func TestApplying_PanickingApplyStillFinishes(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	res, err := f.r.StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err)
+
+	f.r.p.hooks.duringApply = func(context.Context, int64) { panic("apply blew up") }
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = f.r.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), res.Item.ID)
+	}()
+
+	applying, err := f.svc.Pipeline().ApplyingPipelineWorkItem(ctx, res.SessionID)
+	require.NoError(t, err)
+	require.Zero(t, applying, "the claimed item must not stay applying after its apply panicked")
+}
+
+// A refusal because another caller is applying says how to break a wedge.
+func TestApplying_RefusalOffersTakeover(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	a, b := f.r, f.another()
+	res, err := a.StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err)
+	a.p.hooks.duringApply = func(ctx context.Context, _ int64) {
+		_, cerr := b.Current(ctx, res.SessionID)
+		require.Error(t, cerr)
+		require.Contains(t, cerr.Error(), "being applied by another caller")
+		require.Contains(t, cerr.Error(), "takeover:true")
+	}
+	_, err = a.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), res.Item.ID)
+	require.NoError(t, err)
+}
+
+// The in-process start (RunAll, the web job) abandons a session whose planning
+// failed, as the resumable start does; otherwise the planning session refuses
+// every knomit_review start until the reaper.
+func TestPlanning_InProcessFailedPlanIsAbandoned(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	var created string
+	f.r.p.hooks.beforePlan = func(_ context.Context, id string) {
+		created = id
+		panic("plan blew up")
+	}
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = f.r.StartSession(ctx)
+	}()
+	require.NotEmpty(t, created)
+	require.Equal(t, "abandoned", f.status(t, created))
+
+	f.r.p.hooks.beforePlan = nil
+	_, err := f.another().StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err, "the next start is not blocked by the failed plan")
+}
+
+// A planner displaced by takeover while it planned is told so at start,
+// instead of being handed a first item it will only learn is dead on answering.
+func TestPlanning_DisplacedPlannerIsToldAtStart(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	f.r.p.hooks.beforePlan = func(ctx context.Context, id string) {
+		_, err := f.another().StartOrResumeSession(ctx, StartOptions{ResumeWindow: 10 * time.Minute, Takeover: true})
+		require.NoError(t, err)
+	}
+	_, err := f.r.StartOrResumeSession(ctx, liveWindow)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "displaced")
 }

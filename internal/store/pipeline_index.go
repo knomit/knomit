@@ -313,15 +313,21 @@ func (pi *pipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch
 }
 
 // MarkPipelineSessionPlanned records that a session's planning has queued its
-// work, and bumps its heartbeat: planning time is not idle time.
-func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) error {
+// work, and bumps its heartbeat: planning time is not idle time. marked=false
+// means the session was no longer active: displaced while it planned.
+func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) (marked bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := pi.sessionDB.ExecContext(ctx,
+	res, err := pi.sessionDB.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET planning = 0, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
-		now, now, id); err != nil {
-		return fmt.Errorf("MarkPipelineSessionPlanned: %w", err)
+		now, now, id)
+	if err != nil {
+		return false, fmt.Errorf("MarkPipelineSessionPlanned: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("MarkPipelineSessionPlanned rows: %w", err)
+	}
+	return n == 1, nil
 }
 
 // AbandonPlanningPipelineSession abandons a session that is still planning.
@@ -387,7 +393,7 @@ func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id strin
 func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET phase = ?, advancing = 1, updated_at = ? WHERE id = ? AND phase = ? AND advancing = 0
+		`UPDATE pipeline_sessions SET phase = ?, advancing = 1, updated_at = ? WHERE id = ? AND status = 'active' AND phase = ? AND advancing = 0
 		 AND NOT EXISTS (SELECT 1 FROM pipeline_work_items
 		                 WHERE session_id = ? AND (response IS NULL OR applying = 1))`,
 		to, now, id, from, id,

@@ -201,6 +201,8 @@ type pipelineHooks struct {
 	// afterAdvance runs between a won phase CAS and the strategy's
 	// OnPhaseAdvance, the gap in which the next phase's work is not queued yet.
 	afterAdvance func(ctx context.Context, from, to string)
+	// beforePlan runs when a created session starts planning.
+	beforePlan func(ctx context.Context, sessionID string)
 }
 
 // markPlanned clears a session's planning mark once its work is queued and
@@ -209,8 +211,12 @@ func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.Pipeline
 	if !sess.Planning {
 		return nil
 	}
-	if err := d.Pipeline.MarkPipelineSessionPlanned(ctx, sess.ID); err != nil {
+	ok, err := d.Pipeline.MarkPipelineSessionPlanned(ctx, sess.ID)
+	if err != nil {
 		return wrapf(p.strategy.Tool(), err, "mark session planned")
+	}
+	if !ok {
+		return errf(p.strategy.Tool(), "session %q was displaced (taken over by another start) while it planned; there is nothing to continue", sess.ID)
 	}
 	sess.Planning = false
 	return nil
@@ -271,9 +277,31 @@ func errStillPlanning(tool, sessionID string) error {
 	return errf(tool, "session %q is still planning; retry shortly, or start with takeover:true to abandon it", sessionID)
 }
 
-// planSession is StartSession after the session row exists: mark scope, scan
+// planSession plans a session its caller just created, for both start
+// paths. A plan that fails, by error or panic, abandons the session while it
+// is still planning: otherwise it would hold the slot, refusing every start
+// as still planning until the reaper took it.
+func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (res *PipelineResult, err error) {
+	planned := false
+	defer func() {
+		if planned {
+			return
+		}
+		if aerr := d.Pipeline.AbandonPlanningPipelineSession(context.WithoutCancel(ctx), sess.ID); aerr != nil {
+			log.Warn().Err(aerr).Str("session", sess.ID).Msg("pipeline: abandoning a session whose planning failed")
+		}
+	}()
+	res, err = p.plan(ctx, d, sess, branch, totalStart)
+	planned = err == nil
+	return res, err
+}
+
+// plan is StartSession after the session row exists: mark scope, scan
 // seeds, plan, and serve the first item.
-func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (*PipelineResult, error) {
+func (p *Pipeline) plan(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (*PipelineResult, error) {
+	if p.hooks.beforePlan != nil {
+		p.hooks.beforePlan(ctx, sess.ID)
+	}
 	tool := p.strategy.Tool()
 
 	// Persist the scoped flag on the session row so completeSession can
@@ -590,16 +618,28 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 		return p.nextItem(ctx, sess)
 	}
 
+	// The item holds the session's phase from the claim until its apply
+	// returns, so nobody advances past follow-ups the apply is still
+	// enqueueing. It is finished explicitly below, before this call steps the
+	// session, and by the deferred call on every other way out, a panic
+	// included: an item left applying would hold the phase for good.
+	finished := false
+	defer func() {
+		if finished {
+			return
+		}
+		if err := d.Pipeline.FinishPipelineWorkItem(context.WithoutCancel(ctx), item.ID); err != nil {
+			log.Warn().Err(err).Int64("item", item.ID).Msg("pipeline: finishing an item whose apply did not return")
+		}
+	}()
 	if p.hooks.duringApply != nil {
 		p.hooks.duringApply(ctx, item.ID)
 	}
-	// The item holds the session's phase from the claim until its apply
-	// returns, success or failure, so nobody advances past follow-ups the
-	// apply is still enqueueing.
 	applyErr := p.strategy.Apply(ctx, d, sess, item, dec)
 	if err := d.Pipeline.FinishPipelineWorkItem(context.WithoutCancel(ctx), item.ID); err != nil && applyErr == nil {
 		applyErr = wrapf(tool, err, "finish work item %d", item.ID)
 	}
+	finished = true
 	if applyErr != nil {
 		return nil, applyErr
 	}
@@ -1075,7 +1115,7 @@ func (p *Pipeline) handlePhase(ctx context.Context, sess *store.PipelineSession,
 			return nil, wrapf(tool, err, "applying item")
 		}
 		if applying != 0 {
-			return nil, errf(tool, "item %d is being applied by another caller; retry shortly", applying)
+			return nil, errf(tool, "item %d is being applied by another caller; retry shortly, or start with takeover:true to abandon the session", applying)
 		}
 		if now, err := d.Pipeline.GetPipelineSession(ctx, sess.ID); err != nil {
 			return nil, wrapf(tool, err, "re-read session")
@@ -1425,16 +1465,7 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 		if err != nil {
 			return nil, wrapf(tool, err, "create session")
 		}
-		res, err := p.planSession(ctx, d, sess, branch, totalStart)
-		if err != nil {
-			// A session whose planning failed would hold the slot, refusing
-			// every start as still planning until the reaper took it.
-			if aerr := d.Pipeline.AbandonPlanningPipelineSession(context.WithoutCancel(ctx), sess.ID); aerr != nil {
-				log.Warn().Err(aerr).Str("session", sess.ID).Msg("pipeline: abandoning a session whose planning failed")
-			}
-			return nil, err
-		}
-		return res, nil
+		return p.planSession(ctx, d, sess, branch, totalStart)
 	}
 	return nil, errf(tool, "the %s session on branch %q kept changing under concurrent starts; call again", tool, branch)
 }

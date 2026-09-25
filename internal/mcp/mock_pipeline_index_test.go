@@ -277,11 +277,12 @@ func (mr *MockPipelineIndexMockRecorder) InsertPipelineWorkItem(ctx, item any) *
 }
 
 // MarkPipelineSessionPlanned mocks base method.
-func (m *MockPipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) error {
+func (m *MockPipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) (bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MarkPipelineSessionPlanned", ctx, id)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // MarkPipelineSessionPlanned indicates an expected call of MarkPipelineSessionPlanned.

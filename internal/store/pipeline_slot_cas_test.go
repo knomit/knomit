@@ -67,7 +67,8 @@ func TestAbandonPlanningPipelineSession_OnlyWhilePlanning(t *testing.T) {
 
 	planned, err := pi.CreatePipelineSessionReplacing(ctx, "review", "agent/b", "p", "key", "")
 	require.NoError(t, err)
-	require.NoError(t, pi.MarkPipelineSessionPlanned(ctx, planned.ID))
+	_, markErr := pi.MarkPipelineSessionPlanned(ctx, planned.ID)
+	require.NoError(t, markErr)
 	require.NoError(t, pi.AbandonPlanningPipelineSession(ctx, planned.ID))
 	got, err = pi.GetPipelineSession(ctx, planned.ID)
 	require.NoError(t, err)

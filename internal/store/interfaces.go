@@ -243,8 +243,9 @@ type PipelineIndex interface {
 	// resuming caller; false when it is no longer resumable.
 	ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error)
 	// MarkPipelineSessionPlanned clears the planning mark and bumps the
-	// heartbeat once a session's work is queued.
-	MarkPipelineSessionPlanned(ctx context.Context, id string) error
+	// heartbeat once a session's work is queued; false when the session was
+	// no longer active (displaced while it planned).
+	MarkPipelineSessionPlanned(ctx context.Context, id string) (marked bool, err error)
 	// AbandonPlanningPipelineSession abandons one session still planning.
 	AbandonPlanningPipelineSession(ctx context.Context, id string) error
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
