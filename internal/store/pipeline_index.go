@@ -62,8 +62,11 @@ type PipelineSession struct {
 	CreatedBy string
 	// StartKey is what a later start must match to resume this session; see
 	// the start_key column. Shared is set once a second start resumed it.
-	StartKey  string
-	Shared    bool
+	StartKey string
+	Shared   bool
+	// Planning is set from a resumable start's create until its planning has
+	// queued the work (MarkPipelineSessionPlanned).
+	Planning  bool
 	CreatedAt string
 	UpdatedAt string
 	// LastUsedAt is the heartbeat the idle reaper and the resume window read:
@@ -240,14 +243,15 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 		AbandonedCreatedBy: abandonedBy,
 		CreatedBy:          createdBy,
 		StartKey:           startKey,
+		Planning:           replace != anyActive,
 		CreatedAt:          now,
 		UpdatedAt:          now,
 		LastUsedAt:         now,
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_by, start_key, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedBy, s.StartKey, s.CreatedAt, s.UpdatedAt, now,
+		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_by, start_key, planning, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedBy, s.StartKey, s.Planning, s.CreatedAt, s.UpdatedAt, now,
 	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
 	}
@@ -259,14 +263,14 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 	return s, nil
 }
 
-const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, shared,
+const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, shared, planning,
 		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
 		        created_at, updated_at, last_used_at`
 
 func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
 	var s PipelineSession
-	var scoped, shared int
-	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &shared,
+	var scoped, shared, planning int
+	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &shared, &planning,
 		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
 		&s.CreatedAt, &s.UpdatedAt, &s.LastUsedAt)
 	if err != nil {
@@ -274,6 +278,7 @@ func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
 	}
 	s.Scoped = scoped != 0
 	s.Shared = shared != 0
+	s.Planning = planning != 0
 	return &s, nil
 }
 
@@ -305,13 +310,38 @@ func (pi *pipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch
 	return s, nil
 }
 
+// MarkPipelineSessionPlanned records that a session's planning has queued its
+// work, and bumps its heartbeat: planning time is not idle time.
+func (pi *pipelineIndex) MarkPipelineSessionPlanned(ctx context.Context, id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET planning = 0, last_used_at = ?, updated_at = ? WHERE id = ?`,
+		now, now, id); err != nil {
+		return fmt.Errorf("MarkPipelineSessionPlanned: %w", err)
+	}
+	return nil
+}
+
+// AbandonPipelineSession abandons one active session. Used when a start fails
+// after creating its session, so the slot is not held by a session nobody
+// will ever plan or continue.
+func (pi *pipelineIndex) AbandonPipelineSession(ctx context.Context, id string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE id = ? AND status = 'active'`,
+		now, id); err != nil {
+		return fmt.Errorf("AbandonPipelineSession: %w", err)
+	}
+	return nil
+}
+
 // ResumePipelineSession marks an active session shared and bumps its
-// heartbeat. resumed=false means it is no longer active: it completed or was
-// displaced between the caller's read and this write.
+// heartbeat. resumed=false means it is no longer resumable: it completed, was
+// displaced, or is still planning.
 func (pi *pipelineIndex) ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET shared = 1, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
+		`UPDATE pipeline_sessions SET shared = 1, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active' AND planning = 0`,
 		now, now, id)
 	if err != nil {
 		return false, fmt.Errorf("ResumePipelineSession: %w", err)

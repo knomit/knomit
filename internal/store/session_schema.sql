@@ -78,6 +78,10 @@ CREATE TABLE pipeline_sessions (
     -- requires item_id on every answer, so one caller's answer can never land
     -- on the item another caller's answer just advanced to.
     shared       INTEGER NOT NULL DEFAULT 0,
+    -- 1 from a resumable start's create until its planning has queued the
+    -- work. A session still planning is never resumed and never stale by the
+    -- resume window: its queue is empty only because nothing is queued yet.
+    planning     INTEGER NOT NULL DEFAULT 0,
     -- Running work-item stat totals. They live on the row, not in memory, because
     -- the engine is per-call stateless: the MCP handler builds a fresh Reviewer
     -- for every continue call, so nothing accumulated on that struct survives.

@@ -179,6 +179,25 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	return p.planSession(ctx, d, sess, branch, totalStart)
 }
 
+// markPlanned clears a resumable session's planning mark once its work is
+// queued, so a second start may resume it from here on.
+func (p *Pipeline) markPlanned(ctx context.Context, d Deps, sess *store.PipelineSession) error {
+	if !sess.Planning {
+		return nil
+	}
+	if err := d.Pipeline.MarkPipelineSessionPlanned(ctx, sess.ID); err != nil {
+		return wrapf(p.strategy.Tool(), err, "mark session planned")
+	}
+	sess.Planning = false
+	return nil
+}
+
+// errStillPlanning refuses a call on a session whose start has not finished
+// planning: its queue is empty only because nothing is queued yet.
+func errStillPlanning(tool, sessionID string) error {
+	return errf(tool, "session %q is still planning; retry shortly", sessionID)
+}
+
 // planSession is StartSession after the session row exists: mark scope, scan
 // seeds, plan, and serve the first item.
 func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (*PipelineResult, error) {
@@ -243,6 +262,9 @@ func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.Pipeline
 		if planned {
 			log.Info().Str("tool", tool).Str("session", sess.ID).
 				Msg("pipeline: dirty set empty but the corpus's own state has standing work; planning it")
+			if err := p.markPlanned(ctx, d, sess); err != nil {
+				return nil, err
+			}
 			res, err := p.nextItem(ctx, sess)
 			if err != nil {
 				return nil, err
@@ -283,6 +305,9 @@ func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.Pipeline
 		Str("effort", string(p.effort)).Dur("total", time.Since(totalStart)).
 		Msg("pipeline: session started")
 
+	if err := p.markPlanned(ctx, d, sess); err != nil {
+		return nil, err
+	}
 	res, err := p.nextItem(ctx, sess)
 	if err != nil {
 		return nil, err
@@ -396,6 +421,9 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	}
 	if sess.Status != "active" {
 		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+	}
+	if sess.Planning {
+		return nil, errStillPlanning(tool, sessionID)
 	}
 	// A shared session has more than one caller answering its items, so an
 	// answer that does not name its item could land on the item another
@@ -842,6 +870,9 @@ func (p *Pipeline) CurrentItem(ctx context.Context, sessionID string, itemID int
 	if sess.Status != "active" {
 		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
 	}
+	if sess.Planning {
+		return nil, errStillPlanning(tool, sessionID)
+	}
 
 	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
 	if err != nil {
@@ -1194,6 +1225,11 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 			return nil, wrapf(tool, err, "read active session")
 		}
 		replace := ""
+		// A session still planning is never resumed and never stale by the
+		// window; only takeover, or the reaper, displaces it.
+		if active != nil && active.Planning && !opts.Takeover {
+			return nil, errStillPlanning(tool, active.ID)
+		}
 		if active != nil {
 			lastUsed, perr := time.Parse(time.RFC3339, active.LastUsedAt)
 			live := perr == nil && time.Since(lastUsed) <= opts.ResumeWindow
@@ -1231,7 +1267,16 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 		if err != nil {
 			return nil, wrapf(tool, err, "create session")
 		}
-		return p.planSession(ctx, d, sess, branch, totalStart)
+		res, err := p.planSession(ctx, d, sess, branch, totalStart)
+		if err != nil {
+			// A session whose planning failed would hold the slot, refusing
+			// every start as still planning until the reaper took it.
+			if aerr := d.Pipeline.AbandonPipelineSession(context.WithoutCancel(ctx), sess.ID); aerr != nil {
+				log.Warn().Err(aerr).Str("session", sess.ID).Msg("pipeline: abandoning a session whose planning failed")
+			}
+			return nil, err
+		}
+		return res, nil
 	}
 	return nil, errf(tool, "the %s session on branch %q kept changing under concurrent starts; call again", tool, branch)
 }

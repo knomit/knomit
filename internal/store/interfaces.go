@@ -242,6 +242,11 @@ type PipelineIndex interface {
 	// ResumePipelineSession marks an active session shared; false when it is
 	// no longer active.
 	ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error)
+	// MarkPipelineSessionPlanned clears the planning mark and bumps the
+	// heartbeat once a session's work is queued.
+	MarkPipelineSessionPlanned(ctx context.Context, id string) error
+	// AbandonPipelineSession abandons one active session.
+	AbandonPipelineSession(ctx context.Context, id string) error
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
