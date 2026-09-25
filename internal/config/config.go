@@ -234,10 +234,13 @@ type Config struct {
 	// Socket is the local authenticated listener: KNOMIT_SOCKET, else this
 	// key, else a default under Home (see socketFor). An explicit value must
 	// be an absolute path on unix (a leading ~ is expanded) and a pipe name
-	// \\.\pipe\<name> on Windows (no ~ expansion). The server reads it once at startup, while the hooks read it
-	// per connection and the MCP bridge when it starts, so a change takes
-	// effect only after the server restarts — until then clients find no
-	// listener at the new path and use TCP without the verified identity.
+	// \\.\pipe\<name> on Windows (no ~ expansion). The ~ expands against
+	// EACH process's own HOME, so a server run as a service and a bridge run
+	// as the user can disagree; spell the path out when they differ.
+	// The server reads it once at startup, while the hooks read it per
+	// connection and the MCP bridge when it starts, so a change takes effect
+	// only after the server restarts — until then clients find no listener
+	// at the new path and use TCP without the verified identity.
 	Socket       string `toml:"socket"`
 	OntologyRoot string `toml:"ontology_root"`
 	ONNXLibPath  string `toml:"onnx_lib_path"`
