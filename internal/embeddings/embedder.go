@@ -352,6 +352,13 @@ func (e *Embedder) encodeAll(texts []string) []encodedRow {
 // runRows pads rows to the longest in the batch, runs one ONNX inference, pools
 // per the descriptor, and L2-normalizes each row.
 func (e *Embedder) runRows(rows []encodedRow) ([][]float32, error) {
+	if e.sess == nil {
+		// A zero-value Embedder (the serialize and ctx tests build them) has
+		// no session. Say so rather than let onnxruntime_go dereference nil:
+		// on windows/amd64 that fault is dispatched on THIS goroutine's stack
+		// and can corrupt the heap under it (golang/go#81238, knomit#279).
+		return nil, fmt.Errorf("embeddings: no ONNX session; Embedder was not built by NewEmbedder")
+	}
 	e.firstRunRSS.Do(logRSSBeforeFirstInference)
 	n := len(rows)
 	if n == 0 {
