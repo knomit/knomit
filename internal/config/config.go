@@ -372,10 +372,33 @@ func (a AuthConfig) EffectiveLoopbackDefault() []string {
 }
 
 // RuntimeConfig configures the optional runtime diagnostics port (live
-// introspection + pprof + metrics). Off unless Addr is set; bind it to a local
-// address only — it is never meant to face the network.
+// introspection + pprof + metrics + process controls). Off unless Addr is set.
+// It has no authentication, so Validate refuses an Addr whose host is not
+// loopback — 0.0.0.0, an empty host as in ":6060", a LAN address or a DNS name
+// other than localhost — unless AllowRemote is set.
 type RuntimeConfig struct {
 	Addr string `toml:"addr"`
+	// AllowRemote permits a non-loopback Addr AND lets the port answer
+	// non-loopback peers (a remote Prometheus scraper, say). Anyone who can
+	// reach the address can then read pprof and flip the log level, heap
+	// dumps and profilers: put it behind a firewall. Browser-made requests
+	// and unlisted DNS Host names are refused either way (#288).
+	AllowRemote bool `toml:"allow_remote"`
+}
+
+// addrIsLoopback reports whether a host:port listen address binds only
+// loopback: "localhost" in any case, or a loopback IP literal. An empty host
+// (":6060") binds every interface and is NOT loopback.
+func addrIsLoopback(addr string) (bool, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false, err
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true, nil
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback(), nil
 }
 
 // Defaults returns a Config populated with default values.
@@ -543,6 +566,9 @@ func Load() (Config, error) {
 	envOr("KNOMIT_LOG_FILE", &cfg.Log.File)
 	envOr("KNOMIT_CRASH_LOG", &cfg.Log.CrashFile)
 	envOr("KNOMIT_RUNTIME_ADDR", &cfg.Runtime.Addr)
+	if err := envBoolOr("KNOMIT_RUNTIME_ALLOW_REMOTE", &cfg.Runtime.AllowRemote); err != nil {
+		return Config{}, err
+	}
 	for _, err := range []error{
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
@@ -709,6 +735,19 @@ func (c Config) Validate() error {
 	for _, h := range c.Auth.LoopbackHosts {
 		if h == "" || strings.HasPrefix(h, ".") || strings.ContainsAny(h, ":/*@ \t") {
 			return fmt.Errorf("config: auth.loopback_hosts entry %q is not a DNS name (exact names only: no port, scheme, wildcard or space)", h)
+		}
+	}
+	// runtime.addr serves pprof and process controls with no authentication
+	// (#288). A non-loopback bind — including ":6060", which binds every
+	// interface — must be asked for, not stumbled into.
+	if c.Runtime.Addr != "" {
+		lo, err := addrIsLoopback(c.Runtime.Addr)
+		if err != nil {
+			return fmt.Errorf("config: runtime.addr %q is not host:port: %w", c.Runtime.Addr, err)
+		}
+		if !lo && !c.Runtime.AllowRemote {
+			return fmt.Errorf("config: runtime.addr %q is not a loopback address; the runtime diagnostics port has no authentication. "+
+				"Use 127.0.0.1:<port> or localhost:<port>, or set [runtime] allow_remote = true (KNOMIT_RUNTIME_ALLOW_REMOTE=true) to expose it deliberately", c.Runtime.Addr)
 		}
 	}
 	return c.OAuth.validate()

@@ -716,3 +716,72 @@ func TestLoad_LoopbackHostsFromTOML(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// runtime.addr serves pprof and process controls unauthenticated (#288): a
+// bind that is not loopback — ":6060" included, which binds every interface —
+// fails the boot unless runtime.allow_remote asks for it.
+func TestValidate_RuntimeAddrMustBeLoopback(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:6060", "127.0.0.2:6060", "[::1]:6060", "localhost:6060", "LocalHost:6060"} {
+		c := Defaults()
+		c.Runtime.Addr = addr
+		if err := c.Validate(); err != nil {
+			t.Errorf("loopback %q refused: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{":6060", "0.0.0.0:6060", "[::]:6060", "192.168.1.5:6060", "knomit.example:6060", "localhost.:6060"} {
+		c := Defaults()
+		c.Runtime.Addr = addr
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "allow_remote") {
+			t.Errorf("non-loopback %q: want an error naming allow_remote, got %v", addr, err)
+		}
+		c.Runtime.AllowRemote = true
+		if err := c.Validate(); err != nil {
+			t.Errorf("non-loopback %q with allow_remote refused: %v", addr, err)
+		}
+	}
+	for _, addr := range []string{"6060", "127.0.0.1"} {
+		c := Defaults()
+		c.Runtime.Addr = addr
+		c.Runtime.AllowRemote = true
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "host:port") {
+			t.Errorf("malformed %q: want a host:port error, got %v", addr, err)
+		}
+	}
+}
+
+func TestLoad_RuntimeAllowRemoteFromEnv(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir())
+	t.Setenv("KNOMIT_RUNTIME_ADDR", ":6060")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "KNOMIT_RUNTIME_ALLOW_REMOTE") {
+		t.Fatalf("Load with :6060 and no opt-in: want an error naming the env var, got %v", err)
+	}
+	t.Setenv("KNOMIT_RUNTIME_ALLOW_REMOTE", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load with opt-in: %v", err)
+	}
+	if !cfg.Runtime.AllowRemote {
+		t.Fatal("KNOMIT_RUNTIME_ALLOW_REMOTE=true did not set Runtime.AllowRemote")
+	}
+	t.Setenv("KNOMIT_RUNTIME_ALLOW_REMOTE", "yes-please")
+	if _, err := Load(); err == nil {
+		t.Fatal("a non-bool KNOMIT_RUNTIME_ALLOW_REMOTE was accepted")
+	}
+}
+
+func TestLoad_RuntimeAllowRemoteFromTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	toml := "[runtime]\naddr = \"0.0.0.0:6060\"\nallow_remote = true\n"
+	if err := os.WriteFile(filepath.Join(home, "knomit.toml"), []byte(toml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Runtime.AllowRemote || cfg.Runtime.Addr != "0.0.0.0:6060" {
+		t.Fatalf("runtime = %+v", cfg.Runtime)
+	}
+}
