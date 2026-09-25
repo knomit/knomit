@@ -6,18 +6,22 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/rs/zerolog"
 
+	"knomit/internal/config"
 	"knomit/tools/desktop/internal/autostart"
 	"knomit/tools/desktop/internal/tomledit"
 )
 
-// Settings is what the Settings dialog reads and writes. The first four fields
+// Settings is what the Settings dialog reads and writes. The first five fields
 // are editable; the rest is context the form needs in order to be honest about
 // what it can and cannot change.
 type Settings struct {
@@ -25,6 +29,10 @@ type Settings struct {
 	LogLevel     string `json:"logLevel"`
 	LogFormat    string `json:"logFormat"`
 	StartAtLogin bool   `json:"startAtLogin"`
+	// TLSAddr is [tls].addr: where the mTLS listener for enrolled fleet peers
+	// binds, "" = off. Like Port it is bound once at boot, so a change needs
+	// the restart the form offers (knomit#256).
+	TLSAddr string `json:"tlsAddr"`
 
 	// EffectivePort is the port actually bound, which differs from Port
 	// whenever the configured one was taken and the server fell back to an
@@ -39,7 +47,7 @@ type Settings struct {
 	OverriddenByEnv []string `json:"overriddenByEnv"`
 }
 
-// configKeys is the single source of truth for the three knomit.toml keys this
+// configKeys is the single source of truth for the knomit.toml keys this
 // dialog edits: where each one lives in the file, how to read it out of
 // Settings, and which environment variable overrides it.
 //
@@ -55,15 +63,22 @@ type Settings struct {
 //
 // One entry per editable field. A field added to Settings without an entry here
 // is a field the form will claim it can change when it cannot.
+//
+// optional marks a key whose empty value means the same as its absence
+// ([tls].addr: "" and missing are both "off"). Such a key is not CREATED
+// empty: otherwise every save, whatever it changed, would append it to a
+// file that never had it.
 var configKeys = []struct {
-	env   string
-	table string
-	key   string
-	value func(Settings) string
+	env      string
+	table    string
+	key      string
+	value    func(Settings) string
+	optional bool
 }{
 	{env: "KNOMIT_PORT", table: "", key: "port", value: func(s Settings) string { return s.Port }},
 	{env: "KNOMIT_LOG_LEVEL", table: "log", key: "level", value: func(s Settings) string { return s.LogLevel }},
 	{env: "KNOMIT_LOG_FORMAT", table: "log", key: "format", value: func(s Settings) string { return s.LogFormat }},
+	{env: "KNOMIT_TLS_ADDR", table: "tls", key: "addr", value: func(s Settings) string { return s.TLSAddr }, optional: true},
 }
 
 // envKeys are the environment variables in configKeys, derived so the two can
@@ -116,6 +131,31 @@ func validateSettings(s Settings) error {
 	if s.LogFormat != "console" && s.LogFormat != "json" {
 		return fmt.Errorf("log format must be console or json, got %q", s.LogFormat)
 	}
+	return validateTLSAddr(s.TLSAddr, p)
+}
+
+// validateTLSAddr checks [tls].addr as host:port — the host optional (all
+// interfaces), IPv6 bracketed — with the port rules Port has, and not the
+// plaintext port. config does not validate it at all: this is the only check
+// before a listener that would fail at the next boot. "" is "off".
+func validateTLSAddr(addr string, plainPort int) error {
+	if addr == "" {
+		return nil
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || strings.ContainsAny(host, " /") {
+		return fmt.Errorf("the fleet listener address must be host:port (e.g. 0.0.0.0:19279), got %q", addr)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("the fleet listener port must be a number, got %q", port)
+	}
+	if p < 1024 || p > 65535 {
+		return fmt.Errorf("the fleet listener port must be between 1024 and 65535, got %d", p)
+	}
+	if p == plainPort {
+		return fmt.Errorf("the fleet listener cannot share port %d with the local server", p)
+	}
 	return nil
 }
 
@@ -162,10 +202,21 @@ func applySettings(s Settings, configPath string, tog autostart.Toggler, overrid
 		if slices.Contains(overriddenByEnv, c.env) {
 			continue
 		}
+		if c.optional && c.value(s) == "" && !tomledit.Has(src, c.table, c.key) {
+			continue
+		}
 		src, err = tomledit.SetString(src, c.table, c.key, c.value(s))
 		if err != nil {
 			return fmt.Errorf("set %s: %w", c.key, err)
 		}
+	}
+	// tomledit edits text within a subset of TOML (see its package doc): on a
+	// file outside it — an inline `tls = { … }`, say — an edit can produce a
+	// file that no longer parses, i.e. a knomit that no longer starts. Decode
+	// the result with config's own parser into config's own struct first, and
+	// refuse rather than write it. Nothing has been touched yet.
+	if _, err := toml.Decode(string(src), &config.Config{}); err != nil {
+		return fmt.Errorf("the edited %s would not load, so it was not saved (edit the file by hand): %w", filepath.Base(configPath), err)
 	}
 
 	// The OS half. Enabled() failing is not fatal — the desired state is known

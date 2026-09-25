@@ -55,7 +55,7 @@ func TestEnvOverridesReportsNothingWhenNothingIsSet(t *testing.T) {
 // cannot.
 func TestEnvOverridesCoversEveryEditableField(t *testing.T) {
 	all := envOverrides(func(string) string { return "set" })
-	for _, want := range []string{"KNOMIT_PORT", "KNOMIT_LOG_LEVEL", "KNOMIT_LOG_FORMAT"} {
+	for _, want := range []string{"KNOMIT_PORT", "KNOMIT_LOG_LEVEL", "KNOMIT_LOG_FORMAT", "KNOMIT_TLS_ADDR"} {
 		if !slices.Contains(all, want) {
 			t.Errorf("%s is not tracked as an override at all; got %v", want, all)
 		}
@@ -80,6 +80,15 @@ func TestValidateSettingsRejectsBadValues(t *testing.T) {
 		{"empty level", Settings{Port: "19278", LogLevel: "", LogFormat: "console"}},
 		{"unknown format", Settings{Port: "19278", LogLevel: "info", LogFormat: "xml"}},
 		{"empty format", Settings{Port: "19278", LogLevel: "info", LogFormat: ""}},
+		// [tls].addr: config does not validate it at all, so this is the only
+		// check between the form and a listener that fails at the next boot.
+		{"tls addr without a port", Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: "0.0.0.0"}},
+		{"tls addr port not a number", Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: "0.0.0.0:https"}},
+		{"tls addr port privileged", Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: "0.0.0.0:443"}},
+		{"tls addr port out of range", Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: ":70000"}},
+		{"tls addr is the plaintext port", Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: "0.0.0.0:19278"}},
+		{"tls addr with a scheme", Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: "https://0.0.0.0:19279"}},
+		{"tls addr with spaces", Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: " 0.0.0.0:19279"}},
 	} {
 		if err := validateSettings(tc.s); err == nil {
 			t.Errorf("%s: accepted an invalid setting %+v", tc.name, tc.s)
@@ -100,6 +109,12 @@ func TestValidateSettingsAcceptsAValidSet(t *testing.T) {
 			if err := validateSettings(s); err != nil {
 				t.Errorf("rejected %+v: %v", s, err)
 			}
+		}
+	}
+	// [tls].addr: empty is "off"; a host is optional; IPv6 needs brackets.
+	for _, addr := range []string{"", "0.0.0.0:19279", ":19279", "[::]:19279", "192.168.1.5:20000", "knomit.lan:19279"} {
+		if err := validateSettings(Settings{Port: "19278", LogLevel: "info", LogFormat: "json", TLSAddr: addr}); err != nil {
+			t.Errorf("rejected tls addr %q: %v", addr, err)
 		}
 	}
 	// The boundaries themselves are legal.
@@ -693,5 +708,98 @@ func assertConfigRoundTrips(t *testing.T, path, port, level, format string) {
 	}
 	if cfg.Log.Format != format {
 		t.Errorf("loaded log format = %q, want %q", cfg.Log.Format, format)
+	}
+}
+
+// W8: an empty [tls].addr is "off", which is also what an ABSENT one means.
+// So a save that did not touch it must not create one: before this rule,
+// every save — a log-level change included — appended [tls] addr = "" to a
+// file that never had a [tls] table.
+func TestApplySettingsLeavesAnUnsetTLSAddrUnwritten(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "knomit.toml")
+	src := "port = \"19278\"\n\n[log]\nlevel = \"info\"\nformat = \"console\"\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Settings{Port: "19278", LogLevel: "info", LogFormat: "console"}
+	if err := applySettings(s, path, &stubToggler{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != src {
+		t.Fatalf("a save with no TLS change rewrote knomit.toml:\n%s", got)
+	}
+}
+
+// Setting it keeps the rest of an existing [tls] table, and the result is
+// what config reads back.
+func TestApplySettingsWritesTLSAddrKeepingTheTable(t *testing.T) {
+	home := desktopHome(t)
+	t.Setenv("KNOMIT_TLS_DIR", "")
+	path := filepath.Join(home, "knomit.toml")
+	src := "port = \"19278\"\n\n[tls]\ndir = \"/srv/pki\" # mine\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: "0.0.0.0:19279"}
+	if err := applySettings(s, path, &stubToggler{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), `dir = "/srv/pki" # mine`) {
+		t.Fatalf("[tls].dir or its comment was lost:\n%s", got)
+	}
+	cfg, err := config.Load()
+	if err != nil || cfg.TLS.Addr != "0.0.0.0:19279" || cfg.TLS.Dir != "/srv/pki" {
+		t.Fatalf("config reads back %+v %v", cfg.TLS, err)
+	}
+
+	// Clearing it writes the empty value (listener off), since the key exists.
+	s.TLSAddr = ""
+	if err := applySettings(s, path, &stubToggler{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := config.Load(); err != nil || cfg.TLS.Addr != "" {
+		t.Fatalf("after clearing: %+v %v", cfg.TLS, err)
+	}
+}
+
+// S7: tomledit cannot see into an inline table, so setting [tls].addr on a
+// file that has `tls = { … }` would append a [tls] header BurntSushi refuses
+// ("already defined") — a knomit.toml that stops knomit starting. The edit is
+// decoded with config's own parser before it is written, and refused.
+func TestApplySettingsRefusesAnEditThatWouldNotParse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "knomit.toml")
+	src := "port = \"19278\"\ntls = { dir = \"/srv/pki\" }\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tog := &stubToggler{}
+	s := Settings{Port: "19278", LogLevel: "info", LogFormat: "console", TLSAddr: "0.0.0.0:19279", StartAtLogin: true}
+	if err := applySettings(s, path, tog, nil); err == nil {
+		t.Fatal("wrote a knomit.toml that does not parse")
+	}
+	if got, _ := os.ReadFile(path); string(got) != src {
+		t.Fatalf("the refused save changed the file:\n%s", got)
+	}
+	if len(tog.calls) != 0 {
+		t.Fatalf("the refused save touched start-at-login: %v", tog.calls)
+	}
+}
+
+func TestGetSettingsReportsTLSAddrAndItsOverride(t *testing.T) {
+	home := desktopHome(t)
+	path := filepath.Join(home, "knomit.toml")
+	if err := os.WriteFile(path, []byte("[tls]\naddr = \"0.0.0.0:19279\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := newNativeService(path, filepath.Join(home, "desktop.log"), &stubToggler{})
+	got, err := n.GetSettings()
+	if err != nil || got.TLSAddr != "0.0.0.0:19279" || slices.Contains(got.OverriddenByEnv, "KNOMIT_TLS_ADDR") {
+		t.Fatalf("%+v %v", got, err)
+	}
+	t.Setenv("KNOMIT_TLS_ADDR", "0.0.0.0:20001")
+	got, err = n.GetSettings()
+	if err != nil || got.TLSAddr != "0.0.0.0:20001" || !slices.Contains(got.OverriddenByEnv, "KNOMIT_TLS_ADDR") {
+		t.Fatalf("with the env override: %+v %v", got, err)
 	}
 }

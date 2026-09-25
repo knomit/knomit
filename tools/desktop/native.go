@@ -226,6 +226,7 @@ func (n *NativeService) GetSettings() (Settings, error) {
 		LogLevel:        resolved.Level,
 		LogFormat:       resolved.Format,
 		StartAtLogin:    on,
+		TLSAddr:         cfg.TLS.Addr,
 		EffectivePort:   n.currentEffectivePort(),
 		ConfigPath:      n.configPath,
 		LogFilePath:     resolved.File,
