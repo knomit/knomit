@@ -48,6 +48,16 @@ if [ "${#logs[@]}" -eq 0 ]; then
 	echo "::error::no go test streams to check"
 	exit 1
 fi
+# An empty or truncated stream is what a broken capture pipeline leaves
+# behind (seen when jq was missing: tee died on the closed pipe). It must
+# not read as "no faults": every stream has to carry at least one
+# package-level pass or fail event.
+for f in "${logs[@]}"; do
+	if ! [ -s "$f" ] || ! grep -q '"Action":"\(pass\|fail\)","Package"' "$f"; then
+		echo "::error::$f is empty or holds no package result; the capture step did not complete"
+		exit 1
+	fi
+done
 if grep -n 'invalid memory address or nil pointer dereference' "${logs[@]}"; then
 	echo "::error::a test took a real access violation on windows/amd64; under golang/go#81238 that corrupts the heap under the goroutine stack on AMX hosts (see .github/scripts/go-test-fault-guard.sh and knomit#279)"
 	exit 1

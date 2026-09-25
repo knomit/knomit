@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -117,8 +118,10 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 	mcp := httptest.NewRecorder()
 	h.ServeHTTP(mcp, fromLoopback(httptest.NewRequest("POST",
 		"/api/v1/repos/core/branches/main/mcp", nil)))
-	if mcp.Code != http.StatusNotFound {
-		t.Errorf("POST legitimate MCP path: got %d, want 404 from RepoMiddleware (403 = gate blocks MCP; 500 = a nil dependency was reached)", mcp.Code)
+	// The title pins WHICH 404: chi answers 404 for a route that no longer
+	// exists too, and that would be a different regression.
+	if mcp.Code != http.StatusNotFound || !strings.Contains(mcp.Body.String(), "Repo not found") {
+		t.Errorf("POST legitimate MCP path: got %d %q, want 404 \"Repo not found\" from RepoMiddleware (403 = gate blocks MCP; 500 = a nil dependency was reached)", mcp.Code, mcp.Body.String())
 	}
 
 	// Lens-scoped MCP dispatch is also POST-for-reads and must not be gated by
