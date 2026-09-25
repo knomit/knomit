@@ -503,10 +503,11 @@ func Load() (Config, error) {
 	// download again and a second SSH identity is generated under a root
 	// nobody will think to look in.
 	//
-	// ResolveHome (via homeAndConfig) tilde-expands the root and makes it
-	// absolute BEFORE knomit.toml is looked for in it, and SocketPath and the
-	// bridge's credentials go through the same function, so no caller can
-	// search a literal "~/..." directory or one relative to its own cwd.
+	// ResolveHome (via homeAndConfig) tilde-expands the root and refuses one
+	// that is still relative, BEFORE knomit.toml is looked for in it.
+	// SocketPath and the bridge's credentials go through the same function, so
+	// no caller can search a literal "~/..." directory or one relative to its
+	// own working directory.
 	home, path, err := homeAndConfig()
 	if err != nil {
 		return Config{}, err

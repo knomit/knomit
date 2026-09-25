@@ -151,30 +151,22 @@ func TestSocketPath_MalformedTOMLIsAnError(t *testing.T) {
 	}
 }
 
-// A relative KNOMIT_HOME is made absolute against the working directory of the
-// process that reads it, once, before knomit.toml is searched for and before
-// the default listener is derived from it.
-func TestSocketPath_AgreesWithLoad_RelativeHomeIsAbsolutised(t *testing.T) {
-	base := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(base, "rel", "home"), 0o700); err != nil {
-		t.Fatal(err)
+// A relative KNOMIT_HOME would name a different root for every process
+// started from a different directory, so it is refused, by both sides, with
+// the same error. A "~/" root is not relative: it is expanded first.
+func TestSocketPath_RelativeHomeRefused(t *testing.T) {
+	isolateSocketEnv(t, filepath.Join("rel", "home"))
+	_, loadErr := config.Load()
+	got, pathErr := config.SocketPath()
+	if loadErr == nil || pathErr == nil {
+		t.Fatalf("Load err = %v, SocketPath() = %q, err = %v; want both to refuse a relative KNOMIT_HOME",
+			loadErr, got, pathErr)
 	}
-	t.Chdir(base)
-
-	isolateSocketEnv(t, filepath.Join(base, "rel", "home"))
-	want, err := config.SocketPath()
-	if err != nil {
-		t.Fatalf("config.SocketPath for the absolute home: %v", err)
+	if loadErr.Error() != pathErr.Error() {
+		t.Fatalf("Load and SocketPath disagree:\n  Load:       %v\n  SocketPath: %v", loadErr, pathErr)
 	}
-
-	t.Setenv("KNOMIT_HOME", filepath.Join("rel", "home"))
-	requireAgreement(t, want)
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("config.Load: %v", err)
-	}
-	if abs := filepath.Join(base, "rel", "home"); cfg.Home != abs {
-		t.Fatalf("Load().Home = %q, want %q", cfg.Home, abs)
+	if !strings.Contains(pathErr.Error(), "KNOMIT_HOME") || !strings.Contains(pathErr.Error(), "must be an absolute path") {
+		t.Fatalf("error %q does not state the rule for KNOMIT_HOME", pathErr)
 	}
 }
 

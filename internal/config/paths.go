@@ -106,30 +106,34 @@ func withHomeHint(err error) error {
 // the KNOMIT_REPO alias, else DefaultHome. Load layers TOML and the rest on
 // top, but WHICH directory is the root is decided here and only here.
 //
-// The result is tilde-expanded and absolute, for every caller. A relative
-// root would be resolved against each process's own working directory, and
-// the server, the bridge, the hooks and `kb login` are started from different
-// ones; searching before expanding would look in a literal "~/..." directory.
+// The result is tilde-expanded and absolute, for every caller. A value that is
+// still relative after expansion is refused rather than made absolute: the
+// server, the bridge, the hooks and `kb` are started from different working
+// directories, and each would resolve it to a different root.
 func ResolveHome() (string, error) {
-	home, err := rawHome()
+	home, name, err := rawHome()
 	if err != nil {
 		return "", err
 	}
 	if err := expandTilde(&home); err != nil {
 		return "", err
 	}
-	return filepath.Abs(home)
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("%s %q must be an absolute path; set it to one", name, home)
+	}
+	return filepath.Clean(home), nil
 }
 
-// rawHome is the data root as the operator spelled it.
-func rawHome() (string, error) {
-	if v := os.Getenv("KNOMIT_HOME"); v != "" {
-		return v, nil
+// rawHome is the data root as the operator spelled it, and the variable it
+// came from.
+func rawHome() (home, name string, err error) {
+	for _, name := range []string{"KNOMIT_HOME", "KNOMIT_REPO"} {
+		if v := os.Getenv(name); v != "" {
+			return v, name, nil
+		}
 	}
-	if v := os.Getenv("KNOMIT_REPO"); v != "" {
-		return v, nil
-	}
-	return DefaultHome()
+	home, err = DefaultHome()
+	return home, "the default data root", err
 }
 
 // homeAndConfig is the data root (ResolveHome) and the knomit.toml found for
