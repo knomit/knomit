@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -67,6 +68,24 @@ type syncLog struct {
 
 func (s *syncLog) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
 func (s *syncLog) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+
+// hasWarn reports whether one WARN line's message contains msg and its field
+// key equals want EXACTLY. The line is parsed, not substring-matched: zerolog
+// writes JSON, which escapes a Windows path's backslashes, so a raw
+// strings.Contains on the path misses a line that is there (windows-2025 CI).
+func (s *syncLog) hasWarn(msg, key, want string) bool {
+	for _, line := range strings.Split(s.String(), "\n") {
+		var ev map[string]any
+		if json.Unmarshal([]byte(line), &ev) != nil {
+			continue
+		}
+		m, _ := ev["message"].(string)
+		if ev["level"] == "warn" && strings.Contains(m, msg) && ev[key] == want {
+			return true
+		}
+	}
+	return false
+}
 
 func captureLog(t *testing.T) *syncLog {
 	t.Helper()
@@ -170,7 +189,7 @@ func TestBootServer_TLSConfiguredWithoutCertServesPlainOnlyAndWarns(t *testing.T
 	if srv.tls != nil {
 		t.Fatal("TLS listener opened with no certificate installed")
 	}
-	if !strings.Contains(logs.String(), "no instance certificate installed") || !strings.Contains(logs.String(), n.cfg.TLS.Dir) {
+	if !logs.hasWarn("no instance certificate installed", "dir", n.cfg.TLS.Dir) {
 		t.Fatalf("no WARN naming [tls].dir:\n%s", logs)
 	}
 }
@@ -341,7 +360,7 @@ func TestBootServer_TLSAddrInUseWarnsAndServes(t *testing.T) {
 		t.Fatalf("plaintext does not serve: %v %v", resp, err)
 	}
 	resp.Body.Close()
-	if !strings.Contains(logs.String(), "serving without the mTLS listener") || !strings.Contains(logs.String(), held.Addr().String()) {
+	if !logs.hasWarn("serving without the mTLS listener", "addr", held.Addr().String()) {
 		t.Fatalf("no WARN naming the held address:\n%s", logs)
 	}
 }
