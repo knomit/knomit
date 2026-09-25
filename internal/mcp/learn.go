@@ -517,8 +517,9 @@ func topicPathOf(ontologyRoot, path string) string {
 	return categoryDirOf(path[len(prefix):])
 }
 
-// applyDedupMerge searches each incoming fact's own category directory for a
-// near-duplicate and folds any match in, mutating facts and files in place.
+// applyDedupMerge searches under each incoming fact's category directory — a
+// raw path PREFIX, see the scope comment at the search — for a near-duplicate
+// and folds any match in, mutating facts and files in place.
 // Three outcomes per fact: no match (write as-is), the match is a hypothesis
 // this fact subsumes (write as-is, stage the hypothesis for retraction), or a
 // genuine duplicate (merge and write at the EXISTING path).
@@ -571,7 +572,7 @@ func applyDedupMerge(
 	// a merge is rewriting the file that carries them.
 	priorRefs := make(map[string][]string)
 	// An existing fact absorbs at most ONE incoming fact per call. Search runs
-	// with Limit: 1, so two inputs in the same category directory can both come
+	// with Limit: 1, so two inputs whose search scopes overlap can both come
 	// back pointing at the same existing fact — and without this set the second
 	// one retargets paths[i] onto a path the first already claimed, AFTER the
 	// duplicate-path guard in the handler has run and can no longer see it.
@@ -627,8 +628,24 @@ func applyDedupMerge(
 		if ontology.LearnDedupOff(topicCategories[i]) {
 			continue
 		}
-		// Search scope is derived from the on-disk path so the category
-		// directory carries the configured ontology root's real case.
+		// SEARCH SCOPE IS A RAW PATH PREFIX, BY DESIGN (issue #260, closed
+		// won't-fix). Path: categoryDir becomes the store's `f.path LIKE
+		// dir%`, with no trailing slash, so learning into ops/task searches
+		// and can merge into:
+		//   - the directory itself (kb/ops/task/…),
+		//   - its descendants (kb/ops/task/child/…),
+		//   - prefix siblings (kb/ops/tasks/…),
+		//   - `_` wildcard matches (LIKE treats `_` as any one character),
+		//   - ASCII-case variants (LIKE is ASCII case-insensitive).
+		// That is intended: within that prefix the similarity threshold is the
+		// gate, not the exact directory (principles/philosophy/dedup-not-append).
+		// The reach is still bounded by the string prefix of the incoming
+		// fact's directory: another topic or an unrelated category is never
+		// searched. Do not narrow this to an exact directory without revisiting
+		// that decision.
+		//
+		// The directory is derived from the on-disk path so it carries the
+		// configured ontology root's real case.
 		categoryDir := categoryDirOf(paths[i])
 		sq := store.SearchOptions{
 			Text:          f.Title + " " + f.Body,
@@ -645,14 +662,28 @@ func applyDedupMerge(
 		}
 
 		match := results[0]
-		// CANDIDATE side of the flag. The search scope is a raw path prefix
-		// (store's `path LIKE dir%`), so a search from ops/tasks also returns
-		// facts under ops/tasks/protocol/ — a flagged child — and under a
-		// sibling sharing the prefix. Merging there would rewrite a message
-		// the flag exists to keep intact, and validate the result against the
-		// wrong topic's rules. The match's topic path is derived the way
-		// topicCategories is: the on-disk path minus the ontology root and the
-		// file name.
+		// CANDIDATE side of the flag. The prefix reach above is intended, but
+		// it means a search from ops/tasks can return a fact under a topic
+		// path with learn_dedup: off that is NOT the incoming one: a flagged
+		// child (ops/tasks/protocol/) or a flagged prefix sibling. Such a fact
+		// holds a message the flag exists to keep intact, so the match is
+		// declined and the incoming fact is written at its own path. The
+		// match's topic path is derived the way topicCategories is: the
+		// on-disk path minus the ontology root and the file name.
+		//
+		// A match that is merged is re-validated below against the INCOMING
+		// fact's topic path, not the match's. That is accepted: a category is
+		// required (validateAndBuildFacts), so the topic segment is always
+		// followed by "/" and the prefix can never cross into another topic;
+		// the root- and topic-level rules are therefore the same. Below the
+		// topic the paths can differ:
+		//   - rules declared on a deeper ontology node of the MATCH's own path
+		//     are not run;
+		//   - for a prefix SIBLING, rules on the INCOMING path's deeper nodes
+		//     (e.g. ops/task) ARE run against a fact that will live under
+		//     ops/tasks, a node whose rules it was never subject to. For a
+		//     descendant this is harmless: those nodes are its ancestors.
+		// See #260.
 		if ontology.LearnDedupOff(topicPathOf(ontologyRoot, match.Path)) {
 			continue
 		}
@@ -870,7 +901,8 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 
 		// 3b. Dedup check: fold each incoming fact into the near-duplicate it
-		// matches in its own category directory, if any. Mutates facts and
+		// matches under its category-directory PREFIX (see applyDedupMerge's
+		// scope comment; #260), if any. Mutates facts and
 		// files in place; hands back the embedding donations and the subsumed
 		// hypotheses to retract alongside the write.
 		//
