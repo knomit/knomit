@@ -228,9 +228,16 @@ type ExperimentsConfig struct {
 
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home         string `toml:"repo"`
-	Host         string `toml:"host"`
-	Port         string `toml:"port"`
+	Home string `toml:"repo"`
+	Host string `toml:"host"`
+	Port string `toml:"port"`
+	// Socket is the local authenticated listener: KNOMIT_SOCKET, else this
+	// key, else a default under Home (see socketFor). An explicit value must
+	// be an absolute path, or a pipe name on Windows; a leading ~ is
+	// expanded. The server reads it once at startup, while the hooks read it
+	// per connection and the MCP bridge when it starts, so a change takes
+	// effect only after the server restarts — until then clients find no
+	// listener at the new path and use TCP without the verified identity.
 	Socket       string `toml:"socket"`
 	OntologyRoot string `toml:"ontology_root"`
 	ONNXLibPath  string `toml:"onnx_lib_path"`
