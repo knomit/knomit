@@ -115,7 +115,8 @@ func ResolveHome() (string, error) {
 	return DefaultHome()
 }
 
-// homeAndConfig is the data root the operator gets, tilde-expanded, and the
+// homeAndConfig is the data root the operator gets, tilde-expanded and made
+// absolute, and the
 // knomit.toml found for it ("" when there is none). Load and SocketPath both
 // start here, so "resolve, expand, then search" happens in one order in one
 // place: searching before expanding looks in a literal "~/..." directory and
@@ -127,6 +128,12 @@ func homeAndConfig() (home, configPath string, err error) {
 	}
 	if err := expandTilde(&home); err != nil {
 		return "", "", fmt.Errorf("config: %w", err)
+	}
+	// Absolute before anything is derived from it. A relative root would be
+	// resolved against each process's own working directory, and the server,
+	// the bridge and the hooks are started from different ones.
+	if home, err = filepath.Abs(home); err != nil {
+		return "", "", fmt.Errorf("config: cannot make the knomit data root absolute: %w", err)
 	}
 	return home, findConfigFile(home), nil
 }
@@ -174,7 +181,11 @@ func SocketPath() (string, error) {
 			return "", fmt.Errorf("config: %s: %w", path, err)
 		}
 	}
-	return socketFor(home, fromTOML.Socket, os.Getenv("KNOMIT_SOCKET")), nil
+	sock, err := socketFor(home, fromTOML.Socket, os.Getenv("KNOMIT_SOCKET"))
+	if err != nil {
+		return "", fmt.Errorf("config: %w", err)
+	}
+	return sock, nil
 }
 
 // socketFor is the ONE place the local listener is decided from its inputs:
@@ -183,16 +194,22 @@ func SocketPath() (string, error) {
 // the server and the bridge cannot order the layers differently. It is pure:
 // callers read the environment and pass it in.
 //
-// home must already be tilde-expanded. The chosen value itself is NOT expanded
-// — Load never has expanded Socket, and doing it on one side only would be a
-// fresh disagreement.
-func socketFor(home, fromTOML, fromEnv string) string {
+// home must already be tilde-expanded and absolute. A chosen value that is not
+// an absolute path (or, on Windows, a pipe name) is an error: it would resolve
+// against each process's own working directory, and the server and the bridge
+// do not share one.
+func socketFor(home, fromTOML, fromEnv string) (string, error) {
+	var sock string
 	switch {
 	case fromEnv != "":
-		return fromEnv
+		sock = fromEnv
 	case fromTOML != "":
-		return fromTOML
+		sock = fromTOML
 	default:
-		return localListenerName(home)
+		return localListenerName(home), nil
 	}
+	if !isAbsListener(sock) {
+		return "", fmt.Errorf("socket %q must be an absolute path; set KNOMIT_SOCKET or the knomit.toml socket key to one", sock)
+	}
+	return sock, nil
 }

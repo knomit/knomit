@@ -149,3 +149,62 @@ func TestSocketPath_MalformedTOMLIsAnError(t *testing.T) {
 		t.Fatalf("error %q does not name the broken file %q", err, path)
 	}
 }
+
+// A relative KNOMIT_HOME is made absolute against the working directory of the
+// process that reads it, once, before knomit.toml is searched for and before
+// the default listener is derived from it.
+func TestSocketPath_AgreesWithLoad_RelativeHomeIsAbsolutised(t *testing.T) {
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "rel", "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(base)
+
+	isolateSocketEnv(t, filepath.Join(base, "rel", "home"))
+	want, err := config.SocketPath()
+	if err != nil {
+		t.Fatalf("config.SocketPath for the absolute home: %v", err)
+	}
+
+	t.Setenv("KNOMIT_HOME", filepath.Join("rel", "home"))
+	requireAgreement(t, want)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if abs := filepath.Join(base, "rel", "home"); cfg.Home != abs {
+		t.Fatalf("Load().Home = %q, want %q", cfg.Home, abs)
+	}
+}
+
+// A relative socket would resolve against each process's own working
+// directory, and the server and the bridge do not share one. Both sides refuse
+// it with the same error.
+func TestSocketPath_RelativeSocketRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(t *testing.T, home string)
+	}{
+		{"env", func(t *testing.T, _ string) { t.Setenv("KNOMIT_SOCKET", "rel.sock") }},
+		{"toml", func(t *testing.T, home string) { writeSocketTOML(t, home, "rel.sock") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			isolateSocketEnv(t, home)
+			tc.set(t, home)
+
+			_, loadErr := config.Load()
+			got, pathErr := config.SocketPath()
+			if loadErr == nil || pathErr == nil {
+				t.Fatalf("Load err = %v, SocketPath() = %q, err = %v; want both to refuse a relative socket",
+					loadErr, got, pathErr)
+			}
+			if loadErr.Error() != pathErr.Error() {
+				t.Fatalf("Load and SocketPath disagree:\n  Load:       %v\n  SocketPath: %v", loadErr, pathErr)
+			}
+			if !strings.Contains(pathErr.Error(), "must be an absolute path") {
+				t.Fatalf("error %q does not state the rule", pathErr)
+			}
+		})
+	}
+}

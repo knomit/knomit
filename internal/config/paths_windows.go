@@ -64,3 +64,10 @@ func localListenerName(home string) string {
 	sum := sha256.Sum256([]byte(norm))
 	return pipeNamePrefix + hex.EncodeToString(sum[:8])
 }
+
+// isAbsListener reports whether a configured local listener names the same
+// place from every working directory: a pipe name (the machine-wide pipe
+// namespace, internal/auth.PipePrefix) or an absolute path.
+func isAbsListener(p string) bool {
+	return strings.HasPrefix(p, `\\.\pipe\`) || filepath.IsAbs(p)
+}

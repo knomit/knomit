@@ -630,7 +630,9 @@ func Load() (Config, error) {
 	// 1, which is what made [auth].require = true a silent lockout there
 	// (knomit#245): app.checkLocalListener refuses that combination, and the
 	// pipe default is what lets Windows satisfy it.
-	cfg.Socket = socketFor(cfg.Home, cfg.Socket, os.Getenv("KNOMIT_SOCKET"))
+	if cfg.Socket, err = socketFor(cfg.Home, cfg.Socket, os.Getenv("KNOMIT_SOCKET")); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
 
 	// Default [tls].dir to <Home>/pki, after tilde expansion like the two
 	// above. The listener itself stays off until [tls].addr is set.

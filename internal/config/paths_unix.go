@@ -61,3 +61,7 @@ func localListenerName(home string) string {
 	sum := sha256.Sum256([]byte(filepath.Clean(home)))
 	return filepath.Join(auth.FallbackSocketDir(), hex.EncodeToString(sum[:])[:8]+".sock")
 }
+
+// isAbsListener reports whether a configured local listener names the same
+// place from every working directory.
+func isAbsListener(p string) bool { return filepath.IsAbs(p) }
