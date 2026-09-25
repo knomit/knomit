@@ -190,13 +190,19 @@ func TestReviewHandler_DistinctCallersGetDistinctHandles(t *testing.T) {
 // winner is TOLD rather than what the row records.
 func startReviewEnvelope(t *testing.T, ts *httptest.Server, clientName, clientVersion string) (mcpSessionID string, env map[string]any) {
 	t.Helper()
+	return startReviewEnvelopeWith(t, ts, clientName, clientVersion, `{}`)
+}
+
+// startReviewEnvelopeWith is startReviewEnvelope with explicit arguments.
+func startReviewEnvelopeWith(t *testing.T, ts *httptest.Server, clientName, clientVersion, args string) (mcpSessionID string, env map[string]any) {
+	t.Helper()
 	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18",` +
 		`"capabilities":{},"clientInfo":{"name":"` + clientName + `","version":"` + clientVersion + `"}}}`
 	_, hdr := rpc(t, ts, initBody, nil)
 	mcpSessionID = hdr.Get("Mcp-Session-Id")
 	require.NotEmpty(t, mcpSessionID)
 
-	callBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"knomit_review","arguments":{}}}`
+	callBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"knomit_review","arguments":` + args + `}}`
 	raw, _ := rpc(t, ts, callBody, map[string]string{"Mcp-Session-Id": mcpSessionID})
 
 	var rpcEnv struct {
@@ -216,8 +222,8 @@ func startReviewEnvelope(t *testing.T, ts *httptest.Server, clientName, clientVe
 	return mcpSessionID, env
 }
 
-// Within one repo+tool+branch there is exactly ONE session, and starting a new
-// one silently displaces whatever was in flight. #113 made the winner's envelope
+// Within one repo+tool+branch there is exactly ONE session, and a start with
+// takeover:true displaces whatever was in flight. #113 made the winner's envelope
 // say WHAT it displaced; on its own that is an id with nothing behind it, since
 // the loser's row is reapable and a resuming caller cannot look it up later.
 // This pins the other half: the envelope says WHOSE session it took.
@@ -241,7 +247,7 @@ func TestReviewHandler_EnvelopeNamesWhoWasDisplaced(t *testing.T) {
 	require.NotContains(t, firstEnv, "abandoned_session")
 	require.NotContains(t, firstEnv, "abandoned_session_created_by")
 
-	_, secondEnv := startReviewEnvelope(t, ts, "the-winner", "2.0.0")
+	_, secondEnv := startReviewEnvelopeWith(t, ts, "the-winner", "2.0.0", `{"takeover":true}`)
 
 	require.Equal(t, firstEnv["session_id"], secondEnv["abandoned_session"],
 		"the winner must name the session it displaced")

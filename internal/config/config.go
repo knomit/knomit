@@ -188,7 +188,13 @@ type DiscoveryConfig struct {
 type SessionConfig struct {
 	ToolIdleTTL     string `toml:"tool_idle_ttl"`
 	PipelineIdleTTL string `toml:"pipeline_idle_ttl"`
-	SweepInterval   string `toml:"sweep_interval"`
+	// PipelineResumeWindow is how recently a review session must have been
+	// used for a new start to resume it rather than displace it. Must be
+	// positive and shorter than PipelineIdleTTL. Empty means 10m, or half of
+	// PipelineIdleTTL when that is 10m or less; it is left out of Defaults so
+	// a config that only shortens PipelineIdleTTL still boots.
+	PipelineResumeWindow string `toml:"pipeline_resume_window"`
+	SweepInterval        string `toml:"sweep_interval"`
 	// Client-session presence thresholds (client_sessions in control.db).
 	// Silent longer than ClientDeadAfter ⇒ shown as dead; longer than
 	// ClientHiddenAfter ⇒ excluded from the presence view; rows whose
@@ -492,6 +498,7 @@ func Load() (Config, error) {
 	envOr("ONNXRUNTIME_SHARED_LIBRARY", &cfg.ONNXLibPath)
 	envOr("KNOMIT_SESSION_TOOL_IDLE_TTL", &cfg.Session.ToolIdleTTL)
 	envOr("KNOMIT_SESSION_PIPELINE_IDLE_TTL", &cfg.Session.PipelineIdleTTL)
+	envOr("KNOMIT_SESSION_PIPELINE_RESUME_WINDOW", &cfg.Session.PipelineResumeWindow)
 	envOr("KNOMIT_SESSION_SWEEP_INTERVAL", &cfg.Session.SweepInterval)
 	envOr("KNOMIT_SESSION_CLIENT_DEAD_AFTER", &cfg.Session.ClientDeadAfter)
 	envOr("KNOMIT_SESSION_CLIENT_HIDDEN_AFTER", &cfg.Session.ClientHiddenAfter)

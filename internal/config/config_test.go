@@ -493,6 +493,26 @@ func TestDefaults_ClientSessionThresholds(t *testing.T) {
 	}
 }
 
+// Empty on purpose: the default is applied where it is validated against
+// pipeline_idle_ttl, so a config that only shortens that TTL still boots.
+func TestDefaults_PipelineResumeWindowIsUnset(t *testing.T) {
+	if got := Defaults().Session.PipelineResumeWindow; got != "" {
+		t.Errorf("PipelineResumeWindow = %q, want empty", got)
+	}
+}
+
+func TestLoad_PipelineResumeWindowEnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir())
+	t.Setenv("KNOMIT_SESSION_PIPELINE_RESUME_WINDOW", "4m")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Session.PipelineResumeWindow != "4m" {
+		t.Errorf("PipelineResumeWindow = %q, want 4m", cfg.Session.PipelineResumeWindow)
+	}
+}
+
 func TestLoad_ClientSessionEnvOverrides(t *testing.T) {
 	t.Setenv("KNOMIT_HOME", t.TempDir()) // empty dir → no TOML, defaults + env only
 	t.Setenv("KNOMIT_SESSION_CLIENT_DEAD_AFTER", "30m")

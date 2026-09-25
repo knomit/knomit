@@ -28,6 +28,7 @@ func reviewTool() mcpgo.Tool {
 		mcpgo.WithNumber("page", mcpgo.Description("Fetch another page of the CURRENT work item, without answering it. Large items are delivered across several pages: when a result carries more_available: true, call again with session_id, item_id and page = <the next page number> until more_available is false, THEN answer. Paging does not answer or advance anything, so pages may be re-fetched freely. Omit when submitting a response.")),
 		mcpgo.WithString("completion_token", mcpgo.Description("Echo back the completion_token from the FINAL page of a multi-page work item. Required to answer such an item: it is the server's proof you read every page, and a response without it is rejected (the item stays available, so you can page properly and resubmit). Not needed for items delivered in a single page — those carry no token.")),
 		mcpgo.WithNumber("item_id", mcpgo.Description("Echo back item.id from the work item you are answering. Optional but strongly recommended: applying a distill item enqueues follow-up items, so the current item can change between calls — echoing the id lets the server reject a stale answer instead of applying it to a different item.")),
+		mcpgo.WithBoolean("takeover", mcpgo.Description("Start only: abandon the review session already in progress on this branch and start a new one. Needed only when a start is refused because a live session was opened with a different scope or effort.")),
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default — pre-discovery behaviour), 'medium', or 'high'. Medium/high engage the structural-bridge engine to surface emergent synthesis facts from cross-cluster bridges.")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the seed pool to facts in these domains. Empty = whole corpus.")),
 		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the seed pool to facts tagged with these entities. Empty = whole corpus.")),
@@ -103,6 +104,7 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		page := int(req.GetFloat("page", 0))
 		itemID := int64(req.GetFloat("item_id", 0))
 		completionToken := req.GetString("completion_token", "")
+		takeover := req.GetBool("takeover", false)
 
 		// An answer or a page fetch belongs to a session, so without one it is
 		// refused rather than read as a start. Treating it as a start abandoned
@@ -112,11 +114,18 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError(errContinuationWithoutSession), nil
 		}
 
+		if sessionID != "" && takeover {
+			return mcpgo.NewToolResultError("takeover applies only to a start: omit session_id to start a new session with takeover:true, or omit takeover to continue this one"), nil
+		}
+
 		var result *synthesize.ReviewResult
 
 		switch {
 		case sessionID == "":
-			result, err = reviewer.StartSession(ctx)
+			result, err = reviewer.StartOrResumeSession(ctx, synthesize.StartOptions{
+				Takeover:     takeover,
+				ResumeWindow: ri.PipelineResumeWindow(),
+			})
 		case page > 0 && response == "":
 			// A page fetch, not an answer. Ordered before the response guard
 			// below because paging is the one continue-call that legitimately

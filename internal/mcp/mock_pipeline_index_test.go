@@ -41,6 +41,21 @@ func (m *MockPipelineIndex) EXPECT() *MockPipelineIndexMockRecorder {
 	return m.recorder
 }
 
+// ActivePipelineSession mocks base method.
+func (m *MockPipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*store.PipelineSession, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ActivePipelineSession", ctx, tool, branch)
+	ret0, _ := ret[0].(*store.PipelineSession)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ActivePipelineSession indicates an expected call of ActivePipelineSession.
+func (mr *MockPipelineIndexMockRecorder) ActivePipelineSession(ctx, tool, branch any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ActivePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).ActivePipelineSession), ctx, tool, branch)
+}
+
 // AddPipelineSessionStats mocks base method.
 func (m *MockPipelineIndex) AddPipelineSessionStats(ctx context.Context, id string, s store.PipelineSessionStats) error {
 	m.ctrl.T.Helper()
@@ -85,6 +100,21 @@ func (mr *MockPipelineIndexMockRecorder) AnswerPipelineWorkItem(ctx, id, respons
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnswerPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).AnswerPipelineWorkItem), ctx, id, response)
 }
 
+// AnsweredDistillResponses mocks base method.
+func (m *MockPipelineIndex) AnsweredDistillResponses(ctx context.Context, sessionID string) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AnsweredDistillResponses", ctx, sessionID)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// AnsweredDistillResponses indicates an expected call of AnsweredDistillResponses.
+func (mr *MockPipelineIndexMockRecorder) AnsweredDistillResponses(ctx, sessionID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnsweredDistillResponses", reflect.TypeOf((*MockPipelineIndex)(nil).AnsweredDistillResponses), ctx, sessionID)
+}
+
 // CompletePipelineSession mocks base method.
 func (m *MockPipelineIndex) CompletePipelineSession(ctx context.Context, id string) error {
 	m.ctrl.T.Helper()
@@ -112,6 +142,36 @@ func (m *MockPipelineIndex) CreatePipelineSession(ctx context.Context, tool, bra
 func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch, createdBy any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSession), ctx, tool, branch, createdBy)
+}
+
+// CreatePipelineSessionReplacing mocks base method.
+func (m *MockPipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*store.PipelineSession, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreatePipelineSessionReplacing", ctx, tool, branch, createdBy, startKey, replace)
+	ret0, _ := ret[0].(*store.PipelineSession)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CreatePipelineSessionReplacing indicates an expected call of CreatePipelineSessionReplacing.
+func (mr *MockPipelineIndexMockRecorder) CreatePipelineSessionReplacing(ctx, tool, branch, createdBy, startKey, replace any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSessionReplacing", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSessionReplacing), ctx, tool, branch, createdBy, startKey, replace)
+}
+
+// DeletePipelineWorkItem mocks base method.
+func (m *MockPipelineIndex) DeletePipelineWorkItem(ctx context.Context, id int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeletePipelineWorkItem", ctx, id)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeletePipelineWorkItem indicates an expected call of DeletePipelineWorkItem.
+func (mr *MockPipelineIndexMockRecorder) DeletePipelineWorkItem(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).DeletePipelineWorkItem), ctx, id)
 }
 
 // GetPipelineSession mocks base method.
@@ -187,6 +247,21 @@ func (mr *MockPipelineIndexMockRecorder) NextPipelineWorkItem(ctx, sessionID any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "NextPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).NextPipelineWorkItem), ctx, sessionID)
 }
 
+// PendingPipelineWorkItems mocks base method.
+func (m *MockPipelineIndex) PendingPipelineWorkItems(ctx context.Context, sessionID string) ([]store.PipelineWorkItem, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PendingPipelineWorkItems", ctx, sessionID)
+	ret0, _ := ret[0].([]store.PipelineWorkItem)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PendingPipelineWorkItems indicates an expected call of PendingPipelineWorkItems.
+func (mr *MockPipelineIndexMockRecorder) PendingPipelineWorkItems(ctx, sessionID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PendingPipelineWorkItems", reflect.TypeOf((*MockPipelineIndex)(nil).PendingPipelineWorkItems), ctx, sessionID)
+}
+
 // PipelineWorkItemStats mocks base method.
 func (m *MockPipelineIndex) PipelineWorkItemStats(ctx context.Context, sessionID string) (int, int, error) {
 	m.ctrl.T.Helper()
@@ -203,6 +278,21 @@ func (mr *MockPipelineIndexMockRecorder) PipelineWorkItemStats(ctx, sessionID an
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PipelineWorkItemStats", reflect.TypeOf((*MockPipelineIndex)(nil).PipelineWorkItemStats), ctx, sessionID)
 }
 
+// ResumePipelineSession mocks base method.
+func (m *MockPipelineIndex) ResumePipelineSession(ctx context.Context, id string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResumePipelineSession", ctx, id)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ResumePipelineSession indicates an expected call of ResumePipelineSession.
+func (mr *MockPipelineIndexMockRecorder) ResumePipelineSession(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResumePipelineSession", reflect.TypeOf((*MockPipelineIndex)(nil).ResumePipelineSession), ctx, id)
+}
+
 // SetPipelineWatermark mocks base method.
 func (m *MockPipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch, hash string) error {
 	m.ctrl.T.Helper()
@@ -215,4 +305,19 @@ func (m *MockPipelineIndex) SetPipelineWatermark(ctx context.Context, tool, bran
 func (mr *MockPipelineIndexMockRecorder) SetPipelineWatermark(ctx, tool, branch, hash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPipelineWatermark", reflect.TypeOf((*MockPipelineIndex)(nil).SetPipelineWatermark), ctx, tool, branch, hash)
+}
+
+// UpdatePipelineWorkItemFacts mocks base method.
+func (m *MockPipelineIndex) UpdatePipelineWorkItemFacts(ctx context.Context, id int64, factsJSON string) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdatePipelineWorkItemFacts", ctx, id, factsJSON)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdatePipelineWorkItemFacts indicates an expected call of UpdatePipelineWorkItemFacts.
+func (mr *MockPipelineIndexMockRecorder) UpdatePipelineWorkItemFacts(ctx, id, factsJSON any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdatePipelineWorkItemFacts", reflect.TypeOf((*MockPipelineIndex)(nil).UpdatePipelineWorkItemFacts), ctx, id, factsJSON)
 }

@@ -23,7 +23,9 @@ package synthesize
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -146,10 +148,10 @@ func (p *Pipeline) deps() Deps {
 // StartSession creates a session, scans for seed facts, asks the strategy to
 // plan work over them, and returns the first item.
 //
-// This is the ONLY place the engine resolves the session's branch, and still
-// the ONLY place it can reach ri.AgentBranch(). The value becomes sess.Branch
-// and travels with the session for the rest of its lifetime; every method
-// below reads it back off the row
+// This and StartOrResumeSession are the ONLY places the engine resolves the
+// session's branch, and the only places it can reach ri.AgentBranch(). The
+// value becomes sess.Branch and travels with the session for the rest of its
+// lifetime; every method below reads it back off the row
 // (invariants/synthesize/session-branch-binding). The caller's correlation
 // handle is bound at the same moment and for the same reason — see actor.go.
 //
@@ -174,6 +176,13 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	if err != nil {
 		return nil, wrapf(tool, err, "create session")
 	}
+	return p.planSession(ctx, d, sess, branch, totalStart)
+}
+
+// planSession is StartSession after the session row exists: mark scope, scan
+// seeds, plan, and serve the first item.
+func (p *Pipeline) planSession(ctx context.Context, d Deps, sess *store.PipelineSession, branch string, totalStart time.Time) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
 
 	// Persist the scoped flag on the session row so completeSession can
 	// suppress watermark advancement, even though the MCP handler reconstructs
@@ -387,6 +396,14 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	}
 	if sess.Status != "active" {
 		return nil, errf(tool, "session %q is %s, not active", sessionID, sess.Status)
+	}
+	// A shared session has more than one caller answering its items, so an
+	// answer that does not name its item could land on the item another
+	// caller's answer just advanced to. Checked before anything is read or
+	// claimed, so the refusal leaves the item fully retryable.
+	if sess.Shared && itemID == 0 {
+		return nil, errf(tool, "item_id is required: session %q is shared by more than one caller, "+
+			"so echo item.id from the item you are answering", sessionID)
 	}
 
 	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
@@ -1098,4 +1115,123 @@ func recordStats(ctx context.Context, tool string, d Deps, sess *store.PipelineS
 		log.Warn().Err(err).Str("tool", tool).Str("session", sess.ID).
 			Msg("pipeline: could not record session stats")
 	}
+}
+
+// StartOptions govern how StartOrResumeSession treats a session already
+// active on the same tool and branch.
+type StartOptions struct {
+	// Takeover abandons a live session and starts a new one, whatever its
+	// scope and effort.
+	Takeover bool
+	// ResumeWindow is how recently the active session must have served a work
+	// item to count as live. An older one is displaced.
+	ResumeWindow time.Duration
+}
+
+// LiveSessionError refuses a start that would displace a live session it
+// cannot resume, because the two were opened with a different effort or scope.
+type LiveSessionError struct {
+	Tool      string
+	Branch    string
+	SessionID string
+	CreatedBy string
+	LastUsed  time.Time
+}
+
+func (e *LiveSessionError) Error() string {
+	by := e.CreatedBy
+	if by == "" {
+		by = "an in-process caller"
+	}
+	return fmt.Sprintf("a %s session with a different scope or effort is already in progress on branch %q: "+
+		"session_id=%q, opened by %s, last used %s (%s ago). "+
+		"Continue it by passing that session_id, wait for it to finish, "+
+		"or start again with takeover:true to abandon it and start a new session",
+		e.Tool, e.Branch, e.SessionID, by, e.LastUsed.UTC().Format(time.RFC3339),
+		time.Since(e.LastUsed).Round(time.Second))
+}
+
+// startKey is what a start must match to resume a live session: the effort
+// and the scope, canonicalised so argument order does not matter.
+func (p *Pipeline) startKey() string {
+	dom := append([]string(nil), p.scope.Domain...)
+	ent := append([]string(nil), p.scope.Entities...)
+	sort.Strings(dom)
+	sort.Strings(ent)
+	return fmt.Sprintf("effort=%s;domain=%s;entities=%s",
+		p.effort, strings.Join(dom, ","), strings.Join(ent, ","))
+}
+
+// maxSlotRetries bounds StartOrResumeSession's re-reads when a concurrent
+// start changes the slot between its read and its write. Each retry follows a
+// write that some other start won, so it is not reachable by a single caller.
+const maxSlotRetries = 3
+
+// StartOrResumeSession is StartSession for callers that must not silently
+// displace one another (the MCP tools). When the tool and branch already have
+// an active session:
+//
+//   - idle longer than opts.ResumeWindow, or opts.Takeover: it is abandoned and
+//     a new session starts, naming it in abandoned_session;
+//   - live, with the same effort and scope: it is RESUMED — the result is its
+//     current item under its own session_id, flagged Resumed, and the session
+//     is marked shared so every later answer must carry item_id;
+//   - live, with a different effort or scope: *LiveSessionError.
+func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) (*PipelineResult, error) {
+	tool := p.strategy.Tool()
+	totalStart := time.Now()
+	d := p.deps()
+	branch := p.branch
+	if branch == "" {
+		branch = p.ri.AgentBranch()
+	}
+	actor := actorFromContext(ctx)
+	key := p.startKey()
+
+	for attempt := 0; attempt < maxSlotRetries; attempt++ {
+		active, err := d.Pipeline.ActivePipelineSession(ctx, tool, branch)
+		if err != nil {
+			return nil, wrapf(tool, err, "read active session")
+		}
+		replace := ""
+		if active != nil {
+			lastUsed, perr := time.Parse(time.RFC3339, active.LastUsedAt)
+			live := perr == nil && time.Since(lastUsed) <= opts.ResumeWindow
+			switch {
+			case opts.Takeover || !live:
+				replace = active.ID
+			case active.StartKey == key:
+				resumed, rerr := d.Pipeline.ResumePipelineSession(ctx, active.ID)
+				if rerr != nil {
+					return nil, wrapf(tool, rerr, "resume session")
+				}
+				if !resumed {
+					continue // it ended between the read and the claim
+				}
+				log.Info().Str("tool", tool).Str("session", active.ID).Str("resumed_by", actor).
+					Msg("pipeline: session resumed")
+				res, nerr := p.nextItem(ctx, active)
+				if nerr != nil {
+					return nil, nerr
+				}
+				res.Resumed = true
+				p.stampIdentity(res, active)
+				return res, nil
+			default:
+				return nil, &LiveSessionError{
+					Tool: tool, Branch: branch, SessionID: active.ID,
+					CreatedBy: active.CreatedBy, LastUsed: lastUsed,
+				}
+			}
+		}
+		sess, err := d.Pipeline.CreatePipelineSessionReplacing(ctx, tool, branch, actor, key, replace)
+		if errors.Is(err, store.ErrPipelineSlotChanged) {
+			continue
+		}
+		if err != nil {
+			return nil, wrapf(tool, err, "create session")
+		}
+		return p.planSession(ctx, d, sess, branch, totalStart)
+	}
+	return nil, errf(tool, "the %s session on branch %q kept changing under concurrent starts; call again", tool, branch)
 }

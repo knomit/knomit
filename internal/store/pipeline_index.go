@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -59,9 +60,22 @@ type PipelineSession struct {
 	// rather than a follow-up UPDATE: a crash between two writes would leave
 	// exactly the unattributable row this column exists to prevent.
 	CreatedBy string
+	// StartKey is what a later start must match to resume this session; see
+	// the start_key column. Shared is set once a second start resumed it.
+	StartKey  string
+	Shared    bool
 	CreatedAt string
 	UpdatedAt string
+	// LastUsedAt is the heartbeat the idle reaper and the resume window read:
+	// bumped whenever the session serves a work item.
+	LastUsedAt string
 }
+
+// ErrPipelineSlotChanged is returned by CreatePipelineSessionReplacing when
+// the active session for the tool+branch is not the one the caller decided to
+// replace: another start got there between the caller's read and its write.
+// Nothing was written; the caller re-reads the slot and decides again.
+var ErrPipelineSlotChanged = errors.New("the active pipeline session changed")
 
 // PipelineSessionStats are the running totals of what a session's applied work
 // items actually changed in the corpus.
@@ -147,6 +161,23 @@ func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 // layer that knows what the claim is made of. Empty is a legitimate value: an
 // in-process caller has no request to attribute to.
 func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error) {
+	return pi.createPipelineSession(ctx, tool, branch, createdBy, "", anyActive)
+}
+
+// anyActive is createPipelineSession's "replace whatever is active" sentinel.
+// It cannot collide with a session id, which is a uuid.
+const anyActive = "\x00any"
+
+// CreatePipelineSessionReplacing creates a session with startKey, but only if
+// the tool+branch's active session is exactly replace ("" meaning none), which
+// it abandons. Any other active session fails the call with
+// ErrPipelineSlotChanged and writes nothing, so a caller that decided from a
+// read of the slot never displaces a session it did not see.
+func (pi *pipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*PipelineSession, error) {
+	return pi.createPipelineSession(ctx, tool, branch, createdBy, startKey, replace)
+}
+
+func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Own transaction on the session DB. We deliberately do NOT consult any
@@ -173,6 +204,9 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 	).Scan(&abandoned, &abandonedBy); err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("CreatePipelineSession find active: %w", err)
 	}
+	if replace != anyActive && abandoned != replace {
+		return nil, ErrPipelineSlotChanged
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE tool = ? AND branch = ? AND status = 'active'`,
 		now, tool, branch,
@@ -189,13 +223,15 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 		Abandoned:          abandoned,
 		AbandonedCreatedBy: abandonedBy,
 		CreatedBy:          createdBy,
+		StartKey:           startKey,
 		CreatedAt:          now,
 		UpdatedAt:          now,
+		LastUsedAt:         now,
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_by, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedBy, s.CreatedAt, s.UpdatedAt, now,
+		`INSERT INTO pipeline_sessions(id, tool, branch, status, phase, created_by, start_key, created_at, updated_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		s.ID, s.Tool, s.Branch, s.Status, s.Phase, s.CreatedBy, s.StartKey, s.CreatedAt, s.UpdatedAt, now,
 	); err != nil {
 		return nil, fmt.Errorf("CreatePipelineSession insert: %w", err)
 	}
@@ -206,26 +242,68 @@ func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch
 	return s, nil
 }
 
+const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, shared,
+		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
+		        created_at, updated_at, last_used_at`
+
+func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
+	var s PipelineSession
+	var scoped, shared int
+	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &shared,
+		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
+		&s.CreatedAt, &s.UpdatedAt, &s.LastUsedAt)
+	if err != nil {
+		return nil, err
+	}
+	s.Scoped = scoped != 0
+	s.Shared = shared != 0
+	return &s, nil
+}
+
 // GetPipelineSession returns the session with the given ID, or nil if not found.
 func (pi *pipelineIndex) GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error) {
-	var s PipelineSession
-	var scoped int
-	err := pi.sessionDB.QueryRowContext(ctx,
-		`SELECT id, tool, branch, status, phase, scoped, created_by,
-		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
-		        created_at, updated_at
-		 FROM pipeline_sessions WHERE id = ?`, id,
-	).Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy,
-		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
-		&s.CreatedAt, &s.UpdatedAt)
+	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
+		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions WHERE id = ?`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("GetPipelineSession: %w", err)
 	}
-	s.Scoped = scoped != 0
-	return &s, nil
+	return s, nil
+}
+
+// ActivePipelineSession returns the tool+branch's active session, or nil when
+// there is none.
+func (pi *pipelineIndex) ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error) {
+	s, err := scanPipelineSession(pi.sessionDB.QueryRowContext(ctx,
+		`SELECT `+pipelineSessionColumns+` FROM pipeline_sessions
+		 WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`, tool, branch))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ActivePipelineSession: %w", err)
+	}
+	return s, nil
+}
+
+// ResumePipelineSession marks an active session shared and bumps its
+// heartbeat. resumed=false means it is no longer active: it completed or was
+// displaced between the caller's read and this write.
+func (pi *pipelineIndex) ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET shared = 1, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
+		now, now, id)
+	if err != nil {
+		return false, fmt.Errorf("ResumePipelineSession: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("ResumePipelineSession: %w", err)
+	}
+	return n == 1, nil
 }
 
 // MarkPipelineSessionScoped marks a session as having been started with a

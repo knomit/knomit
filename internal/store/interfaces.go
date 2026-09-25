@@ -233,7 +233,15 @@ type ToolSessionIndex interface {
 // PipelineIndex is the interface for pipeline session management. Implemented by *pipelineIndex.
 type PipelineIndex interface {
 	CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error)
+	// CreatePipelineSessionReplacing is CreatePipelineSession that abandons
+	// only the named active session ("" meaning none), and otherwise fails
+	// with ErrPipelineSlotChanged without writing.
+	CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
+	ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
+	// ResumePipelineSession marks an active session shared; false when it is
+	// no longer active.
+	ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error)
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error

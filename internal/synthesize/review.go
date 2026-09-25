@@ -98,6 +98,12 @@ func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	return reviewResult(r.p.StartSession(ctx))
 }
 
+// StartOrResumeSession starts a review session, or resumes the live one on
+// the same branch; see Pipeline.StartOrResumeSession.
+func (r *Reviewer) StartOrResumeSession(ctx context.Context, opts StartOptions) (*ReviewResult, error) {
+	return reviewResult(r.p.StartOrResumeSession(ctx, opts))
+}
+
 // ContinueSession processes the model's response for the current work item
 // and returns the next item, or done if the session is complete.
 //
@@ -183,6 +189,7 @@ func reviewResultPage(res *PipelineResult, page int) (*ReviewResult, error) {
 		WriteBranch:               res.WriteBranch,
 		AbandonedSession:          res.AbandonedSession,
 		AbandonedSessionCreatedBy: res.AbandonedSessionCreatedBy,
+		Resumed:                   res.Resumed,
 		Done:                      res.Done,
 		Summary:                   res.Summary,
 		Progress:                  res.Progress,

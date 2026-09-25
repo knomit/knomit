@@ -178,8 +178,11 @@ type PipelineResult struct {
 	// — WHOSE slot this one took, not merely that it took one (knomit#123).
 	// Empty when nothing was displaced or when the loser carried no handle.
 	AbandonedSessionCreatedBy string
-	Item                      *PipelineItem
-	Done                      bool
+	// Resumed is set when a start joined the live session instead of opening
+	// one: SessionID is that session's, and Item is its current item.
+	Resumed bool
+	Item    *PipelineItem
+	Done    bool
 	// Summary is populated only on the completing turn. It reuses ReviewStats
 	// because that is the type already on the wire and in the session row;
 	// the name is review-flavoured but the counters are not.

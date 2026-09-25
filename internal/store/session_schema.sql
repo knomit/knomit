@@ -69,6 +69,15 @@ CREATE TABLE pipeline_sessions (
     -- (pipeline_idle_ttl, 1h) an unexpected session is one query rather than a
     -- forensic pass over checkpointed DB copies.
     created_by   TEXT NOT NULL DEFAULT '',
+    -- What a start must match to RESUME this session instead of being refused:
+    -- the opening call's effort and scope, canonicalised by the engine. Empty
+    -- for sessions opened without a resume policy (in-process runs), which
+    -- therefore never match.
+    start_key    TEXT NOT NULL DEFAULT '',
+    -- 1 once a second start has resumed this session. A shared session
+    -- requires item_id on every answer, so one caller's answer can never land
+    -- on the item another caller's answer just advanced to.
+    shared       INTEGER NOT NULL DEFAULT 0,
     -- Running work-item stat totals. They live on the row, not in memory, because
     -- the engine is per-call stateless: the MCP handler builds a fresh Reviewer
     -- for every continue call, so nothing accumulated on that struct survives.
@@ -95,3 +104,4 @@ CREATE TABLE pipeline_work_items (
 );
 
 CREATE INDEX pipeline_sessions_last_used ON pipeline_sessions(last_used_at);
+CREATE INDEX pipeline_sessions_slot ON pipeline_sessions(tool, branch, status);

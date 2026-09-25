@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -105,7 +106,9 @@ type RepoInstance struct {
 	clusterMinCommunity int
 	// Discovery dial + verification thresholds (emergent-fact discovery).
 	// See [config.DiscoveryConfig] for vocabulary.
-	discoveryEffortDefault        string
+	discoveryEffortDefault string
+	// pipelineResumeWindow: see PipelineResumeWindow.
+	pipelineResumeWindow          time.Duration
 	discoveryConfidenceThreshold  float64
 	discoveryBlastRadiusThreshold int
 	discoveryBridge               string
@@ -501,6 +504,16 @@ func (ri *RepoInstance) ClusterResolution() float64 { return ri.clusterResolutio
 // ClusterMinCommunitySize returns the min community size paired with the resolution.
 func (ri *RepoInstance) ClusterMinCommunitySize() int { return ri.clusterMinCommunity }
 
+// PipelineResumeWindow is how recently a pipeline session must have been used
+// for a new start to resume it instead of displacing it
+// (session.pipeline_resume_window). Zero falls back to the default.
+func (ri *RepoInstance) PipelineResumeWindow() time.Duration {
+	if ri.pipelineResumeWindow <= 0 {
+		return DefaultPipelineResumeWindow
+	}
+	return ri.pipelineResumeWindow
+}
+
 // DiscoveryEffortDefault returns the default effort dial used when an MCP
 // caller omits 'effort'. Empty string falls back to "normal".
 func (ri *RepoInstance) DiscoveryEffortDefault() string {
@@ -717,6 +730,9 @@ type TestInstanceConfig struct {
 	// test is about bridges. Mirrors the two knobs above, which carry
 	// production defaults for the same reason.
 	Quality *TestQualityConfig
+	// PipelineResumeWindow overrides session.pipeline_resume_window. Zero
+	// means the default.
+	PipelineResumeWindow time.Duration
 }
 
 // TestQualityConfig mirrors the discovery.quality block for test instances.
@@ -742,17 +758,18 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		read = agent
 	}
 	ri := &RepoInstance{
-		uid:                 cfg.UID,
-		agentBranch:         agent,
-		readBranch:          read,
-		subscribed:          cfg.Subscribed,
-		handle:              newStoreHandle(cfg.Svc),
-		ontology:            cfg.Ontology,
-		embedder:            cfg.Embedder,
-		ontologyRoot:        cfg.OntologyRoot,
-		methodologyMinScore: cfg.MethodologyMinScore,
-		clusterResolution:   defaultClusterResolution,
-		clusterMinCommunity: defaultClusterMinCommunitySize,
+		uid:                  cfg.UID,
+		agentBranch:          agent,
+		readBranch:           read,
+		subscribed:           cfg.Subscribed,
+		handle:               newStoreHandle(cfg.Svc),
+		ontology:             cfg.Ontology,
+		embedder:             cfg.Embedder,
+		ontologyRoot:         cfg.OntologyRoot,
+		methodologyMinScore:  cfg.MethodologyMinScore,
+		pipelineResumeWindow: cfg.PipelineResumeWindow,
+		clusterResolution:    defaultClusterResolution,
+		clusterMinCommunity:  defaultClusterMinCommunitySize,
 		// Mirror config.Defaults(): neither blast-radius nor confidence
 		// accessors re-default 0 (explicit 0 means "gate disabled"), so test
 		// instances must carry the production defaults explicitly.
