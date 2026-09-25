@@ -88,6 +88,7 @@ type reviewTurn struct {
 	Abandoned string `json:"abandoned_session"`
 	Resumed   bool   `json:"resumed"`
 	Done      bool   `json:"done"`
+	Next      string `json:"next"`
 	Item      *struct {
 		ID   int64  `json:"id"`
 		Type string `json:"type"`
@@ -328,4 +329,24 @@ func TestReviewE2E_StaleSessionIsDisplaced(t *testing.T) {
 	require.NotEqual(t, first.SessionID, fresh.SessionID)
 	require.Equal(t, first.SessionID, fresh.Abandoned)
 	require.Equal(t, "abandoned", e.sessionStatus(first.SessionID))
+}
+
+// Every result says what to call next and names the session_id to pass, and on
+// the unscoped endpoint says the binding selects the repo and is not the
+// session. A finished session says not to call again.
+func TestReviewE2E_EveryResultNamesTheSessionToContinue(t *testing.T) {
+	e := newReviewE2E(t)
+	sid, handle := e.client()
+	first := e.start(sid, handle)
+
+	require.Contains(t, first.Next, first.SessionID)
+	require.Contains(t, first.Next, "session_id")
+	require.Contains(t, first.Next, fmt.Sprintf("item_id=%d", first.Item.ID))
+	require.Contains(t, first.Next, "binding")
+	require.Contains(t, first.Next, "does not identify this review session")
+
+	done, errText := e.review(sid, answerArgs(handle, first))
+	require.Empty(t, errText)
+	require.True(t, done.Done)
+	require.Contains(t, done.Next, "finished")
 }

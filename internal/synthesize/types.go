@@ -335,6 +335,9 @@ type ReviewResult struct {
 	// Health carries corpus-health descriptors for this session. Read by the
 	// agent, by nothing in the engine.
 	Health []string `json:"health,omitempty"`
+	// Next says what to call now, naming the session_id to pass. Set by the
+	// MCP handler, which knows whether the caller must also pass a binding.
+	Next string `json:"next,omitempty"`
 }
 
 // ReviewItem describes a single work item for the hosting model.

@@ -124,7 +124,9 @@ func handleBanner(handle string) string {
 		"(knomit_query, knomit_learn, knomit_explain, knomit_update, knomit_retract, knomit_review, " +
 		"knomit_hypothesize — and knomit_repos when you want to see what you are bound to). " +
 		"It is how the server knows which knowledge base a call is for; there is no session fallback, " +
-		"so a call without it is refused. Copy it verbatim: it is random, it is not the repo or lens " +
+		"so a call without it is refused. It selects the knowledge base and carries no review state: " +
+		"a knomit_review or knomit_hypothesize continuation also needs the session_id from the result it answers. " +
+		"Copy it verbatim: it is random, it is not the repo or lens " +
 		"name, and a value you construct yourself will be rejected. If any call answers " +
 		"\"unknown binding handle\", stop and call knomit_bind again rather than guessing.\n\n"
 }
