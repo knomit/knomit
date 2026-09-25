@@ -49,7 +49,8 @@ import (
 //
 // A listen failure because the address is already in use is ErrTLSAddrInUse
 // (wrapped): an AVAILABILITY failure, which a caller may choose to survive —
-// the desktop warns and serves without TLS; `knomit serve` stays fatal.
+// the desktop warns and serves without TLS; `knomit serve` returns it from
+// RunE and fails the boot, after its defers have run (#261).
 // Every other error is a TRUST or configuration failure and fails closed.
 func OpenTLSServer(ctx context.Context, tcfg config.TLSConfig, keyPath string, like *http.Server) (*http.Server, net.Listener, error) {
 	if tcfg.Addr == "" {

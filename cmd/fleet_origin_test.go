@@ -43,7 +43,7 @@ import (
 // F19 phase 2b end to end: knomit's go-git client (the knomit+https
 // transport) fetching from knomit's REAL /git handler — web.Server with
 // GitHandler = web.GitRemoteHandler, AuthMiddleware and the write gate —
-// served on the real mTLS listener from openTLSServer. The pki tests prove
+// served on the real mTLS listener from app.OpenTLSServer. The pki tests prove
 // the transport against a minimal upload-pack server; this proves the pair.
 //
 // Only the fetcher uses the client transport. pki.InstallGitTransport writes
