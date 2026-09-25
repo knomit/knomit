@@ -86,20 +86,20 @@ func loserCorroborations(loser factForLLM) int {
 // WAS carried, by the loser. The ref to the loser's own path stays — it is the
 // record of the merge.
 //
-// The two lists are computed from the SAME three operands, so the write list
-// is a subset of the carried set: a mechanical merge introduces no citation,
-// so every element of the write list was carried by the winner, carried by the
+// The two lists are computed from the SAME three operands, so the write list is
+// a subset of the carried set: a mechanical merge introduces no citation, so
+// every element of the write list was carried by the winner, carried by the
 // loser, or is the loser's own path. The carried set is deliberately NOT
 // self-filtered — it is the operands' snapshot, and what it exempts is only
-// ever checked against what is written. They are built separately, and that is the
-// whole point of this function. Handing the write list to Gate.Apply in both
-// argument positions would read identically and behave identically now, and
-// would exempt whatever a later change appends to the write list at the call
-// site — a lineage pointer to a synthesized parent, an annex ref — leaving a
-// gate call that can never reject anything (0ee925f4). `prior` has to be able
-// to diverge from `refs` for the check to mean what it says, so the carried
-// set is derived from the operands, where "this was already carried" is
-// provably true, and never from the list being written.
+// ever checked against what is written. They are built separately, and that is
+// the whole point of this function. Handing the write list to Gate.Apply in
+// both argument positions would read identically and behave identically now,
+// and would exempt whatever a later change appends to the write list at the
+// call site — a lineage pointer to a synthesized parent, an annex ref — leaving
+// a gate call that can never reject anything (0ee925f4). `prior` has to be able
+// to diverge from `refs` for the check to mean what it says, so the carried set
+// is derived from the operands, where "this was already carried" is provably
+// true, and never from the list being written.
 func dedupMergeRefs(winnerRefs, loserRefs []string, winnerPath, loserPath, localRepoID string) (write, carried []string) {
 	self := fact.ClassifyRef(winnerPath, localRepoID).Path
 	union := fact.UnionStrings(winnerRefs, loserRefs)
@@ -316,8 +316,9 @@ func dedupCluster(
 		mergedWeight, _, _ := computeTransfer(ctx, gs, agentBranch, localRepoID,
 			[]string{winnerFact.File, loserFact.File})
 		fullWinner.EvidenceWeight = mergedWeight
-		// Refs = union of both refs + loser's path, and — separately — the
-		// snapshot of what the two operands already carried.
+		// Refs = union of both refs + loser's path, minus the winner's own path
+		// (#280), and — separately — the snapshot of what the two operands
+		// already carried.
 		mergedRefs, carriedRefs := dedupMergeRefs(fullWinner.Refs, fullLoser.Refs, winnerFact.File, loserFact.File, localRepoID)
 
 		// Same gate as every other write path — but this merge ADDS no
