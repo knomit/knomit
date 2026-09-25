@@ -248,6 +248,8 @@ type PipelineIndex interface {
 	// AbandonPipelineSession abandons one active session.
 	AbandonPipelineSession(ctx context.Context, id string) error
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
+	// AdvancePipelineSessionPhase moves from→to only while no item of the
+	// session is unanswered or still being applied.
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
 	CompletePipelineSession(ctx context.Context, id string) error
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
@@ -256,6 +258,11 @@ type PipelineIndex interface {
 	// claimed=false means another caller already answered it — a benign
 	// no-op. Only the claim winner may apply the response's mutations.
 	AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (claimed bool, err error)
+	// FinishPipelineWorkItem ends a claimed item's applying state, after its
+	// apply returns. Until then the item holds the session's phase.
+	FinishPipelineWorkItem(ctx context.Context, id int64) error
+	// ApplyingPipelineWorkItem returns a claimed item still being applied, or 0.
+	ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error)
 	// AddPipelineSessionStats accumulates an applied item's corpus-change
 	// counts onto the session row, which is where a per-call-stateless
 	// engine's running totals have to live.

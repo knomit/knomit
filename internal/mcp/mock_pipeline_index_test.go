@@ -129,6 +129,21 @@ func (mr *MockPipelineIndexMockRecorder) AnsweredDistillResponses(ctx, sessionID
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AnsweredDistillResponses", reflect.TypeOf((*MockPipelineIndex)(nil).AnsweredDistillResponses), ctx, sessionID)
 }
 
+// ApplyingPipelineWorkItem mocks base method.
+func (m *MockPipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ApplyingPipelineWorkItem", ctx, sessionID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ApplyingPipelineWorkItem indicates an expected call of ApplyingPipelineWorkItem.
+func (mr *MockPipelineIndexMockRecorder) ApplyingPipelineWorkItem(ctx, sessionID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ApplyingPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).ApplyingPipelineWorkItem), ctx, sessionID)
+}
+
 // CompletePipelineSession mocks base method.
 func (m *MockPipelineIndex) CompletePipelineSession(ctx context.Context, id string) error {
 	m.ctrl.T.Helper()
@@ -186,6 +201,20 @@ func (m *MockPipelineIndex) DeletePipelineWorkItem(ctx context.Context, id int64
 func (mr *MockPipelineIndexMockRecorder) DeletePipelineWorkItem(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).DeletePipelineWorkItem), ctx, id)
+}
+
+// FinishPipelineWorkItem mocks base method.
+func (m *MockPipelineIndex) FinishPipelineWorkItem(ctx context.Context, id int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FinishPipelineWorkItem", ctx, id)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// FinishPipelineWorkItem indicates an expected call of FinishPipelineWorkItem.
+func (mr *MockPipelineIndexMockRecorder) FinishPipelineWorkItem(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinishPipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).FinishPipelineWorkItem), ctx, id)
 }
 
 // GetPipelineSession mocks base method.

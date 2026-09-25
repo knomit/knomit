@@ -384,8 +384,10 @@ func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id strin
 func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET phase = ?, updated_at = ? WHERE id = ? AND phase = ?`,
-		to, now, id, from,
+		`UPDATE pipeline_sessions SET phase = ?, updated_at = ? WHERE id = ? AND phase = ?
+		 AND NOT EXISTS (SELECT 1 FROM pipeline_work_items
+		                 WHERE session_id = ? AND (response IS NULL OR applying = 1))`,
+		to, now, id, from, id,
 	)
 	if err != nil {
 		return false, fmt.Errorf("AdvancePipelineSessionPhase: %w", err)
@@ -395,6 +397,32 @@ func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, fr
 		return false, fmt.Errorf("AdvancePipelineSessionPhase rows: %w", err)
 	}
 	return n == 1, nil
+}
+
+// FinishPipelineWorkItem records that a claimed item's apply has returned,
+// whether it succeeded or failed.
+func (pi *pipelineIndex) FinishPipelineWorkItem(ctx context.Context, id int64) error {
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_work_items SET applying = 0 WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("FinishPipelineWorkItem: %w", err)
+	}
+	return nil
+}
+
+// ApplyingPipelineWorkItem returns the id of an item of this session that is
+// claimed and still being applied, or 0.
+func (pi *pipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error) {
+	var id int64
+	err := pi.sessionDB.QueryRowContext(ctx,
+		`SELECT id FROM pipeline_work_items WHERE session_id = ? AND applying = 1 ORDER BY id LIMIT 1`,
+		sessionID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("ApplyingPipelineWorkItem: %w", err)
+	}
+	return id, nil
 }
 
 // CompletePipelineSession marks the session as completed.
@@ -473,7 +501,7 @@ func (pi *pipelineIndex) NextPipelineWorkItem(ctx context.Context, sessionID str
 // synthesized facts.
 func (pi *pipelineIndex) AnswerPipelineWorkItem(ctx context.Context, id int64, response string) (bool, error) {
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_work_items SET response = ? WHERE id = ? AND response IS NULL`,
+		`UPDATE pipeline_work_items SET response = ?, applying = 1 WHERE id = ? AND response IS NULL`,
 		response, id,
 	)
 	if err != nil {

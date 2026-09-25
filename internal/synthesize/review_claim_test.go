@@ -71,8 +71,8 @@ func TestReviewer_DuplicateDistillSubmission_SynthesizesOnce(t *testing.T) {
 // TestReviewer_ConcurrentContinuations_ApplyOnce establishes that piling extra
 // callers onto one item stays benign: none of the four surfaces an unexpected
 // error, and the corpus still ends up with exactly one fact. A caller that
-// loses the CAS must fall through to nextItem rather than reporting a failure
-// — the item genuinely was handled, just not by this caller.
+// loses the CAS falls through to nextItem: it is served what comes next, or
+// told the item is still being applied, never a failure of its own.
 //
 // It is NOT the apply-once regression anchor, despite the name's suggestion.
 // Mutation testing (dropping the CAS predicate) showed this 4-caller shape
@@ -213,7 +213,10 @@ func requireOnlyBenignErrors(t *testing.T, errs []error) {
 		if err == nil {
 			continue
 		}
-		require.Containsf(t, err.Error(), "is completed, not active",
+		// A loser either arrives after the winner completed the session, or
+		// while the winner is still applying the item: both are the item
+		// having been handled by someone else.
+		require.Regexpf(t, `is completed, not active|is being applied by another caller`, err.Error(),
 			"caller %d failed for an unexpected reason", i)
 	}
 }

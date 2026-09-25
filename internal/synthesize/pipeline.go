@@ -52,6 +52,8 @@ type Pipeline struct {
 	effort   Effort
 	scope    ScopeFilter
 	strategy Strategy
+	// hooks are test seams; zero in production.
+	hooks pipelineHooks
 	// branch OVERRIDES the branch a session is opened against. Empty means
 	// "this repo's agent branch", which is what every caller meant before
 	// experiments existed. It is set from the caller's BINDING — a session
@@ -185,6 +187,15 @@ func (p *Pipeline) opener(ctx context.Context) (branch, actor string) {
 		branch = p.ri.AgentBranch()
 	}
 	return branch, actorFromContext(ctx)
+}
+
+// pipelineHooks are test seams on one Pipeline, never set in production. They
+// open the gaps a second caller can only hit by timing, so a test can hit them
+// deterministically: beforeClaim runs between an answer's checks and its
+// claim, duringApply between the claim and the apply.
+type pipelineHooks struct {
+	beforeClaim func(ctx context.Context, itemID int64)
+	duringApply func(ctx context.Context, itemID int64)
 }
 
 // markPlanned clears a resumable session's planning mark once its work is
@@ -547,7 +558,9 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	// concurrent caller, or by an earlier attempt of this very submission
 	// whose response reached the DB. Its mutations are already applied, so
 	// re-applying them here is exactly the duplication P0.4 exists to kill.
-	beforeClaim(ctx, item.ID)
+	if p.hooks.beforeClaim != nil {
+		p.hooks.beforeClaim(ctx, item.ID)
+	}
 	claimed, err := d.Pipeline.AnswerPipelineWorkItem(ctx, item.ID, normalized)
 	if err != nil {
 		// UNCOVERED: no test exercises this branch, and there is currently no
@@ -577,8 +590,18 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 		return p.nextItem(ctx, sess)
 	}
 
-	if err := p.strategy.Apply(ctx, d, sess, item, dec); err != nil {
-		return nil, err
+	if p.hooks.duringApply != nil {
+		p.hooks.duringApply(ctx, item.ID)
+	}
+	// The item holds the session's phase from the claim until its apply
+	// returns, success or failure, so nobody advances past follow-ups the
+	// apply is still enqueueing.
+	applyErr := p.strategy.Apply(ctx, d, sess, item, dec)
+	if err := d.Pipeline.FinishPipelineWorkItem(context.WithoutCancel(ctx), item.ID); err != nil && applyErr == nil {
+		applyErr = wrapf(tool, err, "finish work item %d", item.ID)
+	}
+	if applyErr != nil {
+		return nil, applyErr
 	}
 
 	res, err := p.nextItem(ctx, sess)
@@ -1046,6 +1069,24 @@ func (p *Pipeline) handlePhase(ctx context.Context, sess *store.PipelineSession,
 	if err != nil {
 		return nil, wrapf(tool, err, "advance %s→%s", from, to)
 	}
+	if !advanced {
+		// The advance refuses while any item is unanswered or still being
+		// applied. Serve an item queued since the read above; report one
+		// another caller is applying; otherwise another caller advanced the
+		// phase, and the refetch below dispatches from where it now is.
+		if item, err := d.Pipeline.NextPipelineWorkItem(ctx, sess.ID); err != nil {
+			return nil, wrapf(tool, err, "next item")
+		} else if item != nil {
+			return p.renderWorkItem(ctx, d, sess, item)
+		}
+		applying, err := d.Pipeline.ApplyingPipelineWorkItem(ctx, sess.ID)
+		if err != nil {
+			return nil, wrapf(tool, err, "applying item")
+		}
+		if applying != 0 {
+			return nil, errf(tool, "item %d is being applied by another caller; retry shortly", applying)
+		}
+	}
 	if advanced {
 		log.Info().Str("tool", tool).Str("session", sess.ID).Str("from", from).Str("to", to).
 			Msg("pipeline: phase transition")
@@ -1267,11 +1308,6 @@ func canonicalScopeList(in []string) string {
 	sort.Strings(out)
 	return strings.Join(out, ",")
 }
-
-// beforeClaim runs between an answer's checks and its claim. A test seam: it
-// lets a test answer the item in that gap, which is the only way to lose the
-// claim deterministically.
-var beforeClaim = func(context.Context, int64) {}
 
 // maxSlotRetries bounds StartOrResumeSession's re-reads when a concurrent
 // start changes the slot between its read and its write. Each retry follows a

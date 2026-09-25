@@ -102,6 +102,10 @@ CREATE TABLE pipeline_work_items (
     cluster_key TEXT NOT NULL,
     facts_json  TEXT NOT NULL,
     response    TEXT,
+    -- 1 from the claim (response set) until the claimant's apply returns. An
+    -- item being applied is still outstanding: its apply may enqueue follow-up
+    -- items, so the session's phase must not advance past it.
+    applying    INTEGER NOT NULL DEFAULT 0,
     priority    REAL NOT NULL,
     depth       INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL

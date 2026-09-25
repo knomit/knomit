@@ -18,9 +18,13 @@ import (
 // leaves an active session holding an item.
 type resumeFixture struct {
 	r      *Reviewer
+	ri     *repos.RepoInstance
 	svc    *store.Service
 	dbPath string
 }
+
+// another is a second caller's reviewer over the same repo.
+func (f *resumeFixture) another() *Reviewer { return NewReviewer(f.ri, nil) }
 
 const resumeBranch = "agent/test"
 
@@ -47,7 +51,7 @@ func newResumeFixture(t *testing.T) *resumeFixture {
 	ri := repos.NewTestInstanceWithDeps(repos.TestInstanceConfig{
 		Name: "test", AgentBranch: resumeBranch, Svc: svc, OntologyRoot: "kb",
 	})
-	return &resumeFixture{r: NewReviewer(ri, nil), svc: svc, dbPath: dbPath}
+	return &resumeFixture{r: NewReviewer(ri, nil), ri: ri, svc: svc, dbPath: dbPath}
 }
 
 // planningSession creates the row a start creates before it has planned: the
@@ -185,12 +189,11 @@ func TestContinue_LostClaimIsAnError(t *testing.T) {
 	require.NotNil(t, res.Item)
 	itemID := res.Item.ID
 
-	beforeClaim = func(context.Context, int64) {
+	f.r.p.hooks.beforeClaim = func(context.Context, int64) {
 		claimed, cerr := f.svc.Pipeline().AnswerPipelineWorkItem(ctx, itemID, `"the other caller"`)
 		require.NoError(t, cerr)
 		require.True(t, claimed)
 	}
-	t.Cleanup(func() { beforeClaim = func(context.Context, int64) {} })
 
 	_, err = f.r.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), itemID)
 	require.Error(t, err)
@@ -253,4 +256,50 @@ func TestStartKey_IgnoresCaseOrderAndRepeats(t *testing.T) {
 	require.NotEqual(t, key([]string{"mcp"}, nil), key([]string{"store"}, nil))
 	require.NotEqual(t, key(nil, nil),
 		(&Pipeline{effort: EffortHigh}).startKey(), "effort is part of the key")
+}
+
+// An item that has been claimed but not yet applied is still outstanding. A
+// second caller that finds no unanswered item while the first is applying the
+// last one must not advance the session: the apply may enqueue follow-up
+// items, and completing the session would strand them and move the watermark.
+func TestApplying_ItemBeingAppliedHoldsThePhase(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	a, b := f.r, f.another()
+
+	res, err := a.StartOrResumeSession(ctx, liveWindow)
+	require.NoError(t, err)
+	require.NotNil(t, res.Item)
+	pending, err := f.svc.Pipeline().PendingPipelineWorkItems(ctx, res.SessionID)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "precondition: A is answering the last item")
+
+	var followUp int64
+	a.p.hooks.duringApply = func(ctx context.Context, _ int64) {
+		_, cerr := b.Current(ctx, res.SessionID)
+		require.Error(t, cerr, "B must not step the session while A applies")
+		require.Contains(t, cerr.Error(), "being applied by another caller")
+
+		sess, gerr := f.svc.Pipeline().GetPipelineSession(ctx, res.SessionID)
+		require.NoError(t, gerr)
+		require.Equal(t, "active", sess.Status)
+		require.Equal(t, "work", sess.Phase)
+
+		// The apply enqueues a follow-up, as a distill that synthesizes does.
+		require.NoError(t, f.svc.Pipeline().InsertPipelineWorkItem(ctx, store.PipelineWorkItem{
+			SessionID: res.SessionID, StepType: pending[0].StepType, ClusterKey: "follow-up",
+			FactsJSON: pending[0].FactsJSON, Priority: -1, Depth: 1,
+		}))
+		next, nerr := f.svc.Pipeline().NextPipelineWorkItem(ctx, res.SessionID)
+		require.NoError(t, nerr)
+		followUp = next.ID
+	}
+
+	_, err = a.ContinueSessionForItem(ctx, res.SessionID, answerFor(t, res), res.Item.ID)
+	require.NoError(t, err)
+
+	cur, err := b.Current(ctx, res.SessionID)
+	require.NoError(t, err)
+	require.NotNil(t, cur.Item, "after A's apply, B is served A's follow-up")
+	require.Equal(t, followUp, cur.Item.ID)
 }
