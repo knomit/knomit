@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -511,6 +512,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	cfg.Home = home
+	if ignored := ignoredExecutableConfig(home); ignored != "" {
+		ignoredConfigWarnOnce.Do(func() {
+			log.Warn().Str("ignored", ignored).Str("read", filepath.Join(home, "knomit.toml")).
+				Msg("knomit.toml beside the executable is not read; move its settings into the data root's knomit.toml")
+		})
+	}
 
 	// Decode the TOML file.
 	homeBefore := cfg.Home
@@ -794,6 +801,26 @@ func findConfigFile(homePath string) string {
 	}
 	return ""
 }
+
+// ignoredExecutableConfig is the knomit.toml beside the running executable
+// when one exists and is not also <homePath>/knomit.toml, else "". findConfigFile
+// does not read it; Load warns about it once, so an install that kept its
+// settings there learns where they must go.
+func ignoredExecutableConfig(homePath string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(filepath.Dir(exe), "knomit.toml")
+	if !fileExists(p) || filepath.Clean(p) == filepath.Join(homePath, "knomit.toml") {
+		return ""
+	}
+	return p
+}
+
+// ignoredConfigWarnOnce limits Load's warning about an ignored knomit.toml
+// beside the executable to one per process.
+var ignoredConfigWarnOnce sync.Once
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

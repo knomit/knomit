@@ -805,21 +805,9 @@ func TestLoad_RuntimeAllowRemoteFromTOML(t *testing.T) {
 
 // knomit.toml is read from the data root and nowhere else. The server and the
 // bridge are different executables, so a file beside either one would be seen
-// by that binary alone and the two could resolve different sockets. The file
-// is planted beside THIS test binary, the one os.Executable names.
+// by that binary alone and the two could resolve different sockets.
 func TestFindConfigFile_OnlyHome(t *testing.T) {
-	exe, err := os.Executable()
-	if err != nil {
-		t.Skipf("os.Executable: %v", err)
-	}
-	beside := filepath.Join(filepath.Dir(exe), "knomit.toml")
-	if _, err := os.Stat(beside); err == nil {
-		t.Skipf("%s already exists; not overwriting it", beside)
-	}
-	if err := os.WriteFile(beside, []byte("socket = '/beside/exe.sock'\n"), 0o600); err != nil {
-		t.Skipf("cannot write beside the test binary: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Remove(beside) })
+	plantBesideExecutable(t)
 
 	home := t.TempDir()
 	if got := findConfigFile(home); got != "" {
@@ -832,4 +820,39 @@ func TestFindConfigFile_OnlyHome(t *testing.T) {
 	if got := findConfigFile(home); got != inHome {
 		t.Fatalf("findConfigFile(%q) = %q, want %q", home, got, inHome)
 	}
+}
+
+// An install that kept its knomit.toml beside the binary is told, by the
+// server, that the file is no longer read.
+func TestIgnoredExecutableConfig(t *testing.T) {
+	if got := ignoredExecutableConfig(t.TempDir()); got != "" {
+		t.Fatalf("ignoredExecutableConfig = %q with no file beside the executable; want \"\"", got)
+	}
+	beside := plantBesideExecutable(t)
+	if got := ignoredExecutableConfig(t.TempDir()); got != beside {
+		t.Fatalf("ignoredExecutableConfig = %q, want %q", got, beside)
+	}
+	// A data root that IS the executable's directory reads that very file.
+	if got := ignoredExecutableConfig(filepath.Dir(beside)); got != "" {
+		t.Fatalf("ignoredExecutableConfig = %q when the file is <home>/knomit.toml; want \"\"", got)
+	}
+}
+
+// plantBesideExecutable writes a knomit.toml beside THIS test binary, the one
+// os.Executable names, and removes it when the test ends.
+func plantBesideExecutable(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("os.Executable: %v", err)
+	}
+	beside := filepath.Join(filepath.Dir(exe), "knomit.toml")
+	if _, err := os.Stat(beside); err == nil {
+		t.Skipf("%s already exists; not overwriting it", beside)
+	}
+	if err := os.WriteFile(beside, []byte("port = '1'\n"), 0o600); err != nil {
+		t.Skipf("cannot write beside the test binary: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(beside) })
+	return beside
 }
