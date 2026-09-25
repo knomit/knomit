@@ -1422,6 +1422,8 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 			return nil, wrapf(tool, err, "read active session")
 		}
 		replace := ""
+		// Set when replace is displaced as stale: the create re-checks it.
+		var idleBefore time.Time
 		// A session still planning is never resumed and never stale by the
 		// window; only takeover, or the reaper, displaces it.
 		if active != nil && active.Planning && !opts.Takeover {
@@ -1431,8 +1433,11 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 			lastUsed, perr := time.Parse(time.RFC3339, active.LastUsedAt)
 			live := perr == nil && time.Since(lastUsed) <= opts.ResumeWindow
 			switch {
-			case opts.Takeover || !live:
+			case opts.Takeover:
 				replace = active.ID
+			case !live:
+				replace = active.ID
+				idleBefore = time.Now().Add(-opts.ResumeWindow)
 			case active.StartKey == key:
 				resumed, rerr := d.Pipeline.ResumePipelineSession(ctx, active.ID)
 				if rerr != nil {
@@ -1458,7 +1463,7 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 				}
 			}
 		}
-		sess, err := d.Pipeline.CreatePipelineSessionReplacing(ctx, tool, branch, actor, key, replace)
+		sess, err := d.Pipeline.CreatePipelineSessionReplacing(ctx, tool, branch, actor, key, replace, idleBefore)
 		if errors.Is(err, store.ErrPipelineSlotChanged) {
 			continue
 		}

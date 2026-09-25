@@ -13,6 +13,7 @@ import (
 	context "context"
 	store "knomit/internal/store"
 	reflect "reflect"
+	time "time"
 
 	gomock "go.uber.org/mock/gomock"
 )
@@ -175,18 +176,18 @@ func (mr *MockPipelineIndexMockRecorder) CreatePipelineSession(ctx, tool, branch
 }
 
 // CreatePipelineSessionReplacing mocks base method.
-func (m *MockPipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*store.PipelineSession, error) {
+func (m *MockPipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*store.PipelineSession, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CreatePipelineSessionReplacing", ctx, tool, branch, createdBy, startKey, replace)
+	ret := m.ctrl.Call(m, "CreatePipelineSessionReplacing", ctx, tool, branch, createdBy, startKey, replace, idleBefore)
 	ret0, _ := ret[0].(*store.PipelineSession)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // CreatePipelineSessionReplacing indicates an expected call of CreatePipelineSessionReplacing.
-func (mr *MockPipelineIndexMockRecorder) CreatePipelineSessionReplacing(ctx, tool, branch, createdBy, startKey, replace any) *gomock.Call {
+func (mr *MockPipelineIndexMockRecorder) CreatePipelineSessionReplacing(ctx, tool, branch, createdBy, startKey, replace, idleBefore any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSessionReplacing", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSessionReplacing), ctx, tool, branch, createdBy, startKey, replace)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePipelineSessionReplacing", reflect.TypeOf((*MockPipelineIndex)(nil).CreatePipelineSessionReplacing), ctx, tool, branch, createdBy, startKey, replace, idleBefore)
 }
 
 // DeletePipelineWorkItem mocks base method.

@@ -166,7 +166,7 @@ func (pi *pipelineIndex) SetPipelineWatermark(ctx context.Context, tool, branch,
 // layer that knows what the claim is made of. Empty is a legitimate value: an
 // in-process caller has no request to attribute to.
 func (pi *pipelineIndex) CreatePipelineSession(ctx context.Context, tool, branch, createdBy string) (*PipelineSession, error) {
-	return pi.createPipelineSession(ctx, tool, branch, createdBy, "", anyActive)
+	return pi.createPipelineSession(ctx, tool, branch, createdBy, "", anyActive, time.Time{})
 }
 
 // anyActive is createPipelineSession's "replace whatever is active" sentinel.
@@ -175,14 +175,15 @@ const anyActive = "\x00any"
 
 // CreatePipelineSessionReplacing creates a session with startKey, but only if
 // the tool+branch's active session is exactly replace ("" meaning none), which
-// it abandons. Any other active session fails the call with
+// it abandons. A non-zero idleBefore also requires that session's
+// last_used_at to be before it, for a displacement decided on staleness. Any other active session fails the call with
 // ErrPipelineSlotChanged and writes nothing, so a caller that decided from a
 // read of the slot never displaces a session it did not see.
-func (pi *pipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*PipelineSession, error) {
-	return pi.createPipelineSession(ctx, tool, branch, createdBy, startKey, replace)
+func (pi *pipelineIndex) CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
+	return pi.createPipelineSession(ctx, tool, branch, createdBy, startKey, replace, idleBefore)
 }
 
-func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*PipelineSession, error) {
+func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Own transaction on the session DB. We deliberately do NOT consult any
@@ -218,15 +219,23 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 	// continue call is rejected, after spending a turn composing an answer to
 	// an item that no longer exists. Nothing here can notify the loser, so the
 	// least this can do is let the winner's result say what it displaced.
-	var abandoned, abandonedBy string
+	var abandoned, abandonedBy, abandonedLastUsed string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT id, created_by FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`,
+		`SELECT id, created_by, last_used_at FROM pipeline_sessions WHERE tool = ? AND branch = ? AND status = 'active' LIMIT 1`,
 		tool, branch,
-	).Scan(&abandoned, &abandonedBy); err != nil && err != sql.ErrNoRows {
+	).Scan(&abandoned, &abandonedBy, &abandonedLastUsed); err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("CreatePipelineSession find active: %w", err)
 	}
 	if replace != anyActive && abandoned != replace {
 		return nil, ErrPipelineSlotChanged
+	}
+	// Displacing as stale: re-check the staleness here, under the write lock.
+	// A session used again since the caller's read is live and stays.
+	if abandoned != "" && !idleBefore.IsZero() {
+		lastUsed, perr := time.Parse(time.RFC3339, abandonedLastUsed)
+		if perr == nil && !lastUsed.Before(idleBefore) {
+			return nil, ErrPipelineSlotChanged
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE pipeline_sessions SET status = 'abandoned', updated_at = ? WHERE tool = ? AND branch = ? AND status = 'active'`,

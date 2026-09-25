@@ -59,7 +59,7 @@ func newResumeFixture(t *testing.T) *resumeFixture {
 func (f *resumeFixture) planningSession(t *testing.T) *store.PipelineSession {
 	t.Helper()
 	sess, err := f.svc.Pipeline().CreatePipelineSessionReplacing(context.Background(),
-		"review", resumeBranch, "mcp-session:planner", f.r.p.startKey(), "")
+		"review", resumeBranch, "mcp-session:planner", f.r.p.startKey(), "", time.Time{})
 	require.NoError(t, err)
 	return sess
 }

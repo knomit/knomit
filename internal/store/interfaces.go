@@ -236,7 +236,7 @@ type PipelineIndex interface {
 	// CreatePipelineSessionReplacing is CreatePipelineSession that abandons
 	// only the named active session ("" meaning none), and otherwise fails
 	// with ErrPipelineSlotChanged without writing.
-	CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*PipelineSession, error)
+	CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string, idleBefore time.Time) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
 	ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
 	// ResumePipelineSession bumps an active, planned session's heartbeat for a
