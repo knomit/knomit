@@ -199,6 +199,12 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		gitHandler = web.GitRemoteHandler(a.manager)
 	}
 
+	// The Host names a loopback peer may use and still be anonymous (#281):
+	// [auth].loopback_hosts plus the bind host. From cfg.Host HERE, not at
+	// config.Load, because `knomit serve --host` is applied between the two.
+	webAuth := cfg.Auth
+	webAuth.LoopbackHosts = cfg.Auth.EffectiveLoopbackHosts(cfg.Host)
+
 	a.server = &web.Server{
 		Manager:           a.manager,
 		GitHandler:        gitHandler,
@@ -211,7 +217,7 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		APIOnly:           opts.APIOnly,
 		CORSOrigins:       opts.CORSOrigins,
 		ReadOnly:          cfg.ReadOnly,
-		Auth:              cfg.Auth,
+		Auth:              webAuth,
 		SlowRequestMS:     cfg.Log.SlowRequestMS,
 		Logs:              opts.LogTap,
 		// 0 means experiments never expire, and the API then OMITS

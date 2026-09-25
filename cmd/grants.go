@@ -25,8 +25,6 @@ func grantsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "grants",
 		Short: "Add, revoke and list per-principal permissions on this instance",
-		// A refusal is an answer, not a usage mistake: print the error alone.
-		SilenceUsage: true,
 	}
 	var by string
 	add := &cobra.Command{

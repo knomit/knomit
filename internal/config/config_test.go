@@ -2,6 +2,7 @@ package config
 
 import (
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -648,5 +649,70 @@ func TestLoad_TLSDefaultsOffWithDirUnderHome(t *testing.T) {
 	}
 	if cfg.TLS.Addr != "0.0.0.0:19279" || cfg.TLS.Dir != "/srv/knomit/pki" {
 		t.Fatalf("env overrides: %+v", cfg.TLS)
+	}
+}
+
+// [auth].loopback_hosts (#281): the extra DNS names a loopback peer may use
+// and still be the anonymous principal. EffectiveLoopbackHosts adds the BIND
+// host when it is a DNS name, and lower-cases everything; it is evaluated
+// where the Server is built, from the POST-override cfg.Host (knomit serve
+// --host is applied after Load), never at load.
+func TestEffectiveLoopbackHosts(t *testing.T) {
+	a := AuthConfig{LoopbackHosts: []string{"Box.Tail1234.TS.net", "dev.example"}}
+	for _, c := range []struct {
+		bind string
+		want string
+	}{
+		{"mybox", "box.tail1234.ts.net,dev.example,mybox"},
+		{"MyBox.lan", "box.tail1234.ts.net,dev.example,mybox.lan"},
+		{"localhost", "box.tail1234.ts.net,dev.example,localhost"},
+		// Wildcards and IP literals name no host: IP literals pass the guard
+		// anyway, and a wildcard is not a name anyone browses to.
+		{"", "box.tail1234.ts.net,dev.example"},
+		{"0.0.0.0", "box.tail1234.ts.net,dev.example"},
+		{"::", "box.tail1234.ts.net,dev.example"},
+		{"[::1]", "box.tail1234.ts.net,dev.example"},
+		{"127.0.0.1", "box.tail1234.ts.net,dev.example"},
+	} {
+		if got := strings.Join(a.EffectiveLoopbackHosts(c.bind), ","); got != c.want {
+			t.Errorf("bind %q: got %q, want %q", c.bind, got, c.want)
+		}
+	}
+	if got := (AuthConfig{}).EffectiveLoopbackHosts(""); len(got) != 0 {
+		t.Fatalf("nothing configured, no bind name: got %v", got)
+	}
+}
+
+// A loopback_hosts entry is an exact DNS name. Anything that looks like a
+// port, a URL, a pattern or a typo fails the boot rather than silently
+// matching nothing (or, for a pattern, too much).
+func TestValidate_LoopbackHostsRefusesNonNames(t *testing.T) {
+	for _, bad := range []string{"", " ", "box:443", "https://box", "box/", "*.ts.net", "*", "my box", ".ts.net"} {
+		c := Defaults()
+		c.Auth.LoopbackHosts = []string{"ok.example", bad}
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "loopback_hosts") {
+			t.Errorf("entry %q: want a loopback_hosts error, got %v", bad, err)
+		}
+	}
+	c := Defaults()
+	c.Auth.LoopbackHosts = []string{"box.tail1234.ts.net", "MyBox"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid names refused: %v", err)
+	}
+}
+
+func TestLoad_LoopbackHostsFromTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "knomit.toml"),
+		[]byte("[auth]\nloopback_hosts = [\"Box.Tail1234.ts.net\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := strings.Join(cfg.Auth.EffectiveLoopbackHosts(cfg.Host), ","); got != "box.tail1234.ts.net,localhost" {
+		t.Fatalf("got %q", got)
 	}
 }
