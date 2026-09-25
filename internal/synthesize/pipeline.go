@@ -23,6 +23,7 @@ package synthesize
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/fact/textnorm"
 	"knomit/internal/llm"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -1302,19 +1304,30 @@ func (e *LiveSessionError) Error() string {
 }
 
 // startKey is what a start must match to resume a live session: the effort
-// and the scope, canonicalised so argument order, case and repeats do not
-// matter — the scope filter matches case-insensitively too.
+// and the scope, each list folded the way the scope filter compares tags
+// (store.CanonicalizeTag for domains, textnorm.Fold for entities), deduped,
+// sorted, and JSON-encoded as a list, so order, case and repeats do not make
+// two scopes different and a comma inside one value never equals two values.
 func (p *Pipeline) startKey() string {
-	return fmt.Sprintf("effort=%s;domain=%s;entities=%s",
-		p.effort, canonicalScopeList(p.scope.Domain), canonicalScopeList(p.scope.Entities))
+	key, err := json.Marshal(struct {
+		Effort   Effort   `json:"effort"`
+		Domain   []string `json:"domain"`
+		Entities []string `json:"entities"`
+	}{p.effort, canonicalScopeList(p.scope.Domain, store.CanonicalizeTag), canonicalScopeList(p.scope.Entities, textnorm.Fold)})
+	if err != nil {
+		// Marshalling strings cannot fail; a key nobody matches is the safe
+		// answer if it ever did.
+		return ""
+	}
+	return string(key)
 }
 
-// canonicalScopeList lowercases, dedupes and sorts a scope list.
-func canonicalScopeList(in []string) string {
+// canonicalScopeList folds, dedupes and sorts a scope list.
+func canonicalScopeList(in []string, fold func(string) string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		v = strings.ToLower(strings.TrimSpace(v))
+		v = fold(v)
 		if v == "" || seen[v] {
 			continue
 		}
@@ -1322,7 +1335,7 @@ func canonicalScopeList(in []string) string {
 		out = append(out, v)
 	}
 	sort.Strings(out)
-	return strings.Join(out, ",")
+	return out
 }
 
 // maxSlotRetries bounds StartOrResumeSession's re-reads when a concurrent

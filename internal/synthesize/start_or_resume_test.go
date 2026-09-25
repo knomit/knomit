@@ -372,3 +372,22 @@ func TestStartOrResume_StillPlanningOffersTakeover(t *testing.T) {
 	require.Contains(t, err.Error(), "still planning")
 	require.Contains(t, err.Error(), "takeover:true")
 }
+
+// The key encodes each list as a list, so a comma inside one value never
+// equals two values, and it folds tags exactly as the scope filter does.
+func TestStartKey_EncodesListsAndFoldsLikeTheFilter(t *testing.T) {
+	key := func(domain, entities []string) string {
+		return (&Pipeline{effort: EffortNormal, scope: ScopeFilter{Domain: domain, Entities: entities}}).startKey()
+	}
+	require.NotEqual(t, key([]string{"a,b"}, nil), key([]string{"a", "b"}, nil))
+	require.NotEqual(t, key(nil, []string{"a,b"}), key(nil, []string{"a", "b"}))
+	require.Equal(t, key([]string{"store sqlite"}, nil), key([]string{"store-sqlite"}, nil),
+		"a hyphen and a space are one tag to the domain filter")
+	// Unicode forms follow the filter too: DomainTagMatches normalises to NFC,
+	// EntityTagMatches only case-folds, so NFC and NFD are one domain but two
+	// entities.
+	require.True(t, store.DomainTagMatches("caf\u00e9", "cafe\u0301"))
+	require.Equal(t, key([]string{"caf\u00e9"}, nil), key([]string{"cafe\u0301"}, nil))
+	require.False(t, store.EntityTagMatches("caf\u00e9", "cafe\u0301"))
+	require.NotEqual(t, key(nil, []string{"caf\u00e9"}), key(nil, []string{"cafe\u0301"}))
+}
