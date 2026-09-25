@@ -343,3 +343,32 @@ func TestComplete_DisplacedPlannerCompletesNothing(t *testing.T) {
 	require.Equal(t, before, f.watermark(t), "and the watermark does not move")
 	require.Equal(t, "active", f.status(t, taken.SessionID))
 }
+
+// An in-process run (RunAll, the web synthesis job) has no session an agent
+// can continue, so a start is not pointed at its session_id.
+func TestStartOrResume_InProcessSessionIsNamedAsSuch(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	sess, err := f.svc.Pipeline().CreatePipelineSession(ctx, "review", resumeBranch, "")
+	require.NoError(t, err)
+	require.NoError(t, f.svc.Pipeline().MarkPipelineSessionPlanned(ctx, sess.ID))
+
+	_, err = f.r.StartOrResumeSession(ctx, liveWindow)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "an in-process review is running on this branch")
+	require.Contains(t, err.Error(), "takeover:true")
+	require.NotContains(t, err.Error(), sess.ID, "there is nothing for the caller to continue")
+}
+
+// A plan that hangs holds the slot until the reaper; the refusal says how to
+// take it instead of only "retry".
+func TestStartOrResume_StillPlanningOffersTakeover(t *testing.T) {
+	ctx := context.Background()
+	f := newResumeFixture(t)
+	f.planningSession(t)
+
+	_, err := f.r.StartOrResumeSession(ctx, liveWindow)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "still planning")
+	require.Contains(t, err.Error(), "takeover:true")
+}

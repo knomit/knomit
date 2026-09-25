@@ -61,9 +61,8 @@ type PipelineSession struct {
 	// exactly the unattributable row this column exists to prevent.
 	CreatedBy string
 	// StartKey is what a later start must match to resume this session; see
-	// the start_key column. Shared is set once a second start resumed it.
+	// the start_key column. Empty for an in-process start.
 	StartKey string
-	Shared   bool
 	// Planning is set by every create and cleared once its start has planned
 	// the work and rendered the first item (MarkPipelineSessionPlanned).
 	Planning  bool
@@ -263,21 +262,20 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 	return s, nil
 }
 
-const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, shared, planning,
+const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, planning,
 		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
 		        created_at, updated_at, last_used_at`
 
 func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
 	var s PipelineSession
-	var scoped, shared, planning int
-	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &shared, &planning,
+	var scoped, planning int
+	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &planning,
 		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
 		&s.CreatedAt, &s.UpdatedAt, &s.LastUsedAt)
 	if err != nil {
 		return nil, err
 	}
 	s.Scoped = scoped != 0
-	s.Shared = shared != 0
 	s.Planning = planning != 0
 	return &s, nil
 }
@@ -336,13 +334,13 @@ func (pi *pipelineIndex) AbandonPlanningPipelineSession(ctx context.Context, id 
 	return nil
 }
 
-// ResumePipelineSession marks an active session shared and bumps its
-// heartbeat. resumed=false means it is no longer resumable: it completed, was
+// ResumePipelineSession bumps an active, planned session's heartbeat for a
+// resuming caller. resumed=false means it is no longer resumable: it completed, was
 // displaced, or is still planning.
 func (pi *pipelineIndex) ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET shared = 1, last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active' AND planning = 0`,
+		`UPDATE pipeline_sessions SET last_used_at = ?, updated_at = ? WHERE id = ? AND status = 'active' AND planning = 0`,
 		now, now, id)
 	if err != nil {
 		return false, fmt.Errorf("ResumePipelineSession: %w", err)

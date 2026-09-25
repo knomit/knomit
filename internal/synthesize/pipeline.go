@@ -253,7 +253,7 @@ func (p *Pipeline) Current(ctx context.Context, sessionID string) (*PipelineResu
 // errStillPlanning refuses a call on a session whose start has not finished
 // planning: its queue is empty only because nothing is queued yet.
 func errStillPlanning(tool, sessionID string) error {
-	return errf(tool, "session %q is still planning; retry shortly", sessionID)
+	return errf(tool, "session %q is still planning; retry shortly, or start with takeover:true to abandon it", sessionID)
 }
 
 // planSession is StartSession after the session row exists: mark scope, scan
@@ -484,14 +484,6 @@ func (p *Pipeline) continueSessionForItem(ctx context.Context, sessionID, respon
 	}
 	if sess.Planning {
 		return nil, errStillPlanning(tool, sessionID)
-	}
-	// A shared session has more than one caller answering its items, so an
-	// answer that does not name its item could land on the item another
-	// caller's answer just advanced to. Checked before anything is read or
-	// claimed, so the refusal leaves the item fully retryable.
-	if sess.Shared && itemID == 0 {
-		return nil, errf(tool, "item_id is required: session %q is shared by more than one caller, "+
-			"so echo item.id from the item you are answering", sessionID)
 	}
 
 	item, err := d.Pipeline.NextPipelineWorkItem(ctx, sessionID)
@@ -1287,9 +1279,16 @@ type LiveSessionError struct {
 	SessionID string
 	CreatedBy string
 	LastUsed  time.Time
+	// InProcess marks a session opened without a resume policy (RunAll, the
+	// web synthesis job): no agent can continue it, so its id is not offered.
+	InProcess bool
 }
 
 func (e *LiveSessionError) Error() string {
+	if e.InProcess {
+		return fmt.Sprintf("an in-process %s is running on this branch; wait for it to finish, "+
+			"or start with takeover:true to abandon it", e.Tool)
+	}
 	by := e.CreatedBy
 	if by == "" {
 		by = "an in-process caller"
@@ -1332,15 +1331,18 @@ func canonicalScopeList(in []string) string {
 const maxSlotRetries = 3
 
 // StartOrResumeSession is StartSession for callers that must not silently
-// displace one another (the MCP tools). When the tool and branch already have
-// an active session:
+// displace one another (the knomit_review handler). When the tool and branch
+// already have an active session:
 //
-//   - idle longer than opts.ResumeWindow, or opts.Takeover: it is abandoned and
-//     a new session starts, naming it in abandoned_session;
+//   - opts.Takeover: it is abandoned and a new session starts, naming it in
+//     abandoned_session;
+//   - still planning: refused, whatever its age (only takeover or the reaper
+//     displaces it);
+//   - idle longer than opts.ResumeWindow: displaced as for takeover;
 //   - live, with the same effort and scope: it is RESUMED — the result is its
-//     current item under its own session_id, flagged Resumed, and the session
-//     is marked shared so every later answer must carry item_id;
-//   - live, with a different effort or scope: *LiveSessionError.
+//     current item under its own session_id, flagged Resumed;
+//   - live, with a different effort or scope, or opened in-process:
+//     *LiveSessionError.
 func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	totalStart := time.Now()
@@ -1386,6 +1388,7 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 				return nil, &LiveSessionError{
 					Tool: tool, Branch: branch, SessionID: active.ID,
 					CreatedBy: active.CreatedBy, LastUsed: lastUsed,
+					InProcess: active.StartKey == "",
 				}
 			}
 		}

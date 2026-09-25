@@ -74,10 +74,6 @@ CREATE TABLE pipeline_sessions (
     -- for sessions opened without a resume policy (in-process runs), which
     -- therefore never match.
     start_key    TEXT NOT NULL DEFAULT '',
-    -- 1 once a second start has resumed this session. A shared session
-    -- requires item_id on every answer, so one caller's answer can never land
-    -- on the item another caller's answer just advanced to.
-    shared       INTEGER NOT NULL DEFAULT 0,
     -- 1 from every create until its start has planned the work and rendered
     -- the first item. A session still planning is never resumed and never stale by the
     -- resume window: its queue is empty only because nothing is queued yet.

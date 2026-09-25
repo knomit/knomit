@@ -239,8 +239,8 @@ type PipelineIndex interface {
 	CreatePipelineSessionReplacing(ctx context.Context, tool, branch, createdBy, startKey, replace string) (*PipelineSession, error)
 	GetPipelineSession(ctx context.Context, id string) (*PipelineSession, error)
 	ActivePipelineSession(ctx context.Context, tool, branch string) (*PipelineSession, error)
-	// ResumePipelineSession marks an active session shared; false when it is
-	// no longer active.
+	// ResumePipelineSession bumps an active, planned session's heartbeat for a
+	// resuming caller; false when it is no longer resumable.
 	ResumePipelineSession(ctx context.Context, id string) (resumed bool, err error)
 	// MarkPipelineSessionPlanned clears the planning mark and bumps the
 	// heartbeat once a session's work is queued.
