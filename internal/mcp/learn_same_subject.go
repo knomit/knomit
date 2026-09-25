@@ -169,8 +169,9 @@ func findSameSubjectCandidates(
 //
 // It is shared deliberately. applyDedupMerge passes it as its search PREFIX,
 // and the same-subject gate compares against it EXACTLY (sameCategoryDir) —
-// so the gate's exact-directory cap always sits inside the merge's prefix
-// scope, never outside it. Two derivations that drifted would put the gate's
+// so, for ASCII paths, the gate's exact-directory cap always sits inside the
+// merge's prefix scope, never outside it (EqualFold folds Unicode, LIKE folds
+// only ASCII). Two derivations that drifted would put the gate's
 // upper bound somewhere the merge does not cover, which is decision 9d's
 // defect all over again.
 //

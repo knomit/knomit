@@ -672,13 +672,18 @@ func applyDedupMerge(
 		// on-disk path minus the ontology root and the file name.
 		//
 		// A match that is merged is re-validated below against the INCOMING
-		// fact's topic path, not the match's. That is accepted: a prefix
-		// sibling or descendant shares the topic segment, so the root- and
-		// topic-level rules are the same. The two could differ at the topic
-		// segment only if a fact sat at a topic root and one topic name were a
-		// prefix of another, and neither holds (a category is required, and no
-		// topic name prefixes another). Rules declared on a deeper ontology
-		// node of the MATCH's own path are not run. See #260.
+		// fact's topic path, not the match's. That is accepted: a category is
+		// required (validateAndBuildFacts), so the topic segment is always
+		// followed by "/" and the prefix can never cross into another topic;
+		// the root- and topic-level rules are therefore the same. Below the
+		// topic the paths can differ:
+		//   - rules declared on a deeper ontology node of the MATCH's own path
+		//     are not run;
+		//   - for a prefix SIBLING, rules on the INCOMING path's deeper nodes
+		//     (e.g. ops/task) ARE run against a fact that will live under
+		//     ops/tasks, a node whose rules it was never subject to. For a
+		//     descendant this is harmless: those nodes are its ancestors.
+		// See #260.
 		if ontology.LearnDedupOff(topicPathOf(ontologyRoot, match.Path)) {
 			continue
 		}

@@ -541,9 +541,10 @@ func TestLearnHandler_PipelineOriginExemptWithoutRefs(t *testing.T) {
 
 // Decision 9d, at the handler. This is the shape of every measured collision
 // pair: two facts about one event, filed under DIFFERENT categories, similar
-// enough that applyDedupMerge would have folded them had they shared a
-// directory — and it never looked, because it searches only the incoming
-// fact's own category dir.
+// enough that applyDedupMerge would have folded them had one sat under the
+// other's directory prefix — and it never looked, because it searches only
+// under the incoming fact's category-directory prefix (`path LIKE dir%`, #260),
+// which never reaches another topic or an unrelated category.
 //
 // Before 9d both gates passed it: the merge could not see it, and the band
 // excluded it for being at or above Dedup. Measured pairs that fell through:
@@ -558,7 +559,8 @@ func TestLearnHandler_RefusesCrossCategoryCollisionAboveDedup(t *testing.T) {
 			seeded := seedRampFact(t, ctx, emb) // kb/decisions/accepted/ramp/ai-index/...
 			before := liveFactCount(t, svc)
 
-			// A DIFFERENT category directory: applyDedupMerge never searches here.
+			// A DIFFERENT topic and category: outside the incoming prefix
+			// kb/gotchas/tools/ai/spend, so applyDedupMerge never searches here.
 			r, err := LearnHandler(emb)(ctx, sameSubjectLearnReq(
 				"cross-category-dup", "gotchas", "tools/ai/spend",
 				"Enterprise AI spend is plateauing",
@@ -576,9 +578,10 @@ func TestLearnHandler_RefusesCrossCategoryCollisionAboveDedup(t *testing.T) {
 }
 
 // The other half of 9d, and the reason the cap is conditional rather than gone:
-// inside the incoming fact's OWN category directory applyDedupMerge really has
-// already folded an at-or-above-Dedup match, so refusing there would reject the
-// write the merge just absorbed.
+// in EXACTLY the incoming fact's own category directory (the one place
+// sameCategoryDir exempts, and inside the merge's prefix scope) applyDedupMerge
+// really has already folded an at-or-above-Dedup match, so refusing there would
+// reject the write the merge just absorbed.
 func TestLearnHandler_SameCategoryAboveDedupStillMerges(t *testing.T) {
 	for _, ts := range handlerThresholdSets(t) {
 		t.Run(ts.name, func(t *testing.T) {
