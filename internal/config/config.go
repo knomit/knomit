@@ -234,8 +234,8 @@ type Config struct {
 	Port string `toml:"port"`
 	// Socket is the local authenticated listener: KNOMIT_SOCKET, else this
 	// key, else a default under Home (see socketFor). An explicit value must
-	// be an absolute path, or a pipe name on Windows; a leading ~ is
-	// expanded. The server reads it once at startup, while the hooks read it
+	// be an absolute path on unix (a leading ~ is expanded) and a pipe name
+	// \\.\pipe\<name> on Windows (no ~ expansion). The server reads it once at startup, while the hooks read it
 	// per connection and the MCP bridge when it starts, so a change takes
 	// effect only after the server restarts — until then clients find no
 	// listener at the new path and use TCP without the verified identity.
