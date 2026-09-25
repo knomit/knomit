@@ -208,3 +208,28 @@ func TestSocketPath_RelativeSocketRefused(t *testing.T) {
 		})
 	}
 }
+
+// setOSHome points os.UserHomeDir at a temp directory on every platform.
+func setOSHome(t *testing.T) string {
+	t.Helper()
+	osHome := t.TempDir()
+	t.Setenv("HOME", osHome)
+	t.Setenv("USERPROFILE", osHome)
+	return osHome
+}
+
+// A "~/" in the socket value means the user's home directory, on both sides.
+func TestSocketPath_AgreesWithLoad_TildeInSocketEnv(t *testing.T) {
+	osHome := setOSHome(t)
+	isolateSocketEnv(t, t.TempDir())
+	t.Setenv("KNOMIT_SOCKET", "~/x.sock")
+	requireAgreement(t, filepath.Join(osHome, "x.sock"))
+}
+
+func TestSocketPath_AgreesWithLoad_TildeInTOMLSocket(t *testing.T) {
+	osHome := setOSHome(t)
+	home := t.TempDir()
+	isolateSocketEnv(t, home)
+	writeSocketTOML(t, home, "~/x.sock")
+	requireAgreement(t, filepath.Join(osHome, "x.sock"))
+}

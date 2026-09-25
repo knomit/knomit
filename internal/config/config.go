@@ -865,7 +865,8 @@ func envDurationOr(key string, target *time.Duration) error {
 	return nil
 }
 
-// expandTilde rewrites a leading "~/" to the user's home directory.
+// expandTilde rewrites a leading "~/" (and, on Windows, `~\`) to the user's
+// home directory.
 //
 // This is the OPERATING SYSTEM's notion of home, not Config.Home: a "~/" a
 // person typed into knomit.toml means their home directory, and on Windows
@@ -876,7 +877,8 @@ func envDurationOr(key string, target *time.Duration) error {
 // "/.ssh/known_hosts" — the current drive's root on Windows — which is the
 // same class of bug as the one that created C:\.knomit.
 func expandTilde(s *string) error {
-	if !strings.HasPrefix(*s, "~/") {
+	if !strings.HasPrefix(*s, "~/") &&
+		!(filepath.Separator == '\\' && strings.HasPrefix(*s, `~\`)) {
 		return nil
 	}
 	home, err := os.UserHomeDir()

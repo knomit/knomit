@@ -194,10 +194,11 @@ func SocketPath() (string, error) {
 // the server and the bridge cannot order the layers differently. It is pure:
 // callers read the environment and pass it in.
 //
-// home must already be tilde-expanded and absolute. A chosen value that is not
-// an absolute path (or, on Windows, a pipe name) is an error: it would resolve
-// against each process's own working directory, and the server and the bridge
-// do not share one.
+// home must already be tilde-expanded and absolute. The chosen value is
+// tilde-expanded here, so both sides expand it or neither does. One that is
+// then not an absolute path (or, on Windows, a pipe name) is an error: it
+// would resolve against each process's own working directory, and the server
+// and the bridge do not share one.
 func socketFor(home, fromTOML, fromEnv string) (string, error) {
 	var sock string
 	switch {
@@ -207,6 +208,9 @@ func socketFor(home, fromTOML, fromEnv string) (string, error) {
 		sock = fromTOML
 	default:
 		return localListenerName(home), nil
+	}
+	if err := expandTilde(&sock); err != nil {
+		return "", err
 	}
 	if !isAbsListener(sock) {
 		return "", fmt.Errorf("socket %q must be an absolute path; set KNOMIT_SOCKET or the knomit.toml socket key to one", sock)
