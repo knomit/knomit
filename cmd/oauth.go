@@ -32,9 +32,8 @@ import (
 // opens control.db directly: it has no one to wake.
 func oauthCmd() *cobra.Command {
 	c := &cobra.Command{
-		Use:          "oauth",
-		Short:        "List, approve and deny OAuth authorization requests waiting on this instance",
-		SilenceUsage: true,
+		Use:   "oauth",
+		Short: "List, approve and deny OAuth authorization requests waiting on this instance",
 	}
 	pending := &cobra.Command{
 		Use:   "pending",
