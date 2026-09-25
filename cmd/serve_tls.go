@@ -47,7 +47,7 @@ func openTLSServer(ctx context.Context, tcfg config.TLSConfig, keyPath string, l
 	}
 	ps, err := pki.NewServer(tcfg.Dir, keyPath, logTLSReason, tlsRecheckInterval)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tls listener: %w", err)
+		return nil, nil, fmt.Errorf("tls listener on %s: %w", tcfg.Addr, err)
 	}
 	ln, _, err := auth.ListenTLS(tcfg.Addr, ps.TLSConfig())
 	if err != nil {

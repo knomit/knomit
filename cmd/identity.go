@@ -33,9 +33,6 @@ func identityCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "identity",
 		Short: "Instance certificates: mint the fleet root, enroll, install, revoke, show",
-		// A refusal (wrong key, older CRL, unknown serial) is an answer, not a
-		// usage mistake: print the error alone.
-		SilenceUsage: true,
 	}
 	c.AddCommand(identityInitMasterCmd(), identityEnrollCmd(), identityInstallCmd(), identityRevokeCmd(), identityShowCmd())
 	return c

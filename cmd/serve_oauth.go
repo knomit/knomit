@@ -29,7 +29,7 @@ func openOAuthServer(o config.OAuthConfig, h http.Handler, like *http.Server) (*
 	}
 	ln, err := net.Listen("tcp", o.Addr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("oauth listener on %s: %w", o.Addr, err)
+		return nil, nil, fmt.Errorf("oauth listener: %w", err) // err names the address
 	}
 	return &http.Server{
 		Handler:           h,
