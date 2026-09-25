@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -107,6 +108,12 @@ type NativeService struct {
 	// GetSettings on the UI thread, which can be called before that happens.
 	mu            sync.Mutex
 	effectivePort int
+
+	// tls is the boot's TLS listener state, published by the boot goroutine
+	// (see tlsStatus); nil until run() wires it.
+	tls *tlsStatus
+	// installMu serialises InstallBundle: see there.
+	installMu sync.Mutex
 
 	// relaunchTarget resolves WHERE to relaunch (the .app bundle on darwin, the
 	// executable path elsewhere) without spawning anything. Defaults to the
@@ -230,7 +237,13 @@ func (n *NativeService) GetSettings() (Settings, error) {
 // restart. The PORT cannot: it is bound once at boot, and rebinding would
 // strand every connected MCP client, which caches the port at startup. The UI
 // is responsible for telling the user that.
-func (n *NativeService) SaveSettings(s Settings) error {
+//
+// Gated to the Settings window: a save can set [tls].addr, which opens a
+// network port on the next launch (see callerIsSettings).
+func (n *NativeService) SaveSettings(ctx context.Context, s Settings) error {
+	if !callerIsSettings(ctx) {
+		return errNotSettingsWindow
+	}
 	if err := applySettings(s, n.configPath, n.autostart, envOverrides(os.Getenv)); err != nil {
 		return err
 	}

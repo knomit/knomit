@@ -129,8 +129,11 @@ func run(ctx context.Context) error {
 	// and populating each repo's commit log). Running it inline is what used to
 	// keep the tray icon off the menu bar until it finished. Now it overlaps
 	// Wails' own startup, and the tray appears wearing the amber boot badge.
+	// The TLS listener's state, for Settings' Fleet identity section: made
+	// here because the boot starts before NativeService exists (see below).
+	tlsSt := &tlsStatus{}
 	boot := startServerBoot(ctx, func(ctx context.Context, setPhase func(bootPhase)) (string, func(), error) {
-		return bootKnomit(ctx, cfg, lockPath, setPhase)
+		return bootKnomit(ctx, cfg, lockPath, setPhase, tlsSt)
 	})
 	// Wails calls os.Exit on quit, so Go defers in run() do not fire. Cleanup
 	// runs via Wails' OnShutdown hook instead; serverBoot.stop is idempotent, so
@@ -157,6 +160,7 @@ func run(ctx context.Context) error {
 	// on a bundle is the only one there is.
 	nativeSvc := newNativeService(
 		filepath.Join(cfg.Home, "knomit.toml"), logFile, autostart.New())
+	nativeSvc.tls = tlsSt
 	// Restarting must release this process's single-instance lockfile before
 	// spawning the replacement — see the releaseInstance field comment on
 	// NativeService. boot.stop is the same idempotent teardown OnShutdown
@@ -417,7 +421,7 @@ func (g *appStartGate) open() {
 //
 // This is the slow half of startup and it runs on a goroutine (see
 // startServerBoot), so it must not touch Wails — nothing here does.
-func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhase func(bootPhase)) (string, func(), error) {
+func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhase func(bootPhase), tlsSt *tlsStatus) (string, func(), error) {
 	setPhase(phaseInstallingTools)
 	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
 	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
@@ -466,6 +470,7 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhas
 		a.Close()
 		return "", nil, err
 	}
+	tlsSt.set(srv.tlsState)
 	apiBase := fmt.Sprintf("http://127.0.0.1:%d", port)
 	log.Info().Str("api", apiBase).Int("port", port).Str("socket", cfg.Socket).Msg("knomit-desktop server up (API-only)")
 	return apiBase, func() { srv.shutdown(); a.Close() }, nil

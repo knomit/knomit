@@ -65,13 +65,7 @@ func ensureKeyPair(path string) (ssh.Signer, string, error) {
 		return nil, "", fmt.Errorf("create signer: %w", err)
 	}
 
-	hostname, _ := os.Hostname()
-	if hostname == "" {
-		hostname = "local"
-	}
-	comment := "knomit@" + hostname
-	pubLine := string(ssh.MarshalAuthorizedKey(signer.PublicKey()))
-	pubLine = strings.TrimSpace(pubLine) + " " + comment + "\n"
+	pubLine := authorizedKeyLine(signer.PublicKey()) + "\n"
 
 	pubPath := path + ".pub"
 	if err := os.WriteFile(pubPath, []byte(pubLine), 0644); err != nil {
@@ -83,6 +77,34 @@ func ensureKeyPair(path string) (ssh.Signer, string, error) {
 	fmt.Fprintf(os.Stderr, "New knomit SSH public key: %s\n", strings.TrimSpace(pubLine))
 
 	return signer, fp, nil
+}
+
+// authorizedKeyLine is the instance's public key as one authorized_keys line
+// with the "knomit@<hostname>" comment, which `knomit identity enroll`
+// reads the certificate's host label from. ONE builder, so the .pub that
+// ensureKeyPair writes and PublicKeyLine cannot differ.
+func authorizedKeyLine(pub ssh.PublicKey) string {
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "local"
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))) + " knomit@" + hostname
+}
+
+// PublicKeyLine returns the line to hand the fleet operator for `knomit
+// identity enroll --pubkey`: the one ensureKeyPair wrote to <keyPath>.pub,
+// without its newline. It is derived from the PRIVATE key at keyPath, not
+// read from .pub, which can be stale or — for a [remote].ssh_key — absent.
+func PublicKeyLine(keyPath string) (string, error) {
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		return "", fmt.Errorf("read key %s: %w", keyPath, err)
+	}
+	signer, err := ssh.ParsePrivateKey(data)
+	if err != nil {
+		return "", fmt.Errorf("parse private key %s: %w", keyPath, err)
+	}
+	return authorizedKeyLine(signer.PublicKey()), nil
 }
 
 // fingerprint returns the first 8 hex chars of SHA256 of the public key.
