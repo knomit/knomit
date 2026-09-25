@@ -65,7 +65,10 @@ type PipelineSession struct {
 	StartKey string
 	// Planning is set by every create and cleared once its start has planned
 	// the work and rendered the first item (MarkPipelineSessionPlanned).
-	Planning  bool
+	Planning bool
+	// Advancing is set by a won phase advance until its phase hook returns
+	// (FinishPipelineSessionAdvance).
+	Advancing bool
 	CreatedAt string
 	UpdatedAt string
 	// LastUsedAt is the heartbeat the idle reaper and the resume window read:
@@ -262,14 +265,14 @@ func (pi *pipelineIndex) createPipelineSession(ctx context.Context, tool, branch
 	return s, nil
 }
 
-const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, planning,
+const pipelineSessionColumns = `id, tool, branch, status, phase, scoped, created_by, start_key, planning, advancing,
 		        stat_pruned, stat_merged, stat_updated, stat_synthesized,
 		        created_at, updated_at, last_used_at`
 
 func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
 	var s PipelineSession
-	var scoped, planning int
-	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &planning,
+	var scoped, planning, advancing int
+	err := row.Scan(&s.ID, &s.Tool, &s.Branch, &s.Status, &s.Phase, &scoped, &s.CreatedBy, &s.StartKey, &planning, &advancing,
 		&s.Stats.Pruned, &s.Stats.Merged, &s.Stats.Updated, &s.Stats.Synthesized,
 		&s.CreatedAt, &s.UpdatedAt, &s.LastUsedAt)
 	if err != nil {
@@ -277,6 +280,7 @@ func scanPipelineSession(row *sql.Row) (*PipelineSession, error) {
 	}
 	s.Scoped = scoped != 0
 	s.Planning = planning != 0
+	s.Advancing = advancing != 0
 	return &s, nil
 }
 
@@ -383,7 +387,7 @@ func (pi *pipelineIndex) MarkPipelineSessionScoped(ctx context.Context, id strin
 func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET phase = ?, updated_at = ? WHERE id = ? AND phase = ?
+		`UPDATE pipeline_sessions SET phase = ?, advancing = 1, updated_at = ? WHERE id = ? AND phase = ? AND advancing = 0
 		 AND NOT EXISTS (SELECT 1 FROM pipeline_work_items
 		                 WHERE session_id = ? AND (response IS NULL OR applying = 1))`,
 		to, now, id, from, id,
@@ -396,6 +400,16 @@ func (pi *pipelineIndex) AdvancePipelineSessionPhase(ctx context.Context, id, fr
 		return false, fmt.Errorf("AdvancePipelineSessionPhase rows: %w", err)
 	}
 	return n == 1, nil
+}
+
+// FinishPipelineSessionAdvance records that a won phase advance's hook has
+// returned, whether it succeeded or failed.
+func (pi *pipelineIndex) FinishPipelineSessionAdvance(ctx context.Context, id string) error {
+	if _, err := pi.sessionDB.ExecContext(ctx,
+		`UPDATE pipeline_sessions SET advancing = 0 WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("FinishPipelineSessionAdvance: %w", err)
+	}
+	return nil
 }
 
 // FinishPipelineWorkItem records that a claimed item's apply has returned,
@@ -430,7 +444,7 @@ func (pi *pipelineIndex) ApplyingPipelineWorkItem(ctx context.Context, sessionID
 func (pi *pipelineIndex) CompletePipelineSession(ctx context.Context, id string) (completed bool, err error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := pi.sessionDB.ExecContext(ctx,
-		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active'`,
+		`UPDATE pipeline_sessions SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active' AND advancing = 0`,
 		now, id,
 	)
 	if err != nil {

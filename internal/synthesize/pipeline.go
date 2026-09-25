@@ -198,6 +198,9 @@ func (p *Pipeline) opener(ctx context.Context) (branch, actor string) {
 type pipelineHooks struct {
 	beforeClaim func(ctx context.Context, itemID int64)
 	duringApply func(ctx context.Context, itemID int64)
+	// afterAdvance runs between a won phase CAS and the strategy's
+	// OnPhaseAdvance, the gap in which the next phase's work is not queued yet.
+	afterAdvance func(ctx context.Context, from, to string)
 }
 
 // markPlanned clears a session's planning mark once its work is queued and
@@ -253,6 +256,13 @@ func (p *Pipeline) Current(ctx context.Context, sessionID string) (*PipelineResu
 		return nil, err
 	}
 	return p.nextItem(ctx, sess)
+}
+
+// errAdvancing refuses a step on a session another caller is moving to its
+// next phase: until that caller's phase hook has queued the new phase's work,
+// the phase only looks empty.
+func errAdvancing(tool, sessionID string) error {
+	return errf(tool, "session %q is moving to its next phase for another caller; retry shortly", sessionID)
 }
 
 // errStillPlanning refuses a call on a session whose start has not finished
@@ -1067,14 +1077,29 @@ func (p *Pipeline) handlePhase(ctx context.Context, sess *store.PipelineSession,
 		if applying != 0 {
 			return nil, errf(tool, "item %d is being applied by another caller; retry shortly", applying)
 		}
+		if now, err := d.Pipeline.GetPipelineSession(ctx, sess.ID); err != nil {
+			return nil, wrapf(tool, err, "re-read session")
+		} else if now != nil && now.Advancing {
+			return nil, errAdvancing(tool, sess.ID)
+		}
 	}
 	if advanced {
 		log.Info().Str("tool", tool).Str("session", sess.ID).Str("from", from).Str("to", to).
 			Msg("pipeline: phase transition")
+		if p.hooks.afterAdvance != nil {
+			p.hooks.afterAdvance(ctx, from, to)
+		}
 		// Only the CAS winner runs the hook, which is what makes an insert
-		// made inside it at-most-once per session per transition.
-		if err := p.strategy.OnPhaseAdvance(ctx, d, sess, from, to); err != nil {
-			return nil, err
+		// made inside it at-most-once per session per transition. The CAS also
+		// marked the session advancing: until the hook has queued the new
+		// phase's work, the next advance and any completion wait. The mark is
+		// cleared when the hook returns, success or failure.
+		hookErr := p.strategy.OnPhaseAdvance(ctx, d, sess, from, to)
+		if err := d.Pipeline.FinishPipelineSessionAdvance(context.WithoutCancel(ctx), sess.ID); err != nil && hookErr == nil {
+			hookErr = wrapf(tool, err, "finish advance %s→%s", from, to)
+		}
+		if hookErr != nil {
+			return nil, hookErr
 		}
 	}
 	return p.refetchAndDispatch(ctx, sess.ID)
@@ -1160,6 +1185,9 @@ func (p *Pipeline) completeSession(ctx context.Context, sess *store.PipelineSess
 		now, gerr := d.Pipeline.GetPipelineSession(ctx, sess.ID)
 		if gerr != nil {
 			return nil, wrapf(tool, gerr, "re-read session")
+		}
+		if now != nil && now.Status == "active" && now.Advancing {
+			return nil, errAdvancing(tool, sess.ID)
 		}
 		if now == nil || now.Status != "completed" {
 			return nil, errf(tool, "session %q is no longer active; nothing was completed", sess.ID)

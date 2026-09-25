@@ -249,10 +249,12 @@ type PipelineIndex interface {
 	AbandonPlanningPipelineSession(ctx context.Context, id string) error
 	MarkPipelineSessionScoped(ctx context.Context, id string) error
 	// AdvancePipelineSessionPhase moves from→to only while no item of the
-	// session is unanswered or still being applied.
+	// session is unanswered or still being applied and no other advance's hook
+	// is running; a won advance marks the session advancing.
 	AdvancePipelineSessionPhase(ctx context.Context, id, from, to string) (advanced bool, err error)
-	// CompletePipelineSession completes an ACTIVE session; false when it was
-	// no longer active, in which case nothing of the completion may follow.
+	// CompletePipelineSession completes an ACTIVE session that is not mid
+	// advance; false otherwise, in which case nothing of the completion may
+	// follow.
 	CompletePipelineSession(ctx context.Context, id string) (completed bool, err error)
 	InsertPipelineWorkItem(ctx context.Context, item PipelineWorkItem) error
 	NextPipelineWorkItem(ctx context.Context, sessionID string) (*PipelineWorkItem, error)
@@ -263,6 +265,9 @@ type PipelineIndex interface {
 	// FinishPipelineWorkItem ends a claimed item's applying state, after its
 	// apply returns. Until then the item holds the session's phase.
 	FinishPipelineWorkItem(ctx context.Context, id int64) error
+	// FinishPipelineSessionAdvance clears the advancing mark once the phase
+	// hook has returned. Until then the next advance and completion wait.
+	FinishPipelineSessionAdvance(ctx context.Context, id string) error
 	// ApplyingPipelineWorkItem returns a claimed item still being applied, or 0.
 	ApplyingPipelineWorkItem(ctx context.Context, sessionID string) (int64, error)
 	// AddPipelineSessionStats accumulates an applied item's corpus-change

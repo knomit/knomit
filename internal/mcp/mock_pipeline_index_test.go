@@ -204,6 +204,20 @@ func (mr *MockPipelineIndexMockRecorder) DeletePipelineWorkItem(ctx, id any) *go
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePipelineWorkItem", reflect.TypeOf((*MockPipelineIndex)(nil).DeletePipelineWorkItem), ctx, id)
 }
 
+// FinishPipelineSessionAdvance mocks base method.
+func (m *MockPipelineIndex) FinishPipelineSessionAdvance(ctx context.Context, id string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FinishPipelineSessionAdvance", ctx, id)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// FinishPipelineSessionAdvance indicates an expected call of FinishPipelineSessionAdvance.
+func (mr *MockPipelineIndexMockRecorder) FinishPipelineSessionAdvance(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FinishPipelineSessionAdvance", reflect.TypeOf((*MockPipelineIndex)(nil).FinishPipelineSessionAdvance), ctx, id)
+}
+
 // FinishPipelineWorkItem mocks base method.
 func (m *MockPipelineIndex) FinishPipelineWorkItem(ctx context.Context, id int64) error {
 	m.ctrl.T.Helper()

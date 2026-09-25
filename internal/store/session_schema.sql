@@ -78,6 +78,10 @@ CREATE TABLE pipeline_sessions (
     -- the first item. A session still planning is never resumed and never stale by the
     -- resume window: its queue is empty only because nothing is queued yet.
     planning     INTEGER NOT NULL DEFAULT 0,
+    -- 1 from a won phase advance until the strategy's phase hook has queued
+    -- the new phase's work. The next advance and completion wait on it: until
+    -- then the new phase only LOOKS empty.
+    advancing    INTEGER NOT NULL DEFAULT 0,
     -- Running work-item stat totals. They live on the row, not in memory, because
     -- the engine is per-call stateless: the MCP handler builds a fresh Reviewer
     -- for every continue call, so nothing accumulated on that struct survives.
