@@ -47,7 +47,7 @@ func testPipePath(t *testing.T) string {
 func TestBootServer_OpensLocalPipeWithPeerCreds(t *testing.T) {
 	pipe := testPipePath(t)
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: pipe})
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: pipe}), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestBootServer_PipeInUseServesTCPOnly(t *testing.T) {
 	defer release()
 
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: pipe})
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: pipe}), "")
 	if err != nil {
 		t.Fatalf("a pipe in use must not fail the boot: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestBootServer_PipeInUseServesTCPOnly(t *testing.T) {
 func TestBootServer_PipeFailureWritesNoLockfile(t *testing.T) {
 	notAPipe := filepath.Join(t.TempDir(), "knomit.sock")
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: notAPipe})
+	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: notAPipe}), "")
 	if err == nil {
 		srv.shutdown()
 		t.Fatal("bootServer must fail when the local listener cannot be opened")
@@ -161,7 +161,7 @@ func TestBootServer_PipeHeldWithRequireAuthFailsTheBoot(t *testing.T) {
 	defer foreign.Close()
 
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: pipe, Require: true})
+	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: pipe, Require: true}), "")
 	if err == nil {
 		srv.shutdown()
 		t.Fatal("require = true with no local listener must fail the boot, not serve TCP only")
@@ -178,7 +178,7 @@ func TestBootServer_PipeHeldWithRequireAuthFailsTheBoot(t *testing.T) {
 	// POSITIVE CONTROL 1: the SAME config boots once the name is free, so the
 	// refusal above is the guard and not require=true breaking every boot.
 	foreign.Close()
-	ok1, _, err := bootServer(context.Background(), peerEcho, filepath.Join(t.TempDir(), "s1.json"), "v", "", localListener{Path: testPipePath(t), Require: true})
+	ok1, _, err := bootServer(context.Background(), peerEcho, filepath.Join(t.TempDir(), "s1.json"), "v", testCfg(localListener{Path: testPipePath(t), Require: true}), "")
 	if err != nil {
 		t.Fatalf("require = true with a free pipe must boot: %v", err)
 	}
@@ -191,9 +191,13 @@ func TestBootServer_PipeHeldWithRequireAuthFailsTheBoot(t *testing.T) {
 		t.Fatalf("fixture: could not retake the name: %v", err)
 	}
 	defer foreign2.Close()
-	ok2, _, err := bootServer(context.Background(), peerEcho, filepath.Join(t.TempDir(), "s2.json"), "v", "", localListener{Path: pipe})
+	ok2, _, err := bootServer(context.Background(), peerEcho, filepath.Join(t.TempDir(), "s2.json"), "v", testCfg(localListener{Path: pipe}), "")
 	if err != nil {
 		t.Fatalf("a held pipe with require = false must still boot on TCP: %v", err)
 	}
 	ok2.shutdown()
 }
+
+// localTestPath is a fresh, bindable local-listener path on this platform:
+// a unique pipe name here, a short unix socket path elsewhere.
+func localTestPath(t *testing.T) string { return testPipePath(t) }

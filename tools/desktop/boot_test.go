@@ -17,7 +17,7 @@ func TestBootServer_ServesAndWritesLockfile(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "server.json")
 	base := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 
-	srv, port, err := bootServer(context.Background(), base, lockPath, "test-ver", "", localListener{})
+	srv, port, err := bootServer(context.Background(), base, lockPath, "test-ver", testCfg(localListener{}), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestBootServer_ServesAndWritesLockfile(t *testing.T) {
 func TestBootServer_ShutdownRemovesLockfile(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "server.json")
 	base := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
-	srv, _, err := bootServer(context.Background(), base, lockPath, "v", "", localListener{})
+	srv, _, err := bootServer(context.Background(), base, lockPath, "v", testCfg(localListener{}), "")
 	if err != nil {
 		t.Fatal(err)
 	}

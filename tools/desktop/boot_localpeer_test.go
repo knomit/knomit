@@ -44,6 +44,21 @@ func wantOwnPeer(t *testing.T) string {
 	return fmt.Sprintf("peer id=%q ok=true", me.ID)
 }
 
+// testCfg is the config bootServer is booted with in tests that are about
+// the local listener: l's path and Require, the default port handling (an
+// empty Port falls back to netutil.PreferredPort, then ephemeral), and the
+// TLS listener OFF. bootServer derives the listener values from it the same
+// way it does in production, which is what makes these tests pin the
+// mapping at the call site rather than beside it.
+func testCfg(l localListener) config.Config {
+	cfg := config.Defaults()
+	cfg.Port = ""
+	cfg.Socket = l.Path
+	cfg.Auth.Require = l.Require
+	cfg.TLS = config.TLSConfig{}
+	return cfg
+}
+
 // wantNoPeer is what peerEcho prints for a connection with no credential.
 const wantNoPeer = `peer id="" ok=false`
 
@@ -96,5 +111,21 @@ func TestLocalListenerFrom_CarriesPathAndRequire(t *testing.T) {
 		if got.Require != require {
 			t.Fatalf("Require = %v, want %v (cfg.Auth.Require)", got.Require, require)
 		}
+	}
+}
+
+// The pin on the TLS half, for the same reason as the one above: every field
+// carried, and the key path is the one the caller passed (App.KeyPath() in
+// production), not something re-derived from config.
+//
+// Sabotage: swapping Dir for Addr, or dropping KeyPath, in tlsListenerFrom
+// fails this.
+func TestTLSListenerFrom_CarriesAddrDirKey(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.TLS = config.TLSConfig{Addr: "0.0.0.0:19279", Dir: "/k/pki"}
+	got := tlsListenerFrom(cfg, "/k/id_ed25519")
+	want := tlsListener{Addr: "0.0.0.0:19279", Dir: "/k/pki", KeyPath: "/k/id_ed25519"}
+	if got != want {
+		t.Fatalf("tlsListenerFrom = %+v, want %+v", got, want)
 	}
 }
