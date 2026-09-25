@@ -823,18 +823,28 @@ func TestFindConfigFile_OnlyHome(t *testing.T) {
 }
 
 // An install that kept its knomit.toml beside the binary is told, by the
-// server, that the file is no longer read.
+// server and the desktop, that the file is no longer read.
 func TestIgnoredExecutableConfig(t *testing.T) {
-	if got := ignoredExecutableConfig(t.TempDir()); got != "" {
-		t.Fatalf("ignoredExecutableConfig = %q with no file beside the executable; want \"\"", got)
+	if got := IgnoredExecutableConfig(t.TempDir()); got != "" {
+		t.Fatalf("IgnoredExecutableConfig = %q with no file beside the executable; want \"\"", got)
 	}
 	beside := plantBesideExecutable(t)
-	if got := ignoredExecutableConfig(t.TempDir()); got != beside {
-		t.Fatalf("ignoredExecutableConfig = %q, want %q", got, beside)
+	if got := IgnoredExecutableConfig(t.TempDir()); got != beside {
+		t.Fatalf("IgnoredExecutableConfig = %q, want %q", got, beside)
 	}
 	// A data root that IS the executable's directory reads that very file.
-	if got := ignoredExecutableConfig(filepath.Dir(beside)); got != "" {
-		t.Fatalf("ignoredExecutableConfig = %q when the file is <home>/knomit.toml; want \"\"", got)
+	if got := IgnoredExecutableConfig(filepath.Dir(beside)); got != "" {
+		t.Fatalf("IgnoredExecutableConfig = %q when the file is <home>/knomit.toml; want \"\"", got)
+	}
+	// ...however the data root is spelled: through a symlink here, and by
+	// case on a case-insensitive filesystem. The comparison is by file, not
+	// by string.
+	link := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(filepath.Dir(beside), link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if got := IgnoredExecutableConfig(link); got != "" {
+		t.Fatalf("IgnoredExecutableConfig = %q for a data root that links to the executable's directory; want \"\"", got)
 	}
 }
 
