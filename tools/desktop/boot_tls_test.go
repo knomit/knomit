@@ -364,7 +364,10 @@ func TestBootServer_TLSAddrFreeAfterRequireRefusal(t *testing.T) {
 		srv.shutdown()
 		t.Fatal("require=true with the local listener held must refuse the boot")
 	}
-	if !errors.Is(err, auth.ErrSocketInUse) {
+	// The refusal names its setting on both platforms; the error it wraps is
+	// ErrSocketInUse for a held unix socket, and whatever the pipe namespace
+	// reports on Windows.
+	if !strings.Contains(err.Error(), "[auth].require = true") {
 		t.Fatalf("fixture did not reach the RequireLocalListener refusal: %v", err)
 	}
 	if err := addrFree(addr); err != nil {
