@@ -131,7 +131,7 @@ func serveCmd() *cobra.Command {
 			stopDumps := installGoroutineDumpSignal(filepath.Join(cfg.Home, "dumps"))
 			defer stopDumps()
 
-			a, err := app.New(cmd.Context(), cfg, app.Options{LogTap: logTap})
+			a, err := app.New(cmd.Context(), cfg, serveAppOptions(app.Options{LogTap: logTap}))
 			if err != nil {
 				return err
 			}
@@ -228,7 +228,7 @@ func serveCmd() *cobra.Command {
 			// and `knomit identity install` has placed a certificate. The
 			// plaintext listener above is unchanged. serveCtx also bounds its
 			// certificate re-check loop.
-			tlsSrv, tl, err := openTLSServer(serveCtx, cfg.TLS, a.KeyPath(), srv)
+			tlsSrv, tl, err := app.OpenTLSServer(serveCtx, cfg.TLS, a.KeyPath(), srv)
 			if err != nil {
 				// Fail closed: serve does not run without a listener it was
 				// configured to open. The returned error exits 1 through
@@ -362,3 +362,10 @@ func serveUntil(ctx context.Context, errCh <-chan error, cancelServe context.Can
 	}
 	return errors.Join(serveErr, primary.Shutdown(shutCtx))
 }
+
+// serveAppOptions is the identity in production. It exists only so a test
+// can run serve's whole RunE with a deterministic embedder in place of the
+// ONNX one (app.Options.Embedder, the seam internal/app's wiring tests use):
+// the listener failures below are pinned against RunE's returned error,
+// which is the #261 contract, not against a helper beside it.
+var serveAppOptions = func(o app.Options) app.Options { return o }

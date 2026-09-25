@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"knomit/internal/app"
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/pki"
@@ -42,7 +43,7 @@ import (
 // F19 phase 2b end to end: knomit's go-git client (the knomit+https
 // transport) fetching from knomit's REAL /git handler — web.Server with
 // GitHandler = web.GitRemoteHandler, AuthMiddleware and the write gate —
-// served on the real mTLS listener from openTLSServer. The pki tests prove
+// served on the real mTLS listener from app.OpenTLSServer. The pki tests prove
 // the transport against a minimal upload-pack server; this proves the pair.
 //
 // Only the fetcher uses the client transport. pki.InstallGitTransport writes
@@ -84,11 +85,13 @@ func (h *headerLog) count(via string) int {
 	return n
 }
 
-// serveFleetNode is serveBoth with a short IdleTimeout on the plaintext
-// server, which openTLSServer copies to the TLS one. Revocation is checked at
-// the handshake, so a peer's kept-alive connection outlives it until the idle
-// timeout closes it (60s in `knomit serve`); the short one lets this test
-// reach the next handshake without waiting a minute.
+// serveFleetNode serves a plaintext and a TLS server over handler, with a
+// short IdleTimeout on the TLS one. Revocation is checked at the handshake,
+// so a peer's kept-alive connection outlives it until the idle timeout closes
+// it (60s in `knomit serve`); the short one lets this test reach the next
+// handshake without waiting a minute. It is set on the RETURNED server:
+// app.OpenTLSServer owns its timeouts and no longer copies them from like
+// (knomit#256).
 func serveFleetNode(t *testing.T, handler http.Handler, keyPath string, tcfg config.TLSConfig) (plain, tlsAddr string) {
 	t.Helper()
 	pl, err := net.Listen("tcp", "127.0.0.1:0")
@@ -103,10 +106,11 @@ func serveFleetNode(t *testing.T, handler http.Handler, keyPath string, tcfg con
 	}
 	go srv.Serve(pl)
 	t.Cleanup(func() { srv.Close() })
-	tlsSrv, tl, err := openTLSServer(t.Context(), tcfg, keyPath, srv)
+	tlsSrv, tl, err := app.OpenTLSServer(t.Context(), tcfg, keyPath, srv)
 	if err != nil || tlsSrv == nil {
-		t.Fatalf("openTLSServer: %v (server %v)", err, tlsSrv)
+		t.Fatalf("OpenTLSServer: %v (server %v)", err, tlsSrv)
 	}
+	tlsSrv.IdleTimeout = 200 * time.Millisecond
 	go tlsSrv.Serve(tl)
 	t.Cleanup(func() { tlsSrv.Close() })
 	return pl.Addr().String(), tl.Addr().String()

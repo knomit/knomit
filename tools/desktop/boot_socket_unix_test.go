@@ -32,7 +32,7 @@ func shortSocketPath(t *testing.T) string {
 func TestBootServer_OpensLocalSocketWithPeerCreds(t *testing.T) {
 	sock := shortSocketPath(t)
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: sock})
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: sock}), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestBootServer_SocketInUseServesTCPOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: sock})
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: sock}), "")
 	if err != nil {
 		t.Fatalf("socket in use must not fail the boot: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestBootServer_SocketInUseServesTCPOnly(t *testing.T) {
 func TestBootServer_SocketFailureWritesNoLockfile(t *testing.T) {
 	sock := filepath.Join(shortSocketPath(t)+".missing-dir", "knomit.sock") // parent does not exist
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: sock})
+	srv, _, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: sock}), "")
 	if err == nil {
 		srv.shutdown()
 		t.Fatal("bootServer must fail when the socket cannot be opened")
@@ -123,7 +123,7 @@ func TestBootServer_SocketFailureWritesNoLockfile(t *testing.T) {
 func TestBootServer_PathTooLongServesTCPOnly(t *testing.T) {
 	long := "/tmp/" + strings.Repeat("d", 120) + "/knomit.sock"
 	lockPath := filepath.Join(t.TempDir(), "server.json")
-	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", "", localListener{Path: long})
+	srv, port, err := bootServer(context.Background(), peerEcho, lockPath, "v", testCfg(localListener{Path: long}), "")
 	if err != nil {
 		t.Fatalf("an overlong socket path must not fail the boot: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestBootServer_PathTooLongServesTCPOnly(t *testing.T) {
 	}
 
 	lockPath2 := filepath.Join(t.TempDir(), "server.json")
-	srv2, _, err := bootServer(context.Background(), peerEcho, lockPath2, "v", "", localListener{Path: long, Require: true})
+	srv2, _, err := bootServer(context.Background(), peerEcho, lockPath2, "v", testCfg(localListener{Path: long, Require: true}), "")
 	if err == nil {
 		srv2.shutdown()
 		t.Fatal("require=true with no bindable local listener must refuse the boot")
@@ -148,3 +148,7 @@ func TestBootServer_PathTooLongServesTCPOnly(t *testing.T) {
 		t.Fatalf("lockfile written despite the refused boot: %v", serr)
 	}
 }
+
+// localTestPath is a fresh, bindable local-listener path on this platform:
+// a short unix socket path here, a unique pipe name on Windows.
+func localTestPath(t *testing.T) string { return shortSocketPath(t) }

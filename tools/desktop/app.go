@@ -461,7 +461,7 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhas
 	}
 
 	setPhase(phaseStartingServer)
-	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String(), cfg.Port, localListenerFrom(cfg))
+	srv, port, err := bootServer(ctx, a.Handler(), lockPath, version.String(), cfg, a.KeyPath())
 	if err != nil {
 		a.Close()
 		return "", nil, err
