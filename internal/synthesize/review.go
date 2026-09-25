@@ -94,6 +94,10 @@ func (r *Reviewer) Effort() Effort { return r.p.Effort() }
 // becomes sess.Branch at this moment and travels with the session for the
 // rest of its lifetime. Nothing downstream reads either source again
 // (invariants/synthesize/session-branch-binding).
+//
+// It displaces any active session on the branch unconditionally. The
+// knomit_review handler uses StartOrResumeSession; this form is used by
+// tests and in-process callers that own the branch.
 func (r *Reviewer) StartSession(ctx context.Context) (*ReviewResult, error) {
 	return reviewResult(r.p.StartSession(ctx))
 }

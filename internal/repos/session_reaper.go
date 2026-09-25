@@ -85,18 +85,6 @@ func parseSessionReaperConfig(raw config.SessionConfig) (sessionReaperConfig, er
 	return out, nil
 }
 
-// pipelineResumeWindowFrom is the resume window a repo instance is built with.
-// An invalid value falls back to the default here because Manager.Start
-// refuses to boot on it (parseSessionReaperConfig), so no instance built from
-// it ever serves a call.
-func pipelineResumeWindowFrom(raw config.SessionConfig) time.Duration {
-	cfg, err := parseSessionReaperConfig(raw)
-	if err != nil {
-		return DefaultPipelineResumeWindow
-	}
-	return cfg.PipelineResumeWindow
-}
-
 // orDefaultDur returns def when d is non-positive, else d.
 func orDefaultDur(d, def time.Duration) time.Duration {
 	if d <= 0 {

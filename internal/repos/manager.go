@@ -70,6 +70,11 @@ type Manager struct {
 	// parseSessionReaperConfig).
 	sessionReaperStop func()
 
+	// sessionCfg is the session block, parsed and validated once at the top
+	// of Start. The reaper runs on it, and every instance opened afterwards
+	// takes its resume window from it.
+	sessionCfg sessionReaperConfig
+
 	// repoEventHub fans every repo's REPO-LEVEL events into one server-wide
 	// stream. Per-repo TaskHubs cannot serve the fleet-wide index chip: the web
 	// app holds one events stream, for the ACTIVE repo, while rendering a chip
@@ -676,6 +681,14 @@ func (m *Manager) Close() error {
 // than vanishing. The warmer's behaviour comes from m.deps.Cfg.ClusterCache;
 // check_interval=0 disables it. Callers must pair Start with a Close.
 func (m *Manager) Start() error {
+	// The session block is validated before anything opens: an invalid one
+	// is a boot error, and every instance takes its resume window from it.
+	sessionCfg, err := parseSessionReaperConfig(m.deps.Cfg.Session)
+	if err != nil {
+		return fmt.Errorf("session config: %w", err)
+	}
+	m.sessionCfg = sessionCfg
+
 	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
 	if err := os.MkdirAll(reposDir, 0o755); err != nil {
 		return fmt.Errorf("create repos dir: %w", err)
@@ -777,13 +790,9 @@ func (m *Manager) Start() error {
 	m.orphanFiles = m.warnOrphanFiles(reposDir, registered)
 	m.mu.Unlock()
 
-	// Launch the background idle-session reaper. A misconfigured session block
-	// surfaces at boot rather than silently disabling the reaper.
-	reaperCfg, err := parseSessionReaperConfig(m.deps.Cfg.Session)
-	if err != nil {
-		return fmt.Errorf("session reaper config: %w", err)
-	}
-	m.sessionReaperStop = m.startSessionReaper(reaperCfg)
+	// Launch the background idle-session reaper on the session block parsed
+	// at the top of Start.
+	m.sessionReaperStop = m.startSessionReaper(m.sessionCfg)
 	return nil
 }
 
@@ -1062,6 +1071,7 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		agentBranch:           m.deps.AgentBranch,
 		embedder:              m.deps.Embedder,
 		keyPath:               m.deps.KeyPath,
+		resumeWindow:          m.sessionCfg.PipelineResumeWindow,
 		ctx:                   m.ctx,
 		repoEventHub:          m.repoEventHub,
 		disableBackgroundSync: m.deps.DisableBackgroundSync,

@@ -148,10 +148,10 @@ func (p *Pipeline) deps() Deps {
 // StartSession creates a session, scans for seed facts, asks the strategy to
 // plan work over them, and returns the first item.
 //
-// This and StartOrResumeSession are the ONLY places the engine resolves the
-// session's branch, and the only places it can reach ri.AgentBranch(). The
-// value becomes sess.Branch and travels with the session for the rest of its
-// lifetime; every method below reads it back off the row
+// The session's branch is resolved in opener, the ONLY place the engine can
+// reach ri.AgentBranch(), shared with StartOrResumeSession. The value becomes
+// sess.Branch and travels with the session for the rest of its lifetime;
+// every method below reads it back off the row
 // (invariants/synthesize/session-branch-binding). The caller's correlation
 // handle is bound at the same moment and for the same reason — see actor.go.
 //
@@ -161,22 +161,30 @@ func (p *Pipeline) StartSession(ctx context.Context) (*PipelineResult, error) {
 	tool := p.strategy.Tool()
 	totalStart := time.Now()
 	d := p.deps()
-	branch := p.branch
-	if branch == "" {
-		branch = p.ri.AgentBranch()
-	}
-	// Read ONCE, here, for the same reason the branch is: the value describes
-	// the call that opened the session, and the MCP handler builds a fresh
-	// engine per continue call, so a later read would see a different request
-	// (or none). It goes onto the row and is never read from the context again
-	// (knomit#123). Empty is normal for in-process callers.
-	actor := actorFromContext(ctx)
+	branch, actor := p.opener(ctx)
 
 	sess, err := d.Pipeline.CreatePipelineSession(ctx, tool, branch, actor)
 	if err != nil {
 		return nil, wrapf(tool, err, "create session")
 	}
 	return p.planSession(ctx, d, sess, branch, totalStart)
+}
+
+// opener resolves what a new session is bound to at creation: its branch and
+// the opening caller's correlation handle. The one place either is read, for
+// StartSession and StartOrResumeSession alike.
+//
+// Both are read ONCE, at start: the value describes the call that opened the
+// session, and the MCP handler builds a fresh engine per continue call, so a
+// later read would see a different request (or none). They go onto the row
+// and are never read from ri or the context again (knomit#123). An empty
+// actor is normal for in-process callers.
+func (p *Pipeline) opener(ctx context.Context) (branch, actor string) {
+	branch = p.branch
+	if branch == "" {
+		branch = p.ri.AgentBranch()
+	}
+	return branch, actorFromContext(ctx)
 }
 
 // markPlanned clears a resumable session's planning mark once its work is
@@ -1284,11 +1292,7 @@ func (p *Pipeline) StartOrResumeSession(ctx context.Context, opts StartOptions) 
 	tool := p.strategy.Tool()
 	totalStart := time.Now()
 	d := p.deps()
-	branch := p.branch
-	if branch == "" {
-		branch = p.ri.AgentBranch()
-	}
-	actor := actorFromContext(ctx)
+	branch, actor := p.opener(ctx)
 	key := p.startKey()
 
 	for attempt := 0; attempt < maxSlotRetries; attempt++ {
