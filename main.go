@@ -31,7 +31,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := cmd.RootCmd().ExecuteContext(ctx); err != nil {
+	if err := cmd.Execute(ctx, cmd.RootCmd()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
