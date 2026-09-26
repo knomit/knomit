@@ -65,13 +65,19 @@ func (c *branchCache) remove(name string) {
 // maintenance methods. Consumers reach UP to repoHandler for these — they
 // never reach sideways through a sibling subsystem.
 type repoHandler struct {
-	db       *sql.DB
-	cache    *branchCache
-	onDrop   func(context.Context) error
-	gits     *storegit.Storer
-	repo     *gogit.Repository         // nil until OpenRepo/InitRepo/Clone called
-	signer   ssh.Signer                // SSH signer for commit signing (shared)
-	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
+	db     *sql.DB
+	cache  *branchCache
+	onDrop func(context.Context) error
+	gits   *storegit.Storer
+	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
+	signer ssh.Signer        // SSH signer for commit signing (shared)
+
+	// verifyRoot is F09's root of trust (the operator key). The zero value is
+	// unconfigured: a repo whose history enables verification is then closed
+	// before the enable ("unrooted"). Set by Service.SetRootOfTrust at
+	// build/swap time, never mutated afterwards.
+	verifyRoot RootOfTrust
+	onCommit   func(branch, hash string) // external observer (e.g. SSE broadcast)
 
 	// im is the search-index manager. notifyCommit calls im.Sync after every
 	// commit so branch_facts / facts_vec / graph stay in sync with the new
