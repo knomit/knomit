@@ -45,26 +45,41 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) b
 	return decodeBodyInto(w, r, r.Body, v, maxBytes)
 }
 
-// decodeOptionalJSON is decodeJSON for a route whose body may be absent: an
-// empty body passes, whatever its Content-Type, and leaves v untouched. A
-// non-empty body is held to decodeJSON's rules. A body of unknown length
-// (chunked) is judged by peeking one byte, which is put back before decoding.
+// decodeOptionalJSON is decodeJSON for a route whose body may be absent: a
+// body that is empty or only JSON whitespace passes, whatever its
+// Content-Type, and leaves v untouched (curl -d ' ' sends a single space as a
+// form). A body with anything else in it is held to decodeJSON's rules. The
+// leading whitespace is read to find out, whatever the declared length, and
+// counts toward maxBytes.
 func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
 		return true
 	}
 	body := io.Reader(r.Body)
-	if r.ContentLength < 0 {
-		br := bufio.NewReaderSize(r.Body, 16)
-		if _, err := br.Peek(1); errors.Is(err, io.EOF) {
+	if maxBytes > 0 {
+		body = http.MaxBytesReader(w, r.Body, maxBytes)
+	}
+	br := bufio.NewReader(body)
+	for {
+		c, err := br.ReadByte()
+		if errors.Is(err, io.EOF) {
 			return true
 		}
-		body = br
+		if err != nil {
+			writeDecodeProblem(w, r, err)
+			return false
+		}
+		if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+			_ = br.UnreadByte()
+			break
+		}
 	}
 	if !requireJSONContentType(w, r) {
 		return false
 	}
-	return decodeBodyInto(w, r, body, v, maxBytes)
+	// The limit is already on body; decodeBodyInto must not add a second,
+	// fresh one that would not count the whitespace read above.
+	return decodeBodyInto(w, r, br, v, 0)
 }
 
 // requireJSONContentType writes the 415 and reports false unless r declares

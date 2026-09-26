@@ -122,6 +122,19 @@ func TestDecodeJSON(t *testing.T) {
 			wantStatus: http.StatusUnsupportedMediaType, wantTitle: "Unsupported Media Type"},
 		{name: "optional: malformed json", optional: true, contentType: "application/json", body: `{`,
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body"},
+		// curl -d ' ' sends a space as application/x-www-form-urlencoded: no
+		// JSON value at all, so it is the absent body, not a refused one.
+		{name: "optional: whitespace-only body, form content type", optional: true,
+			contentType: "application/x-www-form-urlencoded", body: " ",
+			wantOK: true},
+		{name: "optional: whitespace-only chunked body, no content type", optional: true, body: "\r\n ", chunked: true,
+			wantOK: true},
+		{name: "optional: whitespace past the limit is over the limit", optional: true, body: strings.Repeat(" ", 64), maxBytes: 16,
+			wantStatus: http.StatusRequestEntityTooLarge, wantTitle: "Request body too large"},
+		{name: "optional: leading whitespace before json", optional: true, contentType: "application/json", body: "  \n" + good,
+			wantOK: true, want: decodeTarget{Name: "a", Count: 2}},
+		{name: "optional: leading whitespace before a body with no content type", optional: true, body: "  " + good,
+			wantStatus: http.StatusUnsupportedMediaType, wantTitle: "Unsupported Media Type"},
 		{name: "optional: trailing data", optional: true, contentType: "application/json", body: good + good,
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "trailing data"},
 	}
@@ -156,7 +169,7 @@ func TestDecodeJSON(t *testing.T) {
 					t.Fatalf("a successful decode wrote a response: %s", rec.Body.String())
 				}
 				want := tc.want
-				if tc.optional && tc.body == "" {
+				if tc.optional && strings.TrimSpace(tc.body) == "" {
 					want = decodeTarget{Name: "untouched", Count: -1}
 				}
 				if v != want {

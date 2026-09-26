@@ -92,6 +92,15 @@ func TestDecodeOptionalJSON_ExperimentCommitThroughTheRouter(t *testing.T) {
 		t.Fatalf("the refused experiment is no longer committable: %d %.300s", code, body)
 	}
 
+	// A single space as a form, exactly as `curl -X POST -d ' '` sends it: no
+	// JSON value, so an ordinary commit.
+	open("space")
+	code, body, _ = originReq{method: "POST", path: commitPath("space"), body: " ",
+		contentType: "application/x-www-form-urlencoded", origin: own}.do(t, srv)
+	if code != http.StatusNoContent {
+		t.Fatalf("commit with a whitespace-only form body: %d %.300s; want 204", code, body)
+	}
+
 	// No body and no Content-Type, exactly as the web UI sends it.
 	open("bare")
 	code, body, _ = originReq{method: "POST", path: commitPath("bare"), origin: own}.do(t, srv)
