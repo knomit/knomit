@@ -26,10 +26,12 @@ package privdir
 // user.
 //
 // It returns an error ONLY when the directory cannot be created. A directory
-// that exists but cannot be made private (a filesystem without ACLs, a share,
-// no right to change the DACL) or that the user deliberately left wider is
-// logged as a warning and is not an error: refusing to start over a
-// filesystem quirk would be worse than the status quo, and the warning is the
-// part that was missing. What "private" means per OS, and what is left alone,
-// is in the per-OS implementation.
+// that is ours and merely wider than private (unix mode bits from an earlier
+// writer, a Windows DACL inherited from the parent) is tightened. One that
+// cannot be made private (a filesystem without ACLs, a share, no right to
+// change it) or that is not ours to change (another owner, a symlink, a DACL
+// someone protected on purpose) is logged as a warning and is not an error:
+// refusing to start over a filesystem quirk would be worse than the status
+// quo, and the warning is the part that was missing. The per-OS
+// implementation says exactly what is changed and what is left alone.
 func Ensure(path string) error { return ensure(path) }

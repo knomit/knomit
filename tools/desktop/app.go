@@ -23,6 +23,7 @@ import (
 	knomitapp "knomit/internal/app"
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
+	"knomit/internal/platform/privdir"
 	"knomit/internal/platform/version"
 	webui "knomit/web"
 
@@ -427,6 +428,12 @@ func (g *appStartGate) open() {
 // startServerBoot), so it must not touch Wails — nothing here does.
 func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhase func(bootPhase), tlsSt *tlsStatus) (string, func(), error) {
 	setPhase(phaseInstallingTools)
+	// The data root is private before installBridgeTool creates <home>/bin
+	// (at 0755), which on a first launch creates <home> itself. knomitapp.New
+	// calls it again as the backstop.
+	if err := privdir.Ensure(cfg.Home); err != nil {
+		return "", nil, fmt.Errorf("data root %s: %w", cfg.Home, err)
+	}
 	// Expose the bundled knomit-bridge at a stable path so stdio MCP clients
 	// (Claude Code/Desktop, VS Code) can launch it regardless of where the app
 	// lives. Best-effort: a failure must not block the app from starting.

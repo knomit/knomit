@@ -3,24 +3,19 @@
 package privdir
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
-// captureLog points the global logger at a buffer for the test's duration.
-func captureLog(t *testing.T) *bytes.Buffer {
+func modeOf(t *testing.T, path string) os.FileMode {
 	t.Helper()
-	var buf bytes.Buffer
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	t.Cleanup(func() { log.Logger = prev })
-	return &buf
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Mode().Perm()
 }
 
 func TestEnsure_CreatesWith0700(t *testing.T) {
@@ -30,21 +25,18 @@ func TestEnsure_CreatesWith0700(t *testing.T) {
 	if err := Ensure(home); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
-		t.Errorf("created %v, want a directory with mode 0700", fi.Mode())
+	if m := modeOf(t, home); m != 0o700 {
+		t.Errorf("created with mode %v, want 0700", m)
 	}
 	if logs.Len() != 0 {
 		t.Errorf("a fresh private directory logged: %s", logs)
 	}
 }
 
-// An existing wider directory is reported and NOT chmodded: its mode is the
-// user's choice.
-func TestEnsure_ExistingWideDirIsWarnedNotChanged(t *testing.T) {
+// The case every existing install is in: the root was created 0755 by an
+// earlier writer, and this user owns it. It is tightened, and that is said
+// once, at info level.
+func TestEnsure_ExistingWideOwnedDirIsTightened(t *testing.T) {
 	logs := captureLog(t)
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.Mkdir(home, 0o700); err != nil {
@@ -58,31 +50,77 @@ func TestEnsure_ExistingWideDirIsWarnedNotChanged(t *testing.T) {
 	if err := Ensure(home); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(home)
-	if err != nil {
+	if m := modeOf(t, home); m != 0o700 {
+		t.Errorf("mode after Ensure = %v, want 0700", m)
+	}
+	out := logs.String()
+	if !strings.Contains(out, `"level":"info"`) || !strings.Contains(out, "tightened data root to 0700 (was 755)") || !strings.Contains(out, home) {
+		t.Errorf("no info line naming %s and the old mode: %q", home, out)
+	}
+
+	// The next boot finds it private and says nothing.
+	logs.Reset()
+	if err := Ensure(home); err != nil {
 		t.Fatal(err)
 	}
-	if fi.Mode().Perm() != 0o755 {
-		t.Errorf("Ensure changed an existing directory's mode to %v, want 0755 left alone", fi.Mode().Perm())
-	}
-	if !strings.Contains(logs.String(), `"level":"warn"`) || !strings.Contains(logs.String(), home) {
-		t.Errorf("no warning naming %s: %q", home, logs)
+	if logs.Len() != 0 {
+		t.Errorf("second Ensure logged: %s", logs)
 	}
 }
 
-func TestEnsure_ExistingPrivateDirIsQuiet(t *testing.T) {
+func TestEnsure_ExistingPrivateDirIsQuietAndUnchanged(t *testing.T) {
 	logs := captureLog(t)
 	home := filepath.Join(t.TempDir(), "home")
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(home, 0o700); err != nil {
+	// Stricter than 0700 is private too, and must not be widened to it.
+	if err := os.Chmod(home, 0o500); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
+
 	if err := Ensure(home); err != nil {
 		t.Fatal(err)
+	}
+	if m := modeOf(t, home); m != 0o500 {
+		t.Errorf("mode after Ensure = %v, want 0500 left alone", m)
 	}
 	if logs.Len() != 0 {
 		t.Errorf("a private directory logged: %s", logs)
 	}
 }
+
+// A root that is a symlink to a wide directory is warned about and never
+// chmodded through the link, even though this user owns the target.
+func TestEnsure_SymlinkedWideRootIsWarnedNotChanged(t *testing.T) {
+	logs := captureLog(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(dir, "home")
+	if err := os.Symlink(target, home); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Ensure(home); err != nil {
+		t.Fatal(err)
+	}
+	if m := modeOf(t, target); m != 0o755 {
+		t.Errorf("Ensure chmodded through the symlink: target mode %v, want 0755", m)
+	}
+	out := logs.String()
+	if !strings.Contains(out, `"level":"warn"`) || !strings.Contains(out, "symlink") {
+		t.Errorf("no warning about the symlinked root: %q", out)
+	}
+}
+
+// A wide root owned by someone else (or reached as root via sudo, which is
+// the euid check) is warned about and not chmodded. It cannot be built
+// without a second account, so it is covered by reading ensure's owner
+// check, not by a test.

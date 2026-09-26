@@ -634,10 +634,13 @@ func Load() (Config, error) {
 	//
 	// It is the local bridge's credential -- the OS tells the server who is
 	// on the other end (internal/auth.PeerCred) -- so it has to exist without
-	// being configured. What guards it is the private data root on unix (0700,
-	// made so at boot by internal/platform/privdir.Ensure) and the pipe ACL on
-	// Windows (internal/auth.ListenLocal opens both). privdir makes the root
-	// private on Windows too, by DACL, but the pipe does not live in it.
+	// being configured. What guards it is the private data root on unix and
+	// the pipe ACL on Windows (internal/auth.ListenLocal opens both). The root
+	// is 0700 because internal/platform/privdir.Ensure creates it so, or
+	// tightens it at boot when this user owns it; a root owned by someone else
+	// is only warned about. Before privdir nothing enforced it, and existing
+	// roots were 0755. privdir makes the root private on Windows too, by DACL,
+	// but the pipe does not live in it.
 	//
 	// EVERY platform gets one now. Windows had no default here through phase
 	// 1, which is what made [auth].require = true a silent lockout there
