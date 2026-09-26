@@ -94,8 +94,7 @@ func writeFile(name, contents string) (string, error) {
 // vet error, and the effective port must be read from the one instance the
 // boot goroutine writes to.
 type NativeService struct {
-	// configPath is <cfg.Home>/knomit.toml — the file config.findConfigFile
-	// falls through to, and the one the macOS bundle does not ship.
+	// configPath is <cfg.Home>/knomit.toml — the only file config.Load reads.
 	configPath string
 	// logPath is the desktop's default log file, used to fill the gap when
 	// knomit.toml does not name one.

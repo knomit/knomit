@@ -1,7 +1,6 @@
 package knomitapi
 
 import (
-	"path/filepath"
 	"testing"
 
 	"knomit/internal/config"
@@ -14,7 +13,7 @@ import (
 func TestSocketPath_DelegatesToConfig_KnomitSocketEnv(t *testing.T) {
 	t.Setenv("KNOMIT_HOME", t.TempDir())
 	t.Setenv("KNOMIT_REPO", "")
-	want := filepath.Join(t.TempDir(), "env.sock")
+	want := explicitSocket(t, "env")
 	t.Setenv("KNOMIT_SOCKET", want)
 
 	fromConfig, err := config.SocketPath()

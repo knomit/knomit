@@ -572,16 +572,13 @@ func TestLoad_SocketDefaultsUnderHome(t *testing.T) {
 func TestLoad_ExplicitSocketWins(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("KNOMIT_HOME", home)
-	// Not a valid listener path on either platform, which is the point: Load
-	// must not second-guess an operator, and app.checkLocalListener only asks
-	// whether one is configured. auth.ListenLocal is what refuses a bad one,
-	// at boot, loudly.
-	t.Setenv("KNOMIT_SOCKET", "/tmp/explicit.sock")
+	want := ExplicitSocket(t, "explicit")
+	t.Setenv("KNOMIT_SOCKET", want)
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Socket != "/tmp/explicit.sock" {
+	if cfg.Socket != want {
 		t.Fatalf("Socket = %q, want the explicit path", cfg.Socket)
 	}
 }
@@ -804,4 +801,68 @@ func TestLoad_RuntimeAllowRemoteFromTOML(t *testing.T) {
 	if !cfg.Runtime.AllowRemote || cfg.Runtime.Addr != "0.0.0.0:6060" {
 		t.Fatalf("runtime = %+v", cfg.Runtime)
 	}
+}
+
+// knomit.toml is read from the data root and nowhere else. The server and the
+// bridge are different executables, so a file beside either one would be seen
+// by that binary alone and the two could resolve different sockets.
+func TestFindConfigFile_OnlyHome(t *testing.T) {
+	plantBesideExecutable(t)
+
+	home := t.TempDir()
+	if got := findConfigFile(home); got != "" {
+		t.Fatalf("findConfigFile(%q) = %q with no <home>/knomit.toml; want \"\"", home, got)
+	}
+	inHome := filepath.Join(home, "knomit.toml")
+	if err := os.WriteFile(inHome, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := findConfigFile(home); got != inHome {
+		t.Fatalf("findConfigFile(%q) = %q, want %q", home, got, inHome)
+	}
+}
+
+// An install that kept its knomit.toml beside the binary is told, by the
+// server and the desktop, that the file is no longer read.
+func TestIgnoredExecutableConfig(t *testing.T) {
+	if got := IgnoredExecutableConfig(t.TempDir()); got != "" {
+		t.Fatalf("IgnoredExecutableConfig = %q with no file beside the executable; want \"\"", got)
+	}
+	beside := plantBesideExecutable(t)
+	if got := IgnoredExecutableConfig(t.TempDir()); got != beside {
+		t.Fatalf("IgnoredExecutableConfig = %q, want %q", got, beside)
+	}
+	// A data root that IS the executable's directory reads that very file.
+	if got := IgnoredExecutableConfig(filepath.Dir(beside)); got != "" {
+		t.Fatalf("IgnoredExecutableConfig = %q when the file is <home>/knomit.toml; want \"\"", got)
+	}
+	// ...however the data root is spelled: through a symlink here, and by
+	// case on a case-insensitive filesystem. The comparison is by file, not
+	// by string.
+	link := filepath.Join(t.TempDir(), "home-link")
+	if err := os.Symlink(filepath.Dir(beside), link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if got := IgnoredExecutableConfig(link); got != "" {
+		t.Fatalf("IgnoredExecutableConfig = %q for a data root that links to the executable's directory; want \"\"", got)
+	}
+}
+
+// plantBesideExecutable writes a knomit.toml beside THIS test binary, the one
+// os.Executable names, and removes it when the test ends.
+func plantBesideExecutable(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Skipf("os.Executable: %v", err)
+	}
+	beside := filepath.Join(filepath.Dir(exe), "knomit.toml")
+	if _, err := os.Stat(beside); err == nil {
+		t.Skipf("%s already exists; not overwriting it", beside)
+	}
+	if err := os.WriteFile(beside, []byte("port = '1'\n"), 0o600); err != nil {
+		t.Skipf("cannot write beside the test binary: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(beside) })
+	return beside
 }

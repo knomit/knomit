@@ -63,11 +63,10 @@ func ownSID() (string, error) {
 }
 
 // PipePrefix is the Windows named-pipe namespace prefix. It is an OS fact
-// rather than a knomit one, and it appears twice on purpose: internal/config
-// BUILDS the local listener path with it, and this package RECOGNISES the
-// result. TestSocketPath_IsOpenableAndDialableByAuth (internal/config) pins
-// the two together, so
-// a drift would fail a test rather than silently listen on a file.
+// rather than a knomit one. internal/config BUILDS the local listener path
+// with it and refuses an operator-named socket without it; this package
+// RECOGNISES the result. TestSocketPath_IsOpenableAndDialableByAuth
+// (internal/config) round-trips a real listener through both.
 const PipePrefix = `\\.\pipe\`
 
 // ownerOnlySDDL grants generic-all to this process's user and to SYSTEM, and

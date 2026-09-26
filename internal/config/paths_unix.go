@@ -5,6 +5,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 
 	"knomit/internal/auth"
@@ -60,4 +61,17 @@ func localListenerName(home string) string {
 	}
 	sum := sha256.Sum256([]byte(filepath.Clean(home)))
 	return filepath.Join(auth.FallbackSocketDir(), hex.EncodeToString(sum[:])[:8]+".sock")
+}
+
+// checkExplicitSocket is the unix rule for an operator-named socket: a leading
+// ~ is expanded, and what remains must be an absolute path. A relative one
+// would resolve against each process's own working directory.
+func checkExplicitSocket(sock string) (string, error) {
+	if err := expandTilde(&sock); err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(sock) {
+		return "", fmt.Errorf("socket %q must be an absolute path; set KNOMIT_SOCKET or the knomit.toml socket key to one", sock)
+	}
+	return sock, nil
 }
