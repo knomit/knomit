@@ -229,6 +229,7 @@ func containsPair(pairs []store.RestatementPair, a, b string) bool {
 func (e *restatementEnv) seedShortlist() {
 	e.t.Helper()
 	ctx := context.Background()
+	require.NotNil(e.t, e.emb, "seedShortlist needs an embedder: without one the axis is empty and have == total == 0 passes")
 	// NOT titleBackfillBudget. That is production's 15 s latency budget, and
 	// when it expires ensureTitleVectors returns partial coverage with no
 	// error. The pair under test has the highest fact ids, so it sits in the

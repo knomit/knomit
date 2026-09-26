@@ -99,8 +99,8 @@ func TestEnsureTitleVectors_StopsAtTheLatencyBudget(t *testing.T) {
 //
 // A budget of 0 means the deadline has already passed, so no batch runs and the
 // coverage comes back as it stood. That makes this the deterministic half of
-// TestEnsureTitleVectors_StopsAtTheLatencyBudget, which depends on timing.
-// There are more facts than one titleBackfillBatch, as in the fixture.
+// that test's "partial coverage is not an error" assertion, which depends on
+// timing.
 func TestEnsureTitleVectors_ExpiredBudgetReturnsPartialCoverageWithoutError(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, titleBackfillBatch+10)
@@ -131,7 +131,9 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	ctx := context.Background()
 	env := newRestatementEnv(t, 40)
 	d := env.deps()
-	_, _, err := ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	// time.Hour, not titleBackfillBudget: 40 facts is two batches, and a stall
+	// must not cut coverage short (see seedShortlist, knomit#298).
+	_, _, err := ensureTitleVectors(ctx, d, env.branch, time.Hour)
 	require.NoError(t, err)
 
 	refresh, err := refreshRestatementShortlist(ctx, d, env.branch)
@@ -147,7 +149,8 @@ func TestRefreshShortlist_SeedsThenGoesIncremental(t *testing.T) {
 	require.Zero(t, refresh.NeighbourQueries, "unchanged corpus does no work")
 
 	env.writeFact("kb/f7.md", "F7 revised", "body-7-v2")
-	_, _, err = ensureTitleVectors(ctx, d, env.branch, titleBackfillBudget)
+	// Same reason as above (see seedShortlist, knomit#298).
+	_, _, err = ensureTitleVectors(ctx, d, env.branch, time.Hour)
 	require.NoError(t, err)
 
 	refresh, err = refreshRestatementShortlist(ctx, d, env.branch)
