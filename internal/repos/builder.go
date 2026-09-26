@@ -268,7 +268,7 @@ func (b *repoBuilder) loadOntology() {
 	if preset := fact.EmbeddedPresetByID(ont.ID); !b.subscribed && preset != nil {
 		// Attributes count as divergence (see IsSubsetOf): overwriting a repo
 		// that flags a preset topic would erase the flag on every boot.
-		if divergence := ont.SubsetDivergence(preset); divergence == "" {
+		if divergence := refreshDivergence(ont, preset); divergence == "" {
 			storedY, sErr := ont.Serialize()
 			presetY, pErr := preset.Serialize()
 			if sErr == nil && pErr == nil && !bytes.Equal(storedY, presetY) {
@@ -303,6 +303,23 @@ func (b *repoBuilder) loadOntology() {
 	}
 
 	b.ontology = ont
+}
+
+// refreshDivergence is SubsetDivergence plus one rule of its own: the refresh
+// never ADDS or CHANGES a repository-level (root) attribute, only leaves it as
+// it was. SubsetDivergence already stops a stored root attribute from being
+// erased; this also stops a preset that carries one from introducing it. The
+// refresh commit is signed by this instance, and under F09 a signed change to
+// verify_signatures or verify_signers is a policy change: it must come from
+// the operator, never from an upgrade.
+func refreshDivergence(stored, preset *fact.Ontology) string {
+	if d := stored.SubsetDivergence(preset); d != "" {
+		return d
+	}
+	if !fact.RootAttributesEqual(stored, preset) {
+		return fact.DivergenceAttributes
+	}
+	return ""
 }
 
 // ensureBranch creates the agent branch if it doesn't already exist.

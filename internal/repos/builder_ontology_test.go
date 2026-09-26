@@ -510,3 +510,77 @@ func TestBindingOfLens_RefusesWritesToARepoWithNoOntology(t *testing.T) {
 	require.False(t, b.WriteOK(),
 		"a lens must not be a way to write into a repo whose ontology is unestablished")
 }
+
+// TestLoadOntology_RootAttributesSurvivePresetRefresh is F09 proposal test 23
+// and the reason the root attributes seam exists. A preset-derived repo that is
+// a STALE SUBSET of its preset (the preset has since gained a topic) would be
+// refreshed on boot: the preset is written over the stored file. Before root
+// attributes counted as divergence, and before Serialize emitted them, that
+// write erased verify_signatures in an own-signed commit, which F09 would read
+// as a verified relaxation, fleet-wide. The refresh must be skipped, reason
+// "attributes", and the stored file must be left byte for byte.
+func TestLoadOntology_RootAttributesSurvivePresetRefresh(t *testing.T) {
+	const flaggedYAML = `id: source-code
+name: Source Code Knowledge
+description: stale but verifying
+attributes:
+  verify_signatures: enforce
+topics:
+  invariants:
+    description: Load-bearing rules
+`
+	dir, agentBranch := bootKnomitWithStaleOntologyAt(t, OntologyPath, flaggedYAML)
+
+	var buf bytes.Buffer
+	origLogger := log.Logger
+	log.Logger = zerolog.New(&buf).Level(zerolog.WarnLevel)
+	t.Cleanup(func() { log.Logger = origLogger })
+
+	m := New(context.Background(), Deps{
+		Cfg:         config.Config{Home: dir},
+		AgentBranch: agentBranch,
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+
+	ri := m.Get(testRepoName)
+	require.NotNil(t, ri)
+	require.NotNil(t, ri.Ontology())
+	require.Equal(t, "enforce", ri.Ontology().Attributes[fact.AttrVerifySignatures],
+		"the root attribute must be in force after boot, not refreshed away")
+	require.NotContains(t, ri.Ontology().Topics, "principles",
+		"a root attribute is divergence: the preset must NOT have been written over the stored file")
+
+	result, err := testService(t, ri).Facts().ReadFact(context.Background(), agentBranch, OntologyPath, nil)
+	require.NoError(t, err)
+	require.Equal(t, flaggedYAML, result.Content, "the stored file must be left exactly as written")
+	require.Contains(t, buf.String(), `"reason":"attributes"`,
+		"the diverged warning must name attributes as the reason; got %s", buf.String())
+}
+
+// TestRefreshDivergence_NeverAddsOrChangesRootAttributes: the refresh may only
+// PRESERVE root attributes. A stored file that is otherwise a subset must not
+// be overwritten by a preset that would add a root attribute, change one, or
+// drop one.
+func TestRefreshDivergence_NeverAddsOrChangesRootAttributes(t *testing.T) {
+	parse := func(src string) *fact.Ontology {
+		o, err := fact.ParseOntology([]byte(src))
+		require.NoError(t, err)
+		return o
+	}
+	const topics = "topics:\n  notes:\n    description: d\n"
+	const moreTopics = "topics:\n  notes:\n    description: d\n  more:\n    description: d\n"
+	plain := parse("id: x\nname: X\n" + topics)
+	withLog := parse("id: x\nname: X\nattributes:\n  verify_signatures: log\n" + topics)
+	presetPlain := parse("id: x\nname: X\n" + moreTopics)
+	presetLog := parse("id: x\nname: X\nattributes:\n  verify_signatures: log\n" + moreTopics)
+	presetEnforce := parse("id: x\nname: X\nattributes:\n  verify_signatures: enforce\n" + moreTopics)
+	presetOff := parse("id: x\nname: X\nattributes:\n  verify_signatures: off\n" + moreTopics)
+
+	require.Equal(t, "", refreshDivergence(plain, presetPlain), "no root attributes anywhere: refresh as before")
+	require.Equal(t, "", refreshDivergence(plain, presetOff), "an explicit off is absent: nothing is added")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(plain, presetLog), "a preset must not ADD a root attribute")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(withLog, presetEnforce), "a preset must not CHANGE a root attribute")
+	require.Equal(t, fact.DivergenceAttributes, refreshDivergence(withLog, presetPlain), "a preset must not DROP a root attribute")
+	require.Equal(t, "", refreshDivergence(withLog, presetLog), "an identical root block is preserved, so the refresh may run")
+}

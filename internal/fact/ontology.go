@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -129,7 +130,10 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 	// Every topic in o must exist in other, recursively. One walk: shape
 	// divergence stops it; attribute divergence is only noted, since a shape
 	// difference further on must still win.
-	attrsDiverge := false
+	// Root attributes are compared exactly like a node's: the refresh would
+	// otherwise write a preset without them over the stored file and erase a
+	// repository-level setting (verify_signatures) on every boot.
+	attrsDiverge := attrsNotSubset(o.Attributes, other.Attributes)
 	for key, node := range o.Topics {
 		otherNode, ok := other.Topics[key]
 		if !ok || !nodeIsSubsetOf(node, otherNode, &attrsDiverge) {
@@ -156,13 +160,8 @@ func nodeIsSubsetOf(n, other *OntologyNode, attrsDiverge *bool) bool {
 	if !validationsSubset(n.Validations, other.Validations) {
 		return false
 	}
-	for k, v := range n.Attributes {
-		if attrIsAbsent(k, v) {
-			continue
-		}
-		if ov, ok := other.Attributes[k]; !ok || !reflect.DeepEqual(v, ov) {
-			*attrsDiverge = true
-		}
+	if attrsNotSubset(n.Attributes, other.Attributes) {
+		*attrsDiverge = true
 	}
 	for key, child := range n.Children {
 		otherChild, ok := other.Children[key]
@@ -174,6 +173,36 @@ func nodeIsSubsetOf(n, other *OntologyNode, attrsDiverge *bool) bool {
 		}
 	}
 	return true
+}
+
+// attrsNotSubset reports whether some attribute in attrs is missing from other
+// or differs from it. A value that behaves as absent is compared as absent, so
+// spelling out the default never stops an upgrade.
+func attrsNotSubset(attrs, other map[string]any) bool {
+	for k, v := range attrs {
+		if attrIsAbsent(k, v) {
+			continue
+		}
+		if ov, ok := other[k]; !ok || !reflect.DeepEqual(v, ov) {
+			return true
+		}
+	}
+	return false
+}
+
+// RootAttributesEqual reports whether a and b carry the same root attributes,
+// comparing a value that behaves as absent as absent. The boot refresh uses it
+// so that writing a preset can never ADD or CHANGE a repository-level setting,
+// only leave it as it was.
+func RootAttributesEqual(a, b *Ontology) bool {
+	var aa, ba map[string]any
+	if a != nil {
+		aa = a.Attributes
+	}
+	if b != nil {
+		ba = b.Attributes
+	}
+	return !attrsNotSubset(aa, ba) && !attrsNotSubset(ba, aa)
 }
 
 // validationsSubset returns true if every Validation Name in a appears as a
@@ -201,6 +230,12 @@ type Ontology struct {
 	Description string                   `yaml:"description"`
 	Topics      map[string]*OntologyNode `yaml:"topics"`
 	Validations []Validation             `yaml:"validations,omitempty"`
+	// Attributes are REPOSITORY-level settings (verify_signatures,
+	// verify_signers). They do not inherit into topics, and a key declared for
+	// the other scope is reported (see attributeSpec.scope). Keys this binary
+	// does not declare are kept, so Serialize writes back what a newer knomit
+	// wrote.
+	Attributes map[string]any `yaml:"attributes,omitempty"`
 
 	cache compiledRulesCache
 }
@@ -289,7 +324,25 @@ type attributeSpec struct {
 	accepts string         // human description of the accepted values, for diagnostics
 	valid   func(any) bool // reports whether a decoded value is accepted
 	absent  any            // the value that behaves as absent; compared as absent by IsSubsetOf
+	scope   attrScope      // where the key may be declared
 }
+
+// attrScope says where an attribute key belongs: on topic nodes (inherited
+// down the tree) or in the root block (one value for the whole repository).
+type attrScope int
+
+const (
+	scopeTopic attrScope = iota
+	scopeRoot
+)
+
+// Repository-level attributes (F09). verify_signatures switches signature
+// verification of the upstream for this repository; absent means off.
+// verify_signers lists the OpenSSH ssh-ed25519 public keys admitted to sign.
+const (
+	AttrVerifySignatures = "verify_signatures"
+	AttrVerifySigners    = "verify_signers"
+)
 
 // attributeRegistry is the ONLY place an attribute key is declared.
 //
@@ -318,7 +371,46 @@ var attributeRegistry = map[string]attributeSpec{
 			return ok && (s == "off" || s == "on")
 		},
 		absent: "on",
+		scope:  scopeTopic,
 	},
+	// Exactly "off", "log" or "enforce"; "off" behaves as absent. A yaml bool
+	// is rejected for the same reason as learn_dedup's.
+	AttrVerifySignatures: {
+		accepts: `"off", "log" or "enforce"`,
+		valid: func(v any) bool {
+			s, ok := v.(string)
+			return ok && (s == "off" || s == "log" || s == "enforce")
+		},
+		absent: "off",
+		scope:  scopeRoot,
+	},
+	// A LIST of authorized-key lines, each an ssh-ed25519 key. Full keys, not
+	// fingerprints: a git allowed_signers file needs the key itself.
+	AttrVerifySigners: {
+		accepts: "a list of ssh-ed25519 public-key lines",
+		valid:   validSignerList,
+		scope:   scopeRoot,
+	},
+}
+
+// validSignerList accepts a yaml sequence whose every entry parses as an
+// authorized-key line of type ssh-ed25519.
+func validSignerList(v any) bool {
+	list, ok := v.([]any)
+	if !ok {
+		return false
+	}
+	for _, e := range list {
+		s, ok := e.(string)
+		if !ok {
+			return false
+		}
+		pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(s))
+		if err != nil || pub.Type() != ssh.KeyAlgoED25519 {
+			return false
+		}
+	}
+	return true
 }
 
 // attrIsAbsent reports whether v is the value that means the same as leaving
@@ -419,6 +511,25 @@ func ParseOntology(data []byte) (*Ontology, error) {
 	return o, nil
 }
 
+// ParseNewOntology is ParseOntology for an ontology that is being CREATED:
+// on top of every fatal problem, it also refuses the problems that are only
+// warnings on the open path (an attribute declared in the wrong scope, a bad
+// value for a repository-level attribute). An existing repository must keep
+// opening whatever its committed file says, because a parse failure there
+// refuses every write; a new one can still be fixed, so it is told now.
+func ParseNewOntology(data []byte) (*Ontology, error) {
+	o, diags := ValidateOntologyYAML(data)
+	for _, d := range diags {
+		if d.IsError() || d.newOnly {
+			return nil, errors.New(d.Message)
+		}
+	}
+	if o == nil {
+		return nil, errors.New("parse ontology: no ontology in document")
+	}
+	return o, nil
+}
+
 // TopicNames returns the sorted top-level topic keys.
 func (o *Ontology) TopicNames() []string {
 	names := make([]string, 0, len(o.Topics))
@@ -469,6 +580,11 @@ func (o *Ontology) Serialize() ([]byte, error) {
 	}
 	if len(o.Validations) > 0 {
 		serializeValidations(root, o.Validations)
+	}
+	if len(o.Attributes) > 0 {
+		if err := serializeAttributes(root, o.Attributes); err != nil {
+			return nil, fmt.Errorf("serialize ontology: %w", err)
+		}
 	}
 
 	topicsKey := &yaml.Node{Kind: yaml.ScalarNode, Value: "topics"}
