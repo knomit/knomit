@@ -115,3 +115,49 @@ func TestSignedWrite_LeavesNoUnsignedPreImage(t *testing.T) {
 		t.Fatalf("signed writes must leave no unreachable objects: %v", rep.Issues)
 	}
 }
+
+// TestNoSigner_DeleteAndMergeRefusalsLeaveNoObjects: the signer is resolved
+// before any tree is written on EVERY authored path, including a delete and a
+// non-fast-forward merge (an experiment commit): a refusal leaves the object
+// store exactly as it was.
+func TestNoSigner_DeleteAndMergeRefusalsLeaveNoObjects(t *testing.T) {
+	svc := openRepo(t)
+	ctx := context.Background()
+	seed := sha256.Sum256([]byte("nosignertest merge"))
+	signer, err := ssh.NewSignerFromKey(ed25519.NewKeyFromSeed(seed[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const agent = "agent/test-deadbeef"
+	svc.SetSigner(signer)
+	if _, err := svc.Facts().WriteFact(ctx, agent, "kb/notes/a.md", factBody, "learn: a", "created"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Experiments().OpenExperiment(ctx, "diverge", "", agent); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Facts().WriteFact(ctx, "exp/diverge", "kb/notes/b.md", factBody, "learn: b", "created"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Facts().WriteFact(ctx, agent, "kb/notes/c.md", factBody, "learn: c", "created"); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err := svc.Verify(ctx, store.VerifyOpts{}); err != nil || !rep.IsStrictlyClean() {
+		t.Fatalf("precondition: clean before the refusals: %v %v", err, rep.Issues)
+	}
+
+	svc.SetSigner(nil)
+	if _, err := svc.Facts().DeleteFact(ctx, agent, "kb/notes/a.md", "retract: a"); !errors.Is(err, store.ErrNoSigner) {
+		t.Fatalf("delete without a signer: got %v, want ErrNoSigner", err)
+	}
+	if _, err := svc.Experiments().CommitExperiment(ctx, "diverge", nil); !errors.Is(err, store.ErrNoSigner) {
+		t.Fatalf("a non-fast-forward merge without a signer: got %v, want ErrNoSigner", err)
+	}
+	rep, err := svc.Verify(ctx, store.VerifyOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.IsStrictlyClean() {
+		t.Fatalf("refused delete and merge must leave nothing behind: %v", rep.Issues)
+	}
+}

@@ -161,6 +161,12 @@ func (rh *repoHandler) replayCommit(
 	ontoHash plumbing.Hash,
 	strategy ConflictStrategy,
 ) (plumbing.Hash, error) {
+	// The signer is resolved BEFORE the synthetic base or any merged tree is
+	// written: a refused replay (ErrNoSigner) must leave no object behind.
+	signer, err := rh.commitSigner()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)
+	}
 	ontoCommit, err := rh.repo.CommitObject(ontoHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: onto commit %s: %w", ontoHash, err)
@@ -248,10 +254,6 @@ func (rh *repoHandler) replayCommit(
 		ParentHashes: []plumbing.Hash{ontoHash},
 	}
 
-	signer, err := rh.commitSigner()
-	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)
-	}
 	h, err := storeCommit(rh.gits, signer, newCommit)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)

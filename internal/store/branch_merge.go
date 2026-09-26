@@ -197,6 +197,13 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 		}
 	}
 
+	// The signer is resolved BEFORE the three-way merge writes any tree: a
+	// refused merge (ErrNoSigner) must leave no object behind.
+	signer, err := rh.commitSigner()
+	if err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
+	}
+
 	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, srcCommit, dstCommit, strategy, resolutions)
 	if err != nil {
 		// A refusal is not a malfunction: name the branches on the typed
@@ -235,10 +242,6 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}
 
-	signer, err := rh.commitSigner()
-	if err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
-	}
 	mergeHash, err := storeCommit(rh.gits, signer, mc)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge commit: %w", err)

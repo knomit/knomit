@@ -31,8 +31,15 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", "dist", "web", ".claude":
+			// Skipped by PATH at the module root, never by name: a name match
+			// ("web") also exempted internal/web, the package the wizard fix
+			// lives in.
+			rel, _ := filepath.Rel(root, path)
+			switch rel {
+			case ".git", "web", "dist", ".claude":
+				return filepath.SkipDir
+			}
+			if d.Name() == "node_modules" {
 				return filepath.SkipDir
 			}
 			return nil
