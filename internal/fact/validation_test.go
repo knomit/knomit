@@ -233,6 +233,9 @@ var factToJSOmitted = map[string]string{
 		"the knomit_update path (ParseFact computes it from the on-disk motifs, which the handler may " +
 		"replace wholesale before ValidateFact runs) — so a rule would judge motifs that are not " +
 		"being written. The STRIPPED motif list is exposed instead; see resolvedMotifs.",
+	"ExpiresWarnings": "derived on read, never stored, and unusable from a rule for the same reason " +
+		"RefWarnings is: always empty on the knomit_learn path (SerializeFact refuses a malformed " +
+		"expires) and stale on the knomit_update path. The validated `expires` string is exposed instead.",
 }
 
 // TestFactToJS_ExposesEveryFactField is the regression guard for the omission

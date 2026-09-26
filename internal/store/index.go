@@ -33,7 +33,10 @@ type FactRecord struct {
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	Origin         string   `json:"origin"`
-	SourceCommit   string   `json:"source_commit,omitempty"` // commit at which this version was written
+	// Expires is the frontmatter value as written, "" when absent. Knomit
+	// never acts on it; see fact/expires.go.
+	Expires      string `json:"expires,omitempty"`
+	SourceCommit string `json:"source_commit,omitempty"` // commit at which this version was written
 }
 
 // NewFactRecord constructs a FactRecord from a parsed fact and git metadata.
@@ -66,6 +69,7 @@ func NewFactRecord(f fact.Fact, blobHash string) FactRecord {
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
 		Origin:         string(origin),
+		Expires:        f.Expires,
 	}
 }
 

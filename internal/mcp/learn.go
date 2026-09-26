@@ -109,6 +109,7 @@ func learnToolSchemaProperties() map[string]any {
 		"entities":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Entities this fact mentions."},
 		"distinct_from": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Paths of existing facts you have READ and judged to be about a DIFFERENT subject. Needed only after a call was refused: the refusal lists the candidates it found, and naming them here asserts the distinction and retries. To correct or extend one of those facts instead, call knomit_update on its path. Every path must exist on the branch."},
 		"motifs":        motifsProperty(),
+		"expires":       expiresProperty(),
 		"refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "References, in four forms. " +
 			"(1) A fact in THIS repo: use the bare path, `kb/<topic>/…/<id>.md` — exactly as it appears in a knomit_query result. You never need this repo's id: the server rewrites the ref to the canonical `kb://<repo-id>/<path>` form on write. The target MUST already exist, or be written in this same call — all facts in one call are committed together, so they may cite each other in any order, including circularly. Citing a fact that will not exist REJECTS the whole call and names every offending ref. " +
 			"(2) A fact in ANOTHER repo: `kb://<repo-id>/<path>`. Do not build this yourself — COPY it verbatim from the knomit_query or knomit_explain result that gave you the fact, which already returns other repos' paths in this form. (knomit_repos lists every mounted repo's id if you need to look one up.) Never checked. " +
@@ -149,6 +150,9 @@ type learnFactInput struct {
 	DistinctFrom []string `json:"distinct_from"`
 	Refs         []string `json:"refs"`
 	Origin       string   `json:"origin"`
+	// Expires is passed through to SerializeFact, the single gate that
+	// refuses a non-RFC 3339 value.
+	Expires string `json:"expires"`
 }
 
 // reserialize re-renders f and overwrites the entry at path in the
@@ -314,6 +318,7 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 		// the call there — neither decision belongs in a handler.
 		f.Motifs = fi.Motifs
 		f.Refs = refs
+		f.Expires = fi.Expires
 		// Explicit origin: set it and let SerializeFact validate, the
 		// same way (kind, type) is handled above — one chokepoint, so
 		// synthesize and web write paths get the identical check.
@@ -408,6 +413,11 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	merged.Type = winner.Type
 	// The winner's identity wins, so its origin wins too.
 	merged.Origin = winner.Origin
+	// And its expiry: a merge never invents, inherits or pools one. When the
+	// existing fact wins, an incoming explicit expires is NOT applied — the
+	// handler says so in its result (expiresNotAppliedNotes) rather than
+	// dropping it silently.
+	merged.Expires = winner.Expires
 
 	merged.Domain = fact.UnionStrings(newFact.Domain, existing.Domain)
 	merged.Entities = fact.UnionStrings(newFact.Entities, existing.Entities)
@@ -988,10 +998,31 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			"written_to": dest,
 			"summary":    dest.summary(pluralFacts(len(facts))),
 		}
+		if notes := expiresNotAppliedNotes(factInputs, facts); len(notes) > 0 {
+			result["notes"] = notes
+			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
+		}
 		out, err := json.Marshal(result)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("marshal result: %v", err)), nil
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
+}
+
+// expiresNotAppliedNotes names every incoming fact whose explicit expires did
+// not land because a dedup merge kept the EXISTING fact (mergeFacts takes the
+// winner's value). facts[i] is what was written for inputs[i], at its final
+// path.
+func expiresNotAppliedNotes(inputs []learnFactInput, facts []fact.Fact) []string {
+	var notes []string
+	for i, in := range inputs {
+		if i >= len(facts) || in.Expires == "" || facts[i].Expires == in.Expires {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf(
+			"fact %d: merged into existing fact %s; existing fact kept; expires not applied; set it with knomit_update on %s.",
+			i, facts[i].Path(), facts[i].Path()))
+	}
+	return notes
 }

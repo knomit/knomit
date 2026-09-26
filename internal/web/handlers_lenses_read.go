@@ -83,6 +83,8 @@ type lensFactItem struct {
 	CommittedAt int64          `json:"committed_at,omitempty"`
 	Operation   string         `json:"operation,omitempty"`
 	Score       float64        `json:"score"`
+	Expires     string         `json:"expires,omitempty"`
+	Expired     bool           `json:"expired,omitempty"`
 	Source      lensFactSource `json:"source"`
 }
 
@@ -259,6 +261,10 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 			// Limit is set per fan-out round below — see `depth`.
 			Offset: 0,
 		}
+		now := timeNow()
+		if !applyExpiryParams(w, r, &base, now) {
+			return
+		}
 
 		// Each mount answers the count with its own SELECT COUNT(*), independent
 		// of how many rows this page asked for. Discarding it and reporting
@@ -389,6 +395,8 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 					CommittedAt: e.CommittedAt,
 					Operation:   e.Operation,
 					Score:       e.Score,
+					Expires:     e.Expires,
+					Expired:     expiredAt(e.Expires, now),
 					Source: lensFactSource{
 						Repo:   t.RT.RI.Name(),
 						ID:     federate.ID12(t.RT.RI.ID()),
@@ -701,6 +709,8 @@ type lensSearchItem struct {
 	Entities   []string       `json:"entities,omitempty"`
 	Motifs     []string       `json:"motifs,omitempty"`
 	Confidence float64        `json:"confidence,omitempty"`
+	Expires    string         `json:"expires,omitempty"`
+	Expired    bool           `json:"expired,omitempty"`
 	Source     lensFactSource `json:"source"`
 }
 
@@ -813,6 +823,10 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 			// lensQueryVec.
 			QueryVec: lensQueryVec(r.Context(), emb, qp.Get("q")),
 		}
+		now := timeNow()
+		if !applyExpiryParams(w, r, &base, now) {
+			return
+		}
 
 		// Fan out to every selected mount at its Binding-resolved branch. Any mount
 		// error fails the whole request — a lens must never silently shrink its read
@@ -876,6 +890,8 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 				Entities:   res.Entities,
 				Motifs:     res.Motifs,
 				Confidence: res.Confidence,
+				Expires:    res.Expires,
+				Expired:    expiredAt(res.Expires, now),
 				Source: lensFactSource{
 					Repo:   t.RT.RI.Name(),
 					ID:     federate.ID12(t.RT.RI.ID()),

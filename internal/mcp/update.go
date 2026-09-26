@@ -61,7 +61,9 @@ func updateToolSchemaProperties() map[string]any {
 		// list field at once — keeping it out of here is what lets this string
 		// stay byte-identical to knomit_learn's.
 		"motifs": motifsProperty(),
-		"refs":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces the ENTIRE refs list. Send every ref the fact should keep — any existing ref you leave out is dropped. To add or refresh a ref, read the current refs first and resend the full merged list. Omit the field to leave refs unchanged."},
+		// An explicit "" CLEARS the expiry; omitting the field leaves it.
+		"expires": map[string]any{"type": "string", "description": expiresFieldDescription + ` On update, "" clears it; omit the field to leave it unchanged.`},
+		"refs":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Replaces the ENTIRE refs list. Send every ref the fact should keep — any existing ref you leave out is dropped. To add or refresh a ref, read the current refs first and resend the full merged list. Omit the field to leave refs unchanged."},
 	}
 }
 
@@ -77,6 +79,8 @@ type updateInput struct {
 	Domain     []string `json:"domain"`
 	Entities   []string `json:"entities"`
 	Motifs     []string `json:"motifs"`
+	// Expires is a pointer so "" (clear) differs from absent (unchanged).
+	Expires *string `json:"expires"`
 }
 
 // UpdateHandler returns the handler function for knomit_update.
@@ -199,6 +203,9 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// "unchanged"; an explicit [] clears. No validation here — a malformed
 		// motif is rejected and a subject motif silently dropped by
 		// SerializeFact, the single gate (MN4).
+		if updates.Expires != nil {
+			fact.Expires = *updates.Expires
+		}
 		if updates.Motifs != nil {
 			fact.Motifs = updates.Motifs
 		}

@@ -70,6 +70,7 @@ func factToJS(f Fact) map[string]any {
 		"sources":         f.Sources,
 		"origin":          string(resolvedOrigin(f)),
 		"evidence_weight": f.EvidenceWeight,
+		"expires":         f.Expires,
 	}
 }
 

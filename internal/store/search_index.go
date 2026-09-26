@@ -51,7 +51,7 @@ import (
 // lived in the dropped _int/_real tables and are rewritten as TEXT. Rebuild
 // reads git (the only source of truth) and preserves embeddings, so this costs
 // a graph rewrite, not a re-embed.
-const GraphSchemaVersion = "5"
+const GraphSchemaVersion = "6"
 
 type searchIndex struct {
 	rh *repoHandler
@@ -824,6 +824,30 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 	`, blobObjectType)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: upsert facts: %w", err)
+	}
+
+	// Repopulate the fact_expires side table (migration 000026) for the
+	// rebuilt entries. Only blobs that contain the token "expires" are
+	// re-parsed — the instr() prefilter keeps this second pass from parsing the
+	// whole corpus again. The token, NOT "expires:": YAML also accepts
+	// `expires : …`, which the incremental path indexes, and the repair path
+	// must not disagree with it. A blob that merely mentions the word parses to
+	// a NULL expires and is skipped by the WHERE. REPLACE, not IGNORE: a rebuild is
+	// the repair path, so it must overwrite a row an older build got wrong.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		WITH dated AS (
+			SELECT f.id AS fact_id, knomit_parse_fact(o.data) AS parsed
+			FROM _rebuild_entries e
+			JOIN facts f ON f.path = e.path AND f.blob_hash = e.blob_hash
+			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
+			WHERE instr(o.data, 'expires') > 0
+		)
+		INSERT OR REPLACE INTO fact_expires (fact_id, expires, expires_at)
+		SELECT fact_id, json_extract(parsed, '$.expires'), json_extract(parsed, '$.expires_at')
+		FROM dated
+		WHERE json_extract(parsed, '$.expires_at') IS NOT NULL
+	`, blobObjectType); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: fact_expires: %w", err)
 	}
 
 	affected, _ := res.RowsAffected()

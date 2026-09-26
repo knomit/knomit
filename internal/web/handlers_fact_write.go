@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -219,6 +220,15 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		if err != nil {
 			hal.WriteProblem(w, http.StatusUnprocessableEntity,
 				"Failed to parse fact", err.Error(), r.URL.Path)
+			return
+		}
+		// ParseFact is lenient about a malformed expires (it drops it, so an
+		// old file stays readable). A WRITE is strict everywhere else, and this
+		// path commits the client's bytes verbatim, so refuse here rather than
+		// store a value every reader will ignore.
+		if len(f.ExpiresWarnings) > 0 {
+			hal.WriteProblem(w, http.StatusUnprocessableEntity,
+				"Invalid expires", strings.Join(f.ExpiresWarnings, "; "), r.URL.Path)
 			return
 		}
 

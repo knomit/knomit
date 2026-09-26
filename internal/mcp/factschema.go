@@ -123,6 +123,19 @@ func motifsProperty() map[string]any {
 	}
 }
 
+// expiresFieldDescription is shared by knomit_learn and knomit_update so the two
+// cannot describe the field differently.
+const expiresFieldDescription = `expires (optional): an RFC 3339 timestamp with an offset, e.g. 2026-10-01T00:00:00Z. ` +
+	`Past it the fact is EXPIRED: query results mark it "expired": true and knomit_query can find it ` +
+	`(expired, expires_before, expires_after). That is all: knomit never deletes, hides or retracts a fact ` +
+	`because it expired; you or a human decide whether to keep, update or retract it. Absent means never ` +
+	`expires; there is no default. Any kind or type may carry one — a hypothesis's settlement date, ` +
+	`a time-bound observation, a signal's lifetime. Date-only values (2026-10-01) are refused.`
+
+func expiresProperty() map[string]any {
+	return map[string]any{"type": "string", "format": "date-time", "description": expiresFieldDescription}
+}
+
 // enumValues renders a slice of string-kinded domain values as the []string
 // a JSON-schema "enum" key expects.
 func enumValues[T ~string](vals []T) []string {

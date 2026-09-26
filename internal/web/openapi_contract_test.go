@@ -53,3 +53,44 @@ func TestOpenAPI_RepoSchemaRequiresReadBranch(t *testing.T) {
 		require.Contains(t, props, p, "Repo schema is missing property %q", p)
 	}
 }
+
+// TestOpenAPI_ExpiryFiltersAndFieldsDeclared (F03): every surface that takes
+// the expiry filters declares them, the two semantics a caller gets wrong are
+// stated in the served text, and the row/fact schemas declare the fields.
+func TestOpenAPI_ExpiryFiltersAndFieldsDeclared(t *testing.T) {
+	doc := servedOpenAPI(t)
+	comps := doc["components"].(map[string]any)
+	params := comps["parameters"].(map[string]any)
+	for _, p := range []string{"ExpiredFilter", "ExpiresBefore", "ExpiresAfter"} {
+		require.Contains(t, params, p)
+	}
+	require.Contains(t, params["ExpiredFilter"].(map[string]any)["description"], "`expired=false` INCLUDES facts with no `expires`")
+	require.Contains(t, params["ExpiresBefore"].(map[string]any)["description"], "`expires_before` alone EXCLUDES facts with no\n`expires`")
+
+	paths := doc["paths"].(map[string]any)
+	for _, op := range []string{
+		"/repos/{repo}/branches/{branch}/facts",
+		"/repos/{repo}/branches/{branch}/search",
+		"/lenses/{lens}/facts",
+		"/lenses/{lens}/search",
+	} {
+		get := paths[op].(map[string]any)["get"].(map[string]any)
+		var refs []string
+		for _, p := range get["parameters"].([]any) {
+			if r, ok := p.(map[string]any)["$ref"].(string); ok {
+				refs = append(refs, r)
+			}
+		}
+		for _, want := range []string{"ExpiredFilter", "ExpiresBefore", "ExpiresAfter"} {
+			require.Contains(t, refs, "#/components/parameters/"+want, "%s must declare %s", op, want)
+		}
+	}
+
+	schemas := comps["schemas"].(map[string]any)
+	for _, s := range []string{"Fact", "FactSummary", "LensFactItem", "LensSearchItem", "Highlight"} {
+		props := schemas[s].(map[string]any)["properties"].(map[string]any)
+		require.Contains(t, props, "expires", s)
+		require.Contains(t, props, "expired", s)
+	}
+	require.Contains(t, schemas["FactCreateRequest"].(map[string]any)["properties"], "expires")
+}

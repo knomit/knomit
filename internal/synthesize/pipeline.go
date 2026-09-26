@@ -968,6 +968,9 @@ func factFromSearchResult(sr store.SearchResult) fact.Fact {
 	// function, found because the parity test was rebuilt to compare fields it
 	// was not told about.
 	f.EvidenceWeight = sr.EvidenceWeight
+	// Expires (F03): authored data, so the full-scan seed must carry the same
+	// value the incremental ParseFact path does (TestSeedScanPaths_ProduceTheSameFact).
+	f.Expires = sr.Expires
 	f.Origin = fact.Origin(sr.Origin)
 	return f
 }

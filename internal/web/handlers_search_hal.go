@@ -61,6 +61,8 @@ type searchResultItem struct {
 	Entities   []string    `json:"entities,omitempty"`
 	Motifs     []string    `json:"motifs,omitempty"`
 	Confidence float64     `json:"confidence,omitempty"`
+	Expires    string      `json:"expires,omitempty"`
+	Expired    bool        `json:"expired,omitempty"`
 	Links      hal.LinkMap `json:"_links"`
 }
 
@@ -137,6 +139,10 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 			MinSimilarity:  minSimilarity,
 			Limit:          limit,
 		}
+		now := timeNow()
+		if !applyExpiryParams(w, r, &q, now) {
+			return
+		}
 
 		// since_fork narrows the search to what this experiment changed. It is
 		// honoured HERE as well as on the facts collection because the Library
@@ -190,6 +196,8 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 				Entities:   res.Entities,
 				Motifs:     res.Motifs,
 				Confidence: res.Confidence,
+				Expires:    res.Expires,
+				Expired:    expiredAt(res.Expires, now),
 				Links:      hal.LinkMap{"self": {Href: b.Fact(repoName, a, res.Path)}},
 			}
 			items = append(items, item)

@@ -16,6 +16,25 @@ type FactSummary struct {
 	Title    string   `json:"title"`
 	Entities []string `json:"entities"`
 	Domain   []string `json:"domain"`
+	// Expires/Expired come from the server (F03): Expired is judged by the
+	// server's clock. Knomit never hides an expired fact, so the text block
+	// must say it — see ExpiryNote.
+	Expires string `json:"expires,omitempty"`
+	Expired bool   `json:"expired,omitempty"`
+}
+
+// ExpiryNote is the suffix a text rendering appends to a fact line, so an
+// agent reading the pre-warm sees the date: " (expired <date>)",
+// " (expires <date>)", or "" for an undated fact.
+func ExpiryNote(f FactSummary) string {
+	switch {
+	case f.Expires == "":
+		return ""
+	case f.Expired:
+		return " (expired " + f.Expires + ")"
+	default:
+		return " (expires " + f.Expires + ")"
+	}
 }
 
 // RecentFactsURL builds the recent-facts URL used for the "Recent work" list.

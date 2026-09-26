@@ -3,10 +3,15 @@ package web
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	knomitfact "knomit/internal/fact"
 	"knomit/internal/web/hal"
 )
+
+// timeNow is the web layer's clock, a var so tests can pin it. Every expired
+// marker a handler emits is computed from it.
+var timeNow = time.Now
 
 // FactView is the on-wire HAL envelope for a single fact. One serializer
 // handles both HEAD-anchored and commit-anchored views; the anchor passed
@@ -38,6 +43,12 @@ type FactView struct {
 	// readable — so this is how a reader learns the citation is unfollowable
 	// instead of the fact silently vanishing from the index.
 	RefWarnings []string `json:"ref_warnings,omitempty"`
+
+	// Expires is the fact's optional RFC 3339 expiry as written; Expired says
+	// whether it is at or before the server's clock at READ time. Knomit never
+	// acts on either — they are there so a reader can decide.
+	Expires string `json:"expires,omitempty"`
+	Expired bool   `json:"expired,omitempty"`
 
 	// Links is public so tests can inspect it. Marshaled as _links.
 	Links hal.LinkMap `json:"-"`
@@ -119,6 +130,8 @@ func BuildFactView(
 		AsOf:        AsOf{Branch: a.Branch, Commit: asOfCommit},
 		Refs:        BuildRefViews(b, repo, a, f.Refs, resolver, localRepoID),
 		RefWarnings: f.RefWarnings,
+		Expires:     f.Expires,
+		Expired:     f.IsExpired(timeNow()),
 	}
 	v.Links = buildFactLinks(b, repo, a, headCommit, f.Path())
 	return v
