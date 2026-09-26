@@ -248,17 +248,13 @@ func (rh *repoHandler) replayCommit(
 		ParentHashes: []plumbing.Hash{ontoHash},
 	}
 
-	enc := rh.gits.NewEncodedObject()
-	if err := newCommit.Encode(enc); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("replayCommit: encode: %w", err)
-	}
-	h, err := rh.gits.SetEncodedObject(enc)
+	signer, err := rh.commitSigner()
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("replayCommit: store: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)
 	}
-	h, err = signCommitInPlace(rh.gits, rh.signer, h)
+	h, err := storeCommit(rh.gits, signer, newCommit)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("replayCommit: sign: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("replayCommit: %w", err)
 	}
 	return h, nil
 }

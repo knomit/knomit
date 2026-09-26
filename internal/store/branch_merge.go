@@ -235,18 +235,13 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}
 
-	commitObj := rh.gits.NewEncodedObject()
-	if err := mc.Encode(commitObj); err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: encode merge commit: %w", err)
-	}
-	mergeHash, err := rh.gits.SetEncodedObject(commitObj)
+	signer, err := rh.commitSigner()
 	if err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: store merge commit: %w", err)
+		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
-
-	mergeHash, err = signCommitInPlace(rh.gits, rh.signer, mergeHash)
+	mergeHash, err := storeCommit(rh.gits, signer, mc)
 	if err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: sign merge commit: %w", err)
+		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge commit: %w", err)
 	}
 
 	newRef := plumbing.NewHashReference(dstRefName, mergeHash)
