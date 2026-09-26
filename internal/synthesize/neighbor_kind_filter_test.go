@@ -127,12 +127,14 @@ func requireUnfilteredSearchFinds(t *testing.T, env *restatementEnv, from, want 
 }
 
 // completeEdges stands in for the SIMILAR_TO edge read. The test store builds
-// no SIMILAR_TO edges, so the real SubgraphEdges returns none and ScopedCluster
-// falls back to its category grouping — which at the default resolution and
-// min size gave ZERO clusters here, and a "pol is in no cluster" assertion over
-// zero clusters is vacuous. Every pair of collected paths is an edge instead,
-// so membership is decided by exactly one thing: which paths the neighbour
-// search let into the subgraph.
+// no SIMILAR_TO edges, so the real SubgraphEdges returns none; Louvain then
+// returns one SINGLETON per node — non-empty, so ScopedCluster's category
+// fallback never fires — and filterSmallClusters drops every singleton: ZERO
+// clusters, over which a "pol is in no cluster" assertion is vacuous. Every
+// pair of collected paths is an edge instead, so membership is decided by
+// exactly one thing: which paths the neighbour search let into the subgraph.
+// The tests also pass resolution 1.0, because the production 4.0 splits even a
+// connected 2-node graph.
 type completeEdges struct{ SearchQuery }
 
 func (c completeEdges) SubgraphEdges(_ context.Context, paths []string) ([][2]string, error) {
@@ -402,7 +404,9 @@ func TestNeighborKinds_BackwardBridgesThreadTheList(t *testing.T) {
 	})
 }
 
-// (e) Widening makes a policy a neighbour, never a seed.
+// (e) Widening makes a policy a neighbour, never a seed. This runs the
+// full-scan path, so it pins SeedQuery's SQL kind clause; AcceptSeed (the
+// incremental path) is covered by review_kind_filter_test.go.
 func TestNeighborKinds_WidenedListNeverSeeds(t *testing.T) {
 	ctx := context.Background()
 	env := kindEnv(t, widenedNeighborKinds)

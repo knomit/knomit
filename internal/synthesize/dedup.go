@@ -28,9 +28,16 @@ const maxConcurrentDedupSearches = 8
 var dedupSearchKinds = []string{string(fact.Epistemic)}
 
 // sameKnownKind reports whether a and b may be merged by kind: both kinds must
-// be known and equal. A mechanical merge writes through mergedFact, which does
-// not carry Kind, so a cross-kind merge silently rewrites a policy as an
-// epistemic fact and deletes the original (knomit#308).
+// be known and equal (knomit#308).
+//
+// dedupCluster does NOT go through mergedFact: it re-parses the WINNER from its
+// own file, so the winner keeps its kind, writes it back, and DELETES the
+// loser. A cross-kind pair therefore corrupts by deletion, not by rewriting:
+// if the policy loses, the policy is deleted; if it wins, the observation is
+// deleted into it. That is why this check must outlive the seed filter:
+// convention 8b26a25d allows AcceptSeed to go once mergedFact/distillFact carry
+// Kind, but carrying Kind changes nothing here — dedup deletes across kinds
+// whatever mergedFact does.
 //
 // It fails CLOSED on an empty Kind: "" never equals anything here, including
 // another "". A projection site that forgot to fill Kind must make its facts
