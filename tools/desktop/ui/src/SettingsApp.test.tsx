@@ -129,8 +129,8 @@ describe('SettingsApp fleet identity', () => {
     const B = 'b'.repeat(64)
     const install = vi
       .fn()
-      .mockResolvedValueOnce({ installed: false, class: 'root_differs', message: '', installedRootFingerprint: A, bundleRootFingerprint: B, identity: null })
-      .mockResolvedValueOnce({ installed: true, class: '', message: '', installedRootFingerprint: '', bundleRootFingerprint: '', identity: enrolled })
+      .mockResolvedValueOnce({ installed: false, class: 'root_differs', message: '', installedRootFingerprint: A, bundleRootFingerprint: B, bundlePrincipal: '', identity: null })
+      .mockResolvedValueOnce({ installed: true, class: '', message: '', installedRootFingerprint: '', bundleRootFingerprint: '', bundlePrincipal: '', identity: enrolled })
     byName.mockImplementation((name: string, ...args: unknown[]) => {
       if (name === 'main.NativeService.GetSettings') return Promise.resolve(loaded)
       if (name === 'main.NativeService.GetIdentity') return Promise.resolve(notEnrolled)

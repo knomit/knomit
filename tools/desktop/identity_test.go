@@ -83,6 +83,24 @@ func bundle(t *testing.T, f *pkitest.Fleet, m pkitest.Member) string {
 	return string(m.CertPEM) + string(rootPEM) + string(crlPEM)
 }
 
+// installConfirmed is a first install as the UI does it: the preview call,
+// then the confirmation carrying the root it showed.
+func installConfirmed(t *testing.T, n *NativeService, raw string) InstallResult {
+	t.Helper()
+	res, err := n.InstallBundle(fromSettings, raw, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Class != classRootUnconfirmed {
+		return res
+	}
+	res, err = n.InstallBundle(fromSettings, raw, "", res.BundleRootFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
 func rootFP(t *testing.T, f *pkitest.Fleet) string {
 	t.Helper()
 	fp, err := pki.RootID(f.Root.Cert)
@@ -146,9 +164,8 @@ func TestFleetIdentity_BindingsRefuseAnyCallerButTheSettingsWindow(t *testing.T)
 	}
 
 	// Positive control: the same three calls from Settings succeed.
-	res, err := n.InstallBundle(fromSettings, bundle(t, f, m), "", "")
-	if err != nil || !res.Installed {
-		t.Fatalf("InstallBundle from Settings: %+v %v", res, err)
+	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
+		t.Fatalf("InstallBundle from Settings: %+v", res)
 	}
 	if line, err := n.PublicKeyLine(fromSettings); err != nil || !strings.HasPrefix(line, "ssh-ed25519 ") {
 		t.Fatalf("PublicKeyLine from Settings: %q %v", line, err)
@@ -176,12 +193,12 @@ func TestFleetIdentity_InstallWritesWhatPKIWrites(t *testing.T) {
 	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
 	n := fleetService(t, home)
 
-	res, err := n.InstallBundle(fromSettings, bundle(t, f, m), "", "")
-	if err != nil || !res.Installed || res.Class != "" {
-		t.Fatalf("install: %+v %v", res, err)
+	res := installConfirmed(t, n, bundle(t, f, m))
+	if !res.Installed || res.Class != "" {
+		t.Fatalf("install: %+v", res)
 	}
 	direct := filepath.Join(t.TempDir(), "pki")
-	if _, err := pki.InstallBundle(direct, keyPath, []byte(bundle(t, f, m)), false); err != nil {
+	if _, err := pki.InstallBundle(direct, keyPath, []byte(bundle(t, f, m)), pki.InstallOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	got, want := tree(t, filepath.Join(home, "pki")), tree(t, direct)
@@ -200,8 +217,8 @@ func TestFleetIdentity_RefusalsAreClassesAndWriteNothing(t *testing.T) {
 	f, f1 := pkitest.New(t), pkitest.New(t)
 	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
 	n := fleetService(t, home)
-	if res, err := n.InstallBundle(fromSettings, bundle(t, f, m), "", ""); err != nil || !res.Installed {
-		t.Fatalf("first install: %+v %v", res, err)
+	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
+		t.Fatalf("first install: %+v", res)
 	}
 	// Move this fleet's CRL to #2 and install it, so a #1 bundle is a rollback.
 	oldBundle := bundle(t, f, m)
@@ -254,7 +271,7 @@ func TestFleetIdentity_ReplaceRootNeedsTheFingerprintsThatWereShown(t *testing.T
 	f, f1, f2 := pkitest.New(t), pkitest.New(t), pkitest.New(t)
 	n := fleetService(t, home)
 	pkiDir := filepath.Join(home, "pki")
-	if res, _ := n.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath)), "", ""); !res.Installed {
+	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath))); !res.Installed {
 		t.Fatalf("first install: %+v", res)
 	}
 	foreign := bundle(t, f1, f1.Enroll(t, "laptop", pki.RoleInstance, keyPath))
@@ -288,7 +305,8 @@ func TestFleetIdentity_ReplaceRootNeedsTheFingerprintsThatWereShown(t *testing.T
 	// The installed root changes between the preview and the confirmation
 	// (another fleet installed underneath, e.g. by the CLI): the confirmed
 	// pair no longer describes the move, so it is refused.
-	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop", pki.RoleInstance, keyPath))), true); err != nil {
+	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop", pki.RoleInstance, keyPath))),
+		pki.InstallOptions{ExpectInstalledRoot: oldFP}); err != nil {
 		t.Fatal(err)
 	}
 	res, err = n.InstallBundle(fromSettings, foreign, oldFP, newFP)
@@ -307,6 +325,72 @@ func TestFleetIdentity_ReplaceRootNeedsTheFingerprintsThatWereShown(t *testing.T
 	}
 }
 
+// knomit#299: a FIRST install is shown and confirmed like a replace. The
+// first call installs nothing and reports the bundle's root and the
+// principal its certificate names; only ("", that root) installs; any other
+// pair — or a root installed underneath in between, e.g. by the CLI — is
+// refused as confirmation_stale and writes nothing.
+func TestFleetIdentity_FirstInstallNeedsTheRootThatWasShown(t *testing.T) {
+	home, keyPath := fleetHome(t)
+	f, f2 := pkitest.New(t), pkitest.New(t)
+	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
+	n := fleetService(t, home)
+	pkiDir := filepath.Join(home, "pki")
+	raw := bundle(t, f, m)
+	fp := rootFP(t, f)
+
+	res, err := n.InstallBundle(fromSettings, raw, "", "")
+	if err != nil || res.Installed || res.Class != classRootUnconfirmed || res.InstalledRootFingerprint != "" ||
+		res.BundleRootFingerprint != fp || res.BundlePrincipal != "instance:"+m.Fingerprint()+"@cert" || res.Message != "" {
+		t.Fatalf("first-install preview %+v %v", res, err)
+	}
+	if _, err := os.Stat(pkiDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the preview wrote %s (%v)", pkiDir, err)
+	}
+
+	for _, tc := range []struct{ name, from, to string }{
+		{"another root", "", rootFP(t, f2)},
+		{"a from where none is installed", fp, fp},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := n.InstallBundle(fromSettings, raw, tc.from, tc.to)
+			if err != nil || res.Installed || res.Class != classConfirmationStale ||
+				res.InstalledRootFingerprint != "" || res.BundleRootFingerprint != fp {
+				t.Fatalf("%+v %v", res, err)
+			}
+			if _, err := os.Stat(pkiDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a refused confirmation wrote %s (%v)", pkiDir, err)
+			}
+		})
+	}
+
+	// Another process enrols this home under f2 between the preview and the
+	// confirmation: the confirmed "no root installed" is no longer true.
+	if _, err := pki.InstallBundle(pkiDir, keyPath, []byte(bundle(t, f2, f2.Enroll(t, "laptop", pki.RoleInstance, keyPath))), pki.InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	before := tree(t, pkiDir)
+	res, err = n.InstallBundle(fromSettings, raw, "", fp)
+	if err != nil || res.Installed || res.Class != classConfirmationStale || res.InstalledRootFingerprint != rootFP(t, f2) {
+		t.Fatalf("stale first-install confirmation accepted: %+v %v", res, err)
+	}
+	if !reflect.DeepEqual(before, tree(t, pkiDir)) {
+		t.Fatal("a stale confirmation changed <home>/pki")
+	}
+
+	// On a fresh home, the shown root installs.
+	home2, keyPath2 := fleetHome(t)
+	n2 := fleetService(t, home2)
+	raw2 := bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath2))
+	if res, err := n2.InstallBundle(fromSettings, raw2, "", fp); err != nil || !res.Installed {
+		t.Fatalf("confirmed first install: %+v %v", res, err)
+	}
+	// A renewal under the installed root needs no confirmation.
+	if res, err := n2.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath2)), "", ""); err != nil || !res.Installed {
+		t.Fatalf("renewal: %+v %v", res, err)
+	}
+}
+
 // Neither the raw bundle nor any part of it reaches the log, whatever the
 // outcome.
 func TestFleetIdentity_TheBundleIsNeverLogged(t *testing.T) {
@@ -316,7 +400,7 @@ func TestFleetIdentity_TheBundleIsNeverLogged(t *testing.T) {
 	n := fleetService(t, home)
 	good := bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath))
 	foreign := bundle(t, f1, f1.Enroll(t, "laptop", pki.RoleInstance, keyPath))
-	n.InstallBundle(fromSettings, good, "", "")
+	installConfirmed(t, n, good)
 	n.InstallBundle(fromSettings, foreign, "", "")
 	n.InstallBundle(fromSettings, "junk "+good[40:120], "", "")
 	out := logs.String()
@@ -355,7 +439,7 @@ func TestFleetIdentity_GetIdentityStates(t *testing.T) {
 	}
 	f := pkitest.New(t)
 	m := f.Enroll(t, "laptop", pki.RoleInstance, keyPath)
-	if res, _ := n.InstallBundle(fromSettings, bundle(t, f, m), "", ""); !res.Installed {
+	if res := installConfirmed(t, n, bundle(t, f, m)); !res.Installed {
 		t.Fatalf("install: %+v", res)
 	}
 	n.tls.set(tlsState{Configured: "0.0.0.0:19279", Reason: tlsNoCertificate})

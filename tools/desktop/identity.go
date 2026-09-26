@@ -101,18 +101,22 @@ const (
 	classCRLInvalid        = "crl_invalid"
 	classRootDiffers       = "root_differs"
 	classConfirmationStale = "confirmation_stale"
-	classError             = "error" // I/O and the like: Message says what
+	classRootUnconfirmed   = "root_unconfirmed" // a first install, shown for confirmation
+	classError             = "error"            // I/O and the like: Message says what
 )
 
 // InstallResult is InstallBundle's answer. A refusal is a result with a
-// Class, not an error; the two fingerprints are set for root_differs and
-// confirmation_stale, and are what a confirmation must send back.
+// Class, not an error; the two fingerprints (the installed one "" when there
+// is none) and the principal are set for root_unconfirmed, root_differs and
+// confirmation_stale, and the fingerprints are what a confirmation must send
+// back.
 type InstallResult struct {
 	Installed                bool           `json:"installed"`
 	Class                    string         `json:"class"`
 	Message                  string         `json:"message"` // classError only; never bundle text
 	InstalledRootFingerprint string         `json:"installedRootFingerprint"`
 	BundleRootFingerprint    string         `json:"bundleRootFingerprint"`
+	BundlePrincipal          string         `json:"bundlePrincipal"` // <kind>:<fingerprint>@cert the bundle's certificate names
 	Identity                 *FleetIdentity `json:"identity"`
 }
 
@@ -198,21 +202,34 @@ func (n *NativeService) PublicKeyLine(ctx context.Context) (string, error) {
 // InstallBundle installs an enrolment bundle, pasted or read from a file by
 // the Settings window. raw is never logged, nor echoed back.
 //
-// confirmFrom and confirmTo are empty for an ordinary install. A bundle from
-// a different fleet root is then refused as root_differs, carrying the
-// installed root's fingerprint and the bundle's; the user is shown both, and
-// the replace is a SECOND call that sends that pair back. It replaces only if
-// the pair still describes the move — the installed root and the bundle's
-// root, both re-read under installMu — and is refused as confirmation_stale
-// (with the current pair) otherwise. So a confirmation is bound to what was
-// shown, not to "replace whatever is there".
+// confirmFrom and confirmTo are empty for an ordinary install. An install
+// that would put a root in place the user has not seen is then refused,
+// carrying the bundle root's fingerprint and the principal its certificate
+// names, so the user can compare them with what the fleet operator gave them
+// out of band (knomit#299):
+//
+//   - on a FIRST install (no root installed) as root_unconfirmed;
+//   - on a move to another fleet as root_differs, which also carries the
+//     installed root's fingerprint.
+//
+// The install is then a SECOND call that sends the shown pair back: ("",
+// bundle root) for a first install, (installed root, bundle root) for a
+// move. It installs only if the pair still describes the move — the
+// installed root and the bundle's root, both re-read under installMu — and
+// is refused as confirmation_stale (with the current pair) otherwise. The
+// confirmed installed root is then passed to pki.InstallBundle as the root
+// it must still find under its cross-process lock, so an install by another
+// process (a CLI) after this re-read is refused too, never overwritten. So
+// a confirmation is bound to what was shown, not to "install whatever is
+// there". A bundle under the root already installed (a renewal) needs no
+// confirmation.
 func (n *NativeService) InstallBundle(ctx context.Context, raw, confirmFrom, confirmTo string) (InstallResult, error) {
 	if !callerIsSettings(ctx) {
 		return InstallResult{}, errNotSettingsWindow
 	}
 	// One install at a time in this process: Wails runs each call on its own
-	// goroutine, and a double click must not interleave two. (A concurrent
-	// CLI install is another process; pki's atomic renames are what it gets.)
+	// goroutine, and a double click must not interleave two. Another process
+	// is held off by pki.InstallBundle's own lock.
 	n.installMu.Lock()
 	defer n.installMu.Unlock()
 
@@ -220,27 +237,38 @@ func (n *NativeService) InstallBundle(ctx context.Context, raw, confirmFrom, con
 	if err != nil {
 		return InstallResult{}, err
 	}
-	replace := false
-	if confirmFrom != "" || confirmTo != "" {
-		b, err := pki.SplitBundle([]byte(raw))
-		if err != nil {
-			return n.refused(err), nil
-		}
-		to, err := pki.RootID(b.Root)
-		if err != nil {
-			return n.refused(err), nil
-		}
-		from := ""
-		if cur, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile)); err == nil {
-			from, _ = pki.RootID(cur)
-		}
-		if from != confirmFrom || to != confirmTo {
-			log.Warn().Str("class", classConfirmationStale).Msg("fleet identity install refused")
-			return InstallResult{Class: classConfirmationStale, InstalledRootFingerprint: from, BundleRootFingerprint: to}, nil
-		}
-		replace = true
+	preview, err := pki.PreviewBundle(keyPath, []byte(raw))
+	if err != nil {
+		return n.refused(err), nil
 	}
-	id, err := pki.InstallBundle(dir, keyPath, []byte(raw), replace)
+	to := preview.Root.Fingerprint
+	// An installed root.crt that does not load reads as "" here; pki refuses
+	// it whatever is expected.
+	from := ""
+	if cur, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile)); err == nil {
+		from, _ = pki.RootID(cur)
+	}
+	pending := InstallResult{InstalledRootFingerprint: from, BundleRootFingerprint: to, BundlePrincipal: preview.Principal}
+	confirmed := confirmFrom != "" || confirmTo != ""
+	switch {
+	case confirmed && (from != confirmFrom || to != confirmTo):
+		return n.unconfirmed(pending, classConfirmationStale), nil
+	case confirmed, from == to:
+	case from == "":
+		return n.unconfirmed(pending, classRootUnconfirmed), nil
+	default:
+		return n.unconfirmed(pending, classRootDiffers), nil
+	}
+	id, err := pki.InstallBundle(dir, keyPath, []byte(raw), pki.InstallOptions{ExpectInstalledRoot: from})
+	if errors.Is(err, pki.ErrRootDiffers) {
+		// The installed root changed after the re-read above: whatever the
+		// user confirmed, it was not this.
+		var rd *pki.RootDiffersError
+		if errors.As(err, &rd) {
+			pending.InstalledRootFingerprint = rd.Installed.Fingerprint
+		}
+		return n.unconfirmed(pending, classConfirmationStale), nil
+	}
 	if err != nil {
 		return n.refused(err), nil
 	}
@@ -249,12 +277,19 @@ func (n *NativeService) InstallBundle(ctx context.Context, raw, confirmFrom, con
 		rootID, _ = pki.RootID(cur)
 	}
 	log.Info().Str("principal", pki.PrincipalKind(id.Role)+":"+id.Fingerprint+"@cert").Str("root", rootID).
-		Bool("replaced_root", replace).Str("dir", dir).Msg("fleet identity installed")
+		Bool("replaced_root", from != "" && from != to).Str("dir", dir).Msg("fleet identity installed")
 	res := InstallResult{Installed: true}
 	if fi, err := n.GetIdentity(); err == nil {
 		res.Identity = &fi
 	}
 	return res, nil
+}
+
+// unconfirmed is a refusal that asks the user to confirm pending's roots.
+func (n *NativeService) unconfirmed(pending InstallResult, class string) InstallResult {
+	log.Warn().Str("class", class).Msg("fleet identity install refused")
+	pending.Class = class
+	return pending
 }
 
 // refused maps a pki refusal to its class, logging the class and never the

@@ -441,6 +441,7 @@ describe('SettingsForm restart after an install', () => {
       message: '',
       installedRootFingerprint: '',
       bundleRootFingerprint: '',
+      bundlePrincipal: '',
       identity: after,
     })
     render(

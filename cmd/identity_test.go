@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/app"
+	"knomit/internal/config"
 	"knomit/internal/pki"
 	"knomit/internal/repos"
 )
@@ -91,7 +93,7 @@ func TestIdentity_OfflineEnrollmentRoundTrip(t *testing.T) {
 	bundle := enroll(t, dir, passFile, pubPath)
 
 	useHome(t, home)
-	out, err := run(t, "", "identity", "install", "--bundle", bundle)
+	out, err := run(t, "", "identity", "install", "--bundle", bundle, "--yes")
 	if err != nil {
 		t.Fatalf("install: %v\n%s", err, out)
 	}
@@ -164,7 +166,7 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 
 	// 2. Positive control, then an OLDER CRL than the one already held.
 	oldBundle := enroll(t, dir, passFile, pubPath) // carries CRL #1
-	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle); err != nil {
+	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle, "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	// Revoke some unrelated certificate so the master's CRL moves to #2,
@@ -189,18 +191,18 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 	}
 	// With it, the new fleet's CRL #1 is accepted: it is judged against the
 	// NEW root's watermark entry (none yet), not the old root's #2.
-	if out, err := run(t, "", "identity", "install", "--bundle", foreign, "--replace-root"); err != nil {
+	if out, err := run(t, "", "identity", "install", "--bundle", foreign, "--replace-root", "--yes"); err != nil {
 		t.Fatalf("--replace-root: %v\n%s", err, out)
 	}
 	// The bounce: back to the FIRST fleet with its OLD bundle (CRL #1, while
 	// that root's watermark is #2). Nothing was reset on the way through the
 	// other fleet, so this is still a rollback. (The two masters share a
 	// CommonName, so a CN-keyed watermark would not tell them apart either.)
-	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle, "--replace-root"); err == nil || !strings.Contains(err.Error(), "older") {
+	if _, err := run(t, "", "identity", "install", "--bundle", oldBundle, "--replace-root", "--yes"); err == nil || !strings.Contains(err.Error(), "older") {
 		t.Fatalf("A -> B -> old A bundle was accepted: %v", err)
 	}
 	// Positive control: a CURRENT bundle of the first fleet (CRL #2) moves back.
-	if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--replace-root"); err != nil {
+	if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--replace-root", "--yes"); err != nil {
 		t.Fatalf("moving back with a current bundle: %v\n%s", err, out)
 	}
 
@@ -224,7 +226,7 @@ func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
 	dir, passFile := master(t)
 	home, _, pubPath := instanceHome(t, "laptop")
 	useHome(t, home)
-	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath)); err != nil {
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	pkiDir := filepath.Join(home, "pki")
@@ -237,6 +239,140 @@ func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
 	}
 	if fi, _ := os.Stat(pkiDir); fi.Mode().Perm() != 0o750 {
 		t.Fatalf("a refused install reset the pki dir to %v", fi.Mode().Perm())
+	}
+}
+
+// knomit#299: a first install prints the bundle's fleet root and principal
+// BEFORE installing, and installs only once that root is confirmed. Without
+// a terminal to ask on (stdin is the bundle, or not a terminal) and without
+// --root or --yes, it refuses, naming the fingerprint and the flags, and
+// writes nothing.
+func TestIdentity_FirstInstallConfirmsTheRoot(t *testing.T) {
+	dir, passFile := master(t)
+	home, pub, pubPath := instanceHome(t, "laptop")
+	useHome(t, home)
+	bundle := enroll(t, dir, passFile, pubPath)
+	rootCert, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootFP, _ := pki.RootID(rootCert)
+	principal := "instance:" + pki.Fingerprint(pub) + "@cert"
+	pkiDir := filepath.Join(home, "pki")
+	notInstalled := func(t *testing.T) {
+		t.Helper()
+		if _, err := os.Stat(pkiDir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused install created %s (%v)", pkiDir, err)
+		}
+	}
+
+	t.Run("no terminal, no flag", func(t *testing.T) {
+		out, err := run(t, "", "identity", "install", "--bundle", bundle)
+		if err == nil || !strings.Contains(err.Error(), rootFP) || !strings.Contains(err.Error(), "--root") || !strings.Contains(err.Error(), "--yes") {
+			t.Fatalf("installed an unconfirmed root: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "bundle fleet root: "+rootFP) || !strings.Contains(out, "principal: "+principal) {
+			t.Fatalf("the root and principal were not shown:\n%s", out)
+		}
+		notInstalled(t)
+	})
+	t.Run("bundle on stdin", func(t *testing.T) {
+		raw, _ := os.ReadFile(bundle)
+		if _, err := run(t, string(raw), "identity", "install"); err == nil || !strings.Contains(err.Error(), "--root") {
+			t.Fatalf("installed an unconfirmed root from stdin: %v", err)
+		}
+		notInstalled(t)
+	})
+	t.Run("--root mismatch", func(t *testing.T) {
+		wrong := strings.Repeat("0", len(rootFP))
+		if _, err := run(t, "", "identity", "install", "--bundle", bundle, "--root", wrong); err == nil || !strings.Contains(err.Error(), "is not the bundle's fleet root") {
+			t.Fatalf("installed with a wrong --root: %v", err)
+		}
+		notInstalled(t)
+	})
+	t.Run("--root match", func(t *testing.T) {
+		if out, err := run(t, "", "identity", "install", "--bundle", bundle, "--root", strings.ToUpper(rootFP)); err != nil {
+			t.Fatalf("--root %s: %v\n%s", rootFP, err, out)
+		}
+		// A renewal under the installed root asks nothing.
+		if out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath)); err != nil {
+			t.Fatalf("renewal: %v\n%s", err, out)
+		}
+	})
+}
+
+// The prompt: "y" (or "yes") installs; anything else refuses and writes
+// nothing. --yes needs no answer. Driven through installBundle with an
+// injected reader, which is what the command passes when stdin is a
+// terminal and --bundle is a file.
+func TestIdentity_InstallPromptsOnATerminal(t *testing.T) {
+	dir, passFile := master(t)
+	for _, tc := range []struct {
+		name, answer string
+		yes, ok      bool
+	}{
+		{"y", "y\n", false, true},
+		{"yes", "YES\n", false, true},
+		{"n", "n\n", false, false},
+		{"empty", "\n", false, false},
+		{"eof", "", false, false},
+		{"--yes", "", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, _, pubPath := instanceHome(t, "laptop")
+			useHome(t, home)
+			raw, _ := os.ReadFile(enroll(t, dir, passFile, pubPath))
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			err = installBundle(&out, cfg, raw, installOpts{yes: tc.yes, prompt: strings.NewReader(tc.answer)})
+			if tc.ok != (err == nil) {
+				t.Fatalf("answer %q: %v\n%s", tc.answer, err, out.String())
+			}
+			if !tc.yes && !strings.Contains(out.String(), "[y/N]") {
+				t.Fatalf("no prompt:\n%s", out.String())
+			}
+			if _, serr := os.Stat(filepath.Join(home, "pki", pki.InstanceCertFile)); tc.ok != (serr == nil) {
+				t.Fatalf("installed=%v, want %v", serr == nil, tc.ok)
+			}
+		})
+	}
+}
+
+// A test's stdin, a pipe and a regular file are not terminals, so none of
+// them is prompted on.
+func TestIdentity_IsTerminal(t *testing.T) {
+	f, err := os.Open(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if isTerminal(strings.NewReader("y\n")) || isTerminal(f) {
+		t.Fatal("a reader or a regular file counted as a terminal")
+	}
+}
+
+// --replace-root is the permission to move; the new root still needs the
+// same confirmation as a first install.
+func TestIdentity_ReplaceRootNeedsConfirmationToo(t *testing.T) {
+	dir, passFile := master(t)
+	home, _, pubPath := instanceHome(t, "laptop")
+	useHome(t, home)
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	dir2, pass2 := master(t)
+	foreign := enroll(t, dir2, pass2, pubPath)
+	out, err := run(t, "", "identity", "install", "--bundle", foreign, "--replace-root")
+	if err == nil || !strings.Contains(err.Error(), "--root") || !strings.Contains(out, "installed fleet root: ") {
+		t.Fatalf("replaced the root without confirmation: %v\n%s", err, out)
+	}
+	root2, _ := pki.LoadRootCert(filepath.Join(dir2, pki.RootCertFile))
+	fp2, _ := pki.RootID(root2)
+	if out, err := run(t, "", "identity", "install", "--bundle", foreign, "--replace-root", "--root", fp2); err != nil {
+		t.Fatalf("confirmed replace: %v\n%s", err, out)
 	}
 }
 

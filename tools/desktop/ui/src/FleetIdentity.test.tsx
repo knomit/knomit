@@ -16,6 +16,7 @@ const ok = (identity: FleetIdentity | null = enrolled): InstallResult => ({
   message: '',
   installedRootFingerprint: '',
   bundleRootFingerprint: '',
+  bundlePrincipal: '',
   identity,
 })
 
@@ -25,6 +26,7 @@ const refused = (cls: string, extra: Partial<InstallResult> = {}): InstallResult
   message: '',
   installedRootFingerprint: '',
   bundleRootFingerprint: '',
+  bundlePrincipal: '',
   identity: null,
   ...extra,
 })
@@ -247,5 +249,66 @@ describe('FleetIdentitySection replace-root confirmation', () => {
       fireEvent.click(screen.getByRole('button', { name: /replace fleet root/i }))
     })
     expect(onInstall).toHaveBeenLastCalledWith(BUNDLE, ROOT_C, ROOT_B)
+  })
+})
+
+describe('FleetIdentitySection first-install confirmation (knomit#299)', () => {
+  const PRINCIPAL = `instance:${FP}@cert`
+  const unconfirmed = refused('root_unconfirmed', { bundleRootFingerprint: ROOT_B, bundlePrincipal: PRINCIPAL })
+
+  // A first install shows the root and the principal and asks the user to
+  // check the root against the operator's value; only "Join this fleet"
+  // sends ("", that root) back.
+  it('shows the fleet root and the principal, and joins only on an explicit confirmation', async () => {
+    const onInstall = vi.fn().mockResolvedValueOnce(unconfirmed).mockResolvedValueOnce(ok())
+    const { onInstalled } = renderSection(notEnrolled, { onInstall })
+    await pasteBundle()
+    fireEvent.click(screen.getByRole('button', { name: /^install$/i }))
+
+    const confirm = await screen.findByRole('group', { name: /confirm the fleet root/i })
+    expect(confirm).toHaveTextContent(ROOT_B)
+    expect(confirm).toHaveTextContent(PRINCIPAL)
+    expect(confirm).toHaveTextContent(/fleet operator gave you/i)
+    expect(confirm).not.toHaveTextContent(/current root/i)
+    expect(onInstall).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: /join this fleet/i }))
+    await waitFor(() => expect(onInstall).toHaveBeenCalledTimes(2))
+    expect(onInstall).toHaveBeenLastCalledWith(BUNDLE, '', ROOT_B)
+    await screen.findByText(/^installed\./i)
+    expect(onInstalled).toHaveBeenCalledWith(enrolled)
+  })
+
+  it('cancelling sends nothing and closes the question', async () => {
+    const onInstall = vi.fn().mockResolvedValue(unconfirmed)
+    renderSection(notEnrolled, { onInstall })
+    await pasteBundle()
+    fireEvent.click(screen.getByRole('button', { name: /^install$/i }))
+    await screen.findByRole('group', { name: /confirm the fleet root/i })
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }))
+    expect(screen.queryByRole('group', { name: /confirm the fleet root/i })).not.toBeInTheDocument()
+    expect(onInstall).toHaveBeenCalledTimes(1)
+  })
+
+  // Another process enrolled this home between the question and the answer:
+  // the confirmation comes back stale naming the root now installed, and the
+  // question becomes a replace.
+  it('a root installed underneath turns the question into a replace', async () => {
+    const onInstall = vi
+      .fn()
+      .mockResolvedValueOnce(unconfirmed)
+      .mockResolvedValueOnce(
+        refused('confirmation_stale', { installedRootFingerprint: ROOT_A, bundleRootFingerprint: ROOT_B, bundlePrincipal: PRINCIPAL }),
+      )
+    renderSection(notEnrolled, { onInstall })
+    await pasteBundle()
+    fireEvent.click(screen.getByRole('button', { name: /^install$/i }))
+    await screen.findByRole('group', { name: /confirm the fleet root/i })
+    fireEvent.click(screen.getByRole('button', { name: /join this fleet/i }))
+
+    await screen.findByText(/changed since/i)
+    const confirm = screen.getByRole('group', { name: /replace the fleet root/i })
+    expect(confirm).toHaveTextContent(ROOT_A)
+    expect(confirm).toHaveTextContent(ROOT_B)
   })
 })
