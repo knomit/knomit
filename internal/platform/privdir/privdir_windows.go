@@ -5,6 +5,7 @@ package privdir
 import (
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"github.com/rs/zerolog/log"
@@ -35,7 +36,20 @@ import (
 //
 // A DACL that is ALREADY protected is left alone. It was set deliberately,
 // by an earlier boot or by the user, and a boot that overwrote a user's
-// explicit choice would break whatever they set it for.
+// explicit choice would break whatever they set it for. It is still read:
+// a protected DACL that grants anyone but this user and SYSTEM is reported,
+// since "protected" says nothing about "private".
+//
+// Nothing is rewritten when the process runs as a SERVICE account (see
+// isServiceSID). The DACL would then grant the service and SYSTEM only, and
+// lock out the interactive user whose data root it is: the one real lockout
+// this function could cause.
+//
+// An owner other than this user, SYSTEM or Administrators is reported
+// whatever else happens. An owner keeps an implicit WRITE_DAC and can grant
+// themselves access back at any time, so a data root pre-created by another
+// local user (a KNOMIT_HOME under C:\, made before this user's first boot)
+// is not private to this user, whatever its DACL says.
 //
 // Any failure after creation (FAT or exFAT with no ACLs at all, a share, no
 // WRITE_DAC on a directory owned by someone else) is a warning, not an error;
@@ -51,22 +65,72 @@ func ensure(path string) error {
 	return nil
 }
 
-// protect is ensure's DACL half, returning what went wrong for the warning.
+// The well-known SIDs the checks below are made of, in one place.
+const (
+	sidSystem          = "S-1-5-18"     // NT AUTHORITY\SYSTEM
+	sidLocalService    = "S-1-5-19"     // NT AUTHORITY\LOCAL SERVICE
+	sidNetworkService  = "S-1-5-20"     // NT AUTHORITY\NETWORK SERVICE
+	sidAdministrators  = "S-1-5-32-544" // BUILTIN\Administrators
+	sidVirtualServices = "S-1-5-80-"    // prefix of NT SERVICE\<name> virtual accounts
+)
+
+// isServiceSID reports whether sid is a service account: SYSTEM, LOCAL
+// SERVICE, NETWORK SERVICE, or a per-service virtual account.
+func isServiceSID(sid string) bool {
+	switch sid {
+	case sidSystem, sidLocalService, sidNetworkService:
+		return true
+	}
+	return strings.HasPrefix(sid, sidVirtualServices)
+}
+
+// foreignGrants lists who a DACL lets in besides me and SYSTEM. An ACE whose
+// SID Inspect cannot read counts as foreign, and so does a NULL DACL, which
+// grants everyone everything. Deny ACEs only take access away, so they are
+// not listed.
+func foreignGrants(in Inspection, me string) []string {
+	if in.NullDACL {
+		return []string{"everyone (NULL DACL)"}
+	}
+	var out []string
+	for _, a := range in.ACEs {
+		switch {
+		case a.SID == "":
+			out = append(out, "an ACE of a type whose SID cannot be read")
+		case a.Allow && a.SID != me && a.SID != sidSystem:
+			out = append(out, a.SID)
+		}
+	}
+	return out
+}
+
+// protect is ensure's DACL half. It logs what it declines to do, and returns
+// what went wrong for ensure's warning.
 func protect(path string) error {
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		return fmt.Errorf("read DACL: %w", err)
-	}
-	control, _, err := sd.Control()
-	if err != nil {
-		return fmt.Errorf("read DACL control: %w", err)
-	}
-	if control&windows.SE_DACL_PROTECTED != 0 {
-		return nil
-	}
 	sid, err := ownSID()
 	if err != nil {
 		return err
+	}
+	if isServiceSID(sid) {
+		log.Warn().Str("path", path).Str("sid", sid).
+			Msg("running as a service account; not rewriting the data root's DACL")
+		return nil
+	}
+	// OWNER and DACL need only READ_CONTROL, so this works without WRITE_DAC.
+	in, err := Inspect(path)
+	if err != nil {
+		return fmt.Errorf("read owner and DACL: %w", err)
+	}
+	if in.Owner != sid && in.Owner != sidSystem && in.Owner != sidAdministrators {
+		log.Warn().Str("path", path).Str("owner", in.Owner).
+			Msg("data root is owned by another account, which can always grant itself access to it; it is not private to you")
+	}
+	if in.Protected {
+		if foreign := foreignGrants(in, sid); len(foreign) > 0 {
+			log.Warn().Str("path", path).Strs("grants", foreign).
+				Msgf("data root DACL is protected and grants %s; leaving it as set, but this is not private to you", strings.Join(foreign, ", "))
+		}
+		return nil
 	}
 	want, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;" + sid + ")(A;OICI;FA;;;SY)")
 	if err != nil {

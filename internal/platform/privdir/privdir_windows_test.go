@@ -5,13 +5,13 @@ package privdir
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
 )
 
 const (
-	systemSID = "S-1-5-18"
 	usersSID  = "S-1-5-32-545" // BUILTIN\Users
 	fileAll   = 0x1f01ff       // FILE_ALL_ACCESS, what "FA" (and "GA") read back as
 	inheritOI = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
@@ -96,10 +96,10 @@ func assertPrivateDir(t *testing.T, path string) {
 	if !in.Protected || in.NullDACL || len(in.ACEs) != 2 {
 		t.Fatalf("%s is not a protected two-ACE DACL: %+v", path, in)
 	}
-	want := map[string]bool{me(t): true, systemSID: true}
+	want := map[string]bool{me(t): true, sidSystem: true}
 	for _, a := range in.ACEs {
-		if !want[a.SID] || !a.Allow || a.Mask != fileAll || a.Inherited || a.Flags&inheritOI != inheritOI {
-			t.Errorf("%s: unexpected ACE %+v (want allow FA with OI|CI, not inherited, for %s or SYSTEM)", path, a, me(t))
+		if !want[a.SID] || !a.Allow || a.Mask != fileAll || a.Inherited || a.Flags != inheritOI {
+			t.Errorf("%s: unexpected ACE %+v (want allow FA with exactly OI|CI, not inherited, for %s or SYSTEM)", path, a, me(t))
 		}
 		delete(want, a.SID)
 	}
@@ -113,10 +113,12 @@ func assertInheritsPrivate(t *testing.T, path string) {
 	if in.NullDACL || len(in.ACEs) != 2 || hasSID(in, usersSID) {
 		t.Fatalf("%s does not carry only the private directory's two ACEs: %+v", path, in)
 	}
+	want := map[string]bool{me(t): true, sidSystem: true}
 	for _, a := range in.ACEs {
-		if (a.SID != me(t) && a.SID != systemSID) || !a.Allow || a.Mask != fileAll || !a.Inherited {
-			t.Errorf("%s: unexpected ACE %+v", path, a)
+		if !want[a.SID] || !a.Allow || a.Mask != fileAll || !a.Inherited {
+			t.Errorf("%s: unexpected or repeated ACE %+v (want one inherited allow FA each for %s and SYSTEM)", path, a, me(t))
 		}
+		delete(want, a.SID)
 	}
 }
 
@@ -184,6 +186,7 @@ func TestEnsure_LeavesAProtectedCustomDACLAlone(t *testing.T) {
 	}
 	setDACL(t, home, "D:P(A;OICI;FA;;;"+me(t)+")(A;OICI;FA;;;SY)(A;OICI;0x1200a9;;;BU)")
 	before := sddlOf(t, home)
+	logs := captureLog(t)
 
 	if err := Ensure(home); err != nil {
 		t.Fatal(err)
@@ -194,4 +197,43 @@ func TestEnsure_LeavesAProtectedCustomDACLAlone(t *testing.T) {
 	if !hasSID(inspect(t, home), usersSID) {
 		t.Error("the custom Users ACE is gone")
 	}
+	assertForeignGrantWarned(t, logs.String(), usersSID)
 }
+
+// (e) A directory pre-created protected with access for ANOTHER account only
+// (the shape a data root made by someone else can have): left alone, and
+// reported, naming who it grants.
+func TestEnsure_WarnsOnAProtectedDACLForAnotherAccountOnly(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setDACL(t, home, "D:P(A;OICI;0x1200a9;;;BU)")
+	// Registered after t.TempDir, so it runs before its RemoveAll: give the
+	// owner (us, who keep WRITE_DAC) access back, or cleanup cannot delete it.
+	t.Cleanup(func() { setDACL(t, home, "D:P(A;OICI;FA;;;"+me(t)+")") })
+	before := sddlOf(t, home)
+	logs := captureLog(t)
+
+	if err := Ensure(home); err != nil {
+		t.Fatal(err)
+	}
+	if after := sddlOf(t, home); after != before {
+		t.Errorf("Ensure rewrote a protected DACL:\nbefore %s\nafter  %s", before, after)
+	}
+	assertForeignGrantWarned(t, logs.String(), usersSID)
+}
+
+func assertForeignGrantWarned(t *testing.T, out, sid string) {
+	t.Helper()
+	if !strings.Contains(out, `"level":"warn"`) ||
+		!strings.Contains(out, "data root DACL is protected and grants "+sid+"; leaving it as set, but this is not private to you") {
+		t.Errorf("no warning that the protected DACL grants %s: %q", sid, out)
+	}
+}
+
+// Not built here, because a test cannot create them: a root OWNED by another
+// account (needs a second account, or SeRestorePrivilege), and a process
+// running as a service SID. ensure's owner check and isServiceSID are the
+// code paths; the SIDs they compare against are the constants in
+// privdir_windows.go.
