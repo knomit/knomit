@@ -97,6 +97,12 @@ runs:
         echo "rustup:   $(command -v rustup || echo '(none)')"
         rustup show active-toolchain 2>/dev/null || true
         echo "autocrlf: $(git config --get core.autocrlf || echo '(unset)')"
+        # The CPU model is the one fact a Windows heap-corruption fatal can be
+        # correlated with. golang/go#81238 (exception dispatch overruns the
+        # goroutine stack) reproduces on AMX-capable Intel Xeons (6973P-C,
+        # Platinum 8573C) and never on the pool's AMD EPYCs; without this line
+        # a red run cannot be told apart by host. See knomit#279.
+        echo "cpu:      $(pwsh -NoProfile -Command '(Get-CimInstance Win32_Processor).Name' 2>/dev/null | tr -d '\r' || echo '(unknown)')"
 
     # sqlite3.h — the Windows build requirement nobody had written down, found
     # by this job's first run.

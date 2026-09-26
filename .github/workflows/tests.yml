@@ -254,7 +254,7 @@ jobs:
         run: |
           CGO_ENABLED=1 go build -tags desktop -o NUL ./tools/desktop
           CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
-          CGO_ENABLED=1 go test -tags desktop -run 'TestWritable|TestBootServer_|TestFleetIdentity_' -count=1 ./tools/desktop/
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh desktop -tags desktop -run 'TestWritable|TestBootServer_|TestFleetIdentity_' -count=1 ./tools/desktop/
 
       # internal/config owns the data-root resolution, and it is per-OS code
       # whose branches only the matching runner reaches: the Windows
@@ -284,7 +284,7 @@ jobs:
       # takes in internal/oauth/idp (F19 phase 3c), whose tests drive the
       # in-process fake provider in internal/oauth/idp/idptest.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 go test ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/... ./internal/oauth/...
+        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/... ./internal/oauth/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no
@@ -312,7 +312,7 @@ jobs:
       - name: Story, web + desktop-helper tests (runtime native libs)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh web ./test/storytests/ ./internal/web/... ./tools/desktop/internal/...
 
       # NEW WITH THE WINDOWS LEG, AND HALF THE POINT OF IT. These packages were
       # COMPILED by the build step above but their tests ran on no platform in
@@ -332,7 +332,7 @@ jobs:
       - name: Bridge, platform, app + cmd tests
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test ./tools/bridge/... ./internal/platform/... ./internal/app/ ./cmd/
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh bridge ./tools/bridge/... ./internal/platform/... ./internal/app/ ./cmd/
 
       # Origin-sync fault matrix: build-tagged contract cells drive the real
       # product clone/sync/push path over an in-process fault-injecting git
@@ -343,7 +343,29 @@ jobs:
       - name: Origin-sync contract cells (fault matrix)
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test -tags contract ./test/storytests/ -count=1 -timeout ${{ matrix.contract-timeout }}
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh contract -tags contract ./test/storytests/ -count=1 -timeout ${{ matrix.contract-timeout }}
+
+      # A RECOVERED NIL DEREFERENCE IS NOT HARMLESS ON WINDOWS/AMD64: the
+      # kernel dispatches the exception on the goroutine's own stack and, on
+      # AMX hosts, overruns it into the heap (golang/go#81238; knomit#279,
+      # five crashed runs). Every `go test` step above runs through
+      # go-test-capture.sh, which keeps the -json stream of EVERY test's
+      # output, passing tests included — plain go test discards a passing
+      # package's output, which is why a tee of it could never have caught
+      # this. The guard script carries the full account and the rule: a hit
+      # is a bug in the test, give it the real dependency it dereferenced.
+      #
+      # The count is the number of go test steps above on this leg. On
+      # Windows all five run (the desktop step is Windows-only); the guard
+      # warns rather than fails on fewer, because a step that died before
+      # writing its stream has already turned the job red.
+      #
+      # `!cancelled()` rather than the default success(): when a step above
+      # already died of the GC fatal, the recovered fault that caused it is
+      # the diagnosis, and this step is what prints it.
+      - name: No hardware faults inside the Windows test process (knomit#279)
+        if: matrix.os == 'windows-2025' && !cancelled()
+        run: bash .github/scripts/go-test-fault-guard.sh 5
 
   # The three packages that are slow ON WINDOWS ONLY, in their own job so the
   # build-test leg stays a fast answer to "did this break the build". The cost
@@ -436,7 +458,14 @@ jobs:
       - name: go test ${{ matrix.packages }}
         run: |
           export LD_LIBRARY_PATH="$LIBDIR" DYLD_LIBRARY_PATH="$LIBDIR"
-          CGO_ENABLED=1 go test -timeout ${{ matrix.timeout }} ${{ matrix.packages }}
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh slow -timeout ${{ matrix.timeout }} ${{ matrix.packages }}
+
+      # Same guard as build-test, one stream per leg. store, repos and
+      # synthesize run only here on Windows, and a fault in any of them
+      # corrupts the heap the same way (knomit#279).
+      - name: No hardware faults inside the Windows test process (knomit#279)
+        if: matrix.os == 'windows-2025' && !cancelled()
+        run: bash .github/scripts/go-test-fault-guard.sh 1
 
   # Build + test the Wails v3 desktop app. It lives behind `//go:build desktop`
   # and links the OS-native webview toolkit (Cocoa/WebKit on macOS), so the

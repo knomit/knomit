@@ -228,9 +228,19 @@ type ExperimentsConfig struct {
 
 // Config is the root configuration, composed of section structs.
 type Config struct {
-	Home         string `toml:"repo"`
-	Host         string `toml:"host"`
-	Port         string `toml:"port"`
+	Home string `toml:"repo"`
+	Host string `toml:"host"`
+	Port string `toml:"port"`
+	// Socket is the local authenticated listener: KNOMIT_SOCKET, else this
+	// key, else a default under Home (see socketFor). An explicit value must
+	// be an absolute path on unix (a leading ~ is expanded) and a pipe name
+	// \\.\pipe\<name> on Windows (no ~ expansion). The ~ expands against
+	// EACH process's own HOME, so a server run as a service and a bridge run
+	// as the user can disagree; spell the path out when they differ.
+	// The server reads it once at startup, while the hooks read it per
+	// connection and the MCP bridge when it starts, so a change takes effect
+	// only after the server restarts — until then clients find no listener
+	// at the new path and use TCP without the verified identity.
 	Socket       string `toml:"socket"`
 	OntologyRoot string `toml:"ontology_root"`
 	ONNXLibPath  string `toml:"onnx_lib_path"`
@@ -495,10 +505,11 @@ func Load() (Config, error) {
 	// download again and a second SSH identity is generated under a root
 	// nobody will think to look in.
 	//
-	// homeAndConfig also tilde-expands the root BEFORE looking for knomit.toml
-	// in it, and SocketPath goes through the same helper. Expanding afterwards
-	// (as Load once did) searched a literal "~/..." directory, ignored the
-	// operator's knomit.toml, and disagreed with the bridge (knomit#271).
+	// ResolveHome (via homeAndConfig) tilde-expands the root and refuses one
+	// that is still relative, BEFORE knomit.toml is looked for in it.
+	// SocketPath and the bridge's credentials go through the same function, so
+	// no caller can search a literal "~/..." directory or one relative to its
+	// own working directory.
 	home, path, err := homeAndConfig()
 	if err != nil {
 		return Config{}, err
@@ -593,7 +604,7 @@ func Load() (Config, error) {
 		}
 	}
 
-	// Expand tildes in path fields. Home is not among them: homeAndConfig
+	// Expand tildes in path fields. Home is not among them: ResolveHome
 	// expanded it, once, before the knomit.toml search.
 	for _, p := range []*string{
 		&cfg.ONNXLibPath,
@@ -630,7 +641,9 @@ func Load() (Config, error) {
 	// 1, which is what made [auth].require = true a silent lockout there
 	// (knomit#245): app.checkLocalListener refuses that combination, and the
 	// pipe default is what lets Windows satisfy it.
-	cfg.Socket = socketFor(cfg.Home, cfg.Socket, os.Getenv("KNOMIT_SOCKET"))
+	if cfg.Socket, err = socketFor(cfg.Home, cfg.Socket, os.Getenv("KNOMIT_SOCKET")); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
+	}
 
 	// Default [tls].dir to <Home>/pki, after tilde expansion like the two
 	// above. The listener itself stays off until [tls].addr is set.
@@ -772,19 +785,44 @@ func warnUndecoded(path string, keys []toml.Key) {
 	}
 }
 
-// findConfigFile looks for knomit.toml next to the binary, then in homePath.
+// findConfigFile returns <homePath>/knomit.toml if it exists, else "".
+//
+// The data root is the ONLY place it looks. The server and the bridge are
+// different executables, so a knomit.toml beside either binary would be read
+// by that one alone and the two could resolve different local listeners. The
+// desktop's Settings dialog writes <home>/knomit.toml too.
 func findConfigFile(homePath string) string {
-	if exe, err := os.Executable(); err == nil {
-		p := filepath.Join(filepath.Dir(exe), "knomit.toml")
-		if fileExists(p) {
-			return p
-		}
-	}
 	p := filepath.Join(homePath, "knomit.toml")
 	if fileExists(p) {
 		return p
 	}
 	return ""
+}
+
+// IgnoredExecutableConfig is the knomit.toml beside the running executable
+// when one exists and is not the file <homePath>/knomit.toml, else "".
+// findConfigFile does not read it. `knomit serve` and the desktop call this
+// AFTER configuring their logger and warn once, so an install that kept its
+// settings there learns where they must go; it is not in Load, so `kb` and
+// every other Load caller do not pay for it.
+//
+// The two are compared as FILES (os.SameFile), not as strings, so a data root
+// spelled through a symlink or in another case on a case-insensitive
+// filesystem is not mistaken for a different file.
+func IgnoredExecutableConfig(homePath string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(filepath.Dir(exe), "knomit.toml")
+	beside, err := os.Stat(p)
+	if err != nil {
+		return ""
+	}
+	if read, err := os.Stat(filepath.Join(homePath, "knomit.toml")); err == nil && os.SameFile(beside, read) {
+		return ""
+	}
+	return p
 }
 
 func fileExists(path string) bool {
@@ -864,7 +902,8 @@ func envDurationOr(key string, target *time.Duration) error {
 	return nil
 }
 
-// expandTilde rewrites a leading "~/" to the user's home directory.
+// expandTilde rewrites a leading "~/" (and, on Windows, `~\`) to the user's
+// home directory.
 //
 // This is the OPERATING SYSTEM's notion of home, not Config.Home: a "~/" a
 // person typed into knomit.toml means their home directory, and on Windows
@@ -875,13 +914,14 @@ func envDurationOr(key string, target *time.Duration) error {
 // "/.ssh/known_hosts" — the current drive's root on Windows — which is the
 // same class of bug as the one that created C:\.knomit.
 func expandTilde(s *string) error {
-	if !strings.HasPrefix(*s, "~/") {
+	if !strings.HasPrefix(*s, "~/") &&
+		!(filepath.Separator == '\\' && strings.HasPrefix(*s, `~\`)) {
 		return nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("cannot expand %q: %w", *s, err)
 	}
-	*s = home + (*s)[1:]
+	*s = filepath.Join(home, (*s)[2:])
 	return nil
 }

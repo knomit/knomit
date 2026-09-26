@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -111,23 +112,34 @@ func TestEmbedInBatches_NilSemaphoreRuns(t *testing.T) {
 //
 // Asserted structurally: with the semaphore fully held, the single-shot path
 // must still reach inference. A zero-value Embedder has no ONNX session, so
-// reaching inference panics — that panic IS the evidence it did not block, and
-// a deadlock or timeout here would mean the bypass was lost.
+// reaching inference returns runRows' "no ONNX session" error — that return IS
+// the evidence it did not block, and a deadlock or timeout here would mean the
+// bypass was lost.
+//
+// It used to be a recovered PANIC from onnxruntime_go dereferencing the nil
+// session. On windows/amd64 that is a hardware fault dispatched on the
+// goroutine's own stack, and a fresh goroutine has the least headroom of all;
+// under golang/go#81238 it can corrupt the heap beneath the stack (knomit#279,
+// and CI job 106148265186 died in this package that way). The path now refuses
+// a nil session in Go, so nothing here faults, and nothing here recovers.
 func TestSingleShotPathsBypassTheSemaphore(t *testing.T) {
 	e := &Embedder{model: Model{QueryTemplate: "search_query: {content}"}, batchSem: newBatchSem(1)}
 	e.batchSem <- struct{}{} // held, never released
 
-	reached := make(chan struct{})
+	reached := make(chan error, 1)
 	go func() {
-		defer func() {
-			_ = recover() // nil session — reaching it is the signal
-			close(reached)
-		}()
-		_, _ = e.EmbedQuery(context.Background(), "anything")
+		_, err := e.EmbedQuery(context.Background(), "anything")
+		reached <- err
 	}()
 
 	select {
-	case <-reached:
+	case err := <-reached:
+		// Reaching inference is the point; the specific error proves it got
+		// THERE and not somewhere earlier (a template or context failure
+		// would also return, without ever contending for the semaphore).
+		if err == nil || !strings.Contains(err.Error(), "no ONNX session") {
+			t.Fatalf("EmbedQuery err = %v, want the runRows no-session error (inference must be reached)", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("EmbedQuery blocked on the batch semaphore — single-shot paths must bypass it")
 	}

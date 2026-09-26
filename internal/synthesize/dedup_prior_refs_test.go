@@ -154,7 +154,7 @@ func TestDedupMergeRefs_CarriedIsAnIndependentSnapshot(t *testing.T) {
 	// dropped one of them would still look right.
 	require.NotEqual(t, winnerRefs, loserRefs)
 
-	write, carried := dedupMergeRefs(winnerRefs, loserRefs, loserPath)
+	write, carried := dedupMergeRefs(winnerRefs, loserRefs, winnerPath, loserPath, bareRefFixture)
 
 	// The merge's own behaviour is unchanged: union of both, plus the loser.
 	require.ElementsMatch(t, []string{staleRef, liveRef, loserPath}, write)

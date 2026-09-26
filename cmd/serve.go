@@ -90,6 +90,10 @@ func serveCmd() *cobra.Command {
 			}
 			zerolog.SetGlobalLevel(lvl)
 			log.Logger = lg
+			if ignored := config.IgnoredExecutableConfig(cfg.Home); ignored != "" {
+				log.Warn().Str("ignored", ignored).Str("read", filepath.Join(cfg.Home, "knomit.toml")).
+					Msg("knomit.toml beside the executable is not read; move its settings into the data root's knomit.toml")
+			}
 			if cfg.Log.File != "" {
 				log.Info().Str("file", cfg.Log.File).Int("max_mb", cfg.Log.MaxSizeMB).
 					Int("backups", cfg.Log.MaxBackups).Int("max_age_days", cfg.Log.MaxAgeDays).

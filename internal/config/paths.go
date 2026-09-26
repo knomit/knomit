@@ -105,28 +105,44 @@ func withHomeHint(err error) error {
 // ResolveHome is the data root the operator actually gets: KNOMIT_HOME, else
 // the KNOMIT_REPO alias, else DefaultHome. Load layers TOML and the rest on
 // top, but WHICH directory is the root is decided here and only here.
+//
+// The result is tilde-expanded and absolute, for every caller. A value that is
+// still relative after expansion is refused rather than made absolute: the
+// server, the bridge, the hooks and `kb` are started from different working
+// directories, and each would resolve it to a different root.
 func ResolveHome() (string, error) {
-	if v := os.Getenv("KNOMIT_HOME"); v != "" {
-		return v, nil
+	home, name, err := rawHome()
+	if err != nil {
+		return "", err
 	}
-	if v := os.Getenv("KNOMIT_REPO"); v != "" {
-		return v, nil
+	if err := expandTilde(&home); err != nil {
+		return "", err
 	}
-	return DefaultHome()
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("%s %q must be an absolute path; set it to one", name, home)
+	}
+	return filepath.Clean(home), nil
 }
 
-// homeAndConfig is the data root the operator gets, tilde-expanded, and the
-// knomit.toml found for it ("" when there is none). Load and SocketPath both
-// start here, so "resolve, expand, then search" happens in one order in one
-// place: searching before expanding looks in a literal "~/..." directory and
-// silently skips the operator's knomit.toml.
+// rawHome is the data root as the operator spelled it, and the variable it
+// came from.
+func rawHome() (home, name string, err error) {
+	for _, name := range []string{"KNOMIT_HOME", "KNOMIT_REPO"} {
+		if v := os.Getenv(name); v != "" {
+			return v, name, nil
+		}
+	}
+	home, err = DefaultHome()
+	return home, "the default data root", err
+}
+
+// homeAndConfig is the data root (ResolveHome) and the knomit.toml found for
+// it ("" when there is none). Load and SocketPath both start here, so the two
+// cannot look for different files.
 func homeAndConfig() (home, configPath string, err error) {
 	home, err = ResolveHome()
 	if err != nil {
 		return "", "", fmt.Errorf("config: cannot determine the knomit data root: %w", err)
-	}
-	if err := expandTilde(&home); err != nil {
-		return "", "", fmt.Errorf("config: %w", err)
 	}
 	return home, findConfigFile(home), nil
 }
@@ -168,36 +184,39 @@ func SocketPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// KNOWN GAP, accepted: findConfigFile looks beside os.Executable() before
-	// <home>/knomit.toml, and the bridge is not the server's executable. A
-	// knomit.toml beside only one of the two binaries is read by that one
-	// alone. They ship side by side (dist/, the .app), so in practice both see
-	// the same file; <home>/knomit.toml is read by both wherever they live.
 	var fromTOML Config
 	if path != "" {
 		if _, err := toml.DecodeFile(path, &fromTOML); err != nil {
 			return "", fmt.Errorf("config: %s: %w", path, err)
 		}
 	}
-	return socketFor(home, fromTOML.Socket, os.Getenv("KNOMIT_SOCKET")), nil
+	sock, err := socketFor(home, fromTOML.Socket, os.Getenv("KNOMIT_SOCKET"))
+	if err != nil {
+		return "", fmt.Errorf("config: %w", err)
+	}
+	return sock, nil
 }
 
 // socketFor is the ONE place the local listener is decided from its inputs:
 // fromEnv (KNOMIT_SOCKET), else fromTOML (the knomit.toml `socket` key), else
 // this platform's default under home. Load and SocketPath both call it, so
-// the server and the bridge cannot order the layers differently. It is pure:
-// callers read the environment and pass it in.
+// the server and the bridge cannot order the layers differently. Callers read
+// the environment and pass it in, but it is not pure: checkExplicitSocket may
+// expand a leading ~ against os.UserHomeDir.
 //
-// home must already be tilde-expanded. The chosen value itself is NOT expanded
-// — Load never has expanded Socket, and doing it on one side only would be a
-// fresh disagreement.
-func socketFor(home, fromTOML, fromEnv string) string {
+// home must already be tilde-expanded and absolute. An explicit value goes
+// through checkExplicitSocket, this platform's rule for what an operator may
+// name (paths_unix.go, paths_windows.go); anything it refuses would resolve
+// differently per process, or could never be listened on.
+func socketFor(home, fromTOML, fromEnv string) (string, error) {
+	var sock string
 	switch {
 	case fromEnv != "":
-		return fromEnv
+		sock = fromEnv
 	case fromTOML != "":
-		return fromTOML
+		sock = fromTOML
 	default:
-		return localListenerName(home)
+		return localListenerName(home), nil
 	}
+	return checkExplicitSocket(sock)
 }

@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -57,8 +58,11 @@ func TestIsMutatingRequest(t *testing.T) {
 	}
 }
 
+// Both read-only router tests carry a REAL (empty) Manager, never a nil one.
+// See TestReadOnlyRouter_FactRouteBypassRegression for why that is a heap-
+// safety requirement on Windows and not a nicety.
 func TestReadOnlyRouter_GatesMutations(t *testing.T) {
-	s := &Server{ReadOnly: true}
+	s := &Server{ReadOnly: true, Manager: newTestManagerWithRepos(t)}
 	h := s.Handler()
 
 	post := httptest.NewRecorder()
@@ -77,8 +81,24 @@ func TestReadOnlyRouter_GatesMutations(t *testing.T) {
 // TestReadOnlyRouter_FactRouteBypassRegression is the authoritative end-to-end
 // regression test for the unanchored-regex bypass: a crafted fact path that
 // contains a /branches/X/mcp segment must NOT bypass the read-only gate.
+//
+// THE MANAGER MUST NOT BE NIL, and the reason is not test hygiene. The two
+// non-gated MCP requests below pass the gate on purpose and reach the repo
+// and lens middleware, which lock the Manager. With a nil Manager that is a
+// hardware fault on every OS; on unix the kernel takes it on the signal stack
+// and a recovered panic is all that remains, but on windows/amd64 the
+// exception is dispatched ON THE GOROUTINE'S OWN STACK, an ~11.6 KiB frame on
+// AMX-capable Intel hosts against Go's 4 KiB reserve, and it overruns into
+// the heap span beneath (golang/go#81238, open; no released Go fixes it). A
+// LATER GC then dies with "found pointer to free object". That is
+// knomit#279: five Windows CI runs crashed right after this test's two
+// faults, on unrelated PRs. An empty Manager answers 404 (repo) and 503
+// (lens registry not started) instead, and those exact codes are asserted:
+// any drift that lets either request reach a nil dependency again shows up
+// as a recovered-panic 500 here, and the Windows fault guard in tests.yml
+// names it.
 func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
-	s := &Server{ReadOnly: true}
+	s := &Server{ReadOnly: true, Manager: newTestManagerWithRepos(t)}
 	h := s.Handler()
 
 	// The exploit path: PUT to a fact URL whose key happens to contain
@@ -92,20 +112,25 @@ func TestReadOnlyRouter_FactRouteBypassRegression(t *testing.T) {
 
 	// Confirm we did not over-correct: a legitimate MCP dispatch POST must still
 	// bypass the gate (read-only enforcement for MCP is done inside mcp.NewServer).
-	// We only assert it is NOT 403; the actual status depends on the MCP handler.
+	// With an empty Manager the request passes the gate and RepoMiddleware
+	// answers 404 for the unknown repo: exact, so a 403 (gate regression) and a
+	// 500 (a recovered panic on the way, see the comment above) both fail.
 	mcp := httptest.NewRecorder()
 	h.ServeHTTP(mcp, fromLoopback(httptest.NewRequest("POST",
 		"/api/v1/repos/core/branches/main/mcp", nil)))
-	if mcp.Code == http.StatusForbidden {
-		t.Errorf("POST legitimate MCP path: got 403, want non-403 (gate must not block MCP)")
+	// The title pins WHICH 404: chi answers 404 for a route that no longer
+	// exists too, and that would be a different regression.
+	if mcp.Code != http.StatusNotFound || !strings.Contains(mcp.Body.String(), "Repo not found") {
+		t.Errorf("POST legitimate MCP path: got %d %q, want 404 \"Repo not found\" from RepoMiddleware (403 = gate blocks MCP; 500 = a nil dependency was reached)", mcp.Code, mcp.Body.String())
 	}
 
 	// Lens-scoped MCP dispatch is also POST-for-reads and must not be gated by
 	// method (regression: the branch-only regex 403'd lens MCP on read-only).
+	// The lens middleware answers 503 while the registry is not started.
 	lensMCP := httptest.NewRecorder()
 	h.ServeHTTP(lensMCP, fromLoopback(httptest.NewRequest("POST", "/api/v1/lenses/myview/mcp", nil)))
-	if lensMCP.Code == http.StatusForbidden {
-		t.Errorf("POST lens MCP path: got 403, want non-403 (gate must not block lens MCP)")
+	if lensMCP.Code != http.StatusServiceUnavailable {
+		t.Errorf("POST lens MCP path: got %d, want 503 from the lens middleware (403 = gate blocks lens MCP; 500 = a nil dependency was reached)", lensMCP.Code)
 	}
 
 	// But the lens REST CRUD must stay gated in read-only mode.

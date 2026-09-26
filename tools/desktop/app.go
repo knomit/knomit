@@ -100,6 +100,10 @@ func run(ctx context.Context) error {
 	if lerr := applyLogConfig(cfg.Log, logFile); lerr != nil {
 		log.Warn().Err(lerr).Msg("log config not applied; keeping bootstrap logger")
 	}
+	if ignored := config.IgnoredExecutableConfig(cfg.Home); ignored != "" {
+		log.Warn().Str("ignored", ignored).Str("read", filepath.Join(cfg.Home, "knomit.toml")).
+			Msg("knomit.toml beside the executable is not read; move its settings into the data root's knomit.toml")
+	}
 	// Says out loud which file everything downstream agreed on. main.go already
 	// logs the BOOTSTRAP path, and the two differ whenever knomit.toml names a
 	// file — so without this line the log's own account of where it lives is the
@@ -156,8 +160,8 @@ func run(ctx context.Context) error {
 	}
 
 	// The Settings dialog reads and writes through this service, over Wails IPC
-	// only. configPath is the file config.findConfigFile falls through to, which
-	// on a bundle is the only one there is.
+	// only. configPath is <cfg.Home>/knomit.toml, the only file config.Load
+	// reads.
 	nativeSvc := newNativeService(
 		filepath.Join(cfg.Home, "knomit.toml"), logFile, autostart.New())
 	nativeSvc.tls = tlsSt

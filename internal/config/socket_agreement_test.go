@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -64,7 +65,7 @@ func writeSocketTOML(t *testing.T, home, socket string) {
 
 func TestSocketPath_AgreesWithLoad_KnomitSocketEnv(t *testing.T) {
 	isolateSocketEnv(t, t.TempDir())
-	want := filepath.Join(t.TempDir(), "env.sock")
+	want := config.ExplicitSocket(t, "env")
 	t.Setenv("KNOMIT_SOCKET", want)
 	requireAgreement(t, want)
 }
@@ -72,7 +73,7 @@ func TestSocketPath_AgreesWithLoad_KnomitSocketEnv(t *testing.T) {
 func TestSocketPath_AgreesWithLoad_TOMLSocket(t *testing.T) {
 	home := t.TempDir()
 	isolateSocketEnv(t, home)
-	want := filepath.Join(t.TempDir(), "toml.sock")
+	want := config.ExplicitSocket(t, "toml")
 	writeSocketTOML(t, home, want)
 	requireAgreement(t, want)
 }
@@ -80,8 +81,8 @@ func TestSocketPath_AgreesWithLoad_TOMLSocket(t *testing.T) {
 func TestSocketPath_AgreesWithLoad_EnvBeatsTOML(t *testing.T) {
 	home := t.TempDir()
 	isolateSocketEnv(t, home)
-	writeSocketTOML(t, home, filepath.Join(t.TempDir(), "toml.sock"))
-	want := filepath.Join(t.TempDir(), "env.sock")
+	writeSocketTOML(t, home, config.ExplicitSocket(t, "toml"))
+	want := config.ExplicitSocket(t, "env")
 	t.Setenv("KNOMIT_SOCKET", want)
 	requireAgreement(t, want)
 }
@@ -125,7 +126,7 @@ func TestSocketPath_AgreesWithLoad_TildeHomeWithTOMLSocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	isolateSocketEnv(t, "~/kh")
-	want := filepath.Join(t.TempDir(), "toml.sock")
+	want := config.ExplicitSocket(t, "toml")
 	writeSocketTOML(t, expanded, want)
 	requireAgreement(t, want)
 }
@@ -144,9 +145,72 @@ func TestSocketPath_MalformedTOMLIsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("SocketPath() = %q with a malformed knomit.toml; want an error", got)
 	}
-	// findConfigFile may have picked the file beside the executable, so the
-	// operator needs to be told WHICH knomit.toml is broken.
+	// The operator needs to be told WHICH knomit.toml is broken.
 	if !strings.Contains(err.Error(), path) {
 		t.Fatalf("error %q does not name the broken file %q", err, path)
 	}
+}
+
+// A relative KNOMIT_HOME would name a different root for every process
+// started from a different directory, so it is refused, by both sides, with
+// the same error. A "~/" root is not relative: it is expanded first.
+func TestSocketPath_RelativeHomeRefused(t *testing.T) {
+	isolateSocketEnv(t, filepath.Join("rel", "home"))
+	_, loadErr := config.Load()
+	got, pathErr := config.SocketPath()
+	if loadErr == nil || pathErr == nil {
+		t.Fatalf("Load err = %v, SocketPath() = %q, err = %v; want both to refuse a relative KNOMIT_HOME",
+			loadErr, got, pathErr)
+	}
+	if loadErr.Error() != pathErr.Error() {
+		t.Fatalf("Load and SocketPath disagree:\n  Load:       %v\n  SocketPath: %v", loadErr, pathErr)
+	}
+	if !strings.Contains(pathErr.Error(), "KNOMIT_HOME") || !strings.Contains(pathErr.Error(), "must be an absolute path") {
+		t.Fatalf("error %q does not state the rule for KNOMIT_HOME", pathErr)
+	}
+}
+
+// A relative socket would resolve against each process's own working
+// directory, and the server and the bridge do not share one. Both sides refuse
+// it with the same error, which states this platform's rule.
+func TestSocketPath_RelativeSocketRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(t *testing.T, home string)
+	}{
+		{"env", func(t *testing.T, _ string) { t.Setenv("KNOMIT_SOCKET", "rel.sock") }},
+		{"toml", func(t *testing.T, home string) { writeSocketTOML(t, home, "rel.sock") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			isolateSocketEnv(t, home)
+			tc.set(t, home)
+
+			_, loadErr := config.Load()
+			got, pathErr := config.SocketPath()
+			if loadErr == nil || pathErr == nil {
+				t.Fatalf("Load err = %v, SocketPath() = %q, err = %v; want both to refuse a relative socket",
+					loadErr, got, pathErr)
+			}
+			if loadErr.Error() != pathErr.Error() {
+				t.Fatalf("Load and SocketPath disagree:\n  Load:       %v\n  SocketPath: %v", loadErr, pathErr)
+			}
+			rule := "must be an absolute path"
+			if runtime.GOOS == "windows" {
+				rule = "must be a pipe name"
+			}
+			if !strings.Contains(pathErr.Error(), rule) {
+				t.Fatalf("error %q does not state the rule", pathErr)
+			}
+		})
+	}
+}
+
+// setOSHome points os.UserHomeDir at a temp directory on every platform.
+func setOSHome(t *testing.T) string {
+	t.Helper()
+	osHome := t.TempDir()
+	t.Setenv("HOME", osHome)
+	t.Setenv("USERPROFILE", osHome)
+	return osHome
 }
