@@ -97,6 +97,15 @@ func TestDecodeJSON(t *testing.T) {
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "empty"},
 		{name: "truncated body", contentType: "application/json", body: `{"name":`,
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body"},
+		{name: "a second value after the first", contentType: "application/json", body: good + ` {"name":"b"}`,
+			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "trailing data"},
+		{name: "a stray brace after the value", contentType: "application/json", body: good + `}`,
+			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "trailing data"},
+		{name: "trailing whitespace is not data", contentType: "application/json", body: good + "\n\t ",
+			wantOK: true, want: decodeTarget{Name: "a", Count: 2}},
+		{name: "trailing whitespace past the limit is over the limit", contentType: "application/json",
+			body: good + strings.Repeat(" ", 64), maxBytes: 40,
+			wantStatus: http.StatusRequestEntityTooLarge, wantTitle: "Request body too large"},
 
 		// ── optional body ──
 		{name: "optional: empty body, no content type", optional: true, body: "",
@@ -113,6 +122,8 @@ func TestDecodeJSON(t *testing.T) {
 			wantStatus: http.StatusUnsupportedMediaType, wantTitle: "Unsupported Media Type"},
 		{name: "optional: malformed json", optional: true, contentType: "application/json", body: `{`,
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body"},
+		{name: "optional: trailing data", optional: true, contentType: "application/json", body: good + good,
+			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "trailing data"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
