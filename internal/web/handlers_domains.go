@@ -73,6 +73,8 @@ type factSummaryItem struct {
 	Title      string      `json:"title"`
 	Type       string      `json:"type,omitempty"`
 	Confidence float64     `json:"confidence,omitempty"`
+	Expires    string      `json:"expires,omitempty"`
+	Expired    bool        `json:"expired,omitempty"`
 	Links      hal.LinkMap `json:"_links"`
 }
 
@@ -146,6 +148,7 @@ func handleHALDomainFacts(b hal.URLBuilder, provider domainsProvider) http.Handl
 
 		selfURL := b.Branch(repoName, a) + "/domains/" + domainName
 
+		now := timeNow()
 		items := make([]factSummaryItem, 0, len(results))
 		for _, res := range results {
 			items = append(items, factSummaryItem{
@@ -153,6 +156,8 @@ func handleHALDomainFacts(b hal.URLBuilder, provider domainsProvider) http.Handl
 				Title:      res.Title,
 				Type:       res.Type,
 				Confidence: res.Confidence,
+				Expires:    res.Expires,
+				Expired:    expiredAt(res.Expires, now),
 				Links:      hal.LinkMap{"self": {Href: b.Fact(repoName, a, res.Path)}},
 			})
 		}

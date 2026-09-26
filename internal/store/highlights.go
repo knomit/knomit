@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"knomit/internal/fact"
 )
@@ -72,6 +73,12 @@ type Highlight struct {
 	Confidence  float64 `json:"confidence"`
 	Impact      int     `json:"impact"`
 	CommittedAt int64   `json:"committed_at"`
+	// Expires/Expired (F03): highlights bypass the shared filter builder, and
+	// since nothing is hidden they need no filter — but a highlighted fact
+	// that has expired must still say so. Expired is judged at the time of the
+	// highlights call, at whole seconds like every other marker.
+	Expires string `json:"expires,omitempty"`
+	Expired bool   `json:"expired,omitempty"`
 }
 
 // liveFactNodeCTE returns the "WITH live AS (...), node AS (...), outd AS
@@ -102,7 +109,8 @@ type Highlight struct {
 func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 	q := `
 		WITH live AS (
-		    SELECT f.path, f.title, f.type, f.confidence, f.blob_hash, bf.commit_hash
+		    SELECT f.path, f.title, f.type, f.confidence, f.blob_hash, bf.commit_hash,
+		           COALESCE(f.expires, '') AS expires
 		      FROM branch_facts bf
 		      JOIN facts f ON f.id = bf.fact_id
 		     WHERE bf.branch_id = ?`
@@ -201,7 +209,7 @@ func (fq *factQuery) highlightRows(ctx context.Context, branchID int64, pathPref
 	q := cte + `
 		SELECT live.path, live.title, live.type, live.confidence,
 		       COALESCE(outd.d, 0) AS impact,
-		       COALESCE(cl.committed_at, 0)
+		       COALESCE(cl.committed_at, 0), live.expires
 		  FROM live
 		  LEFT JOIN node ON node.pa = live.path AND node.bh = live.blob_hash
 		  LEFT JOIN outd ON outd.nid = node.nid
@@ -218,12 +226,14 @@ func (fq *factQuery) highlightRows(ctx context.Context, branchID int64, pathPref
 		return nil, fmt.Errorf("highlights: %w", err)
 	}
 	defer rows.Close()
+	now := time.Now()
 	for rows.Next() {
 		var h Highlight
 		if err := rows.Scan(&h.Path, &h.Title, &h.Type, &h.Confidence,
-			&h.Impact, &h.CommittedAt); err != nil {
+			&h.Impact, &h.CommittedAt, &h.Expires); err != nil {
 			return nil, fmt.Errorf("highlights scan: %w", err)
 		}
+		h.Expired = fact.IsExpiredAt(h.Expires, now)
 		out = append(out, h)
 	}
 	return out, rows.Err()

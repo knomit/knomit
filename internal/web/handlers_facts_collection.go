@@ -55,6 +55,8 @@ type recentFactItem struct {
 	Motifs      []string    `json:"motifs,omitempty"`
 	CommittedAt int64       `json:"committed_at,omitempty"`
 	Operation   string      `json:"operation,omitempty"`
+	Expires     string      `json:"expires,omitempty"`
+	Expired     bool        `json:"expired,omitempty"`
 	Links       hal.LinkMap `json:"_links"`
 }
 
@@ -124,6 +126,10 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 			EpisodeOps:     splitCSV(qp.Get("ep")),
 			Motifs:         motifs,
 			MotifMatch:     motifMatch,
+		}
+		now := timeNow()
+		if !applyExpiryParams(w, r, &opts, now) {
+			return
 		}
 
 		// `since_fork` narrows the list to what THIS EXPERIMENT changed.
@@ -202,6 +208,8 @@ func handleHALFactsCollection(b hal.URLBuilder, provider factsCollectionProvider
 				Motifs:      e.Motifs,
 				CommittedAt: e.CommittedAt,
 				Operation:   e.Operation,
+				Expires:     e.Expires,
+				Expired:     expiredAt(e.Expires, now),
 				Links:       hal.LinkMap{"self": {Href: b.Fact(repoName, a, e.Path)}},
 			})
 		}

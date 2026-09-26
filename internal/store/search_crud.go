@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
 )
 
@@ -200,12 +201,13 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
 	_, err = db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin, expires, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.BlobHash, rec.Title, factKind, factType,
 		string(domainJSON), string(entitiesJSON), string(motifsJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.EvidenceWeight, factOrigin,
+		nullIfEmpty(rec.Expires), fact.ExpiresUnix(rec.Expires),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert fact: %w", err)
@@ -503,7 +505,7 @@ func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactW
 	}
 	row := conn(ctx, fq.rh.db).QueryRowContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
-		        f.confidence, f.sources, f.refs, f.evidence_weight,
+		        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(f.expires, ''),
 		        bf.commit_hash, o.data, cl.committed_at
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
@@ -540,8 +542,8 @@ func (si *searchIndex) getEmbeddingByFact(ctx context.Context, path, blobHash st
 
 // scanFactWithBody scans a FactWithBody from a *sql.Row (branch_facts JOIN facts JOIN objects LEFT JOIN commit_log).
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// motifs, confidence, sources, refs, evidence_weight, commit_hash, data,
-// committed_at.
+// motifs, confidence, sources, refs, evidence_weight, expires, commit_hash,
+// data, committed_at.
 func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 	var f FactWithBody
 	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
@@ -551,7 +553,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
 		&domainJSON, &entitiesJSON, &motifsJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &committedAt,
+		&refsJSON, &f.EvidenceWeight, &f.Expires, &f.CommitHash, &rawData, &committedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -571,7 +573,7 @@ func scanFactWithBody(row *sql.Row) (*FactWithBody, error) {
 // scanFactRecordFromRowsWithCommittedAt scans a *FactWithBody from *sql.Rows,
 // including commit_hash and committed_at (fields absent from FactRecord).
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// motifs, confidence, sources, refs, evidence_weight, commit_hash,
+// motifs, confidence, sources, refs, evidence_weight, expires, commit_hash,
 // committed_at.
 func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
@@ -580,7 +582,7 @@ func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error
 		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
 		&domainJSON, &entitiesJSON, &motifsJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &f.CommittedAt,
+		&refsJSON, &f.EvidenceWeight, &f.Expires, &f.CommitHash, &f.CommittedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scanFactRecordFromRowsWithCommittedAt: %w", err)
@@ -593,8 +595,8 @@ func scanFactRecordFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error
 // scanFactWithBodyFromRowsWithCommittedAt scans a *FactWithBody from *sql.Rows,
 // including the body (raw object data) and committed_at timestamp.
 // Expected column order: path, title, blob_hash, kind, type, domain, entities,
-// motifs, confidence, sources, refs, evidence_weight, commit_hash, data,
-// committed_at.
+// motifs, confidence, sources, refs, evidence_weight, expires, commit_hash,
+// data, committed_at.
 func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, error) {
 	var f FactWithBody
 	var domainJSON, entitiesJSON, refsJSON, motifsJSON string
@@ -603,7 +605,7 @@ func scanFactWithBodyFromRowsWithCommittedAt(rows *sql.Rows) (*FactWithBody, err
 		&f.Path, &f.Title, &f.BlobHash, &f.Kind, &f.Type,
 		&domainJSON, &entitiesJSON, &motifsJSON,
 		&f.Confidence, &f.Sources,
-		&refsJSON, &f.EvidenceWeight, &f.CommitHash, &rawData, &f.CommittedAt,
+		&refsJSON, &f.EvidenceWeight, &f.Expires, &f.CommitHash, &rawData, &f.CommittedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scanFactWithBodyFromRowsWithCommittedAt: %w", err)
@@ -656,4 +658,13 @@ func logFactJSONUnmarshal(scanner, path, domainJSON, entitiesJSON, refsJSON stri
 	if err := json.Unmarshal([]byte(refsJSON), refs); err != nil {
 		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "refs").Msg("fact JSON column unmarshal failed; field empty")
 	}
+}
+
+// nullIfEmpty maps "" to SQL NULL, for optional TEXT columns where absent and
+// empty mean the same thing.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

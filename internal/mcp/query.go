@@ -117,6 +117,15 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Filter by motif — the general regularity a fact instantiates (mechanism, failure shape, pattern), independent of its subject. Use to find facts about DIFFERENT subjects that exemplify the same thing. Through a lens the mounts share ONE motif vocabulary, so a term reaches every spelling any mount groups with it, on every mount."),
 			mcpgo.WithStringItems(),
 		),
+		mcpgo.WithBoolean("expired",
+			mcpgo.Description(expiredParamDescription),
+		),
+		mcpgo.WithString("expires_before",
+			mcpgo.Description(expiresBeforeParamDescription),
+		),
+		mcpgo.WithString("expires_after",
+			mcpgo.Description(expiresAfterParamDescription),
+		),
 		mcpgo.WithString("motif_match",
 			mcpgo.Description("How strictly `motifs` must match, loosest last: exact (default; the same motif, however it is spelled), stem, token-2, token-1 (noisiest), soft (not yet available). Only meaningful alongside `motifs`."),
 			mcpgo.Enum(motifMatchEnum()...),
@@ -128,15 +137,20 @@ func queryTool() mcpgo.Tool {
 // session snapshot, so it must round-trip cleanly — hence Frontmatter is a
 // concrete type, not interface{}.
 type factOutput struct {
-	File          string            `json:"file"`
-	Title         string            `json:"title"`
-	Kind          string            `json:"kind,omitempty"` // omitted when epistemic (the default)
-	Type          string            `json:"type"`
-	Score         float64           `json:"score"` // relevance score in [0,100]; 100 for filter-only queries
-	Body          string            `json:"body"`
-	BodyTruncated bool              `json:"body_truncated,omitempty"` // true only when body is a snippet
-	Commit        string            `json:"commit"`
-	Frontmatter   frontmatterOutput `json:"frontmatter"`
+	File          string  `json:"file"`
+	Title         string  `json:"title"`
+	Kind          string  `json:"kind,omitempty"` // omitted when epistemic (the default)
+	Type          string  `json:"type"`
+	Score         float64 `json:"score"` // relevance score in [0,100]; 100 for filter-only queries
+	Body          string  `json:"body"`
+	BodyTruncated bool    `json:"body_truncated,omitempty"` // true only when body is a snippet
+	Commit        string  `json:"commit"`
+	// Expired is true when frontmatter.expires is at or before the query's
+	// clock (one instant per query, fixed when the result set was built, so
+	// every page of a cursor agrees with the filter that selected it).
+	// Knomit never acts on it.
+	Expired     bool              `json:"expired,omitempty"`
+	Frontmatter frontmatterOutput `json:"frontmatter"`
 }
 
 type frontmatterOutput struct {
@@ -150,6 +164,8 @@ type frontmatterOutput struct {
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	CommittedAt    int64    `json:"committed_at,omitempty"`
+	// Expires is the fact's optional RFC 3339 expiry, as written.
+	Expires string `json:"expires,omitempty"`
 }
 
 // queryResponse is the knomit_query envelope. Cursor is non-nil only while more
@@ -168,6 +184,11 @@ type queryResponse struct {
 type pagedRowState struct {
 	Score       float64 `json:"score"`
 	CommittedAt int64   `json:"committed_at"`
+	// AsOf is the query's clock (unix seconds) — the SAME instant the expiry
+	// filters used when this snapshot was built. A resumed page computes the
+	// `expired` marker from it, not from the time the page is served, so a
+	// query run with expired=false never shows expired:true on page 3.
+	AsOf int64 `json:"as_of,omitempty"`
 }
 
 // QueryHandler returns the handler function for knomit_query.
@@ -365,7 +386,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 	items := make([]store.QueueItem, len(order))
 	for i, ref := range order {
 		e := lists[ref.Mount][ref.Rank]
-		state, mErr := json.Marshal(pagedRowState{Score: e.Score, CommittedAt: e.CommittedAt})
+		state, mErr := json.Marshal(pagedRowState{Score: e.Score, CommittedAt: e.CommittedAt, AsOf: q.Now.Unix()})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
@@ -426,7 +447,26 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 	if err != nil {
 		return store.SearchOptions{}, err
 	}
+	before, err := parseExpiryBound(req, "expires_before")
+	if err != nil {
+		return store.SearchOptions{}, err
+	}
+	after, err := parseExpiryBound(req, "expires_after")
+	if err != nil {
+		return store.SearchOptions{}, err
+	}
+	var expired *bool
+	if _, set := req.GetArguments()["expired"]; set {
+		v := req.GetBool("expired", false)
+		expired = &v
+	}
 	return store.SearchOptions{
+		// ONE clock per query: the expiry filters and every page's `expired`
+		// marker are computed from this instant (see pagedRowState.AsOf).
+		Now:            time.Now(),
+		Expired:        expired,
+		ExpiresBefore:  before,
+		ExpiresAfter:   after,
 		Text:           req.GetString("text", ""),
 		Entities:       req.GetStringSlice("entities", nil),
 		Domain:         req.GetStringSlice("domain", nil),
@@ -461,7 +501,47 @@ func hasAnyFilter(q store.SearchOptions) bool {
 		// A motif-only query is a legitimate query: "what else instantiates
 		// this mechanism?" is the question the axis exists to answer, and
 		// omitting it here would reject that as "no filter supplied".
-		len(q.Motifs) > 0
+		len(q.Motifs) > 0 ||
+		// So is an expiry-only one: "every expired fact" is the review list.
+		q.Expired != nil || !q.ExpiresBefore.IsZero() || !q.ExpiresAfter.IsZero()
+}
+
+// Parameter descriptions for the expiry filters, shared with the REST docs'
+// wording. Each states what happens to a fact with NO expires, because that
+// is the case a caller gets wrong.
+const (
+	expiredParamDescription = `true: only facts whose expires is at or before now. false: only facts NOT expired — ` +
+		`expired=false INCLUDES facts with no expires (absent means never). Omit for no expiry filter. ` +
+		`Nothing is ever hidden by default: expired facts appear in every query, marked "expired": true. ` +
+		`"now" is the server's clock, fixed once per query (all pages of a cursor use the same instant).`
+	expiresBeforeParamDescription = `RFC 3339 timestamp: only facts whose expires is strictly before it. ` +
+		`expires_before alone EXCLUDES facts with no expires (absent means never, so they are never before anything). ` +
+		`"Expiring within a window" is expires_after=<now> plus expires_before=<now + window>.`
+	expiresAfterParamDescription = `RFC 3339 timestamp: only facts whose expires is strictly after it. ` +
+		`Like expires_before, it EXCLUDES facts with no expires.`
+)
+
+// parseExpiryBound reads an optional RFC 3339 bound; "" is no bound.
+func parseExpiryBound(req mcpgo.CallToolRequest, key string) (time.Time, error) {
+	v := req.GetString(key, "")
+	if v == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be an RFC 3339 timestamp with an offset (e.g. 2026-10-01T00:00:00Z): %q", key, v)
+	}
+	return t, nil
+}
+
+// snapshotClock is the instant a resumed page marks `expired` against: the
+// query's own clock, recorded in each snapshot row. A row written before the
+// field existed carries 0 and falls back to now.
+func snapshotClock(st pagedRowState) time.Time {
+	if st.AsOf == 0 {
+		return time.Now()
+	}
+	return time.Unix(st.AsOf, 0)
 }
 
 // queryFirstCall fans a relevance query out across every read mount in
@@ -546,7 +626,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	// for a foreign mount (RFC §6.2 uniformity).
 	renderRow := func(ref federate.MountRef) factOutput {
 		r := lists[ref.Mount][ref.Rank]
-		out := buildFactOutput(r, includeBody)
+		out := buildFactOutput(r, includeBody, q.Now)
 		out.File = wirePath(b, targets[ref.Mount].RT, r.Path)
 		return out
 	}
@@ -575,7 +655,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		// Snapshot only what a resumed page can't re-derive: the rank score.
 		// The WIRE path + commit pin the version; title/body/frontmatter are
 		// re-read from the fact on resume, so the snapshot carries no heavy body.
-		state, mErr := json.Marshal(pagedRowState{Score: r.Score, CommittedAt: r.CommittedAt})
+		state, mErr := json.Marshal(pagedRowState{Score: r.Score, CommittedAt: r.CommittedAt, AsOf: q.Now.Unix()})
 		if mErr != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("snapshot error: %v", mErr)), nil
 		}
@@ -746,7 +826,7 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 			if !okRead {
 				continue
 			}
-			page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody))
+			page = append(page, buildFactOutputFromFact(parsed, it.Path, it.CommitHash, st.Score, st.CommittedAt, includeBody, snapshotClock(st)))
 		}
 		if len(page) > 0 {
 			break
@@ -772,9 +852,10 @@ func queryResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, cursor 
 // buildFactOutput renders a search result (first-page rows, whose full body is
 // already in hand). When includeBody is false the body is truncated to a
 // snippet (body_truncated set); otherwise the full body is returned as-is.
-func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
+func buildFactOutput(r store.SearchResult, includeBody bool, now time.Time) factOutput {
 	body, truncated := bodyView(r.Body, includeBody)
 	return factOutput{
+		Expired:       fact.IsExpiredAt(r.Expires, now),
 		File:          r.Path,
 		Title:         r.Title,
 		Kind:          wireKind(r.Kind),
@@ -792,6 +873,7 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 			Refs:           orEmpty(r.Refs),
 			EvidenceWeight: r.EvidenceWeight,
 			CommittedAt:    r.CommittedAt,
+			Expires:        r.Expires,
 		},
 	}
 }
@@ -799,9 +881,10 @@ func buildFactOutput(r store.SearchResult, includeBody bool) factOutput {
 // buildFactOutputFromFact renders a resumed-page row from a fact re-read at its
 // frozen commit, carrying the search score the snapshot preserved (the only
 // field not re-derivable from the fact file itself).
-func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, committedAt int64, includeBody bool) factOutput {
+func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, committedAt int64, includeBody bool, now time.Time) factOutput {
 	body, truncated := bodyView(f.Body, includeBody)
 	return factOutput{
+		Expired:       f.IsExpired(now),
 		File:          path,
 		Title:         f.Title,
 		Kind:          wireKind(string(f.Kind)),
@@ -819,6 +902,7 @@ func buildFactOutputFromFact(f fact.Fact, path, commit string, score float64, co
 			Refs:           orEmpty(f.Refs),
 			EvidenceWeight: f.EvidenceWeight,
 			CommittedAt:    committedAt,
+			Expires:        f.Expires,
 		},
 	}
 }

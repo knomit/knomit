@@ -144,3 +144,45 @@ func TestSessionContext_ServerDown_Skips(t *testing.T) {
 		t.Errorf("got (%q,%q), want (\"\",no_facts)", text, stats.SkipReason)
 	}
 }
+
+func dated(path, title, expires string, expired bool) string {
+	e := "false"
+	if expired {
+		e = "true"
+	}
+	return `{"path":"` + path + `","title":"` + title + `","domain":[],"entities":[],"expires":"` + expires + `","expired":` + e + `}`
+}
+
+// TestSessionContext_ShowsExpiry (F03): the pre-warm is plain text, so a field
+// it does not print does not exist for the agent. An expired fact says
+// "expired", a dated one says "expires", an undated one says nothing — on the
+// exact bytes of each block's line format.
+func TestSessionContext_ShowsExpiry(t *testing.T) {
+	c := &corpusServer{
+		invariants: facts(dated("kb/invariants/x/1.md", "Inv", "2026-01-01T00:00:00Z", true)),
+		recent: facts(
+			dated("kb/gotchas/x/2.md", "Lapsed", "2026-01-01T00:00:00Z", true),
+			dated("kb/gotchas/x/3.md", "Pending", "2030-01-01T00:00:00Z", false),
+			plain("kb/gotchas/x/4.md", "Undated"),
+		),
+	}
+	c.start(t)
+	text, _ := SessionContext("r", "b")
+	for _, want := range []string{
+		"  - Inv (expired 2026-01-01T00:00:00Z)\n    kb/invariants/x/1.md\n",
+		"  - kb/gotchas/x/2.md: Lapsed (expired 2026-01-01T00:00:00Z)\n",
+		"  - kb/gotchas/x/3.md: Pending (expires 2030-01-01T00:00:00Z)\n",
+		"  - kb/gotchas/x/4.md: Undated\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("block missing %q:\n%s", want, text)
+		}
+	}
+
+	c2 := &corpusServer{principles: facts(`{"path":"kb/principles/p/a/1.md","title":"P","domain":["global"],"entities":["designer"],"expires":"2026-01-01T00:00:00Z","expired":true}`)}
+	c2.start(t)
+	text, _ = SessionContext("r", "b")
+	if !strings.Contains(text, ": P (expired 2026-01-01T00:00:00Z)\n") {
+		t.Errorf("principle line missing the expiry note:\n%s", text)
+	}
+}

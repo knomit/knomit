@@ -31,6 +31,9 @@ type Fact struct {
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	Origin         Origin   `json:"origin,omitempty"`
+	// Expires is an optional RFC 3339 timestamp; see expires.go. Knomit never
+	// acts on it — it is searchable, and results say whether it has passed.
+	Expires string `json:"expires,omitempty"`
 
 	// RefWarnings describes refs whose SHAPE is malformed, as ParseFact found
 	// them. Derived on read, never stored: it is absent from the frontmatter
@@ -47,6 +50,11 @@ type Fact struct {
 	// absent from the frontmatter struct. SerializeFact still refuses to write
 	// a motif that would earn one.
 	MotifWarnings []string `json:"motif_warnings,omitempty"`
+
+	// ExpiresWarnings describes an `expires` value ParseFact DROPPED because it
+	// is not RFC 3339 — derived on read, never stored, on the same terms as
+	// RefWarnings and MotifWarnings. SerializeFact refuses such a value.
+	ExpiresWarnings []string `json:"expires_warnings,omitempty"`
 }
 
 // NewFact is the sole constructor. path is always lowercased.
@@ -73,6 +81,7 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		Refs           []string `json:"refs"`
 		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 		Origin         Origin   `json:"origin,omitempty"`
+		Expires        string   `json:"expires,omitempty"`
 	}
 	kind := f.Kind
 	if kind == DefaultKind {
@@ -96,6 +105,7 @@ func (f Fact) MarshalJSON() ([]byte, error) {
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
 		Origin:         origin,
+		Expires:        f.Expires,
 	})
 }
 
@@ -116,6 +126,7 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 		Refs           []string `json:"refs"`
 		EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 		Origin         Origin   `json:"origin,omitempty"`
+		Expires        string   `json:"expires,omitempty"`
 	}
 	var p plain
 	if err := json.Unmarshal(data, &p); err != nil {
@@ -140,6 +151,7 @@ func (f *Fact) UnmarshalJSON(data []byte) error {
 	if f.Origin == "" {
 		f.Origin = DefaultOrigin
 	}
+	f.Expires = p.Expires
 	return nil
 }
 
@@ -155,6 +167,7 @@ type frontmatter struct {
 	Refs           []string `yaml:"refs"`
 	EvidenceWeight float64  `yaml:"evidence_weight,omitempty"`
 	Origin         string   `yaml:"origin"`
+	Expires        string   `yaml:"expires,omitempty"`
 }
 
 // ExtractBody strips the YAML frontmatter and the leading "# Title" heading
@@ -312,6 +325,14 @@ func ParseFact(path, content string) (Fact, error) {
 	f.EvidenceWeight = fm.EvidenceWeight
 	f.Origin = origin
 	f.RefWarnings = refWarnings
+	// Lenient on read, like refs and motifs: a malformed expiry must not make
+	// the fact unloadable. It is dropped (so the fact is simply undated) and
+	// reported; SerializeFact refuses to write one.
+	if err := validateExpires(fm.Expires); err != nil {
+		f.ExpiresWarnings = []string{err.Error()}
+	} else {
+		f.Expires = fm.Expires
+	}
 	return f, nil
 }
 
@@ -367,6 +388,9 @@ func SerializeFact(f Fact) (string, error) {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 	if err := ValidateRefs(f.Refs); err != nil {
+		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
+	if err := validateExpires(f.Expires); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
 	// Order is load-bearing: VALIDATE first, then strip. A malformed motif is
@@ -462,6 +486,12 @@ func SerializeFact(f Fact) (string, error) {
 		add("motifs", flowSeq(motifs))
 	}
 	add("refs", flowSeq(f.Refs))
+	// Emitted only when set, after refs, so every existing fact stays
+	// byte-identical. strScalar forces a quoted string: unquoted, YAML would
+	// resolve the value as a timestamp.
+	if f.Expires != "" {
+		add("expires", strScalar(f.Expires))
+	}
 
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)

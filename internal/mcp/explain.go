@@ -61,6 +61,12 @@ type explainFactEntry struct {
 	Deleted    bool `json:"deleted,omitempty"`
 	Superseded bool `json:"superseded,omitempty"`
 	Summary    bool `json:"summary,omitempty"`
+	// Expires/Expired ride on every node, summaries included: an expired
+	// hypothesis cited deep in an evidence chain is exactly what a reader must
+	// see. Expired is judged against the server clock at the time of THIS call
+	// (a by-path read has no query clock to share). Knomit never acts on it.
+	Expires string `json:"expires,omitempty"`
+	Expired bool   `json:"expired,omitempty"`
 
 	// Root-only fields (omitted on summary nodes).
 	Domain   []string `json:"domain,omitempty"`
@@ -422,6 +428,8 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		Kind:           kindString(parsed),
 		Confidence:     parsed.Confidence,
 		Deleted:        deleted,
+		Expires:        parsed.Expires,
+		Expired:        parsed.IsExpired(time.Now()),
 		Domain:         parsed.Domain,
 		Sources:        parsed.Sources,
 		Entities:       parsed.Entities,
@@ -628,6 +636,8 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 				Deleted:    deleted,
 				Superseded: superseded,
 				Summary:    true,
+				Expires:    parsed.Expires,
+				Expired:    parsed.IsExpired(time.Now()),
 			})
 		}
 

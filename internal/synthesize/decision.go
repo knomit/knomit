@@ -354,6 +354,13 @@ func ApplyPruneDecisions(ctx context.Context,
 			deletes = append(deletes, src)
 		}
 
+		// A prune merge writes a NEW fact from its members; there is no
+		// surviving member, so the merged fact carries NO expires — a merge
+		// never invents or inherits one (F03 ruling). A member's date is not
+		// lost: it stays in history with the member this commit retracts. It
+		// is named in a warn so the drop is visible rather than silent.
+		notCarried := memberExpiries(ctx, gs, agentBranch, deletes)
+
 		if _, _, err := gs.BatchWriteFacts(ctx, agentBranch, files, deletes, msg, "subsume"); err != nil {
 			// Atomic in both directions: nothing landed, so nothing is
 			// recorded. The sources stay live and the pair is offered again.
@@ -362,6 +369,11 @@ func ApplyPruneDecisions(ctx context.Context,
 		}
 		for _, src := range deletes {
 			deletedPaths[src] = true
+		}
+		if len(notCarried) > 0 {
+			onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf(
+				"merge %s: expires not carried (a merge writes a new fact, which carries none; set one with knomit_update if it should expire): %s",
+				merged.Path(), strings.Join(notCarried, ", "))})
 		}
 		onProgress(ProgressEvent{Phase: "detail-merge", Message: "merge " + merged.Path()})
 		stats.Merged++
@@ -766,6 +778,25 @@ func memberRefs(ctx context.Context, gs store.FactIndex, branch string, paths []
 				out = append(out, r)
 			}
 		}
+	}
+	return out
+}
+
+// memberExpiries names each merge member that carries an expires, as
+// "<path> (expires <value>)", read before the merge retracts them. An
+// unreadable member contributes nothing: this is a report, not a gate.
+func memberExpiries(ctx context.Context, gs store.FactIndex, branch string, paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		res, err := gs.ReadFact(ctx, branch, p, nil)
+		if err != nil {
+			continue
+		}
+		f, err := fact.ParseFact(p, res.Content)
+		if err != nil || f.Expires == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s (expires %s)", p, f.Expires))
 	}
 	return out
 }

@@ -76,20 +76,20 @@ func SessionContext(repo, branch string) (string, Stats) {
 	if len(globals) > 0 {
 		sb.WriteString("PROJECT PRINCIPLES:\n")
 		for _, f := range globals {
-			fmt.Fprintf(&sb, "  • %s: %s\n", PrincipleShortPath(f.Path), f.Title)
+			fmt.Fprintf(&sb, "  • %s: %s%s\n", PrincipleShortPath(f.Path), f.Title, ExpiryNote(f))
 		}
 		sb.WriteString("\n")
 	} else if len(invariantsFallback) > 0 {
 		sb.WriteString("LOAD-BEARING INVARIANTS:\n")
 		for _, f := range invariantsFallback {
-			fmt.Fprintf(&sb, "  - %s\n    %s\n", f.Title, f.Path)
+			fmt.Fprintf(&sb, "  - %s%s\n    %s\n", f.Title, ExpiryNote(f), f.Path)
 		}
 		sb.WriteString("\n")
 	}
 	if len(recent) > 0 {
 		sb.WriteString("Recent work in this repo:\n")
 		for _, f := range recent {
-			fmt.Fprintf(&sb, "  - %s: %s\n", f.Path, f.Title)
+			fmt.Fprintf(&sb, "  - %s: %s%s\n", f.Path, f.Title, ExpiryNote(f))
 		}
 	}
 	return sb.String(), Stats{

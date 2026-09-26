@@ -51,7 +51,7 @@ import (
 // lived in the dropped _int/_real tables and are rewritten as TEXT. Rebuild
 // reads git (the only source of truth) and preserves embeddings, so this costs
 // a graph rewrite, not a re-embed.
-const GraphSchemaVersion = "5"
+const GraphSchemaVersion = "6"
 
 type searchIndex struct {
 	rh *repoHandler
@@ -792,7 +792,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin)
+		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin, expires, expires_at)
 		SELECT
 			pe.path,
 			pe.blob_hash,
@@ -806,7 +806,9 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			json_extract(pe.parsed, '$.sources'),
 			json_extract(pe.parsed, '$.refs'),
 			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0),
-			COALESCE(json_extract(pe.parsed, '$.origin'), 'authored')
+			COALESCE(json_extract(pe.parsed, '$.origin'), 'authored'),
+			json_extract(pe.parsed, '$.expires'),
+			json_extract(pe.parsed, '$.expires_at')
 		FROM parsed_entries pe
 		WHERE pe.parsed IS NOT NULL
 		ON CONFLICT(path, blob_hash) DO UPDATE SET
@@ -820,7 +822,9 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			sources         = excluded.sources,
 			refs            = excluded.refs,
 			evidence_weight = excluded.evidence_weight,
-			origin          = excluded.origin
+			origin          = excluded.origin,
+			expires         = excluded.expires,
+			expires_at      = excluded.expires_at
 	`, blobObjectType)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: upsert facts: %w", err)

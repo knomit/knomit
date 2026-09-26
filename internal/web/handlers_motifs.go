@@ -451,6 +451,8 @@ type motifCarrierItem struct {
 	Title       string      `json:"title"`
 	Type        string      `json:"type,omitempty"`
 	CommittedAt int64       `json:"committed_at,omitempty"`
+	Expires     string      `json:"expires,omitempty"`
+	Expired     bool        `json:"expired,omitempty"`
 	Links       hal.LinkMap `json:"_links"`
 }
 
@@ -554,6 +556,8 @@ func handleHALMotifCluster(b hal.URLBuilder, provider motifsProvider, facts fact
 				Title:       e.Title,
 				Type:        e.Type,
 				CommittedAt: e.CommittedAt,
+				Expires:     e.Expires,
+				Expired:     expiredAt(e.Expires, timeNow()),
 				Links:       hal.LinkMap{"self": {Href: b.Fact(repoName, a, e.Path)}},
 			})
 		}

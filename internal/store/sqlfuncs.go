@@ -48,6 +48,10 @@ type parsedFact struct {
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	Origin         string   `json:"origin"`
+	// Expires/ExpiresAt fill facts.expires and facts.expires_at on rebuild;
+	// omitted (JSON null on extract) when the fact has none.
+	Expires   string `json:"expires,omitempty"`
+	ExpiresAt *int64 `json:"expires_at,omitempty"`
 }
 
 // sqlParseFact parses a knomit fact markdown blob (YAML frontmatter + body)
@@ -77,6 +81,8 @@ func sqlParseFact(data []byte) interface{} {
 		Refs:           f.Refs,
 		EvidenceWeight: f.EvidenceWeight,
 		Origin:         string(origin),
+		Expires:        f.Expires,
+		ExpiresAt:      fact.ExpiresUnix(f.Expires),
 	}
 	b, err := json.Marshal(pf)
 	if err != nil {

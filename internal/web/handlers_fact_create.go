@@ -27,6 +27,9 @@ type factCreateRequest struct {
 	// it (the formula multiplies by sources). Mirrors knomit_learn.
 	Confidence *float64 `json:"confidence"`
 	Sources    *int     `json:"sources"`
+	// Expires is knomit_learn's field; SerializeFact refuses a non-RFC 3339
+	// value, which surfaces as a 400 below.
+	Expires string `json:"expires"`
 }
 
 // Defaults for the optional numeric fields above, matching knomit_learn's.
@@ -121,6 +124,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		if req.Sources != nil {
 			f.Sources = *req.Sources
 		}
+		f.Expires = req.Expires
 
 		// Same gate, same rule, same error text as knomit_learn — the corpus
 		// invariant is "a stored local ref resolves", and an invariant that only

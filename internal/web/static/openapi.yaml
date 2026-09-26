@@ -614,6 +614,9 @@ paths:
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
         - $ref: "#/components/parameters/MotifFilter"
         - $ref: "#/components/parameters/MotifMatchTier"
+        - $ref: "#/components/parameters/ExpiredFilter"
+        - $ref: "#/components/parameters/ExpiresBefore"
+        - $ref: "#/components/parameters/ExpiresAfter"
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
       responses:
         "200":
@@ -886,6 +889,9 @@ paths:
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
         - $ref: "#/components/parameters/MotifFilter"
         - $ref: "#/components/parameters/MotifMatchTier"
+        - $ref: "#/components/parameters/ExpiredFilter"
+        - $ref: "#/components/parameters/ExpiresBefore"
+        - $ref: "#/components/parameters/ExpiresAfter"
       responses:
         "200":
           description: Collection of search results
@@ -2030,6 +2036,9 @@ paths:
         - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
         - $ref: "#/components/parameters/MotifFilter"
         - $ref: "#/components/parameters/LensMotifMatchTier"
+        - $ref: "#/components/parameters/ExpiredFilter"
+        - $ref: "#/components/parameters/ExpiresBefore"
+        - $ref: "#/components/parameters/ExpiresAfter"
       responses:
         "200":
           description: Deduped union of facts
@@ -2152,6 +2161,9 @@ paths:
         - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
         - $ref: "#/components/parameters/MotifFilter"
         - $ref: "#/components/parameters/LensMotifMatchTier"
+        - $ref: "#/components/parameters/ExpiredFilter"
+        - $ref: "#/components/parameters/ExpiresBefore"
+        - $ref: "#/components/parameters/ExpiresAfter"
       responses:
         "200":
           description: Fused union of search results
@@ -2584,6 +2596,38 @@ components:
         A motif filter that resolves to nothing matches nothing — it never
         silently widens to the unfiltered set.
       schema: { type: string }
+    ExpiredFilter:
+      name: expired
+      in: query
+      description: |
+        `true`: only facts whose `expires` is at or before now. `false`: only
+        facts NOT expired — `expired=false` INCLUDES facts with no `expires`
+        (absent means never). Omit for no expiry filter.
+
+        Nothing is ever hidden by default: expired facts come back from every
+        read like any other, marked `expired: true`, and knomit never deletes,
+        hides or retracts a fact because it expired. "now" is the server's
+        clock, read once per request and used for both the filter and the
+        markers. Comparisons are at whole seconds. Not `true`/`false` is 400.
+      schema: { type: boolean }
+    ExpiresBefore:
+      name: expires_before
+      in: query
+      description: |
+        RFC 3339 timestamp with an offset: only facts whose `expires` is
+        strictly before it. `expires_before` alone EXCLUDES facts with no
+        `expires` (absent means never, so they are never before anything).
+        "Expiring within a window" is `expires_after=<now>` plus
+        `expires_before=<now + window>`. A date-only or malformed value is 400.
+      schema: { type: string, format: date-time }
+    ExpiresAfter:
+      name: expires_after
+      in: query
+      description: |
+        RFC 3339 timestamp with an offset: only facts whose `expires` is
+        strictly after it. Like `expires_before`, it EXCLUDES facts with no
+        `expires`. A date-only or malformed value is 400.
+      schema: { type: string, format: date-time }
     MotifMatchTier:
       name: motif_match
       in: query
@@ -2883,6 +2927,8 @@ components:
         confidence: { type: number, format: double }
         sources:   { type: integer }
         as_of:     { $ref: "#/components/schemas/FactAsOf" }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         _links:    { $ref: "#/components/schemas/LinkMap" }
 
     FactSummary:
@@ -2896,6 +2942,8 @@ components:
         committed_at: { type: string, format: date-time }
         operation:    { type: string }
         motifs:       { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         _links:       { $ref: "#/components/schemas/LinkMap" }
 
     RefView:
@@ -2984,6 +3032,7 @@ components:
         refs:       { type: array, items: { type: string } }
         confidence: { type: number, format: double }
         sources:    { type: integer }
+        expires:    { type: string, format: date-time, description: "Optional RFC 3339 expiry with an offset (e.g. 2026-10-01T00:00:00Z). A date-only or malformed value is 400. Knomit never acts on it; it is searchable (`expired`, `expires_before`, `expires_after`)." }
 
     FactUpdateRequest:
       type: object
@@ -2991,7 +3040,7 @@ components:
       properties:
         content:
           type: string
-          description: Full markdown document with YAML frontmatter.
+          description: Full markdown document with YAML frontmatter. An `expires:` line that is not an RFC 3339 timestamp with an offset is 422.
 
     # Topics
     TopicNode:
@@ -3234,6 +3283,8 @@ components:
         confidence:  { type: number, format: double }
         impact:      { type: integer, description: "Count of DISTINCT facts reached by outgoing DERIVED_FROM edges — how many facts this was derived from. Not an edge-row count (the same lineage can be asserted at more than one commit). Global: unaffected by the `path` filter." }
         committed_at: { type: integer, format: int64, description: Unix seconds. }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
 
     Stats:
       type: object
@@ -4029,6 +4080,8 @@ components:
         operation:    { type: string }
         motifs:       { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         score:        { type: number, format: double }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         source:       { $ref: "#/components/schemas/LensSource" }
 
     LensFactsResponse:
@@ -4067,6 +4120,8 @@ components:
         entities:   { type: array, items: { type: string } }
         motifs:     { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         confidence: { type: number, format: double }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         source:     { $ref: "#/components/schemas/LensSource" }
 
     LensSearchResponse:
