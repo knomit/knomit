@@ -584,6 +584,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		methodologyMinScore:           b.cfg.MethodologyMinScore,
 		clusterResolution:             clusterResolutionOrDefault(b.cfg.ClusterCache.Resolution),
 		clusterMinCommunity:           clusterMinCommunityOrDefault(b.cfg.ClusterCache.MinCommunitySize),
+		clusterNeighborKinds:          clusterNeighborKindsOrDefault(b.cfg.ClusterCache.NeighborKinds),
 		discoveryEffortDefault:        b.cfg.Discovery.EffortDefault,
 		pipelineResumeWindow:          b.resumeWindow,
 		discoveryConfidenceThreshold:  b.cfg.Discovery.ConfidenceThreshold,

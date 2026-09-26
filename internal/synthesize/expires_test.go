@@ -175,8 +175,8 @@ func TestDedupCluster_WinnerKeepsItsOwnExpires(t *testing.T) {
 			write(winnerPath, "Widget fails closed", 0.9, tc.winnerExp)
 			write(loserPath, "Widget fails closed again", 0.5, tc.loserExp)
 			cluster := []factForLLM{
-				{File: winnerPath, Title: "Widget fails closed", Body: "recording", Type: "observation", Confidence: 0.9, Sources: 1},
-				{File: loserPath, Title: "Widget fails closed again", Body: "recording", Type: "observation", Confidence: 0.5, Sources: 1},
+				{File: winnerPath, Kind: "epistemic", Title: "Widget fails closed", Body: "recording", Type: "observation", Confidence: 0.9, Sources: 1},
+				{File: loserPath, Kind: "epistemic", Title: "Widget fails closed again", Body: "recording", Type: "observation", Confidence: 0.5, Sources: 1},
 			}
 			d := env.deps()
 			surviving, err := dedupCluster(ctx, cluster, env.svc.Facts(), env.svc.Search(),

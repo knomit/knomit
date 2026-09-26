@@ -3,6 +3,8 @@ package repos
 import (
 	"fmt"
 	"time"
+
+	"knomit/internal/fact"
 )
 
 // defaultClusterResolution / defaultClusterMinCommunitySize are the canonical
@@ -34,6 +36,18 @@ func clusterMinCommunityOrDefault(v int) int {
 		return defaultClusterMinCommunitySize
 	}
 	return v
+}
+
+// clusterNeighborKindsOrDefault applies the neighbour-kind fallback for a
+// config that never set the list — a Config built without Load, as tests and
+// tools do. It is only ever nil here for that reason: Load runs Validate, which
+// refuses an explicitly empty [cluster_cache] neighbor_kinds, so this never
+// turns an operator's "[]" into epistemic.
+func clusterNeighborKindsOrDefault(v []string) []string {
+	if len(v) == 0 {
+		return []string{string(fact.Epistemic)}
+	}
+	return append([]string(nil), v...)
 }
 
 // parseConfigDur parses a raw TOML/env duration string for the named config

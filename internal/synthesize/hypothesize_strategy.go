@@ -207,7 +207,7 @@ func backwardDiscoverPriority(rank int) float64 {
 func enqueueBackwardBridgeItems(ctx context.Context, d Deps, sessionID string, seeds []fact.Fact, branch string) error {
 	bridges, err := BuildBackwardBridges(ctx, d.Search, seeds, branch, fact.ID12(d.RI.ID()), d.Effort,
 		BridgeKindFromString(d.RI.DiscoveryBridge()), d.RI.ClusterResolution(),
-		d.RI.ClusterMinCommunitySize(), QualityConfigFromRepo(d.RI), d.Scope)
+		d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), QualityConfigFromRepo(d.RI), d.Scope)
 	if err != nil {
 		return err
 	}

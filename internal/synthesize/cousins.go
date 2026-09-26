@@ -99,6 +99,14 @@ func joinCousinsForPrune(
 	if len(pruneClusters) == 0 {
 		return pruneClusters, h
 	}
+	// The same neighbour-kind list ScopedCluster expands with, so both halves
+	// of one neighbourhood admit the same kinds (knomit#308).
+	neighborKinds := d.RI.ClusterNeighborKinds()
+	if err := requireNeighborKinds(neighborKinds); err != nil {
+		h.Failure = "cousin search failed"
+		log.Warn().Err(err).Msg("review: cousin sweep skipped; prune clusters keep their category-scoped membership")
+		return pruneClusters, h
+	}
 
 	// Which prune cluster each fact currently sits in. A fact in no prune
 	// cluster is absent, which is exactly the "leftover" case the measured
@@ -153,6 +161,7 @@ func joinCousinsForPrune(
 				QueryByPath:   path,
 				MinSimilarity: threshold,
 				Limit:         10,
+				IncludeKinds:  neighborKinds,
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -171,13 +180,15 @@ func joinCousinsForPrune(
 				if other, ok := clusterOf[r.Path]; ok && other == clusterOf[path] {
 					continue // siblings: they already meet
 				}
-				// Kind is NOT filtered here, matching ScopedCluster's own
-				// neighbour expansion — a neighbour it pulls in is not
-				// kind-checked either. Introducing a filter on this path alone
-				// would make the two halves of one neighbourhood disagree.
+				// Kind IS filtered here, by the search's IncludeKinds, with the
+				// same [cluster_cache] neighbor_kinds list ScopedCluster's own
+				// neighbour expansion uses (knomit#308). The two halves of one
+				// neighbourhood must admit the same kinds: filtering only one
+				// would let a cousin sweep attach what the fenced expansion
+				// refuses, or the reverse.
 				edges = append(edges, cousinEdge{from: path, hit: factForLLM{
 					File: r.Path, Title: r.Title, Body: r.Body,
-					Type: r.Type, Domain: r.Domain, Entities: r.Entities,
+					Type: r.Type, Kind: r.Kind, Domain: r.Domain, Entities: r.Entities,
 					Motifs: r.Motifs, Confidence: r.Confidence, Sources: r.Sources,
 				}})
 			}

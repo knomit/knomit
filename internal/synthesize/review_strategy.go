@@ -163,7 +163,7 @@ func (reviewStrategy) Plan(ctx context.Context, d Deps, sess *store.PipelineSess
 
 	// Build scoped clusters.
 	t := time.Now()
-	clusters, err := ScopedCluster(ctx, llmSeeds, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.OnProgress, branch)
+	clusters, err := ScopedCluster(ctx, llmSeeds, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), d.OnProgress, branch)
 	if err != nil {
 		return wrapf(reviewTool, err, "cluster")
 	}
@@ -686,6 +686,7 @@ func factsForLLM(seeds []fact.Fact, localRepoID string) []factForLLM {
 			Title:       f.Title,
 			Body:        f.Body,
 			Type:        string(f.Type),
+			Kind:        string(f.Kind),
 			Domain:      f.Domain,
 			Entities:    f.Entities,
 			Motifs:      f.Motifs,
@@ -1053,13 +1054,16 @@ func enqueueRaptorFollowups(
 	for _, df := range writtenFacts {
 		newFacts = append(newFacts, factForLLM{
 			File: df.Path, Title: df.Title, Body: df.Body,
-			Type: df.Type, Domain: df.Domain, Entities: df.Entities,
+			// distillFact carries no Kind and is written epistemic
+			// (decision.go), so epistemic is what the written fact IS, not a
+			// default standing in for an unknown.
+			Type: df.Type, Kind: string(fact.Epistemic), Domain: df.Domain, Entities: df.Entities,
 			Motifs: df.Motifs, Confidence: df.Confidence, Sources: 1,
 		})
 	}
 
 	// Cluster the new facts to find groups worth distilling further.
-	raptorClusters, clErr := ScopedCluster(ctx, newFacts, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.OnProgress, sess.Branch, "hypothesis")
+	raptorClusters, clErr := ScopedCluster(ctx, newFacts, d.Search, d.RI.ClusterResolution(), d.RI.ClusterMinCommunitySize(), d.RI.ClusterNeighborKinds(), d.OnProgress, sess.Branch, "hypothesis")
 	if clErr != nil {
 		log.Warn().Err(clErr).Msg("review: RAPTOR clustering failed")
 		return

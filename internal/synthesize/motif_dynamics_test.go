@@ -164,9 +164,9 @@ func TestMotifDynamics_ReviewMergePreservesLoserMotifs(t *testing.T) {
 		"one account of it", []string{"silent-fallback"}, 0.5)
 
 	cluster := []factForLLM{
-		{File: "kb/alpha/winner.md", Title: "Cache invalidation on write", Body: "one account of it",
+		{File: "kb/alpha/winner.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
 			Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
-		{File: "kb/alpha/loser.md", Title: "Cache invalidation on write", Body: "one account of it",
+		{File: "kb/alpha/loser.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
 			Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
 	}
 
@@ -218,9 +218,9 @@ func TestMotifDynamics_ReviewMergeTrimsToTheCapWinnerFirst(t *testing.T) {
 		"one account of it", loserMotifs, 0.5)
 
 	cluster := []factForLLM{
-		{File: "kb/alpha/winner.md", Title: "Cache invalidation on write", Body: "one account of it",
+		{File: "kb/alpha/winner.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
 			Type: string(fact.Observation), Confidence: 0.9, Sources: 1},
-		{File: "kb/alpha/loser.md", Title: "Cache invalidation on write", Body: "one account of it",
+		{File: "kb/alpha/loser.md", Kind: "epistemic", Title: "Cache invalidation on write", Body: "one account of it",
 			Type: string(fact.Observation), Confidence: 0.5, Sources: 1},
 	}
 

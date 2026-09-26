@@ -445,7 +445,9 @@ func buildScoredBridges(
 // clusters with. Passing them in (rather than hardcoding) keeps both discovery
 // directions on one community partition: backward clusters its synthesis-fact
 // pool with ScopedCluster exactly as the forward path clusters its review seeds,
-// so both see identical membership for the same inputs.
+// so both see identical membership for the same inputs. neighborKinds
+// (ri.ClusterNeighborKinds()) is threaded for the same reason: a different
+// neighbour-kind list would be a different partition.
 func BuildBackwardBridges(
 	ctx context.Context,
 	idx SearchQuery,
@@ -456,6 +458,7 @@ func BuildBackwardBridges(
 	kind BridgeKind,
 	resolution float64,
 	minCommunitySize int,
+	neighborKinds []string,
 	cfg QualityConfig,
 	scope ScopeFilter,
 ) ([]BridgeSeedSet, error) {
@@ -471,6 +474,7 @@ func BuildBackwardBridges(
 			Title:       f.Title,
 			Body:        f.Body,
 			Type:        string(f.Type),
+			Kind:        string(f.Kind),
 			Domain:      f.Domain,
 			Entities:    f.Entities,
 			Confidence:  f.Confidence,
@@ -479,7 +483,7 @@ func BuildBackwardBridges(
 			LineageRefs: localFactRefPaths(f.Refs, localRepoID),
 		})
 	}
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, func(ProgressEvent) {}, branch)
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}
