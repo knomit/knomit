@@ -276,6 +276,9 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open clone db: %v", err)})
 			return
 		}
+		// F09 first contact runs inside CloneFrom: the history is judged by
+		// the root of trust before the cloned branch is placed.
+		remoteSvc.SetRootOfTrust(rm.RootOfTrust())
 
 		// Phase: cloning.
 		sendEvent(map[string]string{"phase": "cloning"})
