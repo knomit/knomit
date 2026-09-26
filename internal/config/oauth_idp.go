@@ -131,6 +131,9 @@ func (c *OAuthIDPConfig) loadIDPSecret() error {
 		return fmt.Errorf("config: [oauth.idp].client_secret_file: %w", err)
 	}
 	// POSIX modes only; Windows reports synthetic bits, so no check there.
+	// On Windows the guard for a secret file placed under <home> is the data
+	// root's DACL (internal/platform/privdir, applied at boot), which the file
+	// inherits; a file kept elsewhere is the user's responsibility.
 	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("config: [oauth.idp].client_secret_file %q has mode %o; it must be readable by its owner only (0600 or stricter)", c.ClientSecretFile, st.Mode().Perm())
 	}

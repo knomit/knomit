@@ -23,6 +23,7 @@ import (
 	"knomit/internal/pki"
 	"knomit/internal/platform/logging"
 	"knomit/internal/platform/memlimit"
+	"knomit/internal/platform/privdir"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web"
@@ -118,6 +119,14 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 
 	a := &App{}
+
+	// The data root is private to this user before anything is written into
+	// it: the key below, the DBs, knomit.toml and the pki directory all rely
+	// on it, on Windows by inheriting its DACL. Every binary that boots
+	// through here (serve, verify, the desktop) gets it.
+	if err := privdir.Ensure(cfg.Home); err != nil {
+		return nil, fmt.Errorf("data root %s: %w", cfg.Home, err)
+	}
 
 	// SSH keypair.
 	keyPath := ResolveKeyPath(cfg)

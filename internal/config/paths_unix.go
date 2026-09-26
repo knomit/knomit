@@ -37,7 +37,10 @@ const socketFile = "knomit.sock"
 
 // localListenerName is the path of the local authenticated listener for a
 // given data root. On unix that is a socket file inside the root, so the
-// 0700 root above it is what guards it.
+// 0700 root above it is what guards it. internal/platform/privdir.Ensure
+// makes it so at boot: it creates the root 0700, or tightens an existing
+// wider root this user owns; a root owned by someone else (or a symlink) is
+// only warned about, and then the socket is as exposed as the root.
 //
 // UNLESS that path does not fit in a socket address (knomit#253): a data root
 // long enough that <root>/knomit.sock reaches auth.SunPathCap would make
