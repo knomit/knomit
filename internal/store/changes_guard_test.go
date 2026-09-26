@@ -45,8 +45,8 @@ func TestChanges_NoWritePathNoClock(t *testing.T) {
 			}
 			checked++
 			if why, bad := forbidden[sel.Sel.Name]; bad {
-				t.Errorf("%s: %s reaches %s (%s) — the changes read must be two trees, no write, no clock",
-					fset.Position(sel.Pos()), exprString(sel), sel.Sel.Name, why)
+				t.Errorf("%s: %s is a %s — the changes read must be two trees, no write, no clock",
+					fset.Position(sel.Pos()), exprString(sel), why)
 			}
 			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "time" && sel.Sel.Name != "Duration" && sel.Sel.Name != "Second" {
 				t.Errorf("%s: time.%s — no clock in the changes read (only the request timeout's time.Second)",
