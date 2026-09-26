@@ -293,7 +293,7 @@ func TestOAuthListener_PublicRoutesNeedNoToken(t *testing.T) {
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no such waiting") {
 		t.Fatalf("describe: %d %s; want the issuer's 404", rec.Code, rec.Body.String())
 	}
-	rec = serve(h, httptest.NewRequest(http.MethodPost, "/oauth/approve", strings.NewReader("{")))
+	rec = serve(h, newJSONRequest(http.MethodPost, "/oauth/approve", strings.NewReader("{")))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "malformed approval statement") {
 		t.Fatalf("signed approve: %d %s; want the issuer's 400", rec.Code, rec.Body.String())
 	}

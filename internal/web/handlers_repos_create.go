@@ -64,14 +64,7 @@ func handleHALReposCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		// all (see maxCreateBodyBytes), and the check after it enforces the
 		// ontology limit on the ontology itself.
 		var req createRepoRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCreateBodyBytes)).Decode(&req); err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Request too large",
-					"request body exceeds the maximum accepted size", r.URL.Path)
-				return
-			}
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, maxCreateBodyBytes) {
 			return
 		}
 		// The ontology limit, measured on the same bytes :validate measures, so

@@ -26,7 +26,7 @@ import (
 func createViaAPI(t *testing.T, r http.Handler, name string) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+	req := fromLoopback(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"`+name+`","mode":"preset","ontology_preset":"default"}`)))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -118,7 +118,7 @@ func TestArchiveLifecycle_HTTP(t *testing.T) {
 
 	// POST restore
 	rrec := httptest.NewRecorder()
-	r.ServeHTTP(rrec, fromLoopback(httptest.NewRequest(http.MethodPost, "/archived/"+info.ID+"/restore",
+	r.ServeHTTP(rrec, fromLoopback(newJSONRequest(http.MethodPost, "/archived/"+info.ID+"/restore",
 		strings.NewReader(`{}`))))
 	if rrec.Code != http.StatusOK {
 		t.Fatalf("restore status %d body %s", rrec.Code, rrec.Body.String())
@@ -273,7 +273,7 @@ func TestRestore_ConflictingKnowledgeBaseIs409(t *testing.T) {
 	}
 
 	rrec := httptest.NewRecorder()
-	r.ServeHTTP(rrec, fromLoopback(httptest.NewRequest(http.MethodPost, "/archived/"+archived.ID+"/restore",
+	r.ServeHTTP(rrec, fromLoopback(newJSONRequest(http.MethodPost, "/archived/"+archived.ID+"/restore",
 		strings.NewReader(`{}`))))
 	if rrec.Code != http.StatusConflict {
 		t.Fatalf("restore into a taken knowledge base: status %d, want 409; body=%s",

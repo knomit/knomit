@@ -252,7 +252,7 @@ func TestPostRepos_LocalOriginOutsideTheRootIs400(t *testing.T) {
 	// filesystem origins entirely — the stricter half of the same gate.
 	s := &Server{Manager: newRealManager(t)}
 	rec := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+	s.NewAPIRouter().ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"sneaky","mode":"subscribe","origin":{"url":"file:///etc/definitely-not-allowed.git"}}`))))
 
 	if rec.Code != http.StatusBadRequest {
@@ -325,7 +325,7 @@ func awaitCreateID(t *testing.T, r http.Handler, id string) map[string]any {
 func startCreate(t *testing.T, r http.Handler, name string) string {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"`+name+`","mode":"preset","ontology_preset":"default"}`))))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create %q: status = %d, body=%s", name, rec.Code, rec.Body.String())
