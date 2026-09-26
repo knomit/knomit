@@ -38,13 +38,14 @@ import (
 //
 // An authentication refusal here is 403, never 401 (the 421 in 3 refuses a
 // Host, not a caller). RFC 7235 makes WWW-Authenticate mandatory on a 401,
-// and no listener this middleware serves has an HTTP authentication scheme: the local listener's credential is the connection
-// itself, and the TLS listener's is the client certificate verified in the
-// handshake — neither is something a header can present. The ONE 401 in
-// knomit is on the OAuth listener ([oauth].addr, F19 phase 3a), whose router
-// never runs this middleware: BearerMiddleware is its only edge, and bearer
-// tokens are judged there and nowhere else. An Authorization header on any
-// listener served here is ignored.
+// and no listener this middleware serves has an HTTP authentication scheme:
+// the local listener's credential is the connection itself, and the TLS
+// listener's is the client certificate verified in the handshake — neither
+// is something a header can present. The ONE 401 in knomit is on the OAuth
+// listener ([oauth].addr, F19 phase 3a), whose router never runs this
+// middleware: BearerMiddleware is its only edge, and bearer tokens are
+// judged there and nowhere else, producing the same Principal type. An
+// Authorization header on any listener served here is ignored.
 //
 // The two 403s are told apart by TITLE: "Authentication required" here (no
 // principal at all) versus "Permission denied" in Require (a principal that
