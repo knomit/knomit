@@ -174,20 +174,38 @@ func TestBrowserGate_EachMissingProofRefuses(t *testing.T) {
 		"rebinding": true, "rebinding GET": true, "Host 127.0.0.1.nip.io": true,
 		"Host localhost.": true, "Host sub.localhost": true,
 	}
+	// These mutation rows carry an Origin that is neither http(s)://<Host>
+	// nor allowlisted, so since #287 AuthMiddleware refuses them one step
+	// EARLIER too — still 403, titled "Cross-origin request refused", and the
+	// request still stays undecided. The gate's own Origin rule (exact
+	// http://<Host>, arrival port) is stricter and still meets the rows this
+	// guard admits: "Origin https" and the Sec-Fetch-Site rows.
+	refusedByOriginGuard := map[string]bool{
+		"Origin null": true, "Origin another port (same-site)": true,
+		"Origin another port, Sec-Fetch-Site lying": true,
+		"Origin other loopback spelling": true,
+		"Origin wails (desktop allowlist is never own origin)": true,
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newKBFixture(t)
 			id := f.park(t)
-			want := http.StatusForbidden
+			want, reason := http.StatusForbidden, c.reason
 			if refusedEarlier[c.name] {
 				want = http.StatusMisdirectedRequest
+			}
+			if refusedByOriginGuard[c.name] {
+				reason = "Cross-origin request refused"
 			}
 			rec := serve(f.s.Handler(), c.req(id))
 			if rec.Code != want {
 				t.Fatalf("%d %s; want %d", rec.Code, rec.Body.String(), want)
 			}
-			if !strings.Contains(rec.Body.String(), c.reason) {
-				t.Fatalf("%d body %s does not name %q", want, rec.Body.String(), c.reason)
+			if !strings.Contains(rec.Body.String(), reason) {
+				t.Fatalf("%d body %s does not name %q", want, rec.Body.String(), reason)
+			}
+			if !refusedByOriginGuard[c.name] && strings.Contains(rec.Body.String(), "Cross-origin request refused") {
+				t.Fatalf("refused by the #287 guard, not by this gate: %s", rec.Body.String())
 			}
 			if list, _ := f.s.OAuthIssuer.Pending(context.Background()); len(list) != 1 || list[0].Decision != "" {
 				t.Fatalf("a refused request decided it: %+v", list)

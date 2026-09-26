@@ -28,6 +28,10 @@ import (
 //     DNS-rebound page and gets 421 (#281). What it may do is the
 //     parsed [auth].loopback_default, resolved in Require through
 //     loopbackGrants rather than here: this function decides WHO, never WHAT.
+//     A mutating request must also not come from another origin's page
+//     (loopbackOriginOK): a cross-site form or text/plain fetch carries a
+//     loopback Host and would otherwise write as anonymous; it gets 403
+//     "Cross-origin request refused" (#287).
 //  3. Nothing, otherwise — no principal on the context at all. With
 //     require = true the request ends here; without it, a downstream Require
 //     still denies, because the zero principal holds nothing.
@@ -47,7 +51,26 @@ import (
 // and is refused outright if it has none. Bearer tokens (phase 3) do NOT
 // slot in here: they are judged only on the OAuth listener, by
 // BearerMiddleware, and produce the same Principal type there.
+//
+// AuthMiddleware trusts no cross-origin page. Server builds its edge with
+// authMiddleware and the CORS allowlist instead (Server.authEdge), so the
+// desktop's Wails origins can write; call that, not this, from a listener.
 func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) http.Handler {
+	return authMiddleware(cfg, disabled, nil)
+}
+
+// authEdge is the AuthMiddleware every Server router runs, with the CORS
+// allowlist as its trusted origins. It is applied TWICE on the plain listener,
+// on the outer router (Handler) and on the API router (NewAPIRouter), and both
+// must carry the same list, or a desktop write passes one and is refused by
+// the other.
+func (s *Server) authEdge() func(http.Handler) http.Handler {
+	return authMiddleware(s.Auth, s.authDisabled, s.CORSOrigins)
+}
+
+// authMiddleware is AuthMiddleware with the origins, besides the request's
+// own, whose pages may act as the anonymous principal (Server.CORSOrigins).
+func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -109,6 +132,19 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 					hal.WriteProblem(w, http.StatusMisdirectedRequest, "Misdirected Request",
 						"this knomit instance does not answer loopback requests for Host "+strconv.Quote(r.Host)+
 							"; a web page served from that name may not act as the local user. If this is your own proxy or tunnel, add the name to [auth].loopback_hosts in knomit.toml — anyone who reaches knomit through it then holds [auth].loopback_default",
+						r.URL.Path)
+					return
+				}
+				// #287: a loopback Host is not proof of a local user either.
+				// A cross-site page's form or text/plain fetch reaches
+				// 127.0.0.1 with a legitimate Host and no preflight; only its
+				// Origin gives it away. Here, for the same reason as the Host
+				// check: this is the moment anonymous is minted, and the
+				// socket, TLS and OAuth paths never get here.
+				if !loopbackOriginOK(r, trustedOrigins) {
+					hal.WriteProblem(w, http.StatusForbidden, "Cross-origin request refused",
+						"this knomit instance does not accept a "+r.Method+" from a page at Origin "+strconv.Quote(r.Header.Get("Origin"))+
+							" as the local user; only this listener's own origin (http or https://"+r.Host+") and the desktop app may change data. Non-browser clients send no Origin and are unaffected",
 						r.URL.Path)
 					return
 				}

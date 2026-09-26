@@ -30,7 +30,7 @@ const APIBase = "/api/v1"
 // the route-group level where branches/repos appear in the path, not at
 // the router root.
 func (s *Server) NewAPIRouter() chi.Router {
-	r := s.apiRouter(AuthMiddleware(s.Auth, s.authDisabled), s.grants())
+	r := s.apiRouter(s.authEdge(), s.grants())
 	// The operator's approval endpoints live on THIS router only, never on
 	// the OAuth listener's, and only when [oauth] is configured.
 	if s.OAuthIssuer != nil {
