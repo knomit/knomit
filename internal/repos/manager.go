@@ -25,13 +25,13 @@ import (
 
 // Deps holds all shared resources needed to open and manage repos.
 type Deps struct {
-	Cfg         config.Config
-	Signer      ssh.Signer
+	Cfg    config.Config
+	Signer ssh.Signer
 	// VerifyRoot is F09's root of trust, parsed once at boot from
 	// [verify].operator_key. Nil is the unconfigured root: a repository whose
 	// history enables verification is then closed before the enable
 	// ("unrooted"). It never defaults to this instance's own key.
-	VerifyRoot store.RootOfTrust
+	VerifyRoot  store.RootOfTrust
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
