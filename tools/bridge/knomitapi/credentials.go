@@ -163,6 +163,7 @@ func withCredentialsLock(ctx context.Context, u *url.URL, fn func() error) error
 // Windows the token files are private only by inheriting the root's DACL:
 // their 0600 is a no-op there.
 func ensureCredentialsDir(p string) error {
+	// <home>/credentials/<file>: the two levels are CredentialsPath's layout.
 	dir := filepath.Dir(p)
 	if err := privdir.Ensure(filepath.Dir(dir)); err != nil {
 		return err

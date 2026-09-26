@@ -53,6 +53,7 @@ func TestServeTLS_BindConflictFailsTheBoot(t *testing.T) {
 	}
 	f := pkitest.New(t)
 	f.Install(t, f.Enroll(t, "serve", pki.RoleInstance, keyPath), filepath.Join(home, "pki"))
+	widenRoot(t, home)
 
 	held, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -102,4 +103,8 @@ func TestServeTLS_BindConflictFailsTheBoot(t *testing.T) {
 	if _, serr := os.Stat(filepath.Join(home, "running.marker")); !errors.Is(serr, os.ErrNotExist) {
 		t.Fatalf("the crash marker is still there after the returned error (RunE's defers did not run): %v", serr)
 	}
+	// And the data root is private (knomit#301), whether serve's own
+	// privdir.Ensure or app.New's backstop made it so: the end state cannot
+	// tell them apart, only that serve's boot leaves no root wider.
+	assertPrivateRoot(t, home)
 }
