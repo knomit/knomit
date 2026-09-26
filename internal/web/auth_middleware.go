@@ -21,32 +21,35 @@ import (
 //     principal keyed by uid or SID, with the OS-reported pid carried
 //     alongside for the client_sessions row. Which of the two a platform
 //     uses is auth.LocalVia; this function never asks.
-//  2. Nothing, from loopback, with [auth].require = false — the ANONYMOUS
+//  2. A request on the TLS listener (F19 phase 2) — the instance (or
+//     operator) principal of its verified client certificate. That listener
+//     is never anonymous, whatever [auth].require says: a request with no
+//     certificate, or one naming no knomit identity, is refused here.
+//  3. Nothing, from loopback, with [auth].require = false — the ANONYMOUS
 //     principal, so an upgrade changes nobody's day — provided the Host
 //     header names this machine (localhost, an IP literal, the bind host or
 //     an [auth].loopback_hosts name; loopbackHostOK). Any other Host is a
 //     DNS-rebound page and gets 421 (#281). What it may do is the
 //     parsed [auth].loopback_default, resolved in Require through
 //     loopbackGrants rather than here: this function decides WHO, never WHAT.
-//  3. Nothing, otherwise — no principal on the context at all. With
+//  4. Nothing, otherwise — no principal on the context at all. With
 //     require = true the request ends here; without it, a downstream Require
 //     still denies, because the zero principal holds nothing.
 //
-// The refusal is 403, never 401. RFC 7235 makes WWW-Authenticate mandatory on
-// a 401, and no listener this middleware serves has a scheme a TCP caller
-// could satisfy — the local listener is the only credential, and it is not
-// something a header can present. The ONE 401 in knomit is on the OAuth
+// An authentication refusal here is 403, never 401 (the 421 in 3 refuses a
+// Host, not a caller). RFC 7235 makes WWW-Authenticate mandatory on a 401,
+// and no listener this middleware serves has an HTTP authentication scheme:
+// the local listener's credential is the connection itself, and the TLS
+// listener's is the client certificate verified in the handshake — neither
+// is something a header can present. The ONE 401 in knomit is on the OAuth
 // listener ([oauth].addr, F19 phase 3a), whose router never runs this
-// middleware: BearerMiddleware is its only edge. An Authorization header on
-// any listener served here is ignored. The two 403s are told apart by TITLE: "Authentication required" here (no
+// middleware: BearerMiddleware is its only edge, and bearer tokens are
+// judged there and nowhere else, producing the same Principal type. An
+// Authorization header on any listener served here is ignored.
+//
+// The two 403s are told apart by TITLE: "Authentication required" here (no
 // principal at all) versus "Permission denied" in Require (a principal that
 // lacks the permission). Clients and tests key on the title, not the status.
-//
-// 1b (phase 2) sits between 1 and 2: a request on the TLS listener becomes
-// the instance (or operator) principal of its verified client certificate,
-// and is refused outright if it has none. Bearer tokens (phase 3) do NOT
-// slot in here: they are judged only on the OAuth listener, by
-// BearerMiddleware, and produce the same Principal type there.
 func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +71,7 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 				return
 			}
 			if auth.IsTLSListener(ctx) {
-				// 1b. The TLS listener (F19 phase 2) is NEVER anonymous, reads
+				// 2. The TLS listener (F19 phase 2) is NEVER anonymous, reads
 				// included, whatever cfg.Require says: it exists only for
 				// enrolled instances. Its tls.Config (pki.ServerConfig) uses
 				// RequireAnyClientCert and verifies EVERYTHING in
