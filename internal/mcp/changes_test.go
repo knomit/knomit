@@ -135,31 +135,46 @@ func TestChangesHandler_RefusalsCarryTheirRemedy(t *testing.T) {
 	require.Contains(t, text, "cursor")
 }
 
-// No write path: a read moves no ref and creates no commit on any branch.
+// No write path: a read creates, moves or deletes no branch ref and no
+// branches-table row, on ANY branch — not only the two the fixture wrote to.
+// (The store-level TestChangesUnder_WritesNothing also pins the commit-log
+// tables; this one covers what the MCP handler itself could reach.)
 func TestChangesHandler_WritesNothing(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	svc := changesSvc(t, ri)
 	b := repos.NewBindingOfRepo(ri, "agent/test")
 	since := writeOn(t, svc, "main", "kb/tasks/a/t1.md")
 	writeOn(t, svc, "main", "kb/tasks/a/t2.md")
-	writeOn(t, svc, "agent/test", "kb/tasks/a/t3.md")
+	side := writeOn(t, svc, "agent/test", "kb/tasks/a/t3.md")
 
-	tips := func() map[string]string {
+	snapshot := func() map[string]string {
+		ctx := context.Background()
 		m := map[string]string{}
-		for _, br := range []string{"main", "agent/test"} {
-			h, err := svc.Branches().HeadCommit(context.Background(), br)
+		plain, agents, _ := svc.Branches().BranchInfo("")
+		for _, br := range append(plain, agents...) {
+			h, err := svc.Branches().HeadCommit(ctx, br)
 			require.NoError(t, err)
-			m[br] = h
+			m["ref:"+br] = h
+		}
+		rows, err := svc.Branches().ListBranches(ctx)
+		require.NoError(t, err)
+		for _, r := range rows {
+			m["row:"+r.Name] = r.GitRef
 		}
 		return m
 	}
-	before := tips()
+	before := snapshot()
+	require.Contains(t, before, "ref:main")
+	require.Contains(t, before, "ref:agent/test")
 	for _, args := range []map[string]any{
 		{"prefix": "tasks/a"},
 		{"prefix": "tasks/a", "since": since},
+		{"prefix": "tasks/a", "since": since, "limit": 1},
+		{"prefix": "tasks/a", "since": side},
 		{"prefix": "tasks/a", "since": "0123456789abcdef0123456789abcdef01234567"},
+		{"cursor": "garbage"},
 	} {
 		callChanges(t, b, args)
 	}
-	require.Equal(t, before, tips())
+	require.Equal(t, before, snapshot())
 }

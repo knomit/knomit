@@ -47,7 +47,6 @@ func TestRefClassification_HasNoSecondImplementation(t *testing.T) {
 		filepath.Join("internal", "okf", "validate.go"):              "validates a fact FILE name",
 		filepath.Join("internal", "okf", "concept.go"):               "http(s)-only followability, after ClassifyRef has decided the kind",
 		filepath.Join("internal", "store", "branch.go"):              "selects fact files from a git tree",
-		filepath.Join("internal", "store", "changes.go"):             "selects fact files from a git tree diff (knomit_changes)",
 		filepath.Join("internal", "store", "factpath.go"):            "index membership by location under the ontology root",
 		filepath.Join("internal", "store", "fact_read.go"):           "fact file naming",
 		filepath.Join("internal", "store", "git", "commitlog.go"):    "selects fact files when indexing a commit",

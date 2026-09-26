@@ -207,7 +207,7 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 		return ChangesResult{}, err
 	}
 
-	rows, err := diffSubtrees(fromTree, toTree, base)
+	rows, err := diffSubtrees(fromTree, toTree, base, rh.isFactPath)
 	if err != nil {
 		return ChangesResult{}, err
 	}
@@ -250,8 +250,11 @@ func subtreeOrEmpty(c *object.Commit, base string) (*object.Tree, error) {
 }
 
 // diffSubtrees diffs two folder trees (nil = empty) and returns repo-relative
-// fact paths, sorted bytewise, with private paths and non-.md files dropped.
-func diffSubtrees(from, to *object.Tree, base string) ([]PathChange, error) {
+// paths sorted bytewise, keeping only those isFact admits. The caller passes
+// repoHandler.isFactPath — the indexer's own membership rule (under the
+// ontology root, .md, not private) — so changes and the index agree on what a
+// fact is, with one copy of the rule.
+func diffSubtrees(from, to *object.Tree, base string, isFact func(string) bool) ([]PathChange, error) {
 	if from == nil && to == nil {
 		return nil, nil
 	}
@@ -270,12 +273,12 @@ func diffSubtrees(from, to *object.Tree, base string) ([]PathChange, error) {
 		default:
 			rel, kind = ch.To.Name, ChangeModified
 		}
-		if !strings.HasSuffix(rel, ".md") || fact.IsPrivatePath(rel) {
-			continue
-		}
 		p := rel
 		if base != "" {
 			p = base + "/" + rel
+		}
+		if !isFact(p) {
+			continue
 		}
 		rows = append(rows, PathChange{Path: p, Change: kind})
 	}
