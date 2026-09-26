@@ -87,7 +87,7 @@ func capturePathOrder(t *testing.T) []string {
 			return nil, nil
 		}).Times(1)
 
-	_, err := ScopedCluster(context.Background(), seeds, idx, 1.0, 2, nil, branch)
+	_, err := ScopedCluster(context.Background(), seeds, idx, 1.0, 2, testNeighborKinds, nil, branch)
 	require.NoError(t, err)
 	require.NotEmpty(t, captured, "SubgraphEdges must have been called with the node list")
 	return captured

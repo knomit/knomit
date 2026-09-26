@@ -406,7 +406,7 @@ func TestBridgeLineage_BackwardProjectionExcludesLineagePair(t *testing.T) {
 			Return(1, nil).AnyTimes()
 
 		out, err := BuildBackwardBridges(ctx, m, facts, "agent/test", testLocalRepoID,
-			EffortHigh, BridgeDomain, 2.0, 2, testCfg, ScopeFilter{})
+			EffortHigh, BridgeDomain, 2.0, 2, testNeighborKinds, testCfg, ScopeFilter{})
 		require.NoError(t, err)
 		return out
 	}

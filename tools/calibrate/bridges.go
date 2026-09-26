@@ -40,6 +40,14 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 			kindStr, _ := f.GetString("kind")
 			resolution, _ := f.GetFloat64("resolution")
 			minCommunity, _ := f.GetInt("min-community")
+			// Same neighbour-kind list production clusters with (config
+			// [cluster_cache] neighbor_kinds, flag default from
+			// config.Defaults), validated by the same rule, so the report
+			// measures the partition the engine would build (knomit#308).
+			neighborKinds, _ := f.GetStringSlice("neighbor-kinds")
+			if err := config.ValidateNeighborKinds(neighborKinds); err != nil {
+				return fmt.Errorf("--neighbor-kinds: %w", err)
+			}
 
 			// Quality config: the Q-knob flag defaults are registered from
 			// config.Defaults().Discovery (see flag registration below), so
@@ -71,7 +79,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 			// nothing forced the population into the output. Folding a second
 			// population behind a flag on one function is how that recurs.
 			if kindStr == "motif" {
-				return runMotifReport(cmd, dbPath, branch, effortStr, resolution, minCommunity, cfg)
+				return runMotifReport(cmd, dbPath, branch, effortStr, resolution, minCommunity, neighborKinds, cfg)
 			}
 			kind := synthesize.BridgeKindFromString(kindStr)
 
@@ -90,7 +98,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 				return err
 			}
 
-			report, err := synthesize.BridgeComponentReport(ctx, idx, branch, localRepoID, kind, eff, resolution, minCommunity, cfg)
+			report, err := synthesize.BridgeComponentReport(ctx, idx, branch, localRepoID, kind, eff, resolution, minCommunity, neighborKinds, cfg)
 			if err != nil {
 				return fmt.Errorf("bridge component report: %w", err)
 			}
@@ -164,6 +172,8 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 	f.String("kind", "both", "bridge kind to enumerate (domain/entity/both/motif)")
 	f.Float64("resolution", 2.0, "Louvain resolution for clustering")
 	f.Int("min-community", 2, "minimum community size for clustering")
+	f.StringSlice("neighbor-kinds", config.Defaults().ClusterCache.NeighborKinds,
+		"fact kinds a clustering neighbour search may return (epistemic, pragmatic); mirrors [cluster_cache] neighbor_kinds")
 	// Q-knob overrides: register with config.Defaults().Discovery values as the
 	// cobra defaults so --help shows the real defaults and an unset flag yields
 	// the config default when read directly in RunE.
@@ -240,7 +250,7 @@ func sortedCopy(vs []float64) []float64 {
 // population, different pool, different engine. It states all three in its own
 // header rather than inheriting a sentence written about another axis.
 func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
-	resolution float64, minCommunity int, cfg synthesize.QualityConfig) error {
+	resolution float64, minCommunity int, neighborKinds []string, cfg synthesize.QualityConfig) error {
 	eff := synthesize.NormalizeEffort(synthesize.Effort(effortStr))
 	if err := eff.Validate(); err != nil {
 		return fmt.Errorf("--effort: %w", err)
@@ -265,7 +275,7 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 	}
 
 	rep, err := synthesize.MotifComponentReport(cmd.Context(), idx, svc.Motifs(),
-		svc.Abstraction(), branch, localRepoID, eff, resolution, minCommunity, cfg)
+		svc.Abstraction(), branch, localRepoID, eff, resolution, minCommunity, neighborKinds, cfg)
 	if err != nil {
 		return fmt.Errorf("motif component report: %w", err)
 	}

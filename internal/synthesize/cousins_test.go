@@ -132,7 +132,7 @@ func TestCousins_FenceKeepsANonSeedCousinOutOfTheSubgraph(t *testing.T) {
 	require.NotEmpty(t, seeds)
 
 	clusters, err := ScopedCluster(ctx, seeds, env.svc.Search(),
-		env.ri.ClusterResolution(), env.ri.ClusterMinCommunitySize(), func(ProgressEvent) {}, env.branch)
+		env.ri.ClusterResolution(), env.ri.ClusterMinCommunitySize(), env.ri.ClusterNeighborKinds(), func(ProgressEvent) {}, env.branch)
 	require.NoError(t, err)
 	for _, c := range clusters {
 		for _, f := range c {

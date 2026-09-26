@@ -200,6 +200,7 @@ func MotifComponentReport(
 	eff Effort,
 	resolution float64,
 	minCommunitySize int,
+	neighborKinds []string,
 	cfg QualityConfig,
 ) (MotifReport, error) {
 	rep := MotifReport{
@@ -231,7 +232,7 @@ func MotifComponentReport(
 		}
 	}
 
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, func(ProgressEvent) {}, branch)
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(ProgressEvent) {}, branch)
 	if err != nil {
 		return rep, err
 	}
