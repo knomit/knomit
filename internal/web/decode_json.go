@@ -86,7 +86,7 @@ func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes 
 // application/json.
 func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 	ct := r.Header.Get("Content-Type")
-	if mt, _, err := mime.ParseMediaType(ct); err == nil && mt == "application/json" {
+	if isJSONMediaType(ct) {
 		return true
 	}
 	got := "none"
@@ -96,6 +96,16 @@ func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 	hal.WriteProblem(w, http.StatusUnsupportedMediaType, "Unsupported Media Type",
 		"the request body must be sent with Content-Type: application/json; got "+got, r.URL.Path)
 	return false
+}
+
+// isJSONMediaType reports whether a Content-Type header value declares
+// application/json: parameters such as charset, and letter case, are
+// tolerated, and a +json type is not application/json. It is the ONE
+// predicate for "this request says it is JSON"; browserProof uses it too, so
+// the two gates cannot come to disagree about what counts.
+func isJSONMediaType(contentType string) bool {
+	mt, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mt == "application/json"
 }
 
 func decodeBodyInto(w http.ResponseWriter, r *http.Request, body io.Reader, v any, maxBytes int64) bool {
