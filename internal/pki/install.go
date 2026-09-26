@@ -189,17 +189,9 @@ func InstallBundle(dir, keyPath string, raw []byte, opts InstallOptions) (Identi
 	// does not load (or has no RootID) fails closed, always: reading it as
 	// "none" would let a caller that expects none install over it without
 	// anyone having seen what it was. Removing the file is the way out.
-	installed := RootInfo{}
-	switch cur, err := LoadRootCert(filepath.Join(dir, RootCertFile)); {
-	case errors.Is(err, os.ErrNotExist):
-	case err != nil:
-		return Identity{}, fmt.Errorf("the installed root certificate cannot be read, so the bundle cannot be compared with it (remove %s to install anyway): %w",
-			filepath.Join(dir, RootCertFile), err)
-	default:
-		if installed = rootInfo(cur); installed.Fingerprint == "" {
-			return Identity{}, fmt.Errorf("the installed root certificate has no fleet fingerprint (not Ed25519), so the bundle cannot be compared with it (remove %s to install anyway)",
-				filepath.Join(dir, RootCertFile))
-		}
+	installed, err := InstalledRoot(dir)
+	if err != nil {
+		return Identity{}, err
 	}
 	if installed.Fingerprint != opts.ExpectInstalledRoot {
 		return Identity{}, &RootDiffersError{Installed: installed, Bundle: rootInfo(root)}
@@ -268,6 +260,29 @@ func checkBundle(keyPath string, raw []byte) (Bundle, Identity, error) {
 		return Bundle{}, Identity{}, err
 	}
 	return b, id, nil
+}
+
+// InstalledRoot is the root installed in dir, as a caller reads it to show
+// the user and to pass as InstallOptions.ExpectInstalledRoot: the zero
+// RootInfo when root.crt is MISSING (nothing installed), an error naming the
+// file when it exists but does not load or is not Ed25519. A front-end must
+// refuse on that error before asking anything: reading an unreadable root
+// as "none" would show a first-install question that InstallBundle then
+// refuses (knomit#299 review).
+func InstalledRoot(dir string) (RootInfo, error) {
+	p := filepath.Join(dir, RootCertFile)
+	cur, err := LoadRootCert(p)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return RootInfo{}, nil
+	case err != nil:
+		return RootInfo{}, fmt.Errorf("the installed root certificate cannot be read, so the bundle cannot be compared with it (remove %s to install anyway): %w", p, err)
+	}
+	ri := rootInfo(cur)
+	if ri.Fingerprint == "" {
+		return RootInfo{}, fmt.Errorf("the installed root certificate has no fleet fingerprint (not Ed25519), so the bundle cannot be compared with it (remove %s to install anyway)", p)
+	}
+	return ri, nil
 }
 
 // BundlePreview is what a front-end shows before a first install or a move

@@ -15,10 +15,11 @@ import (
 // flock/LockFileEx code is pki's (pki.LockFile), shared with identity
 // install's lock rather than copied.
 func lockFile(ctx context.Context, f *os.File) error {
-	if err := pki.LockFile(ctx, f); err != nil {
+	err := pki.LockFile(ctx, f)
+	if err != nil && ctx.Err() != nil {
 		return fmt.Errorf("waiting for the credentials lock (another kb is refreshing): %w", err)
 	}
-	return nil
+	return err
 }
 
 func unlockFile(f *os.File) error { return pki.UnlockFile(f) }

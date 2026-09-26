@@ -242,12 +242,14 @@ func (n *NativeService) InstallBundle(ctx context.Context, raw, confirmFrom, con
 		return n.refused(err), nil
 	}
 	to := preview.Root.Fingerprint
-	// An installed root.crt that does not load reads as "" here; pki refuses
-	// it whatever is expected.
-	from := ""
-	if cur, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile)); err == nil {
-		from, _ = pki.RootID(cur)
+	// An installed root.crt that does not load is refused HERE, before any
+	// question: read as "none" it would be shown as a first install that pki
+	// then refuses after the user confirmed.
+	installed, err := pki.InstalledRoot(dir)
+	if err != nil {
+		return n.refused(err), nil
 	}
+	from := installed.Fingerprint
 	pending := InstallResult{InstalledRootFingerprint: from, BundleRootFingerprint: to, BundlePrincipal: preview.Principal}
 	confirmed := confirmFrom != "" || confirmTo != ""
 	switch {
@@ -261,13 +263,22 @@ func (n *NativeService) InstallBundle(ctx context.Context, raw, confirmFrom, con
 	}
 	id, err := pki.InstallBundle(dir, keyPath, []byte(raw), pki.InstallOptions{ExpectInstalledRoot: from})
 	if errors.Is(err, pki.ErrRootDiffers) {
-		// The installed root changed after the re-read above: whatever the
-		// user confirmed, it was not this.
+		// The installed root changed after the re-read above. After a
+		// confirmation, whatever the user confirmed was not this: stale. An
+		// unconfirmed call (a renewal) asked nobody, so it is asked afresh
+		// about the root now installed.
 		var rd *pki.RootDiffersError
 		if errors.As(err, &rd) {
 			pending.InstalledRootFingerprint = rd.Installed.Fingerprint
 		}
-		return n.unconfirmed(pending, classConfirmationStale), nil
+		switch {
+		case confirmed:
+			return n.unconfirmed(pending, classConfirmationStale), nil
+		case pending.InstalledRootFingerprint == "":
+			return n.unconfirmed(pending, classRootUnconfirmed), nil
+		default:
+			return n.unconfirmed(pending, classRootDiffers), nil
+		}
 	}
 	if err != nil {
 		return n.refused(err), nil

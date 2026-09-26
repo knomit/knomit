@@ -46,7 +46,9 @@ const installLockWait = 10 * time.Second
 // LockPath is the file InstallBundle locks for the pki dir dir: a SIBLING of
 // dir, "<dir>.lock", never a file inside it — so a refused install still
 // leaves dir exactly as it was (on a fresh home, absent). Only dir's parent
-// is created, 0700, when missing. The lock file is left in place: removing
+// is created, 0700, when missing. So dir's PARENT must be writable: a pki dir
+// made ahead of time inside a directory the installing user cannot write
+// (/etc/knomit/pki, say) now fails with "install lock <path>: ...". The lock file is left in place: removing
 // it would let a waiter lock an unlinked inode while a third process locks
 // a new one.
 func LockPath(dir string) string { return filepath.Clean(dir) + ".lock" }
@@ -55,17 +57,20 @@ func LockPath(dir string) string { return filepath.Clean(dir) + ".lock" }
 func lockInstall(dir string) (func(), error) {
 	p := LockPath(dir)
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("install lock %s: %w", p, err)
 	}
 	f, err := os.OpenFile(p, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("install lock %s (its directory must be writable): %w", p, err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), installLockWait)
 	defer cancel()
 	if err := LockFile(ctx, f); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("waiting for %s (another identity install is running): %w", p, err)
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("install lock %s: waited %s for another identity install to finish: %w", p, installLockWait, err)
+		}
+		return nil, fmt.Errorf("install lock %s: %w", p, err)
 	}
 	return func() {
 		_ = UnlockFile(f)

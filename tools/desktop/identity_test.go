@@ -391,6 +391,31 @@ func TestFleetIdentity_FirstInstallNeedsTheRootThatWasShown(t *testing.T) {
 	}
 }
 
+// An installed root.crt that does not load is refused BEFORE any question
+// (knomit#299 review): read as "no root" it would be shown as a first
+// install that pki then refuses after the user confirmed.
+func TestFleetIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
+	home, keyPath := fleetHome(t)
+	f := pkitest.New(t)
+	n := fleetService(t, home)
+	pkiDir := filepath.Join(home, "pki")
+	if res := installConfirmed(t, n, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath))); !res.Installed {
+		t.Fatalf("install: %+v", res)
+	}
+	if err := os.WriteFile(filepath.Join(pkiDir, pki.RootCertFile), []byte("garbled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := tree(t, pkiDir)
+	res, err := n.InstallBundle(fromSettings, bundle(t, f, f.Enroll(t, "laptop", pki.RoleInstance, keyPath)), "", "")
+	if err != nil || res.Installed || res.Class != classError || !strings.Contains(res.Message, pki.RootCertFile) ||
+		res.BundleRootFingerprint != "" {
+		t.Fatalf("unreadable root: %+v %v", res, err)
+	}
+	if !reflect.DeepEqual(before, tree(t, pkiDir)) {
+		t.Fatal("the refusal changed <home>/pki")
+	}
+}
+
 // Neither the raw bundle nor any part of it reaches the log, whatever the
 // outcome.
 func TestFleetIdentity_TheBundleIsNeverLogged(t *testing.T) {

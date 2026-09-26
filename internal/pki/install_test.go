@@ -512,3 +512,51 @@ func TestPreviewBundle_NamesRootAndPrincipalAfterTheKeyAndChainChecks(t *testing
 		}
 	}
 }
+
+// InstalledRoot is what a front-end reads before asking: nothing for a
+// missing root.crt, an error naming the file for one that does not load —
+// so the front-end refuses before showing a first-install question.
+func TestInstalledRoot_MissingIsNoneUnreadableIsAnError(t *testing.T) {
+	f := pkitest.New(t)
+	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	dir := filepath.Join(t.TempDir(), "pki")
+	if ri, err := pki.InstalledRoot(dir); err != nil || ri != (pki.RootInfo{}) {
+		t.Fatalf("fresh home: %+v %v", ri, err)
+	}
+	if _, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), pki.InstallOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if ri, err := pki.InstalledRoot(dir); err != nil || ri.Fingerprint != rootOf(t, f) {
+		t.Fatalf("installed: %+v %v", ri, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pki.RootCertFile), []byte("garbled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pki.InstalledRoot(dir); err == nil || !strings.Contains(err.Error(), filepath.Join(dir, pki.RootCertFile)) {
+		t.Fatalf("unreadable root.crt: %v", err)
+	}
+}
+
+// The lock beside <pki> needs <pki>'s parent to be writable. A pki dir made
+// ahead of time inside a parent the user cannot write fails with an error
+// that names the lock, not a bare PathError.
+func TestInstallBundle_UnwritableParentNamesTheLock(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("POSIX permission bits, not root")
+	}
+	f := pkitest.New(t)
+	m := f.Enroll(t, "laptop", pki.RoleInstance)
+	parent := filepath.Join(t.TempDir(), "etc-knomit")
+	dir := filepath.Join(parent, "pki")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o700) })
+	_, err := pki.InstallBundle(dir, m.KeyPath, bundleFor(t, f, m), pki.InstallOptions{})
+	if err == nil || !strings.Contains(err.Error(), "install lock "+pki.LockPath(dir)) {
+		t.Fatalf("err %v, want it to name the install lock", err)
+	}
+}

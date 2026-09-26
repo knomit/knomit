@@ -269,55 +269,73 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
         </div>
       </div>
 
-      {confirm && (
-        <div
-          role="group"
-          aria-label={confirm.from ? 'Replace the fleet root' : 'Confirm the fleet root'}
-          className="k-callout is-warn fleet-confirm"
-        >
-          {confirm.stale && <p className="fleet-warn">The fleet roots changed since you were asked. Check them again:</p>}
-          {confirm.from ? (
-            <p>
-              This bundle is from a <strong>different fleet</strong>. Installing it moves this instance to that fleet:
-              peers of the current fleet will refuse it.
-            </p>
-          ) : (
-            <p>
-              This instance is joining a fleet. Anyone who can write your clipboard or a file can hand you a bundle, so
-              first check the fleet root below against the fingerprint the fleet operator gave you directly.
-            </p>
-          )}
-          <dl className="fleet-roots">
-            {confirm.from && (
-              <>
-                <dt>Current root</dt>
-                <dd>
-                  <code>{confirm.from}</code>
-                </dd>
-              </>
+      {confirm && (() => {
+        // Another program installed the bundle's OWN root after the question
+        // was asked: nothing is being replaced, the bundle renews under it.
+        const same = confirm.from !== '' && confirm.from === confirm.to
+        const move = confirm.from !== '' && !same
+        return (
+          <div
+            role="group"
+            aria-label={move ? 'Replace the fleet root' : 'Confirm the fleet root'}
+            className="k-callout is-warn fleet-confirm"
+          >
+            {confirm.stale && !same && (
+              <p className="fleet-warn">The fleet roots changed since you were asked. Check them again:</p>
             )}
-            <dt>{confirm.from ? 'Bundle’s root' : 'Fleet root'}</dt>
-            <dd>
-              <code>{confirm.to}</code>
-            </dd>
-            <dt>This instance as</dt>
-            <dd>
-              <code>{confirm.principal}</code>
-            </dd>
-          </dl>
-          {confirm.from && (
-            <p className="fleet-note">Check the bundle’s root against the fingerprint the fleet operator gave you.</p>
-          )}
-          <div className="fleet-confirm-actions">
-            <button type="button" className="k-btn" onClick={() => setConfirm(null)} disabled={busy}>
-              {confirm.from ? 'Keep the current fleet' : 'Cancel'}
-            </button>
-            <button type="button" className="k-btn is-danger" onClick={() => install(confirm.from, confirm.to)} disabled={busy}>
-              {confirm.from ? 'Replace fleet root' : 'Join this fleet'}
-            </button>
+            {same ? (
+              <p>
+                Since you were asked, another program installed this bundle’s fleet root on this instance. Installing the
+                bundle now only renews this instance’s certificate under that root.
+              </p>
+            ) : move ? (
+              <p>
+                This bundle is from a <strong>different fleet</strong>. Installing it moves this instance to that fleet:
+                peers of the current fleet will refuse it.
+              </p>
+            ) : (
+              <p>
+                This instance is joining a fleet. Anyone who can write your clipboard or a file can hand you a bundle, so
+                first check the fleet root below against the fingerprint the fleet operator gave you directly.
+              </p>
+            )}
+            <dl className="fleet-roots">
+              {move && (
+                <>
+                  <dt>Current root</dt>
+                  <dd>
+                    <code>{confirm.from}</code>
+                  </dd>
+                </>
+              )}
+              <dt>{move ? 'Bundle’s root' : 'Fleet root'}</dt>
+              <dd>
+                <code>{confirm.to}</code>
+              </dd>
+              <dt>This instance as</dt>
+              <dd>
+                <code>{confirm.principal}</code>
+              </dd>
+            </dl>
+            {confirm.from && (
+              <p className="fleet-note">Check the fleet root against the fingerprint the fleet operator gave you.</p>
+            )}
+            <div className="fleet-confirm-actions">
+              <button type="button" className="k-btn" onClick={() => setConfirm(null)} disabled={busy}>
+                {move ? 'Keep the current fleet' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                className={move ? 'k-btn is-danger' : 'k-btn'}
+                onClick={() => install(confirm.from, confirm.to)}
+                disabled={busy}
+              >
+                {move ? 'Replace fleet root' : same ? 'Install' : 'Join this fleet'}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </section>
   )
 }

@@ -278,7 +278,8 @@ func TestIdentity_FirstInstallConfirmsTheRoot(t *testing.T) {
 	})
 	t.Run("bundle on stdin", func(t *testing.T) {
 		raw, _ := os.ReadFile(bundle)
-		if _, err := run(t, string(raw), "identity", "install"); err == nil || !strings.Contains(err.Error(), "--root") {
+		if _, err := run(t, string(raw), "identity", "install"); err == nil || !strings.Contains(err.Error(), "--root") ||
+			!strings.Contains(err.Error(), "stdin is the bundle") || !strings.Contains(err.Error(), "--bundle <file>") {
 			t.Fatalf("installed an unconfirmed root from stdin: %v", err)
 		}
 		notInstalled(t)
@@ -351,6 +352,28 @@ func TestIdentity_IsTerminal(t *testing.T) {
 	defer f.Close()
 	if isTerminal(strings.NewReader("y\n")) || isTerminal(f) {
 		t.Fatal("a reader or a regular file counted as a terminal")
+	}
+}
+
+// An installed root.crt that does not load is refused before the bundle's
+// root is shown or asked about, naming the file.
+func TestIdentity_UnreadableRootIsRefusedBeforeAsking(t *testing.T) {
+	dir, passFile := master(t)
+	home, _, pubPath := instanceHome(t, "laptop")
+	useHome(t, home)
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes"); err != nil {
+		t.Fatal(err)
+	}
+	rootFile := filepath.Join(home, "pki", pki.RootCertFile)
+	if err := os.WriteFile(rootFile, []byte("garbled"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath), "--yes")
+	if err == nil || !strings.Contains(err.Error(), rootFile) {
+		t.Fatalf("installed over an unreadable root.crt: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "bundle fleet root:") {
+		t.Fatalf("the root was shown before the refusal:\n%s", out)
 	}
 }
 

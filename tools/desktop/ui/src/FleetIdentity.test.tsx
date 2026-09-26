@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { FleetIdentitySection } from './FleetIdentity.tsx'
 import type { FleetIdentity, InstallResult } from './fleet.ts'
@@ -310,5 +310,33 @@ describe('FleetIdentitySection first-install confirmation (knomit#299)', () => {
     const confirm = screen.getByRole('group', { name: /replace the fleet root/i })
     expect(confirm).toHaveTextContent(ROOT_A)
     expect(confirm).toHaveTextContent(ROOT_B)
+  })
+
+  // Another program installed the bundle's OWN root between the question and
+  // the answer: nothing is replaced, so the copy must not say "different
+  // fleet" over two identical roots, nor "changed since you were asked".
+  it('a stale answer whose two roots are the same is offered as a renewal, not a replace', async () => {
+    const onInstall = vi
+      .fn()
+      .mockResolvedValueOnce(unconfirmed)
+      .mockResolvedValueOnce(
+        refused('confirmation_stale', { installedRootFingerprint: ROOT_B, bundleRootFingerprint: ROOT_B, bundlePrincipal: PRINCIPAL }),
+      )
+      .mockResolvedValueOnce(ok())
+    renderSection(notEnrolled, { onInstall })
+    await pasteBundle()
+    fireEvent.click(screen.getByRole('button', { name: /^install$/i }))
+    await screen.findByRole('group', { name: /confirm the fleet root/i })
+    fireEvent.click(screen.getByRole('button', { name: /join this fleet/i }))
+
+    const confirm = await screen.findByText(/another program installed/i)
+    expect(confirm).toBeInTheDocument()
+    expect(screen.queryByText(/different fleet/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/changed since/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /replace fleet root/i })).not.toBeInTheDocument()
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('group', { name: /confirm the fleet root/i })).getByRole('button', { name: /^install$/i }))
+    })
+    expect(onInstall).toHaveBeenLastCalledWith(BUNDLE, ROOT_B, ROOT_B)
   })
 })

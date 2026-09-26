@@ -230,6 +230,7 @@ needs no confirmation.`,
 			}
 			// Stdin can answer a prompt only when it is a terminal and is not
 			// already the bundle.
+			opts.bundleOnStdin = fromStdin
 			if !fromStdin && isTerminal(cmd.InOrStdin()) {
 				opts.prompt = cmd.InOrStdin()
 			}
@@ -249,6 +250,9 @@ type installOpts struct {
 	root        string    // --root: the out-of-band fingerprint
 	yes         bool      // --yes
 	prompt      io.Reader // the terminal to ask on; nil when there is none
+	// bundleOnStdin: the bundle was read from stdin, so stdin cannot also
+	// answer a prompt.
+	bundleOnStdin bool
 }
 
 // isTerminal reports whether r is a character device (a terminal). A pipe,
@@ -278,15 +282,11 @@ func installBundle(out io.Writer, cfg config.Config, raw []byte, opts installOpt
 	if err != nil {
 		return err
 	}
-	st, err := pki.Status(dir, keyPath)
+	// An installed root.crt that does not load is refused HERE, before the
+	// root is shown or asked about.
+	installed, err := pki.InstalledRoot(dir)
 	if err != nil {
 		return err
-	}
-	// An installed root.crt that does not load reads as none here; pki
-	// refuses it whatever is expected.
-	installed := pki.RootInfo{}
-	if st.Root != nil {
-		installed = *st.Root
 	}
 	switch {
 	case installed.Fingerprint == preview.Root.Fingerprint:
@@ -353,8 +353,12 @@ func confirmRoot(out io.Writer, p pki.BundlePreview, installed pki.RootInfo, opt
 		}
 		return errors.New("the fleet root was not confirmed; nothing was installed")
 	}
-	return fmt.Errorf("the bundle's fleet root %s is not confirmed: compare it with the fingerprint the fleet operator gave you, then rerun with --root %s (or --yes to skip the check); nothing was installed",
-		p.Root.Fingerprint, p.Root.Fingerprint)
+	why := ""
+	if opts.bundleOnStdin {
+		why = " (no prompt: stdin is the bundle; pass it as --bundle <file> on a terminal to be asked)"
+	}
+	return fmt.Errorf("the bundle's fleet root %s is not confirmed%s: compare it with the fingerprint the fleet operator gave you, then rerun with --root %s (or --yes to skip the check); nothing was installed",
+		p.Root.Fingerprint, why, p.Root.Fingerprint)
 }
 
 func identityRevokeCmd() *cobra.Command {
