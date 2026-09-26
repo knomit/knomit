@@ -203,23 +203,40 @@ func submitConcurrently(t *testing.T, r *Reviewer, sessionID, response string, n
 // prove is carried entirely by the fact count, so the per-caller error
 // assertion only ever added flakiness.
 //
-// Blanket-swallowing all errors would hide real regressions, so anything other
-// than the completed-session refusal still fails. hypothesize_engine_test.go's
-// TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce makes the same
-// tradeoff.
+// Blanket-swallowing all errors would hide real regressions, so anything that
+// does not match benignLoserRefusal still fails. Every concurrent-submission
+// test in this package goes through this helper — including
+// hypothesize_engine_test.go's
+// TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce — so a new loser
+// refusal is added to the pattern once, not to each test's private list.
 func requireOnlyBenignErrors(t *testing.T, errs []error) {
 	t.Helper()
 	for i, err := range errs {
 		if err == nil {
 			continue
 		}
-		// A loser either arrives after the winner completed the session, or
-		// while the winner is still applying the item: both are the item
-		// having been handled by someone else.
-		require.Regexpf(t, `is completed, not active|is being applied by another caller`, err.Error(),
+		require.Regexpf(t, benignLoserRefusal, err.Error(),
 			"caller %d failed for an unexpected reason", i)
 	}
 }
+
+// benignLoserRefusal matches the refusals a caller that lost a race for the
+// same work item can see. Each is the item having been handled by someone
+// else, never a failure of the engine:
+//
+//   - "is completed, not active": the loser arrived after the winner drove
+//     the session to completed.
+//   - "is being applied by another caller": the loser arrived while the
+//     winner still held the item's applying claim (pipeline.go, the claim
+//     refusal in ContinueSession).
+//   - "is moving to its next phase for another caller": the `advancing`
+//     guard (errAdvancing, pipeline.go), raised when the loser re-reads the
+//     session and finds Advancing set. That flag is set by the winner's phase
+//     CAS (store.AdvancePipelineSessionPhase, pipeline_index.go) and cleared
+//     by FinishPipelineSessionAdvance once the phase hook returns, so a loser
+//     sees it only in that window — narrow enough that the tests passed for
+//     a long time without listing it (knomit#305).
+const benignLoserRefusal = `is completed, not active|is being applied by another caller|is moving to its next phase for another caller`
 
 // insertManualDistillItem queues a single distill work item over two synthetic
 // input paths and returns its id.
