@@ -113,7 +113,7 @@ func TestOriginURL_PaddedURLReachesTheSameRemotePath(t *testing.T) {
 
 			post := func(url string) int {
 				rec := httptest.NewRecorder()
-				r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, endpoint,
+				r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, endpoint,
 					strings.NewReader(`{"url":"`+url+`"}`))))
 				return rec.Code
 			}
@@ -170,7 +170,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 			clean, paths, _ := recordingRemote(t)
 			s := &Server{Manager: newRealManager(t)}
 			rec := httptest.NewRecorder()
-			s.NewAPIRouter().ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+			s.NewAPIRouter().ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
 				strings.NewReader(`{"name":"`+name+`","mode":"clone","origin":{"url":"`+pad(clean)+`"}}`))))
 			return paths()
 		}
@@ -248,7 +248,7 @@ func TestOriginURL_EveryEntryPointTrims(t *testing.T) {
 				r := s.NewAPIRouter()
 
 				rec := httptest.NewRecorder()
-				r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/origin-sessions",
+				r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos/alpha/origin-sessions",
 					strings.NewReader(`{"url":"`+pad(clean)+`","auth_method":"none"}`))))
 				require.Equal(t, http.StatusOK, rec.Code,
 					"a URL padded with %s was REJECTED before a session opened (%s) — "+
@@ -283,7 +283,7 @@ func TestOriginURL_WhitespaceOnlyURLIsRejectedAsMissing(t *testing.T) {
 			s := &Server{Manager: newRealManager(t)}
 			r := s.NewAPIRouter()
 			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, endpoint,
+			r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, endpoint,
 				strings.NewReader(`{"url":"  \t "}`))))
 			require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 			require.Contains(t, rec.Body.String(), "url is required")

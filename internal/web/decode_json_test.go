@@ -179,3 +179,13 @@ func TestDecodeOptionalJSON_NilBody(t *testing.T) {
 		t.Fatal("a nil body was refused")
 	}
 }
+
+// newJSONRequest is httptest.NewRequest with the Content-Type every JSON API
+// body is sent with. Fixtures that post a body to a handler reading it with
+// decodeJSON build their request here; a test about the Content-Type rule
+// itself sets or deletes the header afterwards.
+func newJSONRequest(method, target string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(method, target, body)
+	r.Header.Set("Content-Type", "application/json")
+	return r
+}

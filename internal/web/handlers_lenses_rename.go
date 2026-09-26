@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -106,10 +105,8 @@ func handleHALLensRename(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		oldName := chi.URLParam(r, "lens")
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxRenameBodyBytes)
 		var req renameLensRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, maxRenameBodyBytes) {
 			return
 		}
 		if req.Name == "" {

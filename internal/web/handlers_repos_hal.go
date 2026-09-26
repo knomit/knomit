@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -270,16 +269,8 @@ func handleHALRepoPatch(b hal.URLBuilder) http.HandlerFunc {
 		name := chi.URLParam(r, "repo")
 		ri := repos.RepoFromContext(r.Context())
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxRepoPatchBodyBytes)
 		var req patchRepoRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			var tooLarge *http.MaxBytesError
-			if errors.As(err, &tooLarge) {
-				hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Request body too large",
-					fmt.Sprintf("the request body exceeds %d bytes", maxRepoPatchBodyBytes), r.URL.Path)
-				return
-			}
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, maxRepoPatchBodyBytes) {
 			return
 		}
 		// Nothing to do — an empty patch is a successful no-op, not an error.

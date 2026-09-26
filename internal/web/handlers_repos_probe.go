@@ -25,8 +25,7 @@ type probeOriginRequest struct {
 func handleReposProbeOrigin(m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req probeOriginRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 		// Before the emptiness check, so a url of only spaces is "required",

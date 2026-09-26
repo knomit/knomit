@@ -166,7 +166,7 @@ func postLens(t *testing.T, m *repos.Manager, r http.Handler, body string) *http
 func postLensRaw(t *testing.T, r http.Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/lenses", bytes.NewBufferString(body)))
+	req := fromLoopback(newJSONRequest(http.MethodPost, "/lenses", bytes.NewBufferString(body)))
 	r.ServeHTTP(rec, req)
 	return rec
 }

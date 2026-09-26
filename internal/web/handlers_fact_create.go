@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -52,9 +51,7 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		}
 
 		var req factCreateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
-				err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 		if req.Title == "" {
