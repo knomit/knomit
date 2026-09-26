@@ -42,6 +42,10 @@ go test -json "$@" | tee "$log" |
 # command, which hides "go test failed" behind a healthy jq.
 rc=${PIPESTATUS[0]}
 
+# A green step names no test, so the skips are the one test-level fact worth a
+# line each: they are what a platform-only suite quietly did not run.
+jq -r 'select(.Action == "skip" and .Test != null) | "skip\t\(.Package)\t\(.Test)"' "$log"
+
 if [ "$rc" -ne 0 ]; then
 	# tr: jq built for Windows ends its lines in CRLF, and a CR inside $pkg
 	# would make the --arg match nothing. Seen on this exact loop.

@@ -11,12 +11,16 @@ import (
 )
 
 // sandboxHome points StateDir (and thus exportsDir) at a temp dir so the test
-// never touches the real user home.
+// never touches the real state dir. Each OS reads a different variable, and
+// one left unset writes into the real user's directory: Windows runs wrote
+// note.txt and pwned.txt into the real %LOCALAPPDATA%\knomit\exports until
+// LOCALAPPDATA was set here too.
 func sandboxHome(t *testing.T) {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)                                 // darwin StateDir
 	t.Setenv("XDG_STATE_HOME", filepath.Join(tmp, "xdg")) // linux StateDir
+	t.Setenv("LOCALAPPDATA", tmp)                         // windows StateDir
 }
 
 func TestWriteFile_WritesIntoExportsDir(t *testing.T) {
