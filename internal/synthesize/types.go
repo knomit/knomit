@@ -101,6 +101,17 @@ type factForLLM struct {
 	Confidence float64  `json:"confidence"`
 	Sources    int      `json:"sources"`
 	Origin     string   `json:"origin,omitempty"`
+	// Kind is the fact's kind as the index or the parsed fact carries it
+	// ("epistemic" / "pragmatic"). It exists for dedupCluster's cross-kind
+	// guard (knomit#308): that guard fails CLOSED on "", so every projection
+	// site must fill it — a site that forgets makes its facts unmergeable,
+	// which is safe, rather than mergeable with anything, which is not.
+	// Never normalise "" to epistemic at a use site: that would silently
+	// re-admit a pragmatic fact whose kind a projection dropped.
+	//
+	// json:"-" for the same reason as LineageRefs: judges are not shown it, so
+	// no prompt, golden or paging byte moves.
+	Kind string `json:"-"`
 	// LineageRefs holds this fact's refs REDUCED TO THE LOCAL FACT PATHS THEY
 	// NAME, canonicalized — not the raw ref strings. It exists for the one-hop
 	// lineage exclusion in bridge candidate scoring (#125), which needs to ask

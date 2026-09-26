@@ -63,9 +63,9 @@ func TestDedupCluster_MergeRecomputesEvidenceWeightFromPooledRefs(t *testing.T) 
 	weightedDedupFact(t, env, loserPath, "Widget fails closed again", "another recording", 0.5, 3, 0.15)
 
 	cluster := []factForLLM{
-		{File: winnerPath, Title: "Widget fails closed", Body: "one recording",
+		{File: winnerPath, Kind: "epistemic", Title: "Widget fails closed", Body: "one recording",
 			Type: "observation", Confidence: 0.9, Sources: 2},
-		{File: loserPath, Title: "Widget fails closed again", Body: "another recording",
+		{File: loserPath, Kind: "epistemic", Title: "Widget fails closed again", Body: "another recording",
 			Type: "observation", Confidence: 0.5, Sources: 3},
 	}
 
