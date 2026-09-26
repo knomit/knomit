@@ -212,3 +212,75 @@ func TestGate_CachedHistoryAgreesWithAFreshFold(t *testing.T) {
 	require.Equal(t, fresh.NewAnchor, g.anchor(), "cached and fresh folds must agree on the anchor")
 	require.Equal(t, refusedSet(fresh), refusedSet(foldResult{Refused: res.Main.Verify.Refused}))
 }
+
+// TestGate_SteadyTickChecksOnlyTheNewCommits: proposal test 4's second half.
+// History below the anchor is never re-walked for verification.
+func TestGate_SteadyTickChecksOnlyTheNewCommits(t *testing.T) {
+	g := newGateFixture(t)
+	files := with(g.baseFiles, g.ontPath, g.ont(VerifyEnforce, g.a, g.b))
+	e := g.commit(files, g.op, g.init)
+	c1 := g.commit(with(files, "kb/1.md", "1"), g.a, e)
+	g.setOrigin(c1)
+	g.reconcile()
+	c2 := g.commit(with(files, "kb/1.md", "1", "kb/2.md", "2"), g.b, c1)
+	c3 := g.commit(with(files, "kb/1.md", "1", "kb/2.md", "2", "kb/3.md", "3"), g.a, c2)
+	g.setOrigin(c3)
+	res := g.reconcile()
+	require.NotNil(t, res.Main.Verify)
+	require.Equal(t, 2, res.Main.Verify.Checks, "exactly the two new commits are verified")
+	require.Equal(t, c3.Hash, g.anchor())
+}
+
+// TestGate_UpstreamNamedLikeAnAgentBranch: proposal test 5. No exemption by
+// name: an upstream named agent/<peer> is verified exactly like main.
+func TestGate_UpstreamNamedLikeAnAgentBranch(t *testing.T) {
+	g := newGateFixture(t)
+	const up = "agent/peer-12345678"
+	require.NoError(t, g.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(up), g.init.Hash)))
+	_, good, _, stranger := g.history(VerifyEnforce)
+	require.NoError(t, g.svc.rh.gits.SetReference(
+		plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", up), stranger.Hash)))
+	res, err := g.svc.Remote().(*remoteIndex).reconcileNow(context.Background(), gateAgent, up)
+	require.NoError(t, err)
+	require.True(t, res.Main.Verify.Blocking(), "an agent-named upstream gets no exemption")
+	require.Equal(t, good.Hash, mustHeadHash(t, g.svc, up))
+}
+
+// TestGate_CleanLogAdvanceMovesTheAnchor: proposal test 9's second half.
+func TestGate_CleanLogAdvanceMovesTheAnchor(t *testing.T) {
+	g := newGateFixture(t)
+	files := with(g.baseFiles, g.ontPath, g.ont(VerifyLog, g.a))
+	e := g.commit(files, g.op, g.init)
+	c := g.commit(with(files, "kb/c.md", "c"), g.a, e)
+	g.setOrigin(c)
+	res := g.reconcile()
+	require.Empty(t, res.Main.Verify.Refused)
+	require.Equal(t, c.Hash, g.anchor(), "a clean advance moves the anchor to the tip")
+}
+
+// TestGate_StrangerCannotStallAnOffRepo: proposal test 17 / V3-6. An unsigned
+// "enforce" on an off repository is ignored: no stall, the upstream moves.
+func TestGate_StrangerCannotStallAnOffRepo(t *testing.T) {
+	g := newGateFixture(t)
+	files := with(g.baseFiles, g.ontPath, g.ont(VerifyEnforce, g.stranger))
+	evil := g.commit(files, nil, g.init)
+	after := g.commit(with(files, "kb/x.md", "x"), nil, evil)
+	g.setOrigin(after)
+	res := g.reconcile()
+	require.False(t, res.Main.Verify.Blocking())
+	require.Equal(t, after.Hash, mustHeadHash(t, g.svc, "main"), "an off repo keeps syncing")
+	require.Equal(t, plumbing.ZeroHash, g.anchor())
+	require.Len(t, res.Main.Verify.Reported, 1, "the rejected enable is reported")
+}
+
+// TestGate_AdmittedAgentCannotEnable: proposal test 22. An enable signed by a
+// key that is not the operator's (even one it lists) is ignored.
+func TestGate_AdmittedAgentCannotEnable(t *testing.T) {
+	g := newGateFixture(t)
+	files := with(g.baseFiles, g.ontPath, g.ont(VerifyEnforce, g.a))
+	e := g.commit(files, g.a, g.init)
+	g.setOrigin(e)
+	res := g.reconcile()
+	require.Equal(t, VerifyOff, res.Main.Verify.Mode, "only the operator may enable")
+	require.Equal(t, plumbing.ZeroHash, g.anchor())
+}

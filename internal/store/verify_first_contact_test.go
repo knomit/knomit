@@ -228,3 +228,22 @@ func TestNewStaticRoot(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, strings.Contains(r.Fingerprint, " "))
 }
+
+// TestFirstContact_CloneFrom: proposal test 11's store half. The origin
+// wizard's CloneFrom places the cloned branch at the verified anchor (the
+// anchor SwapStore then installs with the DB), the same anchor a root fold
+// computes.
+func TestFirstContact_CloneFrom(t *testing.T) {
+	o := newOriginFixture(t)
+	_, good, _, _ := o.stalledHistory()
+	require.NoError(t, o.repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, plumbing.NewBranchReferenceName("main"))))
+	svc, err := Open(filepath.Join(t.TempDir(), "wiz.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+	svc.SetRootOfTrust(o.root)
+	require.NoError(t, svc.CloneFrom(fileuri.New(o.bare), nil, nil))
+	require.Equal(t, good.Hash, mustHeadHash(t, svc, "main"))
+	ref, err := svc.rh.gits.Reference(verifiedRefName("main"))
+	require.NoError(t, err)
+	require.Equal(t, good.Hash, ref.Hash())
+}
