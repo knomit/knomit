@@ -223,38 +223,40 @@ jobs:
       # runtime surprise on the one platform nobody's compiler was checking.
       # Same argument as the Windows leg itself (see the header).
       #
-      # COMPILE, VET, AND THE ONE WINDOWS-ONLY TEST. This leg already costs
-      # ~30 minutes, and the rest of the desktop tests run on macOS in `desktop`.
-      # It rides this job because the CGo toolchain, libtokenizers.a and the ORT
-      # dir are already set up above by ./.github/actions/native-toolchain.
-      # `-o NUL` is Windows' /dev/null, mirroring the macOS job's `-o /dev/null`.
+      # COMPILE, VET, AND THE WHOLE SUITE. Since knomit#264 this step runs every
+      # test in the package rather than a -run pattern. The suite was run by
+      # hand on a Windows box before widening: 165 tests compile on Windows, 136
+      # of them had never run in CI on Windows, and all that do not skip pass.
+      # The test binary itself takes ~10 seconds, so the cost is still the
+      # compile, which this step was already paying. It rides this job because
+      # the CGo toolchain, libtokenizers.a and the ORT dir are already set up
+      # above by ./.github/actions/native-toolchain. `-o NUL` is Windows'
+      # /dev/null, mirroring the macOS job's `-o /dev/null`.
       #
-      # The test step is scoped by `-run TestWritable` deliberately. Those are
-      # the console_windows_test.go guards: hermetic, Windows-only, and
-      # compiled on no other platform — so this job is the only place they can
-      # ever run, and before this step they were compiled but never executed.
-      # Execution is well under a second (measured); the cost is the compile,
-      # which this step was already paying.
-      # The REST of the desktop suite has never run on Windows (it is exercised
-      # on macOS in `desktop`), so widening the pattern would add an unvetted
-      # gate to a 30-minute job rather than free coverage. Widen it only after
-      # making that suite pass here on purpose.
+      # Nothing in the package opens a window or a tray icon, so the runner
+      # needs no display. The symlink-gated tests in bundled_test.go run here
+      # because the runner is an administrator; on an unelevated box without
+      # Developer Mode they SKIP rather than fail, so a green run there covers
+      # less than a green run here. go-test-capture.sh prints every skipped test
+      # by name, so the step log shows which ones did.
+      # TestApplySettingsFilePermissions skips on Windows by design, which
+      # leaves the Windows ACL path of the settings file untested (knomit#301).
       #
-      # TestBootServer_ was widened to deliberately (knomit#245). Since #248 the
-      # desktop opens cfg.Socket itself, and on Windows that is now a NAMED
-      # PIPE -- so boot_pipe_windows_test.go is the only coverage there is of
-      # the listener the normal Windows install actually serves, and it is
-      # compiled on no other platform. Made to pass here first, as the
-      # paragraph above asks; measured at 0.03s for the three pipe tests.
-      # TestFleetIdentity_ (knomit#256): the Settings enrolment bindings write
-      # <home>/pki and knomit.toml, portable code whose rename-over-existing
-      # and paths are exactly what differs on Windows.
-      - name: Desktop app compiles on Windows (-tags desktop)
+      # The pipe tests (boot_pipe_windows_test.go, the only coverage of the
+      # named pipe a normal Windows install serves since knomit#248) and the
+      # console guards (console_windows_test.go) compile on no other platform,
+      # so this step is still the only place anywhere that executes them. The
+      # fleet-identity tests (TestFleetIdentity_, knomit#256), whose Settings
+      # enrolment bindings write <home>/pki and knomit.toml with the rename-
+      # over-existing and paths that differ on Windows, used to be named in a
+      # -run pattern here; the whole-suite run now covers them like everything
+      # else.
+      - name: Desktop app builds, vets and tests on Windows (-tags desktop)
         if: matrix.os == 'windows-2025'
         run: |
           CGO_ENABLED=1 go build -tags desktop -o NUL ./tools/desktop
           CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
-          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh desktop -tags desktop -run 'TestWritable|TestBootServer_|TestFleetIdentity_' -count=1 ./tools/desktop/
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh desktop -tags desktop -count=1 ./tools/desktop/
 
       # internal/config owns the data-root resolution, and it is per-OS code
       # whose branches only the matching runner reaches: the Windows
