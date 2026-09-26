@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -303,4 +304,94 @@ func TestExplain_MarksExpired(t *testing.T) {
 	require.NotEmpty(t, out.Facts)
 	require.True(t, out.Facts[0].Expired)
 	require.NotEmpty(t, out.Facts[0].Expires)
+}
+
+// pinMCPClock fixes this package's clock for one test.
+func pinMCPClock(t *testing.T, at time.Time) {
+	t.Helper()
+	prev := timeNow
+	timeNow = func() time.Time { return at }
+	t.Cleanup(func() { timeNow = prev })
+}
+
+// TestQuery_FirstPageFilterAndMarkerShareOneClock pins the one-clock contract
+// on the FIRST page (served from search results, not from a snapshot) at the
+// boundary: expires == now is both selected by expired=true AND marked; one
+// second earlier it is neither. A marker or filter reading any other clock —
+// time.Now(), or q.Now skewed — fails one of the two halves.
+func TestQuery_FirstPageFilterAndMarkerShareOneClock(t *testing.T) {
+	_, ctx, emb := newPrinciplesTestRepo(t)
+	at := time.Date(2031, 5, 4, 3, 2, 1, 0, time.UTC)
+	req := expiresLearnReq("Edge claim", "Due exactly at the pinned clock.", "hypothesis", 0.6, at.Format(time.RFC3339))
+	req.Params.Arguments.(map[string]any)["facts"].([]any)[0].(map[string]any)["category"] = "dated/edge"
+	res, err := LearnHandler(emb)(ctx, req)
+	require.NoError(t, err)
+	require.False(t, res.IsError, resultText(t, res))
+	path := mergedFactPath(t, res)
+
+	pinMCPClock(t, at)
+	r, _ := queryFacts(t, ctx, map[string]any{"path": "kb/decisions/dated/edge/", "expired": true})
+	require.Nil(t, r.Cursor, "fixture: one page, served from search results")
+	got := filesOf(r)
+	require.Contains(t, got, path, "at expires == now the filter selects it")
+	require.True(t, got[path].Expired, "and the marker, from the same clock, agrees")
+
+	pinMCPClock(t, at.Add(-time.Second))
+	r, _ = queryFacts(t, ctx, map[string]any{"path": "kb/decisions/dated/edge/", "expired": true})
+	require.Empty(t, r.Facts, "one second before, the filter excludes it")
+	r, _ = queryFacts(t, ctx, map[string]any{"path": "kb/decisions/dated/edge/"})
+	require.Contains(t, filesOf(r), path)
+	require.False(t, filesOf(r)[path].Expired, "and the unfiltered row is not marked")
+}
+
+// TestExplain_SummaryNodesMarkExpired: an expired fact cited by the root shows
+// up as a SUMMARY node, and the marker must be on it too.
+func TestExplain_SummaryNodesMarkExpired(t *testing.T) {
+	_, ctx, emb := newPrinciplesTestRepo(t)
+	at := time.Date(2031, 5, 4, 3, 2, 1, 0, time.UTC)
+	cited := expiresLearnReq("Cited prediction", "It was due.", "hypothesis", 0.6, at.Add(-time.Hour).Format(time.RFC3339))
+	cited.Params.Arguments.(map[string]any)["facts"].([]any)[0].(map[string]any)["category"] = "dated/cited"
+	res, err := LearnHandler(emb)(ctx, cited)
+	require.NoError(t, err)
+	require.False(t, res.IsError, resultText(t, res))
+	citedPath := mergedFactPath(t, res)
+
+	root := expiresLearnReq("Root claim", "Rests on the prediction.", "observation", 0.8, "")
+	item := root.Params.Arguments.(map[string]any)["facts"].([]any)[0].(map[string]any)
+	item["category"] = "dated/root"
+	item["refs"] = []any{citedPath}
+	res, err = LearnHandler(emb)(ctx, root)
+	require.NoError(t, err)
+	require.False(t, res.IsError, resultText(t, res))
+	rootPath := mergedFactPath(t, res)
+
+	pinMCPClock(t, at)
+	var summary *explainFactEntry
+	args := map[string]any{"file": rootPath}
+	for i := 0; i < 10 && summary == nil; i++ {
+		var req mcpgo.CallToolRequest
+		req.Params.Arguments = args
+		res, err := ExplainHandler()(ctx, req)
+		require.NoError(t, err)
+		require.False(t, res.IsError, resultText(t, res))
+		var out struct {
+			Cursor  string             `json:"cursor"`
+			Facts   []explainFactEntry `json:"facts"`
+			HasMore bool               `json:"has_more"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &out))
+		for i := range out.Facts {
+			// Summary paths are wire paths; for the write repo that is the bare path.
+			if out.Facts[i].Summary && strings.HasSuffix(out.Facts[i].Path, citedPath) {
+				summary = &out.Facts[i]
+			}
+		}
+		if !out.HasMore {
+			break
+		}
+		args = map[string]any{"file": rootPath, "cursor": out.Cursor}
+	}
+	require.NotNil(t, summary, "fixture: the cited fact must appear as a summary node")
+	require.True(t, summary.Expired, "the summary node carries the marker")
+	require.Equal(t, at.Add(-time.Hour).Format(time.RFC3339), summary.Expires)
 }

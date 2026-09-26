@@ -463,7 +463,7 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 	return store.SearchOptions{
 		// ONE clock per query: the expiry filters and every page's `expired`
 		// marker are computed from this instant (see pagedRowState.AsOf).
-		Now:            time.Now(),
+		Now:            timeNow(),
 		Expired:        expired,
 		ExpiresBefore:  before,
 		ExpiresAfter:   after,
@@ -513,13 +513,21 @@ const (
 	expiredParamDescription = `true: only facts whose expires is at or before now. false: only facts NOT expired — ` +
 		`expired=false INCLUDES facts with no expires (absent means never). Omit for no expiry filter. ` +
 		`Nothing is ever hidden by default: expired facts appear in every query, marked "expired": true. ` +
-		`"now" is the server's clock, fixed once per query (all pages of a cursor use the same instant).`
+		`"now" is the server's clock, fixed once per query (all pages of a cursor use the same instant). ` +
+		`Combined with text, the filter applies after the semantic nearest-neighbour window, so it can return ` +
+		`fewer matches than exist; without text the result is exact.`
 	expiresBeforeParamDescription = `RFC 3339 timestamp: only facts whose expires is strictly before it. ` +
 		`expires_before alone EXCLUDES facts with no expires (absent means never, so they are never before anything). ` +
 		`"Expiring within a window" is expires_after=<now> plus expires_before=<now + window>.`
 	expiresAfterParamDescription = `RFC 3339 timestamp: only facts whose expires is strictly after it. ` +
 		`Like expires_before, it EXCLUDES facts with no expires.`
 )
+
+// timeNow is this package's clock for everything expiry-related: the query's
+// one instant (parseQueryFilters), a resumed page's fallback, and explain's
+// markers. A var so tests can pin it — without that, the "filter and marker
+// share one clock" contract could not be tested at the boundary.
+var timeNow = time.Now
 
 // parseExpiryBound reads an optional RFC 3339 bound; "" is no bound.
 func parseExpiryBound(req mcpgo.CallToolRequest, key string) (time.Time, error) {
@@ -539,7 +547,7 @@ func parseExpiryBound(req mcpgo.CallToolRequest, key string) (time.Time, error) 
 // field existed carries 0 and falls back to now.
 func snapshotClock(st pagedRowState) time.Time {
 	if st.AsOf == 0 {
-		return time.Now()
+		return timeNow()
 	}
 	return time.Unix(st.AsOf, 0)
 }

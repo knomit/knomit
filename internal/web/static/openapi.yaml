@@ -2609,6 +2609,9 @@ components:
         hides or retracts a fact because it expired. "now" is the server's
         clock, read once per request and used for both the filter and the
         markers. Comparisons are at whole seconds. Not `true`/`false` is 400.
+        Combined with a text query, the filter applies after the semantic
+        nearest-neighbour window, so it can return fewer matches than exist;
+        without text the result is exact.
       schema: { type: boolean }
     ExpiresBefore:
       name: expires_before

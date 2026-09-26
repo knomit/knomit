@@ -429,7 +429,7 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		Confidence:     parsed.Confidence,
 		Deleted:        deleted,
 		Expires:        parsed.Expires,
-		Expired:        parsed.IsExpired(time.Now()),
+		Expired:        parsed.IsExpired(timeNow()),
 		Domain:         parsed.Domain,
 		Sources:        parsed.Sources,
 		Entities:       parsed.Entities,
@@ -637,7 +637,7 @@ func explainResume(ctx context.Context, b *repos.Binding, sWrite mcpStore, curso
 				Superseded: superseded,
 				Summary:    true,
 				Expires:    parsed.Expires,
-				Expired:    parsed.IsExpired(time.Now()),
+				Expired:    parsed.IsExpired(timeNow()),
 			})
 		}
 

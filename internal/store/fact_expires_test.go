@@ -249,3 +249,21 @@ func TestResolveDeadRefs_KeepsExpires(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "2026-10-01T02:00:00+02:00", back.Expires)
 }
+
+// TestFactExpires_RebuildKeepsSpacedKey: `expires : …` is valid YAML and the
+// incremental path indexes it, so the rebuild's text prefilter must not miss
+// it (it once matched only "expires:").
+func TestFactExpires_RebuildKeepsSpacedKey(t *testing.T) {
+	svc, branch := motifEnv(t)
+	ctx := context.Background()
+	body := "---\ntype: hypothesis\ndomain: [alpha]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\nexpires : \"2026-10-01T00:00:00Z\"\n---\n# Spaced\n\nbody\n"
+	_, err := svc.Facts().WriteFact(ctx, branch, "kb/alpha/spaced.md", body, "seed", "")
+	require.NoError(t, err)
+	q := SearchOptions{Expired: boolp(true), Now: expNow}
+	require.Equal(t, []string{"kb/alpha/spaced.md"}, searchPaths(t, svc, branch, q), "fixture: the incremental path indexes it")
+
+	_, err = svc.si.rh.db.ExecContext(ctx, `DELETE FROM fact_expires`)
+	require.NoError(t, err)
+	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
+	require.Equal(t, []string{"kb/alpha/spaced.md"}, searchPaths(t, svc, branch, q), "the rebuild agrees with the parser")
+}
