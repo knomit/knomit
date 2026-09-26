@@ -315,20 +315,21 @@ func TestHypothesizer_ConcurrentDiscoverSubmission_WritesOnce(t *testing.T) {
 
 	p := NewHypothesizer(ri, nil, EffortHigh, ScopeFilter{})
 	var start, done sync.WaitGroup
+	errs := make([]error, 2)
 	start.Add(1)
 	done.Add(2)
-	for range 2 {
+	for i := range 2 {
 		go func() {
 			defer done.Done()
 			start.Wait()
-			// Errors are not asserted: whichever caller arrives after the
-			// session completes gets a "not active" error, which is benign. The
-			// assertion that matters is the fact count below.
-			_, _ = p.ContinueSession(ctx, sess.ID, discoverResponseOneProposal)
+			_, errs[i] = p.ContinueSession(ctx, sess.ID, discoverResponseOneProposal)
 		}()
 	}
 	start.Done()
 	done.Wait()
+	// A loser's refusal is benign (see benignLoserRefusal); anything else is a
+	// real failure. The apply-once assertion is the fact count below.
+	requireOnlyBenignErrors(t, errs)
 
 	// Count only the PROPOSED fact. The two seeds are also on disk now, so a
 	// bare corpus count would no longer measure what this test is about.
