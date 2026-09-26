@@ -36,9 +36,7 @@ func handleCreateSession(b hal.URLBuilder, sm *SessionManager) http.HandlerFunc 
 		repo := chi.URLParam(r, "repo")
 
 		var req createSessionRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
-				"invalid JSON body", r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 		// Before isGitURL below, and before the URL is carried on the session
@@ -621,9 +619,7 @@ func handleApply(sm *SessionManager, agentBranch string) http.HandlerFunc {
 		}
 
 		var req applyRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request",
-				"invalid JSON body", r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 

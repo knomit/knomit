@@ -42,8 +42,7 @@ func handleReposProbeInitialized(m *repos.Manager) http.HandlerFunc {
 		// credential and nothing else, so anything approaching the cap is not a
 		// request this handler can serve — and an unbounded decode on a public
 		// endpoint is a hole regardless of what the fields mean.
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCreateBodyBytes)).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, maxCreateBodyBytes) {
 			return
 		}
 		// Before the emptiness check, so a url of only spaces is "required",

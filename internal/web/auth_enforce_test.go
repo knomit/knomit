@@ -74,11 +74,12 @@ func TestWriteGate_DefaultLoopbackMayMutate(t *testing.T) {
 	post.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, post)
-	// The EXACT status the handler gives an empty body, not merely "not
-	// 403": since #281 a request refused earlier (421, wrong Host) is also
-	// "not 403", and this test must not pass on it.
-	if rr.Code != http.StatusBadRequest || !bytes.Contains(rr.Body.Bytes(), []byte("Invalid body")) {
-		t.Fatalf("default loopback must reach the handler (400 Invalid body): %d %s", rr.Code, rr.Body.String())
+	// The EXACT status the handler gives a request with no JSON body (415
+	// from decodeJSON), not merely "not 403": since #281 a request refused
+	// earlier (421, wrong Host) is also "not 403", and this test must not
+	// pass on it.
+	if rr.Code != http.StatusUnsupportedMediaType || !bytes.Contains(rr.Body.Bytes(), []byte("Unsupported Media Type")) {
+		t.Fatalf("default loopback must reach the handler (415 Unsupported Media Type): %d %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -92,8 +93,8 @@ func TestWriteGate_NilLoopbackDefaultFallsBackToDefaults(t *testing.T) {
 	rr := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rr, post)
 	// Exact status, as above: "not 403" would also pass on a 421.
-	if rr.Code != http.StatusBadRequest || !bytes.Contains(rr.Body.Bytes(), []byte("Invalid body")) {
-		t.Fatalf("a Server built without config must reach the handler (400 Invalid body): %d %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusUnsupportedMediaType || !bytes.Contains(rr.Body.Bytes(), []byte("Unsupported Media Type")) {
+		t.Fatalf("a Server built without config must reach the handler (415 Unsupported Media Type): %d %s", rr.Code, rr.Body.String())
 	}
 }
 
