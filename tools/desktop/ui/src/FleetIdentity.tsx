@@ -22,10 +22,14 @@ interface Loaded {
 
 type Outcome = { kind: 'ok' | 'error'; text: string } | null
 
-/** The pair a replace-root confirmation sends back. */
+/**
+ * The pair a root confirmation sends back: ("", bundle root) for a first
+ * install, (installed root, bundle root) for a move to another fleet.
+ */
 interface Confirm {
   from: string
   to: string
+  principal: string
   stale: boolean
 }
 
@@ -43,9 +47,13 @@ const day = (ts: string) => ts.slice(0, 10)
  *
  * The bundle is never rendered — only where it came from. Every refusal is a
  * CLASS from Go, mapped to a sentence here; Go never sends a bundle-derived
- * refusal's text. Replacing the fleet root is never a default: Go refuses a
- * bundle from another root and names both roots' fingerprints, this section
- * asks, and only an explicit "Replace fleet root" sends that exact pair back.
+ * refusal's text. Trusting a fleet root is never a default (knomit#299): Go
+ * refuses a bundle whose root the user has not seen — on a first install
+ * (root_unconfirmed) as on a move to another fleet (root_differs) — naming
+ * the fingerprints and the principal; this section asks the user to check the
+ * root against the value the operator gave them out of band, and only an
+ * explicit "Join this fleet" or "Replace fleet root" sends that exact pair
+ * back.
  */
 export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboard, onInstall, onInstalled }: Props) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
@@ -122,10 +130,11 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
       onInstalled(res.identity)
       return
     }
-    if (res.class === 'root_differs' || res.class === 'confirmation_stale') {
+    if (res.class === 'root_unconfirmed' || res.class === 'root_differs' || res.class === 'confirmation_stale') {
       setConfirm({
         from: res.installedRootFingerprint,
         to: res.bundleRootFingerprint,
+        principal: res.bundlePrincipal,
         stale: res.class === 'confirmation_stale',
       })
       return
@@ -260,33 +269,73 @@ export function FleetIdentitySection({ identity, onCopyPublicKey, onReadClipboar
         </div>
       </div>
 
-      {confirm && (
-        <div role="group" aria-label="Replace the fleet root" className="k-callout is-warn fleet-confirm">
-          {confirm.stale && <p className="fleet-warn">The fleet roots changed since you were asked. Check them again:</p>}
-          <p>
-            This bundle is from a <strong>different fleet</strong>. Installing it moves this instance to that fleet:
-            peers of the current fleet will refuse it.
-          </p>
-          <dl className="fleet-roots">
-            <dt>Current root</dt>
-            <dd>
-              <code>{confirm.from || 'none installed'}</code>
-            </dd>
-            <dt>Bundle’s root</dt>
-            <dd>
-              <code>{confirm.to}</code>
-            </dd>
-          </dl>
-          <div className="fleet-confirm-actions">
-            <button type="button" className="k-btn" onClick={() => setConfirm(null)} disabled={busy}>
-              Keep the current fleet
-            </button>
-            <button type="button" className="k-btn is-danger" onClick={() => install(confirm.from, confirm.to)} disabled={busy}>
-              Replace fleet root
-            </button>
+      {confirm && (() => {
+        // Another program installed the bundle's OWN root after the question
+        // was asked: nothing is being replaced, the bundle renews under it.
+        const same = confirm.from !== '' && confirm.from === confirm.to
+        const move = confirm.from !== '' && !same
+        return (
+          <div
+            role="group"
+            aria-label={move ? 'Replace the fleet root' : 'Confirm the fleet root'}
+            className="k-callout is-warn fleet-confirm"
+          >
+            {confirm.stale && !same && (
+              <p className="fleet-warn">The fleet roots changed since you were asked. Check them again:</p>
+            )}
+            {same ? (
+              <p>
+                Since you were asked, another program installed this bundle’s fleet root on this instance. Installing the
+                bundle now only renews this instance’s certificate under that root.
+              </p>
+            ) : move ? (
+              <p>
+                This bundle is from a <strong>different fleet</strong>. Installing it moves this instance to that fleet:
+                peers of the current fleet will refuse it.
+              </p>
+            ) : (
+              <p>
+                This instance is joining a fleet. Anyone who can write your clipboard or a file can hand you a bundle, so
+                first check the fleet root below against the fingerprint the fleet operator gave you directly.
+              </p>
+            )}
+            <dl className="fleet-roots">
+              {move && (
+                <>
+                  <dt>Current root</dt>
+                  <dd>
+                    <code>{confirm.from}</code>
+                  </dd>
+                </>
+              )}
+              <dt>{move ? 'Bundle’s root' : 'Fleet root'}</dt>
+              <dd>
+                <code>{confirm.to}</code>
+              </dd>
+              <dt>This instance as</dt>
+              <dd>
+                <code>{confirm.principal}</code>
+              </dd>
+            </dl>
+            {confirm.from && (
+              <p className="fleet-note">Check the fleet root against the fingerprint the fleet operator gave you.</p>
+            )}
+            <div className="fleet-confirm-actions">
+              <button type="button" className="k-btn" onClick={() => setConfirm(null)} disabled={busy}>
+                {move ? 'Keep the current fleet' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                className={move ? 'k-btn is-danger' : 'k-btn'}
+                onClick={() => install(confirm.from, confirm.to)}
+                disabled={busy}
+              >
+                {move ? 'Replace fleet root' : same ? 'Install' : 'Join this fleet'}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </section>
   )
 }

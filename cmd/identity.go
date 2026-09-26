@@ -201,17 +201,26 @@ func identityEnrollCmd() *cobra.Command {
 
 func identityInstallCmd() *cobra.Command {
 	var bundlePath string
-	var replaceRoot bool
+	var opts installOpts
 	c := &cobra.Command{
 		Use:   "install",
 		Short: "Install an enrollment bundle on THIS instance (instance side)",
+		Long: `Install an enrollment bundle on THIS instance (instance side).
+
+Before a first install, or a move to another fleet (--replace-root), the
+bundle's fleet root fingerprint is printed and must be confirmed against the
+fingerprint the fleet operator gave you out of band: with --root <fingerprint>,
+by answering the prompt (only when --bundle is a file and stdin is a
+terminal), or by --yes. A bundle under the root already installed (a renewal)
+needs no confirmation.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
 			var raw []byte
-			if bundlePath == "" || bundlePath == "-" {
+			fromStdin := bundlePath == "" || bundlePath == "-"
+			if fromStdin {
 				raw, err = io.ReadAll(cmd.InOrStdin())
 			} else {
 				raw, err = os.ReadFile(bundlePath)
@@ -219,24 +228,82 @@ func identityInstallCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return installBundle(cmd.OutOrStdout(), cfg, raw, replaceRoot)
+			// Stdin can answer a prompt only when it is a terminal and is not
+			// already the bundle.
+			opts.bundleOnStdin = fromStdin
+			if !fromStdin && isTerminal(cmd.InOrStdin()) {
+				opts.prompt = cmd.InOrStdin()
+			}
+			return installBundle(cmd.OutOrStdout(), cfg, raw, opts)
 		},
 	}
 	c.Flags().StringVar(&bundlePath, "bundle", "", "bundle file from `knomit identity enroll` (default/-: stdin)")
-	c.Flags().BoolVar(&replaceRoot, "replace-root", false, "allow a bundle from a DIFFERENT fleet root (moves this instance to another fleet)")
+	c.Flags().BoolVar(&opts.replaceRoot, "replace-root", false, "allow a bundle from a DIFFERENT fleet root (moves this instance to another fleet; the new root must still be confirmed)")
+	c.Flags().StringVar(&opts.root, "root", "", "the fleet root fingerprint the operator gave you out of band: confirms a bundle whose root matches it")
+	c.Flags().BoolVar(&opts.yes, "yes", false, "trust the bundle's fleet root without confirming it")
 	return c
+}
+
+// installOpts is how `identity install` was asked to confirm a fleet root.
+type installOpts struct {
+	replaceRoot bool
+	root        string    // --root: the out-of-band fingerprint
+	yes         bool      // --yes
+	prompt      io.Reader // the terminal to ask on; nil when there is none
+	// bundleOnStdin: the bundle was read from stdin, so stdin cannot also
+	// answer a prompt.
+	bundleOnStdin bool
+}
+
+// isTerminal reports whether r is a character device (a terminal). A pipe,
+// a file or a test's reader is not. It needs no golang.org/x/term: this is
+// only "may we ask", not raw-mode input.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // installBundle is `identity install` without the flag parsing, so tests can
 // drive it. The checks and the writes are pki.InstallBundle's, the one
 // implementation the desktop's Settings window also calls (knomit#256).
-func installBundle(out io.Writer, cfg config.Config, raw []byte, replaceRoot bool) error {
-	dir := cfg.TLS.Dir
-	id, err := pki.InstallBundle(dir, app.ResolveKeyPath(cfg), raw, replaceRoot)
+//
+// A root this instance does not already trust — a first install, or a move
+// with --replace-root — is shown and must be confirmed first (knomit#299).
+// The installed root read here is what pki.InstallBundle must still find
+// under its lock, so a concurrent install by another process is refused
+// rather than overwritten.
+func installBundle(out io.Writer, cfg config.Config, raw []byte, opts installOpts) error {
+	dir, keyPath := cfg.TLS.Dir, app.ResolveKeyPath(cfg)
+	preview, err := pki.PreviewBundle(keyPath, raw)
+	if err != nil {
+		return err
+	}
+	// An installed root.crt that does not load is refused HERE, before the
+	// root is shown or asked about.
+	installed, err := pki.InstalledRoot(dir)
+	if err != nil {
+		return err
+	}
+	switch {
+	case installed.Fingerprint == preview.Root.Fingerprint:
+		// A renewal: the root is the one this instance already trusts.
+	case installed.Fingerprint != "" && !opts.replaceRoot:
+		return fmt.Errorf("this instance is enrolled under root %q and the bundle is from a different root %q; pass --replace-root to move it to the other fleet",
+			installed.CommonName, preview.Root.CommonName)
+	default:
+		if err := confirmRoot(out, preview, installed, opts); err != nil {
+			return err
+		}
+	}
+	id, err := pki.InstallBundle(dir, keyPath, raw, pki.InstallOptions{ExpectInstalledRoot: installed.Fingerprint})
 	var rd *pki.RootDiffersError
 	if errors.As(err, &rd) {
-		return fmt.Errorf("this instance is enrolled under root %q and the bundle is from a different root %q; pass --replace-root to move it to the other fleet",
-			rd.Installed.CommonName, rd.Bundle.CommonName)
+		return fmt.Errorf("the installed fleet root changed while this command ran (was %s, now %s); nothing was installed — run it again",
+			orNone(installed.Fingerprint), orNone(rd.Installed.Fingerprint))
 	}
 	if err != nil {
 		return err
@@ -249,6 +316,49 @@ func installBundle(out io.Writer, cfg config.Config, raw []byte, replaceRoot boo
 		fmt.Fprintln(out, "a running `knomit serve` picks this up within its recheck interval or on its next handshake; a stopped one on start")
 	}
 	return nil
+}
+
+func orNone(fp string) string {
+	if fp == "" {
+		return "none"
+	}
+	return fp
+}
+
+// confirmRoot shows the bundle's root and principal and returns nil only if
+// the user confirmed that root: --root naming it, --yes, or "y" at the
+// prompt. Without any of them it refuses, naming the fingerprint and the
+// flags, so a script sees why.
+func confirmRoot(out io.Writer, p pki.BundlePreview, installed pki.RootInfo, opts installOpts) error {
+	if installed.Fingerprint != "" {
+		fmt.Fprintf(out, "installed fleet root: %s (%q)\n", installed.Fingerprint, installed.CommonName)
+	}
+	fmt.Fprintf(out, "bundle fleet root: %s (%q)\nprincipal: %s\n", p.Root.Fingerprint, p.Root.CommonName, p.Principal)
+	switch {
+	case opts.root != "":
+		if !strings.EqualFold(strings.TrimSpace(opts.root), p.Root.Fingerprint) {
+			return fmt.Errorf("--root %s is not the bundle's fleet root %s; nothing was installed", opts.root, p.Root.Fingerprint)
+		}
+		return nil
+	case opts.yes:
+		return nil
+	case opts.prompt != nil:
+		fmt.Fprint(out, "Is this the fleet root fingerprint the operator gave you? [y/N] ")
+		line, err := bufio.NewReader(opts.prompt).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return err
+		}
+		if a := strings.ToLower(strings.TrimSpace(line)); a == "y" || a == "yes" {
+			return nil
+		}
+		return errors.New("the fleet root was not confirmed; nothing was installed")
+	}
+	why := ""
+	if opts.bundleOnStdin {
+		why = " (no prompt: stdin is the bundle; pass it as --bundle <file> on a terminal to be asked)"
+	}
+	return fmt.Errorf("the bundle's fleet root %s is not confirmed%s: compare it with the fingerprint the fleet operator gave you, then rerun with --root %s (or --yes to skip the check); nothing was installed",
+		p.Root.Fingerprint, why, p.Root.Fingerprint)
 }
 
 func identityRevokeCmd() *cobra.Command {

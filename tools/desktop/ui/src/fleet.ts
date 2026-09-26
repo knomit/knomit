@@ -50,8 +50,11 @@ export interface InstallResult {
   class: string
   /** Set for class 'error' only; never bundle text. */
   message: string
+  /** "" when no root is installed. Set with the next two for root_unconfirmed, root_differs and confirmation_stale. */
   installedRootFingerprint: string
   bundleRootFingerprint: string
+  /** <kind>:<fingerprint>@cert, the principal the bundle's certificate names. */
+  bundlePrincipal: string
   identity: FleetIdentity | null
 }
 
