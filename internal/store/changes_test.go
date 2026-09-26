@@ -351,7 +351,7 @@ func TestChangesUnder_ExplicitFailures(t *testing.T) {
 
 	for _, since := range []string{
 		"0123456789abcdef0123456789abcdef01234567", // well-formed, not in this repo
-		"abc123",                                   // short
+		"abc123", // short
 		"not-a-hash-not-a-hash-not-a-hash-not-a-h", // 40 chars, not hex
 	} {
 		res, err := svc.Facts().ChangesUnder(ctx, "main", ChangesQuery{Since: since, Prefix: "tasks/a"})

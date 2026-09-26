@@ -22,6 +22,8 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -294,4 +296,35 @@ func parseFullHash(s string) (plumbing.Hash, bool) {
 		}
 	}
 	return plumbing.NewHash(strings.ToLower(s)), true
+}
+
+// changesCursor is the whole state of one paged read. It is stateless on the
+// server by design — nothing is stored, nothing expires — because the answer
+// is a pure function of (since, head, prefix). The MCP tool and the REST route
+// share it, so a cursor minted by one is accepted by the other.
+type changesCursor struct {
+	Since  string `json:"s,omitempty"`
+	Head   string `json:"h"`
+	Prefix string `json:"p,omitempty"`
+	After  string `json:"a"`
+}
+
+// EncodeChangesCursor returns the opaque token for the page after `after`.
+func EncodeChangesCursor(since, head, prefix, after string) string {
+	b, _ := json.Marshal(changesCursor{Since: since, Head: head, Prefix: prefix, After: after})
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// DecodeChangesCursor reverses EncodeChangesCursor. The returned query has no
+// Limit; the caller sets one.
+func DecodeChangesCursor(s string) (ChangesQuery, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return ChangesQuery{}, ErrInvalidChangesCursor
+	}
+	var c changesCursor
+	if err := json.Unmarshal(raw, &c); err != nil || c.Head == "" || c.After == "" {
+		return ChangesQuery{}, ErrInvalidChangesCursor
+	}
+	return ChangesQuery{Since: c.Since, Head: c.Head, Prefix: c.Prefix, After: c.After}, nil
 }
