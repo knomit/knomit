@@ -221,6 +221,18 @@ func (h *TaskHub) broadcastSyncOK(remote string, result store.SyncResult) {
 	})
 }
 
+// broadcastVerify publishes F09's verify-failed event (SSE event name
+// "verify-failed") for an advance whose verification refused or noted
+// commits, in log AND enforce, on every tick it recurs: the anchor does not
+// move past a failure, so the report repeats until the operator acts.
+func (h *TaskHub) broadcastVerify(remote string, rep *store.VerifyReport) {
+	h.ob.Publish(SyncEvent{
+		Remote: remote,
+		Status: "verify-failed",
+		Main:   &store.MainReconcileResult{Verify: rep},
+	})
+}
+
 // BroadcastSyncError publishes a sync failure event.
 func (h *TaskHub) broadcastSyncError(remote, errMsg string) {
 	h.ob.Publish(SyncEvent{

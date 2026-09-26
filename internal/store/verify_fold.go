@@ -136,6 +136,11 @@ type foldResult struct {
 	SigChecks    int           // signature and M3 evaluations performed (0 for an off repo)
 	Unrooted     bool          // a policy change could not be judged: the advance is closed at NewAnchor in every mode
 	Rewind       bool          // the anchor is not an ancestor of the tip
+
+	// Advanced lists the range commits now below the new anchor (NewAnchor and
+	// its ancestors in the range), so a caller caching the anchor's history can
+	// extend it instead of re-walking.
+	Advanced []plumbing.Hash
 }
 
 // Closed reports whether the local upstream must stop at NewAnchor instead of
@@ -147,6 +152,13 @@ type verifier struct {
 	st       storer.EncodedObjectStorer
 	root     RootOfTrust
 	accepted func(plumbing.Hash) bool // --accept waivers: a failing SIGNATURE only
+
+	// below, when set, is the set of commits reachable from the anchor passed
+	// to fold (a cache the caller keeps across ticks). Nil: fold walks the
+	// anchor's history itself.
+	below map[plumbing.Hash]bool
+
+	byTop map[string]settingsState // settingsAt memo, see there
 }
 
 // settingsState is what a commit's ontology says about verification.
@@ -160,6 +172,11 @@ type settingsState struct {
 // exists). A path present as a directory, or a blob that cannot be read, is
 // UNKNOWN rather than "try the next path", so a shadowing directory cannot fall
 // through. No ontology at all reads as off.
+//
+// Cost: the answer depends only on the root-tree entries of the three paths'
+// top-level names, so it is memoised by those entries' hashes. Consecutive
+// commits almost always share them, and a history walk then decodes one root
+// tree per commit and parses each distinct ontology once.
 func (v *verifier) settingsAt(c *object.Commit, cache map[plumbing.Hash]settingsState) (settingsState, error) {
 	if s, ok := cache[c.Hash]; ok {
 		return s, nil
@@ -168,17 +185,31 @@ func (v *verifier) settingsAt(c *object.Commit, cache map[plumbing.Hash]settings
 	if err != nil {
 		return settingsState{}, fmt.Errorf("verify: tree of %s: %w", c.Hash, err)
 	}
+	var key strings.Builder
+	for _, p := range fact.OntologyPathsNewestFirst() {
+		top, _, _ := strings.Cut(p, "/")
+		key.WriteString(top)
+		key.WriteByte('=')
+		if e, err := tree.FindEntry(top); err == nil {
+			key.WriteString(e.Hash.String())
+			key.WriteString(e.Mode.String())
+		}
+		key.WriteByte(';')
+	}
+	if v.byTop == nil {
+		v.byTop = map[string]settingsState{}
+	}
+	if st, ok := v.byTop[key.String()]; ok {
+		cache[c.Hash] = st
+		return st, nil
+	}
 	st := settingsState{Settings: fact.VerifySettings{Mode: VerifyOff, Valid: true}, Known: true}
 	for _, p := range fact.OntologyPathsNewestFirst() {
 		entry, err := tree.FindEntry(p)
 		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
 			continue
 		}
-		if err != nil {
-			st = settingsState{}
-			break
-		}
-		if !entry.Mode.IsFile() {
+		if err != nil || !entry.Mode.IsFile() {
 			st = settingsState{}
 			break
 		}
@@ -200,6 +231,7 @@ func (v *verifier) settingsAt(c *object.Commit, cache map[plumbing.Hash]settings
 		st = settingsState{Settings: s, Known: true}
 		break
 	}
+	v.byTop[key.String()] = st
 	cache[c.Hash] = st
 	return st, nil
 }
@@ -244,13 +276,17 @@ func (v *verifier) fold(anchor plumbing.Hash, actx verifyContext, tip plumbing.H
 	}
 
 	// Commits reachable from the anchor are outside the range.
-	below := map[plumbing.Hash]bool{}
-	if anchor != plumbing.ZeroHash {
-		if anchor == tip {
-			return res, nil
-		}
-		if err := v.walk(anchor, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
-			return res, err
+	below := v.below
+	if anchor != plumbing.ZeroHash && anchor == tip {
+		return res, nil
+	}
+	if below == nil {
+		below = map[plumbing.Hash]bool{}
+		v.below = below // hand the walk back to a caller that caches it
+		if anchor != plumbing.ZeroHash {
+			if err := v.walk(anchor, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
+				return res, err
+			}
 		}
 	}
 
@@ -465,6 +501,12 @@ func (v *verifier) fold(anchor plumbing.Hash, actx verifyContext, tip plumbing.H
 		if good[h] {
 			res.NewAnchor = h
 			res.NewAnchorCtx = contextAt(actx, changes, h, ancestors)
+			res.Advanced = append(res.Advanced, h)
+			for a := range ancestors(h) {
+				if _, in := inRange[a]; in {
+					res.Advanced = append(res.Advanced, a)
+				}
+			}
 			break
 		}
 	}

@@ -77,7 +77,15 @@ type repoHandler struct {
 	// before the enable ("unrooted"). Set by Service.SetRootOfTrust at
 	// build/swap time, never mutated afterwards.
 	verifyRoot RootOfTrust
-	onCommit   func(branch, hash string) // external observer (e.g. SSE broadcast)
+
+	// verifyBelow caches, per upstream, the set of commits reachable from the
+	// verified anchor (or the off-scan watermark), so a steady-state tick walks
+	// only the new commits instead of the whole history. In memory only: a
+	// restart re-walks once. Guarded by verifyBelowMu; each entry is used
+	// under that upstream's branch lock.
+	verifyBelowMu sync.Mutex
+	verifyBelow   map[string]*verifyBelowCache
+	onCommit      func(branch, hash string) // external observer (e.g. SSE broadcast)
 
 	// im is the search-index manager. notifyCommit calls im.Sync after every
 	// commit so branch_facts / facts_vec / graph stay in sync with the new

@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/memory"
 )
 
@@ -17,11 +18,15 @@ import (
 // be tested on exact shapes without the store's write path.
 type memRepo struct {
 	t  *testing.T
-	st *memory.Storage
+	st storer.EncodedObjectStorer
 	n  int
 }
 
 func newMemRepo(t *testing.T) *memRepo { return &memRepo{t: t, st: memory.NewStorage()} }
+
+// repoOn builds commits directly into another object store (a Service's), the
+// way the store tests "pretend a fetch happened".
+func repoOn(t *testing.T, st storer.EncodedObjectStorer) *memRepo { return &memRepo{t: t, st: st} }
 
 func (r *memRepo) blob(content string) plumbing.Hash {
 	o := r.st.NewEncodedObject()
