@@ -90,6 +90,27 @@ func TestEnsureTitleVectors_StopsAtTheLatencyBudget(t *testing.T) {
 	require.Equal(t, total, have, "later sessions finish the backfill")
 }
 
+// TestEnsureTitleVectors_ExpiredBudgetReturnsPartialCoverageWithoutError pins
+// the PRODUCTION contract that the test fixture seedShortlist deliberately
+// bypasses (knomit#298). When the budget is spent, partial coverage is not an
+// error: the session reports it in its health output and later sessions finish
+// the job. So the fixture problem is fixed in the fixture. Nobody may "fix" it
+// by making partial coverage an error in production.
+//
+// A budget of 0 means the deadline has already passed, so no batch runs and the
+// coverage comes back as it stood. That makes this the deterministic half of
+// TestEnsureTitleVectors_StopsAtTheLatencyBudget, which depends on timing.
+// There are more facts than one titleBackfillBatch, as in the fixture.
+func TestEnsureTitleVectors_ExpiredBudgetReturnsPartialCoverageWithoutError(t *testing.T) {
+	ctx := context.Background()
+	env := newRestatementEnv(t, titleBackfillBatch+10)
+
+	have, total, err := ensureTitleVectors(ctx, env.deps(), env.branch, 0)
+	require.NoError(t, err, "an expired budget is not an error")
+	require.Equal(t, titleBackfillBatch+10, total)
+	require.Less(t, have, total, "coverage is reported as it stood, partial")
+}
+
 // TestEnsureTitleVectors_NoEmbedderIsANoOp — read-only tooling and tests run
 // without an embedder; the axis stays empty and nothing errors.
 func TestEnsureTitleVectors_NoEmbedderIsANoOp(t *testing.T) {
