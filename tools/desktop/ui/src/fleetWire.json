@@ -1,0 +1,5 @@
+{
+  "identity": ["state", "dir", "keyFingerprint", "enrolled", "certificate", "principal", "san", "serial", "notAfter", "rootFingerprint", "crlNumber", "crlNextUpdate", "crlStale", "tls"],
+  "tls": ["booted", "configured", "listening", "reason", "configuredNow"],
+  "installResult": ["installed", "class", "message", "installedRootFingerprint", "bundleRootFingerprint", "identity"]
+}

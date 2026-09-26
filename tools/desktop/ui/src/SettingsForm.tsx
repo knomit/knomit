@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { FleetIdentitySection } from './FleetIdentity.tsx'
+import { installNeedsRestart, type FleetIdentity, type InstallResult } from './fleet.ts'
 
 // Mirrors the Settings struct in tools/desktop/settings.go field for field.
 // The json tags there are the wire names; these must match them exactly.
@@ -7,10 +9,20 @@ export interface Settings {
   logLevel: string
   logFormat: string
   startAtLogin: boolean
+  /** [tls].addr: the fleet listener, "" = off. Bound at boot, like port. */
+  tlsAddr: string
   effectivePort: number
   configPath: string
   logFilePath: string
   overriddenByEnv: string[]
+}
+
+/** What the Fleet identity section needs; omitted, the section is not shown. */
+export interface FleetProps {
+  identity: FleetIdentity | null
+  onCopyPublicKey: () => Promise<void>
+  onReadClipboard: () => Promise<string>
+  onInstall: (raw: string, confirmFrom: string, confirmTo: string) => Promise<InstallResult>
 }
 
 interface Props {
@@ -21,6 +33,7 @@ interface Props {
   onRevealLog: () => Promise<void>
   /** Discards edits and closes the window, the way a dialog's Cancel does. */
   onCancel: () => void
+  fleet?: FleetProps
 }
 
 /**
@@ -34,6 +47,7 @@ const ENV_FOR: Record<string, string | undefined> = {
   port: 'KNOMIT_PORT',
   logLevel: 'KNOMIT_LOG_LEVEL',
   logFormat: 'KNOMIT_LOG_FORMAT',
+  tlsAddr: 'KNOMIT_TLS_ADDR',
 }
 
 /** The zerolog levels config.Validate accepts, quietest first. */
@@ -77,7 +91,24 @@ function validate(s: Settings): Record<string, string> {
   if (!FORMATS.some((f) => f.value === s.logFormat)) {
     errs.logFormat = `Log format must be console or json, got "${s.logFormat}".`
   }
+  const tls = tlsAddrError(s.tlsAddr, s.port)
+  if (tls) errs.tlsAddr = tls
   return errs
+}
+
+/**
+ * validateTLSAddr (settings.go), before the round trip: host:port with the
+ * host optional and IPv6 bracketed, the port rules Port has, and not Port
+ * itself. "" is "off". Go stays the authority.
+ */
+function tlsAddrError(addr: string, plainPort: string): string {
+  if (addr === '') return ''
+  const m = /^(\[[^\]\s/]*\]|[^:\s/[\]]*):(\d+)$/.exec(addr)
+  if (!m) return `The fleet listener address must be host:port (e.g. 0.0.0.0:19279), got "${addr}".`
+  const port = Number(m[2])
+  if (port < 1024 || port > 65535) return `The fleet listener port must be between 1024 and 65535, got ${port}.`
+  if (String(port) === plainPort) return `The fleet listener cannot share port ${port} with the local server.`
+  return ''
 }
 
 /** Wails rejects with an Error; unwrap it so the user sees the message alone. */
@@ -85,7 +116,7 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel }: Props) {
+export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel, fleet }: Props) {
   const [s, setS] = useState(initial)
   // Shown beside the buttons. Reserved for failures that belong to the WINDOW
   // rather than to one control: a save the backend refused, a relaunch that
@@ -101,6 +132,14 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
   // is what stops a LATER failed save from retracting a restart that an
   // earlier successful one genuinely owes.
   const [savedPort, setSavedPort] = useState(initial.port)
+  // The same, for [tls].addr: bound once at boot like the port.
+  const [savedTLS, setSavedTLS] = useState(initial.tlsAddr)
+  // The section's identity: the one loaded with the window, then whatever an
+  // install hands back, so the rows show what was just installed.
+  const [identity, setIdentity] = useState<FleetIdentity | null>(fleet?.identity ?? null)
+  useEffect(() => setIdentity(fleet?.identity ?? null), [fleet?.identity])
+  // An install whose listener only a restart can start (see installNeedsRestart).
+  const [installRestart, setInstallRestart] = useState(false)
 
   // "Saved." is a notification, not a state: it reports that something just
   // happened, so it has to expire. Left standing it becomes a claim about the
@@ -111,9 +150,12 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
     const t = setTimeout(() => setSaved(false), 2600)
     return () => clearTimeout(t)
   }, [saved])
-  // Only the port needs a restart: it is bound once at boot. Level and format
-  // are applied live by SaveSettings.
-  const needsRestart = savedPort !== initial.port
+  // The port and [tls].addr need a restart: each is bound once at boot. Level
+  // and format are applied live by SaveSettings. A first enrolment needs one
+  // too when a listener is wanted but not running: installing starts nothing.
+  const portRestart = savedPort !== initial.port
+  const tlsRestart = savedTLS !== initial.tlsAddr
+  const needsRestart = portRestart || tlsRestart || installRestart
 
   // envOverrides returns a NIL slice when nothing is set, and encoding/json
   // renders that as `null` rather than `[]`. That is the ordinary case, so
@@ -164,8 +206,10 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
     // confirmation, including while that warning is still standing — otherwise
     // one port change would silence the feedback on every save after it.
     const changedPort = s.port !== savedPort
-    setSaved(!(changedPort && s.port !== initial.port))
+    const changedTLS = s.tlsAddr !== savedTLS
+    setSaved(!((changedPort && s.port !== initial.port) || (changedTLS && s.tlsAddr !== initial.tlsAddr)))
     setSavedPort(s.port)
+    setSavedTLS(s.tlsAddr)
   }
 
   /**
@@ -312,6 +356,29 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
           </div>
 
           <div className="row">
+            <label htmlFor="tlsAddr">Fleet listener</label>
+            <div className="control">
+              <input
+                id="tlsAddr"
+                className="k-input addr"
+                value={s.tlsAddr}
+                placeholder="off"
+                spellCheck={false}
+                readOnly={overridden('tlsAddr')}
+                aria-invalid={fieldErrors.tlsAddr ? true : undefined}
+                onChange={(e) => edit({ tlsAddr: e.target.value })}
+              />
+              {overridden('tlsAddr') ? (
+                <span className="chip">env</span>
+              ) : (
+                <span className="hint">host:port for enrolled peers</span>
+              )}
+            </div>
+            {errFor('tlsAddr')}
+            {envNote('tlsAddr')}
+          </div>
+
+          <div className="row">
             <label htmlFor="logLevel">Log level</label>
             <div className="control">
               <select
@@ -380,6 +447,19 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
           </div>
         </div>
 
+        {fleet && (
+          <FleetIdentitySection
+            identity={identity}
+            onCopyPublicKey={fleet.onCopyPublicKey}
+            onReadClipboard={fleet.onReadClipboard}
+            onInstall={fleet.onInstall}
+            onInstalled={(next) => {
+              if (next) setIdentity(next)
+              if (installNeedsRestart(next)) setInstallRestart(true)
+            }}
+          />
+        )}
+
         {/* A footnote, not a peer of Port: dim, mono, home-collapsed. */}
         <dl className="ps-paths">
           <dt>Config</dt>
@@ -413,9 +493,9 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
         {needsRestart && (
           <div className="restartbar">
             <p>
-              The port change takes effect after a restart. Connected MCP
-              clients (Claude Code and anything else using the bridge) will need
-              restarting to reconnect.
+              {restartReason(portRestart, tlsRestart, installRestart)}
+              {portRestart &&
+                ' Connected MCP clients (Claude Code and anything else using the bridge) will need restarting to reconnect.'}
             </p>
             <button
               type="button"
@@ -450,4 +530,17 @@ export function SettingsForm({ initial, onSave, onRestart, onRevealLog, onCancel
       </footer>
     </div>
   )
+}
+
+/**
+ * One restart offer whatever owes it — not one bar per cause — saying what
+ * the restart will apply.
+ */
+function restartReason(port: boolean, tls: boolean, install: boolean): string {
+  const what = [port && 'port change', tls && 'fleet listener change'].filter(Boolean)
+  if (what.length > 0) {
+    const s = what.join(' and ')
+    return `The ${s} takes effect after a restart.${install ? ' So does the fleet listener for the bundle just installed.' : ''}`
+  }
+  return 'The fleet listener starts after a restart: installing a bundle does not start it in a running Knomit.'
 }

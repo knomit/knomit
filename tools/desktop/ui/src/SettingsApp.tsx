@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Call, Window } from '@wailsio/runtime'
-import { SettingsForm, type Settings } from './SettingsForm.tsx'
+import { Call, Clipboard, Window } from '@wailsio/runtime'
+import { SettingsForm, type FleetProps, type Settings } from './SettingsForm.tsx'
+import type { FleetIdentity, InstallResult } from './fleet.ts'
 import './App.css'
 
 // Bound-method names are packagePath.TypeName.MethodName, which Wails builds in
@@ -14,18 +15,40 @@ const GET = 'main.NativeService.GetSettings'
 const SAVE = 'main.NativeService.SaveSettings'
 const RESTART = 'main.NativeService.RestartApp'
 const REVEAL = 'main.NativeService.RevealLogFile'
+// Fleet identity (knomit#256). INSTALL, PUBKEY and SAVE are refused by Go
+// unless they come from THIS window (callerIsSettings in identity.go).
+const IDENTITY = 'main.NativeService.GetIdentity'
+const INSTALL = 'main.NativeService.InstallBundle'
+const PUBKEY = 'main.NativeService.PublicKeyLine'
 
 // Kept separate from settings.tsx (which only mounts it) so it can be rendered
 // in a test without a real #root element.
 export function SettingsApp() {
   const [initial, setInitial] = useState<Settings | null>(null)
   const [loadError, setLoadError] = useState('')
+  const [identity, setIdentity] = useState<FleetIdentity | null>(null)
 
   useEffect(() => {
     Call.ByName(GET)
       .then((s: Settings) => setInitial(s))
       .catch((e: unknown) => setLoadError(e instanceof Error ? e.message : String(e)))
+    // Independent of the settings: a failure here leaves the section on
+    // "Loading…" rather than taking the whole window down with it.
+    Call.ByName(IDENTITY)
+      .then((id: FleetIdentity) => setIdentity(id))
+      .catch(() => {})
   }, [])
+
+  const fleet: FleetProps = {
+    identity,
+    // The Wails clipboard, not navigator.clipboard: that needs a secure
+    // context, and whether wails:// is one is not something to find out from
+    // a user's bug report.
+    onCopyPublicKey: () => Call.ByName(PUBKEY).then((line: string) => Clipboard.SetText(line)),
+    onReadClipboard: () => Clipboard.Text(),
+    onInstall: (raw, confirmFrom, confirmTo) =>
+      Call.ByName(INSTALL, raw, confirmFrom, confirmTo) as Promise<InstallResult>,
+  }
 
   if (loadError) {
     return (
@@ -62,6 +85,7 @@ export function SettingsApp() {
       // windows.go), which is what makes reopening show what is on disk rather
       // than the abandoned edits.
       onCancel={() => void Window.Close()}
+      fleet={fleet}
     />
   )
 }

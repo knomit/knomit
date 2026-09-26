@@ -246,12 +246,15 @@ jobs:
       # the listener the normal Windows install actually serves, and it is
       # compiled on no other platform. Made to pass here first, as the
       # paragraph above asks; measured at 0.03s for the three pipe tests.
+      # TestFleetIdentity_ (knomit#256): the Settings enrolment bindings write
+      # <home>/pki and knomit.toml, portable code whose rename-over-existing
+      # and paths are exactly what differs on Windows.
       - name: Desktop app compiles on Windows (-tags desktop)
         if: matrix.os == 'windows-2025'
         run: |
           CGO_ENABLED=1 go build -tags desktop -o NUL ./tools/desktop
           CGO_ENABLED=1 go vet -tags desktop ./tools/desktop/...
-          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh desktop -tags desktop -run 'TestWritable|TestBootServer_' -count=1 ./tools/desktop/
+          CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh desktop -tags desktop -run 'TestWritable|TestBootServer_|TestFleetIdentity_' -count=1 ./tools/desktop/
 
       # internal/config owns the data-root resolution, and it is per-OS code
       # whose branches only the matching runner reaches: the Windows

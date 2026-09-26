@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"knomit/internal/app"
 	"knomit/internal/pki"
 	"knomit/internal/repos"
 )
@@ -208,6 +209,56 @@ func TestIdentity_InstallRefusals(t *testing.T) {
 	os.WriteFile(junk, []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"), 0o600)
 	if _, err := run(t, "", "identity", "install", "--bundle", junk); err == nil {
 		t.Fatal("installed a bundle holding a private key block")
+	}
+}
+
+// The ONE intended behaviour change of moving install into pki (knomit#256):
+// before it, `identity install` created <home>/pki and reset its mode to 0700
+// BEFORE the same-root and CRL checks, so a refused bundle still touched the
+// directory. Now a verification failure leaves it exactly as it was — here, a
+// root-differs refusal on a home whose pki dir the operator set to 0750.
+func TestIdentity_RefusedInstallLeavesThePKIDirAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	dir, passFile := master(t)
+	home, _, pubPath := instanceHome(t, "laptop")
+	useHome(t, home)
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir, passFile, pubPath)); err != nil {
+		t.Fatal(err)
+	}
+	pkiDir := filepath.Join(home, "pki")
+	if err := os.Chmod(pkiDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	dir2, pass2 := master(t)
+	if _, err := run(t, "", "identity", "install", "--bundle", enroll(t, dir2, pass2, pubPath)); err == nil || !strings.Contains(err.Error(), "--replace-root") {
+		t.Fatalf("switched fleets without --replace-root: %v", err)
+	}
+	if fi, _ := os.Stat(pkiDir); fi.Mode().Perm() != 0o750 {
+		t.Fatalf("a refused install reset the pki dir to %v", fi.Mode().Perm())
+	}
+}
+
+// The desktop's "Copy public key" line (app.PublicKeyLine) is accepted by
+// `enroll --pubkey` as the same key, and carries the host enroll would put in
+// the SAN — so an operator given only that line needs no --host.
+func TestIdentity_DesktopPublicKeyLineRoundTripsThroughEnroll(t *testing.T) {
+	home, pub, _ := instanceHome(t, "laptop")
+	line, err := app.PublicKeyLine(filepath.Join(home, "id_ed25519"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, host, err := parseInstancePubkey(line)
+	if err != nil {
+		t.Fatalf("enroll --pubkey refuses the desktop's line %q: %v", line, err)
+	}
+	want, _ := os.Hostname()
+	if want == "" {
+		want = "local"
+	}
+	if !got.Equal(pub) || host != want {
+		t.Fatalf("round trip: key equal %v, host %q, want %q", got.Equal(pub), host, want)
 	}
 }
 

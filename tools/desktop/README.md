@@ -263,6 +263,29 @@ an ephemeral port when `:19278` is taken, leaving two servers and an ambiguous
 quits and relaunches on a new port, restart the MCP client to pick up the new
 `server.json`.
 
+## Fleet peer
+
+The app can join a knomit fleet as an enrolled instance (knomit#256), without
+the `knomit` CLI. In **Settings → Fleet identity**:
+
+1. **Copy public key** and send the line to whoever holds the fleet root. They
+   run `knomit identity enroll --pubkey '<line>' …` and send back a bundle.
+2. **Paste from clipboard** or **Choose file…**, then **Install**. The same
+   checks as `knomit identity install` apply: the key matches, the chain
+   verifies, the CRL is not older than the one held. A bundle from a
+   *different* fleet root is refused until you confirm the move, and the
+   confirmation names both roots' fingerprints.
+3. Set **Fleet listener** (`[tls].addr`, e.g. `0.0.0.0:19279`) and restart when
+   offered. The mTLS listener opens only when an address is set **and** a
+   certificate is installed. The plaintext port stays loopback-only.
+
+Trust material is installed only from the Settings window, never over HTTP.
+CRL updates are manual: a new bundle, or a fresh `crl.pem` dropped into
+`[tls].dir`, which a running listener adopts within its recheck interval. A
+desktop that never receives the new CRL keeps serving a revoked peer. If
+`knomit serve` on the same home already holds the address, the app logs a
+warning and serves without the listener.
+
 ## Logs
 
 The app logs to a rotating file (also to stderr when run from a terminal):
