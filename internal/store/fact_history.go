@@ -17,6 +17,12 @@ func (fi *factIndex) DiffFiles(ctx context.Context, branch, fromCommit string) (
 	return fi.rh.DiffFiles(ctx, branch, fromCommit)
 }
 
+// ChangesUnder reports what differs under a folder between two commits. See
+// changes.go: a read of two trees, no clock, no write.
+func (fi *factIndex) ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error) {
+	return fi.rh.ChangesUnder(ctx, branch, q)
+}
+
 // parseOperation extracts the operation from an author email using the +tag subaddress convention.
 // "agent+learn@agents.knomit.io" → "learn", "bob+learn@gmail.com" → "learn", "bob@gmail.com" → "".
 func parseOperation(email string) string {

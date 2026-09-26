@@ -334,6 +334,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Get("/topics", handleTopics(b, s.OntologyRoot, p.topicLister))
 				r.Get("/topics/*", handleTopicNode(b, s.OntologyRoot, p.topicLister))
 
+				r.Get("/changes", handleHALChanges(b))
 				r.Get("/commits", handleHALCommitsList(b, p.commits, s.OntologyRoot))
 				r.Get("/commits/{sha}", handleHALCommitDetail(b, p.commits, s.OntologyRoot))
 				r.Get("/commits/{sha}/facts/*", handleCommitAnchoredFact(b, p.factReader, p.factSub))
