@@ -360,6 +360,9 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const [facts, setFacts] = useState<RecentFactEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  // Render-phase mirror of `loading` for loadMore's guard; see Infinite scroll.
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
   const sentinelRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // Scroll memory, keyed by location. Returning to a long folder at the top
@@ -412,14 +415,23 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const pivotCluster = pivotResolved[0]?.cluster;
 
   // Scope generation for the Recent list, the counterpart of lensGenRef: the
-  // reset below bumps it, and a paged loadMore drops a response whose
+  // effect below bumps it, and a paged loadMore drops a response whose
   // generation has moved on (knomit#275).
   const recentGenRef = useRef(0);
   useAsync((stale) => {
+    // A fresh scope invalidates any paged loadMore still in flight. Bumped
+    // BEFORE the early returns, so leaving Recent (another sort, or a lens)
+    // drops an in-flight page too rather than appending it to a list nobody
+    // is paging.
+    recentGenRef.current += 1;
     if (isLens) return; // lens context reads via the lens effect below
     if (effectiveSort !== 'recent') return;
-    // A fresh scope invalidates any paged loadMore still in flight.
-    recentGenRef.current += 1;
+    // Synchronously, beside setLoading: loadingRef is otherwise mirrored only
+    // on the next render, and until then loadMoreRef holds a closure with this
+    // scope's filters and the OLD row count. A sentinel tick in that window
+    // would pass the loading guard and fetch offset = old length under the NEW
+    // generation, which the generation check cannot tell from a real page.
+    loadingRef.current = true;
     setLoading(true);
     setFacts([]);
     setTotal(0);
@@ -504,6 +516,9 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const [lensRows, setLensRows] = useState<LensRow[]>([]);
   const [lensTree, setLensTree] = useState<LensDirChild[]>([]);
   const [lensLoading, setLensLoading] = useState(false);
+  // Render-phase mirror of `lensLoading` for loadMore's guard; see Infinite scroll.
+  const lensLoadingRef = useRef(lensLoading);
+  lensLoadingRef.current = lensLoading;
   /**
    * Whether the union has handed over everything it has.
    *
@@ -579,6 +594,8 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       if (rows.some(r => r.path === open)) return;
       dispatch({ type: 'AMEND_NAV', factPath: rows[0].path });
     };
+    // Same window as the Recent reset: close it before the re-render does.
+    lensLoadingRef.current = true;
     setLensLoading(true);
     setLensRows([]);
     setLensTree([]);
@@ -658,14 +675,12 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   }, [isLens, state.factPath, lensRows, lensTree, effectiveSort]);
 
   // Infinite scroll: when the sentinel at the bottom of a paged list scrolls into
-  // view, fetch the next page and append. The *Ref mirrors keep the callback
-  // identity stable so the IntersectionObserver doesn't reconnect on every
-  // loading-state flip (which would re-fire the trigger and double-load). Defined
-  // after the lens union declarations so it can page either list.
-  const loadingRef = useRef(loading);
-  loadingRef.current = loading;
-  const lensLoadingRef = useRef(lensLoading);
-  lensLoadingRef.current = lensLoading;
+  // view, fetch the next page and append. The *Ref mirrors (loadingRef,
+  // lensLoadingRef, declared beside their state so the scope resets can write
+  // them too) keep the callback identity stable so the IntersectionObserver
+  // doesn't reconnect on every loading-state flip (which would re-fire the
+  // trigger and double-load). Defined after the lens union declarations so it
+  // can page either list.
   // A paged list shows the sentinel: repo Recent, or a lens union in a
   // non-relevance sort (lensSearch results aren't paged; an empty scope has none).
   const paged = isLens
