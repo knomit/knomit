@@ -220,22 +220,29 @@ func requireOnlyBenignErrors(t *testing.T, errs []error) {
 	}
 }
 
-// benignLoserRefusal matches the refusals a caller that lost a race for the
-// same work item can see. Each is the item having been handled by someone
-// else, never a failure of the engine:
+// benignLoserRefusal matches the refusals a caller that lost a race to
+// CLAIM the same work item can see. Each is the item having been handled by
+// someone else, never a failure of the engine:
 //
 //   - "is completed, not active": the loser arrived after the winner drove
 //     the session to completed.
-//   - "is being applied by another caller": the loser arrived while the
-//     winner still held the item's applying claim (pipeline.go, the claim
-//     refusal in ContinueSession).
+//   - "is being applied by another caller": raised in handlePhase
+//     (pipeline.go) when the loser lost the phase CAS while the winner's
+//     item is still applying.
 //   - "is moving to its next phase for another caller": the `advancing`
-//     guard (errAdvancing, pipeline.go), raised when the loser re-reads the
-//     session and finds Advancing set. That flag is set by the winner's phase
-//     CAS (store.AdvancePipelineSessionPhase, pipeline_index.go) and cleared
-//     by FinishPipelineSessionAdvance once the phase hook returns, so a loser
-//     sees it only in that window — narrow enough that the tests passed for
-//     a long time without listing it (knomit#305).
+//     guard (errAdvancing, pipeline.go), raised in handlePhase and in
+//     completeSession when the loser re-reads the session and finds
+//     Advancing set. That flag is set by the winner's phase CAS
+//     (store.AdvancePipelineSessionPhase, pipeline_index.go) and cleared by
+//     FinishPipelineSessionAdvance once the phase hook returns, so a loser
+//     sees it only in that window (knomit#305).
+//
+// It is for tests whose proof is the fact count, where accepting "completed"
+// is correct. It is NOT for the reflect-gap tests in review_phase_test.go
+// (TestReviewer_ConcurrentContinuations_EnqueueReflectOnce,
+// TestReviewer_ReflectGap_SecondCallerDoesNotComplete): their guarantee is
+// that no caller completes the session in the gap, so they accept only
+// "retry shortly", and this pattern would admit the regression they catch.
 const benignLoserRefusal = `is completed, not active|is being applied by another caller|is moving to its next phase for another caller`
 
 // insertManualDistillItem queues a single distill work item over two synthetic
