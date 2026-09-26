@@ -12,7 +12,7 @@ import (
 // package ever imports one (directly or transitively), it would bloat the real
 // binary with test scaffolding — this guard fails first.
 var forbidden = []string{
-	"knomit/test/testenv",   // + /gitserver and any subpackage (prefix match)
+	"knomit/test/testenv", // + /gitserver and any subpackage (prefix match)
 	"knomit/test/storytests",
 	// Installs a fallback commit signer for test binaries (F09 PR 2). The hook
 	// it calls refuses to work outside a test binary anyway; this keeps the
