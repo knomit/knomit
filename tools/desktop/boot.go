@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -26,6 +27,7 @@ type server struct {
 	http        *http.Server
 	tls         *http.Server // the mTLS listener's own server; nil when it is off
 	tlsAddr     string       // where tls listens ("" when off); the log line and tests read it
+	tlsState    tlsState     // what Settings shows about the TLS listener
 	closeTLS    func()       // closes tls AND its listener; a noop when it is off
 	cancel      context.CancelFunc
 	lockPath    string
@@ -174,10 +176,15 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version 
 	}
 	// Step 4: the mTLS listener, the last listener that can fail.
 	tlsSrv, tln, err := knomitapp.OpenTLSServer(srvCtx, config.TLSConfig{Addr: tl.Addr, Dir: tl.Dir}, tl.KeyPath, srv)
+	tstate := tlsState{Configured: tl.Addr}
 	switch {
 	case errors.Is(err, knomitapp.ErrTLSAddrInUse):
+		tstate.Reason = tlsAddrInUse
 		log.Warn().Err(err).Str("addr", tl.Addr).
 			Msg("tls listener address is held by another process (normally a `knomit serve` on this home); serving without the mTLS listener")
+	case err == nil && tlsSrv == nil && tl.Addr != "":
+		// OpenTLSServer's (nil, nil, nil) with an addr set: no certificate yet.
+		tstate.Reason = tlsNoCertificate
 	case err != nil:
 		cancel()
 		closeTCP()
@@ -188,6 +195,7 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version 
 	tlsAddr := ""
 	if tlsSrv != nil {
 		tlsAddr = tln.Addr().String()
+		tstate.Listening = tlsAddr
 		log.Info().Str("tls", "https://"+tlsAddr).Str("dir", tl.Dir).Msg("mTLS listener for enrolled instances")
 		// Close both: http.Server.Close closes only listeners Serve has
 		// registered, and the goroutine below may not have got there yet.
@@ -205,7 +213,7 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version 
 		closeSocket()
 		return nil, 0, fmt.Errorf("write lockfile: %w", err)
 	}
-	return &server{http: srv, tls: tlsSrv, tlsAddr: tlsAddr, closeTLS: closeTLS, cancel: cancel, lockPath: lockPath, closeSocket: closeSocket}, port, nil
+	return &server{http: srv, tls: tlsSrv, tlsAddr: tlsAddr, tlsState: tstate, closeTLS: closeTLS, cancel: cancel, lockPath: lockPath, closeSocket: closeSocket}, port, nil
 }
 
 // localListener is WHERE the local authenticated listener goes and WHETHER
@@ -240,4 +248,42 @@ type tlsListener struct {
 // pins it. keyPath is App.KeyPath(), the key app.New resolved.
 func tlsListenerFrom(cfg config.Config, keyPath string) tlsListener {
 	return tlsListener{Addr: cfg.TLS.Addr, Dir: cfg.TLS.Dir, KeyPath: keyPath}
+}
+
+// tlsState is what this boot did with [tls].addr, for the Settings window's
+// Fleet identity section: off (the zero value), listening, or configured but
+// not listening and why. It is recorded where bootServer takes each branch,
+// so it cannot disagree with the WARN the log shows. Only the availability
+// and not-yet-enrolled cases can reach it — a trust failure fails the boot.
+type tlsState struct {
+	Configured string `json:"configured"` // [tls].addr as this boot read it; "" = off
+	Listening  string `json:"listening"`  // the bound address; "" when not listening
+	Reason     string `json:"reason"`     // why Configured is not Listening
+}
+
+// The reasons a configured TLS listener is not listening.
+const (
+	tlsNoCertificate = "no_certificate" // [tls].addr set, nothing installed in [tls].dir
+	tlsAddrInUse     = "addr_in_use"    // app.ErrTLSAddrInUse: another process holds it
+)
+
+// tlsStatus carries a boot's tlsState to the Settings bindings. The boot
+// goroutine writes it once the server is up; GetIdentity reads it at any
+// time, including before (zero value, reported as "starting").
+type tlsStatus struct {
+	mu    sync.Mutex
+	st    tlsState
+	known bool
+}
+
+func (t *tlsStatus) set(st tlsState) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.st, t.known = st, true
+}
+
+func (t *tlsStatus) get() (tlsState, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.st, t.known
 }

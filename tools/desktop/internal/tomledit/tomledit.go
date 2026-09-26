@@ -110,6 +110,25 @@ func SetString(src []byte, table, key, value string) ([]byte, error) {
 	return []byte(joinLines(lines)), nil
 }
 
+// Has reports whether src assigns table.key, by exactly the matching
+// SetString uses to find the line it would update — same subset, same
+// limits. An empty table means the root table.
+func Has(src []byte, table, key string) bool {
+	inTarget := table == ""
+	for _, line := range splitLines(string(src)) {
+		code, _ := splitComment(strings.TrimSuffix(line, "\r"))
+		trimmed := strings.TrimSpace(code)
+		if isTableHeader(trimmed) {
+			inTarget = strings.TrimSpace(trimmed[1:len(trimmed)-1]) == table
+			continue
+		}
+		if inTarget && matchesKey(trimmed, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // isTableHeader reports whether a trimmed line is a `[name]` header. Arrays of
 // tables (`[[name]]`) are deliberately not treated as headers — they are out of
 // scope, and mishandling one is worse than ignoring it.

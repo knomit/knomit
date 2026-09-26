@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/ed25519"
-	"crypto/x509"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -186,7 +185,7 @@ func identityEnrollCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "enrolled %s serial=%s principal=%s@cert not_after=%s\n",
-				rec.SAN, rec.Serial, principalKind(pki.Role(role))+":"+rec.Fingerprint, rec.NotAfter.Format(time.RFC3339))
+				rec.SAN, rec.Serial, pki.PrincipalKind(pki.Role(role))+":"+rec.Fingerprint, rec.NotAfter.Format(time.RFC3339))
 			return nil
 		},
 	}
@@ -198,57 +197,6 @@ func identityEnrollCmd() *cobra.Command {
 	c.Flags().StringVar(&outPath, "out", "", "write the bundle here instead of stdout")
 	c.Flags().DurationVar(&validity, "validity", 90*24*time.Hour, "certificate validity")
 	return c
-}
-
-func principalKind(r pki.Role) string {
-	if r == pki.RoleOperator {
-		return "operator"
-	}
-	return "instance"
-}
-
-// splitBundle returns the instance certificate, the root certificate and the
-// CRL from a bundle, refusing anything else in it.
-func splitBundle(raw []byte) (leaf, root *x509.Certificate, rootPEM, crlPEM []byte, crl *x509.RevocationList, err error) {
-	for rest := raw; ; {
-		var blk *pem.Block
-		blk, rest = pem.Decode(rest)
-		if blk == nil {
-			break
-		}
-		switch blk.Type {
-		case "CERTIFICATE":
-			c, perr := x509.ParseCertificate(blk.Bytes)
-			if perr != nil {
-				return nil, nil, nil, nil, nil, perr
-			}
-			if c.IsCA {
-				if root != nil {
-					return nil, nil, nil, nil, nil, errors.New("bundle holds two root certificates")
-				}
-				root, rootPEM = c, pem.EncodeToMemory(blk)
-			} else {
-				if leaf != nil {
-					return nil, nil, nil, nil, nil, errors.New("bundle holds two instance certificates")
-				}
-				leaf = c
-			}
-		case "X509 CRL":
-			if crl != nil {
-				return nil, nil, nil, nil, nil, errors.New("bundle holds two CRLs")
-			}
-			crlPEM = pem.EncodeToMemory(blk)
-			if crl, err = x509.ParseRevocationList(blk.Bytes); err != nil {
-				return nil, nil, nil, nil, nil, fmt.Errorf("%w: %v", pki.ErrCRLInvalid, err)
-			}
-		default:
-			return nil, nil, nil, nil, nil, fmt.Errorf("bundle holds an unexpected %q block", blk.Type)
-		}
-	}
-	if leaf == nil || root == nil || crl == nil {
-		return nil, nil, nil, nil, nil, errors.New("bundle must hold an instance certificate, a root certificate and a CRL")
-	}
-	return leaf, root, rootPEM, crlPEM, crl, nil
 }
 
 func identityInstallCmd() *cobra.Command {
@@ -280,91 +228,25 @@ func identityInstallCmd() *cobra.Command {
 }
 
 // installBundle is `identity install` without the flag parsing, so tests can
-// drive it. Every check runs BEFORE anything is written.
+// drive it. The checks and the writes are pki.InstallBundle's, the one
+// implementation the desktop's Settings window also calls (knomit#256).
 func installBundle(out io.Writer, cfg config.Config, raw []byte, replaceRoot bool) error {
-	leaf, root, rootPEM, crlPEM, crl, err := splitBundle(raw)
-	if err != nil {
-		return err
-	}
-	keyPath := app.ResolveKeyPath(cfg)
-	_, pub, err := pki.LoadSigner(keyPath)
-	if err != nil {
-		return fmt.Errorf("instance key: %w", err)
-	}
-	if !pub.Equal(leaf.PublicKey) {
-		return fmt.Errorf("the bundle's certificate is for key %s, not this instance's %s (%s)",
-			pki.Short(fingerprintOf(leaf)), pki.Short(pki.Fingerprint(pub)), keyPath)
-	}
-	id, err := pki.VerifyInstanceChain(leaf, nil, root, crl, time.Now(), pki.UsageClient)
-	if err != nil {
-		return err
-	}
 	dir := cfg.TLS.Dir
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	// A different root is a different fleet: refuse unless asked. Nothing is
-	// reset when it is asked: the CRL watermark is kept PER ROOT
-	// (pki.AcceptedNumber), so the new fleet's CRL #1 is judged against the
-	// new root's entry, while an old bundle of a root seen before — after a
-	// detour A -> B -> A — is still judged against that root's own entry and
-	// refused if older.
-	if cur, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile)); err == nil && !cur.Equal(root) && !replaceRoot {
+	id, err := pki.InstallBundle(dir, app.ResolveKeyPath(cfg), raw, replaceRoot)
+	var rd *pki.RootDiffersError
+	if errors.As(err, &rd) {
 		return fmt.Errorf("this instance is enrolled under root %q and the bundle is from a different root %q; pass --replace-root to move it to the other fleet",
-			cur.Subject.CommonName, root.Subject.CommonName)
+			rd.Installed.CommonName, rd.Bundle.CommonName)
 	}
-	last, err := pki.AcceptedNumber(dir, root) // the BUNDLE's root, not the installed one
 	if err != nil {
-		return err
-	}
-	if _, err := pki.CheckCRL(crl, root, last); err != nil {
-		return fmt.Errorf("the bundle's CRL is older than the one this instance already holds: %w", err)
-	}
-	for _, f := range []struct {
-		name string
-		data []byte
-	}{
-		// The server's reloader adopts the three only as a set that verifies
-		// together, so the rename order cannot expose a torn state.
-		{pki.RootCertFile, rootPEM},
-		{pki.CRLFile, crlPEM},
-		{pki.InstanceCertFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})},
-	} {
-		if err := writeAtomic(filepath.Join(dir, f.name), f.data, 0o600); err != nil {
-			return err
-		}
-	}
-	if err := pki.RecordAcceptedNumber(dir, root, crl.Number); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "installed in %s\nprincipal: %s:%s@cert\nsan: %s\nnot_after: %s\n",
-		dir, principalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), id.NotAfter.Format(time.RFC3339))
+		dir, pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), id.NotAfter.Format(time.RFC3339))
 	if cfg.TLS.Addr == "" {
 		fmt.Fprintln(out, "the TLS listener is off; to accept enrolled peers add to knomit.toml:\n  [tls]\n  addr = \"0.0.0.0:19279\"")
 	} else {
 		fmt.Fprintln(out, "a running `knomit serve` picks this up within its recheck interval or on its next handshake; a stopped one on start")
-	}
-	return nil
-}
-
-func fingerprintOf(c *x509.Certificate) string {
-	if pub, ok := c.PublicKey.(ed25519.PublicKey); ok && len(pub) == ed25519.PublicKeySize {
-		return pki.Fingerprint(pub)
-	}
-	return "????????"
-}
-
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
 	}
 	return nil
 }
@@ -450,31 +332,23 @@ func identityShowCmd() *cobra.Command {
 }
 
 func showIdentity(out io.Writer, cfg config.Config) error {
-	keyPath := app.ResolveKeyPath(cfg)
-	_, pub, err := pki.LoadSigner(keyPath)
+	st, err := pki.Status(cfg.TLS.Dir, app.ResolveKeyPath(cfg))
 	if err != nil {
-		return fmt.Errorf("instance key: %w", err)
+		return err
 	}
-	fp := pki.Fingerprint(pub)
-	fmt.Fprintf(out, "key: %s\nfingerprint: %s\nshort: %s\n", keyPath, fp, pki.Short(fp))
-	dir := cfg.TLS.Dir
-	if !pki.HasInstanceCert(dir) {
+	fmt.Fprintf(out, "key: %s\nfingerprint: %s\nshort: %s\n", st.KeyPath, st.Fingerprint, pki.Short(st.Fingerprint))
+	switch {
+	case !st.Enrolled:
 		fmt.Fprintf(out, "certificate: none (not enrolled; see `knomit identity install`)\n")
-	} else if raw, err := os.ReadFile(filepath.Join(dir, pki.InstanceCertFile)); err == nil {
-		if blk, _ := pem.Decode(raw); blk != nil {
-			if c, err := x509.ParseCertificate(blk.Bytes); err == nil {
-				id, ierr := pki.IdentityOf(c)
-				if ierr != nil {
-					fmt.Fprintf(out, "certificate: unreadable identity: %v\n", ierr)
-				} else {
-					fmt.Fprintf(out, "principal: %s:%s@cert\nsan: %s\nserial: %s\nnot_after: %s\n",
-						principalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), c.SerialNumber.Text(16), c.NotAfter.Format(time.RFC3339))
-				}
-			}
-		}
+	case st.IdentityErr != nil:
+		fmt.Fprintf(out, "certificate: unreadable identity: %v\n", st.IdentityErr)
+	case st.Cert != nil:
+		id := st.Cert
+		fmt.Fprintf(out, "principal: %s:%s@cert\nsan: %s\nserial: %s\nnot_after: %s\n",
+			pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
 	}
-	if crl, err := pki.LoadCRL(filepath.Join(dir, pki.CRLFile)); err == nil {
-		fmt.Fprintf(out, "crl_number: %s\ncrl_next_update: %s\n", crl.Number, crl.NextUpdate.Format(time.RFC3339))
+	if st.CRL != nil {
+		fmt.Fprintf(out, "crl_number: %s\ncrl_next_update: %s\n", st.CRL.Number, st.CRL.NextUpdate.Format(time.RFC3339))
 	}
 	if cfg.TLS.Addr == "" {
 		fmt.Fprintln(out, "tls_listener: off ([tls].addr is empty)")

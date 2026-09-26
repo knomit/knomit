@@ -364,3 +364,158 @@
   color: var(--k-red);
   cursor: default;
 }
+
+/* ---- fleet identity (knomit#256) ------------------------------------------ */
+
+/* The listener address holds a host:port, wider than the port box and still
+   sized to its value. */
+.k-input.addr {
+  width: 150px;
+  flex: 0 0 auto;
+  font-family: var(--k-font-mono);
+}
+
+.fleet {
+  margin-top: 0.85rem;
+}
+
+.fleet-h {
+  margin: 0 0 0.35rem 0.15rem;
+}
+
+/* The same label column as a <label>, for rows whose control is not an input. */
+.row > .row-label {
+  font-size: 12.5px;
+  color: var(--k-text);
+}
+
+.fp,
+.fleet-san,
+.fleet-sub code,
+.fleet-roots code {
+  font-family: var(--k-font-mono);
+  font-size: 11px;
+  color: var(--k-text-2);
+}
+
+.fleet-san {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.fleet-facts {
+  flex-wrap: wrap;
+}
+
+.fleet-sub {
+  color: var(--k-muted);
+}
+
+.fleet-note {
+  margin: 0;
+  color: var(--k-muted);
+  font-size: 11.5px;
+}
+
+.fleet-ok {
+  color: var(--k-green);
+  font-size: 11.5px;
+}
+
+.fleet-warn {
+  color: var(--k-amber);
+}
+
+.fleet-bad {
+  color: var(--k-red);
+  font-size: 11.5px;
+}
+
+.fleet-listener {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.fleet-listener.is-ok {
+  color: var(--k-green);
+}
+
+.fleet-listener.is-warn {
+  color: var(--k-amber);
+}
+
+.fleet-listener.is-muted {
+  color: var(--k-muted);
+}
+
+.fleet-install {
+  flex-wrap: wrap;
+}
+
+/* A real file input, hidden inside its button-styled label: keyboard and the
+   OS picker come free. */
+.fleet-file {
+  position: relative;
+  cursor: pointer;
+}
+
+.fleet-file input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.fleet-confirm {
+  margin-top: 0.6rem;
+  font-size: 11.5px;
+}
+
+.fleet-confirm p {
+  margin: 0 0 0.4rem;
+}
+
+/* Fingerprints in full: the point of the question is that they can be
+   compared with what the operator says. They wrap rather than widen. */
+.fleet-roots {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0 0 0.5rem;
+}
+
+.fleet-roots dt {
+  color: var(--k-muted);
+}
+
+.fleet-roots dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fleet-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* The one destructive action in the window: an outline in the red accent,
+   not a filled red slab — it should read as "careful", not as the default. */
+.k-btn.is-danger {
+  color: var(--k-red);
+  border-color: var(--k-red);
+}
+
+.k-btn.is-danger:hover:not(:disabled) {
+  background: rgba(255, 136, 136, 0.08);
+  border-color: var(--k-red);
+}
+
+/* Buttons in the install row are secondary controls in a list row. */
+.fleet-install .k-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+}

@@ -176,8 +176,12 @@ func addrFree(addr string) error {
 
 func TestBootServer_TLSOffWithoutAddr(t *testing.T) {
 	n := newTLSNode(t, "")
-	if srv := n.boot(t); srv.tls != nil || srv.tlsAddr != "" {
+	srv := n.boot(t)
+	if srv.tls != nil || srv.tlsAddr != "" {
 		t.Fatalf("TLS listener opened with no [tls].addr: %v %q", srv.tls, srv.tlsAddr)
+	}
+	if srv.tlsState != (tlsState{}) {
+		t.Fatalf("TLS state %+v, want off", srv.tlsState)
 	}
 }
 
@@ -192,6 +196,10 @@ func TestBootServer_TLSConfiguredWithoutCertServesPlainOnlyAndWarns(t *testing.T
 	if !logs.hasWarn("no instance certificate installed", "dir", n.cfg.TLS.Dir) {
 		t.Fatalf("no WARN naming [tls].dir:\n%s", logs)
 	}
+	// What Settings shows: configured, not listening, and why.
+	if want := (tlsState{Configured: "127.0.0.1:0", Reason: tlsNoCertificate}); srv.tlsState != want {
+		t.Fatalf("TLS state %+v, want %+v", srv.tlsState, want)
+	}
 }
 
 // The headline: a `knomit serve`-style peer in the same fleet reaches the
@@ -202,6 +210,9 @@ func TestBootServer_TLSConfiguredWithoutCertServesPlainOnlyAndWarns(t *testing.T
 func TestBootServer_TLSPeerIsTheInstancePrincipal(t *testing.T) {
 	n := newTLSNode(t, "127.0.0.1:0")
 	srv := n.boot(t)
+	if want := (tlsState{Configured: "127.0.0.1:0", Listening: srv.tlsAddr}); srv.tlsAddr == "" || srv.tlsState != want {
+		t.Fatalf("TLS state %+v, want %+v", srv.tlsState, want)
+	}
 	if srv.tlsAddr == "" {
 		t.Fatal("no TLS listener with [tls].addr set and a certificate installed")
 	}
@@ -362,6 +373,9 @@ func TestBootServer_TLSAddrInUseWarnsAndServes(t *testing.T) {
 	resp.Body.Close()
 	if !logs.hasWarn("serving without the mTLS listener", "addr", held.Addr().String()) {
 		t.Fatalf("no WARN naming the held address:\n%s", logs)
+	}
+	if want := (tlsState{Configured: held.Addr().String(), Reason: tlsAddrInUse}); srv.tlsState != want {
+		t.Fatalf("TLS state %+v, want %+v", srv.tlsState, want)
 	}
 }
 

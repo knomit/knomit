@@ -300,3 +300,31 @@ func TestSetStringCollidesWithAnInlineTableOfTheSameName(t *testing.T) {
 		t.Fatalf("expected a duplicate-key parse failure; the doc describes one:\n%s", out)
 	}
 }
+
+// Has answers "does the file already assign table.key?" by the SAME matching
+// SetString uses, so a caller can decline to create a key it would otherwise
+// append (the Settings dialog does, for an empty [tls].addr).
+func TestHasMatchesWhatSetStringWouldUpdate(t *testing.T) {
+	src := `port = "19278"
+# addr = "commented"
+[tls]
+dir = "/x/pki" # mine
+[log]
+addr = "not the tls one"
+`
+	for _, tc := range []struct {
+		table, key string
+		want       bool
+	}{
+		{"", "port", true},
+		{"tls", "dir", true},
+		{"tls", "addr", false}, // only a commented-out one, and one in [log]
+		{"log", "addr", true},
+		{"", "addr", false},
+		{"missing", "x", false},
+	} {
+		if got := tomledit.Has([]byte(src), tc.table, tc.key); got != tc.want {
+			t.Errorf("Has(%q, %q) = %v, want %v", tc.table, tc.key, got, tc.want)
+		}
+	}
+}

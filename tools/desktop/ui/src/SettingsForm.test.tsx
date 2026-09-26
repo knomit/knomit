@@ -1,12 +1,15 @@
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SettingsForm, type Settings } from './SettingsForm.tsx'
+import type { FleetIdentity } from './fleet.ts'
+import { enrolled, notEnrolled } from './fleetFixtures.ts'
 
 const base: Settings = {
   port: '19278',
   logLevel: 'info',
   logFormat: 'console',
   startAtLogin: false,
+  tlsAddr: '',
   effectivePort: 19278,
   configPath: '/home/u/.knomit/knomit.toml',
   logFilePath: '/home/u/Library/Logs/knomit/knomit-desktop.log',
@@ -370,5 +373,120 @@ describe('SettingsForm', () => {
     expect(onRevealLog).not.toHaveBeenCalled()
     // And says why, rather than leaving an empty row the reader has to interpret.
     expect(screen.getByText(/set/i)).toHaveTextContent('[log] file')
+  })
+})
+
+describe('SettingsForm fleet listener ([tls].addr)', () => {
+  it('saves the address with everything else', async () => {
+    const { onSave } = renderForm()
+    fireEvent.change(screen.getByLabelText(/fleet listener/i), { target: { value: '0.0.0.0:19279' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(onSave).mock.calls[0][0]).toEqual({ ...base, tlsAddr: '0.0.0.0:19279' })
+  })
+
+  it('is read-only and says why when KNOMIT_TLS_ADDR owns it', () => {
+    renderForm({ overriddenByEnv: ['KNOMIT_TLS_ADDR'], tlsAddr: '0.0.0.0:20001' })
+    expect(screen.getByLabelText(/fleet listener/i)).toHaveAttribute('readonly')
+    expect(screen.getByText(/KNOMIT_TLS_ADDR/)).toBeInTheDocument()
+    expect(screen.getByLabelText(/^port$/i)).not.toHaveAttribute('readonly')
+  })
+
+  it.each([
+    ['0.0.0.0', /host:port/],
+    ['0.0.0.0:https', /host:port/],
+    ['0.0.0.0:443', /between 1024 and 65535/],
+    ['0.0.0.0:19278', /cannot share port 19278/],
+    ['https://0.0.0.0:19279', /host:port/],
+  ])('refuses %s before the round trip, on the field', async (addr, text) => {
+    const { onSave } = renderForm()
+    fireEvent.change(screen.getByLabelText(/fleet listener/i), { target: { value: addr } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(text)
+    expect(screen.getByLabelText(/fleet listener/i)).toHaveAttribute('aria-invalid', 'true')
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it.each(['', '0.0.0.0:19279', ':19279', '[::]:19279', 'knomit.lan:20000'])('accepts %j', async (addr) => {
+    const { onSave } = renderForm({ tlsAddr: '0.0.0.0:21000' })
+    fireEvent.change(screen.getByLabelText(/fleet listener/i), { target: { value: addr } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1))
+  })
+
+  it('offers the restart after an address change, saying what it applies', async () => {
+    renderForm()
+    fireEvent.change(screen.getByLabelText(/fleet listener/i), { target: { value: '0.0.0.0:19279' } })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    expect(await screen.findByRole('button', { name: /restart now/i })).toBeInTheDocument()
+    expect(screen.getByText(/fleet listener change takes effect after a restart/i)).toBeInTheDocument()
+    // Not a port change: no word about MCP clients.
+    expect(screen.queryByText(/MCP clients/i)).not.toBeInTheDocument()
+  })
+
+  it('offers no restart for a save that left the address alone', async () => {
+    const { onSave } = renderForm({ tlsAddr: '0.0.0.0:19279' })
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: /restart now/i })).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsForm restart after an install', () => {
+  const bundle = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n'
+  function withFleet(after: FleetIdentity) {
+    const onInstall = vi.fn().mockResolvedValue({
+      installed: true,
+      class: '',
+      message: '',
+      installedRootFingerprint: '',
+      bundleRootFingerprint: '',
+      identity: after,
+    })
+    render(
+      <SettingsForm
+        initial={base}
+        onSave={vi.fn().mockResolvedValue(undefined)}
+        onRestart={vi.fn().mockReturnValue(new Promise<void>(() => {}))}
+        onRevealLog={vi.fn().mockResolvedValue(undefined)}
+        onCancel={vi.fn()}
+        fleet={{
+          identity: notEnrolled,
+          onCopyPublicKey: vi.fn().mockResolvedValue(undefined),
+          onReadClipboard: vi.fn().mockResolvedValue(bundle),
+          onInstall,
+        }}
+      />,
+    )
+  }
+  async function install() {
+    fireEvent.click(screen.getByRole('button', { name: /paste from clipboard/i }))
+    await screen.findByText(/bundle loaded/i)
+    fireEvent.click(screen.getByRole('button', { name: /^install$/i }))
+    await screen.findByText(/^installed\./i)
+  }
+
+  // The first enrolment of a desktop that already has [tls].addr set: its
+  // listener was off for lack of a certificate, and installing starts nothing.
+  it('offers it when a listener is wanted and not running', async () => {
+    withFleet({
+      ...enrolled,
+      tls: { booted: true, configured: '0.0.0.0:19279', listening: '', reason: 'no_certificate', configuredNow: '0.0.0.0:19279' },
+    })
+    await install()
+    expect(await screen.findByRole('button', { name: /restart now/i })).toBeInTheDocument()
+    expect(screen.getByText(/fleet listener starts after a restart/i)).toBeInTheDocument()
+  })
+
+  it('does not offer it when the listener is already running (it adopts the files)', async () => {
+    withFleet(enrolled)
+    await install()
+    expect(screen.queryByRole('button', { name: /restart now/i })).not.toBeInTheDocument()
+  })
+
+  it('does not offer it when no listener is configured', async () => {
+    withFleet({ ...enrolled, tls: { booted: true, configured: '', listening: '', reason: '', configuredNow: '' } })
+    await install()
+    expect(screen.queryByRole('button', { name: /restart now/i })).not.toBeInTheDocument()
   })
 })

@@ -43,6 +43,9 @@ func newAuxWindows(app *application.App) *auxWindows {
 // to make it look broken.
 func settingsWindowOptions() application.WebviewWindowOptions {
 	return application.WebviewWindowOptions{
+		// The name is what gates the trust-changing bindings to this window
+		// (callerIsSettings): Wails reports the calling window by name.
+		Name:  settingsWindowName,
 		Title: "Knomit Settings",
 		URL:   settingsURL,
 		Width: 520,
