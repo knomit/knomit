@@ -138,9 +138,41 @@ func agentBranchFor(t *testing.T, s ssh.Signer) string {
 	return "agent/host-" + fp[:8]
 }
 
-// TestE4 covers proposal tests 3, 6b and 13: origin's copy of this
-// instance's agent branch is adopted only when its own commits are signed by
-// THIS instance's key, in every mode (the repo here is off).
+// cloneErr is clone without the success requirement.
+func (o *originFixture) cloneErr(agentBranch string, signer ssh.Signer, root RootOfTrust, accept ...plumbing.Hash) (*Service, error) {
+	o.t.Helper()
+	svc, err := Open(filepath.Join(o.t.TempDir(), "clone.db"))
+	require.NoError(o.t, err)
+	o.t.Cleanup(func() { _ = svc.Close() })
+	if signer != nil {
+		svc.SetSigner(signer)
+	}
+	if root != nil {
+		svc.SetRootOfTrust(root)
+	}
+	for _, h := range accept {
+		_, err := svc.rh.db.Exec(`INSERT INTO verify_accepted(commit_hash, accepted_at) VALUES (?, 0)`, h.String())
+		require.NoError(o.t, err)
+	}
+	_, _, err = svc.InitFromRemote(fileuri.New(o.bare), nil, "main", agentBranch, nil, nil)
+	return svc, err
+}
+
+// requireNoLocalBranches asserts a refused create left no local upstream and
+// no local agent branch behind.
+func requireNoLocalBranches(t *testing.T, svc *Service, names ...string) {
+	t.Helper()
+	for _, n := range names {
+		_, err := svc.rh.gits.Reference(plumbing.NewBranchReferenceName(n))
+		require.ErrorIs(t, err, plumbing.ErrReferenceNotFound, "a refused create must not create %s", n)
+	}
+}
+
+// TestE4 covers proposal tests 3, 6b and 13 and the ruling that E4 never
+// silently discards commits: origin's copy of this instance's agent branch is
+// adopted only when its own commits are signed by THIS instance's key, in
+// every mode (the repo here is off). Otherwise the create FAILS with a
+// ForeignLineageError, creates no local branch, and leaves the remote alone.
 func TestE4(t *testing.T) {
 	cases := map[string]struct {
 		signer   func(o *originFixture, me ssh.Signer) ssh.Signer // who signed the agent branch's own commit
@@ -167,15 +199,56 @@ func TestE4(t *testing.T) {
 			if c.noOwnKey {
 				s = nil
 			}
-			svc := o.clone(branch, s, o.root)
-			got := mustHeadHash(t, svc, branch)
+			svc, err := o.cloneErr(branch, s, o.root)
 			if c.adopt {
-				require.Equal(t, own.Hash, got, "the own-signed branch must be adopted")
-			} else {
-				require.Equal(t, mainTip.Hash, got, "a foreign lineage must not be adopted; bootstrap from the verified upstream")
+				require.NoError(t, err)
+				require.Equal(t, own.Hash, mustHeadHash(t, svc, branch), "the own-signed branch must be adopted")
+				return
 			}
+			var fl *ForeignLineageError
+			require.ErrorAs(t, err, &fl, "a foreign lineage must FAIL the create, loudly")
+			require.ErrorIs(t, err, ErrForeignLineage)
+			require.Len(t, fl.Refused, 1)
+			require.Contains(t, err.Error(), own.Hash.String()[:8], "the error names the refused commit")
+			require.Contains(t, err.Error(), "knomit verify accept", "the error names the remedies")
+			requireNoLocalBranches(t, svc, "main", branch)
+			ref, rerr := o.repo.Storer.Reference(plumbing.NewBranchReferenceName(branch))
+			require.NoError(t, rerr)
+			require.Equal(t, own.Hash, ref.Hash(), "the remote branch is left exactly as it was")
 		})
 	}
+}
+
+// TestE4_PreSigningCommitsAreNotDiscarded: the motivating case,
+// debian-dev-24971f37 on cyberai-kb (4 unsigned commits ahead of main). A
+// re-clone must refuse, keep those commits, and succeed once they are
+// accepted on this instance.
+func TestE4_PreSigningCommitsAreNotDiscarded(t *testing.T) {
+	o := newOriginFixture(t)
+	me := namedSigner(t, "me")
+	branch := agentBranchFor(t, me)
+	root := o.commit(o.baseFiles, nil)
+	mainTip := o.commit(with(o.baseFiles, "kb/m.md", "m"), o.a, root)
+	o.setBranch("main", mainTip)
+	files := with(o.baseFiles, "kb/m.md", "m")
+	var tip *object.Commit = mainTip
+	var unsigned []plumbing.Hash
+	for i := 0; i < 4; i++ {
+		files = with(files, "kb/pre"+string(rune('0'+i))+".md", "pre-signing")
+		tip = o.commit(files, nil, tip)
+		unsigned = append(unsigned, tip.Hash)
+	}
+	o.setBranch(branch, tip)
+
+	svc, err := o.cloneErr(branch, me, o.root)
+	var fl *ForeignLineageError
+	require.ErrorAs(t, err, &fl)
+	require.Len(t, fl.Refused, 4, "every refused commit is listed")
+	requireNoLocalBranches(t, svc, "main", branch)
+
+	svc, err = o.cloneErr(branch, me, o.root, unsigned...)
+	require.NoError(t, err, "accepted on this instance, the lineage is adopted")
+	require.Equal(t, tip.Hash, mustHeadHash(t, svc, branch))
 }
 
 // TestE4_OldCommitReplayedUnderMyName: proposal test 6b. An old commit of
@@ -189,8 +262,9 @@ func TestE4_OldCommitReplayedUnderMyName(t *testing.T) {
 	mainTip := o.commit(with(o.baseFiles, "kb/m.md", "m"), o.a, root)
 	o.setBranch("main", mainTip)
 	o.setBranch(agentBranchFor(t, me), old)
-	svc := o.clone(agentBranchFor(t, me), me, o.root)
-	require.Equal(t, mainTip.Hash, mustHeadHash(t, svc, agentBranchFor(t, me)))
+	svc, err := o.cloneErr(agentBranchFor(t, me), me, o.root)
+	require.ErrorIs(t, err, ErrForeignLineage)
+	requireNoLocalBranches(t, svc, "main", agentBranchFor(t, me))
 }
 
 // TestFirstContact_Subscription: InitSubscription places the upstream at the

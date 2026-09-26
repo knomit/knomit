@@ -441,6 +441,22 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	// originMainRef is the VERIFIED target from here on; every use below
 	// (bootstrap, adoption base, watermark) means "the upstream as verified".
 	originMainRef := plumbing.NewHashReference(originRemoteRef.Name(), target)
+
+	// E4 (F09, every mode, off included), BEFORE any local ref is set:
+	// origin's copy of THIS instance's agent branch is adopted only if every
+	// commit it holds beyond the verified upstream is signed by this
+	// instance's own key (or accepted on this instance). Otherwise the create
+	// FAILS with a ForeignLineageError naming the commits and the remedies. It
+	// never starts a fresh lineage under that name: that would overwrite the
+	// remote branch on the first push and silently discard its commits.
+	if agentBranch == "" {
+		agentBranch = defaultAgentBranch()
+	}
+	if remoteAgent, rerr := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch)); rerr == nil {
+		if e4err := s.rh.checkOwnLineage(context.Background(), agentBranch, remoteAgent.Hash(), originMainRef.Hash()); e4err != nil {
+			return "", false, fmt.Errorf("InitFromRemote: %w", e4err)
+		}
+	}
 	if err := s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(upstreamMain), originMainRef.Hash())); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: set local %s: %w", upstreamMain, err)
 	}
@@ -469,19 +485,6 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	agentRefName := plumbing.NewBranchReferenceName(agentBranch)
 	var watermarkHash plumbing.Hash
 	remoteAgentRef, remoteAgentErr := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", agentBranch))
-	// E4 (F09, every mode, off included): adopt origin/<agent> as THIS
-	// instance's lineage only if every commit it holds beyond the verified
-	// upstream is signed by this instance's own key. Otherwise — a forged
-	// branch, one carrying refused upstream commits, or a store with no signer
-	// to know its own key — bootstrap from the verified upstream instead; the
-	// first push then replaces the remote branch.
-	if remoteAgentErr == nil {
-		if e4err := s.rh.checkOwnLineage(remoteAgentRef.Hash(), originMainRef.Hash()); e4err != nil {
-			log.Warn().Err(e4err).Str("branch", agentBranch).
-				Msg("InitFromRemote: refusing to adopt origin's copy of this instance's agent branch; bootstrapping from the verified upstream")
-			remoteAgentErr = e4err
-		}
-	}
 	// The rule, applied here against the refs just fetched. ProbeInitialized
 	// applies the SAME function against the refs the remote advertises, so its
 	// prediction of what this create will read cannot drift from what it does.
