@@ -104,6 +104,8 @@ type RepoInstance struct {
 	methodologyMinScore float64
 	clusterResolution   float64
 	clusterMinCommunity int
+	// clusterNeighborKinds: see ClusterNeighborKinds.
+	clusterNeighborKinds []string
 	// Discovery dial + verification thresholds (emergent-fact discovery).
 	// See [config.DiscoveryConfig] for vocabulary.
 	discoveryEffortDefault string
@@ -504,6 +506,16 @@ func (ri *RepoInstance) ClusterResolution() float64 { return ri.clusterResolutio
 // ClusterMinCommunitySize returns the min community size paired with the resolution.
 func (ri *RepoInstance) ClusterMinCommunitySize() int { return ri.clusterMinCommunity }
 
+// ClusterNeighborKinds returns the fact kinds a clustering neighbour search may
+// return (config [cluster_cache] neighbor_kinds, default ["epistemic"];
+// knomit#308). It governs ScopedCluster's neighbour expansion and the prune
+// cousin sweep only — never seeds, and never dedupCluster, which stays
+// epistemic-only whatever this says. A copy, so no caller can widen it for
+// the next one.
+func (ri *RepoInstance) ClusterNeighborKinds() []string {
+	return append([]string(nil), ri.clusterNeighborKinds...)
+}
+
 // PipelineResumeWindow is how recently a pipeline session must have been used
 // for a new start to resume it instead of displacing it
 // (session.pipeline_resume_window). Zero falls back to the default.
@@ -733,6 +745,9 @@ type TestInstanceConfig struct {
 	// PipelineResumeWindow overrides session.pipeline_resume_window. Zero
 	// means the default.
 	PipelineResumeWindow time.Duration
+	// NeighborKinds overrides cluster_cache.neighbor_kinds. Nil means the
+	// default, ["epistemic"].
+	NeighborKinds []string
 }
 
 // TestQualityConfig mirrors the discovery.quality block for test instances.
@@ -770,6 +785,7 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		pipelineResumeWindow: cfg.PipelineResumeWindow,
 		clusterResolution:    defaultClusterResolution,
 		clusterMinCommunity:  defaultClusterMinCommunitySize,
+		clusterNeighborKinds: clusterNeighborKindsOrDefault(cfg.NeighborKinds),
 		// Mirror config.Defaults(): neither blast-radius nor confidence
 		// accessors re-default 0 (explicit 0 means "gate disabled"), so test
 		// instances must carry the production defaults explicitly.

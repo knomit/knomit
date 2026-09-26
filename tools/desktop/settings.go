@@ -253,6 +253,12 @@ func setAutostart(tog autostart.Toggler, on bool) error {
 // configFileMode is what a dialog-created knomit.toml gets. Owner-only, because
 // the file can hold an LLM API key ([llm] api_key). An existing file keeps
 // whatever mode the user gave it.
+//
+// On Windows the mode is meaningless: Go maps it onto the read-only attribute
+// alone, and the file is private because it inherits the data root's DACL
+// (internal/platform/privdir, applied at boot) through the temp file the
+// rename carries in. The "keep the user's mode" Stat in writeConfigFile reads
+// 0666 there for any writable file and carries nothing.
 const configFileMode fs.FileMode = 0o600
 
 // writeConfigFile replaces path's contents atomically: a temp file in the same

@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
+	"knomit/internal/platform/privdir"
 )
 
 // warmModelsCmd builds the `knomit warm-models` subcommand. It downloads the
@@ -35,6 +36,12 @@ func warmModelsCmd() *cobra.Command {
 			model, err := embeddings.Lookup(id)
 			if err != nil {
 				return fmt.Errorf("unknown embedding model %q: %w", id, err)
+			}
+			// The data root is private before the download creates it (at
+			// 0755) as the first thing ever run on a machine: `warm-models`
+			// is a Docker build and install step that precedes any serve.
+			if err := privdir.Ensure(cfg.Home); err != nil {
+				return fmt.Errorf("data root %s: %w", cfg.Home, err)
 			}
 			cacheDir := filepath.Join(cfg.Home, "models")
 			modelPath, tokPath, err := embeddings.EnsureModel(cmd.Context(), model, cacheDir)

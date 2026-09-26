@@ -923,7 +923,7 @@ func TestHandleHALSetOrigin_RefusesARemoteWithADifferentOntology(t *testing.T) {
 
 	// A repo on the CODE taxonomy.
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`))))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
@@ -936,7 +936,7 @@ func TestHandleHALSetOrigin_RefusesARemoteWithADifferentOntology(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	body := `{"url":"` + url + `","branch":"main"}`
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
+	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409; body = %s", rec.Code, rec.Body.String())
@@ -958,7 +958,7 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 	r := s.NewAPIRouter()
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPost, "/repos",
+	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPost, "/repos",
 		strings.NewReader(`{"name":"kb","mode":"preset","ontology_preset":"code"}`))))
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("create: status = %d, body = %s", rec.Code, rec.Body.String())
@@ -970,7 +970,7 @@ func TestHandleHALSetOrigin_PlainRemoteIsAllowedAndKeepsTheOntology(t *testing.T
 
 	rec = httptest.NewRecorder()
 	body := `{"url":"` + url + `","branch":"main"}`
-	r.ServeHTTP(rec, fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
+	r.ServeHTTP(rec, fromLoopback(newJSONRequest(http.MethodPut, "/repos/kb/origin", strings.NewReader(body))))
 
 	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want the attach to be allowed; body = %s", rec.Code, rec.Body.String())

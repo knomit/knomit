@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -450,9 +449,7 @@ func handleHALSetOrigin(b hal.URLBuilder, m *repos.Manager, op originProvider) h
 		ri := repos.RepoFromContext(r.Context())
 
 		var req setOriginRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
-				err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 		// Before every read of req.URL below — the local-origin gate, the
@@ -580,9 +577,7 @@ func handleHALSetOriginUpstream(b hal.URLBuilder, m *repos.Manager, op originPro
 		ri := repos.RepoFromContext(r.Context())
 
 		var req upstreamRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
-				err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 		if req.Branch == "" {

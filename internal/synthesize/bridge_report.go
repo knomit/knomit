@@ -54,6 +54,7 @@ func BridgeComponentReport(
 	eff Effort,
 	resolution float64,
 	minCommunitySize int,
+	neighborKinds []string,
 	cfg QualityConfig,
 ) ([]ScoredBridge, error) {
 	// 1. Load pool via Search, mirroring hypothesize.go:138-150.
@@ -71,6 +72,7 @@ func BridgeComponentReport(
 			Title:       r.Title,
 			Body:        r.Body,
 			Type:        r.Type,
+			Kind:        r.Kind,
 			Domain:      r.Domain,
 			Entities:    r.Entities,
 			Confidence:  r.Confidence,
@@ -83,7 +85,7 @@ func BridgeComponentReport(
 	// 2. Cluster the pool to get community assignments. Same in-process scoped
 	// clustering the production pipeline uses (ScopedCluster → Louvain over
 	// idx.SubgraphEdges), adapted to ClusterResult for the bridge engine.
-	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, func(ProgressEvent) {}, branch)
+	groups, err := ScopedCluster(ctx, seeds, idx, resolution, minCommunitySize, neighborKinds, func(ProgressEvent) {}, branch)
 	if err != nil {
 		return nil, err
 	}

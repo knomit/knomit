@@ -382,8 +382,7 @@ func handleHALLensesCreate(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc 
 			return
 		}
 		var req createLensRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 		if rejectUnknownMembers(w, r, m.Repos(), req.Write.UID, req.Reads) {
@@ -445,8 +444,7 @@ func handleHALLensPatch(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 			return
 		}
 		var req patchLensRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 

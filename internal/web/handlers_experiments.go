@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -139,9 +138,7 @@ func handleExperimentOpen(b hal.URLBuilder, expiryDays int) http.HandlerFunc {
 		ri := repos.RepoFromContext(r.Context())
 
 		var req experimentCreateRequest
-		if derr := json.NewDecoder(r.Body).Decode(&req); derr != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
-				derr.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
 		// The refusals that are ABOUT THE REPO come first and name the repo's
@@ -195,9 +192,8 @@ func handleExperimentAction(b hal.URLBuilder, action string, expiryDays int) htt
 		// REST takes the same resolutions as the MCP tool — the mirrored
 		// surfaces must not disagree about what commit MEANS. It is a body on
 		// a POST, optional and absent for an ordinary commit.
-		adjudications, perr := decodeResolutions(r)
-		if perr != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid resolutions", perr.Error(), r.URL.Path)
+		adjudications, decoded := decodeResolutions(w, r)
+		if !decoded {
 			return
 		}
 		if len(adjudications) > 0 && action != "commit" {
@@ -315,24 +311,30 @@ func experimentForResolutions(ctx context.Context, ri *repos.RepoInstance, name 
 // the reason the store's ResolutionSide doc gives: the two surfaces are one
 // feature, and a client that learned the vocabulary from one must not be
 // surprised by the other.
-func decodeResolutions(r *http.Request) (map[string]store.Resolution, error) {
-	if r.Body == nil {
-		return nil, nil
-	}
+func decodeResolutions(w http.ResponseWriter, r *http.Request) (map[string]store.Resolution, bool) {
 	var body struct {
 		Resolutions map[string]json.RawMessage `json:"resolutions"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, nil // no body at all: an ordinary commit
-		}
-		return nil, fmt.Errorf("body is not JSON: %w", err)
+	// Optional: no body at all is an ordinary commit.
+	if !decodeOptionalJSON(w, r, &body, 0) {
+		return nil, false
 	}
-	if len(body.Resolutions) == 0 {
+	out, err := parseResolutions(body.Resolutions)
+	if err != nil {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid resolutions", err.Error(), r.URL.Path)
+		return nil, false
+	}
+	return out, true
+}
+
+// parseResolutions checks the shape of each resolution: "ours", "theirs", or
+// {"body": "..."} with a non-empty body.
+func parseResolutions(resolutions map[string]json.RawMessage) (map[string]store.Resolution, error) {
+	if len(resolutions) == 0 {
 		return nil, nil
 	}
-	out := make(map[string]store.Resolution, len(body.Resolutions))
-	for path, raw := range body.Resolutions {
+	out := make(map[string]store.Resolution, len(resolutions))
+	for path, raw := range resolutions {
 		var side string
 		if err := json.Unmarshal(raw, &side); err == nil {
 			switch side {

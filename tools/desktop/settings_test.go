@@ -407,9 +407,11 @@ func TestApplySettingsFilePermissions(t *testing.T) {
 	// Windows synthesises Perm() from the read-only attribute alone: every
 	// writable file reads 0666, so neither "not group/world readable" nor
 	// "mode preserved at 0644" is expressible. Keeping the API key off other
-	// users there is an ACL question, and nothing in this tree sets ACLs.
+	// users there is an ACL question: the data root's DACL, which the file
+	// inherits. TestApplySettingsFilePermissions_Windows is this test's twin
+	// (settings_permissions_windows_test.go).
 	if runtime.GOOS == "windows" {
-		t.Skip("Unix mode bits are not represented on Windows; see the ACL note above")
+		t.Skip("Unix mode bits are not represented on Windows; see TestApplySettingsFilePermissions_Windows")
 	}
 	dir := t.TempDir()
 	s := Settings{Port: "19278", LogLevel: "info", LogFormat: "console"}

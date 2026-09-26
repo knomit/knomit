@@ -901,6 +901,7 @@ func enqueueRestatementItems(ctx context.Context, d Deps, sess *store.PipelineSe
 				Title:      f.Title,
 				Body:       f.Body,
 				Type:       f.Type,
+				Kind:       f.Kind,
 				Domain:     f.Domain,
 				Entities:   f.Entities,
 				Confidence: f.Confidence,

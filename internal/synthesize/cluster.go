@@ -5,6 +5,7 @@ package synthesize
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"sort"
 	"sync"
@@ -32,7 +33,7 @@ const (
 
 // ScopedCluster builds clusters containing only seed facts and their nearest neighbors.
 // Algorithm:
-// 1. For each seed, find neighbors via idx.Search (semantic similarity) scoped to same category
+// 1. For each seed, find neighbors via idx.Search (semantic similarity) scoped to same category and neighborKinds
 // 2. Build subgraph of seeds + neighbors
 // 3. Run Louvain (gonum) over the subgraph's SIMILAR_TO edges (idx.SubgraphEdges) in-process
 // 4. Fallback to grouping by category path if the edge read fails or yields no clusters
@@ -41,12 +42,16 @@ func ScopedCluster(ctx context.Context,
 	idx SearchQuery,
 	resolution float64,
 	minCommunitySize int,
+	neighborKinds []string,
 	onProgress func(ProgressEvent),
 	agentBranch string,
 	excludeTypes ...string,
 ) ([][]factForLLM, error) {
 	if len(seeds) == 0 {
 		return nil, nil
+	}
+	if err := requireNeighborKinds(neighborKinds); err != nil {
+		return nil, err
 	}
 
 	if onProgress == nil {
@@ -80,6 +85,12 @@ func ScopedCluster(ctx context.Context,
 				Path:         cat,
 				Limit:        10,
 				ExcludeTypes: excludeTypes,
+				// Which kinds may be a NEIGHBOUR (knomit#308): config
+				// [cluster_cache] neighbor_kinds, default epistemic. Seeds are
+				// already epistemic-only (reviewStrategy.AcceptSeed); without
+				// this a policy filed beside a seed was pulled into its cluster
+				// and could be merged or judged as a near-duplicate.
+				IncludeKinds: neighborKinds,
 			})
 
 			mu.Lock()
@@ -94,7 +105,7 @@ func ScopedCluster(ctx context.Context,
 				if _, exists := factByPath[r.Path]; !exists {
 					factByPath[r.Path] = factForLLM{
 						File: r.Path, Title: r.Title, Body: r.Body,
-						Type: r.Type, Domain: r.Domain, Entities: r.Entities,
+						Type: r.Type, Kind: r.Kind, Domain: r.Domain, Entities: r.Entities,
 						Motifs: r.Motifs, Confidence: r.Confidence, Sources: r.Sources,
 					}
 				}
@@ -221,4 +232,16 @@ func filterSmallClusters(clusters [][]factForLLM, minCommunitySize int) [][]fact
 		}
 	}
 	return out
+}
+
+// requireNeighborKinds refuses an empty neighbour-kind list. The store reads an
+// empty IncludeKinds as "no kind filter", so passing one through would widen
+// every neighbour search to every kind — the opposite of what an unset list
+// should mean. Config refuses [] at boot; this is the same rule for callers
+// that do not come through config, failing loudly instead of defaulting.
+func requireNeighborKinds(kinds []string) error {
+	if len(kinds) == 0 {
+		return fmt.Errorf("scoped-cluster: neighbour kinds must not be empty (config [cluster_cache] neighbor_kinds)")
+	}
+	return nil
 }

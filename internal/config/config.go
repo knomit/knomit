@@ -139,6 +139,25 @@ type ClusterCacheConfig struct {
 	// granularity. MinCommunitySize relabels communities smaller than this as noise.
 	Resolution       float64 `toml:"resolution"`
 	MinCommunitySize int     `toml:"min_community_size"`
+	// NeighborKinds lists the fact kinds a clustering NEIGHBOUR search may
+	// return (knomit#308): ScopedCluster's per-seed expansion, which every
+	// review, distill, bridge and discover cluster is built from, and the
+	// prune cousin sweep. Default ["epistemic"]. Vocabulary: "epistemic",
+	// "pragmatic"; no duplicates; an EMPTY list is refused, because it would
+	// mean no neighbours at all. Env: KNOMIT_CLUSTER_CACHE_NEIGHBOR_KINDS,
+	// comma-separated.
+	//
+	// Adding "pragmatic" makes policies, heuristics and signals cluster
+	// NEIGHBOURS: they join clusters and so the cluster topology, the bridges
+	// and discover. It NEVER makes them seeds (the seed filter is fixed at
+	// epistemic), and mechanical dedup NEVER merges across kinds whatever this
+	// says (dedupCluster pins its own search to epistemic and refuses a
+	// mixed-kind pair). But the prune judge and a RAPTOR distill act on what a
+	// cluster holds, and their write path (mergedFact, distillFact) does not
+	// carry Kind, so a judged merge or distill over a widened cluster can
+	// still rewrite a policy as an epistemic fact. Widening is a hook for
+	// future work to use knowingly, not a supported production setting yet.
+	NeighborKinds []string `toml:"neighbor_kinds"`
 }
 
 // DiscoveryConfig tunes the emergent-fact discovery engine (effort dial,
@@ -438,6 +457,7 @@ func Defaults() Config {
 		ClusterCache: ClusterCacheConfig{
 			Resolution:       4.0,
 			MinCommunitySize: 2,
+			NeighborKinds:    []string{"epistemic"},
 		},
 		Auth: AuthConfig{
 			// Everything a local operator could do before [auth] existed.
@@ -587,6 +607,7 @@ func Load() (Config, error) {
 	if err := envBoolOr("KNOMIT_RUNTIME_ALLOW_REMOTE", &cfg.Runtime.AllowRemote); err != nil {
 		return Config{}, err
 	}
+	envListOr("KNOMIT_CLUSTER_CACHE_NEIGHBOR_KINDS", &cfg.ClusterCache.NeighborKinds)
 	for _, err := range []error{
 		envFloatOr("KNOMIT_CLUSTER_CACHE_RESOLUTION", &cfg.ClusterCache.Resolution),
 		envIntOr("KNOMIT_CLUSTER_CACHE_MIN_COMMUNITY_SIZE", &cfg.ClusterCache.MinCommunitySize),
@@ -634,8 +655,13 @@ func Load() (Config, error) {
 	//
 	// It is the local bridge's credential -- the OS tells the server who is
 	// on the other end (internal/auth.PeerCred) -- so it has to exist without
-	// being configured. What guards it is the 0700 data root on unix and the
-	// pipe ACL on Windows (internal/auth.ListenLocal opens both).
+	// being configured. What guards it is the private data root on unix and
+	// the pipe ACL on Windows (internal/auth.ListenLocal opens both). The root
+	// is 0700 because internal/platform/privdir.Ensure creates it so, or
+	// tightens it at boot when this user owns it; a root owned by someone else
+	// is only warned about. Before privdir nothing enforced it, and existing
+	// roots were 0755. privdir makes the root private on Windows too, by DACL,
+	// but the pipe does not live in it.
 	//
 	// EVERY platform gets one now. Windows had no default here through phase
 	// 1, which is what made [auth].require = true a silent lockout there
@@ -693,6 +719,9 @@ func (c Config) Validate() error {
 	// rather than on the first tick.
 	if c.Experiments.ExpiryDays < 0 {
 		return fmt.Errorf("config: experiments.expiry_days must be >= 0 (0 means never expire), got %d", c.Experiments.ExpiryDays)
+	}
+	if err := ValidateNeighborKinds(c.ClusterCache.NeighborKinds); err != nil {
+		return err
 	}
 	// discovery.effort_default is consumed raw by the MCP review/hypothesize
 	// handlers (it is NOT coerced like discovery.bridge), so an unknown value
@@ -828,6 +857,48 @@ func IgnoredExecutableConfig(homePath string) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// ValidateNeighborKinds checks cluster_cache.neighbor_kinds, and any tool flag
+// that stands in for it. The vocabulary
+// mirrors fact.Epistemic / fact.Pragmatic, kept as literals to avoid a
+// config→fact import (the same reason discovery.effort_default spells out
+// synthesize.Effort). Empty is refused rather than defaulted: an empty
+// IncludeKinds means "no kind filter" to the store, so a list emptied by
+// mistake would silently widen every neighbour search to every kind.
+func ValidateNeighborKinds(kinds []string) error {
+	if len(kinds) == 0 {
+		return fmt.Errorf("config: cluster_cache.neighbor_kinds must not be empty (it would leave clustering no neighbours); use [\"epistemic\"] for the default")
+	}
+	seen := make(map[string]bool, len(kinds))
+	for _, k := range kinds {
+		switch k {
+		case "epistemic", "pragmatic":
+		default:
+			return fmt.Errorf("config: cluster_cache.neighbor_kinds entries must be one of epistemic, pragmatic, got %q", k)
+		}
+		if seen[k] {
+			return fmt.Errorf("config: cluster_cache.neighbor_kinds lists %q twice", k)
+		}
+		seen[k] = true
+	}
+	return nil
+}
+
+// envListOr overlays a comma-separated list env var. Entries are trimmed and
+// kept as written, empty ones included, so a malformed value reaches Validate
+// and fails at boot instead of being quietly repaired.
+func envListOr(key string, target *[]string) {
+	v := os.Getenv(key)
+	if strings.TrimSpace(v) == "" {
+		return
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, len(parts))
+	for i, p := range parts {
+		out[i] = strings.TrimSpace(p)
+	}
+	*target = out
 }
 
 func envOr(key string, target *string) {

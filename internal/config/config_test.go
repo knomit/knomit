@@ -866,3 +866,104 @@ func plantBesideExecutable(t *testing.T) string {
 	t.Cleanup(func() { _ = os.Remove(beside) })
 	return beside
 }
+
+// cluster_cache.neighbor_kinds (knomit#308): which fact kinds a clustering
+// neighbour search may return. Default epistemic only; the vocabulary is the
+// two kinds; an empty list is refused because the store reads an empty kind
+// filter as "every kind".
+func TestNeighborKinds_DefaultIsEpistemicOnly(t *testing.T) {
+	if got := Defaults().ClusterCache.NeighborKinds; len(got) != 1 || got[0] != "epistemic" {
+		t.Fatalf("Defaults().ClusterCache.NeighborKinds = %v, want [epistemic]", got)
+	}
+	t.Setenv("KNOMIT_HOME", t.TempDir())
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.ClusterCache.NeighborKinds; len(got) != 1 || got[0] != "epistemic" {
+		t.Fatalf("Load with no TOML: NeighborKinds = %v, want [epistemic]", got)
+	}
+}
+
+func TestNeighborKinds_Validate(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kinds []string
+		want  string // "" = valid
+	}{
+		{"default", []string{"epistemic"}, ""},
+		{"widened", []string{"epistemic", "pragmatic"}, ""},
+		{"pragmatic alone", []string{"pragmatic"}, ""},
+		{"empty", []string{}, "must not be empty"},
+		{"nil", nil, "must not be empty"},
+		{"unknown", []string{"bogus"}, `got "bogus"`},
+		{"blank entry", []string{"epistemic", ""}, `got ""`},
+		{"duplicate", []string{"epistemic", "epistemic"}, "twice"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Defaults()
+			c.ClusterCache.NeighborKinds = tc.kinds
+			err := c.Validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("Validate(%v): %v", tc.kinds, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "cluster_cache.neighbor_kinds") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate(%v) = %v, want an error naming cluster_cache.neighbor_kinds and %q", tc.kinds, err, tc.want)
+			}
+		})
+	}
+}
+
+// An operator who writes `neighbor_kinds = []` must be refused at boot, not
+// quietly handed the default — and not handed "every kind" either.
+func TestNeighborKinds_FromTOML(t *testing.T) {
+	for _, tc := range []struct {
+		toml    string
+		want    []string
+		wantErr bool
+	}{
+		{"[cluster_cache]\nneighbor_kinds = [\"epistemic\", \"pragmatic\"]\n", []string{"epistemic", "pragmatic"}, false},
+		{"[cluster_cache]\nneighbor_kinds = []\n", nil, true},
+		{"[cluster_cache]\nneighbor_kinds = [\"bogus\"]\n", nil, true},
+	} {
+		home := t.TempDir()
+		t.Setenv("KNOMIT_HOME", home)
+		if err := os.WriteFile(filepath.Join(home, "knomit.toml"), []byte(tc.toml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load()
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("Load(%q) accepted NeighborKinds %v", tc.toml, cfg.ClusterCache.NeighborKinds)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("Load(%q): %v", tc.toml, err)
+		}
+		if strings.Join(cfg.ClusterCache.NeighborKinds, ",") != strings.Join(tc.want, ",") {
+			t.Fatalf("Load(%q): NeighborKinds = %v, want %v", tc.toml, cfg.ClusterCache.NeighborKinds, tc.want)
+		}
+	}
+}
+
+func TestNeighborKinds_EnvOverride(t *testing.T) {
+	t.Setenv("KNOMIT_HOME", t.TempDir())
+	t.Setenv("KNOMIT_CLUSTER_CACHE_NEIGHBOR_KINDS", " epistemic , pragmatic ")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := strings.Join(cfg.ClusterCache.NeighborKinds, ","); got != "epistemic,pragmatic" {
+		t.Fatalf("env override NeighborKinds = %q, want epistemic,pragmatic", got)
+	}
+
+	// A malformed list reaches Validate instead of being repaired.
+	t.Setenv("KNOMIT_CLUSTER_CACHE_NEIGHBOR_KINDS", "epistemic,,pragmatic")
+	if _, err := Load(); err == nil {
+		t.Fatal("a list with an empty entry was accepted")
+	}
+}

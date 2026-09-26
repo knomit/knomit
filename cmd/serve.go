@@ -22,6 +22,7 @@ import (
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/platform/diag"
 	"knomit/internal/platform/logging"
+	"knomit/internal/platform/privdir"
 )
 
 // logTapLines is how many recent log lines the server keeps for the Manage
@@ -90,6 +91,17 @@ func serveCmd() *cobra.Command {
 			}
 			zerolog.SetGlobalLevel(lvl)
 			log.Logger = lg
+
+			// The data root is private before the first thing below writes
+			// into it: the crash log redirect, the crash reporter and the
+			// running marker all MkdirAll 0755, and whichever ran first used
+			// to decide the root's mode. Right after the logger, so what
+			// Ensure reports lands in the configured log; before the first
+			// log line, which could create a log file under the root.
+			// app.New calls it again as the backstop for other entry points.
+			if err := privdir.Ensure(cfg.Home); err != nil {
+				return fmt.Errorf("data root %s: %w", cfg.Home, err)
+			}
 			if ignored := config.IgnoredExecutableConfig(cfg.Home); ignored != "" {
 				log.Warn().Str("ignored", ignored).Str("read", filepath.Join(cfg.Home, "knomit.toml")).
 					Msg("knomit.toml beside the executable is not read; move its settings into the data root's knomit.toml")

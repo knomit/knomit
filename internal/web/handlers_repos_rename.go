@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -99,10 +98,8 @@ func handleHALRepoRename(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		oldName := chi.URLParam(r, "repo")
 
-		r.Body = http.MaxBytesReader(w, r.Body, maxRenameBodyBytes)
 		var req renameRepoRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body", err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &req, maxRenameBodyBytes) {
 			return
 		}
 		if req.Name == "" {

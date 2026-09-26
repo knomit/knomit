@@ -19,6 +19,34 @@ import (
 // maxConcurrentNeighborSearches in cluster.go.
 const maxConcurrentDedupSearches = 8
 
+// dedupSearchKinds pins dedupCluster's candidate search to epistemic facts.
+// It is NOT [cluster_cache] neighbor_kinds and must never become it: that list
+// widens what CLUSTERS may hold, and dedup is the one consumer that acts on a
+// cluster with no judge. A widened cluster may hold a policy; this search then
+// cannot return it (knomit#308). It does not stop the search that STARTS at the
+// policy from returning an observation — sameKnownKind is what refuses that pair.
+var dedupSearchKinds = []string{string(fact.Epistemic)}
+
+// sameKnownKind reports whether a and b may be merged by kind: both kinds must
+// be known and equal (knomit#308).
+//
+// dedupCluster does NOT go through mergedFact: it re-parses the WINNER from its
+// own file, so the winner keeps its kind, writes it back, and DELETES the
+// loser. A cross-kind pair therefore corrupts by deletion, not by rewriting:
+// if the policy loses, the policy is deleted; if it wins, the observation is
+// deleted into it. That is why this check must outlive the seed filter:
+// convention 8b26a25d allows AcceptSeed to go once mergedFact/distillFact carry
+// Kind, but carrying Kind changes nothing here — dedup deletes across kinds
+// whatever mergedFact does.
+//
+// It fails CLOSED on an empty Kind: "" never equals anything here, including
+// another "". A projection site that forgot to fill Kind must make its facts
+// unmergeable, never mergeable — normalising "" to epistemic at this check
+// would re-admit exactly the pragmatic fact whose kind was dropped.
+func sameKnownKind(a, b factForLLM) bool {
+	return a.Kind != "" && a.Kind == b.Kind
+}
+
 // mergePair represents two facts that are candidates for merging.
 type mergePair struct {
 	a          factForLLM
@@ -190,6 +218,7 @@ func dedupCluster(
 				QueryByPath:   fact.File,
 				MinSimilarity: threshold,
 				Limit:         10,
+				IncludeKinds:  dedupSearchKinds,
 			}
 			results, err := idx.Search(gctx, agentBranch, sq)
 			if err != nil {
@@ -206,6 +235,15 @@ func dedupCluster(
 				}
 				// Skip self-match.
 				if r.Path == fact.File {
+					continue
+				}
+				// Never pair across kinds, or with a member whose kind is
+				// unknown. Unconditional: no config reaches this.
+				if !sameKnownKind(fact, other) {
+					log.Debug().
+						Str("a", fact.File).Str("a_kind", fact.Kind).
+						Str("b", other.File).Str("b_kind", other.Kind).
+						Msg("dedup: skipping cross-kind or unknown-kind pair")
 					continue
 				}
 				// Deduplicate symmetric pairs by normalising to (lexicographically smaller, larger).

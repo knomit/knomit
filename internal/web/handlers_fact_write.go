@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -206,9 +205,7 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		var body struct {
 			Content string `json:"content"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			hal.WriteProblem(w, http.StatusBadRequest, "Invalid request body",
-				err.Error(), r.URL.Path)
+		if !decodeJSON(w, r, &body, 0) {
 			return
 		}
 

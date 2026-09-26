@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"knomit/internal/config"
+	"knomit/internal/platform/privdir"
 )
 
 // Credentials is what `kb login` keeps for one knomit host: the OAuth token
@@ -86,14 +87,15 @@ func LoadCredentials(u *url.URL) (*Credentials, error) {
 	return &c, nil
 }
 
-// SaveCredentials writes them at 0600 in a 0700 directory, via a temp file
-// and a rename so a concurrent reader never sees half a file.
+// SaveCredentials writes them at 0600 in a 0700 directory under the private
+// data root (see ensureCredentialsDir), via a temp file and a rename so a
+// concurrent reader never sees half a file.
 func SaveCredentials(u *url.URL, c *Credentials) error {
 	p, err := CredentialsPath(u)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	if err := ensureCredentialsDir(p); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(c, "", "  ")
@@ -140,7 +142,7 @@ func withCredentialsLock(ctx context.Context, u *url.URL, fn func() error) error
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	if err := ensureCredentialsDir(p); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(p+".lock", os.O_RDWR|os.O_CREATE, 0o600)
@@ -153,4 +155,18 @@ func withCredentialsLock(ctx context.Context, u *url.URL, fn func() error) error
 	}
 	defer unlockFile(f)
 	return fn()
+}
+
+// ensureCredentialsDir creates the directory that holds p, making the data
+// root above it private first (privdir.Ensure). `kb login` can be the first
+// thing ever run on a machine, before any server boot has done that, and on
+// Windows the token files are private only by inheriting the root's DACL:
+// their 0600 is a no-op there.
+func ensureCredentialsDir(p string) error {
+	// <home>/credentials/<file>: the two levels are CredentialsPath's layout.
+	dir := filepath.Dir(p)
+	if err := privdir.Ensure(filepath.Dir(dir)); err != nil {
+		return err
+	}
+	return os.MkdirAll(dir, 0o700)
 }

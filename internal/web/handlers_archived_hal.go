@@ -1,7 +1,6 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -84,7 +83,10 @@ func handleHALArchivedRestore(b hal.URLBuilder, m *repos.Manager) http.HandlerFu
 	return func(w http.ResponseWriter, r *http.Request) {
 		uid := chi.URLParam(r, "id")
 		var req restoreRequest
-		_ = json.NewDecoder(r.Body).Decode(&req) // empty body ok
+		// Optional: an empty body restores under the original name.
+		if !decodeOptionalJSON(w, r, &req, 0) {
+			return
+		}
 		ri, err := m.Restore(uid, req.NewName)
 		if err != nil {
 			status, title := archiveErrStatus(err)

@@ -263,6 +263,7 @@ func liveMember(ctx context.Context, d Deps, branch string, stale factForLLM) (f
 		Title:      rec.Title,
 		Body:       rec.Body,
 		Type:       rec.Type,
+		Kind:       rec.Kind,
 		Domain:     rec.Domain,
 		Entities:   rec.Entities,
 		Motifs:     rec.Motifs,

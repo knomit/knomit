@@ -247,7 +247,7 @@ func TestHostGuard_NonLoopbackPeerIgnoresHost(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("LAN GET: %d %s", rr.Code, rr.Body.String())
 	}
-	patch := httptest.NewRequest("PATCH", "/api/v1/repos/alpha", strings.NewReader(`{}`))
+	patch := newJSONRequest("PATCH", "/api/v1/repos/alpha", strings.NewReader(`{}`))
 	patch.Host = "mybox.lan:19278"
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, patch)

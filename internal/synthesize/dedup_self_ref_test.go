@@ -61,8 +61,8 @@ func TestDedupCluster_SurvivorDoesNotCiteItself(t *testing.T) {
 				[]string{tc.loserCites, liveRef})
 
 			cluster := []factForLLM{
-				{File: winnerPath, Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
-				{File: loserPath, Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
+				{File: winnerPath, Kind: "epistemic", Title: "winner", Body: "b", Type: string(fact.Observation), Confidence: winnerConf, Sources: 1},
+				{File: loserPath, Kind: "epistemic", Title: "loser", Body: "b", Type: string(fact.Observation), Confidence: loserConf, Sources: 1},
 			}
 			idx := &fixedPairSearch{
 				SearchQuery: svc.Search(),

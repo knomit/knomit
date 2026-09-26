@@ -31,7 +31,7 @@ func TestScopedCluster_GroupsBySubgraphEdges(t *testing.T) {
 	idx.EXPECT().SubgraphEdges(gomock.Any(), gomock.Any()).
 		Return([][2]string{{"kb/a.md", "kb/b.md"}}, nil).Times(1)
 
-	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, 2, nil, branch)
+	clusters, err := ScopedCluster(ctx, seeds, idx, 1.0, 2, testNeighborKinds, nil, branch)
 	require.NoError(t, err)
 
 	require.Len(t, clusters, 1, "exactly one cluster survives minCommunitySize=2")
