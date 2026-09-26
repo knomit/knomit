@@ -68,6 +68,7 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 		`SELECT COUNT(*)
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE bf.branch_id = ?`+flt.SQL()+epClause,
 		countArgs...,
@@ -77,10 +78,11 @@ func (fq *factQuery) RecentFacts(ctx context.Context, branch string, opts Search
 
 	queryArgs := append(append(append([]any{branchID}, flt.args...), epArgs...), opts.Limit, opts.Offset)
 	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(f.expires, ''),
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
 		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE bf.branch_id = ?`+flt.SQL()+epClause+`
 		 ORDER BY cl.committed_at DESC, f.path ASC
@@ -141,10 +143,11 @@ func (fq *factQuery) recentFactsSearch(ctx context.Context, branch string, opts 
 	}
 
 	rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
-		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(f.expires, ''),
+		`SELECT f.path, f.title, f.kind, f.type, f.domain, f.entities, f.motifs, COALESCE(fe.expires, ''),
 		        COALESCE(cl.committed_at, 0), COALESCE(cl.operation, ''), bf.commit_hash
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE bf.branch_id = ? AND f.path IN (`+strings.Join(placeholders, ",")+`)
 		 ORDER BY cl.committed_at DESC, f.path ASC`,
@@ -297,7 +300,7 @@ type SearchOptions struct {
 	// fact with no expires — absent means never, so it is never "before" or
 	// "after" anything. "Expiring within w" is ExpiresAfter=Now,
 	// ExpiresBefore=Now+w. All comparisons are at whole seconds
-	// (facts.expires_at).
+	// (fact_expires.expires_at).
 	Expired       *bool
 	ExpiresBefore time.Time
 	ExpiresAfter  time.Time
@@ -373,16 +376,16 @@ func newFactFilter(q SearchOptions) *factFilter {
 			now = time.Now()
 		}
 		if *q.Expired {
-			f.add(" AND f.expires_at IS NOT NULL AND f.expires_at <= ?", now.Unix())
+			f.add(" AND fe.expires_at IS NOT NULL AND fe.expires_at <= ?", now.Unix())
 		} else {
-			f.add(" AND (f.expires_at IS NULL OR f.expires_at > ?)", now.Unix())
+			f.add(" AND (fe.expires_at IS NULL OR fe.expires_at > ?)", now.Unix())
 		}
 	}
 	if !q.ExpiresBefore.IsZero() {
-		f.add(" AND f.expires_at IS NOT NULL AND f.expires_at < ?", q.ExpiresBefore.Unix())
+		f.add(" AND fe.expires_at IS NOT NULL AND fe.expires_at < ?", q.ExpiresBefore.Unix())
 	}
 	if !q.ExpiresAfter.IsZero() {
-		f.add(" AND f.expires_at IS NOT NULL AND f.expires_at > ?", q.ExpiresAfter.Unix())
+		f.add(" AND fe.expires_at IS NOT NULL AND fe.expires_at > ?", q.ExpiresAfter.Unix())
 	}
 	if q.MinConfidence > 0 {
 		f.add(" AND f.confidence >= ?", q.MinConfidence)
@@ -799,10 +802,11 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 		args := append(append([]any{blobObjectType, branchID}, flt.args...), limit)
 		rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
 			`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
-			        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(f.expires, ''),
+			        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''),
 			        bf.commit_hash, o.data, COALESCE(cl.committed_at, 0)
 			 FROM branch_facts bf
 			 JOIN facts f ON f.id = bf.fact_id
+			 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 			 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 			 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 			 WHERE bf.branch_id = ?`+flt.SQL()+` LIMIT ?`,
@@ -964,10 +968,11 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 
 	metaRows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
-		        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(f.expires, ''), bf.commit_hash,
+		        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''), bf.commit_hash,
 		        COALESCE(cl.committed_at, 0)
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 LEFT JOIN commit_log cl ON bf.commit_hash = cl.commit_hash AND f.path = cl.path
 		 WHERE bf.branch_id = ? AND f.path IN (`+pathPH[:len(pathPH)-1]+`)`+flt.SQL(),
 		append(pathArgs, flt.args...)...,

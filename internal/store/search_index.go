@@ -792,7 +792,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			FROM _rebuild_entries e
 			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
 		)
-		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin, expires, expires_at)
+		INSERT INTO facts (path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin)
 		SELECT
 			pe.path,
 			pe.blob_hash,
@@ -806,9 +806,7 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			json_extract(pe.parsed, '$.sources'),
 			json_extract(pe.parsed, '$.refs'),
 			COALESCE(json_extract(pe.parsed, '$.evidence_weight'), 0),
-			COALESCE(json_extract(pe.parsed, '$.origin'), 'authored'),
-			json_extract(pe.parsed, '$.expires'),
-			json_extract(pe.parsed, '$.expires_at')
+			COALESCE(json_extract(pe.parsed, '$.origin'), 'authored')
 		FROM parsed_entries pe
 		WHERE pe.parsed IS NOT NULL
 		ON CONFLICT(path, blob_hash) DO UPDATE SET
@@ -822,12 +820,32 @@ func (si *searchIndex) rebuildFacts(ctx context.Context, branch, head string, pr
 			sources         = excluded.sources,
 			refs            = excluded.refs,
 			evidence_weight = excluded.evidence_weight,
-			origin          = excluded.origin,
-			expires         = excluded.expires,
-			expires_at      = excluded.expires_at
+			origin          = excluded.origin
 	`, blobObjectType)
 	if err != nil {
 		return 0, fmt.Errorf("rebuildFacts: upsert facts: %w", err)
+	}
+
+	// Repopulate the fact_expires side table (migration 000026) for the
+	// rebuilt entries. Only blobs that contain "expires:" are re-parsed — the
+	// instr() prefilter keeps this second pass from parsing the whole corpus
+	// again; a blob whose text merely mentions the word parses to a NULL
+	// expires and is skipped by the WHERE. REPLACE, not IGNORE: a rebuild is
+	// the repair path, so it must overwrite a row an older build got wrong.
+	if _, err := conn(ctx, si.rh.db).ExecContext(ctx, `
+		WITH dated AS (
+			SELECT f.id AS fact_id, knomit_parse_fact(o.data) AS parsed
+			FROM _rebuild_entries e
+			JOIN facts f ON f.path = e.path AND f.blob_hash = e.blob_hash
+			JOIN objects o ON o.hash = e.blob_hash AND o.type = ?
+			WHERE instr(o.data, 'expires:') > 0
+		)
+		INSERT OR REPLACE INTO fact_expires (fact_id, expires, expires_at)
+		SELECT fact_id, json_extract(parsed, '$.expires'), json_extract(parsed, '$.expires_at')
+		FROM dated
+		WHERE json_extract(parsed, '$.expires_at') IS NOT NULL
+	`, blobObjectType); err != nil {
+		return 0, fmt.Errorf("rebuildFacts: fact_expires: %w", err)
 	}
 
 	affected, _ := res.RowsAffected()

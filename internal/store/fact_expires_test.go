@@ -147,22 +147,22 @@ func TestSearch_ResultsCarryExpiresAsWritten(t *testing.T) {
 func TestFactExpires_RebuildRepopulates(t *testing.T) {
 	svc, branch := expiresFixture(t)
 	ctx := context.Background()
-	_, err := svc.si.rh.db.ExecContext(ctx, `UPDATE facts SET expires = NULL, expires_at = NULL`)
+	_, err := svc.si.rh.db.ExecContext(ctx, `DELETE FROM fact_expires`)
 	require.NoError(t, err)
 	require.Empty(t, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}),
-		"clearing must empty the columns, or the rebuild below proves nothing")
+		"clearing must empty the side table, or the rebuild below proves nothing")
 
 	require.NoError(t, svc.IndexManager().Rebuild(ctx, branch, nil))
 
 	require.Equal(t, []string{"kb/alpha/past.md"}, searchPaths(t, svc, branch, SearchOptions{Expired: boolp(true)}))
 	var n int
 	require.NoError(t, svc.si.rh.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM facts WHERE expires IS NOT NULL AND expires_at IS NOT NULL`).Scan(&n))
+		`SELECT COUNT(*) FROM fact_expires`).Scan(&n))
 	require.Equal(t, 3, n)
 }
 
 // TestFactExpires_UpgradeFromV5ForcesRebuild is the backfill: a repo indexed
-// by a pre-F03 build (graph schema "5", columns NULL even though a blob
+// by a pre-F03 build (graph schema "5", no fact_expires rows even though a blob
 // carries `expires:`) reports NeedsRebuild, and that rebuild — what repo open
 // runs — fills the columns.
 func TestFactExpires_UpgradeFromV5ForcesRebuild(t *testing.T) {
@@ -175,7 +175,7 @@ func TestFactExpires_UpgradeFromV5ForcesRebuild(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stale, "fixture: a freshly rebuilt branch must be current")
 
-	_, err = svc.si.rh.db.ExecContext(ctx, `UPDATE facts SET expires = NULL, expires_at = NULL`)
+	_, err = svc.si.rh.db.ExecContext(ctx, `DELETE FROM fact_expires`)
 	require.NoError(t, err)
 	res, err := svc.si.rh.db.ExecContext(ctx, `UPDATE meta SET value = '5' WHERE key = ?`, schemaVersionKey(branch))
 	require.NoError(t, err)

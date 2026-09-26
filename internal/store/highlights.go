@@ -110,9 +110,10 @@ func liveFactNodeCTE(branchID int64, pathPrefix string) (string, []any) {
 	q := `
 		WITH live AS (
 		    SELECT f.path, f.title, f.type, f.confidence, f.blob_hash, bf.commit_hash,
-		           COALESCE(f.expires, '') AS expires
+		           COALESCE(fe.expires, '') AS expires
 		      FROM branch_facts bf
 		      JOIN facts f ON f.id = bf.fact_id
+		      LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		     WHERE bf.branch_id = ?`
 	args := []any{branchID}
 	if pathPrefix != "" {

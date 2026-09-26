@@ -48,7 +48,7 @@ type parsedFact struct {
 	Refs           []string `json:"refs"`
 	EvidenceWeight float64  `json:"evidence_weight,omitempty"`
 	Origin         string   `json:"origin"`
-	// Expires/ExpiresAt fill facts.expires and facts.expires_at on rebuild;
+	// Expires/ExpiresAt fill the fact_expires side table on rebuild;
 	// omitted (JSON null on extract) when the fact has none.
 	Expires   string `json:"expires,omitempty"`
 	ExpiresAt *int64 `json:"expires_at,omitempty"`

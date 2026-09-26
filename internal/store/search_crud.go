@@ -201,13 +201,12 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 
 	// Atomic: insert fact if it doesn't exist yet (no TOCTOU race).
 	_, err = db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin, expires, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO facts(path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.Path, rec.BlobHash, rec.Title, factKind, factType,
 		string(domainJSON), string(entitiesJSON), string(motifsJSON),
 		rec.Confidence, rec.Sources,
 		string(refsJSON), rec.EvidenceWeight, factOrigin,
-		nullIfEmpty(rec.Expires), fact.ExpiresUnix(rec.Expires),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert fact: %w", err)
@@ -221,6 +220,19 @@ func (si *searchIndex) upsert(ctx context.Context, branch, commitHash string, re
 	).Scan(&factID)
 	if err != nil {
 		return fmt.Errorf("upsert select id: %w", err)
+	}
+
+	// The fact's expiry lives in the fact_expires side table, keyed by this
+	// immutable (path, blob_hash) row — see migration 000026 for why it is not
+	// a facts column. OR IGNORE, like the facts insert: the row is content-
+	// addressed, so an existing one already holds these exact values.
+	if at := fact.ExpiresUnix(rec.Expires); at != nil {
+		if _, err := db.ExecContext(ctx,
+			`INSERT OR IGNORE INTO fact_expires(fact_id, expires, expires_at) VALUES (?, ?, ?)`,
+			factID, rec.Expires, *at,
+		); err != nil {
+			return fmt.Errorf("upsert fact_expires: %w", err)
+		}
 	}
 
 	// COW hit check: are junction tables already populated for this fact?
@@ -505,10 +517,11 @@ func (fq *factQuery) GetByPath(ctx context.Context, branch, path string) (*FactW
 	}
 	row := conn(ctx, fq.rh.db).QueryRowContext(ctx,
 		`SELECT f.path, f.title, f.blob_hash, f.kind, f.type, f.domain, f.entities, f.motifs,
-		        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(f.expires, ''),
+		        f.confidence, f.sources, f.refs, f.evidence_weight, COALESCE(fe.expires, ''),
 		        bf.commit_hash, o.data, cl.committed_at
 		 FROM branch_facts bf
 		 JOIN facts f ON f.id = bf.fact_id
+		 LEFT JOIN fact_expires fe ON fe.fact_id = f.id
 		 JOIN objects o ON o.hash = f.blob_hash AND o.type = ?
 		 LEFT JOIN commit_log cl ON cl.commit_hash = bf.commit_hash AND cl.path = bf.path
 		 WHERE bf.branch_id = ? AND bf.path = ?`, blobObjectType, branchID, path,
@@ -658,13 +671,4 @@ func logFactJSONUnmarshal(scanner, path, domainJSON, entitiesJSON, refsJSON stri
 	if err := json.Unmarshal([]byte(refsJSON), refs); err != nil {
 		log.Warn().Err(err).Str("scanner", scanner).Str("path", path).Str("column", "refs").Msg("fact JSON column unmarshal failed; field empty")
 	}
-}
-
-// nullIfEmpty maps "" to SQL NULL, for optional TEXT columns where absent and
-// empty mean the same thing.
-func nullIfEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
