@@ -411,9 +411,15 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
   const pivotResolved = useMotifClusters(motifEndpointOf(state), pivotMotif ? [pivotMotif] : undefined);
   const pivotCluster = pivotResolved[0]?.cluster;
 
+  // Scope generation for the Recent list, the counterpart of lensGenRef: the
+  // reset below bumps it, and a paged loadMore drops a response whose
+  // generation has moved on (knomit#275).
+  const recentGenRef = useRef(0);
   useAsync((stale) => {
     if (isLens) return; // lens context reads via the lens effect below
     if (effectiveSort !== 'recent') return;
+    // A fresh scope invalidates any paged loadMore still in flight.
+    recentGenRef.current += 1;
     setLoading(true);
     setFacts([]);
     setTotal(0);
@@ -713,6 +719,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
     // Same double-fire window as the lens branch above: set it synchronously.
     loadingRef.current = true;
     setLoading(true);
+    // Same generation snapshot as the lens branch: a page that lands after the
+    // scope was reset belongs to the old scope and must neither append rows nor
+    // clear the new scope's loading flag.
+    const gen = recentGenRef.current;
     api.recent(state.repo, state.branch, path, state.freeText, PAGE_SIZE, facts.length, {
       types: types.length ? types : undefined,
       kinds: kinds.length ? kinds : undefined,
@@ -723,9 +733,10 @@ export function Library({ state, dispatch, navigate, narrow = false }: Props) {
       sinceFork: state.sinceFork || undefined,
       ...motifOpts,
     }).then(r => {
+      if (gen !== recentGenRef.current) return;
       setFacts(prev => [...prev, ...(r.facts || [])]);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => { if (gen === recentGenRef.current) setLoading(false); });
   }, [isLens, effectiveSort, emptyScope, lensExhausted, lensRows.length, lensName, reposKey, facts.length, total, state.repo, state.branch, path, state.freeText, types, kinds, origins, domains, entities, eps, state.sinceFork]);
 
   // The observer calls loadMore through a ref, and depends only on `paged`.

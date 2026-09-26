@@ -835,3 +835,106 @@ describe('Library — the sentinel sees the current list at the commit that show
     });
   });
 });
+
+// knomit#275. The repo Recent branch of loadMore used to append whatever page
+// came back, so a page requested for one scope and landing after a filter
+// change put that scope's rows onto the new list and cleared the new scope's
+// loading flag. The lens branch has always dropped such a page (lensGenRef);
+// these are the lens scope-change test ported to repo Recent, one for each
+// order the stale page and the new scope's first page can land in.
+describe('Library — repo Recent drops a page requested for a previous scope', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  const GO = [{ category: 'domain' as const, value: 'go' }];
+  const mk = (prefix: string, start: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      path: `kb/${prefix}${start + i}.md`, title: `${prefix}${start + i}`, type: 'process',
+      committed_at: start + i, source: { repo: 'core', id: 'aaaaaaaaaaaa', branch: 'agent/main' },
+    }));
+  type RecentOpts = { domains?: string[] };
+  const recentMock = async () =>
+    (await import('./api')).api.recent as ReturnType<typeof vi.fn>;
+
+  // Scope A (no chips): page 1 lands, the sentinel fires, and the offset-50
+  // request for scope A is held pending. Scope B (domain:go) answers its page 1
+  // with newPage1 and every later page at once.
+  const openScopeAWithPageInFlight = async (newPage1: () => unknown) => {
+    const recent = await recentMock();
+    let releaseStale!: (v: unknown) => void;
+    const stalePage = new Promise<unknown>(res => { releaseStale = res; });
+    recent.mockImplementation(async (
+      _r: string, _b: string, _p: string, _q: string, _limit: number, offset: number, o: RecentOpts,
+    ) => {
+      if (!o?.domains) return offset === 0 ? { facts: mk('A', 0, 50), total: 200 } : stalePage;
+      return offset === 0 ? newPage1() : { facts: mk('B', offset, 50), total: 200 };
+    });
+
+    const callbacks: IntersectionObserverCallback[] = [];
+    const origIO = window.IntersectionObserver;
+    window.IntersectionObserver = class {
+      constructor(cb: IntersectionObserverCallback) { callbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {} takeRecords() { return []; }
+      root = null; rootMargin = ''; thresholds = [];
+    } as unknown as typeof IntersectionObserver;
+    const fire = () => act(() => {
+      callbacks[callbacks.length - 1](
+        [{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+
+    const view = render(<Library state={repoState()} dispatch={vi.fn()} navigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(50));
+    await waitFor(() => expect(callbacks.length).toBeGreaterThan(0));
+    fire();
+    await waitFor(() => expect(recent.mock.calls.map(c => c[5])).toEqual([0, 50]));
+    return { recent, view, fire, releaseStale, restore: () => { window.IntersectionObserver = origIO; } };
+  };
+
+  const titles = () => screen.queryAllByTestId('chrono-item').map(e => e.textContent || '');
+  const hasScopeARow = () => titles().some(t => /\bA\d/.test(t));
+
+  it('a stale page landing AFTER the new scope\'s first page is dropped, and paging continues from the new list', async () => {
+    const { recent, view, fire, releaseStale, restore } =
+      await openScopeAWithPageInFlight(() => ({ facts: mk('B', 0, 50), total: 200 }));
+    try {
+      view.rerender(<Library state={repoState({ filters: GO })} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText('B0')).toBeTruthy());
+      expect(screen.getAllByTestId('chrono-item').length).toBe(50);
+
+      await act(async () => { releaseStale({ facts: mk('A', 50, 50), total: 200 }); });
+      await act(async () => {});
+
+      expect(hasScopeARow()).toBe(false);
+      expect(screen.getAllByTestId('chrono-item').length).toBe(50);
+
+      // The next tick asks the NEW scope for the page after its own first.
+      const before = recent.mock.calls.length;
+      fire();
+      await waitFor(() => expect(recent.mock.calls.length).toBe(before + 1));
+      const last = recent.mock.calls[recent.mock.calls.length - 1];
+      expect(last[5]).toBe(50);
+      expect((last[6] as RecentOpts).domains).toEqual(['go']);
+    } finally { restore(); }
+  });
+
+  it('a stale page landing BEFORE the new scope\'s first page is dropped and leaves the spinner up', async () => {
+    let releaseNew!: (v: unknown) => void;
+    const newPage = new Promise<unknown>(res => { releaseNew = res; });
+    const { recent, view, releaseStale, restore } = await openScopeAWithPageInFlight(() => newPage);
+    try {
+      view.rerender(<Library state={repoState({ filters: GO })} dispatch={vi.fn()} navigate={vi.fn()} />);
+      await waitFor(() =>
+        expect(recent.mock.calls.some(c => c[5] === 0 && (c[6] as RecentOpts)?.domains)).toBe(true));
+
+      await act(async () => { releaseStale({ facts: mk('A', 50, 50), total: 200 }); });
+      await act(async () => {});
+
+      expect(titles()).toEqual([]);
+      expect(screen.getByText('Loading...')).toBeTruthy();
+
+      await act(async () => { releaseNew({ facts: mk('B', 0, 50), total: 200 }); });
+      await waitFor(() => expect(screen.getAllByTestId('chrono-item').length).toBe(50));
+      expect(hasScopeARow()).toBe(false);
+      expect(screen.queryByText('Loading...')).toBeNull();
+    } finally { restore(); }
+  });
+});
