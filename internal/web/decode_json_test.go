@@ -169,6 +169,23 @@ func TestDecodeJSON(t *testing.T) {
 	}
 }
 
+// decodeJSON on a request whose Body is nil answers the empty-body 400, not a
+// panic.
+func TestDecodeJSON_NilBody(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "/x", nil)
+	r.Body = nil
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	var v decodeTarget
+	if decodeJSON(rec, r, &v, 0) {
+		t.Fatal("a nil body was accepted")
+	}
+	title, detail := decodeProblem(t, rec)
+	if rec.Code != http.StatusBadRequest || title != "Invalid request body" || !strings.Contains(detail, "empty") {
+		t.Fatalf("got %d %q %q; want 400 Invalid request body (empty)", rec.Code, title, detail)
+	}
+}
+
 // A nil Body (http.NewRequest with no body, as some callers construct it) is an
 // empty body to the optional decoder, not a crash.
 func TestDecodeOptionalJSON_NilBody(t *testing.T) {

@@ -30,9 +30,10 @@ import (
 //   - the body is not one JSON value of v's shape: 400 "Invalid request
 //     body", naming the byte offset (and the field, for a type mismatch).
 //
-// v must be a non-nil pointer. It is written only on success: the body is
-// decoded into a fresh value and copied, so a half-decoded body never leaves a
-// caller holding partial input. Unknown fields are accepted, as they always
+// v must be a non-nil pointer, and callers pass a zero value: it is written
+// only on success, and then WHOLE (the body is decoded into a fresh value and
+// copied), so a half-decoded body never leaves a caller holding partial input
+// and a field the body omits ends up zero, not kept. Unknown fields are accepted, as they always
 // were; rejecting them is not a CSRF control and would break a client for
 // sending more than the server reads.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
@@ -84,6 +85,11 @@ func decodeBodyInto(w http.ResponseWriter, r *http.Request, body io.Reader, v an
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		panic("decodeJSON: v must be a non-nil pointer")
+	}
+	if body == nil {
+		// A request built by hand can carry a nil Body; the server never
+		// sends one (it uses http.NoBody). Read it as the empty body it is.
+		body = http.NoBody
 	}
 	if maxBytes > 0 {
 		body = http.MaxBytesReader(w, io.NopCloser(body), maxBytes)
