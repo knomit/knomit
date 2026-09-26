@@ -224,6 +224,36 @@ func TestEnsure_WarnsOnAProtectedDACLForAnotherAccountOnly(t *testing.T) {
 	assertForeignGrantWarned(t, logs.String(), usersSID)
 }
 
+// (f) What Explorer's "Disable inheritance, convert inherited permissions"
+// leaves on a profile folder (user, SYSTEM, Administrators), here with an
+// inherit-only CREATOR OWNER and an OWNER RIGHTS ACE as a DACL copied from a
+// drive root carries: protected, private to the user, left alone and NOT
+// reported. Warning on it would warn on every boot.
+func TestEnsure_ProtectedWithAdministratorsAndOwnerPlaceholdersIsQuiet(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setDACL(t, home, "D:P(A;OICI;FA;;;"+me(t)+")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICIIO;GA;;;CO)(A;;0x1200a9;;;OW)")
+	before := sddlOf(t, home)
+	logs := captureLog(t)
+
+	if err := Ensure(home); err != nil {
+		t.Fatal(err)
+	}
+	if after := sddlOf(t, home); after != before {
+		t.Errorf("Ensure rewrote a protected DACL:\nbefore %s\nafter  %s", before, after)
+	}
+	for _, sid := range []string{sidAdministrators, sidCreatorOwner, sidOwnerRights} {
+		if !hasSID(inspect(t, home), sid) {
+			t.Fatalf("fixture: %s is not in the DACL, so its row proves nothing: %s", sid, before)
+		}
+	}
+	if logs.Len() != 0 {
+		t.Errorf("a protected DACL private to the user logged: %s", logs)
+	}
+}
+
 func assertForeignGrantWarned(t *testing.T, out, sid string) {
 	t.Helper()
 	if !strings.Contains(out, `"level":"warn"`) ||

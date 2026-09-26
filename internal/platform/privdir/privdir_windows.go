@@ -37,13 +37,15 @@ import (
 // A DACL that is ALREADY protected is left alone. It was set deliberately,
 // by an earlier boot or by the user, and a boot that overwrote a user's
 // explicit choice would break whatever they set it for. It is still read:
-// a protected DACL that grants anyone but this user and SYSTEM is reported,
-// since "protected" says nothing about "private".
+// a protected DACL that grants another account (anyone notForeign does not
+// accept) is reported, since "protected" says nothing about "private".
 //
 // Nothing is rewritten when the process runs as a SERVICE account (see
 // isServiceSID). The DACL would then grant the service and SYSTEM only, and
 // lock out the interactive user whose data root it is: the one real lockout
-// this function could cause.
+// this function could cause. Out of scope: IIS AppPool identities
+// (S-1-5-82-*) and gMSA/MSA accounts are ordinary SIDs that cannot be told
+// apart from a user, so running as one protects the root to that account.
 //
 // An owner other than this user, SYSTEM or Administrators is reported
 // whatever else happens. An owner keeps an implicit WRITE_DAC and can grant
@@ -67,12 +69,29 @@ func ensure(path string) error {
 
 // The well-known SIDs the checks below are made of, in one place.
 const (
-	sidSystem          = "S-1-5-18"     // NT AUTHORITY\SYSTEM
-	sidLocalService    = "S-1-5-19"     // NT AUTHORITY\LOCAL SERVICE
-	sidNetworkService  = "S-1-5-20"     // NT AUTHORITY\NETWORK SERVICE
-	sidAdministrators  = "S-1-5-32-544" // BUILTIN\Administrators
-	sidVirtualServices = "S-1-5-80-"    // prefix of NT SERVICE\<name> virtual accounts
+	sidSystem          = "S-1-5-18"  // NT AUTHORITY\SYSTEM
+	sidLocalService    = "S-1-5-19"  // NT AUTHORITY\LOCAL SERVICE
+	sidNetworkService  = "S-1-5-20"  // NT AUTHORITY\NETWORK SERVICE
+	sidVirtualServices = "S-1-5-80-" // prefix of NT SERVICE\<name> virtual accounts
+
+	// Not foreign grants on a protected DACL (see notForeign):
+	sidAdministrators = "S-1-5-32-544" // BUILTIN\Administrators: can take ownership whatever the DACL says
+	sidCreatorOwner   = "S-1-3-0"      // CREATOR OWNER: inherit-only placeholder, becomes each child's creator
+	sidOwnerRights    = "S-1-3-4"      // OWNER RIGHTS: stands for the object's owner, whoever that is
 )
+
+// notForeign reports whether an allow ACE for sid leaves the root private to
+// me: the user, SYSTEM, and the three grants above that name no other
+// account. Administrators is what Explorer's "Disable inheritance, convert
+// inherited permissions" leaves on a profile folder, and CREATOR OWNER and
+// OWNER RIGHTS what a DACL copied from a drive root carries.
+func notForeign(sid, me string) bool {
+	switch sid {
+	case me, sidSystem, sidAdministrators, sidCreatorOwner, sidOwnerRights:
+		return true
+	}
+	return false
+}
 
 // isServiceSID reports whether sid is a service account: SYSTEM, LOCAL
 // SERVICE, NETWORK SERVICE, or a per-service virtual account.
@@ -84,10 +103,10 @@ func isServiceSID(sid string) bool {
 	return strings.HasPrefix(sid, sidVirtualServices)
 }
 
-// foreignGrants lists who a DACL lets in besides me and SYSTEM. An ACE whose
-// SID Inspect cannot read counts as foreign, and so does a NULL DACL, which
-// grants everyone everything. Deny ACEs only take access away, so they are
-// not listed.
+// foreignGrants lists who a DACL lets in that notForeign does not accept. An
+// ACE whose SID Inspect cannot read counts as foreign, and so does a NULL
+// DACL, which grants everyone everything. Deny ACEs only take access away,
+// so they are not listed.
 func foreignGrants(in Inspection, me string) []string {
 	if in.NullDACL {
 		return []string{"everyone (NULL DACL)"}
@@ -97,7 +116,7 @@ func foreignGrants(in Inspection, me string) []string {
 		switch {
 		case a.SID == "":
 			out = append(out, "an ACE of a type whose SID cannot be read")
-		case a.Allow && a.SID != me && a.SID != sidSystem:
+		case a.Allow && !notForeign(a.SID, me):
 			out = append(out, a.SID)
 		}
 	}
