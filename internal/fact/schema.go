@@ -22,6 +22,7 @@ func OntologySchema() []SchemaField {
 		{"Ontology", "description", "What this ontology is for"},
 		{"Ontology", "topics", "Map of top-level topic keys to their definitions"},
 		{"Ontology", "validations", "Rules applied to every fact, whatever its topic"},
+		{"Ontology", "attributes", "Repository-level settings. verify_signatures: off (default), log or enforce — verify commit signatures of the upstream for this repository; verify_signers: the ssh-ed25519 public keys admitted to sign"},
 
 		{"OntologyNode", "description", "What this topic covers"},
 		{"OntologyNode", "children", "Map of nested sub-topic keys to their definitions"},

@@ -21,6 +21,10 @@ type Diagnostic struct {
 	Column   int    `json:"column"`
 	Message  string `json:"message"`
 	Severity `json:"-"`
+	// newOnly marks a warning that ParseNewOntology treats as fatal: a problem
+	// an existing repository must survive opening with, but a new ontology
+	// must not be created with.
+	newOnly bool
 }
 
 // Severity separates "this document cannot be used" from "this document is
@@ -142,6 +146,7 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 	for _, key := range sortedKeys(o.Topics) {
 		diags = append(diags, attributeDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
 	}
+	diags = append(diags, rootAttributeDiags(o.Attributes, valueForKey(documentRoot(&doc), "attributes"))...)
 	// Only a FATAL diagnostic withholds the ontology. Warnings travel back
 	// ALONGSIDE a usable document, which is what lets the open path read a repo
 	// whose ontology carries a key this binary does not declare.
@@ -181,6 +186,13 @@ func attributeDiags(path string, node *OntologyNode, body *yaml.Node) []Diagnost
 			diags = append(diags, d)
 			continue
 		}
+		if spec.scope != scopeTopic {
+			d := diagAt(attrKeys[k], fmt.Sprintf(
+				"parse ontology: attribute %q in topic %q is repository-level: declare it in the root attributes block; ignored here", k, path))
+			d.Severity, d.newOnly = SeverityWarning, true
+			diags = append(diags, d)
+			continue
+		}
 		if v := node.Attributes[k]; !spec.valid(v) {
 			diags = append(diags, diagAt(attrKeys[k], fmt.Sprintf(
 				"parse ontology: attribute %q in topic %q must be %s, got %v (%T)", k, path, spec.accepts, v, v)))
@@ -189,6 +201,39 @@ func attributeDiags(path string, node *OntologyNode, body *yaml.Node) []Diagnost
 	children := valueForKey(body, "children")
 	for _, ck := range sortedKeys(node.Children) {
 		diags = append(diags, attributeDiags(path+"/"+ck, node.Children[ck], valueForKey(children, ck))...)
+	}
+	return diags
+}
+
+// rootAttributeDiags checks the root attributes block. Nothing here is fatal on
+// the open path: an unknown key is a warning (a newer knomit may have written
+// it, and it is preserved); a topic-scoped key, or a bad value for a
+// repository-level key, is a warning that ParseNewOntology refuses. A bad
+// value is never read as a setting: the verifier treats it as unknown, never
+// as off.
+func rootAttributeDiags(attrs map[string]any, body *yaml.Node) []Diagnostic {
+	var diags []Diagnostic
+	attrKeys := mappingChildren(body)
+	for _, k := range slices.Sorted(maps.Keys(attrs)) {
+		spec, known := attributeRegistry[k]
+		var msg string
+		switch {
+		case !known:
+			d := diagAt(attrKeys[k], fmt.Sprintf(
+				"parse ontology: unknown root attribute %q: not recognised by this knomit and ignored", k))
+			d.Severity = SeverityWarning
+			diags = append(diags, d)
+			continue
+		case spec.scope != scopeRoot:
+			msg = fmt.Sprintf("parse ontology: attribute %q belongs on a topic, not in the root attributes block; ignored here", k)
+		case !spec.valid(attrs[k]):
+			msg = fmt.Sprintf("parse ontology: root attribute %q must be %s, got %v (%T)", k, spec.accepts, attrs[k], attrs[k])
+		default:
+			continue
+		}
+		d := diagAt(attrKeys[k], msg)
+		d.Severity, d.newOnly = SeverityWarning, true
+		diags = append(diags, d)
 	}
 	return diags
 }

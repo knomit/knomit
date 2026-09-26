@@ -933,7 +933,10 @@ func (m *Manager) initLocal(ctx context.Context, spec CreateSpec, dbPath string,
 //     than on the field alone.
 func resolveOntology(spec CreateSpec) (*fact.Ontology, error) {
 	if spec.Mode == "custom" || (spec.Mode == "initialize" && spec.OntologyYAML != "") {
-		o, err := fact.ParseOntology([]byte(spec.OntologyYAML))
+		// A NEW ontology: problems the open path only warns about (an attribute
+		// in the wrong scope, a bad repository-level value) are refused here,
+		// while they can still be fixed.
+		o, err := fact.ParseNewOntology([]byte(spec.OntologyYAML))
 		if err != nil {
 			return nil, fmt.Errorf("parse ontology: %w", err)
 		}
