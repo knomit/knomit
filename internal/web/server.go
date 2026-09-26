@@ -201,7 +201,7 @@ func (s *Server) Handler() http.Handler {
 	// here and never passes through NewAPIRouter. Below Recoverer for the
 	// same reason it is on the API router: a panic here must become a 500,
 	// not a dropped connection.
-	r.Use(AuthMiddleware(s.Auth, s.authDisabled))
+	r.Use(s.authEdge())
 	if len(s.CORSOrigins) > 0 {
 		r.Use(corsMiddleware(s.CORSOrigins))
 	}

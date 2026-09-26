@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"knomit/internal/config"
@@ -89,4 +90,66 @@ func TestApp_BindHostIsALoopbackHost(t *testing.T) {
 			t.Fatalf("listed name: %d", got)
 		}
 	})
+}
+
+// #287: the Origin guard reaches both boot paths. `knomit serve` and the
+// desktop app each build their server through New and serve Server.Handler;
+// the desktop passes its Wails origins as Options.CORSOrigins
+// (tools/desktop/app.go desktopAppOptions, pinned by its app_options_test).
+// Booting through New is what is under test: an allowlist threaded into the
+// CORS middleware but not into AuthMiddleware lets the webview preflight and
+// then refuses its write.
+func TestApp_OriginGuardWiring(t *testing.T) {
+	wails := []string{"wails://localhost", "http://wails.localhost"}
+	post := func(t *testing.T, opts Options, origin string) (int, string) {
+		t.Helper()
+		t.Setenv("KNOMIT_HOME", t.TempDir())
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts.Embedder = &testenv.DeterministicEmbedder{}
+		a, err := New(context.Background(), cfg, opts)
+		if err != nil {
+			t.Fatalf("boot: %v", err)
+		}
+		defer a.Close()
+		req := httptest.NewRequest("POST", "/api/v1/ontologies:validate", strings.NewReader("topics: {}\n"))
+		req.RemoteAddr = "127.0.0.1:1"
+		req.Host = "127.0.0.1:19278"
+		req.Header.Set("Content-Type", "text/yaml")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rr := httptest.NewRecorder()
+		a.Handler().ServeHTTP(rr, req)
+		return rr.Code, rr.Body.String()
+	}
+	refused := func(code int, body string) bool {
+		return code == http.StatusForbidden && strings.Contains(body, "Cross-origin request refused")
+	}
+
+	serve := Options{APIOnly: true}
+	desktop := Options{APIOnly: true, CORSOrigins: wails}
+
+	if code, body := post(t, serve, "https://evil.example"); !refused(code, body) {
+		t.Fatalf("serve, foreign Origin: %d %.200s; want 403 Cross-origin request refused", code, body)
+	}
+	if code, body := post(t, desktop, "https://evil.example"); !refused(code, body) {
+		t.Fatalf("desktop, foreign Origin: %d %.200s; want 403 Cross-origin request refused", code, body)
+	}
+	if code, body := post(t, serve, "wails://localhost"); !refused(code, body) {
+		t.Fatalf("serve, Wails Origin (not allowlisted there): %d %.200s; want 403", code, body)
+	}
+	for _, origin := range wails {
+		if code, body := post(t, desktop, origin); code >= 400 {
+			t.Fatalf("desktop, Origin %s: %d %.200s; want the write served", origin, code, body)
+		}
+	}
+	if code, body := post(t, serve, "http://127.0.0.1:19278"); code >= 400 {
+		t.Fatalf("serve, own Origin: %d %.200s; want served", code, body)
+	}
+	if code, body := post(t, serve, ""); code >= 400 {
+		t.Fatalf("serve, no Origin: %d %.200s; want served", code, body)
+	}
 }

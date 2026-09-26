@@ -151,7 +151,7 @@ func TestBrowserGate_EachMissingProofRefuses(t *testing.T) {
 		{"Origin another port, Sec-Fetch-Site lying", post(func(r *http.Request) { r.Header.Set("Origin", "http://127.0.0.1:3000") }), "Origin"},
 		{"Origin https", post(func(r *http.Request) { r.Header.Set("Origin", "https://127.0.0.1:"+gatePort) }), "Origin"},
 		{"Origin other loopback spelling", post(func(r *http.Request) { r.Header.Set("Origin", "http://localhost:"+gatePort) }), "Origin"},
-		{"Origin wails (desktop allowlist is never own origin)", post(func(r *http.Request) { r.Header.Set("Origin", "wails://localhost") }), "Origin"},
+		{"Origin wails, no allowlist (refused earlier by the #287 guard)", post(func(r *http.Request) { r.Header.Set("Origin", "wails://localhost") }), "Origin"},
 		{"Origin mismatched on GET", get(func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }), "Origin"},
 		{"Sec-Fetch-Site cross-site", post(func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "cross-site") }), "Sec-Fetch-Site"},
 		{"Sec-Fetch-Site same-site", get(func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "same-site") }), "Sec-Fetch-Site"},
@@ -174,25 +174,80 @@ func TestBrowserGate_EachMissingProofRefuses(t *testing.T) {
 		"rebinding": true, "rebinding GET": true, "Host 127.0.0.1.nip.io": true,
 		"Host localhost.": true, "Host sub.localhost": true,
 	}
+	// These mutation rows carry an Origin that is neither http(s)://<Host>
+	// nor allowlisted, so since #287 AuthMiddleware refuses them one step
+	// EARLIER too — still 403, titled "Cross-origin request refused", and the
+	// request still stays undecided. The gate's own Origin rule (exact
+	// http://<Host>, arrival port) is stricter and still meets the rows this
+	// guard admits: "Origin https" and the Sec-Fetch-Site rows.
+	refusedByOriginGuard := map[string]bool{
+		"Origin null": true, "Origin another port (same-site)": true,
+		"Origin another port, Sec-Fetch-Site lying":                      true,
+		"Origin other loopback spelling":                                 true,
+		"Origin wails, no allowlist (refused earlier by the #287 guard)": true,
+	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newKBFixture(t)
 			id := f.park(t)
-			want := http.StatusForbidden
+			want, reason := http.StatusForbidden, c.reason
 			if refusedEarlier[c.name] {
 				want = http.StatusMisdirectedRequest
+			}
+			if refusedByOriginGuard[c.name] {
+				reason = "Cross-origin request refused"
 			}
 			rec := serve(f.s.Handler(), c.req(id))
 			if rec.Code != want {
 				t.Fatalf("%d %s; want %d", rec.Code, rec.Body.String(), want)
 			}
-			if !strings.Contains(rec.Body.String(), c.reason) {
-				t.Fatalf("%d body %s does not name %q", want, rec.Body.String(), c.reason)
+			if !strings.Contains(rec.Body.String(), reason) {
+				t.Fatalf("%d body %s does not name %q", want, rec.Body.String(), reason)
+			}
+			if !refusedByOriginGuard[c.name] && strings.Contains(rec.Body.String(), "Cross-origin request refused") {
+				t.Fatalf("refused by the #287 guard, not by this gate: %s", rec.Body.String())
 			}
 			if list, _ := f.s.OAuthIssuer.Pending(context.Background()); len(list) != 1 || list[0].Decision != "" {
 				t.Fatalf("a refused request decided it: %+v", list)
 			}
 		})
+	}
+}
+
+// The desktop allowlist is NEVER own origin for the approval gate. With
+// CORSOrigins set, a wails://localhost POST passes the #287 Origin guard by
+// design (the desktop's own writes need it), so this is the only place the
+// gate's stricter rule is exercised: it must still refuse, with ITS reason,
+// and leave the request undecided. A browserProof that reused
+// loopbackOriginOK or trusted the allowlist would turn a Wails-origin
+// approval into admin; the old no-allowlist row cannot see that, because
+// the guard refuses it first.
+//
+// Sec-Fetch-Site is removed so the Origin rule, not the fetch-metadata
+// rule, is the one that has to refuse.
+func TestBrowserGate_AllowlistedOriginIsNeverOwnOrigin(t *testing.T) {
+	f := newKBFixture(t)
+	f.s.CORSOrigins = []string{"wails://localhost"}
+	id := f.park(t)
+	r := browserReq(http.MethodPost, "/api/v1/oauth/pending/"+id+"/approve", approveBody(), "127.0.0.1")
+	r.Header.Set("Origin", "wails://localhost")
+	r.Header.Del("Sec-Fetch-Site")
+	if r.Header.Get(KnomitClientHeader) != "web" || r.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("fixture: want X-Knomit-Client: web and JSON, got %q / %q", r.Header.Get(KnomitClientHeader), r.Header.Get("Content-Type"))
+	}
+	rec := serve(f.s.Handler(), r)
+	body := rec.Body.String()
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("allowlisted Wails origin approving: %d %s; want 403", rec.Code, body)
+	}
+	if strings.Contains(body, "Cross-origin request refused") {
+		t.Fatalf("refused by the #287 guard, not the gate; the guard must admit an allowlisted origin: %s", body)
+	}
+	if !strings.Contains(body, "is not this listener's own origin") {
+		t.Fatalf("403 without the gate's Origin reason: %s", body)
+	}
+	if list, _ := f.s.OAuthIssuer.Pending(context.Background()); len(list) != 1 || list[0].Decision != "" {
+		t.Fatalf("a refused request decided it: %+v", list)
 	}
 }
 

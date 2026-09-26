@@ -32,25 +32,49 @@ import (
 //     DNS-rebound page and gets 421 (#281). What it may do is the
 //     parsed [auth].loopback_default, resolved in Require through
 //     loopbackGrants rather than here: this function decides WHO, never WHAT.
+//     A mutating request must also not come from another origin's page
+//     (loopbackOriginOK): a cross-site form or text/plain fetch carries a
+//     loopback Host and would otherwise write as anonymous; it gets 403
+//     "Cross-origin request refused" (#287).
 //  4. Nothing, otherwise — no principal on the context at all. With
 //     require = true the request ends here; without it, a downstream Require
 //     still denies, because the zero principal holds nothing.
 //
-// An authentication refusal here is 403, never 401 (the 421 in 3 refuses a
-// Host, not a caller). RFC 7235 makes WWW-Authenticate mandatory on a 401,
-// and no listener this middleware serves has an HTTP authentication scheme:
-// the local listener's credential is the connection itself, and the TLS
-// listener's is the client certificate verified in the handshake — neither
-// is something a header can present. The ONE 401 in knomit is on the OAuth
+// An authentication refusal here is 403, never 401 (the 421 and the
+// cross-origin 403 in 3 refuse a Host or a page, not a caller). RFC 7235
+// makes WWW-Authenticate mandatory on a 401, and no listener this middleware
+// serves has an HTTP authentication scheme: the local listener's credential
+// is the connection itself, and the TLS listener's is the client certificate
+// verified in the handshake — neither is something a header can present. The ONE 401 in knomit is on the OAuth
 // listener ([oauth].addr, F19 phase 3a), whose router never runs this
 // middleware: BearerMiddleware is its only edge, and bearer tokens are
 // judged there and nowhere else, producing the same Principal type. An
 // Authorization header on any listener served here is ignored.
 //
-// The two 403s are told apart by TITLE: "Authentication required" here (no
-// principal at all) versus "Permission denied" in Require (a principal that
-// lacks the permission). Clients and tests key on the title, not the status.
+// The 403s are told apart by TITLE: "Authentication required" here (no
+// principal at all), "Cross-origin request refused" here (a page on another
+// origin, #287), and "Permission denied" in Require (a principal that lacks
+// the permission). Clients and tests key on the title, not the status.
+//
+// AuthMiddleware trusts no cross-origin page. Server builds its edge with
+// authMiddleware and the CORS allowlist instead (Server.authEdge), so the
+// desktop's Wails origins can write; call that, not this, from a listener.
 func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) http.Handler {
+	return authMiddleware(cfg, disabled, nil)
+}
+
+// authEdge is the AuthMiddleware every Server router runs, with the CORS
+// allowlist as its trusted origins. It is applied TWICE on the plain listener,
+// on the outer router (Handler) and on the API router (NewAPIRouter), and both
+// must carry the same list, or a desktop write passes one and is refused by
+// the other.
+func (s *Server) authEdge() func(http.Handler) http.Handler {
+	return authMiddleware(s.Auth, s.authDisabled, s.CORSOrigins)
+}
+
+// authMiddleware is AuthMiddleware with the origins, besides the request's
+// own, whose pages may act as the anonymous principal (Server.CORSOrigins).
+func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -112,6 +136,19 @@ func AuthMiddleware(cfg config.AuthConfig, disabled bool) func(http.Handler) htt
 					hal.WriteProblem(w, http.StatusMisdirectedRequest, "Misdirected Request",
 						"this knomit instance does not answer loopback requests for Host "+strconv.Quote(r.Host)+
 							"; a web page served from that name may not act as the local user. If this is your own proxy or tunnel, add the name to [auth].loopback_hosts in knomit.toml — anyone who reaches knomit through it then holds [auth].loopback_default",
+						r.URL.Path)
+					return
+				}
+				// #287: a loopback Host is not proof of a local user either.
+				// A cross-site page's form or text/plain fetch reaches
+				// 127.0.0.1 with a legitimate Host and no preflight; only its
+				// Origin gives it away. Here, for the same reason as the Host
+				// check: this is the moment anonymous is minted, and the
+				// socket, TLS and OAuth paths never get here.
+				if !loopbackOriginOK(r, trustedOrigins) {
+					hal.WriteProblem(w, http.StatusForbidden, "Cross-origin request refused",
+						"this knomit instance does not accept a "+r.Method+" from a page at Origin "+strconv.Quote(r.Header.Get("Origin"))+
+							" as the local user; only this listener's own origin (http or https://"+r.Host+") and the desktop app may change data. Non-browser clients send no Origin and are unaffected",
 						r.URL.Path)
 					return
 				}
