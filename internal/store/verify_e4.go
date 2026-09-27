@@ -47,9 +47,11 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 // instance's accept list. A store that has no signer cannot know its own key:
 // every such commit is refused.
 func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
+	// The own key is the key this store signs with (commitSigner: the store's
+	// signer, or a test binary's fallback). No signer means no own key.
 	own := ""
-	if rh.signer != nil {
-		fp, err := keyFingerprint(rh.signer.PublicKey())
+	if signer, err := rh.commitSigner(); err == nil {
+		fp, err := keyFingerprint(signer.PublicKey())
 		if err != nil {
 			return fmt.Errorf("E4: own key: %w", err)
 		}
