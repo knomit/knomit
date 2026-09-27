@@ -114,7 +114,8 @@ func TestApplyBodyOps_Append(t *testing.T) {
 			out, deltas, err := ApplyBodyOps(c.body, []BodyOp{{Op: OpAppend, Text: c.text}})
 			require.NoError(t, err)
 			require.Equal(t, c.want, out)
-			require.Equal(t, len(c.want)-len(c.body), deltas[0].Delta)
+			require.Equal(t, len(strings.TrimSpace(c.want))-len(strings.TrimSpace(c.body)), deltas[0].Delta,
+				"the delta counts bytes as stored, without edge whitespace")
 		})
 	}
 }

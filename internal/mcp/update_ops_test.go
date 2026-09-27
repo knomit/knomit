@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -154,9 +155,6 @@ func TestUpdateOps_SequentialAnchoringOneCommit(t *testing.T) {
 	require.False(t, res.IsError, resultText(t, res))
 	require.Equal(t, "one two three", readBody(t, svc, opsSlot))
 
-	last, err := svc.Facts().LastCommitTouching(ctx, "agent/test", opsSlot)
-	require.NoError(t, err)
-	require.Equal(t, headCommit(t, svc), last)
 	at, err := svc.Facts().ReadFact(ctx, "agent/test", opsSlot, &store.ReadFactOpts{AtCommit: head})
 	require.NoError(t, err)
 	parsed, err := fact.ParseFact(opsSlot, at.Content)
@@ -213,6 +211,7 @@ func TestUpdateOps_RoundtripFailureRejects(t *testing.T) {
 	res := callUpdate(t, ctx, opsArgs(opsSlot, replace("abc", "line one\r\nline two")))
 	require.True(t, res.IsError)
 	require.Contains(t, resultText(t, res), "roundtrip")
+	require.Contains(t, resultText(t, res), "body would read back differently")
 	require.Equal(t, "abc", readBody(t, svc, opsSlot))
 }
 
@@ -224,7 +223,7 @@ func TestUpdate_TitleThatBreaksRoundtripRejects(t *testing.T) {
 		"updates": map[string]any{"title": "two\nlines"},
 	})
 	require.True(t, res.IsError)
-	require.Contains(t, resultText(t, res), "roundtrip")
+	require.Contains(t, resultText(t, res), "title would read back differently")
 }
 
 func TestUpdate_TitleEdgeWhitespaceIsTrimmedNotRejected(t *testing.T) {
@@ -288,8 +287,7 @@ func TestUpdate_IfCommitOnBodyPath(t *testing.T) {
 		"updates": map[string]any{"body": "version two secret"},
 	})
 	require.False(t, res.IsError, resultText(t, res))
-	c2, err := svc.Facts().LastCommitTouching(ctx, "agent/test", opsSlot)
-	require.NoError(t, err)
+	c2 := headCommit(t, svc)
 
 	res = callUpdate(t, ctx, map[string]any{
 		"file": opsSlot, "moment_name": "m", "if_commit": c1,
@@ -352,8 +350,8 @@ func TestUpdateOps_IfCommitPrivateSlotRewrittenRejects(t *testing.T) {
 	svc, ctx, _ := newPrinciplesTestRepo(t)
 	writeSlot(t, ctx, svc, "slot body secret")
 	readAt := writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated")
-	rewritten := writeSlot(t, ctx, svc, "slot body secret, rewritten")
-	writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated again")
+	writeSlot(t, ctx, svc, "slot body secret, rewritten")
+	tip := writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated again")
 
 	args := opsArgs(opsSlot, replace("rewritten", "edited"))
 	args["if_commit"] = readAt
@@ -361,7 +359,7 @@ func TestUpdateOps_IfCommitPrivateSlotRewrittenRejects(t *testing.T) {
 	require.True(t, res.IsError)
 	text := resultText(t, res)
 	require.Contains(t, text, "current_commit")
-	require.Contains(t, text, rewritten, "current_commit is the last commit that touched the file")
+	require.Contains(t, text, tip, "current_commit is the write-branch tip")
 	require.NotContains(t, text, "secret")
 	require.Equal(t, "slot body secret, rewritten", readBody(t, svc, opsSlot))
 }
@@ -371,7 +369,7 @@ func TestUpdateOps_IfCommitUnknownOrAbsentRejects(t *testing.T) {
 	beforeSlot := writeRaw(t, ctx, svc, ".knomit/jobs/x/other.md", "unrelated")
 	writeSlot(t, ctx, svc, "abc")
 
-	for _, c := range []string{strings.Repeat("0", 40), "not-a-hash", beforeSlot} {
+	for _, c := range []string{strings.Repeat("0", 40), beforeSlot} {
 		args := opsArgs(opsSlot, replace("abc", "x"))
 		args["if_commit"] = c
 		res := callUpdate(t, ctx, args)
@@ -410,4 +408,151 @@ func TestUpdateTool_ServesOpsAndIfCommit(t *testing.T) {
 	require.Contains(t, tool.InputSchema.Properties.IfCommit.Description, "current_commit")
 	require.NotContains(t, tool.InputSchema.Required, "updates",
 		"an ops-only call must be expressible")
+}
+
+// A malformed if_commit must be refused outright: GetString would read a
+// number or an array as "" and silently switch the guard off.
+func TestUpdateOps_IfCommitMalformedRejects(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+	writeSlot(t, ctx, svc, "abc")
+	for _, v := range []any{"not-a-hash", "", 42, []any{"x"}, strings.Repeat("A", 40)} {
+		args := opsArgs(opsSlot, replace("abc", "x"))
+		args["if_commit"] = v
+		res := callUpdate(t, ctx, args)
+		require.True(t, res.IsError, "if_commit %v must reject", v)
+		require.Contains(t, resultText(t, res), "40-character")
+	}
+	require.Equal(t, "abc", readBody(t, svc, opsSlot))
+}
+
+// After an experiment lands with a {body} resolution, the slot's bytes exist
+// only in the merge commit. A stale if_commit must get back a current_commit
+// that a retry can use: re-reading there and sending it as if_commit passes.
+func TestUpdateOps_IfCommitAfterMergeReturnsUsableTip(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+	seed := writeSlot(t, ctx, svc, "base")
+
+	_, err := svc.Experiments().OpenExperiment(ctx, "e", "", "agent/test")
+	require.NoError(t, err)
+	f := fact.NewFact(opsSlot)
+	f.Title, f.Body, f.Type = "Job state", "experiment side", fact.Observation
+	f.Domain, f.Confidence, f.Sources, f.Entities = []string{"jobs"}, 0.8, 1, []string{}
+	expSide, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Facts().WriteFact(ctx, "exp/e", opsSlot, expSide, "exp edit", "")
+	require.NoError(t, err)
+	writeSlot(t, ctx, svc, "agent side")
+	f.Body = "merged by hand"
+	merged, err := fact.SerializeFact(f)
+	require.NoError(t, err)
+	_, err = svc.Experiments().CommitExperiment(ctx, "e", map[string]store.Resolution{
+		opsSlot: {Body: []byte(merged)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "merged by hand", readBody(t, svc, opsSlot))
+
+	args := opsArgs(opsSlot, replace("merged by hand", "merged, then edited"))
+	args["if_commit"] = seed
+	res := callUpdate(t, ctx, args)
+	require.True(t, res.IsError)
+	tip := headCommit(t, svc)
+	require.Contains(t, resultText(t, res), "current_commit: "+tip)
+
+	args["if_commit"] = tip
+	res = callUpdate(t, ctx, args)
+	require.False(t, res.IsError, "a retry with if_commit=current_commit must pass: %s", resultText(t, res))
+	require.Equal(t, "merged, then edited", readBody(t, svc, opsSlot))
+}
+
+// The if_commit check and the write are one atomic step: of N concurrent
+// callers holding the same if_commit, exactly one lands and the rest are
+// refused — none silently overwrites another.
+func TestUpdateOps_IfCommitConcurrentCallersOneWins(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+	readAt := writeSlot(t, ctx, svc, "counter")
+
+	const n = 8
+	results := make(chan *mcpgo.CallToolResult, n)
+	for i := range n {
+		go func() {
+			args := opsArgs(opsSlot, map[string]any{"op": "append", "text": fmt.Sprintf("writer %d", i)})
+			args["if_commit"] = readAt
+			var req mcpgo.CallToolRequest
+			req.Params.Arguments = args
+			res, err := UpdateHandler()(ctx, req)
+			if err != nil {
+				res = mcpgo.NewToolResultError(err.Error())
+			}
+			results <- res
+		}()
+	}
+	wins := 0
+	for range n {
+		res := <-results
+		if !res.IsError {
+			wins++
+			continue
+		}
+		require.Contains(t, resultText(t, res), "current_commit")
+	}
+	require.Equal(t, 1, wins, "exactly one caller holding the same if_commit may land")
+	require.Equal(t, 1, strings.Count(readBody(t, svc, opsSlot), "writer "))
+}
+
+// Without if_commit, ops are still computed from the bytes read at the start
+// of the call; a write that lands in between must not be overwritten by them.
+func TestUpdateOps_ConcurrentCallersNeverLoseAWrite(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+	writeSlot(t, ctx, svc, "log")
+
+	const n = 8
+	done := make(chan bool, n)
+	for i := range n {
+		go func() {
+			var req mcpgo.CallToolRequest
+			req.Params.Arguments = opsArgs(opsSlot, map[string]any{"op": "append", "text": fmt.Sprintf("entry %d", i)})
+			res, err := UpdateHandler()(ctx, req)
+			done <- err == nil && !res.IsError
+		}()
+	}
+	landed := 0
+	for range n {
+		if <-done {
+			landed++
+		}
+	}
+	require.GreaterOrEqual(t, landed, 1)
+	require.Equal(t, landed, strings.Count(readBody(t, svc, opsSlot), "entry "),
+		"every call that reported success must be in the body")
+}
+
+// A body whose fence count is already odd (valid CommonMark: a ```` fence
+// quoting a ``` line) stays editable; only an edit that unbalances an even
+// count is refused.
+func TestUpdateOps_AlreadyOddFenceBodyStaysEditable(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+	writeSlot(t, ctx, svc, "````md\n```\n````\n\nold tail")
+	res := callUpdate(t, ctx, opsArgs(opsSlot, replace("old tail", "new tail")))
+	require.False(t, res.IsError, resultText(t, res))
+
+	res = callUpdate(t, ctx, map[string]any{
+		"file": opsSlot, "moment_name": "m",
+		"updates": map[string]any{"body": "````md\n```\n````\n\nrewritten"},
+	})
+	require.False(t, res.IsError, "the body path judges the edit against the existing body: %s", resultText(t, res))
+}
+
+func TestUpdateOps_DeltaCountsStoredBytes(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+	writeSlot(t, ctx, svc, "abc")
+	res := callUpdate(t, ctx, opsArgs(opsSlot, map[string]any{"op": "append", "text": "def\n\n"}))
+	require.False(t, res.IsError, resultText(t, res))
+	var payload struct {
+		Ops []struct {
+			Delta int `json:"delta"`
+		} `json:"ops"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &payload))
+	require.Equal(t, len("abc\n\ndef")-len("abc"), payload.Ops[0].Delta,
+		"trailing whitespace is not stored, so it is not counted")
 }

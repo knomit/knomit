@@ -154,12 +154,6 @@ func (fi *factIndex) ReadFact(ctx context.Context, branch, path string, opts *Re
 	}
 }
 
-// LastCommitTouching returns the most recent non-merge commit on branch that
-// changed path, from git history (see repoHandler.LastCommitForPath).
-func (fi *factIndex) LastCommitTouching(ctx context.Context, branch, path string) (string, error) {
-	return fi.rh.LastCommitForPath(ctx, branch, strings.ToLower(path))
-}
-
 // FactExists returns true if a fact exists at path on branch HEAD.
 func (fi *factIndex) FactExists(ctx context.Context, branch, path string) (bool, error) {
 	return fi.fileExists(ctx, branch, path)

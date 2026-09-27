@@ -33,14 +33,17 @@ type BodyOp struct {
 	Text   string  `json:"text,omitempty"`
 }
 
-// BodyOpDelta is the byte-length change one op made to the body.
+// BodyOpDelta is the byte-length change one op made to the body as stored:
+// measured on the edge-trimmed form, since the file format keeps no leading or
+// trailing whitespace on a body.
 type BodyOpDelta struct {
 	Op    string `json:"op"`
 	Delta int    `json:"delta"`
 }
 
 // ApplyBodyOps applies ops in order to body, each against the result of the
-// ones before it, and returns the final body and each op's byte delta. It is
+// ones before it, and returns the final body and each op's stored byte delta
+// (see BodyOpDelta; the deltas sum to the change in stored length). It is
 // all-or-nothing: on any error the caller gets no body and must write nothing.
 // Every error names the failing op by its zero-based index.
 //
@@ -60,7 +63,8 @@ func ApplyBodyOps(body string, ops []BodyOp) (string, []BodyOpDelta, error) {
 		if err != nil {
 			return "", nil, fmt.Errorf("op %d: %w", i, err)
 		}
-		deltas = append(deltas, BodyOpDelta{Op: op.Op, Delta: len(next) - len(body)})
+		stored := len(strings.TrimSpace(next)) - len(strings.TrimSpace(body))
+		deltas = append(deltas, BodyOpDelta{Op: op.Op, Delta: stored})
 		body = next
 	}
 	return body, deltas, nil

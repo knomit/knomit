@@ -631,6 +631,27 @@ func (rh *repoHandler) HeadCommitInfo(ctx context.Context, branch string) (strin
 }
 
 // readFileWithHash returns both the file content and the blob hash for the given path.
+// blobAtCommit returns the blob hash of path in commit's tree, or "" when the
+// path is absent there.
+func (rh *repoHandler) blobAtCommit(commitHash plumbing.Hash, path string) (string, error) {
+	commit, err := rh.repo.CommitObject(commitHash)
+	if err != nil {
+		return "", fmt.Errorf("blobAtCommit: commit: %w", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return "", fmt.Errorf("blobAtCommit: tree: %w", err)
+	}
+	entry, err := tree.FindEntry(path)
+	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("blobAtCommit: entry %s: %w", path, err)
+	}
+	return entry.Hash.String(), nil
+}
+
 func (rh *repoHandler) readFileWithHash(ctx context.Context, branch, path string) (string, string, error) {
 	headHash, err := rh.resolveRef(ctx, branch)
 	if err != nil {

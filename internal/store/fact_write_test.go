@@ -62,3 +62,32 @@ func TestWriteFact_StillLowercasesPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, paths, "kb/technology/software/abcdef12.md")
 }
+
+// WriteFactIfUnchanged is a compare-and-swap: a writer holding a stale blob
+// must be refused, not allowed to overwrite the write that landed after its
+// read.
+func TestWriteFactIfUnchanged_RefusesStaleBlob(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := Open(filepath.Join(dir, "k.db"))
+	require.NoError(t, err)
+	defer svc.Close()
+	require.NoError(t, svc.InitRepo(map[string]string{}, "main"))
+	fi := svc.Facts()
+	ctx := context.Background()
+	const path = ".knomit/jobs/x/y.md"
+
+	_, err = fi.WriteFact(ctx, "main", path, "v1", "v1", "update")
+	require.NoError(t, err)
+	read, err := fi.ReadFact(ctx, "main", path, &ReadFactOpts{WithHash: true})
+	require.NoError(t, err)
+
+	_, err = fi.WriteFactIfUnchanged(ctx, "main", path, "v2", "v2", "update", read.BlobHash)
+	require.NoError(t, err, "the blob is still the one read: the write proceeds")
+
+	_, err = fi.WriteFactIfUnchanged(ctx, "main", path, "v3", "v3", "update", read.BlobHash)
+	require.ErrorIs(t, err, ErrFactChanged, "the blob moved on: the stale writer is refused")
+
+	now, err := fi.ReadFact(ctx, "main", path, nil)
+	require.NoError(t, err)
+	require.Equal(t, "v2", now.Content)
+}

@@ -1,11 +1,13 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,10 +69,10 @@ Ops apply in order, each to the body the previous op produced, so a later op may
 
 Matching is exact: no regex, no whitespace or Unicode normalisation. On 0 matches the error gives the longest prefix of old_str that does occur, its byte offset, and the first differing character on each side as U+XXXX — fix old_str from that (smart quotes, em dash vs "--", non-breaking space, trailing whitespace) and retry. On 2 or more matches it gives the count and offsets — widen old_str with surrounding text until it is unique.
 
-The body's leading and trailing whitespace is not stored. A body with an unbalanced ` + "```" + ` fence is refused.`
+The body's leading and trailing whitespace is not stored. An edit that leaves an unclosed ` + "```" + ` fence in a body whose fences were balanced is refused.`
 
 // ifCommitDescription is the agent-facing contract for knomit_update's if_commit.
-const ifCommitDescription = `Optional guard against editing a fact that changed since you read it. Pass the commit you read the fact at — the "commit" knomit_explain returned for it — as the full 40-character hash. The update proceeds only if the file's bytes at that commit equal its bytes now; an unrelated commit in between does not matter. Otherwise nothing is written and the error gives current_commit, the last commit that changed the file: read the fact again at current_commit and rebuild your edit against it. Applies to ops and to updates.body alike.`
+const ifCommitDescription = `Optional guard against editing a fact that changed since you read it. Pass the commit you read the fact at — the "commit" knomit_explain returned for it — as the full 40-character hash. The update proceeds only if the file's bytes at that commit equal its bytes now; an unrelated commit in between does not matter. Otherwise nothing is written and the error gives current_commit: read the fact again at current_commit and rebuild your edit against it. The check and the write are atomic, so two callers holding the same if_commit cannot both land. Applies to ops and to updates.body alike.`
 
 // updateToolSchemaProperties is the knomit_update `updates` object's
 // properties map. Extracted from the registration literal above for the same
@@ -184,7 +186,9 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		}
 
 		// 4. Read and parse existing fact.
-		readResult, err := s.facts.ReadFact(ctx, writeBranch, file, nil)
+		// WithHash: the blob read here is the precondition the write below
+		// commits against, so nothing that lands in between is overwritten.
+		readResult, err := s.facts.ReadFact(ctx, writeBranch, file, &store.ReadFactOpts{WithHash: true})
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("read file error: %v", err)), nil
 		}
@@ -213,9 +217,12 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		}
+		// Strict: an unknown key on an op (say replace_all, or an occurrence
+		// index) is refused rather than ignored, because ignoring it would
+		// apply an edit the caller did not ask for.
 		var ops []factpkg.BodyOp
 		if hasOps {
-			if ops, err = decodeOps(req); err != nil {
+			if err := unmarshalArgStrict(req, "ops", &ops); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 			if updates.Body != nil {
@@ -228,20 +235,20 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// anchored its edit on is the content it read, so the content is what
 		// is checked. Any commit at which the file read the same passes — the
 		// one knomit_explain returned, or any later one that left it alone.
-		if ifCommit := req.GetString("if_commit", ""); ifCommit != "" {
+		// The write below re-checks the blob inside the write lock, so the
+		// guard also holds against a writer landing after this check.
+		ifCommit, err := ifCommitArg(req)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if ifCommit != "" {
 			at, rerr := s.facts.ReadFact(ctx, writeBranch, file, &store.ReadFactOpts{AtCommit: ifCommit})
 			if rerr != nil || at.Content != content {
-				current, cerr := s.facts.LastCommitTouching(ctx, writeBranch, file)
-				if cerr != nil {
-					return mcpgo.NewToolResultError(fmt.Sprintf("if_commit check error: %v", cerr)), nil
-				}
 				reason := "the file changed since that commit"
 				if rerr != nil {
 					reason = "the file cannot be read at that commit"
 				}
-				return mcpgo.NewToolResultError(fmt.Sprintf(
-					"if_commit %s does not match: %s; nothing was written. current_commit: %s",
-					ifCommit, reason, current)), nil
+				return staleFactResult(ctx, s, writeBranch, fmt.Sprintf("if_commit %s does not match: %s", ifCommit, reason)), nil
 			}
 		}
 
@@ -260,12 +267,13 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if updates.Sources != nil {
 			fact.Sources = *updates.Sources
 		}
-		bodyChanged := updates.Body != nil || len(ops) > 0
+		priorBody := fact.Body
+		bodyChanged := updates.Body != nil || hasOps
 		if updates.Body != nil {
 			fact.Body = *updates.Body
 		}
 		var opDeltas []factpkg.BodyOpDelta
-		if len(ops) > 0 {
+		if hasOps {
 			if fact.Body, opDeltas, err = factpkg.ApplyBodyOps(fact.Body, ops); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
@@ -308,7 +316,7 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		fact.Title = strings.TrimSpace(fact.Title)
 		fact.Body = strings.TrimSpace(fact.Body)
 		if bodyChanged {
-			if err := factpkg.CheckFences(fact.Body); err != nil {
+			if err := factpkg.CheckFenceEdit(priorBody, fact.Body); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		}
@@ -353,11 +361,18 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("serialize error: %v", err)), nil
 		}
-		if err := checkRoundtrip(file, serialized); err != nil {
+		if err := checkRoundtrip(file, fact, serialized); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
-		writeRes, err := s.facts.WriteFact(ctx, writeBranch, file, serialized, commitMsg, "update")
+		writeRes, err := s.facts.WriteFactIfUnchanged(ctx, writeBranch, file, serialized, commitMsg, "update", readResult.BlobHash)
+		if errors.Is(err, store.ErrFactChanged) {
+			reason := "the fact changed while this update was being applied"
+			if ifCommit != "" {
+				reason = fmt.Sprintf("if_commit %s does not match: %s", ifCommit, reason)
+			}
+			return staleFactResult(ctx, s, writeBranch, reason), nil
+		}
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
@@ -380,40 +395,77 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 	}
 }
 
-// decodeOps reads the ops argument strictly: an unknown key on an op (say
-// replace_all, or an occurrence index) is refused rather than ignored, because
-// ignoring it would apply an edit the caller did not ask for.
-func decodeOps(req mcpgo.CallToolRequest) ([]factpkg.BodyOp, error) {
-	raw, err := json.Marshal(req.GetArguments()["ops"])
+// ifCommitArg reads if_commit. Absent means no guard; anything present must
+// be a full lowercase 40-hex commit hash. A non-string must not read as ""
+// and silently switch the guard off.
+func ifCommitArg(req mcpgo.CallToolRequest) (string, error) {
+	raw, ok := req.GetArguments()["if_commit"]
+	if !ok {
+		return "", nil
+	}
+	c, isString := raw.(string)
+	if !isString || !commitHashRE.MatchString(c) {
+		return "", fmt.Errorf("if_commit must be a full 40-character lowercase hex commit hash, got %v", raw)
+	}
+	return c, nil
+}
+
+var commitHashRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// staleFactResult is the refusal for an update whose fact is no longer what
+// the caller read. It carries the write branch's tip as current_commit and
+// nothing else — never the body. The tip is the right commit to hand back:
+// the guard compares bytes, and the file's bytes at the tip are by definition
+// its bytes now, so a retry that re-reads there and sends if_commit=tip passes
+// unless yet another write lands first.
+func staleFactResult(ctx context.Context, s mcpStore, branch, reason string) *mcpgo.CallToolResult {
+	tip, err := s.branches.HeadCommit(ctx, branch)
 	if err != nil {
-		return nil, fmt.Errorf("invalid ops: %v", err)
+		return mcpgo.NewToolResultError(fmt.Sprintf("%s; nothing was written (current_commit unavailable: %v)", reason, err))
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var ops []factpkg.BodyOp
-	if err := dec.Decode(&ops); err != nil {
-		return nil, fmt.Errorf("invalid ops format: %v", err)
-	}
-	if len(ops) == 0 {
-		return nil, fmt.Errorf("ops is empty: send at least one op, or omit ops")
-	}
-	return ops, nil
+	return mcpgo.NewToolResultError(fmt.Sprintf(
+		"%s; nothing was written. current_commit: %s — read the fact again at current_commit and rebuild the edit against it",
+		reason, tip))
 }
 
 // checkRoundtrip refuses bytes that would not read back as what was written:
 // the file is parsed and serialised again, and the two serialisations must be
 // identical. It catches any field content the parser treats as structure — a
 // CR LF pair it normalises away, a newline in the title — which would
-// otherwise commit a revision no reader sees as sent.
-func checkRoundtrip(file, serialized string) error {
+// otherwise commit a revision no reader sees as sent. The error names the
+// field that differed and shows where.
+func checkRoundtrip(file string, sent factpkg.Fact, serialized string) error {
 	parsed, err := factpkg.ParseFact(file, serialized)
 	if err != nil {
 		return fmt.Errorf("roundtrip check failed: the written fact would not parse: %v", err)
 	}
 	again, err := factpkg.SerializeFact(parsed)
-	if err != nil || again != serialized {
-		return fmt.Errorf("roundtrip check failed: the fact would not read back as written " +
-			"(a carriage return, or a newline in the title, are the usual causes)")
+	if err == nil && again == serialized {
+		return nil
 	}
-	return nil
+	switch {
+	case parsed.Title != sent.Title:
+		return fmt.Errorf("roundtrip check failed: the title would read back differently — %s", firstDifference(sent.Title, parsed.Title))
+	case parsed.Body != sent.Body:
+		return fmt.Errorf("roundtrip check failed: the body would read back differently — %s", firstDifference(sent.Body, parsed.Body))
+	default:
+		return fmt.Errorf("roundtrip check failed: the frontmatter would read back differently")
+	}
+}
+
+// firstDifference describes where sent and read first differ, as a short
+// quoted window of each from that byte offset.
+func firstDifference(sent, read string) string {
+	i := 0
+	for i < len(sent) && i < len(read) && sent[i] == read[i] {
+		i++
+	}
+	window := func(s string) string {
+		s = s[i:]
+		if len(s) > 30 {
+			s = s[:30] + "…"
+		}
+		return strconv.Quote(s)
+	}
+	return fmt.Sprintf("at byte %d, sent %s, would read %s", i, window(sent), window(read))
 }

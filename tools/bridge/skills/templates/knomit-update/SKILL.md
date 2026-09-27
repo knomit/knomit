@@ -69,7 +69,8 @@ Pass `if_commit` with the `commit` from that same explain call. If the fact
 changed since you read it, nothing is written and the error gives
 `current_commit`. Read the fact again at that commit and rebuild your ops.
 
-A body with an unbalanced ```` ``` ```` fence is refused on both paths.
+An edit that leaves an unclosed ```` ``` ```` fence in a body whose fences were
+balanced is refused, on both paths.
 
 ## Body updates replace the WHOLE body — preserve hardening
 

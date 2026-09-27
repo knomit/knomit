@@ -43,6 +43,11 @@ var ErrNoAgentBranch = errors.New("repo has no agent branch to push")
 // and are not gated.
 var ErrRepoReadOnly = errors.New("repo is read-only")
 
+// ErrFactChanged is returned by a conditional write (WriteFactIfUnchanged)
+// whose file no longer holds the blob the caller read: another write landed
+// in between, and committing would silently discard it.
+var ErrFactChanged = errors.New("fact changed since it was read")
+
 // ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read
 // path that needs to resolve a path's active commit via branch_facts) when
 // no row exists for (branch, path). This means the fact is not currently live

@@ -13,6 +13,10 @@ import (
 type FactIndex interface {
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
+	// WriteFactIfUnchanged is WriteFact that commits only if path's blob on
+	// the branch tip is still expectBlob, checked inside the write lock;
+	// otherwise it writes nothing and returns an error wrapping ErrFactChanged.
+	WriteFactIfUnchanged(ctx context.Context, branch, path, content, message, operation, expectBlob string) (WriteFactResult, error)
 	// WriteRootFile writes a root-level non-fact file (e.g. README.md)
 	// PRESERVING CASE. WriteFact lowercases, which is correct for fact paths
 	// and wrong for a filename an external reader looks for by exact name.
@@ -24,11 +28,6 @@ type FactIndex interface {
 	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
 	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
 	FactExists(ctx context.Context, branch, path string) (bool, error)
-	// LastCommitTouching is the most recent non-merge commit on branch that
-	// changed path, read from git rather than the index — so it answers for
-	// private-state paths too, which the index never admits. FactQuery's
-	// LastCommitForPath is the index-backed sibling.
-	LastCommitTouching(ctx context.Context, branch, path string) (string, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
