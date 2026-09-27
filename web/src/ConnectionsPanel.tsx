@@ -2,11 +2,13 @@ import { useRef, useCallback } from 'react';
 import type { RefObject } from 'react';
 import type { RefGroup } from './api';
 import { EdgeRow } from './EdgeRow';
-import { useDismiss } from './hooks';
+import { PANEL_GAP, useDismiss, usePanelClamp } from './hooks';
 import type { EdgeDir } from './utils';
 import { EDGE_ACCENT, EDGE_ERROR, EDGE_GLYPH, EDGE_LABEL } from './utils';
 
 export const CONNECTIONS_PANEL_WIDTH = 360;
+/** Nominal height cap; a short pane lowers it further (usePanelClamp). */
+export const CONNECTIONS_PANEL_MAX_HEIGHT = 360;
 
 // Matches LeftPanel's guard, including the jsdom/SSR checks.
 const prefersReducedMotion =
@@ -53,6 +55,7 @@ export function ConnectionsPanel({
   const ref = useRef<HTMLDivElement>(null);
 
   useDismiss(open !== null, onClose, [ref, menuRef]);
+  const clamp = usePanelClamp(ref, open !== null);
 
   // Stable identity: EdgeRow is memoized, and an inline arrow here would be a
   // fresh prop on every render, making that memo inert.
@@ -81,9 +84,12 @@ export function ConnectionsPanel({
         position: 'absolute',
         top: '100%',
         left: 0,
-        marginTop: 6,
+        marginTop: PANEL_GAP,
         width: CONNECTIONS_PANEL_WIDTH,
-        maxHeight: 360,
+        // Never past the fact pane, which clips: shrink to what is visible and
+        // let the list scroll. The header does not shrink, so esc and × stay.
+        maxWidth: clamp.maxWidth,
+        maxHeight: Math.min(CONNECTIONS_PANEL_MAX_HEIGHT, clamp.maxHeight ?? CONNECTIONS_PANEL_MAX_HEIGHT),
         background: '#101010',
         border: '1px solid #2f2f2f',
         borderRadius: 6,
@@ -138,7 +144,7 @@ export function ConnectionsPanel({
         </span>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div data-testid="connections-panel-list" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         {error && <div style={{ color: EDGE_ERROR, fontSize: 12, padding: '8px 12px' }}>{error}</div>}
         {!error && groups.map(g => (
           <EdgeRow key={g.path} group={g} onHop={handleHop} />
