@@ -134,16 +134,17 @@ function attentionFor(rows: FleetRow[]): Attention[] {
   return out.sort((a, b) => Number(a.kind === 'no-remote') - Number(b.kind === 'no-remote'));
 }
 
-export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, readOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions, liveSessions, onOpenCreate, createSurface }: {
+export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig, serverReadOnly, onSelectRepo, onSelectLens, onNewRepo, onNewLens, onSelectSessions, liveSessions, onOpenCreate, createSurface }: {
   repos: RepoInfo[];
   lenses: Lens[];
   archivedCount: number;
   hideRemoteConfig: boolean;
-  /** Same gate as the rail's `+` buttons. Read-only is not only the
-   *  server-read-only instance — it is also every history excursion — so these
-   *  must be dead whenever those are, or Overview becomes the one way to reach
-   *  a create form whose submit is going to be refused. */
-  readOnly: boolean;
+  /** Same gate as the rail's `+` buttons: the INSTANCE accepts no mutations.
+   *  These must be dead whenever those are, or Overview becomes the one way to
+   *  reach a create form whose submit is going to be refused. Creating is
+   *  instance-scoped, so the browsed repo's subscription, branch or history
+   *  anchor never enters into it (#324). */
+  serverReadOnly: boolean;
   /** focus names the block to scroll to on the repo's settings page. */
   onSelectRepo: (name: string, focus?: string) => void;
   onSelectLens: (name: string) => void;
@@ -237,12 +238,12 @@ export function ManageOverview({ repos, lenses, archivedCount, hideRemoteConfig,
             "+ Repository", not "+ New repository" — the plus already says new,
             and the word only made the button wider. */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-          <button type="button" data-testid="overview-new-repo" style={btn(readOnly)} disabled={readOnly}
-            title={readOnly ? 'Read-only' : undefined} onClick={onNewRepo}>
+          <button type="button" data-testid="overview-new-repo" style={btn(serverReadOnly)} disabled={serverReadOnly}
+            title={serverReadOnly ? 'Read-only' : undefined} onClick={onNewRepo}>
             <PlusIcon color="currentColor" size={12} /> Repository
           </button>
-          <button type="button" data-testid="overview-new-lens" style={btn(readOnly)} disabled={readOnly}
-            title={readOnly ? 'Read-only' : undefined} onClick={onNewLens}>
+          <button type="button" data-testid="overview-new-lens" style={btn(serverReadOnly)} disabled={serverReadOnly}
+            title={serverReadOnly ? 'Read-only' : undefined} onClick={onNewLens}>
             <PlusIcon color="currentColor" size={12} /> Lens
           </button>
         </div>
