@@ -24,7 +24,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// the store: reads, and the two tables
 		"d.ri.Acquire", "release", "svc.Triggers", "svc.Branches", "?.HeadCommit", "svc.UpstreamBranch", "svc.SignerFingerprint",
 		"tr.OntologyAtCommit", "tr.TriggerWatermarks", "tr.IsAncestor", "tr.DiffFacts", "tr.TreeReader",
-		"tr.VerifiedAnchor", "tr.AncestorSet", "tr.RecordTriggerRuns", "tr.AdvanceTriggerWatermarks",
+		"tr.UpstreamTip", "tr.AncestorSet", "tr.RecordTriggerRuns", "tr.AdvanceTriggerWatermarks",
 		"cr.tr.CommitInfo", "cr.tr.CommitSignerOf", "cr.trees.Toucher", "trees.BlobAt", "?.TriggerWatermarks", "?.RecentTriggerFires",
 		"ri.WithRead", "ri.Name",
 		// the compiled triggers

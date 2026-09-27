@@ -21,9 +21,9 @@ var triggersAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// git reads
 		"?.CommitObject", "c.Tree", "cur.NumParents", "tree.FindEntry", "tree.TreeEntryFile", "tree.File",
-		"f.Contents", "?.Log", "iter.ForEach", "?.Reference", "?.IsFile", "ref.Hash", "?.String",
+		"f.Contents", "walkHistory", "?.Reference", "?.IsFile", "ref.Hash", "?.String",
 		"tt.commit", "tt.tree", "tt.blobHashAt", "rh.TreeReader", "?.Toucher", "?.BlobAt",
-		"isAncestorCommit", "verifyCommitSignature", "verifiedRefName", "rh.cachedBelow",
+		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verifyCommitSignature",
 		"fact.OntologyPathsNewestFirst",
 		// this store's own tables
 		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn",

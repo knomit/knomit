@@ -24,7 +24,8 @@ Call `knomit_update` with:
 
 - `file`: the fact path (e.g. `kb/decisions/synthesize/.../<uuid>.md`)
 - `moment_name`: short label (e.g. `"post-rename dirtyFacts → dirty"`)
-- `updates`: ONLY the changed fields (partial)
+- `updates`: ONLY the changed fields (partial). Any key not in the schema fails
+  the whole call: body edits go in `ops`, and the path and origin cannot change
 - `ops`: edits to the body, in place of `updates.body` (see below)
 - `if_commit` (optional): the `commit` knomit_explain returned when you read the fact
 

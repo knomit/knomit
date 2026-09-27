@@ -210,9 +210,10 @@ func countFires(t *testing.T, svc *Service) (total, runs int, minID, maxID int64
 	return
 }
 
-// Migration 000028: both tables exist after Open (and the body re-runs
-// cleanly, which the recovery tests exercise for every migration).
-func TestMigration000028_TablesExist(t *testing.T) {
+// Migration 000029: both tables exist after Open (and the body re-runs
+// cleanly, which the recovery tests exercise for every migration). 000028 is
+// F09 PR 5's drop of verify_context, which landed first.
+func TestMigration000029_TablesExist(t *testing.T) {
 	svc := newChangesService(t)
 	for _, table := range []string{"trigger_watermarks", "trigger_fires"} {
 		var n int
@@ -355,29 +356,26 @@ func TestCommitSignerOf_MatchesSignerFingerprint(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnsigned)
 }
 
-// VerifiedAnchor: no ref → ZeroHash; a ref set without a fold → the anchor and
-// a NIL cached set (F09 fills it only by folding in this process); AncestorSet
-// is the fallback walk.
-func TestVerifiedAnchor_NilCacheUntilAFold(t *testing.T) {
+// UpstreamTip is the local main's head (ZeroHash for a branch that does not
+// exist); AncestorSet is everything reachable from it — what F09 counts as
+// verified after PR 5 (accepted at the gate, then trusted).
+func TestUpstreamTip_AndAncestorSet(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
-	anchor, set, err := svc.Triggers().VerifiedAnchor(ctx, "main")
+	none, err := svc.Triggers().UpstreamTip(ctx, "no-such-branch")
 	require.NoError(t, err)
-	require.Equal(t, plumbing.ZeroHash, anchor)
-	require.Nil(t, set)
+	require.Equal(t, plumbing.ZeroHash, none)
 
 	a := writeF(t, svc, "main", "kb/tasks/a/a.md")
-	b := writeF(t, svc, "main", "kb/tasks/a/b.md")
-	require.NoError(t, svc.TestingSetRef(VerifiedRefName("main"), a))
-	anchor, set, err = svc.Triggers().VerifiedAnchor(ctx, "main")
+	b := writeF(t, svc, "agent/a", "kb/tasks/a/b.md") // the agent's own write, not through main
+	tip, err := svc.Triggers().UpstreamTip(ctx, "main")
 	require.NoError(t, err)
-	require.Equal(t, plumbing.NewHash(a), anchor)
-	require.Nil(t, set, "the cache is nil until a fold runs in this process")
+	require.Equal(t, plumbing.NewHash(a), tip)
 
-	below, err := svc.Triggers().AncestorSet(ctx, anchor)
+	below, err := svc.Triggers().AncestorSet(ctx, tip)
 	require.NoError(t, err)
 	require.True(t, below[plumbing.NewHash(a)])
-	require.False(t, below[plumbing.NewHash(b)], "b is above the anchor")
+	require.False(t, below[plumbing.NewHash(b)], "an unmerged agent write is not below main")
 	require.True(t, below[mustRootHash(t, svc, "main")])
 }
 

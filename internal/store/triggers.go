@@ -16,10 +16,8 @@ import (
 	"strings"
 	"time"
 
-	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/storer"
 	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
@@ -139,12 +137,14 @@ type TriggerIndex interface {
 	// BlobAt reads path's content at commit; ok is false when absent.
 	BlobAt(ctx context.Context, commit plumbing.Hash, path string) (content string, ok bool, err error)
 	IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error)
-	// VerifiedAnchor returns F09's anchor ref for upstream (ZeroHash when
-	// none) and the in-memory set of commits below it, which is NIL until a
-	// fold has run in this process (verify_gate.go cachedBelow). The
-	// dispatcher falls back to AncestorSet once per run in that case.
-	VerifiedAnchor(ctx context.Context, upstream string) (plumbing.Hash, map[plumbing.Hash]bool, error)
-	// AncestorSet is every commit reachable from tip, tip included.
+	// UpstreamTip is the local consensus branch's head (ZeroHash when the
+	// branch does not exist). Since F09 PR 5 verification happens ONCE at the
+	// gate that advances main, and main is trusted afterwards: a commit is
+	// "verified" when it is reachable from that tip. There is no anchor ref
+	// and no fold cache any more.
+	UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash, error)
+	// AncestorSet is every commit reachable from tip, tip included. The
+	// dispatcher walks it once per run per distinct tip and reuses it.
 	AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error)
 
 	// TriggerWatermarks returns trigger name → commit hash for branch.
@@ -413,36 +413,41 @@ func (rh *repoHandler) BlobAt(ctx context.Context, commit plumbing.Hash, path st
 
 // IsAncestor implements TriggerIndex: a is b or an ancestor of b.
 func (rh *repoHandler) IsAncestor(ctx context.Context, a, b plumbing.Hash) (bool, error) {
-	return isAncestorCommit(rh, a, b)
+	if a == b {
+		return true, nil
+	}
+	if a == plumbing.ZeroHash || b == plumbing.ZeroHash {
+		return false, nil
+	}
+	ac, err := object.GetCommit(rh.gits, a)
+	if err != nil {
+		return false, fmt.Errorf("triggers: commit %s: %w", a, err)
+	}
+	bc, err := object.GetCommit(rh.gits, b)
+	if err != nil {
+		return false, fmt.Errorf("triggers: commit %s: %w", b, err)
+	}
+	return ac.IsAncestor(bc)
 }
 
-// VerifiedAnchor implements TriggerIndex.
-func (rh *repoHandler) VerifiedAnchor(ctx context.Context, upstream string) (plumbing.Hash, map[plumbing.Hash]bool, error) {
-	ref, err := rh.gits.Reference(verifiedRefName(upstream))
+// UpstreamTip implements TriggerIndex.
+func (rh *repoHandler) UpstreamTip(ctx context.Context, upstream string) (plumbing.Hash, error) {
+	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(upstream))
 	if errors.Is(err, plumbing.ErrReferenceNotFound) {
-		return plumbing.ZeroHash, nil, nil
+		return plumbing.ZeroHash, nil
 	}
 	if err != nil {
-		return plumbing.ZeroHash, nil, fmt.Errorf("triggers: read anchor: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("triggers: read %s: %w", upstream, err)
 	}
-	return ref.Hash(), rh.cachedBelow(upstream, ref.Hash()), nil
+	return ref.Hash(), nil
 }
 
-// AncestorSet implements TriggerIndex.
+// AncestorSet implements TriggerIndex, with F09's own history walk
+// (verify_walk.go). Nothing is re-verified here: the gate that advanced main
+// did that, and reachability from main IS acceptance.
 func (rh *repoHandler) AncestorSet(ctx context.Context, tip plumbing.Hash) (map[plumbing.Hash]bool, error) {
-	iter, err := rh.repo.Log(&gogit.LogOptions{From: tip})
-	if err != nil {
-		return nil, fmt.Errorf("triggers: log from %s: %w", tip, err)
-	}
 	set := map[plumbing.Hash]bool{}
-	err = iter.ForEach(func(c *object.Commit) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		set[c.Hash] = true
-		return nil
-	})
-	if err != nil && !errors.Is(err, storer.ErrStop) {
+	if err := walkHistory(rh.gits, tip, nil, func(c *object.Commit) { set[c.Hash] = true }); err != nil {
 		return nil, fmt.Errorf("triggers: walk from %s: %w", tip, err)
 	}
 	return set, nil

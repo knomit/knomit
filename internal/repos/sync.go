@@ -11,7 +11,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/config"
-	"knomit/internal/platform/metrics"
 	"knomit/internal/store"
 )
 
@@ -126,7 +125,7 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 //
 // Interval is min(sync, push) interval from the Remote record. Configured
 // changes are picked up on the next tick (re-read from DB).
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool) {
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error)) {
 	defer wg.Done()
 
 	// Initial config read for logging context.
@@ -197,7 +196,6 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 
 		// Sync first.
 		syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
-		reportVerify(repo, hub, lg, syncResult.Main.Verify, err)
 		if tickAbandoned(ctx, err) {
 			// Our own cancellation, not the remote's verdict. Say nothing, count
 			// nothing, and do not go on to push — that would fail identically.
@@ -235,6 +233,12 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			if tickAbandoned(ctx, err) {
 				lg.Debug().Err(err).Msg("reconcile: push abandoned; loop is stopping")
 				return
+			}
+			if onPush != nil {
+				// The fleet state machine retries its pending push HERE: a
+				// registration or unregistration completes on the first
+				// successful push of the fleet repository (Manager.fleetPushed).
+				onPush(repo, err)
 			}
 			if err != nil {
 				pushFails++
@@ -394,34 +398,4 @@ func runLocalReconcile(
 			}
 		}
 	}
-}
-
-// verifyRefused counts commits F09 refused or noted, per repo.
-var verifyRefused = metrics.Default().CounterVec("knomit_verify_refused_total",
-	"Commits F09 signature verification refused or reported, per repository.", "repo")
-
-// reportVerify surfaces one tick's verification report: a verify-failed event
-// and the counter for every refused or noted commit, and a log line. A
-// blocking refusal ALSO goes through the tick's ordinary failure path (Sync
-// returned store.ErrVerifyFailed), which records the status and escalates.
-func reportVerify(repo string, hub *TaskHub, lg zerolog.Logger, rep *store.VerifyReport, syncErr error) {
-	if rep == nil {
-		var vf *store.VerifyFailedError
-		if errors.As(syncErr, &vf) {
-			rep = vf.Report
-		}
-	}
-	if rep == nil || (len(rep.Refused) == 0 && len(rep.Reported) == 0 && !rep.Rewind) {
-		return
-	}
-	verifyRefused.With(repo).Add(int64(len(rep.Refused) + len(rep.Reported)))
-	if hub != nil {
-		hub.broadcastVerify("origin", rep)
-	}
-	ev := lg.Warn().Str("mode", rep.Mode).Int("refused", len(rep.Refused)).
-		Int("reported", len(rep.Reported)).Bool("held", rep.Held).Bool("rewind", rep.Rewind)
-	if len(rep.Refused) > 0 {
-		ev = ev.Str("first", rep.Refused[0].Commit).Str("reason", rep.Refused[0].Reason)
-	}
-	ev.Msg("verify: upstream commits refused or reported")
 }

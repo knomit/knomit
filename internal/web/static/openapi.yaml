@@ -1297,6 +1297,21 @@ paths:
         rows per repo. `enabled: false` with a `reason` on a read-only server
         or a subscription (no agent branch to observe).
 
+        What a trigger's `if` sees as `change.author`: `id` (the commit
+        author's name), `kind` (`agent` for an @agents.knomit.io address,
+        `human` otherwise, `unknown` when the change has no originating
+        commit, e.g. a path scrubbed by a rewind), `fp` (the SSHSIG signer's
+        full fingerprint, set only when the signature verifies) and
+        `verified`. `verified` means "this change has already passed the
+        acceptance gate": it is true only when `verify_signatures` is `log`
+        or `enforce` in the ontology at the observed head AND the originating
+        commit is an ancestor of the local upstream (main) tip. Nothing is
+        re-verified by the dispatcher — the gate that advanced main did that.
+        Consequences: with verification off it is always false; this
+        instance's own writes read false until they come back through main;
+        `source` (`local`/`merged`) is decided by the signer's fingerprint and
+        is independent of `verified`.
+
         This is the ONLY surface for the trigger statistics.
       parameters:
         - name: log
@@ -1654,6 +1669,103 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /fleet:
+    get:
+      tags: [fleet]
+      summary: This instance's fleet membership (F09)
+      description: |
+        The membership state machine: `standalone` (no fleet) -> `registering`
+        (own member record committed, push pending) -> `registered` (the
+        record is `pending` on the fleet's main until a human merges it, then
+        `active`, `left` or `revoked` as that main says) -> `unregistering`
+        (a `left` record committed, push pending) -> `standalone`.
+        `last_error` is the latest push or fetch failure, cleared on success;
+        a pending push is retried on the sync loop. The fleet repository is the
+        one mounted repository whose ontology is the fleet preset.
+      operationId: getFleet
+      responses:
+        "200":
+          description: The fleet state
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/FleetStatus" }
+    put:
+      tags: [fleet]
+      summary: Register with a fleet (or refresh this instance's record)
+      description: |
+        Mounts the fleet repository (clone, with an agent branch), refuses
+        unless its ontology is the fleet preset, writes this instance's member
+        record on the agent branch and pushes it. A human accepts by merging
+        the agent branch into the fleet's main. The same URL again refreshes
+        the record (for example after a key rotation). 202 while the push is
+        pending (retried on the sync loop).
+
+        Refusals carry a machine-readable `code`:
+        `registration_pending` (409), `unregistration_pending` (409),
+        `already_registered` (409, another fleet: unregister first),
+        `not_a_fleet` (422, the repository's ontology is not the fleet preset;
+        the mount is removed), `clone_failed` (502, nothing is mounted or
+        persisted; re-issue the request), `url_required` (400).
+      operationId: registerFleet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string }
+                auth_method: { type: string }
+                auth_token: { type: string }
+      responses:
+        "200": { description: Registered, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "202": { description: Registering (push pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "400": { description: url_required }
+        "409": { description: registration_pending, unregistration_pending or already_registered }
+        "422": { description: not_a_fleet }
+        "502": { description: clone_failed }
+    delete:
+      tags: [fleet]
+      summary: Unregister from the fleet
+      description: |
+        Commits this instance's record with `state: left` on its agent branch,
+        enters `unregistering` and pushes. Only a successful push unmounts the
+        fleet repository and returns to `standalone` (200); otherwise the state
+        stays `unregistering` with `last_error` set and the push is retried on
+        the sync loop (202) until it succeeds or the fleet repository is
+        archived by hand. A bare archive of the fleet repository while
+        registered is refused with `use_unregister` (409). Refusals:
+        `not_registered` (409), `unregistration_pending` (409).
+      operationId: unregisterFleet
+      responses:
+        "200": { description: Unregistered, content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "202": { description: Unregistering (push pending), content: { application/hal+json: { schema: { $ref: "#/components/schemas/FleetStatus" } } } }
+        "409": { description: not_registered or unregistration_pending }
+  /fleet/members:
+    get:
+      tags: [fleet]
+      summary: Member records at the fleet repository's main
+      operationId: listFleetMembers
+      responses:
+        "200":
+          description: The members
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  members:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agent: { type: string }
+                        state: { type: string, enum: [active, left, revoked] }
+                        host: { type: string }
+                        branch: { type: string }
+                        path: { type: string }
+        "409": { description: not_registered }
   /sessions:
     get:
       tags: [sessions]
@@ -2841,6 +2953,19 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    FleetStatus:
+      type: object
+      required: [state, agent_id]
+      properties:
+        state: { type: string, enum: [standalone, registering, registered, unregistering] }
+        fleet_repo: { type: string }
+        fleet_url: { type: string }
+        agent_id: { type: string, description: "This instance's persisted, opaque agent id" }
+        record_state: { type: string, enum: [pending, active, left, revoked] }
+        since: { type: string, format: date-time }
+        registered_at: { type: string, format: date-time }
+        last_attempt: { type: string, format: date-time }
+        last_error: { type: string, description: "The latest push or fetch failure; empty after a success" }
     # HAL primitives
     Link:
       type: object

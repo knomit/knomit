@@ -113,6 +113,7 @@ Exit codes:
 		"parity-check every refs/heads/* ref, not only the branches the index maintains")
 	cmd.Flags().BoolVar(&pruneRefs, "prune-generated-refs", false,
 		"DELETE the generated okf/* refs left by the removed server-side export, and their markers")
+	cmd.AddCommand(verifyAuditCmd())
 	return cmd
 }
 

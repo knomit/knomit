@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -33,6 +34,17 @@ func main() {
 
 	if err := cmd.Execute(ctx, cmd.RootCmd()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(exitCodeOf(err))
 	}
+}
+
+// exitCodeOf is the process exit code for a command's error. A command may
+// name its code (cmd.ExitCodeError): `knomit verify audit` distinguishes
+// findings (1) from could not run (2). Anything else exits 1.
+func exitCodeOf(err error) int {
+	var coded interface{ ExitCode() int }
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
+	}
+	return 1
 }

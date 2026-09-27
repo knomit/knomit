@@ -96,6 +96,74 @@ func TestHandleFactCreate_MissingTitle_Returns400(t *testing.T) {
 	}
 }
 
+// A whitespace-only title is as empty as a missing one: it serialises as a
+// bare "# " heading that no reader can parse.
+func TestHandleFactCreate_WhitespaceTitle_Returns400(t *testing.T) {
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "know",
+		providers: storeProviders{
+			factWriter: stubFactWriterForCreate{},
+		},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"title":"   ","body":"blank title"}`
+	rec := httptest.NewRecorder()
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleFactCreate_MultilineTitle_Returns400(t *testing.T) {
+	for _, title := range []string{`\nFoo`, `Foo\nBar`, `Foo\r\nBar`} {
+		s := &Server{
+			Manager:      newTestManagerWithRepos(t, "alpha"),
+			OntologyRoot: "know",
+			providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
+		}
+		r := s.NewAPIRouter()
+		body := `{"title":"` + title + `","body":"b"}`
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("title %q: status %d, want 400, body=%s", title, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestHandleFactCreate_TrimsTitleEdges(t *testing.T) {
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "know",
+		providers:    storeProviders{factWriter: stubFactWriterForCreate{}},
+	}
+	r := s.NewAPIRouter()
+	rec := httptest.NewRecorder()
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts",
+		strings.NewReader(`{"title":"  Padded  ","body":"b"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var view struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Title != "Padded" {
+		t.Errorf("title: got %q, want %q", view.Title, "Padded")
+	}
+}
+
 func TestHandleFactCreate_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),

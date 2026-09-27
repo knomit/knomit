@@ -1671,6 +1671,18 @@ describe('Manage tabs', () => {
   // test order cannot matter.
   beforeEach(() => { vi.mocked(api.listOAuthPending).mockResolvedValue(null); });
 
+  // F09: Fleet is a top-level server page, BETWEEN Knowledge and Sessions
+  // (user ruling), and it is a server page (no rail beside it).
+  it('places the Fleet tab between Knowledge and Sessions', async () => {
+    vi.mocked(api.listClientSessions).mockResolvedValue({ truncated: false, policy: POLICY, sessions: [] });
+    render(<RepoManager {...baseProps} />);
+    await screen.findByTestId('repomgr-overview');
+    const ids = screen.getAllByRole('tab').map(t => t.getAttribute('data-testid'));
+    const k = ids.indexOf('repomgr-overview');
+    expect(ids[k + 1]).toBe('repomgr-fleet');
+    expect(ids[k + 2]).toBe('repomgr-sessions');
+  });
+
   it('badges the live count, and lights NEITHER tab once an entity is selected', async () => {
     vi.mocked(api.listClientSessions).mockResolvedValue({
       truncated: false,

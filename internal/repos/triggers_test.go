@@ -383,9 +383,9 @@ func TestDispatch_TraceFromTrailer(t *testing.T) {
 const verifyLog = "attributes:\n  verify_signatures: log\n"
 
 // AuthorVerifiedOnlyUnderF09: with verify_signatures absent, a validly signed
-// commit reads verified:false; with `log` and the commit below the anchor,
-// true; an own unmerged write above the anchor, false. Sabotage: report
-// signature-valid as verified.
+// commit reads verified:false; with `log` and the commit reachable from main
+// (accepted at the gate, F09 PR 5), true; an own unmerged write above main,
+// false. Sabotage: report signature-valid as verified.
 func TestDispatch_AuthorVerifiedOnlyUnderF09(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
@@ -401,23 +401,22 @@ func TestDispatch_AuthorVerifiedOnlyUnderF09(t *testing.T) {
 	require.Empty(t, firesOf(t, ri, "verified-only"))
 	require.Len(t, firesOf(t, ri, "all"), 1)
 
-	// verify_signatures: log, anchor set at a commit: a write BELOW the anchor
-	// (parked so the anchor covers it before the run) is verified; the next
-	// write above it is not.
+	// verify_signatures: log, main moved to a commit (as the gate would): a
+	// write BELOW main (parked so main covers it before the run) is verified;
+	// the next write above it is not.
 	setOntology(t, ri, triggerOntology(verifyLog, entries...))
 	release := parkDispatcher(t, ri)
 	below := writeOn(t, ri, trigAgent, "kb/tasks/below.md")
-	require.NoError(t, svc.TestingSetRef(store.VerifiedRefName("main"), below))
+	require.NoError(t, svc.TestingSetRef("refs/heads/main", below))
 	release()
 	waitTriggerHead(t, ri, below)
 	write(t, ri, "kb/tasks/above.md")
 	require.Equal(t, []string{"kb/tasks/below.md"}, pathsOf(firesOf(t, ri, "verified-only")))
 }
 
-// VerifiedAfterRestart [R2-1]: F09's in-memory below-anchor cache is empty
-// after a restart until the first fold; the dispatcher must then walk the
-// anchor's history itself, not read every fire as unverified. Sabotage: treat
-// a nil cache as "not below".
+// VerifiedAfterRestart [R2-1]: no cache of main's history survives a restart;
+// the dispatcher must walk it itself on the first run that needs it, not read
+// every fire as unverified. Sabotage: treat an empty cache as "not below".
 func TestDispatch_VerifiedAfterRestart(t *testing.T) {
 	home := t.TempDir()
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
@@ -438,11 +437,11 @@ func TestDispatch_VerifiedAfterRestart(t *testing.T) {
 	waitTriggerHead(t, ri2, head(t, ri2))
 	release := parkDispatcher(t, ri2)
 	c := writeOn(t, ri2, trigAgent, "kb/tasks/after-restart.md")
-	require.NoError(t, testService(t, ri2).TestingSetRef(store.VerifiedRefName("main"), c))
+	require.NoError(t, testService(t, ri2).TestingSetRef("refs/heads/main", c))
 	release()
 	waitTriggerHead(t, ri2, c)
 	require.Equal(t, []string{"kb/tasks/after-restart.md"}, pathsOf(firesOf(t, ri2, "verified-only")),
-		"a commit below the anchor is verified even though F09's cache is empty after the restart")
+		"a commit reachable from main is verified even though no history cache survives the restart")
 }
 
 // ---- Watermarks

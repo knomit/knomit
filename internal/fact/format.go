@@ -384,6 +384,9 @@ func SerializeFact(f Fact) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
+	if err := ValidateTitle(f.Title); err != nil {
+		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
+	}
 	if err := validateBounds(f.Confidence, f.Sources); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}

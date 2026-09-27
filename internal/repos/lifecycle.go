@@ -702,7 +702,17 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 // not deleted, and the error says so, because a caller told "deleted" would
 // otherwise never look in the archive for the row that remains.
 func (m *Manager) DeleteRepo(name string) error {
-	info, err := m.Archive(name)
+	if err := m.guardFleetRemoval(name); err != nil {
+		return err
+	}
+	return m.deleteRepo(name)
+}
+
+// deleteRepo is DeleteRepo without the fleet guard: the unregister path uses
+// it once the departure has been pushed.
+func (m *Manager) deleteRepo(name string) error {
+	wasFleet := m.IsFleetRepo(name)
+	info, err := m.archive(name)
 	if err != nil {
 		return err
 	}
@@ -710,6 +720,7 @@ func (m *Manager) DeleteRepo(name string) error {
 		return fmt.Errorf("delete %q: archived, but the purge that follows failed (the row remains in the archive): %w", name, perr)
 	}
 	log.Info().Str("repo", name).Str("uid", info.ID).Msg("deleted repo")
+	m.fleetRemoved(wasFleet)
 	return nil
 }
 
@@ -1006,7 +1017,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// the history, and the own key is what E4 checks origin's copy of this
 	// instance's agent branch against (a store with no signer refuses adoption).
 	svc.SetSigner(m.deps.Signer)
-	svc.SetRootOfTrust(m.deps.VerifyRoot)
+	svc.SetOwnKeys(m.ownFleetKeys)
 	// No Crypt is wired here: the clone's credential is already resolved above
 	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
 	// holds the only Crypt. This store never stores a credential of its own.
@@ -1161,8 +1172,8 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// pushed: it must be signed like every later one. Without this it went out
 	// unsigned (and now fails with store.ErrNoSigner).
 	svc.SetSigner(m.deps.Signer)
+	svc.SetOwnKeys(m.ownFleetKeys)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
-	svc.SetRootOfTrust(m.deps.VerifyRoot)
 	// No Crypt is wired here, for the same reason initClone doesn't: the
 	// credential is already resolved above, and its durable copy belongs to
 	// control.db's Origins, which holds the only Crypt.
@@ -1306,7 +1317,6 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
-	svc.SetRootOfTrust(m.deps.VerifyRoot)
 
 	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch,
 		transferProgress(emit, "subscribe"))
@@ -1446,6 +1456,19 @@ type ArchiveInfo struct {
 // ANY repo may be archived, including the last one: no repo is privileged, and
 // zero repos is a valid state.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
+	if err := m.guardFleetRemoval(name); err != nil {
+		return ArchiveInfo{}, err
+	}
+	wasFleet := m.IsFleetRepo(name)
+	info, err := m.archive(name)
+	if err == nil {
+		m.fleetRemoved(wasFleet)
+	}
+	return info, err
+}
+
+// archive is Archive without the fleet guard (see deleteRepo).
+func (m *Manager) archive(name string) (ArchiveInfo, error) {
 	// Truncated to the second because that is the resolution the registry
 	// stores (SetState takes a Unix second) and therefore the resolution
 	// ListArchived renders back. Formatting the untruncated value here would

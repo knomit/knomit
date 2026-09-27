@@ -124,11 +124,11 @@ type triggerDispatcher struct {
 	// ontErr is the blob (or head, when there is no ontology) whose failure
 	// was already logged.
 	ontErr string
-	// verified caches the anchor's ancestor set built by THIS dispatcher when
-	// F09's own cache was empty (R2-1), keyed by the anchor.
+	// verified caches the upstream tip's ancestor set (what F09 counts as
+	// verified after PR 5), keyed by the tip.
 	verified struct {
-		anchor plumbing.Hash
-		set    map[plumbing.Hash]bool
+		tip plumbing.Hash
+		set map[plumbing.Hash]bool
 	}
 	// pending is phase C's write-behind buffer (see pendingFlush).
 	pending pendingFlush
@@ -155,8 +155,10 @@ func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh
 // triggerIdentityFor is this instance's {agent}, {host} and {fp8}. {agent} is
 // the branch minus "agent/", which is also the commit author's name; {fp8} is
 // the first 8 hex of sha256 of the signing key (identity.go's fingerprint),
-// falling back to the branch suffix when no signer is known; {host} is the
-// branch name without the fingerprint suffix.
+// the SAME key the signer uses — a store with no signer has no {fp8}, and a
+// trigger naming it is then invalid on this instance; {host} is the branch
+// name without the fingerprint suffix (a legacy agent/<host> branch has no
+// suffix, so {host} == {agent} there, and {agent} still names the inbox).
 func triggerIdentityFor(agentBranch string, signer ssh.Signer) fact.TriggerIdentity {
 	agent := strings.TrimPrefix(agentBranch, "agent/")
 	id := fact.TriggerIdentity{Agent: agent, Host: agent}
@@ -166,9 +168,6 @@ func triggerIdentityFor(agentBranch string, signer ssh.Signer) fact.TriggerIdent
 	}
 	if i := strings.LastIndex(agent, "-"); i >= 0 && isHex8(agent[i+1:]) {
 		id.Host = agent[:i]
-		if id.FP8 == "" {
-			id.FP8 = agent[i+1:]
-		}
 	}
 	return id
 }
@@ -747,33 +746,32 @@ func (d *triggerDispatcher) verifyModeOn(blob string, data []byte, readable bool
 	return on
 }
 
-// verifiedBelow is the set of commits F09 has accepted for the upstream: the
-// store's own cache when a fold filled it, else ONE history walk per run,
-// reused while the anchor does not move (R2-1: the cache is nil after every
-// restart until the first sync tick, after an operator accept, and for good
-// on a verify-on repo with no origin).
+// verifiedBelow is the set of commits F09 counts as verified: everything
+// reachable from the local upstream's tip. Since F09 PR 5 verification runs
+// once at the acceptance gate that advances main, and main is trusted
+// afterwards; there is no anchor ref and no fold cache to consult, so the
+// dispatcher walks the tip's history ONCE per run and reuses the set while
+// the tip does not move (a restart re-walks once). Your own unmerged writes
+// are therefore verified:false until they come back through main.
 func (d *triggerDispatcher) verifiedBelow(ctx context.Context, tr store.TriggerIndex, upstream string) map[plumbing.Hash]bool {
-	anchor, cached, err := tr.VerifiedAnchor(ctx, upstream)
-	if err != nil || anchor == plumbing.ZeroHash {
+	tip, err := tr.UpstreamTip(ctx, upstream)
+	if err != nil || tip == plumbing.ZeroHash {
 		return nil
 	}
-	if cached != nil {
-		return cached
-	}
 	d.mu.Lock()
-	if d.verified.anchor == anchor && d.verified.set != nil {
+	if d.verified.tip == tip && d.verified.set != nil {
 		set := d.verified.set
 		d.mu.Unlock()
 		return set
 	}
 	d.mu.Unlock()
-	set, err := tr.AncestorSet(ctx, anchor)
+	set, err := tr.AncestorSet(ctx, tip)
 	if err != nil {
-		log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: anchor history walk failed; verified reads false this run")
+		log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: upstream history walk failed; verified reads false this run")
 		return nil
 	}
 	d.mu.Lock()
-	d.verified.anchor, d.verified.set = anchor, set
+	d.verified.tip, d.verified.set = tip, set
 	d.mu.Unlock()
 	return set
 }

@@ -41,41 +41,50 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 
 // checkOwnLineage is F09's E4 check, run at clone time in EVERY mode (off
 // included): the input an attacker cannot choose. Every commit reachable from
-// agentTip and not from upstream (the VERIFIED upstream, so refused upstream
-// commits merged into the branch count as foreign) must carry a valid SSHSIG
+// agentTip and not from upstream (origin's main, trusted since it was accepted
+// at its own gate) must carry a valid SSHSIG
 // by this instance's own key, compared by full fingerprint, or be on this
 // instance's accept list. A store that has no signer cannot know its own key:
 // every such commit is refused.
 func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
 	// The own key is the key this store signs with (commitSigner: the store's
 	// signer, or a test binary's fallback). No signer means no own key.
-	own := ""
+	own := map[string]bool{}
 	if signer, err := rh.commitSigner(); err == nil {
 		fp, err := keyFingerprint(signer.PublicKey())
 		if err != nil {
 			return fmt.Errorf("E4: own key: %w", err)
 		}
-		own = fp
+		own[fp] = true
 	}
-	v := rh.verifier(ctx)
+	// Registered in a fleet: every key this instance's own member record has
+	// held (its versions) is also its own, so a key rotation does not make the
+	// instance's earlier commits foreign.
+	if rh.ownKeys != nil {
+		for _, k := range rh.ownKeys() {
+			if fp, err := keyFingerprint(k); err == nil {
+				own[fp] = true
+			}
+		}
+	}
 	below := map[plumbing.Hash]bool{}
 	if upstream != plumbing.ZeroHash {
-		if err := v.walk(upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
+		if err := walkHistory(rh.gits, upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
 			return err
 		}
 	}
 	var refused []string
-	err := v.walk(agentTip, below, func(c *object.Commit) {
-		if v.accepted != nil && v.accepted(c.Hash) {
+	err := walkHistory(rh.gits, agentTip, below, func(c *object.Commit) {
+		if rh.acceptedCommit(ctx, c.Hash) {
 			return
 		}
 		s, serr := verifyCommitSignature(c)
 		switch {
-		case own == "":
+		case len(own) == 0:
 			refused = append(refused, shortRefHash(c.Hash)+": this store has no signer to know its own key")
 		case serr != nil:
 			refused = append(refused, shortRefHash(c.Hash)+": "+serr.Error())
-		case s.Fingerprint != own:
+		case !own[s.Fingerprint]:
 			refused = append(refused, shortRefHash(c.Hash)+": signed by "+s.Fingerprint[:8])
 		}
 	})

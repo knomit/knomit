@@ -294,7 +294,6 @@ type Config struct {
 	Runtime             RuntimeConfig      `toml:"runtime"`
 	Auth                AuthConfig         `toml:"auth"`
 	TLS                 TLSConfig          `toml:"tls"`
-	Verify              VerifyConfig       `toml:"verify"`
 	OAuth               OAuthConfig        `toml:"oauth"`
 }
 
@@ -308,22 +307,6 @@ type Config struct {
 //
 // Dir holds instance.crt, root.crt, crl.pem and crl.number. The instance KEY
 // is not here: it stays at [remote].ssh_key / <Home>/id_ed25519, the one copy.
-// VerifyConfig is F09's instance-level setting: the root of trust for
-// commit signature verification. Whether a repository IS verified, and with
-// which signers, lives in that repository's ontology (verify_signatures,
-// verify_signers), never here.
-//
-// OperatorKey is the operator's public key as an authorized-key line
-// (ssh-ed25519 only). Only a commit signed by it may enable verification on a
-// repository, relax it, or change its signer list. Empty means unrooted: a
-// repository whose history enables verification is then closed before the
-// enable. It NEVER defaults to this instance's own key — that would make every
-// instance an operator. A malformed value fails boot. Env
-// KNOMIT_VERIFY_OPERATOR_KEY.
-type VerifyConfig struct {
-	OperatorKey string `toml:"operator_key"`
-}
-
 type TLSConfig struct {
 	Addr string `toml:"addr"` // e.g. "0.0.0.0:19279"; env KNOMIT_TLS_ADDR
 	Dir  string `toml:"dir"`  // default <Home>/pki; env KNOMIT_TLS_DIR
@@ -579,7 +562,6 @@ func Load() (Config, error) {
 	// KNOMIT_SOCKET is applied in socketFor, below — not here.
 	envOr("KNOMIT_TLS_ADDR", &cfg.TLS.Addr)
 	envOr("KNOMIT_TLS_DIR", &cfg.TLS.Dir)
-	envOr("KNOMIT_VERIFY_OPERATOR_KEY", &cfg.Verify.OperatorKey)
 	envOr("KNOMIT_OAUTH_ISSUER", &cfg.OAuth.Issuer)
 	envOr("KNOMIT_OAUTH_ADDR", &cfg.OAuth.Addr)
 	envOr("KNOMIT_EMBED_MODEL", &cfg.Embeddings.Model)
