@@ -91,9 +91,6 @@ func (rh *repoHandler) writeAgentBase(agentBranch string, hash plumbing.Hash) er
 type MainReconcileResult struct {
 	Mode   Mode   `json:"mode"`
 	NewTip string `json:"new_tip,omitempty"`
-	// Verify is F09's report for this advance; nil when verification is off
-	// and had nothing to say.
-	Verify *VerifyReport `json:"verify,omitempty"`
 }
 
 // reconcileMain updates the local consensus branch (upstreamMain) to track
@@ -127,32 +124,17 @@ func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (
 	if err != nil {
 		return MainReconcileResult{}, fmt.Errorf("reconcileMain: read origin/%s: %w", upstreamMain, err)
 	}
-	originHash := originMainRef.Hash()
-
-	// F09: where may the local upstream move? Verification runs BEFORE any
-	// SetReference below and may hold the target below origin (refs advance
-	// up to the last good commit and stop there).
-	localMainName := plumbing.NewBranchReferenceName(upstreamMain)
-	var localBefore plumbing.Hash
-	if ref, lerr := rh.gits.Reference(localMainName); lerr == nil {
-		localBefore = ref.Hash()
-	}
-	target, report, err := rh.verifyAdvance(ctx, upstreamMain, localBefore, originHash)
-	if err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: verify: %w", err)
-	}
-	res, err := rh.reconcileMainTo(ctx, upstreamMain, target)
-	res.Verify = report
-	return res, err
+	// F09: origin's main is trusted as fetched. A change is verified once,
+	// at the gate that advanced main (CheckRange), never again here.
+	return rh.reconcileMainTo(ctx, upstreamMain, originMainRef.Hash())
 }
 
-// reconcileMainTo moves the local upstream to originHash (the VERIFIED target,
-// which may be below origin/<upstream>) by fast-forward, create, or
-// force-update. See reconcileMain.
+// reconcileMainTo moves the local upstream to originHash by fast-forward,
+// create, or force-update. See reconcileMain.
 func (rh *repoHandler) reconcileMainTo(ctx context.Context, upstreamMain string, originHash plumbing.Hash) (MainReconcileResult, error) {
 	localMainName := plumbing.NewBranchReferenceName(upstreamMain)
 	if originHash == plumbing.ZeroHash {
-		return MainReconcileResult{Mode: ModeNoop}, nil // nothing verified to move to
+		return MainReconcileResult{Mode: ModeNoop}, nil // nothing to move to
 	}
 	localMainRef, err := rh.gits.Reference(localMainName)
 	if err != nil {

@@ -1006,7 +1006,6 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// the history, and the own key is what E4 checks origin's copy of this
 	// instance's agent branch against (a store with no signer refuses adoption).
 	svc.SetSigner(m.deps.Signer)
-	svc.SetRootOfTrust(m.deps.VerifyRoot)
 	// No Crypt is wired here: the clone's credential is already resolved above
 	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
 	// holds the only Crypt. This store never stores a credential of its own.
@@ -1162,7 +1161,6 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// unsigned (and now fails with store.ErrNoSigner).
 	svc.SetSigner(m.deps.Signer)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
-	svc.SetRootOfTrust(m.deps.VerifyRoot)
 	// No Crypt is wired here, for the same reason initClone doesn't: the
 	// credential is already resolved above, and its durable copy belongs to
 	// control.db's Origins, which holds the only Crypt.
@@ -1306,7 +1304,6 @@ func (m *Manager) initSubscribe(ctx context.Context, spec CreateSpec, uid, dbPat
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
-	svc.SetRootOfTrust(m.deps.VerifyRoot)
 
 	upstream, err := svc.InitSubscription(spec.Origin.URL, auth, spec.Origin.Branch,
 		transferProgress(emit, "subscribe"))

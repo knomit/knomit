@@ -3,27 +3,19 @@ package fact
 import (
 	"errors"
 	"fmt"
-	"slices"
 
 	"gopkg.in/yaml.v3"
 )
 
 // VerifySettings is what F09 reads from one ontology file: the repository's
-// verify_signatures mode and verify_signers list.
+// verify_signatures mode.
 //
-// Valid=false means a key is present with a value its registry spec rejects:
-// the setting is UNKNOWN, and the verifier must never read it as off. Mode and
-// Signers are only meaningful when Valid.
+// Valid=false means the key is present with a value its registry spec rejects:
+// the setting is UNKNOWN, and the gate must never read it as off. Mode is only
+// meaningful when Valid.
 type VerifySettings struct {
-	Mode    string   // "off", "log" or "enforce"; explicit "off" and absent both read "off"
-	Signers []string // authorized-key lines, in file order; nil when absent or empty
-	Valid   bool
-}
-
-// Equal reports whether two settings are the same policy. Only meaningful when
-// both are Valid.
-func (v VerifySettings) Equal(o VerifySettings) bool {
-	return v.Mode == o.Mode && slices.Equal(v.Signers, o.Signers)
+	Mode  string // "off", "log" or "enforce"; explicit "off" and absent both read "off"
+	Valid bool
 }
 
 // ReadVerifySettings reads ONLY the root attributes block of an ontology file.
@@ -58,14 +50,6 @@ func ReadVerifySettings(data []byte) (VerifySettings, error) {
 			return VerifySettings{Valid: false}, nil
 		}
 		out.Mode = v.(string)
-	}
-	if v, ok := attrs[AttrVerifySigners]; ok {
-		if !attributeRegistry[AttrVerifySigners].valid(v) {
-			return VerifySettings{Valid: false}, nil
-		}
-		for _, e := range v.([]any) {
-			out.Signers = append(out.Signers, e.(string))
-		}
 	}
 	return out, nil
 }

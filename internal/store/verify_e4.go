@@ -41,8 +41,8 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 
 // checkOwnLineage is F09's E4 check, run at clone time in EVERY mode (off
 // included): the input an attacker cannot choose. Every commit reachable from
-// agentTip and not from upstream (the VERIFIED upstream, so refused upstream
-// commits merged into the branch count as foreign) must carry a valid SSHSIG
+// agentTip and not from upstream (origin's main, trusted since it was accepted
+// at its own gate) must carry a valid SSHSIG
 // by this instance's own key, compared by full fingerprint, or be on this
 // instance's accept list. A store that has no signer cannot know its own key:
 // every such commit is refused.
@@ -57,16 +57,15 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 		}
 		own = fp
 	}
-	v := rh.verifier(ctx)
 	below := map[plumbing.Hash]bool{}
 	if upstream != plumbing.ZeroHash {
-		if err := v.walk(upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
+		if err := walkHistory(rh.gits, upstream, nil, func(c *object.Commit) { below[c.Hash] = true }); err != nil {
 			return err
 		}
 	}
 	var refused []string
-	err := v.walk(agentTip, below, func(c *object.Commit) {
-		if v.accepted != nil && v.accepted(c.Hash) {
+	err := walkHistory(rh.gits, agentTip, below, func(c *object.Commit) {
+		if rh.acceptedCommit(ctx, c.Hash) {
 			return
 		}
 		s, serr := verifyCommitSignature(c)

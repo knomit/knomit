@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -58,14 +57,45 @@ func CodeOntology() *Ontology {
 	return codeOntology
 }
 
+//go:embed ontology_fleet.yaml
+var fleetOntologyYAML []byte
+
+var (
+	fleetOntology     *Ontology
+	fleetOntologyOnce sync.Once
+)
+
+// FleetOntologyID is the id of the fleet preset. A repository whose ontology
+// has this id IS a fleet repository (F09): that is how an instance recognises
+// it, with no reserved name and nothing in any other repository's ontology.
+const FleetOntologyID = "fleet"
+
+// FleetOntology returns the embedded fleet ontology preset.
+// It panics if the embedded YAML is invalid.
+func FleetOntology() *Ontology {
+	fleetOntologyOnce.Do(func() {
+		o, err := ParseOntology(fleetOntologyYAML)
+		if err != nil {
+			panic(fmt.Sprintf("embedded fleet ontology is invalid: %v", err))
+		}
+		fleetOntology = o
+	})
+	return fleetOntology
+}
+
+// IsFleetOntology reports whether o is a fleet repository's ontology.
+func IsFleetOntology(o *Ontology) bool { return o != nil && o.ID == FleetOntologyID }
+
 // OntologyByPreset returns one of the embedded ontology presets by name.
-// Known presets: "default", "code".
+// Known presets: "default", "code", "fleet".
 func OntologyByPreset(name string) (*Ontology, error) {
 	switch name {
 	case "default":
 		return DefaultOntology(), nil
 	case "code":
 		return CodeOntology(), nil
+	case "fleet":
+		return FleetOntology(), nil
 	default:
 		return nil, fmt.Errorf("unknown ontology preset: %q", name)
 	}
@@ -81,6 +111,8 @@ func EmbeddedPresetByID(id string) *Ontology {
 		return DefaultOntology()
 	case "source-code":
 		return CodeOntology()
+	case FleetOntologyID:
+		return FleetOntology()
 	default:
 		return nil
 	}
@@ -368,13 +400,11 @@ const (
 	scopeRoot
 )
 
-// Repository-level attributes (F09). verify_signatures switches signature
-// verification of the upstream for this repository; absent means off.
-// verify_signers lists the OpenSSH ssh-ed25519 public keys admitted to sign.
-const (
-	AttrVerifySignatures = "verify_signatures"
-	AttrVerifySigners    = "verify_signers"
-)
+// AttrVerifySignatures is the repository-level attribute (F09) that switches
+// signature verification at the acceptance gate for this repository; absent
+// means off. It is the ONLY verification setting in an ontology: who may sign
+// comes from the fleet repository's member records, never from here.
+const AttrVerifySignatures = "verify_signatures"
 
 // attributeRegistry is the ONLY place an attribute key is declared.
 //
@@ -416,33 +446,6 @@ var attributeRegistry = map[string]attributeSpec{
 		absent: "off",
 		scope:  scopeRoot,
 	},
-	// A LIST of authorized-key lines, each an ssh-ed25519 key. Full keys, not
-	// fingerprints: a git allowed_signers file needs the key itself.
-	AttrVerifySigners: {
-		accepts: "a list of ssh-ed25519 public-key lines",
-		valid:   validSignerList,
-		scope:   scopeRoot,
-	},
-}
-
-// validSignerList accepts a yaml sequence whose every entry parses as an
-// authorized-key line of type ssh-ed25519.
-func validSignerList(v any) bool {
-	list, ok := v.([]any)
-	if !ok {
-		return false
-	}
-	for _, e := range list {
-		s, ok := e.(string)
-		if !ok {
-			return false
-		}
-		pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(s))
-		if err != nil || pub.Type() != ssh.KeyAlgoED25519 {
-			return false
-		}
-	}
-	return true
 }
 
 // attrIsAbsent reports whether v is the value that means the same as leaving
