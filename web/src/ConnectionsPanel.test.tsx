@@ -69,12 +69,18 @@ describe('ConnectionsPanel', () => {
     expect(panel.style.pointerEvents).toBe('auto');
   });
 
-  it('hangs from the menu, right-aligned', () => {
+  // LEFT-anchored, like MotifPanel. The cells that open this sit at the START
+  // of the edges row, so a right:0 anchor on the row's span hung the 360px
+  // panel leftward past the fact pane's edge, where the pane's overflow:hidden
+  // cut it off beside the list rail. jsdom cannot show clipping, so the anchor
+  // itself is the contract.
+  it('hangs from the menu, left-aligned', () => {
     render(<ConnectionsPanel {...base} open="in" />);
     const panel = screen.getByTestId('connections-panel');
     expect(panel.style.position).toBe('absolute');
     expect(panel.style.top).toBe('100%');
-    expect(panel.style.right).toBe('0px');
+    expect(panel.style.left).toBe('0px');
+    expect(panel.style.right).toBe('');
   });
 
   it('closes on Escape, on the × and on an outside click', () => {

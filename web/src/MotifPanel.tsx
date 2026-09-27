@@ -14,11 +14,12 @@ export const MOTIF_PANEL_WIDTH = 420;
  * THE FIRST CLICK INSPECTS. Leaving for the twenty-six other facts is a second,
  * deliberate click on the button at the bottom — nothing irreversible happens
  * on a click you made to find out what something was. It is also what keeps the
- * edges row honest: every cell in that border inspects THIS fact, which is why
+ * edges row honest: every cell in that row inspects THIS fact, which is why
  * retract was left outside it, and a pivot lands on a corpus-wide query.
  *
- * The shell is ConnectionsPanel's, deliberately: same width, same surfaces, the
- * same `esc` chip. A reader who has opened one has opened both. There is no
+ * The shell is ConnectionsPanel's, deliberately: same anchor, same surfaces,
+ * the same `esc` chip — only wider (MOTIF_PANEL_WIDTH 420 against
+ * CONNECTIONS_PANEL_WIDTH 360), for definitions and carrier titles. A reader who has opened one has opened both. There is no
  * version tab, because the version is not a panel-opener and does not sit with
  * the cells this hangs from.
  */
