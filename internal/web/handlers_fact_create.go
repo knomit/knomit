@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -54,9 +55,9 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
-		if req.Title == "" {
+		if err := knomitfact.ValidateTitle(req.Title); err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing title",
-				"title is required", r.URL.Path)
+				err.Error(), r.URL.Path)
 			return
 		}
 
@@ -100,7 +101,9 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		}
 
 		f := knomitfact.NewFact(path)
-		f.Title = req.Title
+		// Validated above on the raw input; trimmed so what is stored is what
+		// ParseFact reads back.
+		f.Title = strings.TrimSpace(req.Title)
 		f.Body = req.Body
 		f.Kind = kind
 		f.Type = eType

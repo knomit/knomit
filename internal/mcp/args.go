@@ -108,37 +108,96 @@ func rejectUnknownArguments(req mcpgo.CallToolRequest, tool mcpgo.Tool) error {
 		return rejectNonObjectArguments(req, tool)
 	}
 
-	var unknown []string
-	for key := range args {
-		// Transport metadata is not a caller mistake. MCP reserves `_meta`,
-		// and clients attach underscore-prefixed keys of their own accord;
-		// rejecting those would break working clients to catch a bug they do
-		// not have.
-		if strings.HasPrefix(key, "_") {
-			continue
-		}
-		if _, declared := tool.InputSchema.Properties[key]; !declared {
-			unknown = append(unknown, key)
-		}
-	}
+	// Transport metadata is not a caller mistake. MCP reserves `_meta`, and
+	// clients attach underscore-prefixed keys of their own accord; rejecting
+	// those would break working clients to catch a bug they do not have.
+	isTransport := func(key string) bool { return strings.HasPrefix(key, "_") }
+	unknown, valid := undeclaredKeys(args, tool.InputSchema.Properties, isTransport)
 	if len(unknown) == 0 {
 		return nil
 	}
-
-	// Sorted so the message is deterministic — a caller diffing two error
-	// strings should see a difference only when the calls differ.
-	sort.Strings(unknown)
-	valid := make([]string, 0, len(tool.InputSchema.Properties))
-	for key := range tool.InputSchema.Properties {
-		valid = append(valid, key)
-	}
-	sort.Strings(valid)
 
 	// The message names the offending keys AND the valid set: a caller that
 	// invented a parameter cannot correct itself from "invalid arguments", and
 	// the one that produced #121 would simply have re-sent the same call.
 	return fmt.Errorf("unknown argument %s for %s; valid arguments are: %s",
 		quotedList(unknown), tool.Name, strings.Join(valid, ", "))
+}
+
+// rejectUnknownObjectKeys is rejectUnknownArguments one level down: it fails a
+// call whose object argument `arg` carries a key its schema does not declare.
+// Same reason, same message shape — a key the handler never reads makes the
+// call do something other than what the caller asked, and report success.
+// There is no transport-metadata exemption here: nothing but the caller writes
+// inside an argument. A non-object value is left to the argument's decoder,
+// which reports it.
+func rejectUnknownObjectKeys(req mcpgo.CallToolRequest, arg string, declared map[string]any, toolName string) error {
+	obj, ok := req.GetArguments()[arg].(map[string]any)
+	if !ok {
+		return nil
+	}
+	unknown, valid := undeclaredKeys(obj, declared, nil)
+	if len(unknown) == 0 {
+		return nil
+	}
+	return fmt.Errorf("unknown key %s in %s for %s; valid keys are: %s",
+		quotedList(unknown), arg, toolName, strings.Join(valid, ", "))
+}
+
+// rejectUnknownItemKeys is rejectUnknownObjectKeys for an ARRAY of objects
+// (knomit_learn's `facts`): every element is checked against declared, and
+// each offending element is reported by its index as "<item> N: unknown key
+// ...", one line per element, followed by the valid set. Elements that are not
+// objects are left to the argument's decoder.
+func rejectUnknownItemKeys(req mcpgo.CallToolRequest, arg string, declared map[string]any, item string) error {
+	items, ok := req.GetArguments()[arg].([]any)
+	if !ok {
+		return nil
+	}
+	var lines []string
+	var valid []string
+	for i, el := range items {
+		obj, ok := el.(map[string]any)
+		if !ok {
+			continue
+		}
+		unknown, v := undeclaredKeys(obj, declared, nil)
+		if len(unknown) == 0 {
+			continue
+		}
+		valid = v
+		lines = append(lines, fmt.Sprintf("%s %d: unknown key %s", item, i, quotedList(unknown)))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s; valid keys are: %s", strings.Join(lines, "\n"), strings.Join(valid, ", "))
+}
+
+// undeclaredKeys returns obj's keys that declared lacks, and declared's keys,
+// both sorted so an error built from them is deterministic — a caller diffing
+// two error strings should see a difference only when the calls differ. skip,
+// when non-nil, exempts keys from the check. unknown is nil when every key is
+// declared.
+func undeclaredKeys(obj, declared map[string]any, skip func(string) bool) (unknown, valid []string) {
+	for key := range obj {
+		if skip != nil && skip(key) {
+			continue
+		}
+		if _, ok := declared[key]; !ok {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil, nil
+	}
+	sort.Strings(unknown)
+	valid = make([]string, 0, len(declared))
+	for key := range declared {
+		valid = append(valid, key)
+	}
+	sort.Strings(valid)
+	return unknown, valid
 }
 
 // quotedList renders names as `"a", "b"` for an error message.

@@ -215,7 +215,9 @@ func TestUpdateOps_RoundtripFailureRejects(t *testing.T) {
 	require.Equal(t, "abc", readBody(t, svc, opsSlot))
 }
 
-func TestUpdate_TitleThatBreaksRoundtripRejects(t *testing.T) {
+// A newline in a title used to reach the roundtrip gate; the title rule now
+// refuses it first, naming the field.
+func TestUpdate_MultilineTitleRejects(t *testing.T) {
 	svc, ctx, _ := newPrinciplesTestRepo(t)
 	writeSlot(t, ctx, svc, "abc")
 	res := callUpdate(t, ctx, map[string]any{
@@ -223,7 +225,7 @@ func TestUpdate_TitleThatBreaksRoundtripRejects(t *testing.T) {
 		"updates": map[string]any{"title": "two\nlines"},
 	})
 	require.True(t, res.IsError)
-	require.Contains(t, resultText(t, res), "title would read back differently")
+	require.Contains(t, resultText(t, res), "updates.title: title must be a single line")
 }
 
 func TestUpdate_TitleEdgeWhitespaceIsTrimmedNotRejected(t *testing.T) {
@@ -231,7 +233,7 @@ func TestUpdate_TitleEdgeWhitespaceIsTrimmedNotRejected(t *testing.T) {
 	writeSlot(t, ctx, svc, "abc")
 	res := callUpdate(t, ctx, map[string]any{
 		"file": opsSlot, "moment_name": "m",
-		"updates": map[string]any{"title": "  New title \n"},
+		"updates": map[string]any{"title": "  New title \t "},
 	})
 	require.False(t, res.IsError, resultText(t, res))
 	f, err := fact.ParseFact(opsSlot, readContent(t, svc, opsSlot))
