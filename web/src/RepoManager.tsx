@@ -34,7 +34,21 @@ interface Props {
   open: boolean;
   repos: RepoInfo[];
   currentRepo: string;
-  readOnly: boolean;
+  /**
+   * The INSTANCE accepts no mutations (demo mode) — the only read-only this
+   * pane takes from outside. Required so every render has to answer it.
+   *
+   * Deliberately NOT the app's isReadOnly(state): that folds in the BROWSED
+   * repo's subscription, branch and history anchor, and nothing here is about
+   * the browsed repo — creating repos and lenses, the server log, archived
+   * repos, lenses, and every repo's settings page are instance-scoped or
+   * scoped to the entity on screen (#324). A repo's own read-only-ness is its
+   * mode, which RepoDetail reads from that repo's details.
+   *
+   * When per-caller permissions reach the UI, they belong here: the server's
+   * counterpart is writeGate (internal/web/readonly.go).
+   */
+  serverReadOnly: boolean;
   hideRemoteConfig: boolean;
   // No onClose: leaving Manage is the top bar's job now, not this pane's. The
   // surface has no chrome of its own to dismiss.
@@ -102,7 +116,7 @@ function isServerPage(v: Selection): boolean {
   return v?.kind === 'sessions' || v?.kind === 'logs' || v?.kind === 'oauth';
 }
 
-export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly, hideRemoteConfig, onChanged, onBrowse, onEnterBranch, onBusyChange }: Props) {
+export function RepoManager({ open, repos, currentRepo, currentBranch, serverReadOnly, hideRemoteConfig, onChanged, onBrowse, onEnterBranch, onBusyChange }: Props) {
   const [archived, setArchived] = useState<ArchivedRepo[]>([]);
   const [lenses, setLenses] = useState<Lens[]>([]);
   const [sel, setSel] = useState<Selection>(null);
@@ -270,7 +284,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
   const [oauthCount, setOAuthCount] = useState<number | null>(null);
   const oauthOpen = sel?.kind === 'oauth';
   useEffect(() => {
-    if (!open || readOnly || !wantLiveCount || oauthOpen) return;
+    if (!open || serverReadOnly || !wantLiveCount || oauthOpen) return;
     let cancelled = false;
     const probe = () => {
       api.listOAuthPending()
@@ -284,7 +298,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
     probe();
     const t = setInterval(probe, 30_000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [open, readOnly, wantLiveCount, oauthOpen]);
+  }, [open, serverReadOnly, wantLiveCount, oauthOpen]);
   const handleOAuthCount = useCallback((n: number) => setOAuthCount(n), []);
 
   if (!open) return null;
@@ -362,7 +376,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
               there — the server's own log is not part of the public demo, and
               free text has no useful redaction — so a tab would be a control
               that cannot work. Same rule as the rail on a server page. */}
-          {!readOnly && (
+          {!serverReadOnly && (
             <button
               type="button"
               role="tab"
@@ -376,7 +390,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
               <ScrollIcon color="currentColor" size={12} /> Logs
             </button>
           )}
-          {!readOnly && oauthAvailable && (
+          {!serverReadOnly && oauthAvailable && (
             <button
               type="button"
               role="tab"
@@ -420,8 +434,8 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
                   onMouseDown={noMouseFocus}
                 title="New repository"
                 aria-label="New repository"
-                style={plusBtn(readOnly, view.kind === 'new')}
-                disabled={readOnly || connectBusy}
+                style={plusBtn(serverReadOnly, view.kind === 'new')}
+                disabled={serverReadOnly || connectBusy}
                 onClick={() => setSel({ kind: 'new' })}
               ><PlusIcon color="currentColor" size={14} /></button>
             </div>
@@ -538,8 +552,8 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
                   onMouseDown={noMouseFocus}
                 title="New lens"
                 aria-label="New lens"
-                style={plusBtn(readOnly, view.kind === 'newLens')}
-                disabled={readOnly || connectBusy}
+                style={plusBtn(serverReadOnly, view.kind === 'newLens')}
+                disabled={serverReadOnly || connectBusy}
                 onClick={() => setSel({ kind: 'newLens' })}
               ><PlusIcon color="currentColor" size={14} /></button>
             </div>
@@ -571,7 +585,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
                 lenses={lenses}
                 archivedCount={archived.length}
                 hideRemoteConfig={hideRemoteConfig}
-                readOnly={readOnly}
+                serverReadOnly={serverReadOnly}
                 onSelectRepo={(name, focus) => setSel({ kind: 'repo', name, focus })}
                 onSelectLens={name => setSel({ kind: 'lens', name })}
                 onNewRepo={() => setSel({ kind: 'new' })}
@@ -600,8 +614,8 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
                 lenses={lenses}
                 focus={view.focus}
                 onSelectLens={n => setSel({ kind: 'lens', name: n })}
-                canArchive={!readOnly}
-                readOnly={readOnly}
+                canArchive={!serverReadOnly}
+                serverReadOnly={serverReadOnly}
                 hideRemoteConfig={hideRemoteConfig}
                 createJob={activeCreates.get(view.name) ?? null}
                 onCancelCreate={async () => {
@@ -646,7 +660,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
             {view.kind === 'archived' && (
               <ArchivedPage
                 archived={archived}
-                readOnly={readOnly}
+                readOnly={serverReadOnly}
                 activeNames={new Set(repos.map(r => r.name))}
                 onRestored={(name) => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
                 // Purging the LAST one takes the Archived rail row away with it
@@ -672,8 +686,8 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
                 onOpenRepo={name => { onChanged(); refresh(); setSel({ kind: 'repo', name }); }}
               />
             )}
-            {view.kind === 'new' && readOnly && <CreateBlocked what="repository" />}
-            {view.kind === 'new' && !readOnly && (
+            {view.kind === 'new' && serverReadOnly && <CreateBlocked what="repository" />}
+            {view.kind === 'new' && !serverReadOnly && (
               <CreateRepoWizard
                 // Fires the moment the repo EXISTS, not when the job ends — see
                 // maybeEnterRepo. Browse rather than settings, for the same
@@ -694,7 +708,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
                 lens={lenses.find(l => l.name === view.name)}
                 name={view.name}
                 repos={repos}
-                readOnly={readOnly}
+                readOnly={serverReadOnly}
                 onDeleted={() => { onChanged(); refresh(); setSel(null); }}
                 onSaved={() => { onChanged(); refresh(); }}
                 // Same rename hint as RepoDetail's onRenamed (see its comment
@@ -706,8 +720,8 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
                 onError={setErr}
               />
             )}
-            {view.kind === 'newLens' && readOnly && <CreateBlocked what="lens" />}
-            {view.kind === 'newLens' && !readOnly && (
+            {view.kind === 'newLens' && serverReadOnly && <CreateBlocked what="lens" />}
+            {view.kind === 'newLens' && !serverReadOnly && (
               <CreateLensForm
                 repos={repos}
                 lenses={lenses}
@@ -722,19 +736,6 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, readOnly,
   );
 }
 
-/**
- * CreateBlocked stands in for a create form the user cannot submit.
- *
- * The rail's `+` buttons are disabled when read-only, so normally you never
- * reach a create form at all. Two paths get past that: with zero repositories
- * the create form is the FALLBACK selection rather than something you clicked,
- * and a selection made while live survives into a history excursion. Both used
- * to land on a fully live form whose submit would 4xx with no warning.
- *
- * The copy names both causes rather than guessing between them: this pane is
- * given one `readOnly` boolean, and inferring the reason from a neighbouring
- * prop would be a guess that reads as fact.
- */
 /**
  * RepoUnavailable is the settings page for a repository that has no live store.
  *
@@ -805,21 +806,34 @@ function RepoUnavailable({ repo }: { repo: RepoInfo }) {
   );
 }
 
+/**
+ * CreateBlocked stands in for a create form the user cannot submit.
+ *
+ * The rail's `+` buttons are disabled on a read-only instance, so normally you
+ * never reach a create form at all. One path gets past that: with zero
+ * repositories the create form is the FALLBACK selection rather than something
+ * you clicked, and it used to land on a fully live form whose submit would 403
+ * with no warning.
+ *
+ * The only cause is the instance's own read-only mode. Creating a repository or
+ * a lens is instance-scoped, so neither the browsed repo nor the history anchor
+ * has any say in it (#324).
+ */
 function CreateBlocked({ what }: { what: 'repository' | 'lens' }) {
   return (
     <div data-testid={`create-blocked-${what}`} style={{ maxWidth: 460, paddingTop: 30 }}>
       <h3 style={{ margin: 0, fontSize: 16 }}>Read-only</h3>
       <p style={{ fontSize: 12.5, color: '#888', lineHeight: 1.6, marginTop: 8 }}>
-        No {what} can be created here: either this instance is read-only, or the
-        app is anchored in history. If it is the anchor, returning to now lifts
-        it.
+        No {what} can be created here: this instance is read-only.
       </p>
     </div>
   );
 }
 
-function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfig, createJob, onCancelCreate, onArchived, onConnect, onChanged, onRenamed, onBrowse, onEnterBranch, currentBranch, onSelectLens, onError }: {
-  name: string; canArchive: boolean; readOnly: boolean; hideRemoteConfig: boolean;
+function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemoteConfig, createJob, onCancelCreate, onArchived, onConnect, onChanged, onRenamed, onBrowse, onEnterBranch, currentBranch, onSelectLens, onError }: {
+  name: string; canArchive: boolean; hideRemoteConfig: boolean;
+  /** The instance accepts no mutations: every control on this page is off. */
+  serverReadOnly: boolean;
   /** The create still working on this repo, if any. Puts the page in CREATING
    *  MODE — see the `creating` flag below. */
   createJob?: RepoCreateStatus | null;
@@ -1001,9 +1015,17 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // licence, agent branch, agent access, the index chip, and Browse — the
   // repo is readable from the index phase on, which is the whole point.
   const creating = !!createJob && !isTerminalCreateState(createJob.state);
-  // Edits are locked by creating exactly as they are by read-only, so every
-  // control that already asks "may I write?" needs no new question.
-  const lockEdits = readOnly || creating;
+  // THIS repo's own read-only-ness: a subscription follows a remote branch and
+  // owns no content, so nothing IN it can change — README and LICENSE commit to
+  // an agent branch it does not have, and the server fails every such write.
+  // Its registry config is another matter: rename, archive, rebuild and the
+  // upstream stay open. Read from this repo's details, never from the app's
+  // browse state, which describes whatever repo is BROWSED — not necessarily
+  // this one (#324).
+  const subscribed = repoMode === 'subscribe';
+  // Content edits are locked by creating exactly as they are by read-only, so
+  // every control that already asks "may I write?" needs no new question.
+  const lockEdits = serverReadOnly || subscribed || creating;
 
   if (creating && createJob) {
     sections.push({
@@ -1065,7 +1087,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
       ) : licEditing ? (
         // The EDITOR is the shared monospace textarea; only the read view
         // below differs from the description block.
-        <DescriptionBody editor={licEditor} readOnly={readOnly}
+        <DescriptionBody editor={licEditor} readOnly={lockEdits}
           containerTestId="repo-license-editor" textareaTestId="license-textarea" />
       ) : license ? (
         // PREFORMATTED, NOT MARKDOWN. A licence's single newlines are
@@ -1095,7 +1117,6 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
   // write-target's green treatment: green already means "writes land here" in
   // this UI (see writeReadTag), and a repo's agent branch is exactly the same
   // statement as a lens's write target.
-  const subscribed = repoMode === 'subscribe';
   sections.push({
     id: 'agent-branch',
     // A subscription has no agent branch, so the heading has to name what it
@@ -1167,7 +1188,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
               fallen back to the READ branch, which equals the origin's branch,
               so passing it through would claim the repo is push-only when it is
               exactly the opposite. */}
-          <RemoteCard repo={name} agentBranch={subscribed ? '' : agentBranch} readOnly={readOnly}
+          <RemoteCard repo={name} agentBranch={subscribed ? '' : agentBranch} readOnly={serverReadOnly} subscription={subscribed}
             state={remote} onConnect={onConnect} onDisconnect={() => setConfirming('disconnect')}
             onChanged={onChanged} />
           {confirming === 'disconnect' && (
@@ -1186,7 +1207,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
           {/* The block is headed "Remote" and the line beside it says "Not
               connected", so the object needs no third naming. The ellipsis
               stays: this opens the wizard, it does not connect anything. */}
-          <button type="button" data-testid="remote-connect" style={btn(readOnly)} disabled={readOnly} onClick={onConnect}>
+          <button type="button" data-testid="remote-connect" style={btn(serverReadOnly)} disabled={serverReadOnly} onClick={onConnect}>
             Connect…
           </button>
         </div>
@@ -1254,7 +1275,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
     // No Rebuild while creating: the index is already being built, and a
     // second build queued behind it answers a question nobody asked.
     action: creating ? undefined : (
-      <button type="button" data-testid="repo-rebuild" style={btn(readOnly || rebuilding)} disabled={readOnly || rebuilding} onClick={rebuild}>
+      <button type="button" data-testid="repo-rebuild" style={btn(serverReadOnly || rebuilding)} disabled={serverReadOnly || rebuilding} onClick={rebuild}>
         {rebuilding ? 'Rebuilding…' : 'Rebuild'}
       </button>
     ),
@@ -1307,7 +1328,7 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
               value={renameTo}
               onChange={e => setRenameTo(e.target.value)}
               placeholder="new-name"
-              disabled={readOnly || renaming}
+              disabled={serverReadOnly || renaming}
               style={renameInput}
             />
             <input
@@ -1315,14 +1336,14 @@ function RepoDetail({ name, lenses, focus, canArchive, readOnly, hideRemoteConfi
               value={renameConfirm}
               onChange={e => setRenameConfirm(e.target.value)}
               placeholder={`type "${name}" to confirm`}
-              disabled={readOnly || renaming}
+              disabled={serverReadOnly || renaming}
               style={renameInput}
             />
             <button
               type="button"
               data-testid="repo-rename-submit"
-              style={btn(readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name, 'danger')}
-              disabled={readOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name}
+              style={btn(serverReadOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name, 'danger')}
+              disabled={serverReadOnly || renaming || renameConfirm !== name || !renameTo || renameTo === name}
               onClick={rename}
             >
               {renaming ? 'Renaming…' : 'Rename'}
