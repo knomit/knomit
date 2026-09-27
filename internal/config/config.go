@@ -1,9 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -257,6 +259,18 @@ type Config struct {
 	Home string `toml:"repo"`
 	Host string `toml:"host"`
 	Port string `toml:"port"`
+	// ExternalAddresses (F10) are the URLs PEERS use to reach this instance,
+	// not what knomit listens on: scheme://host[:port], no path. Behind
+	// `tailscale serve`, knomit may listen on 127.0.0.1:19278 while peers
+	// reach it on 443:
+	//
+	//	external_addresses = ["https://h1v302.tail5113a7.ts.net"]
+	//
+	// Only the operator knows this, so only the operator writes it: nothing
+	// is derived from host, port, auth.loopback_hosts, host names or
+	// certificates, and nothing is probed. The fleet member record carries
+	// the list verbatim, refreshed at every boot. Default empty.
+	ExternalAddresses []string `toml:"external_addresses"`
 	// Socket is the local authenticated listener: KNOMIT_SOCKET, else this
 	// key, else a default under Home (see socketFor). An explicit value must
 	// be an absolute path on unix (a leading ~ is expanded) and a pipe name
@@ -367,6 +381,32 @@ type AuthConfig struct {
 	// Older knomit versions only warn about the key, so it can be added
 	// before upgrading.
 	LoopbackHosts []string `toml:"loopback_hosts"`
+}
+
+// validateExternalAddress accepts scheme://host[:port] and nothing more. Any
+// scheme is accepted: the operator knows what peers speak.
+func validateExternalAddress(a string) error {
+	if strings.ContainsAny(a, " \t\r\n") {
+		return errors.New("contains whitespace")
+	}
+	u, err := url.Parse(a)
+	switch {
+	case err != nil:
+		return errors.New("is not a URL")
+	case u.Scheme == "":
+		return errors.New("has no scheme")
+	case u.Host == "" || u.Hostname() == "":
+		return errors.New("has no host")
+	case u.User != nil:
+		return errors.New("carries user info")
+	case u.Path != "" || u.RawPath != "" || u.Opaque != "":
+		return errors.New("has a path")
+	case u.RawQuery != "" || u.ForceQuery:
+		return errors.New("has a query")
+	case u.Fragment != "" || strings.Contains(a, "#"):
+		return errors.New("has a fragment")
+	}
+	return nil
 }
 
 // EffectiveLoopbackHosts is LoopbackHosts lower-cased, plus bindHost when
@@ -793,6 +833,11 @@ func (c Config) Validate() error {
 	for _, h := range c.Auth.LoopbackHosts {
 		if h == "" || strings.HasPrefix(h, ".") || strings.ContainsAny(h, ":/*@ \t") {
 			return fmt.Errorf("config: auth.loopback_hosts entry %q is not a DNS name (exact names only: no port, scheme, wildcard or space)", h)
+		}
+	}
+	for _, a := range c.ExternalAddresses {
+		if err := validateExternalAddress(a); err != nil {
+			return fmt.Errorf("config: external_addresses entry %q %v (want scheme://host[:port], the address peers use)", a, err)
 		}
 	}
 	// runtime.addr serves pprof and process controls with no authentication

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"knomit/internal/repos"
+	"knomit/internal/store"
 	"knomit/internal/web/hal"
 )
 
@@ -94,6 +95,17 @@ func handleDeleteFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	}
 }
 
+// fleetMemberRow is one member as GET /api/v1/fleet/members shows it: every
+// field as the record has it (someone else's odd values are shown, never
+// used), addresses always an array and capabilities always an object.
+func fleetMemberRow(mem store.FleetMember) map[string]any {
+	f := repos.MemberFieldsOf(mem.Member)
+	return map[string]any{
+		"agent": mem.Agent, "state": mem.State, "host": mem.Host, "branch": mem.Branch, "path": mem.Path,
+		"addresses": f.Addresses, "git": f.Git, "capabilities": f.Capabilities,
+	}
+}
+
 // handleFleetMembers: GET /api/v1/fleet/members, the member records at the
 // fleet repository's main.
 func handleFleetMembers(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
@@ -105,9 +117,7 @@ func handleFleetMembers(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 		}
 		rows := make([]map[string]any, 0, len(ms))
 		for _, mem := range ms {
-			rows = append(rows, map[string]any{
-				"agent": mem.Agent, "state": mem.State, "host": mem.Host, "branch": mem.Branch, "path": mem.Path,
-			})
+			rows = append(rows, fleetMemberRow(mem))
 		}
 		hal.WriteHAL(w, http.StatusOK, map[string]any{
 			"members": rows,

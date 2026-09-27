@@ -70,6 +70,11 @@ type Manager struct {
 	// parseSessionReaperConfig).
 	sessionReaperStop func()
 
+	// fleetBootWg tracks the one-shot fleet record reconcile Start launches
+	// (fleetBootReconcile). Close waits for it before releasing control.db
+	// and the repositories it reads and writes.
+	fleetBootWg sync.WaitGroup
+
 	// sessionCfg is the session block, parsed and validated once at the top
 	// of Start. The reaper runs on it, and every instance opened afterwards
 	// takes its resume window from it.
@@ -631,6 +636,9 @@ func (m *Manager) Close() error {
 		log.Error().Dur("timeout", createDrainTimeout).
 			Msg("close: in-flight repo create did not finish after cancellation; closing anyway")
 	}
+	// The boot fleet reconcile reads control.db and writes one commit: it must
+	// finish before those handles close, like the creates above.
+	m.fleetBootWg.Wait()
 
 	m.mu.Lock()
 	reg := m.registry
@@ -817,6 +825,11 @@ func (m *Manager) Start() error {
 	// Launch the background idle-session reaper on the session block parsed
 	// at the top of Start.
 	m.sessionReaperStop = m.startSessionReaper(m.sessionCfg)
+
+	// F10: bring this instance's fleet member record up to date with the
+	// current config and binary, off the startup path (it never blocks or
+	// fails Start).
+	m.startFleetBootReconcile()
 	return nil
 }
 

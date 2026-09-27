@@ -1696,9 +1696,12 @@ paths:
         Mounts the fleet repository (clone, with an agent branch), refuses
         unless its ontology is the fleet preset, writes this instance's member
         record on the agent branch and pushes it. A human accepts by merging
-        the agent branch into the fleet's main. The same URL again refreshes
-        the record (for example after a key rotation). 202 while the push is
-        pending (retried on the sync loop).
+        the agent branch into the fleet's main. The same URL again compares
+        the record with the current config and binary and writes ONE new
+        version only if an advertised field (key, host, branch, addresses,
+        git, capabilities) changed. 202 while the push is pending (retried on
+        the sync loop). With no `external_addresses` in knomit.toml the
+        registration still succeeds and the response carries `notice`.
 
         Refusals carry a machine-readable `code`:
         `registration_pending` (409), `unregistration_pending` (409),
@@ -1765,6 +1768,9 @@ paths:
                         host: { type: string }
                         branch: { type: string }
                         path: { type: string }
+                        addresses: { type: array, items: { type: string }, description: "As the record has it; never validated or used" }
+                        git: { type: string, description: "Path suffix a peer appends to an address (/git), absent when not served" }
+                        capabilities: { type: object, additionalProperties: { type: string }, description: "os, arch, version, read_only, as the record has them" }
         "409": { description: not_registered }
   /sessions:
     get:
@@ -2966,6 +2972,21 @@ components:
         registered_at: { type: string, format: date-time }
         last_attempt: { type: string, format: date-time }
         last_error: { type: string, description: "The latest push or fetch failure; empty after a success" }
+        external_addresses:
+          type: array
+          items: { type: string }
+          description: "knomit.toml external_addresses: the URLs PEERS use to reach this instance ([] when unset). Never derived, never probed."
+        record:
+          type: object
+          description: "This instance's own member record on its agent branch head (absent when there is none)"
+          properties:
+            addresses: { type: array, items: { type: string } }
+            git: { type: string }
+            capabilities: { type: object, additionalProperties: { type: string } }
+            host: { type: string }
+        record_current: { type: boolean, description: "The own record matches what the current config and binary advertise (absent when there is no record). Updated at boot and on re-registration." }
+        record_pending_update: { type: boolean, description: "The fleet's main holds an older version of the own record: waiting for a merge" }
+        notice: { type: string, description: "Set while external_addresses is empty" }
     # HAL primitives
     Link:
       type: object

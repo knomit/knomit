@@ -27,6 +27,33 @@ function when(iso?: string): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
+// capabilitiesText shows capabilities as the record has them: os/arch first,
+// then the version, then anything else, sorted. Nothing is interpreted.
+export function capabilitiesText(c?: Record<string, string>): string {
+  if (!c) return '';
+  const parts: string[] = [];
+  if (c.os || c.arch) parts.push(`${c.os ?? '?'}/${c.arch ?? '?'}`);
+  if (c.version) parts.push(c.version);
+  for (const k of Object.keys(c).sort()) {
+    if (k === 'os' || k === 'arch' || k === 'version') continue;
+    parts.push(c[k] === '' ? k : `${k}=${c[k]}`);
+  }
+  return parts.join(' · ');
+}
+
+// recordSync is the own record's standing: the config changed since it was
+// written, it waits to be merged, or it is current.
+export function recordSync(st: FleetStatus): { text: string; warn: boolean } | null {
+  if (!st.record) return null;
+  if (st.record_current === false) {
+    return { text: 'differs from knomit.toml / this binary: restart or re-register to update it', warn: true };
+  }
+  if (st.record_pending_update) {
+    return { text: "pending update: waiting for someone to merge this instance's branch into the fleet's main", warn: false };
+  }
+  return { text: 'current', warn: false };
+}
+
 // registerBlocked / unregisterBlocked are the reasons the state machine
 // forbids an action ('' = allowed). The server refuses the same requests with
 // the same codes; the UI only says so before the click.
@@ -133,6 +160,28 @@ export function ManageFleet() {
           </>
         )}
 
+        <div style={{ ...cardLabel, marginTop: 10 }}>External addresses (knomit.toml)</div>
+        <div data-testid="fleet-external-addresses" style={mono}>
+          {(st.external_addresses ?? []).length > 0 ? (st.external_addresses ?? []).join(' ') : <span style={dim}>none</span>}
+        </div>
+        {st.notice && <div data-testid="fleet-notice" style={{ ...dim, color: '#fbbf24' }}>{st.notice}</div>}
+
+        {st.record && (() => {
+          const sync = recordSync(st);
+          return (
+            <>
+              <div style={{ ...cardLabel, marginTop: 10 }}>This instance's record</div>
+              <div data-testid="fleet-own-record" style={mono}>
+                <div>addresses: {st.record.addresses.length > 0 ? st.record.addresses.join(' ') : '—'}</div>
+                <div>capabilities: {capabilitiesText(st.record.capabilities) || '—'}</div>
+              </div>
+              {sync && (
+                <div data-testid="fleet-record-sync" style={sync.warn ? { ...dim, color: '#fbbf24' } : dim}>{sync.text}</div>
+              )}
+            </>
+          );
+        })()}
+
         {st.last_error && (
           <div data-testid="fleet-last-error" role="alert" style={errText}>
             Last attempt {when(st.last_attempt)} failed: <span style={mono}>{st.last_error}</span>
@@ -175,10 +224,12 @@ export function ManageFleet() {
         <div style={card}>
           <div style={cardLabel}>Members (the fleet's main)</div>
           {members.map(m => (
-            <div key={m.path ?? m.agent} data-testid="fleet-member" style={{ display: 'flex', gap: 10, ...mono }}>
+            <div key={m.path ?? m.agent} data-testid="fleet-member" style={{ display: 'flex', flexWrap: 'wrap', columnGap: 10, ...mono }}>
               <span style={{ color: '#ddd' }}>{m.agent}</span>
               <span>{m.state}</span>
               {m.host && <span style={{ color: '#888' }}>{m.host}</span>}
+              {(m.addresses ?? []).length > 0 && <span>{(m.addresses ?? []).join(' ')}</span>}
+              {capabilitiesText(m.capabilities) && <span style={{ color: '#888' }}>{capabilitiesText(m.capabilities)}</span>}
             </div>
           ))}
         </div>

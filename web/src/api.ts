@@ -1827,6 +1827,23 @@ export interface FleetStatus {
   registered_at?: string;
   last_attempt?: string;
   last_error?: string;
+  // F10: the configured external_addresses ([] when unset), this instance's
+  // own record on its agent branch, whether it matches the current config
+  // and binary, whether the fleet's main still holds an older version, and
+  // the notice shown while no address is configured.
+  external_addresses?: string[];
+  record?: FleetRecordFields;
+  record_current?: boolean;
+  record_pending_update?: boolean;
+  notice?: string;
+}
+
+// FleetRecordFields are a member record's advertised fields, as written.
+export interface FleetRecordFields {
+  addresses: string[];
+  git?: string;
+  capabilities: Record<string, string>;
+  host?: string;
 }
 
 export interface FleetMember {
@@ -1835,6 +1852,9 @@ export interface FleetMember {
   host?: string;
   branch?: string;
   path?: string;
+  addresses?: string[];
+  git?: string;
+  capabilities?: Record<string, string>;
 }
 
 // FleetRefusal carries the server's machine-readable refusal code

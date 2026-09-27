@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { ManageFleet, registerBlocked, unregisterBlocked } from './ManageFleet';
+import { ManageFleet, capabilitiesText, registerBlocked, unregisterBlocked } from './ManageFleet';
 import { api, type FleetStatus } from './api';
 
 vi.mock('./api', async importOriginal => ({
@@ -77,5 +77,69 @@ describe('ManageFleet', () => {
     await waitFor(() => expect(screen.getByTestId('fleet-error').textContent).toContain('repository not found'));
     expect(api.registerFleet).toHaveBeenCalledWith('https://github.com/knomit/fleet.git', '');
     expect(input.value).toBe('https://github.com/knomit/fleet.git');
+  });
+});
+
+describe('F10: addresses, capabilities and the own record', () => {
+  const registered: FleetStatus = {
+    state: 'registered',
+    agent_id: 'h1v302',
+    fleet_repo: 'fleet',
+    record_state: 'active',
+    external_addresses: ['https://h1v302.tail5113a7.ts.net'],
+    record: {
+      addresses: ['https://h1v302.tail5113a7.ts.net'],
+      git: '/git',
+      capabilities: { os: 'darwin', arch: 'arm64', version: '0.5.0.abc', read_only: 'false' },
+    },
+    record_current: true,
+    record_pending_update: true,
+  };
+
+  it('capabilitiesText puts os/arch and version first and shows the rest as written', () => {
+    expect(capabilitiesText({ version: '0.5.0', arch: 'amd64', os: 'linux', read_only: 'false', odd: '' })).toBe(
+      'linux/amd64 · 0.5.0 · odd · read_only=false',
+    );
+    expect(capabilitiesText(undefined)).toBe('');
+  });
+
+  it('shows the configured addresses, the own record and "pending update"', async () => {
+    vi.mocked(api.getFleet).mockResolvedValue(registered);
+    render(<ManageFleet />);
+    await waitFor(() => expect(screen.getByTestId('fleet-state').textContent).toBe('registered'));
+    expect(screen.getByTestId('fleet-external-addresses').textContent).toBe('https://h1v302.tail5113a7.ts.net');
+    expect(screen.getByTestId('fleet-own-record').textContent).toContain('darwin/arm64 · 0.5.0.abc · read_only=false');
+    expect(screen.getByTestId('fleet-record-sync').textContent).toMatch(/^pending update/);
+    expect(screen.queryByTestId('fleet-notice')).toBeNull();
+  });
+
+  it('says when the record differs from the config, and shows the notice with no addresses', async () => {
+    vi.mocked(api.getFleet).mockResolvedValue({
+      ...registered,
+      external_addresses: [],
+      record_current: false,
+      notice: 'no external addresses configured; set `external_addresses` in knomit.toml',
+    });
+    render(<ManageFleet />);
+    await waitFor(() => expect(screen.getByTestId('fleet-notice').textContent).toContain('external_addresses'));
+    expect(screen.getByTestId('fleet-external-addresses').textContent).toBe('none');
+    expect(screen.getByTestId('fleet-record-sync').textContent).toMatch(/restart or re-register/);
+  });
+
+  it('lists every member with its addresses, capabilities, host and state as written', async () => {
+    vi.mocked(api.getFleet).mockResolvedValue(registered);
+    vi.mocked(api.listFleetMembers).mockResolvedValue([
+      { agent: 'h1v302', state: 'active', host: 'h1v302', addresses: ['https://h1v302.tail5113a7.ts.net'], capabilities: { os: 'darwin', arch: 'arm64', version: '0.5.0.abc' } },
+      { agent: 'peer', state: 'left', host: 'box', addresses: ['not-a-url'], capabilities: { os: 'plan9' } },
+    ]);
+    render(<ManageFleet />);
+    await waitFor(() => expect(screen.getAllByTestId('fleet-member')).toHaveLength(2));
+    const [a, b] = screen.getAllByTestId('fleet-member');
+    expect(a.textContent).toContain('https://h1v302.tail5113a7.ts.net');
+    expect(a.textContent).toContain('darwin/arm64 · 0.5.0.abc');
+    expect(b.textContent).toContain('left');
+    expect(b.textContent).toContain('box');
+    expect(b.textContent).toContain('not-a-url');
+    expect(b.textContent).toContain('plan9/?');
   });
 });

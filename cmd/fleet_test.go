@@ -55,3 +55,28 @@ func TestFleetCLI_ThinClientOverTheLocalListener(t *testing.T) {
 	err = fleetCall(ctx, hc, &out, http.MethodDelete, nil)
 	require.ErrorContains(t, err, "this instance is standalone")
 }
+
+// F10: status prints the configured addresses, the record's advertised
+// fields, whether it is current or pending, and the no-address notice.
+func TestFleetCLI_PrintsAddressesAndRecord(t *testing.T) {
+	var st fleetStatusJSON
+	require.NoError(t, json.Unmarshal([]byte(`{"state":"registered","agent_id":"box","fleet_repo":"fleet","record_state":"active",
+		"external_addresses":["https://new.example"],
+		"record":{"addresses":["https://old.example"],"capabilities":{"os":"linux","arch":"amd64"}},
+		"record_current":false,"record_pending_update":false}`), &st))
+	var out bytes.Buffer
+	printFleetStatus(&out, st)
+	require.Contains(t, out.String(), "addresses (knomit.toml): https://new.example")
+	require.Contains(t, out.String(), "addresses (record):      https://old.example")
+	require.Contains(t, out.String(), "capabilities: arch=amd64 os=linux")
+	require.Contains(t, out.String(), "restart or re-register")
+
+	st = fleetStatusJSON{}
+	require.NoError(t, json.Unmarshal([]byte(`{"state":"registered","agent_id":"box","fleet_repo":"fleet","record_state":"active",
+		"external_addresses":[],"record":{"addresses":[],"capabilities":{}},"record_current":true,"record_pending_update":true,
+		"notice":"no external addresses configured; set `+"`external_addresses`"+` in knomit.toml"}`), &st))
+	out.Reset()
+	printFleetStatus(&out, st)
+	require.Contains(t, out.String(), "pending update")
+	require.Contains(t, out.String(), "notice: no external addresses configured")
+}

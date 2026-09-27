@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -965,5 +966,52 @@ func TestNeighborKinds_EnvOverride(t *testing.T) {
 	t.Setenv("KNOMIT_CLUSTER_CACHE_NEIGHBOR_KINDS", "epistemic,,pragmatic")
 	if _, err := Load(); err == nil {
 		t.Fatal("a list with an empty entry was accepted")
+	}
+}
+
+// external_addresses (F10) is what PEERS use to reach this instance, written
+// by the operator and never derived. Each entry is scheme://host[:port] with
+// nothing after it; anything else fails the boot naming the entry.
+func TestValidate_ExternalAddresses(t *testing.T) {
+	for _, bad := range []string{"", " ", "h1v302.ts.net", "//h1v302.ts.net", "https://", "https://h1v302.ts.net/",
+		"https://h1v302.ts.net/git", "https://h1v302.ts.net?x=1", "https://h1v302.ts.net#f", "https://u@h1v302.ts.net",
+		"https://h1 v302.ts.net", "https://h1v302.ts.net ", "not a url"} {
+		c := Defaults()
+		c.ExternalAddresses = []string{"https://ok.example", bad}
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "external_addresses") || !strings.Contains(err.Error(), fmt.Sprintf("%q", bad)) {
+			t.Errorf("entry %q: want an external_addresses error naming it, got %v", bad, err)
+		}
+	}
+	c := Defaults()
+	c.ExternalAddresses = []string{"https://h1v302.tail5113a7.ts.net", "http://10.0.0.5:19278", "knomit+https://box.example:8443"}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid addresses refused: %v", err)
+	}
+	if len(Defaults().ExternalAddresses) != 0 {
+		t.Fatalf("default must be empty")
+	}
+}
+
+func TestLoad_ExternalAddressesFromTOML(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("KNOMIT_HOME", home)
+	if err := os.WriteFile(filepath.Join(home, "knomit.toml"),
+		[]byte("external_addresses = [\"https://h1v302.tail5113a7.ts.net\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := strings.Join(cfg.ExternalAddresses, ","); got != "https://h1v302.tail5113a7.ts.net" {
+		t.Fatalf("got %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(home, "knomit.toml"),
+		[]byte("external_addresses = [\"https://h1v302.tail5113a7.ts.net/knomit\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "external_addresses") {
+		t.Fatalf("a path must fail the load, got %v", err)
 	}
 }

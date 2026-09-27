@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -84,6 +86,15 @@ type fleetStatusJSON struct {
 	Since       string `json:"since"`
 	LastAttempt string `json:"last_attempt"`
 	LastError   string `json:"last_error"`
+	// F10
+	ExternalAddresses []string `json:"external_addresses"`
+	Record            *struct {
+		Addresses    []string          `json:"addresses"`
+		Capabilities map[string]string `json:"capabilities"`
+	} `json:"record"`
+	RecordCurrent       *bool  `json:"record_current"`
+	RecordPendingUpdate bool   `json:"record_pending_update"`
+	Notice              string `json:"notice"`
 }
 
 func fleetCall(ctx context.Context, hc *http.Client, out io.Writer, method string, body any) error {
@@ -101,6 +112,27 @@ func printFleetStatus(out io.Writer, st fleetStatusJSON) {
 	if st.FleetRepo != "" {
 		fmt.Fprintf(out, "fleet:  %s (%s)\n", st.FleetRepo, st.FleetURL)
 		fmt.Fprintf(out, "record: %s\n", st.RecordState)
+	}
+	if len(st.ExternalAddresses) > 0 {
+		fmt.Fprintf(out, "addresses (knomit.toml): %s\n", strings.Join(st.ExternalAddresses, " "))
+	}
+	if st.Record != nil {
+		fmt.Fprintf(out, "addresses (record):      %s\n", strings.Join(st.Record.Addresses, " "))
+		caps := make([]string, 0, len(st.Record.Capabilities))
+		for k, v := range st.Record.Capabilities {
+			caps = append(caps, k+"="+v)
+		}
+		sort.Strings(caps)
+		fmt.Fprintf(out, "capabilities: %s\n", strings.Join(caps, " "))
+	}
+	switch {
+	case st.RecordCurrent != nil && !*st.RecordCurrent:
+		fmt.Fprintln(out, "record differs from knomit.toml / this binary: restart or re-register to update it")
+	case st.RecordPendingUpdate:
+		fmt.Fprintln(out, "record: pending update (merge this instance's branch into the fleet's main)")
+	}
+	if st.Notice != "" {
+		fmt.Fprintf(out, "notice: %s\n", st.Notice)
 	}
 	if st.LastError != "" {
 		fmt.Fprintf(out, "last error (%s): %s\n", st.LastAttempt, st.LastError)

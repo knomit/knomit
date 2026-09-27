@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -35,18 +36,26 @@ type Member struct {
 	Key    ssh.PublicKey // the current signing key
 	Host   string        // informational
 	Branch string        // informational: the agent branch the instance registered
-	Notes  string        // free text after the fields
+	// F10 advertised fields. Addresses are the operator's external_addresses
+	// verbatim; Git is the path suffix a peer appends to one ("" when the
+	// instance does not serve /git); Capabilities are only what the instance
+	// detects on its own host (os, arch, version, read_only). Someone else's
+	// values are kept as written: nothing here is validated or used yet.
+	Addresses    []string
+	Git          string
+	Capabilities map[string]string
+	Notes        string // free text after the fields
 }
 
 // memberFields are the `field: value` lines a member record's body starts
 // with, in the order RenderMember writes them.
-var memberFields = []string{"agent", "state", "key", "host", "branch"}
+var memberFields = []string{"agent", "state", "key", "host", "branch", "addresses", "git", "capabilities"}
 
 // ParseMember reads a member record's body: one `field: value` line each for
-// agent, state and key (required) and host and branch (optional), then free
-// text. Unknown fields are ignored so a newer writer's record still parses.
+// agent, state and key (required) and host, branch, addresses, git and
+// capabilities (optional), then free text. Unknown fields are ignored so a newer writer's record still parses.
 func ParseMember(body string) (Member, error) {
-	var m Member
+	m := Member{Addresses: []string{}}
 	var keyLine string
 	var notes []string
 	fieldsDone := false
@@ -69,6 +78,12 @@ func ParseMember(body string) (Member, error) {
 					m.Host = strings.TrimSpace(v)
 				case "branch":
 					m.Branch = strings.TrimSpace(v)
+				case "addresses":
+					m.Addresses = append([]string{}, strings.Fields(v)...)
+				case "git":
+					m.Git = strings.TrimSpace(v)
+				case "capabilities":
+					m.Capabilities = parseCapabilities(v)
 				}
 				continue
 			}
@@ -105,10 +120,13 @@ func ParseMember(body string) (Member, error) {
 func RenderMember(m Member) string {
 	var b strings.Builder
 	vals := map[string]string{
-		"agent":  m.Agent,
-		"state":  m.State,
-		"host":   m.Host,
-		"branch": m.Branch,
+		"agent":        m.Agent,
+		"state":        m.State,
+		"host":         m.Host,
+		"branch":       m.Branch,
+		"addresses":    strings.Join(m.Addresses, " "),
+		"git":          m.Git,
+		"capabilities": renderCapabilities(m.Capabilities),
 	}
 	if m.Key != nil {
 		vals["key"] = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(m.Key)))
@@ -129,3 +147,67 @@ func RenderMember(m Member) string {
 func SameKey(a, b ssh.PublicKey) bool {
 	return a != nil && b != nil && bytes.Equal(a.Marshal(), b.Marshal())
 }
+
+// parseCapabilities reads `k=v` tokens. A token without `=` (or with an empty
+// key) is kept whole as a key with an empty value: displayed as written.
+func parseCapabilities(v string) map[string]string {
+	out := map[string]string{}
+	for _, tok := range strings.Fields(v) {
+		k, val, ok := strings.Cut(tok, "=")
+		if !ok || k == "" {
+			out[tok] = ""
+			continue
+		}
+		out[k] = val
+	}
+	return out
+}
+
+// renderCapabilities writes sorted `k=v` tokens, so an unchanged instance
+// renders the same bytes at every boot.
+func renderCapabilities(c map[string]string) string {
+	keys := make([]string, 0, len(c))
+	for k := range c {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	toks := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if c[k] == "" {
+			toks = append(toks, k)
+			continue
+		}
+		toks = append(toks, k+"="+c[k])
+	}
+	return strings.Join(toks, " ")
+}
+
+// AdvertisedDiff names the advertised fields (key, host, branch, addresses,
+// git, capabilities) in which m and o differ, in record order; nil when none.
+// Agent, state and notes are NOT advertised: the instance never rewrites them
+// on its own (state changes only by registering and unregistering).
+func (m Member) AdvertisedDiff(o Member) []string {
+	var d []string
+	if !(m.Key == nil && o.Key == nil) && !SameKey(m.Key, o.Key) {
+		d = append(d, "key")
+	}
+	if m.Host != o.Host {
+		d = append(d, "host")
+	}
+	if m.Branch != o.Branch {
+		d = append(d, "branch")
+	}
+	if strings.Join(m.Addresses, " ") != strings.Join(o.Addresses, " ") {
+		d = append(d, "addresses")
+	}
+	if m.Git != o.Git {
+		d = append(d, "git")
+	}
+	if renderCapabilities(m.Capabilities) != renderCapabilities(o.Capabilities) {
+		d = append(d, "capabilities")
+	}
+	return d
+}
+
+// SameAdvertised reports whether m and o agree on every advertised field.
+func (m Member) SameAdvertised(o Member) bool { return len(m.AdvertisedDiff(o)) == 0 }
