@@ -71,4 +71,58 @@ func TestUpdateHandler_BlankTitleNamesTheRule(t *testing.T) {
 	require.Contains(t, resultText(t, res), "title is required")
 }
 
-var _ = json.Marshal
+func TestUpdateHandler_RejectsMultilineTitleEarly(t *testing.T) {
+	svc, ctx, _ := newPrinciplesTestRepo(t)
+	writeSlot(t, ctx, svc, "abc")
+	for _, title := range []string{"\nFoo", "Foo\nBar", "Foo\r\nBar"} {
+		res := callUpdate(t, ctx, map[string]any{
+			"file": opsSlot, "moment_name": "m",
+			// A bad ref alongside: the title must be what is reported.
+			"updates": map[string]any{"title": title, "refs": []any{"kb/nope/nope/00000000.md"}},
+		})
+		require.True(t, res.IsError, "title %q", title)
+		require.Contains(t, resultText(t, res), "title must be a single line")
+	}
+}
+
+// The unknown-key check runs with the other argument checks, before the file
+// is looked up, so a bad key on a missing path reports the key.
+func TestUpdateHandler_UnknownKeyReportedBeforeFileLookup(t *testing.T) {
+	_, ctx, _ := newPrinciplesTestRepo(t)
+	res := callUpdate(t, ctx, map[string]any{
+		"file": ".knomit/jobs/x/missing.md", "moment_name": "m",
+		"updates": map[string]any{"origin": "authored"},
+	})
+	require.True(t, res.IsError)
+	require.Contains(t, resultText(t, res), `unknown key "origin"`)
+}
+
+// The served schema says what the handler enforces: no undeclared keys in
+// `updates` or in a learn fact, like ops items already declare.
+func TestServedSchemas_ForbidAdditionalProperties(t *testing.T) {
+	raw, err := json.Marshal(updateTool())
+	require.NoError(t, err)
+	var upd struct {
+		InputSchema struct {
+			Properties struct {
+				Updates map[string]any `json:"updates"`
+			} `json:"properties"`
+		} `json:"inputSchema"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &upd))
+	require.Equal(t, false, upd.InputSchema.Properties.Updates["additionalProperties"])
+
+	raw, err = json.Marshal(learnTool())
+	require.NoError(t, err)
+	var lrn struct {
+		InputSchema struct {
+			Properties struct {
+				Facts struct {
+					Items map[string]any `json:"items"`
+				} `json:"facts"`
+			} `json:"properties"`
+		} `json:"inputSchema"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &lrn))
+	require.Equal(t, false, lrn.InputSchema.Properties.Facts.Items["additionalProperties"])
+}

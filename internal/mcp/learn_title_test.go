@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"reflect"
 	"sort"
 	"strings"
@@ -51,8 +50,6 @@ func TestLearnHandler_RejectsMissingOrBlankTitle(t *testing.T) {
 	}
 }
 
-var _ = context.Background
-
 // An unknown key inside a fact object is refused, not ignored — naming the
 // fact, every unknown key, and the accepted set — and the batch writes nothing.
 func TestLearnHandler_RejectsUnknownFactKeys(t *testing.T) {
@@ -98,4 +95,43 @@ func TestLearnFactInput_MatchesServedSchema(t *testing.T) {
 	sort.Strings(fromSchema)
 	sort.Strings(fromStruct)
 	require.Equal(t, fromSchema, fromStruct)
+}
+
+// A line break in a title is refused on learn, before anything is written.
+func TestLearnHandler_RejectsMultilineTitle(t *testing.T) {
+	for _, title := range []string{"\nFoo", "Foo\nBar", "Foo\r\nBar"} {
+		svc, ctx, emb := newPrinciplesTestRepo(t)
+		before := headCommit(t, svc)
+		var req mcpgo.CallToolRequest
+		req.Params.Arguments = map[string]any{
+			"moment_name": "multiline",
+			"facts": []any{map[string]any{
+				"topic": "gotchas", "category": "testing/titles",
+				"title": title, "body": "b", "entities": []any{"x"},
+			}},
+		}
+		res, err := LearnHandler(emb)(ctx, req)
+		require.NoError(t, err)
+		require.True(t, res.IsError, "title %q must be refused", title)
+		require.Contains(t, resultText(t, res), "fact 0: title must be a single line")
+		require.Equal(t, before, headCommit(t, svc))
+	}
+}
+
+// learn stores the title the parser will read back: edge whitespace trimmed.
+func TestLearnHandler_TrimsTitleEdges(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"moment_name": "trim",
+		"facts": []any{map[string]any{
+			"topic": "gotchas", "category": "testing/titles",
+			"title": "  Padded title\t ", "body": "b", "entities": []any{"x"},
+		}},
+	}
+	res, err := LearnHandler(emb)(ctx, req)
+	require.NoError(t, err)
+	require.False(t, res.IsError, resultText(t, res))
+	path := mergedFactPath(t, res)
+	require.Contains(t, readContent(t, svc, path), "\n# Padded title\n", "the stored heading carries no edge whitespace")
 }

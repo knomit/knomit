@@ -11,7 +11,7 @@ import (
 // which ParseFact refuses — so every reader would reject what the writer
 // accepted. SerializeFact is the gate every write path shares, so it refuses.
 func TestSerializeFact_RefusesBlankTitle(t *testing.T) {
-	for _, title := range []string{"", "   ", "\t\n"} {
+	for _, title := range []string{"", "   ", "\t "} {
 		f := NewFact("kb/x/y/aaaaaaaa.md")
 		f.Title = title
 		f.Body = "body"
@@ -32,4 +32,11 @@ func TestValidateTitle(t *testing.T) {
 	require.ErrorIs(t, ValidateTitle(""), ErrTitleRequired)
 	require.ErrorIs(t, ValidateTitle(" \t "), ErrTitleRequired)
 	require.NoError(t, ValidateTitle("x"))
+
+	// A line break anywhere makes the title unreadable or silently rewritten:
+	// "\nFoo" serialises as an empty "# " heading; "Foo\nBar" reads back as
+	// title "Foo" with "Bar" pushed into the body.
+	for _, title := range []string{"\nFoo", "Foo\nBar", "Foo\r\nBar", "Foo\r", "Foo\n"} {
+		require.ErrorIs(t, ValidateTitle(title), ErrTitleMultiline, "title %q", title)
+	}
 }

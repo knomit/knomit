@@ -23,8 +23,12 @@ import (
 )
 
 // updateTool returns the Tool definition for knomit_update.
+// updateToolName is knomit_update's registered name, shared by the tool
+// definition and the handler's error messages.
+const updateToolName = "knomit_update"
+
 func updateTool() mcpgo.Tool {
-	return mcpgo.NewTool("knomit_update",
+	return mcpgo.NewTool(updateToolName,
 		mcpgo.WithDescription("Update an existing fact in the knowledge base."),
 		bindingArg(true),
 		mcpgo.WithString("file",
@@ -36,6 +40,7 @@ func updateTool() mcpgo.Tool {
 			mcpgo.Description("A short label for this update moment."),
 		),
 		mcpgo.WithObject("updates",
+			mcpgo.AdditionalProperties(false),
 			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn. Send updates, ops, or both."),
 			mcpgo.Properties(updateToolSchemaProperties()),
 		),
@@ -177,6 +182,50 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError("moment_name is required"), nil
 		}
 
+		// 2b. Parse updates and ops — with the other argument checks, before
+		// the file is looked up, so a bad argument is reported as that even
+		// when the path is also wrong. updates.body and ops both rewrite the body,
+		// so a call may carry one or the other, never both.
+		var updates updateInput
+		_, hasUpdates := req.GetArguments()["updates"]
+		_, hasOps := req.GetArguments()["ops"]
+		if !hasUpdates && !hasOps {
+			return mcpgo.NewToolResultError("updates or ops is required"), nil
+		}
+		if hasUpdates {
+			// A key the schema does not declare is refused, not ignored:
+			// ignoring it reported success for a change that was never made
+			// (origin, topic, path, a body-edit name that belongs in ops).
+			// The accepted set is the served schema; the strict decode below
+			// backs it, and a test keeps the struct and the schema equal.
+			if err := rejectUnknownObjectKeys(req, "updates", updateToolSchemaProperties(), updateToolName); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			if err := unmarshalArgStrict(req, "updates", &updates); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			// Checked with the arguments, so a later ontology or refs error
+			// cannot mask a bad title and cost a second round trip.
+			// SerializeFact enforces the same rule; this reports it first.
+			if updates.Title != nil {
+				if err := factpkg.ValidateTitle(*updates.Title); err != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("updates.title: %v", err)), nil
+				}
+			}
+		}
+		// Strict: an unknown key on an op (say replace_all, or an occurrence
+		// index) is refused rather than ignored, because ignoring it would
+		// apply an edit the caller did not ask for.
+		var ops []factpkg.BodyOp
+		if hasOps {
+			if err := unmarshalArgStrict(req, "ops", &ops); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			if updates.Body != nil {
+				return mcpgo.NewToolResultError("send updates.body or ops, not both: both rewrite the body"), nil
+			}
+		}
+
 		// 3. Check file exists.
 		exists, err := s.facts.FactExists(ctx, writeBranch, file)
 		if err != nil {
@@ -204,40 +253,6 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// every fact that ever cited it uneditable. Captured before the merge
 		// below, which may replace the list wholesale.
 		priorRefs := append([]string(nil), fact.Refs...)
-
-		// 5. Parse updates and ops. updates.body and ops both rewrite the body,
-		// so a call may carry one or the other, never both.
-		var updates updateInput
-		_, hasUpdates := req.GetArguments()["updates"]
-		_, hasOps := req.GetArguments()["ops"]
-		if !hasUpdates && !hasOps {
-			return mcpgo.NewToolResultError("updates or ops is required"), nil
-		}
-		if hasUpdates {
-			// A key the schema does not declare is refused, not ignored:
-			// ignoring it reported success for a change that was never made
-			// (origin, topic, path, a body-edit name that belongs in ops).
-			// The accepted set is the served schema; the strict decode below
-			// backs it, and a test keeps the struct and the schema equal.
-			if err := rejectUnknownObjectKeys(req, "updates", updateToolSchemaProperties(), "knomit_update"); err != nil {
-				return mcpgo.NewToolResultError(err.Error()), nil
-			}
-			if err := unmarshalArgStrict(req, "updates", &updates); err != nil {
-				return mcpgo.NewToolResultError(err.Error()), nil
-			}
-		}
-		// Strict: an unknown key on an op (say replace_all, or an occurrence
-		// index) is refused rather than ignored, because ignoring it would
-		// apply an edit the caller did not ask for.
-		var ops []factpkg.BodyOp
-		if hasOps {
-			if err := unmarshalArgStrict(req, "ops", &ops); err != nil {
-				return mcpgo.NewToolResultError(err.Error()), nil
-			}
-			if updates.Body != nil {
-				return mcpgo.NewToolResultError("send updates.body or ops, not both: both rewrite the body"), nil
-			}
-		}
 
 		// Optimistic concurrency. The guard compares the file's BYTES at
 		// if_commit with its bytes now, not commit hashes: what the caller

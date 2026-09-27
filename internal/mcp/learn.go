@@ -70,9 +70,10 @@ func learnTool() mcpgo.Tool {
 			mcpgo.Required(),
 			mcpgo.Description("Array of fact objects to write."),
 			mcpgo.Items(map[string]any{
-				"type":       "object",
-				"properties": learnToolSchemaProperties(),
-				"required":   []string{"title", "body"},
+				"type":                 "object",
+				"properties":           learnToolSchemaProperties(),
+				"required":             []string{"title", "body"},
+				"additionalProperties": false,
 			}),
 		),
 	)
@@ -306,7 +307,9 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			eType = fact.DefaultEpistemicType
 		}
 		f := fact.NewFact(path)
-		f.Title = fi.Title
+		// Validated above on the raw input; trimmed here so what is stored is
+		// what ParseFact reads back, as knomit_update does.
+		f.Title = strings.TrimSpace(fi.Title)
 		f.Body = fi.Body
 		f.Kind = kind
 		f.Type = eType
