@@ -864,8 +864,16 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 
 		// Parse facts from the arguments.
+		// A key the fact schema does not declare is refused, not ignored:
+		// ignoring it wrote a fact without the field the caller meant to set
+		// and reported success. Checked before anything else, so the batch
+		// writes nothing. The strict decode backs it, and a test keeps
+		// learnFactInput and the schema equal.
+		if err := rejectUnknownItemKeys(req, "facts", learnToolSchemaProperties(), "fact"); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		var factInputs []learnFactInput
-		if err := unmarshalArg(req, "facts", &factInputs); err != nil {
+		if err := unmarshalArgStrict(req, "facts", &factInputs); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if len(factInputs) == 0 {

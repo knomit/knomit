@@ -144,6 +144,36 @@ func rejectUnknownObjectKeys(req mcpgo.CallToolRequest, arg string, declared map
 		quotedList(unknown), arg, toolName, strings.Join(valid, ", "))
 }
 
+// rejectUnknownItemKeys is rejectUnknownObjectKeys for an ARRAY of objects
+// (knomit_learn's `facts`): every element is checked against declared, and
+// each offending element is reported by its index as "<item> N: unknown key
+// ...", one line per element, followed by the valid set. Elements that are not
+// objects are left to the argument's decoder.
+func rejectUnknownItemKeys(req mcpgo.CallToolRequest, arg string, declared map[string]any, item string) error {
+	items, ok := req.GetArguments()[arg].([]any)
+	if !ok {
+		return nil
+	}
+	var lines []string
+	var valid []string
+	for i, el := range items {
+		obj, ok := el.(map[string]any)
+		if !ok {
+			continue
+		}
+		unknown, v := undeclaredKeys(obj, declared, nil)
+		if len(unknown) == 0 {
+			continue
+		}
+		valid = v
+		lines = append(lines, fmt.Sprintf("%s %d: unknown key %s", item, i, quotedList(unknown)))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s; valid keys are: %s", strings.Join(lines, "\n"), strings.Join(valid, ", "))
+}
+
 // undeclaredKeys returns obj's keys that declared lacks, and declared's keys,
 // both sorted so an error built from them is deterministic — a caller diffing
 // two error strings should see a difference only when the calls differ. skip,
