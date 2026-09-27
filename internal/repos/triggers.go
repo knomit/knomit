@@ -68,9 +68,13 @@ const maxTriggerLogField = 256
 // triggerHooks are test seams. Every field is nil (or zero) in production.
 type triggerHooks struct {
 	// afterKick runs between receiving a kick and reading the head ref. It is
-	// how a test parks the worker, and how KickReceivedBeforeRefRead commits
-	// in the window the ordering rule exists for.
+	// how a test parks the worker.
 	afterKick func()
+	// afterHeadRead runs right after phase A read the head ref: a commit made
+	// here is NOT in this run's range, and its kick must survive the run
+	// (KickReceivedBeforeRefRead). A dispatcher that drained the kick channel
+	// after reading the ref would swallow it.
+	afterHeadRead func()
 	// beforeTx2 runs between tx1 and tx2 (the crash test panics here).
 	beforeTx2 func()
 	// changeDelay is added inside the change build: knomit's per-path cost,
@@ -566,6 +570,9 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	}
 	head := plumbing.NewHash(headStr)
 	rs.head = headStr
+	if h := currentTriggerHooks().afterHeadRead; h != nil {
+		h()
+	}
 
 	// The trigger set at THIS head, cached by the ontology blob (D-b).
 	_, blob, data, oerr := tr.OntologyAtCommit(ctx, head)

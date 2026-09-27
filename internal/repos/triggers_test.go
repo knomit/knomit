@@ -647,19 +647,20 @@ func TestDispatch_TriggerKickNeverBlocksWriter(t *testing.T) {
 	require.Len(t, firesOf(t, ri, "all"), 101)
 }
 
-// KickReceivedBeforeRefRead [S1]: a commit that lands between the kick
-// receive and the head-ref read fires without any further commit. Sabotage:
-// drain the kick after reading the ref (the in-between commit's kick is
-// swallowed and its fire waits for an unrelated commit).
+// KickReceivedBeforeRefRead [S1]: the kick is consumed BEFORE the head ref is
+// read, so a commit that lands right after the ref read leaves its own kick
+// pending and fires in the next run without any further commit. Sabotage:
+// drain the kick channel after reading the ref (the in-between commit's kick
+// is swallowed and its fire waits for an unrelated later commit).
 func TestDispatch_KickReceivedBeforeRefRead(t *testing.T) {
 	_, ri := newTriggerRepo(t, trig("all", "learn", "", ""))
 	write(t, ri, "kb/tasks/warm.md")
 	var once sync.Once
 	var inBetween string
-	setHooks(t, triggerHooks{afterKick: func() {
+	setHooks(t, triggerHooks{afterHeadRead: func() {
 		once.Do(func() { inBetween = writeOn(t, ri, trigAgent, "kb/tasks/in-between.md") })
 	}})
-	writeOn(t, ri, trigAgent, "kb/other/unrelated.md") // the kick
+	writeOn(t, ri, trigAgent, "kb/other/unrelated.md") // the kick whose run the hook interrupts
 	require.Eventually(t, func() bool {
 		return len(firesOf(t, ri, "all")) == 2
 	}, 10*time.Second, 10*time.Millisecond, "the in-between commit (%s) must fire with no further commit", inBetween)
