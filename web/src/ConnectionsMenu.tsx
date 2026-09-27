@@ -31,7 +31,8 @@ export const CELL_PAD_X = 7;
 /**
  * One edge-count cell in the fact header's edges row, which reads
  * `↙ cited by N  ↗ cites N  ≈ motif…` — connections first, then the motif
- * cells; version, date and retract sit apart from it, pinned right.
+ * cells. The date, version walker, retracted badge and retract sit apart from
+ * it, pinned right.
  *
  * Connections used to be a 300px column, then a 36px gutter with a side drawer.
  * Both spent permanent horizontal space on something a reader consults

@@ -43,10 +43,9 @@ interface Props {
  * variant that pushed the prose down would relayout the whole fact on every
  * open and close, for a panel meant to be glanced at and dismissed.
  *
- * Positioned absolutely inside the header's control group, which means it
- * scrolls with the fact body. That is acceptable precisely because it is
- * transient: it closes when the pointer leaves, so it is not something a reader
- * scrolls away from while still using it.
+ * Positioned absolutely inside the edges row, which FactBand draws ABOVE the
+ * fact body's scroll container, so the panel stays put while the body scrolls
+ * beneath it.
  */
 export function ConnectionsPanel({
   id, open, incoming, outgoing, error, onClose, onHop, menuRef, onMouseEnter, onMouseLeave,
