@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
+	"knomit/internal/testsupport/testsigner"
 	"knomit/internal/platform/fileuri"
 )
 
@@ -183,7 +184,12 @@ func seedRemoteInitializedByThisMachine(t *testing.T, bare, agentBranch string) 
 	require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath), ont, 0o644))
 	runGit(t, work, "add", "-A")
-	runGit(t, work, "commit", "-m", "init: create knowledge base")
+	// THIS machine's commit is signed by this machine's key (F09 E4 adopts
+	// origin's copy of the agent branch only then). The Managers here have no
+	// Deps.Signer, so "this machine" signs with the test binary's fallback key.
+	key, err := testsigner.WriteFallbackKey(t.TempDir())
+	require.NoError(t, err)
+	runGit(t, work, "-c", "gpg.format=ssh", "-c", "user.signingkey="+key, "commit", "-S", "-m", "init: create knowledge base")
 	runGit(t, work, "push", "origin", agentBranch)
 	return url
 }

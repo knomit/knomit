@@ -177,7 +177,14 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		return SyncResult{}, fmt.Errorf("Sync: fetch: %w", fetchErr)
 	}
 
-	return ri.reconcileNow(ctx, agentBranch, upstreamMain)
+	syncRes, err := ri.reconcileNow(ctx, agentBranch, upstreamMain)
+	if err == nil && syncRes.Main.Verify.Blocking() {
+		// After the agent step: the agent merged whatever the local upstream
+		// verifiably is. The deferred status write records the refusal, and
+		// the caller's failure path broadcasts and counts it; Push still runs.
+		err = &VerifyFailedError{Report: syncRes.Main.Verify}
+	}
+	return syncRes, err
 }
 
 // reconcileNow runs the post-fetch portion of Sync. Exposed (package-private)

@@ -193,10 +193,19 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		log.Warn().Msg("synthesis disabled (no LLM adapter)")
 	}
 
+	// F09's root of trust. Parsed here so a malformed key fails boot with a
+	// named error instead of leaving every enabled repository "unrooted" for a
+	// reason nobody would guess. Empty = unrooted; never the instance's key.
+	verifyRoot, err := store.NewStaticRoot(cfg.Verify.OperatorKey)
+	if err != nil {
+		return nil, fmt.Errorf("[verify].operator_key: %w", err)
+	}
+
 	// Repo manager.
 	a.manager = repos.New(ctx, repos.Deps{
 		Cfg:         cfg,
 		Signer:      signer,
+		VerifyRoot:  verifyRoot,
 		AgentBranch: a.agentBranch,
 		Embedder:    embedder,
 		KeyPath:     keyPath,
