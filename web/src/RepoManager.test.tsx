@@ -65,7 +65,7 @@ describe('RepoManager', () => {
     open: true as const,
     repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
     currentRepo: 'core',
-    readOnly: false,
+    serverReadOnly: false,
     hideRemoteConfig: false,
     onChanged: () => {},
     onBrowse: () => {},
@@ -265,7 +265,7 @@ describe('RepoManager', () => {
   // stop you. Read-only used to land straight on a live form whose submit would
   // be refused, with nothing on screen saying why.
   it('explains itself instead of offering a create form it cannot submit', async () => {
-    render(<RepoManager {...baseProps} repos={[]} currentRepo="" readOnly />);
+    render(<RepoManager {...baseProps} repos={[]} currentRepo="" serverReadOnly />);
 
     expect(await screen.findByTestId('create-blocked-repository')).toBeInTheDocument();
     // `step-source` is the wizard's first screen — a proxy for "the create
@@ -281,7 +281,7 @@ describe('RepoManager', () => {
     fireEvent.click(await screen.findByTestId('repomgr-new'));
     expect(await screen.findByTestId('step-source')).toBeInTheDocument();
 
-    rerender(<RepoManager {...baseProps} readOnly />);
+    rerender(<RepoManager {...baseProps} serverReadOnly />);
     expect(screen.queryByTestId('step-source')).not.toBeInTheDocument();
     expect(screen.getByTestId('create-blocked-repository')).toBeInTheDocument();
   });
@@ -706,8 +706,8 @@ describe('RepoManager', () => {
       expect(await screen.findByText(/re-read it and retry/i)).toBeInTheDocument();
     });
 
-    it('is disabled entirely when the repo is read-only', async () => {
-      render(<RepoManager {...baseProps} readOnly />);
+    it('is disabled entirely on a read-only instance', async () => {
+      render(<RepoManager {...baseProps} serverReadOnly />);
       await selectRepo();
 
       fireEvent.change(screen.getByTestId('repo-rename-input'), { target: { value: 'beta' } });
@@ -766,7 +766,7 @@ describe('RepoManager', () => {
   // way to create one gets no heading for it.
   it('omits the license block when read-only and the repo has no LICENSE', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
-    render(<RepoManager {...baseProps} readOnly />);
+    render(<RepoManager {...baseProps} serverReadOnly />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('block-license')).toBeNull();
     expect(screen.queryByTestId('toc-license')).toBeNull();
@@ -844,7 +844,7 @@ describe('RepoManager', () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({
       name: 'core', license_oversize: true,
     });
-    render(<RepoManager {...baseProps} readOnly />);
+    render(<RepoManager {...baseProps} serverReadOnly />);
     await selectRepo();
 
     expect(await screen.findByTestId('repo-license-oversize')).toBeInTheDocument();
@@ -862,7 +862,7 @@ describe('RepoManager', () => {
 
   it('hides the description block entirely when read-only and empty', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core' });
-    render(<RepoManager {...baseProps} readOnly />);
+    render(<RepoManager {...baseProps} serverReadOnly />);
     await waitFor(() => expect(api.getRepo).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('block-description')).not.toBeInTheDocument();
   });
@@ -1029,7 +1029,7 @@ describe('RepoManager', () => {
 
   it('hides the description edit affordance in read-only mode', async () => {
     (api.getRepo as ReturnType<typeof vi.fn>).mockResolvedValue({ name: 'core', description: '# Old' });
-    render(<RepoManager {...baseProps} readOnly />);
+    render(<RepoManager {...baseProps} serverReadOnly />);
     await selectRepo();
     await screen.findByTestId('repo-description');
     expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
@@ -1204,7 +1204,7 @@ describe('RepoManager', () => {
     });
 
     it('is disabled entirely when read-only', async () => {
-      render(<RepoManager {...baseProps} readOnly />);
+      render(<RepoManager {...baseProps} serverReadOnly />);
       await selectLens();
 
       fireEvent.change(screen.getByTestId('lens-rename-input'), { target: { value: 'newdev' } });
@@ -1478,7 +1478,7 @@ describe('RepoManager', () => {
         open
         repos={[{ name: 'core', uid: 'uid-core' }]}
         currentRepo="core"
-        readOnly
+        serverReadOnly
         hideRemoteConfig
         onChanged={() => {}}
         onBrowse={() => {}}
@@ -1506,7 +1506,7 @@ describe('RepoManager — a subscription', () => {
     open: true as const,
     repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
     currentRepo: 'core',
-    readOnly: false,
+    serverReadOnly: false,
     hideRemoteConfig: false,
     onChanged: () => {},
     onBrowse: () => {},
@@ -1544,6 +1544,103 @@ describe('RepoManager — a subscription', () => {
     expect(row.textContent).toContain('main');
     expect(row.textContent).toContain('read-only');
   });
+
+  // #324: a subscription's CONTENT cannot change — README and LICENSE commit to
+  // an agent branch it does not have — but its registry config can. The server
+  // also refuses detaching or re-pointing its origin (409), so those two go;
+  // the upstream stays.
+  it('locks its content and keeps its admin operations', async () => {
+    vi.mocked(api.getOrigin).mockResolvedValue({
+      url: 'https://example.com/kb.git', branch: 'main', auth_method: 'none',
+    } as unknown as Awaited<ReturnType<typeof api.getOrigin>>);
+    render(<RepoManager {...subProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
+
+    expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repo-license-edit')).not.toBeInTheDocument();
+
+    expect(await screen.findByTestId('upstream-change')).toBeInTheDocument();
+    expect(screen.queryByTestId('remote-reconnect')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('remote-disconnect')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repo-rebuild')).toBeEnabled();
+    expect(screen.getByTestId('repo-archive')).toBeEnabled();
+    expect(screen.getByTestId('repo-rename-input')).toBeEnabled();
+  });
+
+  // #324's other half: the pane used to take the BROWSED repo's read-only state
+  // for every settings page. Browsing a subscription must not lock a writable
+  // repo's page — the page describes the repo on screen.
+  it('does not lock a writable repo while the subscription is the one browsed', async () => {
+    vi.mocked(api.getRepo).mockImplementation(async (name: string) => (
+      name === 'core'
+        ? { name: 'core', mode: 'subscribe', read_branch: 'main' }
+        : { name: 'work', description: '' }
+    ) as Awaited<ReturnType<typeof api.getRepo>>);
+    vi.mocked(api.getAgentBranch).mockResolvedValue('machine/test');
+    render(<RepoManager {...subProps} currentRepo="core" />);
+    fireEvent.click(await screen.findByTestId('repomgr-item-work'));
+
+    expect(await screen.findByTestId('repo-description-edit')).toBeInTheDocument();
+    expect(screen.queryByTestId('repo-readonly-badge')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repo-archive')).toBeEnabled();
+  });
+});
+
+// Until a repo's details answer, the page cannot tell a subscription from an
+// ordinary repo. Showing the editors meanwhile would flash, on a subscription,
+// controls whose every use fails (#324) — so the unknown mode locks them, and
+// the lock lifts once the mode says "ordinary".
+describe('RepoManager — mode not yet known', () => {
+  it('withholds content editors and origin re-pointing until the mode resolves', async () => {
+    let resolveRepo!: (r: Awaited<ReturnType<typeof api.getRepo>>) => void;
+    vi.mocked(api.getRepo).mockReturnValue(new Promise(res => { resolveRepo = res; }));
+    vi.mocked(api.getAgentBranch).mockResolvedValue('machine/test');
+    vi.mocked(api.getOrigin).mockResolvedValue({
+      url: 'https://example.com/kb.git', branch: 'main', auth_method: 'none',
+    } as unknown as Awaited<ReturnType<typeof api.getOrigin>>);
+    render(
+      <RepoManager open repos={[{ name: 'core', uid: 'uid-core' }]} currentRepo="core"
+        serverReadOnly={false} hideRemoteConfig={false} onChanged={() => {}} onBrowse={() => {}} />,
+    );
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+
+    // The origin has loaded — the card is drawn — so the absences below are
+    // the mode gate, not an empty page.
+    expect(await screen.findByTestId('upstream-change')).toBeInTheDocument();
+    expect(screen.queryByTestId('remote-reconnect')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('remote-disconnect')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repo-license-edit')).not.toBeInTheDocument();
+    // Registry operations do not wait on the mode: a subscription keeps them.
+    expect(screen.getByTestId('repo-archive')).toBeEnabled();
+
+    await act(async () => { resolveRepo({ name: 'core', description: '' } as Awaited<ReturnType<typeof api.getRepo>>); });
+    expect(await screen.findByTestId('repo-description-edit')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-disconnect')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-reconnect')).toBeInTheDocument();
+  });
+});
+
+// A read-only INSTANCE is the one thing that locks every control on a repo's
+// page — registry operations included, which a subscription leaves open.
+describe('RepoManager — a read-only instance', () => {
+  it('disables archive, rename and rebuild', async () => {
+    vi.mocked(api.getRepo).mockResolvedValue({ name: 'core', description: '' });
+    render(
+      <RepoManager open repos={[{ name: 'core', uid: 'uid-core' }]} currentRepo="core"
+        serverReadOnly hideRemoteConfig={false} onChanged={() => {}} onBrowse={() => {}} />,
+    );
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+
+    expect(await screen.findByTestId('repo-archive')).toBeDisabled();
+    expect(screen.getByTestId('repo-rename-input')).toBeDisabled();
+    expect(screen.getByTestId('repo-rebuild')).toBeDisabled();
+    expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repomgr-logs')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-new')).toBeDisabled();
+    expect(screen.getByTestId('repomgr-new-lens')).toBeDisabled();
+  });
 });
 
 // The tab strip is the second navigation axis: server-wide PAGES across the
@@ -1554,7 +1651,7 @@ describe('Manage tabs', () => {
     open: true as const,
     repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
     currentRepo: 'core',
-    readOnly: false,
+    serverReadOnly: false,
     hideRemoteConfig: false,
     onChanged: () => {},
     onBrowse: () => {},
@@ -1789,7 +1886,7 @@ describe('Manage tabs', () => {
   // a control that cannot work — worse than an absent one, the same rule the
   // rail follows.
   it('renders no Logs tab at all on a read-only instance', async () => {
-    render(<RepoManager {...baseProps} readOnly />);
+    render(<RepoManager {...baseProps} serverReadOnly />);
     await screen.findByTestId('repomgr-sessions');
     expect(screen.queryByTestId('repomgr-logs')).not.toBeInTheDocument();
   });
@@ -1819,7 +1916,7 @@ describe('Manage tabs', () => {
 
   it('renders no Authorizations tab on a read-only instance', async () => {
     vi.mocked(api.listOAuthPending).mockResolvedValue([]);
-    render(<RepoManager {...baseProps} readOnly />);
+    render(<RepoManager {...baseProps} serverReadOnly />);
     await screen.findByTestId('repomgr-sessions');
     expect(screen.queryByTestId('repomgr-oauth')).not.toBeInTheDocument();
   });

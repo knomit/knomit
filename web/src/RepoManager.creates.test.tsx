@@ -37,7 +37,7 @@ const baseProps = {
   open: true as const,
   repos: [{ name: 'core', uid: 'uid-core' }],
   currentRepo: 'core',
-  readOnly: false,
+  serverReadOnly: false,
   hideRemoteConfig: false,
   onChanged: () => {},
   onBrowse: () => {},

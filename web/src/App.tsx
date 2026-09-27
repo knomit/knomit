@@ -1,6 +1,6 @@
 import { useReducer, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo } from 'react';
 import type { Dispatch } from 'react';
-import { reducer, init, isReadOnly, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
+import { reducer, init, isLive, selectTrail, currentPath, lensResolutionPending, remoteErrorText } from './state';
 import type { Action, BrowseContext } from './state';
 import { api, apiUrl, fetchVersion, repoAvailable, brokenLensMember, subscribeRepoEvents } from './api';
 import type { RepoInfo, Lens, Status, RepoIndexEvent, RepoDetails } from './api';
@@ -1163,7 +1163,7 @@ export default function App() {
             open
             repos={repos}
             currentRepo={state.repo}
-            readOnly={isReadOnly(state)}
+            serverReadOnly={state.serverReadOnly}
             hideRemoteConfig={state.serverReadOnly}
             onChanged={onRepoMgrChanged}
             onBrowse={onRepoMgrBrowse}
@@ -1314,7 +1314,7 @@ export default function App() {
               open
               repos={repos}
               currentRepo={state.repo}
-              readOnly={isReadOnly(state)}
+              serverReadOnly={state.serverReadOnly}
               hideRemoteConfig={state.serverReadOnly}
               onChanged={onRepoMgrChanged}
               onBrowse={onRepoMgrBrowse}

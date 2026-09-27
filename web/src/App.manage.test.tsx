@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App from './App';
 import { installFakeEventSource, uninstallFakeEventSource } from './testEventSource';
+import { SUBSCRIPTION_TITLE } from './state';
 
 // Manage is a MODE, not a dialog. These pin the three claims that distinguish
 // the two, because each was a deliberate design call and each is easy to undo
@@ -357,5 +358,42 @@ describe('Manage as a mode', () => {
     await waitFor(() => expect(locked()).toBe(false));
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     await waitFor(() => expect(screen.queryByTestId('manage-surface')).not.toBeInTheDocument());
+  });
+});
+
+// #324: the Manage panel's instance actions (+ repo, + lens, the Logs tab) were
+// gated on the BROWSED repo's read-only state. A fresh origin has no remembered
+// context, so pickRepo lands on the first sorted repo — here a subscription —
+// and the instance looked read-only although the server accepts every write.
+describe('Manage on a writable instance while browsing a subscription', () => {
+  beforeEach(() => { localStorage.clear(); });
+
+  it('keeps the instance actions available and fact authoring blocked', async () => {
+    const m = await primeApi();
+    m.getRepo.mockResolvedValue({ name: 'alpha', description: '', mode: 'subscribe', read_branch: 'main' });
+    m.browse.mockResolvedValue({ path: 'kb', children: [{ name: 'foo.md', is_dir: false, title: 'Foo', type: 'observation' }] });
+    m.fact.mockResolvedValue({
+      path: 'kb/foo.md', title: 'Foo', body: 'body', type: 'observation', confidence: 0.9, sources: 1,
+      domain: [], entities: [], refs: [], commit_hash: 'aaa1111', commit_date: '2026-05-01T00:00:00Z',
+    });
+    m.factCommits.mockResolvedValue({ entries: [] });
+    m.explain.mockResolvedValue({ incoming: [], outgoing: [] });
+    m.commitDetail.mockResolvedValue(null);
+
+    await mountApp();
+    // SET_REPO_READONLY lands asynchronously, after the boot details. Wait until
+    // the subscription is OBSERVABLE — the fact pane's retract names it — so the
+    // Manage assertions below cannot pass merely by running before it arrives.
+    fireEvent.click(await screen.findByTestId('dir-entry'));
+    await waitFor(() => {
+      const retract = screen.getByTestId('retract-btn');
+      expect(retract).toBeDisabled();
+      expect(retract).toHaveAttribute('title', SUBSCRIPTION_TITLE);
+    });
+
+    await enterManage();
+    expect(await screen.findByTestId('repomgr-logs')).toBeInTheDocument();
+    expect(screen.getByTestId('repomgr-new')).toBeEnabled();
+    expect(screen.getByTestId('repomgr-new-lens')).toBeEnabled();
   });
 });

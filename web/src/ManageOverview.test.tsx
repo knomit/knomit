@@ -45,7 +45,7 @@ const baseProps = {
   open: true as const,
   repos: [{ name: 'core', uid: 'uid-core' }, { name: 'work', uid: 'uid-work' }],
   currentRepo: 'core',
-  readOnly: false,
+  serverReadOnly: false,
   hideRemoteConfig: false,
   onChanged: () => {},
   onBrowse: () => {},
@@ -189,10 +189,10 @@ describe('Manage Overview', () => {
 
   // The rail's `+` buttons have always been gated on read-only. These were not,
   // which made Overview the one route to a create form whose submit is going to
-  // be refused — and read-only is not just the read-only INSTANCE, it is every
-  // history excursion, so an ordinary user could reach it by time-travelling.
-  it('gates its create buttons on read-only, exactly as the rail does', async () => {
-    render(<RepoManager {...baseProps} readOnly />);
+  // be refused. Creating is instance-scoped, so the gate is the read-only
+  // INSTANCE alone — the browsed repo and the history anchor have no say (#324).
+  it('gates its create buttons on a read-only instance, exactly as the rail does', async () => {
+    render(<RepoManager {...baseProps} serverReadOnly />);
     await screen.findByTestId('fleet-row-core');
 
     expect(screen.getByTestId('overview-new-repo')).toBeDisabled();

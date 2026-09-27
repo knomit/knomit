@@ -8,6 +8,14 @@ interface Props {
   repo: string;
   agentBranch: string;      // this machine's local agent branch (for the upstream warning)
   readOnly: boolean;
+  /**
+   * Withhold Reconnect and Disconnect; the upstream stays changeable. Set for a
+   * subscription, which IS its origin — its mode lives only on the origin
+   * record — so the server refuses both detaching it and re-pointing it
+   * through a connect session (409). Also set while the caller does not yet
+   * know whether the repo is one. Optional: a card with no say is unlocked.
+   */
+  lockOrigin?: boolean;
   state: RemoteState;
   onConnect: () => void;    // open the connect wizard
   onDisconnect: () => void; // ask RepoDetail to run its disconnect confirm
@@ -24,7 +32,7 @@ interface Props {
 // Its two actions are card-local icon buttons because they edit the connection
 // this card describes, as against the block-level actions (Rebuild, Archive)
 // that belong to the whole repo.
-export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDisconnect, onChanged }: Props) {
+export function RemoteCard({ repo, agentBranch, readOnly, lockOrigin = false, state, onConnect, onDisconnect, onChanged }: Props) {
   const { origin, loading, err, setErr, reload } = state;
   const [busy, setBusy] = useState(false);
   const [editingUpstream, setEditingUpstream] = useState(false);
@@ -76,7 +84,7 @@ export function RemoteCard({ repo, agentBranch, readOnly, state, onConnect, onDi
         <div style={{ ...cardLabel, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
           <GlobeIcon color="#555" size={11} /> Remote
         </div>
-        {!loading && origin && !readOnly && (
+        {!loading && origin && !readOnly && !lockOrigin && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <button type="button" className="k-bare" data-testid="remote-reconnect"
               title="Reconnect / change remote" aria-label="Reconnect or change remote"
