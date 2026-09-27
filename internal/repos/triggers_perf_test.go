@@ -288,60 +288,91 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 		name     string
 		triggers int
 		merge    bool
+		noIf     bool // triggers without an `if`: matching + change + emit only
 	}{
-		{"own-write/0", 0, false}, {"own-write/50", 50, false},
-		{"merge/0", 0, true}, {"merge/50", 50, true},
+		{"own-write/0", 0, false, false}, {"own-write/50", 50, false, false}, {"own-write/50-no-if", 50, false, true},
+		{"merge/0", 0, true, false}, {"merge/50", 50, true, false}, {"merge/50-no-if", 50, true, true},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
-			t := &testing.T{}
 			home := b.TempDir()
 			m := New(context.Background(), Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
 				KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true})
 			defer m.Close()
+			if err := m.Start(); err != nil {
+				b.Fatal(err)
+			}
 			ri, err := m.Create(context.Background(), CreateSpec{Name: "bench", Mode: "preset"}, nil)
 			if err != nil {
 				b.Fatal(err)
 			}
-			require.NoError(t, m.Start())
 			svc, release, err := ri.Acquire()
 			if err != nil {
 				b.Fatal(err)
 			}
 			defer release()
 			ctx := context.Background()
+			must := func(err error) {
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			headOf := func() string {
+				h, err := svc.Branches().HeadCommit(ctx, trigAgent)
+				must(err)
+				return h
+			}
+			waitHead := func(h string) {
+				deadline := time.Now().Add(2 * time.Minute)
+				for {
+					got, _ := ri.triggers.runSequence()
+					if got == h && ri.triggers.flushed() {
+						return
+					}
+					if time.Now().After(deadline) {
+						b.Fatalf("the dispatcher never completed a run at %s", h)
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+			writeB := func(branch, path string) {
+				_, err := svc.Facts().WriteFact(ctx, branch, path, factBody(path), "learn: "+path, "learn")
+				must(err)
+			}
 			files := map[string]string{}
 			for i := 0; i < 2000; i++ {
 				files[fmt.Sprintf("kb/tasks/f/%04d.md", i)] = factBody(fmt.Sprintf("f%d", i))
 			}
 			entries := make([]string, 0, tc.triggers)
+			cond := "fact.confidence > 0.5"
+			if tc.noIf {
+				cond = ""
+			}
 			for i := 0; i < tc.triggers; i++ {
-				entries = append(entries, trig(fmt.Sprintf("t%02d", i), "[learn, update, retract]", "tasks/**", "fact.confidence > 0.5"))
+				entries = append(entries, trig(fmt.Sprintf("t%02d", i), "[learn, update, retract]", "tasks/**", cond))
 			}
 			files[OntologyPath] = triggerOntology("", entries...)
-			if _, _, err := svc.Facts().BatchWriteFacts(ctx, trigAgent, files, nil, "fixture", "learn"); err != nil {
-				b.Fatal(err)
-			}
-			waitTriggerHead(t, ri, head(t, ri))
-			w := head(t, ri)
-			// The advance: 8 paths (a typical knomit-kb advance), own write or
-			// brought in by a merge from a peer branch.
+			// The fixture commit skips the index (TestingCommitFiles): indexing
+			// 2,000 facts is the store's cost, not the dispatcher's.
+			_, err = svc.TestingCommitFiles(trigAgent, files, "fixture")
+			must(err)
+			ri.triggers.triggerKick()
+			waitHead(headOf())
+			w := headOf()
+			// The advance: 8 paths (a typical knomit-kb advance), own writes
+			// or brought in by a merge from a peer branch.
 			src := trigAgent
 			if tc.merge {
 				src = "peer"
-				if err := svc.Branches().CreateBranch(ctx, "peer", trigAgent); err != nil {
-					b.Fatal(err)
-				}
+				must(svc.Branches().CreateBranch(ctx, "peer", trigAgent))
 			}
 			for i := 0; i < 8; i++ {
-				writeOn(t, ri, src, fmt.Sprintf("kb/tasks/adv/%d.md", i))
+				writeB(src, fmt.Sprintf("kb/tasks/adv/%d.md", i))
 			}
 			if tc.merge {
-				writeOn(t, ri, trigAgent, "kb/other/mine.md")
-				if err := svc.Branches().MergeBranch(ctx, "peer", trigAgent, store.StrategyRemoteWins); err != nil {
-					b.Fatal(err)
-				}
+				writeB(trigAgent, "kb/other/mine.md")
+				must(svc.Branches().MergeBranch(ctx, "peer", trigAgent, store.StrategyRemoteWins))
 			}
-			waitTriggerHead(t, ri, head(t, ri))
+			waitHead(headOf())
 			d := ri.triggers
 			names := map[string]string{}
 			for i := 0; i < tc.triggers; i++ {
@@ -351,12 +382,11 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				if len(names) > 0 {
-					if err := svc.Triggers().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil); err != nil {
-						b.Fatal(err)
-					}
+					must(svc.Triggers().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil))
 				}
 				b.StartTimer()
 				d.run(ctx)
+				d.flush(ctx)
 			}
 			b.StopTimer()
 			if tc.triggers > 0 && d.stats.view("t00").Fires == 0 {
