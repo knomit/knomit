@@ -96,6 +96,29 @@ func TestHandleFactCreate_MissingTitle_Returns400(t *testing.T) {
 	}
 }
 
+// A whitespace-only title is as empty as a missing one: it serialises as a
+// bare "# " heading that no reader can parse.
+func TestHandleFactCreate_WhitespaceTitle_Returns400(t *testing.T) {
+	s := &Server{
+		Manager:      newTestManagerWithRepos(t, "alpha"),
+		OntologyRoot: "know",
+		providers: storeProviders{
+			factWriter: stubFactWriterForCreate{},
+		},
+	}
+	r := s.NewAPIRouter()
+
+	body := `{"title":"   ","body":"blank title"}`
+	rec := httptest.NewRecorder()
+	req := fromLoopback(httptest.NewRequest(http.MethodPost, "/repos/alpha/branches/agent:test/facts", strings.NewReader(body)))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleFactCreate_UnknownRepo_Returns404(t *testing.T) {
 	s := &Server{
 		Manager:      newTestManagerWithRepos(t),

@@ -54,9 +54,9 @@ func handleFactCreate(b hal.URLBuilder, ontologyRoot string, writer FactWriter) 
 		if !decodeJSON(w, r, &req, 0) {
 			return
 		}
-		if req.Title == "" {
+		if err := knomitfact.ValidateTitle(req.Title); err != nil {
 			hal.WriteProblem(w, http.StatusBadRequest, "Missing title",
-				"title is required", r.URL.Path)
+				err.Error(), r.URL.Path)
 			return
 		}
 

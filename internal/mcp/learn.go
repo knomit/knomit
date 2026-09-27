@@ -234,6 +234,13 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 	topicCategories := make([]string, len(inputs))
 	paths := make([]string, len(inputs))
 	for i, fi := range inputs {
+		// Checked first, so a missing title is reported as that and not as
+		// whatever later rule it happens to trip. SerializeFact enforces the
+		// same rule for every write path; this is the same rule, reported
+		// with the fact's index.
+		if err := fact.ValidateTitle(fi.Title); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+		}
 		var path string
 		var topicCategory string
 		if fi.Path != "" {

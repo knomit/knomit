@@ -214,7 +214,15 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			return mcpgo.NewToolResultError("updates or ops is required"), nil
 		}
 		if hasUpdates {
-			if err := unmarshalArg(req, "updates", &updates); err != nil {
+			// A key the schema does not declare is refused, not ignored:
+			// ignoring it reported success for a change that was never made
+			// (origin, topic, path, a body-edit name that belongs in ops).
+			// The accepted set is the served schema; the strict decode below
+			// backs it, and a test keeps the struct and the schema equal.
+			if err := rejectUnknownObjectKeys(req, "updates", updateToolSchemaProperties(), "knomit_update"); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			if err := unmarshalArgStrict(req, "updates", &updates); err != nil {
 				return mcpgo.NewToolResultError(err.Error()), nil
 			}
 		}
