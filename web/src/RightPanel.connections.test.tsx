@@ -9,6 +9,7 @@ import { RightPanel } from './RightPanel';
 import { init } from './state';
 import type { AppState } from './state';
 import type { RefGroup } from './api';
+import { PANEL_BOUNDS_ATTR } from './hooks';
 
 vi.mock('./api', () => ({
   api: {
@@ -18,6 +19,10 @@ vi.mock('./api', () => ({
     activity: vi.fn().mockResolvedValue(null),
     explain: vi.fn().mockResolvedValue({ incoming: [], outgoing: [] }),
     factCommits: vi.fn().mockResolvedValue({ entries: [] }),
+    motifCluster: vi.fn().mockResolvedValue({
+      canonical: 'shared-shape', cluster_key: 'k', members: ['shared-shape'],
+      carrier_count: 3, df: 103, carriers: [], aliases: [{ motif: 'shared-shape', method: 'canonical' }],
+    }),
   },
 }));
 import { api } from './api';
@@ -60,6 +65,37 @@ describe('RightPanel — connections menu', () => {
     fireEvent.click(screen.getByTestId('connections-in'));
     expect(screen.getByTestId('connections-panel')).toHaveAttribute('data-open', 'true');
     expect(screen.getByText('Inbound')).toBeInTheDocument();
+  });
+
+  // The panel clamps itself to the nearest [data-panel-bounds] ancestor. That
+  // must be the element that actually CLIPS it — the fact view's overflow:hidden
+  // wrapper — or the clamp measures the wrong box and the cut comes back.
+  it('hangs inside the fact pane\'s clipping wrapper, which is the clamp bounds', async () => {
+    mount();
+    await waitFor(() => expect(screen.getByTestId('connections-in')).toBeInTheDocument());
+    const panel = screen.getByTestId('connections-panel');
+    const bounds = panel.closest(`[${PANEL_BOUNDS_ATTR}]`) as HTMLElement | null;
+    expect(bounds).not.toBeNull();
+    expect(bounds!.style.overflow).toBe('hidden');
+    // The clamp measures from the panel's containing block, its parent.
+    expect((panel.parentElement as HTMLElement).style.position).toBe('relative');
+  });
+
+  // MotifPanel hangs from the same span and clamps against the same bounds.
+  it('hangs the motif panel inside the same clipping wrapper', async () => {
+    (api.fact as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      path: 'kb/a.md', title: 'A fact', body: 'body', type: 'observation',
+      confidence: 0.9, sources: 1, domain: [], entities: [], refs: [], motifs: ['shared-shape'],
+      commit_hash: 'c0ffee1', commit_date: '2026-07-01T00:00:00Z',
+    });
+    mount();
+    await waitFor(() => expect(screen.getByTestId('motif-cell')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('motif-cell'));
+    const panel = await screen.findByTestId('motif-panel');
+    const bounds = panel.closest(`[${PANEL_BOUNDS_ATTR}]`) as HTMLElement | null;
+    expect(bounds).not.toBeNull();
+    expect(bounds!.style.overflow).toBe('hidden');
+    expect((panel.parentElement as HTMLElement).style.position).toBe('relative');
   });
 
   it('swaps direction rather than stacking', async () => {

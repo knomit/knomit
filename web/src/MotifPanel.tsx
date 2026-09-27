@@ -1,12 +1,14 @@
 import { useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { useDismiss } from './hooks';
+import { PANEL_GAP, useDismiss, usePanelClamp } from './hooks';
 import { MOTIF_GLYPH, typeStyles, defaultTypeStyle } from './utils';
 import { subjectSummary } from './motifSubject';
 import type { ResolvedMotif } from './useMotifClusters';
 import type { MotifAlias, MotifCluster } from './api';
 
 export const MOTIF_PANEL_WIDTH = 420;
+/** Nominal height cap; a short pane lowers it further (usePanelClamp). */
+export const MOTIF_PANEL_MAX_HEIGHT = 420;
 
 /**
  * The panel a motif name opens, hanging from the cell that opened it.
@@ -39,6 +41,7 @@ export function MotifPanel({ motifs, focused, onClose, onPivot, menuRef, onMouse
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(true, onClose, [ref, menuRef]);
+  const clamp = usePanelClamp(ref, true);
 
   // Nothing focused (the +N route) opens on the first, which is the
   // highest-carrier motif since the caller sorted them.
@@ -52,8 +55,10 @@ export function MotifPanel({ motifs, focused, onClose, onPivot, menuRef, onMouse
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       style={{
-        position: 'absolute', top: '100%', left: 0, marginTop: 6,
-        width: MOTIF_PANEL_WIDTH, maxHeight: 420,
+        position: 'absolute', top: '100%', left: 0, marginTop: PANEL_GAP,
+        // Clamped to the fact pane like ConnectionsPanel: shrink, list scrolls.
+        width: MOTIF_PANEL_WIDTH, maxWidth: clamp.maxWidth,
+        maxHeight: Math.min(MOTIF_PANEL_MAX_HEIGHT, clamp.maxHeight ?? MOTIF_PANEL_MAX_HEIGHT),
         background: '#101010', border: '1px solid #2f2f2f', borderRadius: 6,
         boxShadow: '0 10px 30px rgba(0,0,0,0.6)', zIndex: 20,
         overflow: 'hidden', display: 'flex', flexDirection: 'column', textAlign: 'left',
@@ -80,7 +85,7 @@ export function MotifPanel({ motifs, focused, onClose, onPivot, menuRef, onMouse
         </span>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div data-testid="motif-panel-list" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         {motifs.map(m => (
           <MotifSection key={m.motif} motif={m} expanded={m.motif === open} onPivot={onPivot} />
         ))}

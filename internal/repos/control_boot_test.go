@@ -20,22 +20,12 @@ func openControlDB(t *testing.T, path string) *sql.DB {
 	return db
 }
 
-func hasTable(t *testing.T, db *sql.DB, name string) bool {
-	t.Helper()
-	var n int
-	require.NoError(t, db.QueryRow(
-		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n))
-	return n > 0
-}
-
-// writePreUIDControlDB builds a control.db in the post-migrate-registry,
-// pre-uid shape: membership already uid-keyed (lenses.write_uid,
-// lens_reads.repo_uid), the lens row itself still keyed by name. It holds one
-// repo and one lens with one read mount, and returns the repo's uid.
-//
-// This shape PASSES the unmigrated-home guard — no lenses.write_repo, no
-// archive directory, and the repos table exists — which is what lets a test
-// drive it through the real Manager.Start.
+// writePreUIDControlDB builds a control.db in the registry-era, pre-uid lens
+// shape: membership already uid-keyed (lenses.write_uid, lens_reads.repo_uid),
+// the lens row itself still keyed by name. It holds one repo and one lens with
+// one read mount, and returns the repo's uid. upgradeLensSchema converts this
+// shape on the open path, so a test can drive it through the real
+// Manager.Start.
 func writePreUIDControlDB(t *testing.T, path string) string {
 	t.Helper()
 	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
@@ -81,44 +71,6 @@ func requireReKeyed(t *testing.T, lenses []Lens, repoUID string) {
 	require.Equal(t, repoUID, lenses[0].Reads[0].RepoUID)
 }
 
-// The guard must run before the migrator. If it did not, schema_migrations
-// would exist after a refused boot -- and creating `repos` would destroy the
-// SchemaExisted evidence the guard depends on, so the refusal would happen on
-// the first boot only.
-//
-// Driven through Manager.Start, not through refuseUnmigratedHome directly: the
-// ordering under test lives in Start, so a test that called the two in its own
-// preferred order could only fail if someone edited the test.
-func TestBootGuard_RunsBeforeMigrator(t *testing.T) {
-	m := newTestManager(t)
-	home := m.deps.Cfg.Home
-	path := filepath.Join(home, "control.db")
-
-	// A genuinely pre-registry home: name-keyed lenses with write_repo.
-	db := openControlDB(t, path)
-	_, err := db.Exec(`CREATE TABLE lenses (
-	    name TEXT PRIMARY KEY, write_repo TEXT NOT NULL,
-	    description TEXT NOT NULL DEFAULT '',
-	    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`)
-	require.NoError(t, err)
-
-	err = m.Start()
-	require.Error(t, err, "a legacy home must be refused")
-	require.Contains(t, err.Error(), "migrate-registry")
-
-	require.False(t, hasTable(t, db, "schema_migrations"),
-		"the migrator must not have run: the guard comes first")
-	require.False(t, hasTable(t, db, "repos"),
-		"creating repos would destroy the SchemaExisted evidence")
-
-	// And the guard is still armed for the next attempt, which is the whole
-	// point of writing nothing before it.
-	reg, err := OpenRegistryNoSchema(path)
-	require.NoError(t, err)
-	defer reg.Close()
-	require.False(t, reg.SchemaExisted())
-}
-
 // The lens re-key must run BEFORE the baseline. ALTER TABLE ... RENAME TO does
 // not rename attached indexes, so a baseline that created lenses_name first
 // would make the re-key's own CREATE UNIQUE INDEX lenses_name collide.
@@ -132,9 +84,8 @@ func TestLensRekey_RunsBeforeBaseline(t *testing.T) {
 	require.NoError(t, os.MkdirAll(home, 0o755))
 	uid := writePreUIDControlDB(t, filepath.Join(home, "control.db"))
 
-	// The pre-uid home boots: the guard passes on this shape, and Start's
-	// controlUp re-keys it. A repo row whose .db is missing is an ordinary
-	// unavailable repo, not a boot failure.
+	// The pre-uid home boots: Start's controlUp re-keys it. A repo row whose
+	// .db is missing is an ordinary unavailable repo, not a boot failure.
 	require.NoError(t, m.Start())
 
 	lenses, err := m.LensRegistry().List()
@@ -147,17 +98,13 @@ func TestLensRekey_RunsBeforeBaseline(t *testing.T) {
 	require.NoError(t, m.Repos().DB().Ping(), "Close must not have shut the shared handle")
 }
 
-// A GENUINELY pre-registry home (lenses.write_repo) is the one shape controlUp
-// must NOT re-key: upgradeLensSchema copies write_uid, which that home has no
-// column for, so trying turns a home migrate-registry could still convert into
-// a failed open. Skipping must leave the legacy evidence intact — `knomit
-// migrate-registry` is the only converter, and the boot guard has to keep
-// refusing this home until it has run.
-func TestOpenRegistry_LeavesAPreRegistryHomeForMigrateRegistry(t *testing.T) {
-	home := t.TempDir()
-	reposDir := filepath.Join(home, "repos")
-	require.NoError(t, os.MkdirAll(reposDir, 0o755))
-	path := filepath.Join(home, "control.db")
+// A GENUINELY pre-registry control.db (lenses.write_repo) is the one shape
+// controlUp must NOT re-key: upgradeLensSchema copies write_uid, which that
+// shape has no column for, so trying would turn an open into a failure.
+// controlUp skips it (HasLegacyLensSchema), and the skip must leave the legacy
+// table untouched rather than half-convert it.
+func TestOpenRegistry_LeavesAPreRegistryLensTableUntouched(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control.db")
 	db := openControlDB(t, path)
 	_, err := db.Exec(`CREATE TABLE lenses (
 	    name TEXT PRIMARY KEY, write_repo TEXT NOT NULL,
@@ -172,16 +119,9 @@ func TestOpenRegistry_LeavesAPreRegistryHomeForMigrateRegistry(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, empty)
 
-	// The legacy lens table is untouched, so the guard's first arm still fires
-	// and this home cannot boot until migrate-registry has converted it.
 	legacy, err := HasLegacyLensSchema(db)
 	require.NoError(t, err)
-	require.True(t, legacy, "the re-key must not have half-converted a migrate-registry home")
-	// Named, not merely non-nil: the guard has three arms, and only the
-	// write_repo one proves the legacy lens table is what refused this home. A
-	// bare require.Error would also pass on a stray-.db refusal from an
-	// unrelated arm.
-	require.ErrorContains(t, refuseUnmigratedHome(reg, reposDir), "write_repo")
+	require.True(t, legacy, "the re-key must not have half-converted a pre-registry lens table")
 }
 
 // Every opener re-keys, not just the lens one. A bare migrate.Control against a

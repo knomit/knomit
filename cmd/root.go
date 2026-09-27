@@ -24,7 +24,6 @@ func RootCmd() *cobra.Command {
 	root.AddCommand(serveCmd())
 	root.AddCommand(oauthCmd())
 	root.AddCommand(verifyCmd())
-	root.AddCommand(migrateRegistryCmd())
 	root.AddCommand(warmModelsCmd())
 	root.AddCommand(versionCmd())
 	root.AddCommand(identityCmd())

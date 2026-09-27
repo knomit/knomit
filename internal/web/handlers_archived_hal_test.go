@@ -227,7 +227,7 @@ func newRealManagerInHome(t *testing.T, home string) *repos.Manager {
 // Restore never recorded repo_id. It leaned on SetState tripping
 // repos_active_repo_id — but that index is WHERE state='active' AND repo_id IS
 // NOT NULL, so an archived row with a NULL repo_id (exactly what
-// migrate-registry writes for a repo whose HEAD it could not resolve, and what
+// the removed pre-registry converter wrote for a repo whose HEAD it could not resolve, and what
 // any repo archived before repo_id existed has) flips to active unchallenged
 // and STAYS null. Two live copies of one knowledge base then both write
 // agent/<host> and clobber each other on push.

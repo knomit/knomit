@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import type { DependencyList, RefObject } from 'react';
 import { fetchVersion } from './api';
 
@@ -44,6 +44,81 @@ export function useDismiss(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+}
+
+/**
+ * Marks the element that CLIPS a hanging panel — an overflow:hidden ancestor —
+ * so usePanelClamp can measure it. The fact view's pane wrapper carries it.
+ */
+export const PANEL_BOUNDS_ATTR = 'data-panel-bounds';
+/** Room left between a clamped panel and the bounds' edge, so its shadow and border read as inside. */
+export const PANEL_BOUNDS_GUTTER = 8;
+/** The gap between a hanging panel and the bottom of the element it hangs from (its marginTop). */
+export const PANEL_GAP = 6;
+
+export interface PanelClamp {
+  /** Available width from the panel's left edge to the bounds' right edge; undefined = unclamped. */
+  maxWidth?: number;
+  /** Available height from the panel's top to the bounds' bottom edge; undefined = unclamped. */
+  maxHeight?: number;
+}
+
+/**
+ * The space a panel hanging below its containing block (top:100%, left:0,
+ * marginTop PANEL_GAP) has before the nearest PANEL_BOUNDS_ATTR ancestor cuts
+ * it off. Measured on open and again on the triggers listed below.
+ *
+ * Measured from the panel's PARENT, not the panel: the parent is the
+ * containing block the panel is anchored to, and the panel's own rect is
+ * mid-transition while it slides in, so it would report a top up to 8px off.
+ *
+ * Only ever an upper bound. A panel keeps its nominal width and height and
+ * shrinks to this when the pane is smaller; it scrolls its own list rather
+ * than being cut. Outside a bounds element nothing is clamped.
+ *
+ * Re-measured whenever the answer can change: the bounds or the anchor
+ * resizing (ResizeObserver — the list rail resizes the pane without resizing
+ * the window), and the bounds SCROLLING, which moves the anchor inside a pane
+ * of unchanged size (an overflow:hidden element still scrolls
+ * programmatically, e.g. on scroll-into-view). Window `resize` is only the
+ * fallback where ResizeObserver does not exist; alongside one it would
+ * measure every resize twice. A measure that changes nothing keeps the
+ * previous object, so it does not re-render the panel.
+ */
+export function usePanelClamp(ref: RefObject<HTMLElement | null>, active: boolean): PanelClamp {
+  const [clamp, setClamp] = useState<PanelClamp>({});
+  useLayoutEffect(() => {
+    if (!active) return;
+    const el = ref.current;
+    const anchor = el?.parentElement;
+    const bounds = el?.closest<HTMLElement>(`[${PANEL_BOUNDS_ATTR}]`);
+    const update = (next: PanelClamp) => setClamp(prev =>
+      prev.maxWidth === next.maxWidth && prev.maxHeight === next.maxHeight ? prev : next);
+    if (!anchor || !bounds) { update({}); return; }
+    const measure = () => {
+      const b = bounds.getBoundingClientRect();
+      const a = anchor.getBoundingClientRect();
+      update({
+        maxWidth: Math.max(0, b.right - PANEL_BOUNDS_GUTTER - a.left),
+        maxHeight: Math.max(0, b.bottom - PANEL_BOUNDS_GUTTER - (a.bottom + PANEL_GAP)),
+      });
+    };
+    measure();
+    bounds.addEventListener('scroll', measure);
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    if (ro) {
+      ro.observe(bounds);
+      ro.observe(anchor);
+    } else {
+      window.addEventListener('resize', measure);
+    }
+    return () => {
+      bounds.removeEventListener('scroll', measure);
+      if (ro) ro.disconnect();
+      else window.removeEventListener('resize', measure);
+    };
+  }, [ref, active]);
+  return clamp;
 }
 
 /**

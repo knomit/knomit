@@ -1661,8 +1661,8 @@ func (m *Manager) Restore(uid, newName string) (*RepoInstance, error) {
 	// Create (above), Start's openRegistered (manager.go), and SwapStore
 	// (swapstore.go) — and Restore is the fourth first-open there is: an
 	// archived repo that was archived before repo_id existed, or registered
-	// with a NULL one by migrate-registry, has its FIRST successful open right
-	// here.
+	// with a NULL one by the since-removed pre-registry converter, has its
+	// FIRST successful open right here.
 	//
 	// Leaning on SetState to catch a conflict is not enough. The
 	// repos_active_repo_id index is WHERE state='active' AND repo_id IS NOT
