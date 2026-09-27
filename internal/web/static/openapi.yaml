@@ -1086,8 +1086,26 @@ paths:
       - $ref: "#/components/parameters/Branch"
     get:
       tags: [events]
-      summary: Server-Sent Events stream for branch (status, task, sync)
+      summary: Server-Sent Events stream for branch (status, task, sync, trigger)
       operationId: streamBranchEvents
+      description: |
+        One `event:` line per kind: `status` (the head moved), `task`, `index`,
+        `sync_ok` / `sync_error` / `verify-failed`, `push_ok` / `push_error`,
+        and `trigger`.
+
+        `trigger` is F07's `emit` action: a trigger declared in the ontology
+        matched a fact path that changed on this repo's agent branch and its
+        `if` held. `data` is `{trigger, path, episode, source, commit, trace}`:
+        `episode` is `learn` | `update` | `retract` (derived from the tree
+        difference, never from commit labels), `source` is `local` (this
+        instance signed the originating commit) or `merged`, `commit` is the
+        ORIGINAL commit that made the change (not this machine's merge), and
+        `trace` is the commit's `Knomit-Trace` trailer when it carries one.
+        The event is sent ONLY on the stream of the agent branch it happened
+        on, and it is published straight from the dispatcher, not through the
+        debounced head-change path, so it arrives within the run that produced
+        it. See `GET …/triggers` for the declared triggers, their bookmarks,
+        statistics and the recent fire log.
       responses:
         "200":
           description: SSE stream
@@ -1237,6 +1255,77 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/triggers:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [events]
+      summary: The repo's triggers, their bookmarks, statistics and recent fires
+      operationId: listTriggers
+      description: |
+        Every trigger declared in the ontology at the head of this repo's
+        AGENT branch (the branch the dispatcher observes; `branch` in the body
+        names it, whatever branch is in the URL), with:
+
+          * `state`: `active` (compiled and evaluated), `invalid` (a problem
+            in the entry — a typo, an unknown value, a bad `match`, an `if`
+            that does not compile — with `error` verbatim), `frozen` (invalid,
+            and holding a bookmark: its fires wait for the fix and resume
+            from where it stopped), or `unsupported` (valid, but a `do` or
+            `on` value this knomit version does not act on yet, such as
+            `do: script` or `on: due`; not an error, and it holds no bookmark
+            until a version activates it — no back-fill).
+          * `watermark`: the last agent-branch head this trigger fully
+            processed. First appearance sets it to the head of that advance,
+            so facts committed together with the trigger never fire. It is
+            deleted only when the trigger's NAME leaves the ontology.
+          * `stats`: since instance start — evaluations, fires, outcomes by
+            kind, `slow` (evaluations over `[log].slow_trigger_ms`), and the
+            duration of the trigger's OWN work (`if` plus its action) as
+            `count`, `min_ms`, `max_ms` (exact) and `p95_recent_ms` over the
+            last `p95_window` evaluations. Building `change` (the history
+            walk, the signature check) is knomit's cost and is reported on
+            the runs as `change_ms`, never charged to a trigger.
+
+        `runs` carries the run count and the last run's coalesced range,
+        path count, evaluations, fires and durations. `?log=N` (0–500)
+        appends the newest N fire-log rows; the log keeps the newest 10,000
+        rows per repo. `enabled: false` with a `reason` on a read-only server
+        or a subscription (no agent branch to observe).
+
+        What a trigger's `if` sees as `change.author`: `id` (the commit
+        author's name), `kind` (`agent` for an @agents.knomit.io address,
+        `human` otherwise, `unknown` when the change has no originating
+        commit, e.g. a path scrubbed by a rewind), `fp` (the SSHSIG signer's
+        full fingerprint, set only when the signature verifies) and
+        `verified`. `verified` means "this change has already passed the
+        acceptance gate": it is true only when `verify_signatures` is `log`
+        or `enforce` in the ontology at the observed head AND the originating
+        commit is an ancestor of the local upstream (main) tip. Nothing is
+        re-verified by the dispatcher — the gate that advanced main did that.
+        Consequences: with verification off it is always false; this
+        instance's own writes read false until they come back through main;
+        `source` (`local`/`merged`) is decided by the signer's fingerprint and
+        is independent of `verified`.
+
+        This is the ONLY surface for the trigger statistics.
+      parameters:
+        - name: log
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 500, default: 0 }
+          description: How many recent fire-log rows to include.
+      responses:
+        "200":
+          description: The trigger resource
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/Triggers" }
+        "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
@@ -3559,6 +3648,101 @@ components:
                 changes:
                   type: array
                   items: { $ref: "#/components/schemas/PathChange" }
+
+    TriggerDuration:
+      type: object
+      description: The trigger's OWN work (`if` plus its action); count, min and max are exact since instance start, the p95 covers the last `p95_window` evaluations.
+      properties:
+        count:         { type: integer }
+        min_ms:        { type: number }
+        max_ms:        { type: number }
+        p95_recent_ms: { type: number }
+        p95_window:    { type: integer }
+
+    TriggerStats:
+      type: object
+      properties:
+        evaluations: { type: integer }
+        fires:       { type: integer }
+        if_false:    { type: integer }
+        if_error:    { type: integer }
+        if_timeout:  { type: integer }
+        unparseable: { type: integer }
+        slow:        { type: integer, description: "Evaluations slower than [log].slow_trigger_ms." }
+        duration:    { $ref: "#/components/schemas/TriggerDuration" }
+
+    Trigger:
+      type: object
+      required: [name, node, on, do, state, stats]
+      properties:
+        name:      { type: string }
+        node:      { type: string, description: "The ontology node that declares it (lowercase path)." }
+        match:     { type: string, description: "The pattern after placeholder substitution for an active trigger; as written otherwise." }
+        on:        { type: array, items: { type: string } }
+        do:        { type: string }
+        state:     { type: string, enum: [active, invalid, frozen, unsupported] }
+        error:     { type: string, description: "The problem (invalid/frozen) or the reason (unsupported), verbatim." }
+        watermark: { type: string, description: "The last agent-branch head fully processed (40-hex); absent before first appearance and for unsupported triggers." }
+        stats:     { $ref: "#/components/schemas/TriggerStats" }
+
+    TriggerFire:
+      type: object
+      description: One fire-log row. `trigger` is empty and `outcome` is `run` on the one summary row each dispatcher run writes.
+      properties:
+        id:               { type: integer }
+        trigger:          { type: string }
+        branch:           { type: string }
+        path:             { type: string }
+        episode:          { type: string, enum: [learn, update, retract] }
+        source:           { type: string, enum: [local, merged] }
+        commit:           { type: string, description: "The ORIGINAL commit that made the change." }
+        trace:            { type: string }
+        outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, run] }
+        error:            { type: string }
+        nonlinear:        { type: boolean, description: "The advance's old head was not an ancestor of the new one (a rewind replay)." }
+        range_from:       { type: string }
+        range_to:         { type: string }
+        evaluated:        { type: integer }
+        paths:            { type: integer }
+        fires:            { type: integer }
+        fires_not_logged: { type: integer, description: "Fires beyond the 10,000-row cap that this run counted but did not log." }
+        duration_ms:      { type: integer }
+        diff_ms:          { type: integer }
+        change_ms:        { type: integer }
+        fired_at:         { type: integer, description: "Local Unix seconds, for the operator; never read for ordering." }
+
+    Triggers:
+      type: object
+      required: [enabled, branch, runs, triggers, fires, _links]
+      properties:
+        enabled:       { type: boolean }
+        reason:        { type: string, description: "Why there is no dispatcher, when enabled is false." }
+        branch:        { type: string, description: "The observed agent branch." }
+        head:          { type: string }
+        ontology_blob: { type: string, description: "The blob hash of the ontology file the trigger set was compiled from." }
+        runs:
+          type: object
+          properties:
+            runs: { type: integer }
+            last:
+              type: object
+              properties:
+                range_from:  { type: string }
+                range_to:    { type: string }
+                nonlinear:   { type: boolean }
+                paths:       { type: integer }
+                evaluated:   { type: integer }
+                fires:       { type: integer }
+                duration_ms: { type: integer }
+                diff_ms:     { type: integer }
+                change_ms:   { type: integer }
+        triggers:
+          type: array
+          items: { $ref: "#/components/schemas/Trigger" }
+        fires:
+          type: array
+          items: { $ref: "#/components/schemas/TriggerFire" }
+        _links: { $ref: "#/components/schemas/LinkMap" }
 
     CommitFile:
       type: object

@@ -80,6 +80,15 @@ func handleHALEvents() http.HandlerFunc {
 				case repos.PushEvent:
 					data, _ := json.Marshal(ev)
 					sent = stream.Write("event: %s\ndata: %s\n\n", ev.Status, data)
+				case repos.TriggerEvent:
+					// The hub is per repo, so every branch stream receives
+					// every fire; a fire belongs to the agent branch it
+					// happened on and goes ONLY to that branch's stream.
+					if ev.Branch != branch {
+						continue
+					}
+					data, _ := json.Marshal(ev)
+					sent = stream.Write("event: trigger\ndata: %s\n\n", data)
 				default:
 					continue
 				}

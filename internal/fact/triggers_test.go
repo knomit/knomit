@@ -214,29 +214,99 @@ func TestTriggers_DuplicateNameShallowerWins(t *testing.T) {
 	}
 }
 
-func TestTriggers_InactiveDoKnownNotUnknown(t *testing.T) {
-	o := mustParseTriggerDoc(t, ontologyWithTriggers(`
-  tasks:
-    description: t
-    triggers:
-      - {name: later, on: learn, do: script, script: inbox-dispatch}
-`))
-	st := stateOf(t, CompileTriggers(o, testIdentity, "b"), "later")
-	if st.State != TriggerInvalid || !strings.Contains(st.Error, "not active in this knomit version") {
-		t.Errorf("do: script should be a known-but-inactive trigger, got %+v", st)
+// A reserved `do` (script, push, run) is valid syntax this version does not
+// act on: the trigger is `unsupported`, not `invalid` — declared (so a later
+// version finds it), not active, and NOT a problem (no warning diagnostic).
+func TestTriggers_ReservedDoIsUnsupported(t *testing.T) {
+	for _, entry := range []string{
+		"{name: later, on: learn, do: script, script: inbox-dispatch}",
+		"{name: later, on: learn, do: push}",
+		"{name: later, on: learn, do: run, recipe: worker}",
+	} {
+		o := mustParseTriggerDoc(t, ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - "+entry+"\n"))
+		set := CompileTriggers(o, testIdentity, "b")
+		st := stateOf(t, set, "later")
+		if st.State != TriggerUnsupported || !strings.Contains(st.Error, "not supported in this knomit version") {
+			t.Errorf("%s: want unsupported, got %+v", entry, st)
+		}
+		if activeNamed(set, "later") != nil {
+			t.Errorf("%s: an unsupported trigger must not be active", entry)
+		}
+		if !set.Declared["later"] {
+			t.Errorf("%s: an unsupported trigger is still declared", entry)
+		}
+		for _, d := range triggerDiags(o) {
+			if strings.Contains(d.Message, "later") {
+				t.Errorf("%s: unsupported is not a problem, got diagnostic %q", entry, d.Message)
+			}
+		}
 	}
 }
 
-func TestTriggers_DueIsAcceptedEpisode(t *testing.T) {
+// `on: due` waits for PR 2's sweep. A trigger that lists it is unsupported as a
+// whole in this version, even alongside supported episodes.
+func TestTriggers_DueIsUnsupported(t *testing.T) {
 	o := mustParseTriggerDoc(t, ontologyWithTriggers(`
   tasks:
     description: t
     triggers:
       - {name: expiring, on: [learn, due], do: emit}
+      - {name: only-due, on: due, do: emit}
 `))
-	tr := activeNamed(CompileTriggers(o, testIdentity, "b"), "expiring")
-	if tr == nil || !tr.OnEpisode(TriggerOnDue) {
-		t.Fatalf("on: due should parse as a known episode: %+v", tr)
+	set := CompileTriggers(o, testIdentity, "b")
+	for _, n := range []string{"expiring", "only-due"} {
+		st := stateOf(t, set, n)
+		if st.State != TriggerUnsupported || !strings.Contains(st.Error, "on: due is not supported") {
+			t.Errorf("%s: want unsupported for on: due, got %+v", n, st)
+		}
+		if activeNamed(set, n) != nil {
+			t.Errorf("%s: a due trigger must not be active before PR 2", n)
+		}
+	}
+}
+
+// Invalidity is decided before support: a reserved `do` with a broken match is
+// `invalid`, so the author still learns about the typo.
+func TestTriggers_InvalidBeatsUnsupported(t *testing.T) {
+	o := mustParseTriggerDoc(t, ontologyWithTriggers(`
+  tasks:
+    description: t
+    triggers:
+      - {name: broken, on: learn, do: script, script: s, match: "other/**"}
+`))
+	st := stateOf(t, CompileTriggers(o, testIdentity, "b"), "broken")
+	if st.State != TriggerInvalid || !strings.Contains(st.Error, "leaves its topic") {
+		t.Errorf("want invalid (match leaves its topic), got %+v", st)
+	}
+}
+
+// An uppercase grandchild key (deeper keys are not validated) used to yield an
+// uppercase node path, which the lowercased glob could never start with: every
+// trigger under such a node was permanently invalid. The node path is now
+// lowercased in the walk.
+func TestTriggers_UppercaseGrandchildNodeIsActive(t *testing.T) {
+	o := mustParseTriggerDoc(t, ontologyWithTriggers(`
+  tasks:
+    description: t
+    children:
+      research:
+        description: r
+        children:
+          Deep:
+            description: d
+            triggers:
+              - {name: deep, on: learn, do: emit}
+`))
+	set := CompileTriggers(o, testIdentity, "b")
+	tr := activeNamed(set, "deep")
+	if tr == nil {
+		t.Fatalf("trigger under an uppercase grandchild must be active: %+v", set.States)
+	}
+	if tr.Node != "tasks/research/deep" {
+		t.Errorf("node path must be lowercase, got %q", tr.Node)
+	}
+	if !tr.Matches("tasks/research/deep/x.md") || tr.Matches("tasks/research/other/x.md") {
+		t.Errorf("implicit prefix must cover exactly the node's subtree")
 	}
 }
 

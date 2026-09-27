@@ -226,6 +226,40 @@ func (rh *repoHandler) ChangesUnder(ctx context.Context, branch string, q Change
 	return res, nil
 }
 
+// DiffFacts is the trigger dispatcher's read: every fact path under the
+// ontology root that differs between the tree at `from` and the tree at `to`,
+// as added/modified/deleted, sorted bytewise. The same two-tree read as
+// ChangesUnder — subtreeOrEmpty, diffSubtrees, isFactPath, no clock, no
+// commit log, no write — with ONE difference: there is NO ancestry check. The
+// dispatcher's advance is "old head → current head" of the agent branch, and
+// after an origin rewind the old head is NOT an ancestor of the new one (the
+// agent's commits were replayed under new hashes); the two trees are still
+// meaningful, and refusing them would silently lose the fires. ChangesUnder
+// keeps its check: its `since` is a client's bookmark, where a sideways diff
+// fabricates deletions. A ZeroHash `from` is the empty tree.
+func (rh *repoHandler) DiffFacts(ctx context.Context, from, to plumbing.Hash) ([]PathChange, error) {
+	base := rh.ontologyRoot()
+	var fromTree *object.Tree
+	if from != plumbing.ZeroHash {
+		fc, err := rh.repo.CommitObject(from)
+		if err != nil {
+			return nil, fmt.Errorf("DiffFacts: from commit %s: %w", from, err)
+		}
+		if fromTree, err = subtreeOrEmpty(fc, base); err != nil {
+			return nil, err
+		}
+	}
+	tc, err := rh.repo.CommitObject(to)
+	if err != nil {
+		return nil, fmt.Errorf("DiffFacts: to commit %s: %w", to, err)
+	}
+	toTree, err := subtreeOrEmpty(tc, base)
+	if err != nil {
+		return nil, err
+	}
+	return diffSubtrees(fromTree, toTree, base, rh.isFactPath)
+}
+
 // subtreeOrEmpty returns the tree at base in c, or nil (the empty tree) when
 // that folder does not exist there. A missing folder is the normal lifecycle
 // of a queue folder — it does not exist before the first post, and git drops
