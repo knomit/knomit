@@ -16,7 +16,7 @@ import (
 // longer an ancestor (the replay case), or F09's verified anchor
 // (refs/knomit/verified/<upstream>) without running a fold.
 //
-// Test-only by contract, like SetTestFallbackSigner: it panics outside a test
+// Test-only by contract, like the store's fallback-signer hook: it panics outside a test
 // binary, so no production path can move a ref behind the store's back.
 func (s *Service) TestingSetRef(name, hash string) error {
 	if !testing.Testing() {

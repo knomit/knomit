@@ -16,17 +16,43 @@ import (
 )
 
 // triggersRepo boots a real manager with one repo whose agent branch carries
-// an ontology declaring one trigger on `tasks`.
+// an ontology declaring one trigger on `tasks`, and waits (through the
+// endpoint) until the dispatcher has processed the advance that declared it.
+// Without the wait, the ontology commit and the test's first fact commit can
+// coalesce into ONE advance under load, and a fact committed in the same
+// advance as its trigger never fires — by design (first appearance).
 func triggersRepo(t *testing.T, ontology string) (*repos.RepoInstance, http.Handler) {
 	t.Helper()
 	m, _ := newTestLensManager(t, "alpha")
 	ri := m.Get("alpha")
+	var head string
 	require.NoError(t, ri.WithRead(func(svc *store.Service) {
-		_, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), repos.OntologyPath, ontology, "ontology", "updated")
+		res, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), repos.OntologyPath, ontology, "ontology", "updated")
 		require.NoError(t, err)
+		head = res.CommitHash
 	}))
 	r := (&Server{Manager: m, AgentBranch: "machine/test", OntologyRoot: "kb"}).NewAPIRouter()
+	waitTriggersHead(t, r, "/repos/alpha/branches/"+urlBranch(ri.AgentBranch())+"/triggers", head)
 	return ri, r
+}
+
+// waitTriggersHead polls GET …/triggers until the report's head is the given
+// commit, i.e. the dispatcher has read the ontology at that head.
+func waitTriggersHead(t *testing.T, r http.Handler, url, head string) triggersPage {
+	t.Helper()
+	var page triggersPage
+	var lastCode int
+	var lastBody string
+	require.Eventually(t, func() bool {
+		rec, p := getTriggers(t, r, url)
+		lastCode, lastBody = rec.Code, rec.Body.String()
+		if rec.Code != http.StatusOK {
+			return false
+		}
+		page = p
+		return p.Head == head
+	}, 20*time.Second, 20*time.Millisecond, "the dispatcher never reached %s (last status %d: %s)", head, lastCode, lastBody)
+	return page
 }
 
 const oneTriggerOntology = "id: t\nname: T\ntopics:\n  tasks:\n    description: t\n    triggers:\n      - {name: all, on: [learn, update], do: emit}\n  other:\n    description: o\n"
@@ -65,14 +91,17 @@ func TestREST_TriggersExposed(t *testing.T) {
 
 	head := seedOn(t, ri, agent, "kb/tasks/a/fire.md")
 	var page triggersPage
+	var lastCode int
+	var lastBody string
 	require.Eventually(t, func() bool {
 		rec, p := getTriggers(t, r, url)
+		lastCode, lastBody = rec.Code, rec.Body.String()
 		if rec.Code != http.StatusOK {
 			return false
 		}
 		page = p
 		return len(p.Triggers) == 1 && p.Triggers[0].Stats.Fires == 1 && p.Triggers[0].Watermark == head && len(p.Fires) >= 2
-	}, 20*time.Second, 20*time.Millisecond, "the fire never showed on the endpoint: %+v", page)
+	}, 20*time.Second, 20*time.Millisecond, "the fire never showed on the endpoint: %+v (last status %d: %s)", page, lastCode, lastBody)
 
 	require.True(t, page.Enabled)
 	require.Equal(t, agent, page.Branch)
