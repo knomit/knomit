@@ -56,8 +56,11 @@ type registerFleetRequest struct {
 func handlePutFleet(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req registerFleetRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.URL == "" {
-			hal.WriteProblemWithExtra(w, http.StatusBadRequest, "URL required", "the body must be JSON with a non-empty url", r.URL.Path, map[string]any{"code": "url_required"})
+		if !decodeJSON(w, r, &req, 0) {
+			return
+		}
+		if req.URL == "" {
+			hal.WriteProblemWithExtra(w, http.StatusBadRequest, "URL required", "the body must carry a non-empty url", r.URL.Path, map[string]any{"code": "url_required"})
 			return
 		}
 		st, err := m.RegisterFleet(r.Context(), req.URL, req.AuthMethod, req.AuthToken)
