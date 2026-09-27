@@ -69,18 +69,23 @@ func ownSID() (string, error) {
 // (internal/config) round-trips a real listener through both.
 const PipePrefix = `\\.\pipe\`
 
-// ownerOnlySDDL grants generic-all to this process's user and to SYSTEM, and
-// to nobody else.
+// ownerOnlySDDL names this process's user as the pipe's OWNER, and grants
+// generic-all to that user and to SYSTEM, and to nobody else.
 //
-// WHAT THIS IS AND IS NOT. It controls who may OPEN knomit's pipe, which is
-// the unix parallel to 0600 under a 0700 data root. It does NOT control who
-// may CREATE a pipe by that name: \\.\pipe\ is world-creatable, so another
-// local user can take the name before knomit boots and receive the bridge's
-// traffic. That is not a silent hijack — ListenLocal then fails to create the
-// name and the server says so — but it is a real difference from the unix
-// case, where the 0700 data root also gates creation. Closing it needs the
-// client to verify the SERVER's owner at dial time, which DialLocal does not
-// do; it is out of scope for phase 1b and belongs with the certificate work.
+// WHAT THIS IS AND IS NOT. The DACL controls who may OPEN knomit's pipe,
+// which is the unix parallel to 0600 under a 0700 data root. It does NOT
+// control who may CREATE a pipe by that name: \\.\pipe\ is world-creatable,
+// so another local user can take the name before knomit boots. ListenLocal
+// then fails to create the name and the server says so; the CLIENT is
+// protected by DialLocal, which verifies the owner below before it writes a
+// byte (knomit#265).
+//
+// THE O: PART IS WHAT MAKES THAT CHECK WORK. Without it the owner is the
+// creating token's TokenOwner, which for a UAC-elevated server — the desktop,
+// typically — is BUILTIN\Administrators, not the user (measured; the same
+// finding as knomit#301's data directory). A token may always assign its own
+// user SID as owner, so naming it here is accepted elevated or not, and the
+// client can then expect its own SID.
 //
 // P (protected) matters: without it an inherited ACE could widen the pipe
 // silently. There is deliberately no explicit DENY ace — a DACL with no
@@ -96,7 +101,7 @@ func ownerOnlySDDL() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return "D:P(A;;GA;;;" + sid + ")(A;;GA;;;SY)", nil
+	return "O:" + sid + "D:P(A;;GA;;;" + sid + ")(A;;GA;;;SY)", nil
 }
 
 // DialLocal dials the local authenticated listener at path. It is the other
@@ -112,6 +117,10 @@ func ownerOnlySDDL() (string, error) {
 // returns no peer and the caller silently becomes anonymous. Identification
 // is the least level that lets the server learn WHO is calling while still
 // refusing it the right to ACT as the caller.
+//
+// A connection is returned only once its OWNER is verified (verifyPipeOwner):
+// anything else is closed before a byte is written, and a foreign owner comes
+// back as ErrForeignListener.
 func DialLocal(ctx context.Context, path string, timeout time.Duration) (net.Conn, error) {
 	if !strings.HasPrefix(path, PipePrefix) {
 		return nil, fmt.Errorf("local listener path %q is not a named pipe (it must start with %s): "+
@@ -119,7 +128,78 @@ func DialLocal(ctx context.Context, path string, timeout time.Duration) (net.Con
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return winio.DialPipeAccessImpLevel(ctx, path,
+	conn, err := winio.DialPipeAccessImpLevel(ctx, path,
 		uint32(windows.GENERIC_READ|windows.GENERIC_WRITE),
 		winio.PipeImpLevelIdentification)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyPipeOwner(conn, path); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// acceptedPipeOwner reports whether a pipe owned by owner may be trusted by a
+// client whose token user is self: this user, SYSTEM (a knomit run as a
+// service) or BUILTIN\Administrators (a server started before ownerOnlySDDL
+// named its owner, elevated). Only an administrator can produce either of the
+// last two, and an administrator is out of scope: it can already read this
+// user's data root.
+//
+// It is a variable so a test can NARROW it: a pipe owned by another account
+// cannot be created without privileges the suite does not have.
+var acceptedPipeOwner = func(owner *windows.SID, self string) bool {
+	return owner.String() == self ||
+		owner.IsWellKnown(windows.WinLocalSystemSid) ||
+		owner.IsWellKnown(windows.WinBuiltinAdministratorsSid)
+}
+
+// verifyPipeOwner reads the OWNER of the pipe conn is connected to and
+// refuses it unless acceptedPipeOwner does. Every failure to read it is an
+// error too: a connection is never used unverified.
+//
+// WHY THE OWNER and not the server process's token user. The owner is read
+// from the handle already held, in one call, and names whoever CREATED the
+// pipe name — the squatter, if there is one. The token route
+// (GetNamedPipeServerProcessId, then OpenProcess and OpenProcessToken) needs
+// two more handles and goes through a PID, which can be reused between the
+// lookup and the open. Both were measured to work from an unelevated client
+// against an elevated server (knomit#265).
+//
+// SE_KERNEL_OBJECT and not SE_FILE_OBJECT: the file form fails with
+// ERROR_INVALID_PARAMETER on a pipe whose DACL is not protected, which is
+// exactly what a squatter is free to create (measured). READ_CONTROL, which
+// the query needs, is part of the GENERIC_READ DialLocal asks for, so a pipe
+// that withholds it cannot be dialled at all.
+//
+// THE LIMIT: a squatter running as THIS user owns its pipe as this user and
+// passes. That is the unix same-uid boundary, and no owner check can move it.
+func verifyPipeOwner(conn net.Conn, path string) error {
+	fder, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return fmt.Errorf("local listener %s: the connection (%T) exposes no handle, so its owner cannot be verified", path, conn)
+	}
+	sd, err := windows.GetSecurityInfo(windows.Handle(fder.Fd()), windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("local listener %s: reading its owner: %w", path, err)
+	}
+	owner, _, err := sd.Owner()
+	if err != nil {
+		return fmt.Errorf("local listener %s: reading its owner: %w", path, err)
+	}
+	if owner == nil {
+		return fmt.Errorf("local listener %s: it has no owner, so it cannot be verified", path)
+	}
+	self, err := ownSID()
+	if err != nil {
+		return err
+	}
+	if !acceptedPipeOwner(owner, self) {
+		return fmt.Errorf("%w: %s is owned by %s, not %s; another process holds the local listener's name. "+
+			"Pass an explicit URL (KNOMIT_BASE_URL or the URL argument) to skip the pipe if that server is yours",
+			ErrForeignListener, path, owner.String(), self)
+	}
+	return nil
 }
