@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,26 @@ func recordVersions(t *testing.T, bare, rev string) []string {
 	out, err := exec.Command("git", "-C", bare, "log", "--format=%H", rev, "--", memberRecordPath("kb", "test-fleet")).Output()
 	require.NoError(t, err)
 	return strings.Fields(string(out))
+}
+
+// remoteHead is the fleet remote's tip of rev.
+func remoteHead(t *testing.T, bare, rev string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", bare, "rev-parse", rev).Output()
+	require.NoError(t, err)
+	return strings.TrimSpace(string(out))
+}
+
+// commitsBetween counts ALL commits in from..to on the fleet remote — not
+// only those that change the record: an identical-content commit is noise
+// too, and `git log -- <path>` would not show it.
+func commitsBetween(t *testing.T, bare, from, to string) int {
+	t.Helper()
+	out, err := exec.Command("git", "-C", bare, "rev-list", "--count", from+".."+to).Output()
+	require.NoError(t, err)
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	require.NoError(t, err)
+	return n
 }
 
 // captureLog swaps the global logger for a buffer for the rest of the test.
@@ -148,22 +169,26 @@ func TestFleetRecord_BootReconcile(t *testing.T) {
 	agent := registerAt(t, m, url)
 	mergeOnRemote(t, bare, agent)
 	syncFleet(t, m)
+	m.FleetRetry(context.Background())
 	before := recordVersions(t, bare, agent)
 	require.Len(t, before, 1)
+	head0 := remoteHead(t, bare, agent)
 	closeM()
 
 	logs := captureLog(t)
 	m, closeM = bootFleet(t, dir, withAddresses("https://old.example"))
 	m.FleetRetry(context.Background())
-	require.Equal(t, before, recordVersions(t, bare, agent), "an unchanged record is never rewritten")
+	require.Equal(t, head0, remoteHead(t, bare, agent), "an unchanged record: no commit at all")
 	require.Contains(t, logs.String(), "fleet record current")
 	require.NotContains(t, logs.String(), "fleet record updated")
 	closeM()
 
 	m, _ = bootFleet(t, dir, withAddresses("https://new.example", "https://new2.example:8443"))
 	m.FleetRetry(context.Background())
+	require.Equal(t, 1, commitsBetween(t, bare, head0, agent), "exactly one update commit")
+	require.Equal(t, head0, remoteHead(t, bare, agent+"^"))
 	after := recordVersions(t, bare, agent)
-	require.Len(t, after, 2, "exactly one update commit")
+	require.Len(t, after, 2)
 	require.Equal(t, before[0], after[1])
 	rec := remoteRecord(t, bare, agent)
 	require.Contains(t, rec, "\naddresses: https://new.example https://new2.example:8443\n")
@@ -224,12 +249,13 @@ func TestFleetRecord_VersionChangeRefreshesCapabilities(t *testing.T) {
 	m, closeM := bootFleet(t, dir, withAddresses("https://x.example"))
 	agent := registerAt(t, m, url)
 	require.Contains(t, remoteRecord(t, bare, agent), "version=0.5.0.aaaaaaa")
+	head0 := remoteHead(t, bare, agent)
 	closeM()
 
 	version.Version, version.Commit = "0.6.0", "bbbbbbb"
 	m, _ = bootFleet(t, dir, withAddresses("https://x.example"))
 	m.FleetRetry(context.Background())
-	require.Len(t, recordVersions(t, bare, agent), 2)
+	require.Equal(t, 1, commitsBetween(t, bare, head0, agent))
 	rec := remoteRecord(t, bare, agent)
 	require.Contains(t, rec, "version=0.6.0.bbbbbbb")
 	require.NotContains(t, rec, "0.5.0")
@@ -281,6 +307,7 @@ func TestFleetRecord_BootWritesNothingUnlessRegistered(t *testing.T) {
 	url := seedFleetRemote(t, bare)
 	m, closeM := bootFleet(t, dir, withAddresses("https://old.example"))
 	agent := registerAt(t, m, url)
+	head0 := remoteHead(t, bare, agent)
 	require.NoError(t, os.Rename(bare, bare+".away"))
 	st, err := m.UnregisterFleet(context.Background())
 	require.NoError(t, err)
@@ -290,7 +317,7 @@ func TestFleetRecord_BootWritesNothingUnlessRegistered(t *testing.T) {
 	m, _ = bootFleet(t, dir, withAddresses("https://new.example"))
 	require.NoError(t, os.Rename(bare+".away", bare))
 	m.FleetRetry(context.Background())
-	require.Len(t, recordVersions(t, bare, agent), 2, "register + left, no boot update")
+	require.Equal(t, 1, commitsBetween(t, bare, head0, agent), "the departure only, no boot update")
 	rec := remoteRecord(t, bare, agent)
 	require.Contains(t, rec, "state: left")
 	require.Contains(t, rec, "addresses: https://old.example")
@@ -348,16 +375,16 @@ func TestFleetRecord_ReRegisterCompares(t *testing.T) {
 	url := seedFleetRemote(t, bare)
 	m, _ := bootFleet(t, dir, withAddresses("https://old.example"))
 	agent := registerAt(t, m, url)
-	require.Len(t, recordVersions(t, bare, agent), 1)
+	head0 := remoteHead(t, bare, agent)
 
 	registerAt(t, m, url)
-	require.Len(t, recordVersions(t, bare, agent), 1, "unchanged: no commit")
+	require.Equal(t, head0, remoteHead(t, bare, agent), "unchanged: no commit at all")
 
 	m.deps.Cfg.ExternalAddresses = []string{"https://new.example"}
 	st, err := m.RegisterFleet(ctx, url, "", "")
 	require.NoError(t, err)
 	require.Equal(t, FleetRegistered, st.State)
-	require.Len(t, recordVersions(t, bare, agent), 2, "changed: one commit")
+	require.Equal(t, 1, commitsBetween(t, bare, head0, agent), "changed: one commit")
 	require.Contains(t, remoteRecord(t, bare, agent), "addresses: https://new.example")
 }
 
