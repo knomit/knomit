@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
@@ -31,12 +33,44 @@ func updateTool() mcpgo.Tool {
 			mcpgo.Description("A short label for this update moment."),
 		),
 		mcpgo.WithObject("updates",
-			mcpgo.Required(),
-			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn."),
+			mcpgo.Description("Fields to update. Include only the fields you want to change. origin and the topic/category path are immutable and not accepted here — fixing either requires knomit_retract plus a fresh knomit_learn. Send updates, ops, or both."),
 			mcpgo.Properties(updateToolSchemaProperties()),
+		),
+		mcpgo.WithArray("ops",
+			mcpgo.Description(opsDescription),
+			mcpgo.Items(map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"required":             []string{"op"},
+				"properties": map[string]any{
+					"op":      map[string]any{"type": "string", "enum": []string{fact.OpStrReplace, fact.OpAppend}, "description": "str_replace or append."},
+					"old_str": map[string]any{"type": "string", "description": "str_replace: the exact text to replace. Must occur exactly once in the current body."},
+					"new_str": map[string]any{"type": "string", "description": `str_replace: the replacement. Required; "" deletes old_str.`},
+					"text":    map[string]any{"type": "string", "description": "append: the text to add at the end of the body."},
+				},
+			}),
+		),
+		mcpgo.WithString("if_commit",
+			mcpgo.Description(ifCommitDescription),
 		),
 	)
 }
+
+// opsDescription is the agent-facing contract for knomit_update's ops.
+const opsDescription = `Edit the body in place instead of resending it. Use ops, not updates.body, for any edit to a large fact. Send ops OR updates.body, never both; ops may be combined with every other updates field.
+
+Each op is one of:
+- {"op": "str_replace", "old_str": "...", "new_str": "..."} — old_str must occur EXACTLY ONCE in the body, byte for byte. new_str "" deletes it.
+- {"op": "append", "text": "..."} — adds text at the end of the body as a new paragraph: knomit inserts only the newlines needed for one blank line before it and removes nothing you send. To extend the last line or list instead, str_replace it.
+
+Ops apply in order, each to the body the previous op produced, so a later op may anchor on text an earlier one inserted. All ops land as ONE revision or none do: if any op fails, nothing is written and the error names the op by its zero-based index.
+
+Matching is exact: no regex, no whitespace or Unicode normalisation. On 0 matches the error gives the longest prefix of old_str that does occur, its byte offset, and the first differing character on each side as U+XXXX — fix old_str from that (smart quotes, em dash vs "--", non-breaking space, trailing whitespace) and retry. On 2 or more matches it gives the count and offsets — widen old_str with surrounding text until it is unique.
+
+The body's leading and trailing whitespace is not stored. A body with an unbalanced ` + "```" + ` fence is refused.`
+
+// ifCommitDescription is the agent-facing contract for knomit_update's if_commit.
+const ifCommitDescription = `Optional guard against editing a fact that changed since you read it. Pass the commit you read the fact at — the "commit" knomit_explain returned for it — as the full 40-character hash. The update proceeds only if the file's bytes at that commit equal its bytes now; an unrelated commit in between does not matter. Otherwise nothing is written and the error gives current_commit, the last commit that changed the file: read the fact again at current_commit and rebuild your edit against it. Applies to ops and to updates.body alike.`
 
 // updateToolSchemaProperties is the knomit_update `updates` object's
 // properties map. Extracted from the registration literal above for the same
@@ -166,10 +200,49 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// below, which may replace the list wholesale.
 		priorRefs := append([]string(nil), fact.Refs...)
 
-		// 5. Parse updates.
+		// 5. Parse updates and ops. updates.body and ops both rewrite the body,
+		// so a call may carry one or the other, never both.
 		var updates updateInput
-		if err := unmarshalArg(req, "updates", &updates); err != nil {
-			return mcpgo.NewToolResultError(err.Error()), nil
+		_, hasUpdates := req.GetArguments()["updates"]
+		_, hasOps := req.GetArguments()["ops"]
+		if !hasUpdates && !hasOps {
+			return mcpgo.NewToolResultError("updates or ops is required"), nil
+		}
+		if hasUpdates {
+			if err := unmarshalArg(req, "updates", &updates); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+		}
+		var ops []factpkg.BodyOp
+		if hasOps {
+			if ops, err = decodeOps(req); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
+			if updates.Body != nil {
+				return mcpgo.NewToolResultError("send updates.body or ops, not both: both rewrite the body"), nil
+			}
+		}
+
+		// Optimistic concurrency. The guard compares the file's BYTES at
+		// if_commit with its bytes now, not commit hashes: what the caller
+		// anchored its edit on is the content it read, so the content is what
+		// is checked. Any commit at which the file read the same passes — the
+		// one knomit_explain returned, or any later one that left it alone.
+		if ifCommit := req.GetString("if_commit", ""); ifCommit != "" {
+			at, rerr := s.facts.ReadFact(ctx, writeBranch, file, &store.ReadFactOpts{AtCommit: ifCommit})
+			if rerr != nil || at.Content != content {
+				current, cerr := s.facts.LastCommitTouching(ctx, writeBranch, file)
+				if cerr != nil {
+					return mcpgo.NewToolResultError(fmt.Sprintf("if_commit check error: %v", cerr)), nil
+				}
+				reason := "the file changed since that commit"
+				if rerr != nil {
+					reason = "the file cannot be read at that commit"
+				}
+				return mcpgo.NewToolResultError(fmt.Sprintf(
+					"if_commit %s does not match: %s; nothing was written. current_commit: %s",
+					ifCommit, reason, current)), nil
+			}
 		}
 
 		// 6. Merge updates into fact. (kind, type) validation is deferred
@@ -187,8 +260,15 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if updates.Sources != nil {
 			fact.Sources = *updates.Sources
 		}
+		bodyChanged := updates.Body != nil || len(ops) > 0
 		if updates.Body != nil {
 			fact.Body = *updates.Body
+		}
+		var opDeltas []factpkg.BodyOpDelta
+		if len(ops) > 0 {
+			if fact.Body, opDeltas, err = factpkg.ApplyBodyOps(fact.Body, ops); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
 		}
 		if updates.Title != nil {
 			fact.Title = *updates.Title
@@ -220,6 +300,17 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 				refs = factpkg.AppendUnique(refs, ref)
 			}
 			fact.Refs = refs
+		}
+
+		// The file format does not keep edge whitespace on the title or the
+		// body (ParseFact trims both), so trim it here rather than fail the
+		// roundtrip below on bytes no reader could ever see.
+		fact.Title = strings.TrimSpace(fact.Title)
+		fact.Body = strings.TrimSpace(fact.Body)
+		if bodyChanged {
+			if err := factpkg.CheckFences(fact.Body); err != nil {
+				return mcpgo.NewToolResultError(err.Error()), nil
+			}
 		}
 
 		// 7. Validate the assembled fact against the ontology's rules.
@@ -262,6 +353,9 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("serialize error: %v", err)), nil
 		}
+		if err := checkRoundtrip(file, serialized); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		commitMsg := fmt.Sprintf("update: %s", fact.Title)
 		writeRes, err := s.facts.WriteFact(ctx, writeBranch, file, serialized, commitMsg, "update")
 		if err != nil {
@@ -275,10 +369,51 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 			"written_to": dest,
 			"summary":    dest.summary("1 fact revision"),
 		}
+		if len(opDeltas) > 0 {
+			result["ops"] = opDeltas
+		}
 		out, err := json.Marshal(result)
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("marshal error: %v", err)), nil
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
+}
+
+// decodeOps reads the ops argument strictly: an unknown key on an op (say
+// replace_all, or an occurrence index) is refused rather than ignored, because
+// ignoring it would apply an edit the caller did not ask for.
+func decodeOps(req mcpgo.CallToolRequest) ([]factpkg.BodyOp, error) {
+	raw, err := json.Marshal(req.GetArguments()["ops"])
+	if err != nil {
+		return nil, fmt.Errorf("invalid ops: %v", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var ops []factpkg.BodyOp
+	if err := dec.Decode(&ops); err != nil {
+		return nil, fmt.Errorf("invalid ops format: %v", err)
+	}
+	if len(ops) == 0 {
+		return nil, fmt.Errorf("ops is empty: send at least one op, or omit ops")
+	}
+	return ops, nil
+}
+
+// checkRoundtrip refuses bytes that would not read back as what was written:
+// the file is parsed and serialised again, and the two serialisations must be
+// identical. It catches any field content the parser treats as structure — a
+// CR LF pair it normalises away, a newline in the title — which would
+// otherwise commit a revision no reader sees as sent.
+func checkRoundtrip(file, serialized string) error {
+	parsed, err := factpkg.ParseFact(file, serialized)
+	if err != nil {
+		return fmt.Errorf("roundtrip check failed: the written fact would not parse: %v", err)
+	}
+	again, err := factpkg.SerializeFact(parsed)
+	if err != nil || again != serialized {
+		return fmt.Errorf("roundtrip check failed: the fact would not read back as written " +
+			"(a carriage return, or a newline in the title, are the usual causes)")
+	}
+	return nil
 }

@@ -24,6 +24,11 @@ type FactIndex interface {
 	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
 	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
 	FactExists(ctx context.Context, branch, path string) (bool, error)
+	// LastCommitTouching is the most recent non-merge commit on branch that
+	// changed path, read from git rather than the index — so it answers for
+	// private-state paths too, which the index never admits. FactQuery's
+	// LastCommitForPath is the index-backed sibling.
+	LastCommitTouching(ctx context.Context, branch, path string) (string, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)
 	ListAll(ctx context.Context, branch string) ([]string, error)
 	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
