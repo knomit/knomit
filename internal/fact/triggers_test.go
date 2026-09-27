@@ -3,6 +3,7 @@ package fact
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 var testIdentity = TriggerIdentity{Agent: "mindev.local-8ef0cd32", Host: "mindev.local", FP8: "8ef0cd32"}
@@ -266,8 +267,18 @@ func TestTriggers_EvalIfFrozenGlobals(t *testing.T) {
 	if ok, err := compile("typeof require === 'undefined' && typeof process === 'undefined'").EvalIf(globals); err != nil || !ok {
 		t.Errorf("require/process reachable: %v %v", ok, err)
 	}
-	if _, err := compile("while (true) {}").EvalIf(globals); err == nil || !strings.Contains(err.Error(), "exceeded") {
-		t.Errorf("a busy loop was not interrupted at the budget: %v", err)
+	// Bounded here, so a missing interrupt fails THIS test by name instead of
+	// hanging the package until the suite's timeout.
+	busy := compile("while (true) {}")
+	done := make(chan error, 1)
+	go func() { _, err := busy.EvalIf(globals); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "exceeded") {
+			t.Errorf("a busy loop was not interrupted at the budget: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a busy loop ran 5s: the condition's time budget is not enforced")
 	}
 	empty := activeNamed(CompileTriggers(mustParseTriggerDoc(t, ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - {name: e, on: learn, do: emit}\n")), testIdentity, "b"), "e")
 	if ok, err := empty.EvalIf(nil); err != nil || !ok {
