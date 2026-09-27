@@ -111,6 +111,9 @@ Exit codes:
 			"always complete, and --json is never truncated")
 	cmd.Flags().BoolVar(&allBranches, "all-branches", false,
 		"parity-check every refs/heads/* ref, not only the branches the index maintains")
+	// F09: commit signature verification lives under the same command, as
+	// `verify report` and `verify accept`.
+	cmd.AddCommand(verifyReportCmd(), verifyAcceptCmd(), verifyCICmd())
 	cmd.Flags().BoolVar(&pruneRefs, "prune-generated-refs", false,
 		"DELETE the generated okf/* refs left by the removed server-side export, and their markers")
 	return cmd

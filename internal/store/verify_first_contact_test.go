@@ -150,9 +150,8 @@ func (o *originFixture) cloneErr(agentBranch string, signer ssh.Signer, root Roo
 	if root != nil {
 		svc.SetRootOfTrust(root)
 	}
-	for _, h := range accept {
-		_, err := svc.rh.db.Exec(`INSERT INTO verify_accepted(commit_hash, accepted_at) VALUES (?, 0)`, h.String())
-		require.NoError(o.t, err)
+	if len(accept) > 0 {
+		svc.SetAcceptList(testAccepts(accept))
 	}
 	_, _, err = svc.InitFromRemote(fileuri.New(o.bare), nil, "main", agentBranch, nil, nil)
 	return svc, err
@@ -320,4 +319,16 @@ func TestFirstContact_CloneFrom(t *testing.T) {
 	ref, err := svc.rh.gits.Reference(verifiedRefName("main"))
 	require.NoError(t, err)
 	require.Equal(t, good.Hash, ref.Hash())
+}
+
+// testAccepts is an in-memory AcceptList of commit hashes (any repository).
+type testAccepts []plumbing.Hash
+
+func (a testAccepts) Lookup(h plumbing.Hash) (Accept, bool) {
+	for _, x := range a {
+		if x == h {
+			return Accept{Commit: h.String()}, true
+		}
+	}
+	return Accept{}, false
 }

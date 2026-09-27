@@ -99,6 +99,7 @@ type Manager struct {
 	// handle). Opened by Start, closed with reg — Origins has no Close of its
 	// own, it borrows reg's *sql.DB; nil before Start.
 	origins *Origins
+	accepts *VerifyAccepts
 
 	// clientSessions records every MCP client session (fourth control.db
 	// tenant, borrowing reg's handle). Opened by Start, nil before; nil-safe
@@ -501,6 +502,22 @@ func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
 // construction and never changed, so no lock.
 func (m *Manager) RootOfTrust() store.RootOfTrust { return m.deps.VerifyRoot }
 
+// VerifyAccepts returns this instance's F09 accept list, or nil before Start.
+func (m *Manager) VerifyAccepts() *VerifyAccepts {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.accepts
+}
+
+// acceptListFor is the accept list bound to repository uid (nil before Start).
+func (m *Manager) acceptListFor(uid string) store.AcceptList {
+	return m.VerifyAccepts().For(uid)
+}
+
+// AcceptListFor is acceptListFor for a caller outside the package that opens
+// a Service of its own (the origin wizard's clone store).
+func (m *Manager) AcceptListFor(uid string) store.AcceptList { return m.acceptListFor(uid) }
+
 // Origins returns the per-repo origin store, or nil before Start.
 func (m *Manager) Origins() *Origins {
 	m.mu.RLock()
@@ -763,6 +780,8 @@ func (m *Manager) Start() error {
 	origins := OpenOrigins(repoReg.DB(), crypt)
 	m.mu.Lock()
 	m.origins = origins
+	// F09's accept list, another control.db tenant (control migration 000012).
+	m.accepts = OpenVerifyAccepts(repoReg.DB())
 	m.mu.Unlock()
 
 	// Client-session registry: fourth tenant of control.db, borrowing the same
@@ -1085,6 +1104,7 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		cfg:                   m.deps.Cfg,
 		signer:                m.deps.Signer,
 		verifyRoot:            m.deps.VerifyRoot,
+		acceptList:            m.acceptListFor(uid),
 		agentBranch:           m.deps.AgentBranch,
 		embedder:              m.deps.Embedder,
 		keyPath:               m.deps.KeyPath,

@@ -22,6 +22,7 @@ var ErrForeignLineage = errors.New("origin's copy of this instance's agent branc
 type ForeignLineageError struct {
 	Branch  string
 	Refused []string // "<short hash>: <reason>"
+	Commits []string // the refused commits' full hashes, in the same order
 }
 
 func (e *ForeignLineageError) Error() string {
@@ -33,7 +34,10 @@ func (e *ForeignLineageError) Error() string {
 	}
 	b.WriteString("\nNothing was discarded and no local agent branch was created. Merge " + e.Branch +
 		" into the upstream on the forge and clone again; or, if these commits are yours from before signing, " +
-		"accept each one with `knomit verify accept <commit>` (next release) and clone again.")
+		"accept each one on this instance and clone again:")
+	for _, c := range e.Commits {
+		b.WriteString("\n  knomit verify accept " + c)
+	}
 	return b.String()
 }
 
@@ -64,26 +68,31 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 			return err
 		}
 	}
-	var refused []string
+	var refused, commits []string
 	err := v.walk(agentTip, below, func(c *object.Commit) {
 		if v.accepted != nil && v.accepted(c.Hash) {
 			return
 		}
 		s, serr := verifyCommitSignature(c)
+		reason := ""
 		switch {
 		case own == "":
-			refused = append(refused, shortRefHash(c.Hash)+": this store has no signer to know its own key")
+			reason = "this store has no signer to know its own key"
 		case serr != nil:
-			refused = append(refused, shortRefHash(c.Hash)+": "+serr.Error())
+			reason = serr.Error()
 		case s.Fingerprint != own:
-			refused = append(refused, shortRefHash(c.Hash)+": signed by "+s.Fingerprint[:8])
+			reason = "signed by " + s.Fingerprint[:8]
+		}
+		if reason != "" {
+			refused = append(refused, shortRefHash(c.Hash)+": "+reason)
+			commits = append(commits, c.Hash.String())
 		}
 	})
 	if err != nil {
 		return err
 	}
 	if len(refused) > 0 {
-		return &ForeignLineageError{Branch: branch, Refused: refused}
+		return &ForeignLineageError{Branch: branch, Refused: refused, Commits: commits}
 	}
 	return nil
 }

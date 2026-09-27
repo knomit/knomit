@@ -1,0 +1,39 @@
+# F09 forge-side check for a knomit knowledge base repository.
+#
+# Add the `verify` step below to the repository's merge-agent-branches
+# workflow, BEFORE the step that merges the agent branch into main. It runs
+# `knomit verify ci`, which folds the candidate branch's history exactly as a
+# fresh knomit clone would, with the repository's own verify_signatures /
+# verify_signers as the FOLD computes them (never the candidate head's
+# ontology file), and fails the job when a commit the branch adds is refused.
+# With verification off in the repository it checks nothing and passes.
+#
+# Setup, once per repository (a repository admin):
+#   - Repository variable KNOMIT_VERIFY_OPERATOR_KEY = the operator's
+#     ssh-ed25519 public key line (the same value as [verify].operator_key on
+#     every instance). A variable set by an admin, never a file in the repo.
+#   - KNOMIT_VERSION below: a knomit release that has `knomit verify ci`.
+#
+# Limits: the job has no accept list, so a commit or merge that needs a waiver
+# (for example a criss-cross auto-merge) blocks here and is merged by the
+# operator. Direct pushes to main that bypass this workflow are covered by each
+# knomit instance's own verification, not by this job.
+
+      - name: Check out the full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ env.BRANCH }}
+
+      - name: Verify commit signatures (F09)
+        env:
+          KNOMIT_VERSION: "SET-ME" # the first knomit release with `knomit verify ci`; the download fails loudly until set
+          KNOMIT_VERIFY_OPERATOR_KEY: ${{ vars.KNOMIT_VERIFY_OPERATOR_KEY }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          curl -fsSL -o knomit.tar.gz \
+            "https://github.com/knomit/knomit/releases/download/v${KNOMIT_VERSION}/knomit-${KNOMIT_VERSION}-linux-amd64.tar.gz"
+          mkdir -p .knomit-bin && tar -xzf knomit.tar.gz -C .knomit-bin
+          KNOMIT=$(find .knomit-bin -type f -name knomit -perm -u+x | head -1)
+          "$KNOMIT" verify ci --dir . --upstream origin/main --candidate "origin/$BRANCH"

@@ -284,6 +284,9 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 		// F09 first contact runs inside CloneFrom: the history is judged by
 		// the root of trust before the cloned branch is placed.
 		remoteSvc.SetRootOfTrust(rm.RootOfTrust())
+		if ri := repos.RepoFromContext(r.Context()); ri != nil {
+			remoteSvc.SetAcceptList(rm.AcceptListFor(ri.UID()))
+		}
 
 		// Phase: cloning.
 		sendEvent(map[string]string{"phase": "cloning"})

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
 // The verified anchor of an upstream: the furthest commit whose history the
@@ -39,10 +40,11 @@ func (rh *repoHandler) verifier(ctx context.Context) *verifier {
 		st:   rh.gits,
 		root: rh.rootOfTrust(),
 		accepted: func(h plumbing.Hash) bool {
-			var one int
-			err := conn(ctx, rh.db).QueryRowContext(ctx,
-				`SELECT 1 FROM verify_accepted WHERE commit_hash = ?`, h.String()).Scan(&one)
-			return err == nil
+			if rh.acceptList == nil {
+				return false
+			}
+			_, ok := rh.acceptList.Lookup(h)
+			return ok
 		},
 	}
 }
@@ -145,3 +147,30 @@ func (rh *repoHandler) storeContext(ctx context.Context, h plumbing.Hash, c veri
 	}
 	return nil
 }
+
+// Accept is one entry of the operator's accept list.
+type Accept struct {
+	Commit  string `json:"commit"`
+	RepoUID string `json:"repo_uid,omitempty"` // "" = any repository
+	Note    string `json:"note,omitempty"`
+}
+
+// AcceptList is the operator's per-INSTANCE accept list (control.db, user
+// ruling for PR 4). An accept waives a failing signature on one commit, or an
+// unsigned merge that fails merge rule M3. It never waives an unaccepted
+// parent, a policy change or an author claim: the fold enforces that scope.
+// The repo-database table verify_accepted (repo migration 000027) is never
+// read or written.
+type AcceptList interface {
+	Lookup(commit plumbing.Hash) (Accept, bool)
+}
+
+// CommitExists reports whether this repository's object store holds commit h.
+func (s *Service) CommitExists(h plumbing.Hash) bool {
+	_, err := object.GetCommit(s.rh.gits, h)
+	return err == nil
+}
+
+// SetAcceptList installs the accept list, bound to this repository. Like
+// SetRootOfTrust it must be re-applied on every store reopen.
+func (s *Service) SetAcceptList(a AcceptList) { s.rh.acceptList = a }

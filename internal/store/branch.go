@@ -78,6 +78,11 @@ type repoHandler struct {
 	// build/swap time, never mutated afterwards.
 	verifyRoot RootOfTrust
 
+	// acceptList is the operator's accept list (control.db), bound to this
+	// repository. Nil is empty. Set by Service.SetAcceptList at build/swap
+	// time, never mutated afterwards.
+	acceptList AcceptList
+
 	// verifyBelow caches, per upstream, the set of commits reachable from the
 	// verified anchor (or the off-scan watermark), so a steady-state tick walks
 	// only the new commits instead of the whole history. In memory only: a

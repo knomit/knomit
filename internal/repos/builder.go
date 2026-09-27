@@ -29,6 +29,7 @@ type repoBuilder struct {
 	cfg         config.Config
 	signer      ssh.Signer
 	verifyRoot  store.RootOfTrust
+	acceptList  store.AcceptList
 	agentBranch string
 	// subscribed builds a subscription: no agent branch is cut, the store is
 	// read-only, and readBranch() resolves to the followed upstream. Set by
@@ -160,6 +161,7 @@ func (b *repoBuilder) openGit() error {
 	}
 	b.svc.SetSigner(b.signer)
 	b.svc.SetRootOfTrust(b.verifyRoot)
+	b.svc.SetAcceptList(b.acceptList)
 	return nil
 }
 
