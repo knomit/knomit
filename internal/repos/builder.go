@@ -28,6 +28,7 @@ type repoBuilder struct {
 	dbPath      string
 	cfg         config.Config
 	signer      ssh.Signer
+	acceptList  store.AcceptList
 	agentBranch string
 	// onPush observes every push the reconcile loop makes (the fleet state
 	// machine's retry: Manager.fleetPushed). Nil in tests that build alone.
@@ -161,6 +162,7 @@ func (b *repoBuilder) openGit() error {
 		}
 	}
 	b.svc.SetSigner(b.signer)
+	b.svc.SetAcceptList(b.acceptList)
 	return nil
 }
 

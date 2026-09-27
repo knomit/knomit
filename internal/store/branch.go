@@ -74,6 +74,11 @@ type repoHandler struct {
 
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
+	// acceptList is the operator's accept list (control.db), bound to this
+	// repository. Nil is empty. Set by Service.SetAcceptList at build/swap
+	// time, never mutated afterwards.
+	acceptList AcceptList
+
 	// ownKeys, when set, returns every key this instance's fleet member record
 	// has held (E4 accepts them as its own). Nil when standalone.
 	ownKeys func() []ssh.PublicKey

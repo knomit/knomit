@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"crypto/ed25519"
 	"fmt"
 
@@ -89,13 +88,40 @@ func keyFingerprint(pk ssh.PublicKey) (string, error) {
 	return pki.Fingerprint(ed), nil
 }
 
-// acceptedCommit reports whether h is on this instance's accept list
-// (`knomit verify accept`), which waives E4 for that one commit.
-func (rh *repoHandler) acceptedCommit(ctx context.Context, h plumbing.Hash) bool {
-	var one int
-	err := conn(ctx, rh.db).QueryRowContext(ctx,
-		`SELECT 1 FROM verify_accepted WHERE commit_hash = ?`, h.String()).Scan(&one)
+// Accept is one entry of the operator's accept list.
+type Accept struct {
+	Commit  string `json:"commit"`
+	RepoUID string `json:"repo_uid,omitempty"` // "" = any repository
+	Note    string `json:"note,omitempty"`
+}
+
+// AcceptList is the operator's per-INSTANCE accept list (control.db). Its only
+// reader is E4: an accept waives the own-lineage refusal for one commit on
+// origin's copy of this instance's agent branch (for example commits made
+// before signing existed). The repo-database table verify_accepted (repo
+// migration 000027) is never read or written.
+type AcceptList interface {
+	Lookup(commit plumbing.Hash) (Accept, bool)
+}
+
+// CommitExists reports whether this repository's object store holds commit h.
+func (s *Service) CommitExists(h plumbing.Hash) bool {
+	_, err := object.GetCommit(s.rh.gits, h)
 	return err == nil
+}
+
+// SetAcceptList installs the accept list, bound to this repository. Like
+// SetSigner it must be re-applied on every store reopen.
+func (s *Service) SetAcceptList(a AcceptList) { s.rh.acceptList = a }
+
+// acceptedCommit reports whether h is on this instance's accept list, which
+// waives E4 for that one commit.
+func (rh *repoHandler) acceptedCommit(h plumbing.Hash) bool {
+	if rh.acceptList == nil {
+		return false
+	}
+	_, ok := rh.acceptList.Lookup(h)
+	return ok
 }
 
 // SetOwnKeys installs the source of this instance's historical keys (its

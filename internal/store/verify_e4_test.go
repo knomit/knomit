@@ -81,9 +81,8 @@ func (o *e4Origin) cloneErr(agentBranch string, signer ssh.Signer, ownKeys []ssh
 	if ownKeys != nil {
 		svc.SetOwnKeys(func() []ssh.PublicKey { return ownKeys })
 	}
-	for _, h := range accept {
-		_, err := svc.rh.db.Exec(`INSERT INTO verify_accepted(commit_hash, accepted_at) VALUES (?, 0)`, h.String())
-		require.NoError(o.t, err)
+	if len(accept) > 0 {
+		svc.SetAcceptList(fixedAccepts(accept))
 	}
 	_, _, err = svc.InitFromRemote(fileuri.New(o.bare), nil, "main", agentBranch, nil, nil)
 	return svc, err
@@ -192,4 +191,17 @@ func TestE4_OwnRecordKeysAreOwn(t *testing.T) {
 
 	_, err = o.cloneErr(branch, cur, []ssh.PublicKey{old.PublicKey(), cur.PublicKey()})
 	require.NoError(t, err, "the record's earlier key is this instance's own")
+}
+
+// fixedAccepts is an accept list holding exactly these commits (control.db's
+// list is repos.VerifyAccepts; store sees only the interface).
+type fixedAccepts []plumbing.Hash
+
+func (f fixedAccepts) Lookup(h plumbing.Hash) (Accept, bool) {
+	for _, x := range f {
+		if x == h {
+			return Accept{Commit: h.String()}, true
+		}
+	}
+	return Accept{}, false
 }

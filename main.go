@@ -39,8 +39,9 @@ func main() {
 }
 
 // exitCodeOf is the process exit code for a command's error. A command may
-// name its code (cmd.ExitCodeError): `knomit verify audit` distinguishes
-// findings (1) from could not run (2). Anything else exits 1.
+// name its code (cmd.ExitCodeError): `knomit verify ci` and `knomit verify
+// audit` distinguish blocked/findings (1) from could not run (2). Anything
+// else exits 1.
 func exitCodeOf(err error) int {
 	var coded interface{ ExitCode() int }
 	if errors.As(err, &coded) {
