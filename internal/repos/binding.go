@@ -106,7 +106,7 @@ func (b *Binding) Name() string { return b.name }
 // Prefixed deliberately. Once one side stops being a name the two value
 // spaces are no longer self-evidently disjoint, and a legal repo name can
 // parse as a ksuid: isValidRepoName allows [a-z0-9_-] with no length cap, so
-// a 27-character lowercase-alphanumeric name is also a valid ksuid. The
+// a 27-character lowercase-alphanumeric name CAN also be a valid ksuid. The
 // prefix removes the question instead of arguing about probabilities.
 func (b *Binding) PinID() string { return b.pinID }
 

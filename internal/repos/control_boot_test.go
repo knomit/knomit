@@ -84,8 +84,8 @@ func TestLensRekey_RunsBeforeBaseline(t *testing.T) {
 	require.NoError(t, os.MkdirAll(home, 0o755))
 	uid := writePreUIDControlDB(t, filepath.Join(home, "control.db"))
 
-	// The pre-uid home boots: Start's controlUp re-keys it. A repo row whose .db is missing is an ordinary
-	// unavailable repo, not a boot failure.
+	// The pre-uid home boots: Start's controlUp re-keys it. A repo row whose
+	// .db is missing is an ordinary unavailable repo, not a boot failure.
 	require.NoError(t, m.Start())
 
 	lenses, err := m.LensRegistry().List()
