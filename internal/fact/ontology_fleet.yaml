@@ -1,0 +1,19 @@
+id: fleet
+name: Fleet
+description: >-
+  A knomit fleet's source of truth. One member record per agent under
+  members/, holding the agent's CURRENT state and key; earlier keys and
+  states are earlier versions of the same fact (knomit explain). Records are
+  never deleted: leaving or revoking is a state change. An instance joins by
+  writing its own record on its agent branch; a human accepts by merging it
+  into main.
+topics:
+  members:
+    description: >-
+      One record per agent (category = the agent id): agent, state
+      (active | left | revoked), key (the current ssh-ed25519 key line),
+      host, branch, then free text.
+    validations:
+      - name: members-are-policy
+        message: a member record is a pragmatic policy fact
+        rule: "fact.kind === 'pragmatic' && fact.type === 'policy'"

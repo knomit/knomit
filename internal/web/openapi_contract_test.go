@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -126,4 +127,24 @@ func TestOpenAPI_ChangesDeclared(t *testing.T) {
 		pc["properties"].(map[string]any)["change"].(map[string]any)["enum"].([]any))
 	page := schemas["ChangesPage"].(map[string]any)["allOf"].([]any)[1].(map[string]any)
 	require.ElementsMatch(t, []any{"head", "has_more", "_embedded"}, page["required"].([]any))
+}
+
+// TestOpenAPI_FleetDeclared (F09): the fleet endpoints are declared with every
+// state and every refusal code a client branches on.
+func TestOpenAPI_FleetDeclared(t *testing.T) {
+	doc := servedOpenAPI(t)
+	paths := doc["paths"].(map[string]any)
+	fleet, ok := paths["/fleet"].(map[string]any)
+	require.True(t, ok, "/fleet must be declared")
+	for _, m := range []string{"get", "put", "delete"} {
+		require.Contains(t, fleet, m)
+	}
+	require.Contains(t, paths, "/fleet/members")
+	text := fmt.Sprint(fleet)
+	for _, code := range []string{"registration_pending", "unregistration_pending", "already_registered", "not_a_fleet", "clone_failed", "not_registered", "use_unregister"} {
+		require.Contains(t, text, code, "refusal code %s must be declared", code)
+	}
+	schema := doc["components"].(map[string]any)["schemas"].(map[string]any)["FleetStatus"].(map[string]any)
+	state := schema["properties"].(map[string]any)["state"].(map[string]any)
+	require.ElementsMatch(t, []any{"standalone", "registering", "registered", "unregistering"}, state["enum"])
 }

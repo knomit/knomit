@@ -36,8 +36,8 @@ func (m *Manager) rewireStore(ri *RepoInstance, svc *store.Service) {
 		svc.SetEmbedder(m.deps.Embedder)
 	}
 	svc.SetSigner(m.deps.Signer)
-	svc.SetRootOfTrust(m.deps.VerifyRoot)
 	svc.SetAcceptList(m.acceptListFor(ri.uid))
+	svc.SetOwnKeys(m.ownFleetKeys)
 	// store.Open does not restore the network timeout either; re-apply it so a
 	// swapped-in store bounds remote git ops identically to a freshly built one.
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)

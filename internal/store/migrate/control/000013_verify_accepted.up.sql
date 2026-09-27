@@ -1,9 +1,10 @@
 -- F09: the operator's accept list for commit signature verification, one per
 -- INSTANCE (user ruling, PR 4 option a).
 --
--- `knomit verify accept <commit>` records a waiver here. It waives a failing
--- signature on that one commit, or an unsigned merge that fails merge rule M3.
--- It never waives a policy change or an author claim (enforced by the fold).
+-- `knomit verify accept <commit>` records a waiver here. Its only reader is
+-- E4, the clone-time check of origin's copy of this instance's own agent
+-- branch: an accepted commit there is adopted even though this instance did
+-- not sign it. The acceptance gate (knomit verify ci) never reads it.
 --
 -- Here and not in each repository's database because the clone-time E4 check
 -- refuses DURING a create, when the repository's database is brand new and a

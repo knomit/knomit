@@ -43,6 +43,11 @@ var ErrNoAgentBranch = errors.New("repo has no agent branch to push")
 // and are not gated.
 var ErrRepoReadOnly = errors.New("repo is read-only")
 
+// ErrFactChanged is returned by a conditional write (WriteFactIfUnchanged)
+// whose file no longer holds the blob the caller read: another write landed
+// in between, and committing would silently discard it.
+var ErrFactChanged = errors.New("fact changed since it was read")
+
 // ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read
 // path that needs to resolve a path's active commit via branch_facts) when
 // no row exists for (branch, path). This means the fact is not currently live
@@ -268,23 +273,6 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 	}
 	branch := strings.TrimPrefix(head.Name().String(), "refs/heads/")
 
-	// F09 first contact: the clone created refs/heads/<branch> at origin's
-	// tip. Place it at the VERIFIED point before anything reads it (origin's
-	// tip for a repository that is off).
-	s.rh.repo = repo
-	target, report, err := s.rh.verifyAdvance(context.Background(), branch, plumbing.ZeroHash, head.Hash())
-	if err != nil {
-		return fmt.Errorf("CloneFrom: verify %s: %w", branch, err)
-	}
-	if target == plumbing.ZeroHash {
-		return fmt.Errorf("CloneFrom: %s: %w", branch, &VerifyFailedError{Report: report})
-	}
-	if target != head.Hash() {
-		if err := s.rh.gits.SetReference(plumbing.NewHashReference(head.Name(), target)); err != nil {
-			return fmt.Errorf("CloneFrom: place %s at the verified point: %w", branch, err)
-		}
-	}
-
 	log.Info().Str("branch", branch).Str("url", url).Msg("cloned remote into storer")
 	s.rh.repo = repo
 	s.fi.auth = auth
@@ -415,36 +403,17 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 		return "", false, fmt.Errorf("InitFromRemote: re-fetch: %w", err)
 	}
 
-	// Bootstrap local upstream branch from origin/<upstreamMain> — at the
-	// VERIFIED point, not origin's tip. F09 first contact folds the whole
-	// history from the root BEFORE any local ref is set (V4-3), so a fresh
-	// clone of an enforcing repository lands on the same anchor as a
-	// long-running instance and never indexes, merges or re-pushes a refused
-	// commit. For a repository that is off (the default) the target is
-	// origin's tip, exactly as before.
-	originRemoteRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
+	// Bootstrap local upstream branch from origin/<upstreamMain>. Origin's
+	// main is trusted as fetched (F09 verifies once, at the gate that
+	// advanced it).
+	originMainRef, err := s.rh.gits.Reference(plumbing.NewRemoteReferenceName("origin", upstreamMain))
 	if err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: resolve origin/%s: %w", upstreamMain, err)
 	}
-	target, report, err := s.rh.verifyAdvance(context.Background(), upstreamMain, plumbing.ZeroHash, originRemoteRef.Hash())
-	if err != nil {
-		return "", false, fmt.Errorf("InitFromRemote: verify origin/%s: %w", upstreamMain, err)
-	}
-	if target == plumbing.ZeroHash {
-		return "", false, fmt.Errorf("InitFromRemote: origin/%s: %w", upstreamMain, &VerifyFailedError{Report: report})
-	}
-	if report != nil && (len(report.Refused) > 0 || report.Held) {
-		log.Warn().Str("upstream", upstreamMain).Str("mode", report.Mode).Int("refused", len(report.Refused)).
-			Bool("unrooted", report.Unrooted).Str("at", target.String()).
-			Msg("InitFromRemote: first contact verification held the upstream below origin")
-	}
-	// originMainRef is the VERIFIED target from here on; every use below
-	// (bootstrap, adoption base, watermark) means "the upstream as verified".
-	originMainRef := plumbing.NewHashReference(originRemoteRef.Name(), target)
 
 	// E4 (F09, every mode, off included), BEFORE any local ref is set:
 	// origin's copy of THIS instance's agent branch is adopted only if every
-	// commit it holds beyond the verified upstream is signed by this
+	// commit it holds beyond origin's upstream is signed by this
 	// instance's own key (or accepted on this instance). Otherwise the create
 	// FAILS with a ForeignLineageError naming the commits and the remedies. It
 	// never starts a fresh lineage under that name: that would overwrite the
@@ -627,17 +596,8 @@ func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, 
 	if err != nil {
 		return "", fmt.Errorf("InitSubscription: resolve origin/%s: %w", upstreamMain, err)
 	}
-	// F09 first contact: the upstream is placed at the VERIFIED point (origin's
-	// tip for a repository that is off), before any local ref exists.
-	target, report, err := s.rh.verifyAdvance(context.Background(), upstreamMain, plumbing.ZeroHash, originRef.Hash())
-	if err != nil {
-		return "", fmt.Errorf("InitSubscription: verify origin/%s: %w", upstreamMain, err)
-	}
-	if target == plumbing.ZeroHash {
-		return "", fmt.Errorf("InitSubscription: origin/%s: %w", upstreamMain, &VerifyFailedError{Report: report})
-	}
 	localName := plumbing.NewBranchReferenceName(upstreamMain)
-	if err := s.rh.gits.SetReference(plumbing.NewHashReference(localName, target)); err != nil {
+	if err := s.rh.gits.SetReference(plumbing.NewHashReference(localName, originRef.Hash())); err != nil {
 		return "", fmt.Errorf("InitSubscription: set local %s: %w", upstreamMain, err)
 	}
 	if err := s.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, localName)); err != nil {

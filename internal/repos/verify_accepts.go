@@ -2,7 +2,6 @@ package repos
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 )
 
 // VerifyAccepts is this instance's F09 accept list, a tenant of control.db
-// (verify_accepted, control migration 000012). See store.AcceptList for what
+// (verify_accepted, control migration 000013). See store.AcceptList for what
 // an accept waives, and does not.
 type VerifyAccepts struct{ db *sql.DB }
 
@@ -78,25 +77,4 @@ func (f acceptsFor) Lookup(commit plumbing.Hash) (store.Accept, bool) {
 		return store.Accept{}, false
 	}
 	return x, true
-}
-
-// ErrUnwaivable refuses an accept the fold would never honour.
-var ErrUnwaivable = errors.New("an accept never waives a policy change or an author claim")
-
-// CheckWaivable refuses to accept commit when the repository's own dry run
-// (store.Service.SignatureReport) already shows it as an unauthorised policy
-// change or an author-claim mismatch: the fold would ignore the waiver, and a
-// silent no-op waiver is how an operator comes to believe a refusal is fixed.
-func CheckWaivable(rep store.SignatureReport, commit plumbing.Hash) error {
-	for _, rs := range [][]store.Refusal{rep.Refused, rep.Reported} {
-		for _, r := range rs {
-			if r.Commit != commit.String() {
-				continue
-			}
-			if r.Rule == store.RulePolicyChange || r.Rule == store.RuleAuthorClaim {
-				return fmt.Errorf("%w: %s is refused for %q (%s)", ErrUnwaivable, commit, r.Rule, r.Reason)
-			}
-		}
-	}
-	return nil
 }

@@ -13,8 +13,6 @@ const rootAttrYAML = `id: x
 name: X
 attributes:
   verify_signatures: enforce
-  verify_signers:
-    - ` + testSignerKey + `
 topics:
   notes:
     description: d
@@ -29,10 +27,6 @@ func TestRootAttributes_Parse(t *testing.T) {
 	}
 	if got := o.Attributes["verify_signatures"]; got != "enforce" {
 		t.Fatalf("verify_signatures = %v, want enforce", got)
-	}
-	signers, ok := o.Attributes["verify_signers"].([]any)
-	if !ok || len(signers) != 1 || signers[0] != testSignerKey {
-		t.Fatalf("verify_signers = %#v, want [%q]", o.Attributes["verify_signers"], testSignerKey)
 	}
 }
 
@@ -102,9 +96,6 @@ func TestRootAttributes_ProblemsAreFatalOnlyForANewOntology(t *testing.T) {
 		"root key on a topic": "id: x\nname: X\ntopics:\n  notes:\n    description: d\n    attributes:\n      verify_signatures: log\n",
 		"topic key at root":   "id: x\nname: X\nattributes:\n  learn_dedup: off\ntopics:\n  notes:\n    description: d\n",
 		"bad mode value":      "id: x\nname: X\nattributes:\n  verify_signatures: yes\ntopics:\n  notes:\n    description: d\n",
-		"bad signer line":     "id: x\nname: X\nattributes:\n  verify_signers:\n    - not-a-key\ntopics:\n  notes:\n    description: d\n",
-		"signers not a list":  "id: x\nname: X\nattributes:\n  verify_signers: " + testSignerKey + "\ntopics:\n  notes:\n    description: d\n",
-		"rsa signer":          "id: x\nname: X\nattributes:\n  verify_signers:\n    - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQC7 x\ntopics:\n  notes:\n    description: d\n",
 	}
 	for name, src := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -132,5 +123,21 @@ func TestRootAttributes_LearnDedupStaysFatalOnTopics(t *testing.T) {
 	src := "id: x\nname: X\ntopics:\n  notes:\n    description: d\n    attributes:\n      learn_dedup: maybe\n"
 	if _, err := ParseOntology([]byte(src)); err == nil {
 		t.Fatal("a bad learn_dedup value must stay fatal")
+	}
+}
+
+// TestRootAttributes_RemovedVerifySignersIsUnknown: verify_signers was removed
+// (F09 PR 5): who may sign comes from the fleet repository's member records.
+// A dev-built ontology that still carries it is an UNKNOWN root key, which is
+// a warning, never a refusal (the forward-compatible reader rule for
+// attributes), and nothing reads it.
+func TestRootAttributes_RemovedVerifySignersIsUnknown(t *testing.T) {
+	src := "id: x\nname: X\nattributes:\n  verify_signers:\n    - " + testSignerKey + "\ntopics:\n  notes:\n    description: d\n"
+	_, diags := ValidateOntologyYAML([]byte(src))
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, "verify_signers") {
+		t.Fatalf("want one diagnostic naming verify_signers, got %v", diags)
+	}
+	if _, err := ParseNewOntology([]byte(src)); err != nil {
+		t.Fatalf("an unknown root key must not refuse a new ontology: %v", err)
 	}
 }

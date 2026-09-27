@@ -136,7 +136,14 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 	}
 	a.signer = signer
 	a.keyPath = keyPath
-	a.agentBranch = agentBranch(keyFingerprint)
+	// The agent branch is PERSISTED (F09 PR 5): derived from the key and
+	// hostname only on the first boot that finds no identity in control.db,
+	// read from there ever after, so a key rotation or a hostname change
+	// keeps the id. The commit author follows (store.AgentIDOf).
+	a.agentBranch, err = repos.ResolveIdentity(cfg.Home, agentBranch(keyFingerprint))
+	if err != nil {
+		return nil, err
+	}
 
 	// The knomit+https go-git transport, registered before anything can
 	// clone or sync (repos.New and Manager.Start are below): go-git's
@@ -193,19 +200,10 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		log.Warn().Msg("synthesis disabled (no LLM adapter)")
 	}
 
-	// F09's root of trust. Parsed here so a malformed key fails boot with a
-	// named error instead of leaving every enabled repository "unrooted" for a
-	// reason nobody would guess. Empty = unrooted; never the instance's key.
-	verifyRoot, err := store.NewStaticRoot(cfg.Verify.OperatorKey)
-	if err != nil {
-		return nil, fmt.Errorf("[verify].operator_key: %w", err)
-	}
-
 	// Repo manager.
 	a.manager = repos.New(ctx, repos.Deps{
 		Cfg:         cfg,
 		Signer:      signer,
-		VerifyRoot:  verifyRoot,
 		AgentBranch: a.agentBranch,
 		Embedder:    embedder,
 		KeyPath:     keyPath,

@@ -9,8 +9,8 @@ import (
 )
 
 // TestExitCodeOf: the path main takes from a command's error to the process
-// exit code. A wrapped cmd.ExitCodeError keeps its code (verify ci's 1 and 2
-// reach the forge job); any other error exits 1.
+// exit code. A wrapped cmd.ExitCodeError keeps its code (verify ci's and
+// verify audit's 1 and 2 reach the caller); any other error exits 1.
 func TestExitCodeOf(t *testing.T) {
 	for _, tc := range []struct {
 		err  error

@@ -1,28 +1,29 @@
-# F09 forge-side check for a knomit knowledge base repository.
+# F09 acceptance gate for a knomit knowledge base repository.
 #
-# Add the `verify` step below to the repository's merge-agent-branches
-# workflow, BEFORE the step that merges the agent branch into main. It runs
-# `knomit verify ci`, which folds the candidate branch's history exactly as a
-# fresh knomit clone would, with the repository's own verify_signatures /
-# verify_signers as the FOLD computes them (never the candidate head's
-# ontology file), and fails the job when a commit the branch adds is refused.
-# With verification off in the repository it checks nothing and passes.
+# Add the `verify` steps below to the repository's merge-agent-branches
+# workflow, BEFORE the step that merges the agent branch into main. They run
+# `knomit verify ci`, which reads verify_signatures at main's tip FIRST:
 #
-# Setup, once per repository (a repository admin):
-#   - Repository variable KNOMIT_VERIFY_OPERATOR_KEY = the operator's
-#     ssh-ed25519 public key line (the same value as [verify].operator_key on
-#     every instance). A variable set by an admin, never a file in the repo.
+#   - off or absent (the default): it exits 0 at once and checks nothing. The
+#     fleet repository is not needed, and the job behaves exactly as without
+#     these steps.
+#   - log or enforce: every commit the agent branch adds must be signed by the
+#     CURRENT key of an ACTIVE member of the fleet (the member record at the
+#     commit author's agent id, in the fleet repository's main). In enforce a
+#     failure fails the job (exit 1) and the branch is not merged; in log it is
+#     reported and the job passes. A missing or unreadable fleet, while
+#     verification is on, is exit 2.
+#
+# Inputs, set once per repository:
+#   - Repository variable KNOMIT_FLEET_URL: the fleet repository to clone (the
+#     knomit repository whose ontology is the fleet preset). Needed only when
+#     verification is on.
+#   - Repository secret KNOMIT_FLEET_TOKEN (optional): a read token, if the
+#     fleet repository is private.
 #   - KNOMIT_VERSION below: a knomit release that has `knomit verify ci`.
 #
-# Limits: the job has no accept list, so a commit or merge that needs a waiver
-# (for example a criss-cross auto-merge) blocks here and is merged by the
-# operator. Direct pushes to main that bypass this workflow are covered by each
-# knomit instance's own verification, not by this job. A push event runs the
-# workflow file FROM THE PUSHED BRANCH, so whoever can push an agent branch can
-# edit .github/workflows/ in it and drop this step (as they could already drop
-# the auto-merge's other checks); the verification on every knomit instance
-# still refuses what this job would have blocked. A policy change the fold only
-# notes (log, off) also blocks here: the branch stays open for the operator.
+# A commit accepted here is never re-checked: this job is where a change is
+# verified, once. `knomit verify audit` re-checks a whole branch on demand.
 
       - name: Check out the full history
         uses: actions/checkout@v4
@@ -30,10 +31,22 @@
           fetch-depth: 0
           ref: ${{ env.BRANCH }}
 
+      - name: Check out the fleet repository
+        if: ${{ vars.KNOMIT_FLEET_URL != '' }}
+        env:
+          KNOMIT_FLEET_URL: ${{ vars.KNOMIT_FLEET_URL }}
+          KNOMIT_FLEET_TOKEN: ${{ secrets.KNOMIT_FLEET_TOKEN }}
+        run: |
+          set -euo pipefail
+          url="$KNOMIT_FLEET_URL"
+          if [ -n "${KNOMIT_FLEET_TOKEN:-}" ]; then
+            url="https://x-access-token:${KNOMIT_FLEET_TOKEN}@${url#https://}"
+          fi
+          git clone --quiet "$url" "$RUNNER_TEMP/fleet"
+
       - name: Verify commit signatures (F09)
         env:
-          KNOMIT_VERSION: "SET-ME" # the first knomit release with `knomit verify ci`; the download fails loudly until set
-          KNOMIT_VERIFY_OPERATOR_KEY: ${{ vars.KNOMIT_VERIFY_OPERATOR_KEY }}
+          KNOMIT_VERSION: "SET-ME" # the first knomit release with `knomit verify ci --fleet`; the download fails loudly until set
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
@@ -41,4 +54,6 @@
             "https://github.com/knomit/knomit/releases/download/v${KNOMIT_VERSION}/knomit-${KNOMIT_VERSION}-linux-amd64.tar.gz"
           mkdir -p .knomit-bin && tar -xzf knomit.tar.gz -C .knomit-bin
           KNOMIT=$(find .knomit-bin -type f -name knomit -perm -u+x | head -1)
-          "$KNOMIT" verify ci --dir . --upstream origin/main --candidate "origin/$BRANCH"
+          fleet=()
+          if [ -d "$RUNNER_TEMP/fleet" ]; then fleet=(--fleet "$RUNNER_TEMP/fleet"); fi
+          "$KNOMIT" verify ci --dir . --upstream origin/main --candidate "origin/$BRANCH" "${fleet[@]}"

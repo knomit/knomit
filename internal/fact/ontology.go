@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 
-	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 )
 
@@ -58,14 +57,45 @@ func CodeOntology() *Ontology {
 	return codeOntology
 }
 
+//go:embed ontology_fleet.yaml
+var fleetOntologyYAML []byte
+
+var (
+	fleetOntology     *Ontology
+	fleetOntologyOnce sync.Once
+)
+
+// FleetOntologyID is the id of the fleet preset. A repository whose ontology
+// has this id IS a fleet repository (F09): that is how an instance recognises
+// it, with no reserved name and nothing in any other repository's ontology.
+const FleetOntologyID = "fleet"
+
+// FleetOntology returns the embedded fleet ontology preset.
+// It panics if the embedded YAML is invalid.
+func FleetOntology() *Ontology {
+	fleetOntologyOnce.Do(func() {
+		o, err := ParseOntology(fleetOntologyYAML)
+		if err != nil {
+			panic(fmt.Sprintf("embedded fleet ontology is invalid: %v", err))
+		}
+		fleetOntology = o
+	})
+	return fleetOntology
+}
+
+// IsFleetOntology reports whether o is a fleet repository's ontology.
+func IsFleetOntology(o *Ontology) bool { return o != nil && o.ID == FleetOntologyID }
+
 // OntologyByPreset returns one of the embedded ontology presets by name.
-// Known presets: "default", "code".
+// Known presets: "default", "code", "fleet".
 func OntologyByPreset(name string) (*Ontology, error) {
 	switch name {
 	case "default":
 		return DefaultOntology(), nil
 	case "code":
 		return CodeOntology(), nil
+	case "fleet":
+		return FleetOntology(), nil
 	default:
 		return nil, fmt.Errorf("unknown ontology preset: %q", name)
 	}
@@ -81,6 +111,8 @@ func EmbeddedPresetByID(id string) *Ontology {
 		return DefaultOntology()
 	case "source-code":
 		return CodeOntology()
+	case FleetOntologyID:
+		return FleetOntology()
 	default:
 		return nil
 	}
@@ -104,6 +136,9 @@ func EmbeddedPresetByID(id string) *Ontology {
 // is compared as absent) — the repo keeps its file and forgoes auto-upgrade,
 // exactly as it would for a custom topic or rule. See SubsetDivergence for
 // telling the two apart in a log.
+//
+// Triggers are compared the same way, and for the same reason: a stored node
+// whose triggers the preset does not carry identically is divergence.
 func (o *Ontology) IsSubsetOf(other *Ontology) bool {
 	return o.SubsetDivergence(other) == ""
 }
@@ -111,7 +146,8 @@ func (o *Ontology) IsSubsetOf(other *Ontology) bool {
 // Divergence reasons returned by SubsetDivergence.
 const (
 	DivergenceShape      = "shape"      // a topic, child, or validation other lacks
-	DivergenceAttributes = "attributes" // taxonomy is a subset; only attributes differ
+	DivergenceAttributes = "attributes" // taxonomy is a subset; attributes differ
+	DivergenceTriggers   = "triggers"   // taxonomy and attributes are a subset; only triggers differ
 )
 
 // SubsetDivergence reports why o is NOT a subset of other: "" when it is,
@@ -133,24 +169,35 @@ func (o *Ontology) SubsetDivergence(other *Ontology) string {
 	// Root attributes are compared exactly like a node's: the refresh would
 	// otherwise write a preset without them over the stored file and erase a
 	// repository-level setting (verify_signatures) on every boot.
-	attrsDiverge := attrsNotSubset(o.Attributes, other.Attributes)
+	d := behaviourDivergence{attrs: attrsNotSubset(o.Attributes, other.Attributes)}
 	for key, node := range o.Topics {
 		otherNode, ok := other.Topics[key]
-		if !ok || !nodeIsSubsetOf(node, otherNode, &attrsDiverge) {
+		if !ok || !nodeIsSubsetOf(node, otherNode, &d) {
 			return DivergenceShape
 		}
 	}
-	if attrsDiverge {
+	switch {
+	case d.attrs:
 		return DivergenceAttributes
+	case d.triggers:
+		return DivergenceTriggers
 	}
 	return ""
 }
 
+// behaviourDivergence records the non-shape reasons a subset walk found.
+type behaviourDivergence struct {
+	attrs    bool
+	triggers bool
+}
+
 // nodeIsSubsetOf returns true if every Validation and child in n also appears
-// in other. It sets *attrsDiverge when an attribute of n is missing from other
-// or differs from it; a value that behaves as absent (learn_dedup: on) is
-// compared as absent, so spelling out the default never stops an upgrade.
-func nodeIsSubsetOf(n, other *OntologyNode, attrsDiverge *bool) bool {
+// in other. It sets d.attrs when an attribute of n is missing from other or
+// differs from it; a value that behaves as absent (learn_dedup: on) is
+// compared as absent, so spelling out the default never stops an upgrade. It
+// sets d.triggers when n declares triggers other does not declare identically:
+// like attributes, overwriting the file with the preset would erase them.
+func nodeIsSubsetOf(n, other *OntologyNode, d *behaviourDivergence) bool {
 	if n == nil {
 		return true
 	}
@@ -161,14 +208,17 @@ func nodeIsSubsetOf(n, other *OntologyNode, attrsDiverge *bool) bool {
 		return false
 	}
 	if attrsNotSubset(n.Attributes, other.Attributes) {
-		*attrsDiverge = true
+		d.attrs = true
+	}
+	if !triggersSubset(n.Triggers, other.Triggers) {
+		d.triggers = true
 	}
 	for key, child := range n.Children {
 		otherChild, ok := other.Children[key]
 		if !ok {
 			return false
 		}
-		if !nodeIsSubsetOf(child, otherChild, attrsDiverge) {
+		if !nodeIsSubsetOf(child, otherChild, d) {
 			return false
 		}
 	}
@@ -188,6 +238,20 @@ func attrsNotSubset(attrs, other map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// triggersSubset reports whether a's triggers are safe to overwrite with b's:
+// a declares none, or declares exactly what b declares (compared as YAML).
+func triggersSubset(a, b TriggerList) bool {
+	if a.node == nil {
+		return true
+	}
+	if b.node == nil {
+		return false
+	}
+	ay, aerr := yaml.Marshal(a.node)
+	by, berr := yaml.Marshal(b.node)
+	return aerr == nil && berr == nil && string(ay) == string(by)
 }
 
 // RootAttributesEqual reports whether a and b carry the same root attributes,
@@ -230,8 +294,7 @@ type Ontology struct {
 	Description string                   `yaml:"description"`
 	Topics      map[string]*OntologyNode `yaml:"topics"`
 	Validations []Validation             `yaml:"validations,omitempty"`
-	// Attributes are REPOSITORY-level settings (verify_signatures,
-	// verify_signers). They do not inherit into topics, and a key declared for
+	// Attributes are REPOSITORY-level settings (verify_signatures). They do not inherit into topics, and a key declared for
 	// the other scope is reported (see attributeSpec.scope). Keys this binary
 	// does not declare are kept, so Serialize writes back what a newer knomit
 	// wrote.
@@ -336,13 +399,11 @@ const (
 	scopeRoot
 )
 
-// Repository-level attributes (F09). verify_signatures switches signature
-// verification of the upstream for this repository; absent means off.
-// verify_signers lists the OpenSSH ssh-ed25519 public keys admitted to sign.
-const (
-	AttrVerifySignatures = "verify_signatures"
-	AttrVerifySigners    = "verify_signers"
-)
+// AttrVerifySignatures is the repository-level attribute (F09) that switches
+// signature verification at the acceptance gate for this repository; absent
+// means off. It is the ONLY verification setting in an ontology: who may sign
+// comes from the fleet repository's member records, never from here.
+const AttrVerifySignatures = "verify_signatures"
 
 // attributeRegistry is the ONLY place an attribute key is declared.
 //
@@ -384,33 +445,6 @@ var attributeRegistry = map[string]attributeSpec{
 		absent: "off",
 		scope:  scopeRoot,
 	},
-	// A LIST of authorized-key lines, each an ssh-ed25519 key. Full keys, not
-	// fingerprints: a git allowed_signers file needs the key itself.
-	AttrVerifySigners: {
-		accepts: "a list of ssh-ed25519 public-key lines",
-		valid:   validSignerList,
-		scope:   scopeRoot,
-	},
-}
-
-// validSignerList accepts a yaml sequence whose every entry parses as an
-// authorized-key line of type ssh-ed25519.
-func validSignerList(v any) bool {
-	list, ok := v.([]any)
-	if !ok {
-		return false
-	}
-	for _, e := range list {
-		s, ok := e.(string)
-		if !ok {
-			return false
-		}
-		pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(s))
-		if err != nil || pub.Type() != ssh.KeyAlgoED25519 {
-			return false
-		}
-	}
-	return true
 }
 
 // attrIsAbsent reports whether v is the value that means the same as leaving
@@ -474,6 +508,11 @@ type OntologyNode struct {
 	// attributeRegistry; resolve with Ontology.Attr, never by reading this
 	// map directly (it holds only this node's own values, not inherited ones).
 	Attributes map[string]any `yaml:"attributes,omitempty"`
+	// Triggers (F07) are rules fired by changes to facts under this node. The
+	// list decodes leniently and a bad entry is never fatal: see triggers.go.
+	// Compile them with CompileTriggers (or a TriggerCache), never by reading
+	// this field directly.
+	Triggers TriggerList `yaml:"triggers,omitempty"`
 }
 
 // Validation is one ontology-declared rule evaluated against a fact on write.
@@ -634,6 +673,14 @@ func serializeNode(parent *yaml.Node, key string, node *OntologyNode) error {
 
 	if len(node.Validations) > 0 {
 		serializeValidations(valNode, node.Validations)
+	}
+
+	// Triggers are written back exactly as they were read, unknown keys and
+	// malformed entries included: dropping them would erase a newer knomit's
+	// triggers on round trip, and fixing them is the author's job, not ours.
+	if node.Triggers.node != nil {
+		valNode.Content = append(valNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "triggers"}, node.Triggers.node)
 	}
 
 	if len(node.Children) > 0 {

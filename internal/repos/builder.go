@@ -28,9 +28,11 @@ type repoBuilder struct {
 	dbPath      string
 	cfg         config.Config
 	signer      ssh.Signer
-	verifyRoot  store.RootOfTrust
 	acceptList  store.AcceptList
 	agentBranch string
+	// onPush observes every push the reconcile loop makes (the fleet state
+	// machine's retry: Manager.fleetPushed). Nil in tests that build alone.
+	onPush func(repo string, err error)
 	// subscribed builds a subscription: no agent branch is cut, the store is
 	// read-only, and readBranch() resolves to the followed upstream. Set by
 	// openOne from the origin's Mode, in the SAME statement block that clears
@@ -160,7 +162,6 @@ func (b *repoBuilder) openGit() error {
 		}
 	}
 	b.svc.SetSigner(b.signer)
-	b.svc.SetRootOfTrust(b.verifyRoot)
 	b.svc.SetAcceptList(b.acceptList)
 	return nil
 }
@@ -313,9 +314,9 @@ func (b *repoBuilder) loadOntology() {
 // never ADDS or CHANGES a repository-level (root) attribute, only leaves it as
 // it was. SubsetDivergence already stops a stored root attribute from being
 // erased; this also stops a preset that carries one from introducing it. The
-// refresh commit is signed by this instance, and under F09 a signed change to
-// verify_signatures or verify_signers is a policy change: it must come from
-// the operator, never from an upgrade.
+// refresh commit is signed by this instance, and a change to verify_signatures
+// is a policy decision for whoever merges to the repo's main, never an
+// upgrade's.
 func refreshDivergence(stored, preset *fact.Ontology) string {
 	if d := stored.SubsetDivergence(preset); d != "" {
 		return d
@@ -802,7 +803,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush)
 		return nil
 	}
 
@@ -956,7 +957,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	b.syncLoopMu.Lock()
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush)
 }
 
 // startExperimentSweep launches the expiry sweeper for this repo.

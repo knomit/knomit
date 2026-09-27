@@ -31,12 +31,17 @@ func validatePath(path string) error {
 // "ai") — see fact.NormalizePath. It is a fact-path rule, not a storage rule,
 // so writeFileExact is the door for files that are not facts.
 func (fi *factIndex) writeFile(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
-	return fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation)
+	return fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation, "")
 }
 
 // writeFileExact is writeFile without case normalization. Callers own the
 // exact bytes of the path they pass.
-func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, message, operation string) (commitHash string, blobHash string, err error) {
+//
+// A non-empty expectBlob is a compare-and-swap precondition: the blob at path
+// on the branch tip must be expectBlob, checked INSIDE the branch write lock so
+// no other write can land between the check and the commit. On a mismatch
+// nothing is written and the error wraps ErrFactChanged.
+func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, message, operation, expectBlob string) (commitHash string, blobHash string, err error) {
 	if fi.rh.readOnly {
 		return "", "", ErrRepoReadOnly
 	}
@@ -50,6 +55,15 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return "", "", fmt.Errorf("WriteFile: ref: %w", err)
+	}
+	if expectBlob != "" {
+		current, err := fi.rh.blobAtCommit(headHash, path)
+		if err != nil {
+			return "", "", fmt.Errorf("WriteFile: precondition: %w", err)
+		}
+		if current != expectBlob {
+			return "", "", fmt.Errorf("WriteFile: %q: %w", path, ErrFactChanged)
+		}
 	}
 
 	signer, err := fi.rh.commitSigner()
@@ -305,6 +319,23 @@ func (fi *factIndex) WriteFact(ctx context.Context, branch, path, content, messa
 	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
 }
 
+// WriteFactIfUnchanged is WriteFact with a compare-and-swap precondition: it
+// commits only if path's blob on the branch tip is still expectBlob (the
+// BlobHash a ReadFact{WithHash} returned), checked inside the branch write
+// lock. Otherwise nothing is written and the error wraps ErrFactChanged. This
+// is what makes a read-modify-write of one fact safe against a concurrent
+// writer.
+func (fi *factIndex) WriteFactIfUnchanged(ctx context.Context, branch, path, content, message, operation, expectBlob string) (WriteFactResult, error) {
+	if expectBlob == "" {
+		return WriteFactResult{}, fmt.Errorf("WriteFactIfUnchanged: expectBlob is required")
+	}
+	commitHash, blobHash, err := fi.writeFileExact(ctx, branch, strings.ToLower(path), content, message, operation, expectBlob)
+	if err != nil {
+		return WriteFactResult{}, err
+	}
+	return WriteFactResult{CommitHash: commitHash, BlobHash: blobHash}, nil
+}
+
 // WriteRootFile writes a root-level, non-fact file (README.md, and any future
 // sibling) preserving the case of path. Root-level only: a nested path would
 // otherwise be a way around fact-path normalization.
@@ -312,7 +343,7 @@ func (fi *factIndex) WriteRootFile(ctx context.Context, branch, path, content, m
 	if strings.Contains(path, "/") {
 		return WriteFactResult{}, fmt.Errorf("store: WriteRootFile: %q is not root-level", path)
 	}
-	commitHash, blobHash, err := fi.writeFileExact(ctx, branch, path, content, message, operation)
+	commitHash, blobHash, err := fi.writeFileExact(ctx, branch, path, content, message, operation, "")
 	if err != nil {
 		return WriteFactResult{}, err
 	}

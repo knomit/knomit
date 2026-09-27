@@ -24,17 +24,54 @@ Call `knomit_update` with:
 
 - `file`: the fact path (e.g. `kb/decisions/synthesize/.../<uuid>.md`)
 - `moment_name`: short label (e.g. `"post-rename dirtyFacts → dirty"`)
-- `updates`: ONLY the changed fields (partial)
+- `updates`: ONLY the changed fields (partial). Any key not in the schema fails
+  the whole call: body edits go in `ops`, and the path and origin cannot change
+- `ops`: edits to the body, in place of `updates.body` (see below)
+- `if_commit` (optional): the `commit` knomit_explain returned when you read the fact
 
 Common partial updates:
 
 | Change | Field |
 |---|---|
-| Body text drifted | `body` |
+| A sentence or section drifted | `ops` (`str_replace`) |
+| New material at the end | `ops` (`append`) |
+| Body rewritten top to bottom | `body` |
 | Add, refresh, or drop source anchors | `refs` (REPLACES the whole list — send every ref the fact should keep) |
 | Evidence corroborated | `confidence` up, `sources` += new count |
 | Evidence weakened | `confidence` down |
 | Wrong topic/category | NOT possible via update — retract + relearn |
+
+## Edit the body with ops, not a resent body
+
+`ops` edits the body in place, so you send only what changes. Use it for any
+edit to a large fact. Send `ops` or `updates.body`, never both; `ops` combines
+with every other `updates` field.
+
+```json
+"ops": [
+  {"op": "str_replace", "old_str": "the gate runs twice", "new_str": "the gate runs once"},
+  {"op": "append", "text": "A closing paragraph."}
+]
+```
+
+- `str_replace`: `old_str` must occur EXACTLY ONCE in the body, byte for byte.
+  `new_str: ""` deletes it.
+- `append`: adds `text` as a new paragraph at the end of the body.
+- Ops apply in order, each to the body the one before it produced. They land
+  as ONE revision or not at all; an error names the failing op by index.
+- On 0 matches, the error gives the longest prefix of `old_str` that does
+  occur, its byte offset, and the first differing character on each side as
+  `U+XXXX`. Fix `old_str` from that: smart quotes, em dash vs `--`,
+  non-breaking space and trailing whitespace are the usual causes. On 2 or
+  more matches, widen `old_str` with surrounding text until it is unique.
+- Copy `old_str` from the body `knomit_explain` returned, not from memory.
+
+Pass `if_commit` with the `commit` from that same explain call. If the fact
+changed since you read it, nothing is written and the error gives
+`current_commit`. Read the fact again at that commit and rebuild your ops.
+
+An edit that leaves an unclosed ```` ``` ```` fence in a body whose fences were
+balanced is refused, on both paths.
 
 ## Body updates replace the WHOLE body — preserve hardening
 

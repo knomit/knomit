@@ -1,6 +1,10 @@
 package synthesize
 
-import "fmt"
+import (
+	"fmt"
+
+	"knomit/internal/fact"
+)
 
 // validPruneActions is the set of allowed decision actions.
 var validPruneActions = map[string]bool{
@@ -27,8 +31,10 @@ func validatePrunePaths(r PruneResult, inputPaths []string) error {
 		if len(m.Paths) == 0 {
 			return fmt.Errorf("merge has empty source paths")
 		}
-		if m.Merged.Title == "" {
-			return fmt.Errorf("merge has empty title")
+		// The same rule SerializeFact applies, checked before the item is
+		// applied so a blank or multi-line model title fails here.
+		if err := fact.ValidateTitle(m.Merged.Title); err != nil {
+			return fmt.Errorf("merge title: %w", err)
 		}
 		for _, p := range m.Paths {
 			if !valid[p] {
@@ -92,8 +98,11 @@ func validateReflectResponse(r ReflectResult, transitionPaths []string, proposeC
 	}
 
 	for i, p := range r.Propose {
-		if p.Title == "" {
-			return fmt.Errorf("propose[%d]: title is required", i)
+		// Checked here, before the item is claimed: refused later by
+		// SerializeFact, the whole item — valid reinforcements included —
+		// would be consumed with nothing applied.
+		if err := fact.ValidateTitle(p.Title); err != nil {
+			return fmt.Errorf("propose[%d]: %w", i, err)
 		}
 		if p.Body == "" {
 			return fmt.Errorf("propose[%d]: body is required", i)

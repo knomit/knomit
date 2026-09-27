@@ -70,9 +70,10 @@ func learnTool() mcpgo.Tool {
 			mcpgo.Required(),
 			mcpgo.Description("Array of fact objects to write."),
 			mcpgo.Items(map[string]any{
-				"type":       "object",
-				"properties": learnToolSchemaProperties(),
-				"required":   []string{"title", "body"},
+				"type":                 "object",
+				"properties":           learnToolSchemaProperties(),
+				"required":             []string{"title", "body"},
+				"additionalProperties": false,
 			}),
 		),
 	)
@@ -234,6 +235,13 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 	topicCategories := make([]string, len(inputs))
 	paths := make([]string, len(inputs))
 	for i, fi := range inputs {
+		// Checked first, so a missing title is reported as that and not as
+		// whatever later rule it happens to trip. SerializeFact enforces the
+		// same rule for every write path; this is the same rule, reported
+		// with the fact's index.
+		if err := fact.ValidateTitle(fi.Title); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("fact %d: %v", i, err)
+		}
 		var path string
 		var topicCategory string
 		if fi.Path != "" {
@@ -299,7 +307,9 @@ func validateAndBuildFacts(ontology *fact.Ontology, ontologyRoot string, inputs 
 			eType = fact.DefaultEpistemicType
 		}
 		f := fact.NewFact(path)
-		f.Title = fi.Title
+		// Validated above on the raw input; trimmed here so what is stored is
+		// what ParseFact reads back, as knomit_update does.
+		f.Title = strings.TrimSpace(fi.Title)
 		f.Body = fi.Body
 		f.Kind = kind
 		f.Type = eType
@@ -857,8 +867,16 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 
 		// Parse facts from the arguments.
+		// A key the fact schema does not declare is refused, not ignored:
+		// ignoring it wrote a fact without the field the caller meant to set
+		// and reported success. Checked before anything else, so the batch
+		// writes nothing. The strict decode backs it, and a test keeps
+		// learnFactInput and the schema equal.
+		if err := rejectUnknownItemKeys(req, "facts", learnToolSchemaProperties(), "fact"); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		var factInputs []learnFactInput
-		if err := unmarshalArg(req, "facts", &factInputs); err != nil {
+		if err := unmarshalArgStrict(req, "facts", &factInputs); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		if len(factInputs) == 0 {

@@ -13,9 +13,10 @@ import { RemoteCard } from './RemoteStatus';
 import { useRemote } from './useRemote';
 import { RemoteConnectWizard } from './RemoteConnectWizard';
 import { LENS, formatBytes, repoHue, repoHueBg, repoHueBorder, noMouseFocus } from './utils';
-import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, TreeIcon, BroadcastIcon, ScrollIcon, GlobeIcon } from './icons';
+import { BookIcon, ArchiveIcon, PlusIcon, GitBranchIcon, LayersIcon, PencilIcon, CopyIcon, TreeIcon, BroadcastIcon, ScrollIcon, GlobeIcon, BotIcon } from './icons';
 import { ManageOverview } from './ManageOverview';
 import { ManageSessions } from './ManageSessions';
+import { ManageFleet } from './ManageFleet';
 import { ManageLogs } from './ManageLogs';
 import { ManageOAuth } from './ManageOAuth';
 import { useClientSessionChanges } from './useClientSessionChanges';
@@ -78,6 +79,9 @@ type Selection =
   // lens — which is why it is a server PAGE in the tab strip and why the rail
   // is absent while it is open. See isServerPage below.
   | { kind: 'sessions' }
+  // This instance's fleet membership (F09): server-level like Sessions, placed
+  // between Knowledge and Sessions in the strip.
+  | { kind: 'fleet' }
   // Logs is the server's own output: the same shape of page as Sessions, and
   // the second member of isServerPage.
   | { kind: 'logs' }
@@ -113,7 +117,7 @@ type Selection =
 // same repo and lens pages.
 // See kb/decisions/web/manage/rail-only-for-entity-pages.
 function isServerPage(v: Selection): boolean {
-  return v?.kind === 'sessions' || v?.kind === 'logs' || v?.kind === 'oauth';
+  return v?.kind === 'sessions' || v?.kind === 'logs' || v?.kind === 'oauth' || v?.kind === 'fleet';
 }
 
 export function RepoManager({ open, repos, currentRepo, currentBranch, serverReadOnly, hideRemoteConfig, onChanged, onBrowse, onEnterBranch, onBusyChange }: Props) {
@@ -352,6 +356,18 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 is one of them. Tree is otherwise only a sort-axis glyph in the
                 browse-mode Library header, never the Library's own mark. */}
             <TreeIcon color="currentColor" size={12} /> Knowledge
+          </button>
+          <button
+            type="button"
+            role="tab"
+            data-testid="repomgr-fleet"
+            aria-selected={view.kind === 'fleet'}
+            onMouseDown={noMouseFocus}
+            style={tabBtn(view.kind === 'fleet')}
+            disabled={connectBusy}
+            onClick={() => setSel({ kind: 'fleet' })}
+          >
+            <BotIcon color="currentColor" size={12} /> Fleet
           </button>
           <button
             type="button"
@@ -596,6 +612,7 @@ export function RepoManager({ open, repos, currentRepo, currentBranch, serverRea
                 createSurface="overview"
               />
             )}
+            {view.kind === 'fleet' && <ManageFleet />}
             {view.kind === 'sessions' && <ManageSessions onLiveCount={handleLiveCount} />}
             {view.kind === 'logs' && <ManageLogs />}
             {view.kind === 'oauth' && <ManageOAuth onCount={handleOAuthCount} />}

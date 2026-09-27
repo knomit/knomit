@@ -88,28 +88,3 @@ func TestVerifyAccepts_UnblockAnE4Refusal(t *testing.T) {
 	}))
 	require.Equal(t, unsigned, head)
 }
-
-// TestCheckWaivable: condition 3 of the accept ruling. A commit the dry run
-// shows as a policy change or an author-claim mismatch is refused at accept
-// time, refused or merely reported; a signature failure is waivable.
-func TestCheckWaivable(t *testing.T) {
-	h := plumbing.NewHash("3333333333333333333333333333333333333333")
-	for _, c := range []struct {
-		rep  store.SignatureReport
-		want bool // waivable
-	}{
-		{store.SignatureReport{Refused: []store.Refusal{{Commit: h.String(), Rule: store.RuleSignature}}}, true},
-		{store.SignatureReport{Refused: []store.Refusal{{Commit: h.String(), Rule: store.RuleMerge}}}, true},
-		{store.SignatureReport{Refused: []store.Refusal{{Commit: h.String(), Rule: store.RulePolicyChange}}}, false},
-		{store.SignatureReport{Reported: []store.Refusal{{Commit: h.String(), Rule: store.RulePolicyChange}}}, false},
-		{store.SignatureReport{Refused: []store.Refusal{{Commit: h.String(), Rule: store.RuleAuthorClaim}}}, false},
-		{store.SignatureReport{Refused: []store.Refusal{{Commit: "other", Rule: store.RulePolicyChange}}}, true},
-	} {
-		err := CheckWaivable(c.rep, h)
-		if c.want {
-			require.NoError(t, err)
-		} else {
-			require.ErrorIs(t, err, ErrUnwaivable)
-		}
-	}
-}

@@ -12,25 +12,28 @@ type SchemaField struct {
 //
 // This list is covered by TestOntologySchema_CoversEveryYAMLTag: adding a
 // yaml-tagged field to Ontology, OntologyNode or Validation without adding it
-// here FAILS the build. Do not maintain a parallel copy in TypeScript — the
+// here FAILS the build. Trigger keys come from triggerKeys, the same list the
+// trigger parser accepts, so the two cannot drift. Do not maintain a parallel copy in TypeScript — the
 // web client fetches this over /api/v1/ontologies/schema precisely so there
 // is one source of truth.
 func OntologySchema() []SchemaField {
-	return []SchemaField{
+	return append([]SchemaField{
 		{"Ontology", "id", "Stable identifier for this ontology (e.g. general, source-code)"},
 		{"Ontology", "name", "Human-readable name"},
 		{"Ontology", "description", "What this ontology is for"},
 		{"Ontology", "topics", "Map of top-level topic keys to their definitions"},
 		{"Ontology", "validations", "Rules applied to every fact, whatever its topic"},
-		{"Ontology", "attributes", "Repository-level settings. verify_signatures: off (default), log or enforce — verify commit signatures of the upstream for this repository; verify_signers: the ssh-ed25519 public keys admitted to sign"},
+		{"Ontology", "attributes", "Repository-level settings. verify_signatures: off (default), log or enforce — verify commit signatures of the upstream for this repository"},
 
 		{"OntologyNode", "description", "What this topic covers"},
 		{"OntologyNode", "children", "Map of nested sub-topic keys to their definitions"},
 		{"OntologyNode", "validations", "Rules applied to facts filed under this topic"},
 		{"OntologyNode", "attributes", "Store behaviour for facts under this topic and every sub-topic that does not override it. One key today: learn_dedup: off (or on) — skip knomit_learn's auto-merge and same-subject refusal"},
 
+		{"OntologyNode", "triggers", "Rules fired by changes to facts under this topic: name, match, on, if, do. A bad trigger is skipped with a warning, never fatal"},
+
 		{"Validation", "name", "Short identifier for the rule"},
 		{"Validation", "message", "Message shown when the rule rejects a fact"},
 		{"Validation", "rule", "The rule expression evaluated on write"},
-	}
+	}, triggerKeys...)
 }

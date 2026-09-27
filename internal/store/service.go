@@ -540,3 +540,8 @@ func canonicalizePath(path string) string {
 func (s *Service) HasObject(hash string) bool {
 	return s.rh.gits.HasEncodedObject(plumbing.NewHash(hash)) == nil
 }
+
+// AgentIDOf is the agent id a branch writes under: the id in its commit author
+// address (<id>+<op>@agents.knomit.io). It is OPAQUE to verification: the
+// acceptance gate looks the id up, and never parses it.
+func AgentIDOf(branch string) string { return deriveAgentID(branch) }

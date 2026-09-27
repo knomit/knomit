@@ -147,6 +147,9 @@ func ValidateOntologyYAML(data []byte) (*Ontology, []Diagnostic) {
 		diags = append(diags, attributeDiags(key, o.Topics[key], valueForKey(topicsNode, key))...)
 	}
 	diags = append(diags, rootAttributeDiags(o.Attributes, valueForKey(documentRoot(&doc), "attributes"))...)
+	// Triggers: every problem is a WARNING and drops only that trigger — see
+	// triggers.go for why a trigger may never fail the ontology.
+	diags = append(diags, triggerDiags(&o)...)
 	// Only a FATAL diagnostic withholds the ontology. Warnings travel back
 	// ALONGSIDE a usable document, which is what lets the open path read a repo
 	// whose ontology carries a key this binary does not declare.
