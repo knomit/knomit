@@ -98,8 +98,9 @@ func newLazyHooksClient(timeout time.Duration) *http.Client {
 }
 
 // socketPreferringClient dials the local listener first and falls back to the
-// address the request actually asked for. socketPath is consulted on EVERY
-// dial, and "" means "do not try it at all".
+// address the request actually asked for, unless the listener is owned by
+// another account (auth.ErrForeignListener), which fails the request instead.
+// socketPath is consulted on EVERY dial, and "" means "do not try it at all".
 //
 // auth.DialLocal is the other half of auth.ListenLocal, which is what
 // `knomit serve` opens: keeping both in one package is what stops the client
@@ -108,7 +109,7 @@ func newLazyHooksClient(timeout time.Duration) *http.Client {
 // plain winio.DialPipeContext would connect and then be anonymous.
 func socketPreferringClient(timeout time.Duration, socketPath func() string) *http.Client {
 	d := &net.Dialer{Timeout: timeout}
-	var warnOnce sync.Once
+	var warnOnce, foreignOnce sync.Once
 	return &http.Client{
 		Timeout: timeout,
 		// withBearer: the token `kb login` saved for the request's host,
@@ -122,6 +123,20 @@ func socketPreferringClient(timeout time.Duration, socketPath func() string) *ht
 				conn, err := auth.DialLocal(ctx, p, localDialBudget(timeout))
 				if err == nil {
 					return conn, nil
+				}
+				// Two shapes of failure are benign and fall back to TCP
+				// below: a MISSING listener, and one that is there but
+				// UNREACHABLE. A FOREIGN one is neither and does not fall
+				// back (knomit#265): another account holds our listener's
+				// name, which means a live process chose it, and the TCP
+				// path carries no verified identity either. The request
+				// fails, and the error says how to name a server explicitly.
+				if errors.Is(err, auth.ErrForeignListener) {
+					foreignOnce.Do(func() {
+						log.Warn().Err(err).Str("socket", p).Str("via", string(auth.LocalVia)).Str("addr", addr).
+							Msg("bridge: local listener is held by another account; refusing to talk to it and not falling back to TCP")
+					})
+					return nil, err
 				}
 				// NO LISTENER AT ALL is the ordinary case — no server
 				// running, or one older than the socket — and warning about

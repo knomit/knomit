@@ -156,6 +156,17 @@ var acceptedPipeOwner = func(owner *windows.SID, self string) bool {
 		owner.IsWellKnown(windows.WinBuiltinAdministratorsSid)
 }
 
+// RefuseEveryPipeOwnerForTest makes DialLocal treat EVERY listener as
+// foreign until restore is called, so a test in another package can stand a
+// real listener in for a squatter's (tools/bridge/knomitapi). It can only
+// NARROW the accepted set, never widen it: misused, it makes dials fail,
+// and it cannot make one succeed. Not safe for parallel tests.
+func RefuseEveryPipeOwnerForTest() (restore func()) {
+	orig := acceptedPipeOwner
+	acceptedPipeOwner = func(*windows.SID, string) bool { return false }
+	return func() { acceptedPipeOwner = orig }
+}
+
 // verifyPipeOwner reads the OWNER of the pipe conn is connected to and
 // refuses it unless acceptedPipeOwner does. Every failure to read it is an
 // error too: a connection is never used unverified.
