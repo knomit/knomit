@@ -17,7 +17,12 @@
 # Limits: the job has no accept list, so a commit or merge that needs a waiver
 # (for example a criss-cross auto-merge) blocks here and is merged by the
 # operator. Direct pushes to main that bypass this workflow are covered by each
-# knomit instance's own verification, not by this job.
+# knomit instance's own verification, not by this job. A push event runs the
+# workflow file FROM THE PUSHED BRANCH, so whoever can push an agent branch can
+# edit .github/workflows/ in it and drop this step (as they could already drop
+# the auto-merge's other checks); the verification on every knomit instance
+# still refuses what this job would have blocked. A policy change the fold only
+# notes (log, off) also blocks here: the branch stays open for the operator.
 
       - name: Check out the full history
         uses: actions/checkout@v4

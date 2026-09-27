@@ -24,10 +24,22 @@ type CheckoutVerdict struct {
 }
 
 // Blocked reports whether the candidate must not be merged: verification is
-// on (log or enforce) and a new commit is refused, or a policy change could
-// not be judged. With verification off nothing is checked.
+// on (log or enforce) and a new commit is refused, a policy change could not
+// be judged, or a new commit carries a policy change or an unreadable setting
+// that the fold only noted. log's "report and ignore" is for the fleet; a
+// forge check refusing costs nothing (the branch stays open), and merging the
+// note would leave main's file saying one mode while the fleet folds another.
+// With verification off, only policy changes are checked.
 func (v CheckoutVerdict) Blocked() bool {
-	return v.Unrooted || (v.Mode != VerifyOff && len(v.Refused) > 0)
+	if v.Unrooted || (v.Mode != VerifyOff && len(v.Refused) > 0) {
+		return true
+	}
+	for _, r := range v.Reported {
+		if r.Rule == RulePolicyChange || r.Rule == RuleUnreadable {
+			return true
+		}
+	}
+	return false
 }
 
 // VerifyCheckout runs F09's fold over a plain git repository at dir (no knomit

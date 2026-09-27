@@ -336,7 +336,8 @@ forge variable set by an admin, never a file in the repository). Without it, a
 candidate that carries a policy change cannot be judged and is blocked.
 
 Limits: a CI job has no accept list, so a commit or merge that needs a waiver
-is blocked here and left to the operator. It checks what reaches the job:
+is blocked here and left to the operator. A policy change or unreadable setting
+the fold only notes (log, off) also blocks. It checks what reaches the job:
 direct pushes that bypass the workflow, and repositories you do not run CI on,
 are covered by each knomit instance's own verification, not by this.
 
@@ -375,7 +376,14 @@ Exit codes: 0 mergeable (or verification off), 1 blocked, 2 could not run.`,
 				}
 			}
 			if v.Blocked() {
-				return &ExitCodeError{Code: exitDirty, Err: fmt.Errorf("%s is blocked: %d refused commit(s)", candidate, len(v.Refused))}
+				why := fmt.Sprintf("%d refused commit(s)", len(v.Refused))
+				switch {
+				case v.Unrooted:
+					why = "unrooted (set KNOMIT_VERIFY_OPERATOR_KEY)"
+				case len(v.Refused) == 0:
+					why = "a noted policy change or unreadable setting"
+				}
+				return &ExitCodeError{Code: exitDirty, Err: fmt.Errorf("%s is blocked: %s", candidate, why)}
 			}
 			return nil
 		},

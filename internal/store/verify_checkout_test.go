@@ -64,3 +64,34 @@ func TestVerifyCheckout_OffAndUnrooted(t *testing.T) {
 	require.True(t, v.Unrooted)
 	require.True(t, v.Blocked(), "without the operator key the job cannot judge the enable")
 }
+
+// TestVerifyCheckout_BlocksNotedPolicyChange: a policy change the fold only
+// NOTES (log keeps the old context and reports; off reports an unauthorised
+// enable) still blocks the forge check. Merging it would leave main's file
+// saying one mode while every instance folds another.
+func TestVerifyCheckout_BlocksNotedPolicyChange(t *testing.T) {
+	o := newOriginFixture(t)
+	root := o.commit(o.baseFiles, nil)
+	files := with(o.baseFiles, o.ontPath, o.ont(VerifyLog, o.a))
+	en := o.commit(files, o.op, root)
+	o.setBranch("main", en)
+
+	relax := o.commit(with(files, o.ontPath, o.ont(VerifyOff)), o.a, en)
+	o.setBranch("agent/relax", relax)
+	v, err := VerifyCheckout(o.bare, "main", "agent/relax", o.root, nil)
+	require.NoError(t, err)
+	require.Equal(t, VerifyLog, v.Mode)
+	require.Empty(t, v.Refused, "log refuses nothing")
+	require.Len(t, v.Reported, 1)
+	require.Equal(t, RulePolicyChange, v.Reported[0].Rule)
+	require.True(t, v.Blocked(), "a noted relaxation blocks the forge check")
+
+	o.setBranch("off", root)
+	enable := o.commit(with(o.baseFiles, o.ontPath, o.ont(VerifyEnforce, o.stranger)), o.stranger, root)
+	o.setBranch("agent/enable", enable)
+	v, err = VerifyCheckout(o.bare, "off", "agent/enable", o.root, nil)
+	require.NoError(t, err)
+	require.Equal(t, VerifyOff, v.Mode, "a stranger cannot enable")
+	require.True(t, v.Blocked(), "an unauthorised enable blocks even in an off repository: %+v", v)
+
+}
