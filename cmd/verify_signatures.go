@@ -45,8 +45,7 @@ Exit codes: 0 report printed, 2 the report could not run.`,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := runVerifyReport(cmd, repoName, from, asJSON); err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
-				os.Exit(exitFailed)
+				return &ExitCodeError{Code: exitFailed, Err: err}
 			}
 			return nil
 		},
@@ -93,8 +92,7 @@ the commit is checked against it first.
 		Args:          cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := runVerifyAccept(cmd, args, repoName, note, list); err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
-				os.Exit(exitFailed)
+				return &ExitCodeError{Code: exitFailed, Err: err}
 			}
 			return nil
 		},
@@ -352,13 +350,11 @@ Exit codes: 0 mergeable (or verification off), 1 blocked, 2 could not run.`,
 			}
 			root, err := store.NewStaticRoot(key)
 			if err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
-				os.Exit(exitFailed)
+				return &ExitCodeError{Code: exitFailed, Err: err}
 			}
 			v, err := store.VerifyCheckout(dir, upstream, candidate, root, nil)
 			if err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Error:", err)
-				os.Exit(exitFailed)
+				return &ExitCodeError{Code: exitFailed, Err: err}
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
@@ -379,7 +375,7 @@ Exit codes: 0 mergeable (or verification off), 1 blocked, 2 could not run.`,
 				}
 			}
 			if v.Blocked() {
-				os.Exit(exitDirty)
+				return &ExitCodeError{Code: exitDirty, Err: fmt.Errorf("%s is blocked: %d refused commit(s)", candidate, len(v.Refused))}
 			}
 			return nil
 		},
@@ -391,3 +387,15 @@ Exit codes: 0 mergeable (or verification off), 1 blocked, 2 could not run.`,
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the verdict as JSON")
 	return cmd
 }
+
+// ExitCodeError carries the process exit code a command wants, for the one
+// place allowed to exit (main.go): commands return errors, they never call
+// os.Exit themselves (TestCmd_NoProcessExit).
+type ExitCodeError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitCodeError) Error() string { return e.Err.Error() }
+func (e *ExitCodeError) Unwrap() error { return e.Err }
+func (e *ExitCodeError) ExitCode() int { return e.Code }

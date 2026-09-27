@@ -40,3 +40,15 @@ func TestVerifyAccept_RefusesBeforeBooting(t *testing.T) {
 	err = runVerifyReport(c, "x", "abc", false)
 	require.ErrorContains(t, err, "40-hex")
 }
+
+// TestVerifyCI_CouldNotRunIsExitTwo: commands never call os.Exit; `verify ci`
+// returns an ExitCodeError that main.go honours, so "could not run" (2) stays
+// distinct from "blocked" (1) for a CI job.
+func TestVerifyCI_CouldNotRunIsExitTwo(t *testing.T) {
+	c := verifyCICmd()
+	c.SetArgs([]string{"--dir", t.TempDir(), "--candidate", "HEAD"})
+	err := c.Execute()
+	var coded *ExitCodeError
+	require.ErrorAs(t, err, &coded)
+	require.Equal(t, exitFailed, coded.ExitCode())
+}

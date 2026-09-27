@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -33,6 +34,12 @@ func main() {
 
 	if err := cmd.Execute(ctx, cmd.RootCmd()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		// A command may name its exit code (cmd.ExitCodeError): `knomit verify
+		// ci` distinguishes "blocked" (1) from "could not run" (2).
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			os.Exit(coded.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
