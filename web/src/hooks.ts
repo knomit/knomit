@@ -66,8 +66,7 @@ export interface PanelClamp {
 /**
  * The space a panel hanging below its containing block (top:100%, left:0,
  * marginTop PANEL_GAP) has before the nearest PANEL_BOUNDS_ATTR ancestor cuts
- * it off. Measured on open and again whenever the window or the bounds
- * element resizes.
+ * it off. Measured on open and again on the triggers listed below.
  *
  * Measured from the panel's PARENT, not the panel: the parent is the
  * containing block the panel is anchored to, and the panel's own rect is
@@ -76,6 +75,15 @@ export interface PanelClamp {
  * Only ever an upper bound. A panel keeps its nominal width and height and
  * shrinks to this when the pane is smaller; it scrolls its own list rather
  * than being cut. Outside a bounds element nothing is clamped.
+ *
+ * Re-measured whenever the answer can change: the bounds or the anchor
+ * resizing (ResizeObserver — the list rail resizes the pane without resizing
+ * the window), and the bounds SCROLLING, which moves the anchor inside a pane
+ * of unchanged size (an overflow:hidden element still scrolls
+ * programmatically, e.g. on scroll-into-view). Window `resize` is only the
+ * fallback where ResizeObserver does not exist; alongside one it would
+ * measure every resize twice. A measure that changes nothing keeps the
+ * previous object, so it does not re-render the panel.
  */
 export function usePanelClamp(ref: RefObject<HTMLElement | null>, active: boolean): PanelClamp {
   const [clamp, setClamp] = useState<PanelClamp>({});
@@ -84,24 +92,30 @@ export function usePanelClamp(ref: RefObject<HTMLElement | null>, active: boolea
     const el = ref.current;
     const anchor = el?.parentElement;
     const bounds = el?.closest<HTMLElement>(`[${PANEL_BOUNDS_ATTR}]`);
-    if (!anchor || !bounds) { setClamp({}); return; }
+    const update = (next: PanelClamp) => setClamp(prev =>
+      prev.maxWidth === next.maxWidth && prev.maxHeight === next.maxHeight ? prev : next);
+    if (!anchor || !bounds) { update({}); return; }
     const measure = () => {
       const b = bounds.getBoundingClientRect();
       const a = anchor.getBoundingClientRect();
-      setClamp({
+      update({
         maxWidth: Math.max(0, b.right - PANEL_BOUNDS_GUTTER - a.left),
         maxHeight: Math.max(0, b.bottom - PANEL_BOUNDS_GUTTER - (a.bottom + PANEL_GAP)),
       });
     };
     measure();
-    window.addEventListener('resize', measure);
-    // The pane also changes size without the window doing so (the list rail
-    // is resizable). jsdom has no ResizeObserver; the window listener covers it there.
+    bounds.addEventListener('scroll', measure);
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
-    ro?.observe(bounds);
+    if (ro) {
+      ro.observe(bounds);
+      ro.observe(anchor);
+    } else {
+      window.addEventListener('resize', measure);
+    }
     return () => {
-      window.removeEventListener('resize', measure);
-      ro?.disconnect();
+      bounds.removeEventListener('scroll', measure);
+      if (ro) ro.disconnect();
+      else window.removeEventListener('resize', measure);
     };
   }, [ref, active]);
   return clamp;
