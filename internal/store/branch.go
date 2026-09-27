@@ -72,20 +72,11 @@ type repoHandler struct {
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer ssh.Signer        // SSH signer for commit signing (shared)
 
-	// verifyRoot is F09's root of trust (the operator key). The zero value is
-	// unconfigured: a repo whose history enables verification is then closed
-	// before the enable ("unrooted"). Set by Service.SetRootOfTrust at
-	// build/swap time, never mutated afterwards.
-	verifyRoot RootOfTrust
+	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
-	// verifyBelow caches, per upstream, the set of commits reachable from the
-	// verified anchor (or the off-scan watermark), so a steady-state tick walks
-	// only the new commits instead of the whole history. In memory only: a
-	// restart re-walks once. Guarded by verifyBelowMu; each entry is used
-	// under that upstream's branch lock.
-	verifyBelowMu sync.Mutex
-	verifyBelow   map[string]*verifyBelowCache
-	onCommit      func(branch, hash string) // external observer (e.g. SSE broadcast)
+	// ownKeys, when set, returns every key this instance's fleet member record
+	// has held (E4 accepts them as its own). Nil when standalone.
+	ownKeys func() []ssh.PublicKey
 
 	// im is the search-index manager. notifyCommit calls im.Sync after every
 	// commit so branch_facts / facts_vec / graph stay in sync with the new

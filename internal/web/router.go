@@ -158,6 +158,12 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 	// It is about every repo rather than any one, and the UI holds exactly one.
 	r.Get("/repo-events", handleRepoEvents(s.Manager))
 	r.Get("/logs/events", handleLogEvents(s.Logs, s.ReadOnly))
+	// F09 fleet membership: a TOP-LEVEL resource (the instance's state, not a
+	// repo's). PUT/DELETE pass the ordinary write gate.
+	r.Get("/fleet", handleGetFleet(b, s.Manager))
+	r.Put("/fleet", handlePutFleet(b, s.Manager))
+	r.Delete("/fleet", handleDeleteFleet(b, s.Manager))
+	r.Get("/fleet/members", handleFleetMembers(b, s.Manager))
 	r.Get("/archived", handleHALArchived(b, s.Manager))
 	r.Post("/archived/{id}/restore", handleHALArchivedRestore(b, s.Manager))
 	r.Delete("/archived/{id}", handleHALArchivedPurge(s.Manager))

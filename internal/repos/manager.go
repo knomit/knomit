@@ -25,13 +25,8 @@ import (
 
 // Deps holds all shared resources needed to open and manage repos.
 type Deps struct {
-	Cfg    config.Config
-	Signer ssh.Signer
-	// VerifyRoot is F09's root of trust, parsed once at boot from
-	// [verify].operator_key. Nil is the unconfigured root: a repository whose
-	// history enables verification is then closed before the enable
-	// ("unrooted"). It never defaults to this instance's own key.
-	VerifyRoot  store.RootOfTrust
+	Cfg         config.Config
+	Signer      ssh.Signer
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
 	KeyPath     string
@@ -496,11 +491,6 @@ func (m *Manager) LensRegistry() *LensRegistry {
 // store.ErrNoSigner. Set at construction and never changed, so no lock.
 func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
 
-// RootOfTrust returns F09's root of trust for a caller that opens a Service of
-// its own (the origin wizard's clone store). Nil when unconfigured. Set at
-// construction and never changed, so no lock.
-func (m *Manager) RootOfTrust() store.RootOfTrust { return m.deps.VerifyRoot }
-
 // Origins returns the per-repo origin store, or nil before Start.
 func (m *Manager) Origins() *Origins {
 	m.mu.RLock()
@@ -726,6 +716,14 @@ func (m *Manager) Start() error {
 	// so no entry point can migrate this file without it.
 	if err := controlUp(repoReg.DB()); err != nil {
 		return err
+	}
+	// The instance identity row (F09): app.New writes it before the Manager
+	// exists; this only covers a Manager booted without app (tests, tools), so
+	// the fleet state machine always has its row.
+	if m.deps.AgentBranch != "" {
+		if _, err := resolveIdentity(repoReg.DB(), m.deps.AgentBranch, time.Now()); err != nil {
+			return err
+		}
 	}
 
 	// One handle for all three tenants: Registry owns it, the lens registry and
@@ -996,8 +994,8 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		dbPath:                dbPath,
 		cfg:                   m.deps.Cfg,
 		signer:                m.deps.Signer,
-		verifyRoot:            m.deps.VerifyRoot,
 		agentBranch:           m.deps.AgentBranch,
+		onPush:                m.fleetPushed,
 		embedder:              m.deps.Embedder,
 		keyPath:               m.deps.KeyPath,
 		resumeWindow:          m.sessionCfg.PipelineResumeWindow,

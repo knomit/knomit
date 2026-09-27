@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"knomit/internal/fact"
-	"knomit/internal/testsupport/testsigner"
 	"knomit/internal/platform/fileuri"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // The three answers, against real bare repos on disk.

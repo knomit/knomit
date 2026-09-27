@@ -43,6 +43,11 @@ func handleHALRepoArchive(b hal.URLBuilder, m *repos.Manager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := chi.URLParam(r, "repo")
 		info, err := m.Archive(name)
+		var fe *repos.FleetError
+		if errors.As(err, &fe) {
+			writeFleetError(w, r, err) // use_unregister: 409 with the hint
+			return
+		}
 		if err != nil {
 			status, title := archiveErrStatus(err)
 			hal.WriteProblem(w, status, title, err.Error(), r.URL.Path)

@@ -40,7 +40,7 @@ type CommitSigner struct {
 // without its signature header, exactly as signCommit (sshsig.go) produced it:
 // magic, namespace "git", sha512, an Ed25519 key. It returns the key the
 // signature was made with; WHETHER that key is admitted is the caller's
-// question (the fold's signer set), never this function's.
+// question (the acceptance gate's member records), never this function's.
 //
 // A PGP-armored signature (GitHub's web-flow merges) is ErrNotSSHSIG: F09
 // treats it as unsigned, and a merge then goes to merge rule M3.
