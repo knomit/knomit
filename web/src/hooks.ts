@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import type { DependencyList, RefObject } from 'react';
 import { fetchVersion } from './api';
 
@@ -44,6 +44,67 @@ export function useDismiss(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+}
+
+/**
+ * Marks the element that CLIPS a hanging panel — an overflow:hidden ancestor —
+ * so usePanelClamp can measure it. The fact view's pane wrapper carries it.
+ */
+export const PANEL_BOUNDS_ATTR = 'data-panel-bounds';
+/** Room left between a clamped panel and the bounds' edge, so its shadow and border read as inside. */
+export const PANEL_BOUNDS_GUTTER = 8;
+/** The gap between a hanging panel and the bottom of the element it hangs from (its marginTop). */
+export const PANEL_GAP = 6;
+
+export interface PanelClamp {
+  /** Available width from the panel's left edge to the bounds' right edge; undefined = unclamped. */
+  maxWidth?: number;
+  /** Available height from the panel's top to the bounds' bottom edge; undefined = unclamped. */
+  maxHeight?: number;
+}
+
+/**
+ * The space a panel hanging below its containing block (top:100%, left:0,
+ * marginTop PANEL_GAP) has before the nearest PANEL_BOUNDS_ATTR ancestor cuts
+ * it off. Measured on open and again whenever the window or the bounds
+ * element resizes.
+ *
+ * Measured from the panel's PARENT, not the panel: the parent is the
+ * containing block the panel is anchored to, and the panel's own rect is
+ * mid-transition while it slides in, so it would report a top up to 8px off.
+ *
+ * Only ever an upper bound. A panel keeps its nominal width and height and
+ * shrinks to this when the pane is smaller; it scrolls its own list rather
+ * than being cut. Outside a bounds element nothing is clamped.
+ */
+export function usePanelClamp(ref: RefObject<HTMLElement | null>, active: boolean): PanelClamp {
+  const [clamp, setClamp] = useState<PanelClamp>({});
+  useLayoutEffect(() => {
+    if (!active) return;
+    const el = ref.current;
+    const anchor = el?.parentElement;
+    const bounds = el?.closest<HTMLElement>(`[${PANEL_BOUNDS_ATTR}]`);
+    if (!anchor || !bounds) { setClamp({}); return; }
+    const measure = () => {
+      const b = bounds.getBoundingClientRect();
+      const a = anchor.getBoundingClientRect();
+      setClamp({
+        maxWidth: Math.max(0, b.right - PANEL_BOUNDS_GUTTER - a.left),
+        maxHeight: Math.max(0, b.bottom - PANEL_BOUNDS_GUTTER - (a.bottom + PANEL_GAP)),
+      });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    // The pane also changes size without the window doing so (the list rail
+    // is resizable). jsdom has no ResizeObserver; the window listener covers it there.
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    ro?.observe(bounds);
+    return () => {
+      window.removeEventListener('resize', measure);
+      ro?.disconnect();
+    };
+  }, [ref, active]);
+  return clamp;
 }
 
 /**

@@ -9,6 +9,7 @@ import { RightPanel } from './RightPanel';
 import { init } from './state';
 import type { AppState } from './state';
 import type { RefGroup } from './api';
+import { PANEL_BOUNDS_ATTR } from './hooks';
 
 vi.mock('./api', () => ({
   api: {
@@ -60,6 +61,20 @@ describe('RightPanel — connections menu', () => {
     fireEvent.click(screen.getByTestId('connections-in'));
     expect(screen.getByTestId('connections-panel')).toHaveAttribute('data-open', 'true');
     expect(screen.getByText('Inbound')).toBeInTheDocument();
+  });
+
+  // The panel clamps itself to the nearest [data-panel-bounds] ancestor. That
+  // must be the element that actually CLIPS it — the fact view's overflow:hidden
+  // wrapper — or the clamp measures the wrong box and the cut comes back.
+  it('hangs inside the fact pane\'s clipping wrapper, which is the clamp bounds', async () => {
+    mount();
+    await waitFor(() => expect(screen.getByTestId('connections-in')).toBeInTheDocument());
+    const panel = screen.getByTestId('connections-panel');
+    const bounds = panel.closest(`[${PANEL_BOUNDS_ATTR}]`) as HTMLElement | null;
+    expect(bounds).not.toBeNull();
+    expect(bounds!.style.overflow).toBe('hidden');
+    // The clamp measures from the panel's containing block, its parent.
+    expect((panel.parentElement as HTMLElement).style.position).toBe('relative');
   });
 
   it('swaps direction rather than stacking', async () => {

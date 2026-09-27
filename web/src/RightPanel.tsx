@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import type { Dispatch, ReactNode } from 'react';
-import { useAsync } from './hooks';
+import { PANEL_BOUNDS_ATTR, useAsync } from './hooks';
 import { api } from './api';
 import type { Fact, Stats, ActivityStats, LensStats, RefGroup, RankAxis } from './api';
 import type { AppState, Action } from './state';
@@ -1054,8 +1054,10 @@ export const RightPanel = memo(function RightPanel({ state, dispatch, navigate, 
         />
       )}
       {/* No scroll here: the fact view scrolls its own body BELOW the band, so
-          the band can stay put. A scroller here would move the band with it. */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          the band can stay put. A scroller here would move the band with it.
+          It is also what clips the header's hanging panels, so it is their
+          clamp bounds: they shrink to fit inside it rather than being cut. */}
+      <div {...{ [PANEL_BOUNDS_ATTR]: '' }} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {renderFact(
           fact,
           // History anchor (VersionWalker) — the fact's own source mount + relative
