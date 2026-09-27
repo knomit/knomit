@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -21,6 +22,17 @@ import (
 //	    return mcpgo.NewToolResultError(err.Error()), nil
 //	}
 func unmarshalArg[T any](req mcpgo.CallToolRequest, key string, target *T) error {
+	return decodeArg(req, key, target, false)
+}
+
+// unmarshalArgStrict is unmarshalArg that also refuses keys the target type
+// does not declare. Use it where ignoring an unknown key would do something
+// the caller did not ask for.
+func unmarshalArgStrict[T any](req mcpgo.CallToolRequest, key string, target *T) error {
+	return decodeArg(req, key, target, true)
+}
+
+func decodeArg[T any](req mcpgo.CallToolRequest, key string, target *T, strict bool) error {
 	args := req.GetArguments()
 	raw, ok := args[key]
 	if !ok {
@@ -30,7 +42,11 @@ func unmarshalArg[T any](req mcpgo.CallToolRequest, key string, target *T) error
 	if err != nil {
 		return fmt.Errorf("invalid %s: %v", key, err)
 	}
-	if err := json.Unmarshal(b, target); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	if err := dec.Decode(target); err != nil {
 		return fmt.Errorf("invalid %s format: %v", key, err)
 	}
 	return nil

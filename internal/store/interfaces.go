@@ -13,6 +13,10 @@ import (
 type FactIndex interface {
 	ReadFact(ctx context.Context, branch, path string, opts *ReadFactOpts) (ReadFactResult, error)
 	WriteFact(ctx context.Context, branch, path, content, message, operation string) (WriteFactResult, error)
+	// WriteFactIfUnchanged is WriteFact that commits only if path's blob on
+	// the branch tip is still expectBlob, checked inside the write lock;
+	// otherwise it writes nothing and returns an error wrapping ErrFactChanged.
+	WriteFactIfUnchanged(ctx context.Context, branch, path, content, message, operation, expectBlob string) (WriteFactResult, error)
 	// WriteRootFile writes a root-level non-fact file (e.g. README.md)
 	// PRESERVING CASE. WriteFact lowercases, which is correct for fact paths
 	// and wrong for a filename an external reader looks for by exact name.
