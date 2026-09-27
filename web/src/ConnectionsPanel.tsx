@@ -34,8 +34,12 @@ interface Props {
  * The references panel: one direction at a time, dropped from the fact header's
  * connections cell.
  *
- * Right-aligned under the menu rather than spanning the pane, so it reads as
- * having opened from the cell that was clicked. It OVERLAYS the fact body — a
+ * Left-aligned under the menu rather than spanning the pane, so it reads as
+ * having opened from the cell that was clicked. LEFT because those cells open
+ * the edges row: its containing block is the row's span, which starts at the
+ * pane's left padding, so a right anchor would hang the panel leftward past
+ * the pane's edge, where the fact view's overflow:hidden clips it. MotifPanel
+ * hangs from the same span the same way. It OVERLAYS the fact body — a
  * variant that pushed the prose down would relayout the whole fact on every
  * open and close, for a panel meant to be glanced at and dismissed.
  *
@@ -77,7 +81,7 @@ export function ConnectionsPanel({
       style={{
         position: 'absolute',
         top: '100%',
-        right: 0,
+        left: 0,
         marginTop: 6,
         width: CONNECTIONS_PANEL_WIDTH,
         maxHeight: 360,

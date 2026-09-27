@@ -29,12 +29,13 @@ interface Props {
 export const CELL_PAD_X = 7;
 
 /**
- * One edge-count cell in the fact header's control menu, which reads
- * `↙2 ↗3 ⏱v1 ⊗` — connections, then version, then retract.
+ * One edge-count cell in the fact header's edges row, which reads
+ * `↙ cited by N  ↗ cites N  ≈ motif…` — connections first, then the motif
+ * cells; version, date and retract sit apart from it, pinned right.
  *
  * Connections used to be a 300px column, then a 36px gutter with a side drawer.
  * Both spent permanent horizontal space on something a reader consults
- * occasionally; putting the counts beside the version chip costs nothing that
+ * occasionally; putting the counts in the header's edges row costs nothing that
  * was not already header, and the panel they open is transient.
  *
  * ZERO IS NOT A BUTTON: no accent, no hover, no pointer, no panel. It renders

@@ -39,6 +39,18 @@ const FPS = ok('failure-presents-as-success', {
 });
 
 describe('MotifPanel', () => {
+  // Same anchor as ConnectionsPanel: both hang from the start of the edges
+  // row and open rightward into the pane. A right anchor there opens leftward
+  // past the pane's edge, where overflow:hidden clips it.
+  it('hangs from the menu, left-aligned', () => {
+    panel([FPS], null);
+    const el = screen.getByTestId('motif-panel');
+    expect(el.style.position).toBe('absolute');
+    expect(el.style.top).toBe('100%');
+    expect(el.style.left).toBe('0px');
+    expect(el.style.right).toBe('');
+  });
+
   it('expands the motif that was clicked and collapses the others', () => {
     panel([FPS, ok('absence-encodes-value', { carrier_count: 7 })], 'absence-encodes-value');
     const sections = screen.getAllByTestId('motif-section');
