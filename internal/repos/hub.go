@@ -221,6 +221,27 @@ func (h *TaskHub) broadcastSyncOK(remote string, result store.SyncResult) {
 	})
 }
 
+// TriggerEvent is F07's `emit` action on the branch SSE stream (event name
+// "trigger"). Published straight from the dispatcher (broadcastTrigger), NOT
+// through the debounced commit observer, so a fire reaches a listener within
+// the run that produced it and a steady stream of writes cannot starve it.
+// Branch is the agent branch the fire happened on; the SSE handler forwards
+// the event only to the stream of that branch.
+type TriggerEvent struct {
+	Branch  string `json:"-"`
+	Trigger string `json:"trigger"`
+	Path    string `json:"path"`
+	Episode string `json:"episode"`
+	Source  string `json:"source"`
+	Commit  string `json:"commit"`
+	Trace   string `json:"trace,omitempty"`
+}
+
+// broadcastTrigger publishes one trigger fire to this repo's SSE subscribers.
+func (h *TaskHub) broadcastTrigger(ev TriggerEvent) {
+	h.ob.Publish(ev)
+}
+
 // broadcastVerify publishes F09's verify-failed event (SSE event name
 // "verify-failed") for an advance whose verification refused or noted
 // commits, in log AND enforce, on every tick it recurs: the anchor does not

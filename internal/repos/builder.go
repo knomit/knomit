@@ -83,6 +83,9 @@ type repoBuilder struct {
 	// runtime clone-create's ActivateSync cannot kill the in-flight initial index.
 	indexCtx context.Context
 	indexWg  *sync.WaitGroup
+	// ri is the instance build() produced, kept so activate() can start the
+	// trigger dispatcher it holds.
+	ri *RepoInstance
 	// repoEventHub is the Manager's server-wide repo-event stream, nil when the
 	// Manager has none (most tests). Carried onto the instance so the mark*
 	// chokepoint can reach it.
@@ -643,7 +646,25 @@ func (b *repoBuilder) build() *RepoInstance {
 		}
 		hub.broadcastStatus(hash)
 	})
-	ri.onCommit = func(_, hash string) { obs.Notify(hash) }
+	// F07: the trigger dispatcher is built here (so its kick slot exists from
+	// the first commit, even during the background heal) and STARTED in
+	// activate(). It is not built at all for a read-only server, or for a
+	// subscription (no agent branch to observe): then ri.triggers stays nil
+	// and the kick below is a nil check.
+	if b.agentBranch != "" && !b.subscribed && !b.cfg.ReadOnly {
+		ri.triggers = newTriggerDispatcher(ri, b.name, b.agentBranch, b.signer, b.cfg.Log.SlowTriggerMS)
+	}
+	// This closure runs under the writer's branch lock (store notifyCommit),
+	// so it must only schedule: the observer's debounce timer, and, for the
+	// agent branch, one non-blocking send on the dispatcher's 1-slot channel.
+	// Nothing else may happen here. main and exp/* never kick.
+	agentBranchForKick := b.agentBranch
+	ri.onCommit = func(branch, hash string) {
+		obs.Notify(hash)
+		if branch == agentBranchForKick {
+			ri.triggerKick()
+		}
+	}
 	b.svc.SetOnCommit(ri.onCommit)
 
 	// Startup recovery + the remote sync loops are DEFERRED to activate(), run
@@ -820,6 +841,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		h.svc.Close()
 	}
 
+	b.ri = ri
 	return ri
 }
 
@@ -832,6 +854,21 @@ func (b *repoBuilder) activate() {
 	b.ensureLocalUpstream()
 	b.recoverFromOrigin()
 	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
+	b.startTriggerDispatcher()
+}
+
+// startTriggerDispatcher launches the F07 dispatcher built in build(), after
+// the initial index so its first run never races the heal. It gets its OWN
+// context from b.ctx — never syncCtx, which ActivateSync cancels to restart
+// the reconcile loop (the experiment sweep shares syncCtx and dies on every
+// origin attach; the dispatcher must not). It runs regardless of
+// DisableBackgroundSync: it writes no ref and no fact, only its two tables and
+// the SSE hub, and a repo with no triggers declared does one cheap run.
+func (b *repoBuilder) startTriggerDispatcher() {
+	if b.ri == nil || b.ri.triggers == nil {
+		return
+	}
+	b.ri.triggers.start(b.ctx)
 }
 
 // ensureLocalUpstream repairs a store that holds refs/remotes/origin/<upstream>

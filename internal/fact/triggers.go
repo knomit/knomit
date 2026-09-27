@@ -24,16 +24,17 @@ import (
 // THE RULE THIS FILE EXISTS TO KEEP: a trigger problem is NEVER fatal to the
 // ontology. A fatal diagnostic fails ParseOntology, and the repo then opens
 // with no ontology and refuses every write (repos/builder.go loadOntology →
-// ontologyErr). A missing trigger loses nothing — its watermark freezes in 1b
-// and catches up once fixed — while a fatal one would stop writes on every
-// machine that pulls the typo. So every problem is a warning, and the trigger
-// is recorded as `invalid` with its error text (user ruling D-a, 2026-09-27;
-// and "invalid / malformed triggers and recipes should be skipped and at least
-// logged as errors" — the logging is 1b's, which knows the repo).
+// ontologyErr). A missing trigger loses nothing — its watermark freezes in the
+// dispatcher (repos/triggers.go) and catches up once fixed — while a fatal one
+// would stop writes on every machine that pulls the typo. So every problem is
+// a warning, and the trigger is recorded as `invalid` with its error text
+// (user ruling D-a, 2026-09-27; and "invalid / malformed triggers and recipes
+// should be skipped and at least logged as errors" — the logging is the
+// dispatcher's, which knows the repo).
 
-// Trigger actions and episodes. A value this binary does not know drops the
-// trigger (it may come from a newer knomit); a known value that this version
-// does not act on yet is kept but inactive.
+// Trigger actions and episodes. A value this binary does not know makes the
+// trigger `invalid` (it may come from a newer knomit); a known value that this
+// version does not act on yet makes it `unsupported` (see the states below).
 const (
 	TriggerDoEmit   = "emit"
 	TriggerDoScript = "script"
@@ -47,9 +48,24 @@ const (
 )
 
 // Trigger states, per declared trigger.
+//
+//   - active: compiled, matched and evaluated by the dispatcher.
+//   - invalid: something is WRONG with the entry (a typo, an unknown value, a
+//     bad glob, an `if` that does not compile). It is a problem: the editor
+//     shows a warning and the dispatcher logs an ERROR once per blob. Its
+//     bookmark FREEZES so nothing is lost while it is being fixed.
+//   - unsupported: the entry is valid but names a capability this knomit
+//     version does not act on yet (`do: script|push|run`, or `on: due` before
+//     the due sweep exists). It is NOT an error: no warning, no ERROR log, and
+//     it holds NO bookmark — when a later version activates it, it starts at
+//     the head of that advance, never back-filling (user ruling, 2026-09-27).
+//
+// Invalidity is decided first: a `do: script` entry with a bad glob is
+// `invalid`, so the author still learns about the typo.
 const (
-	TriggerActive  = "active"
-	TriggerInvalid = "invalid"
+	TriggerActive      = "active"
+	TriggerInvalid     = "invalid"
+	TriggerUnsupported = "unsupported"
 )
 
 var (
@@ -57,9 +73,13 @@ var (
 	knownTriggerDo = map[string]bool{TriggerDoEmit: true, TriggerDoScript: true, TriggerDoPush: true, TriggerDoRun: true}
 	// activeTriggerDo is what this version acts on. The others parse, so an
 	// ontology written for a later PR is not "unknown", but their triggers are
-	// invalid here: they must not run, and their watermark freezes until a
-	// knomit that implements them arrives.
+	// `unsupported` here: they must not run, and they hold no watermark until
+	// a knomit that implements them arrives.
 	activeTriggerDo = map[string]bool{TriggerDoEmit: true}
+	// activeTriggerOn is the episodes this version derives from the tree. `due`
+	// waits for the sweep (PR 2); a trigger that lists it is `unsupported` as a
+	// whole.
+	activeTriggerOn = map[string]bool{TriggerOnLearn: true, TriggerOnUpdate: true, TriggerOnRetract: true}
 )
 
 // triggerKeys is every key a trigger entry may carry, with its editor doc.
@@ -251,9 +271,12 @@ func (t *CompiledTrigger) Matches(path string) bool { return t.glob.Match(path) 
 // OnEpisode reports whether the trigger listens for episode.
 func (t *CompiledTrigger) OnEpisode(episode string) bool { return slices.Contains(t.On, episode) }
 
-// TriggerState is the outcome for one declared trigger: active, or invalid
-// with the error verbatim. Key is stable per (name, ontology blob) so the
-// dispatcher can log an invalid trigger ONCE per blob, not on every advance.
+// TriggerState is the outcome for one declared trigger: active, invalid (with
+// the error verbatim) or unsupported (with the reason). Key is stable per
+// (name, ontology blob) so the dispatcher can log an invalid trigger ONCE per
+// blob, not on every advance. Match, On and Do are the entry AS WRITTEN (the
+// pattern before substitution), so the triggers endpoint can show a trigger
+// that did not compile.
 type TriggerState struct {
 	Name  string
 	Node  string
@@ -261,7 +284,15 @@ type TriggerState struct {
 	Error string
 	Key   string
 	Line  int
+	Match string
+	On    []string
+	Do    string
 }
+
+// FactGlobal is the `fact` global a trigger's `if` sees: the same map the
+// validation rules see (factToJS), so a condition written against one works
+// against the other.
+func FactGlobal(f Fact) map[string]any { return factToJS(f) }
 
 // TriggerSet is every trigger of one ontology, compiled for one instance.
 type TriggerSet struct {
@@ -281,6 +312,13 @@ type declaredTrigger struct {
 }
 
 // collectTriggers walks every node (topics then children, in sorted order).
+//
+// The node path is LOWERCASED segment by segment: fact paths are lowercase and
+// compileGlob lowercases the pattern, so the literal-prefix check compares
+// like with like. Topic and first-level child keys are already forced to
+// lowercase by the ontology diagnostics, but deeper keys are not validated, and
+// an uppercase grandchild used to make every trigger under it permanently
+// invalid ("match leaves its topic").
 func collectTriggers(o *Ontology) []declaredTrigger {
 	var out []declaredTrigger
 	var walk func(prefix string, n *OntologyNode)
@@ -292,12 +330,12 @@ func collectTriggers(o *Ontology) []declaredTrigger {
 			out = append(out, declaredTrigger{node: prefix, spec: s})
 		}
 		for _, k := range sortedKeys(n.Children) {
-			walk(prefix+"/"+k, n.Children[k])
+			walk(prefix+"/"+strings.ToLower(k), n.Children[k])
 		}
 	}
 	if o != nil {
 		for _, k := range sortedKeys(o.Topics) {
-			walk(k, o.Topics[k])
+			walk(strings.ToLower(k), o.Topics[k])
 		}
 	}
 	return out
@@ -331,21 +369,26 @@ func CompileTriggers(o *Ontology, id TriggerIdentity, blob string) *TriggerSet {
 		}
 	}
 	for i, d := range all {
-		st := TriggerState{Name: d.spec.Name, Node: d.node, Line: d.spec.line}
+		st := TriggerState{Name: d.spec.Name, Node: d.node, Line: d.spec.line,
+			Match: d.spec.Match, On: append([]string(nil), d.spec.On...), Do: d.spec.Do}
 		if d.spec.Name != "" {
 			set.Declared[d.spec.Name] = true
 			st.Key = d.spec.Name + "@" + blob
 		}
 		var ct *CompiledTrigger
+		var unsupported string
 		var err error
 		if w, ok := winner[d.spec.Name]; ok && w != i {
 			err = fmt.Errorf("duplicate trigger name %q: already declared at %s", d.spec.Name, all[w].node)
 		} else {
-			ct, err = compileTrigger(d.node, d.spec, id)
+			ct, unsupported, err = compileTrigger(d.node, d.spec, id)
 		}
-		if err != nil {
+		switch {
+		case err != nil:
 			st.State, st.Error = TriggerInvalid, err.Error()
-		} else {
+		case unsupported != "":
+			st.State, st.Error = TriggerUnsupported, unsupported
+		default:
 			st.State = TriggerActive
 			set.Active = append(set.Active, ct)
 		}
@@ -354,39 +397,40 @@ func CompileTriggers(o *Ontology, id TriggerIdentity, blob string) *TriggerSet {
 	return set
 }
 
-// compileTrigger validates one entry declared at node and compiles it.
-func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTrigger, error) {
+// compileTrigger validates one entry declared at node and compiles it. It
+// returns the compiled trigger; or a non-empty `unsupported` reason when the
+// entry is valid but names a capability this version does not act on; or an
+// error when the entry is invalid. Every validity check runs BEFORE the
+// support check, so a broken `do: script` entry is reported as invalid.
+func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTrigger, string, error) {
 	if s.problem != "" {
-		return nil, fmt.Errorf("%s", s.problem)
+		return nil, "", fmt.Errorf("%s", s.problem)
 	}
 	if s.Name == "" {
-		return nil, fmt.Errorf("name is required")
+		return nil, "", fmt.Errorf("name is required")
 	}
 	if !validKeyRe.MatchString(s.Name) {
-		return nil, fmt.Errorf("name %q must be lowercase kebab-case", s.Name)
+		return nil, "", fmt.Errorf("name %q must be lowercase kebab-case", s.Name)
 	}
 	if len(s.On) == 0 {
-		return nil, fmt.Errorf("on is required (learn, update, retract or due)")
+		return nil, "", fmt.Errorf("on is required (learn, update, retract or due)")
 	}
 	for _, e := range s.On {
 		if !knownTriggerOn[e] {
-			return nil, fmt.Errorf("unknown on value %q (known: learn, update, retract, due)", e)
+			return nil, "", fmt.Errorf("unknown on value %q (known: learn, update, retract, due)", e)
 		}
 	}
 	if s.Do == "" {
-		return nil, fmt.Errorf("do is required")
+		return nil, "", fmt.Errorf("do is required")
 	}
 	if !knownTriggerDo[s.Do] {
-		return nil, fmt.Errorf("unknown do value %q (known: emit, script, push, run)", s.Do)
+		return nil, "", fmt.Errorf("unknown do value %q (known: emit, script, push, run)", s.Do)
 	}
 	if s.Do == TriggerDoScript && s.Script == "" {
-		return nil, fmt.Errorf("do: script needs a script name")
+		return nil, "", fmt.Errorf("do: script needs a script name")
 	}
 	if s.Do == TriggerDoRun && s.Recipe == "" {
-		return nil, fmt.Errorf("do: run needs a recipe name")
-	}
-	if !activeTriggerDo[s.Do] {
-		return nil, fmt.Errorf("do: %s is not active in this knomit version; the trigger is kept and waits for a version that implements it", s.Do)
+		return nil, "", fmt.Errorf("do: run needs a recipe name")
 	}
 	pattern := s.Match
 	if pattern == "" {
@@ -394,30 +438,39 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 	}
 	sub, err := substitutePlaceholders(pattern, id)
 	if err != nil {
-		return nil, fmt.Errorf("match: %w", err)
+		return nil, "", fmt.Errorf("match: %w", err)
 	}
 	g, err := compileGlob(sub)
 	if err != nil {
-		return nil, fmt.Errorf("match: %w", err)
+		return nil, "", fmt.Errorf("match: %w", err)
 	}
 	if !g.literalPrefix(strings.Split(node, "/")) {
-		return nil, fmt.Errorf("match %q leaves its topic: it must start with %q", s.Match, node+"/")
+		return nil, "", fmt.Errorf("match %q leaves its topic: it must start with %q", s.Match, node+"/")
 	}
 	ct := &CompiledTrigger{Name: s.Name, Node: node, Match: sub, On: s.On, Do: s.Do, If: s.If, glob: g}
 	if strings.TrimSpace(s.If) != "" {
 		prog, err := goja.Compile("trigger "+s.Name, s.If, true)
 		if err != nil {
-			return nil, fmt.Errorf("if does not compile: %w", err)
+			return nil, "", fmt.Errorf("if does not compile: %w", err)
 		}
 		ct.ifProg = prog
 	}
-	return ct, nil
+	// Valid. Is it something this version acts on?
+	if !activeTriggerDo[s.Do] {
+		return nil, fmt.Sprintf("do: %s is not supported in this knomit version; the trigger waits for a version that implements it", s.Do), nil
+	}
+	for _, e := range s.On {
+		if !activeTriggerOn[e] {
+			return nil, fmt.Sprintf("on: %s is not supported in this knomit version; the trigger waits for a version that implements it", e), nil
+		}
+	}
+	return ct, "", nil
 }
 
-// triggerDiags reports every trigger problem of o as a WARNING (never an
-// error: see the rule at the top of this file) so the editor shows it. Parse
-// time has no instance identity, so placeholders are checked against a
-// stand-in.
+// triggerDiags reports every trigger PROBLEM of o as a WARNING (never an
+// error: see the rule at the top of this file) so the editor shows it. An
+// `unsupported` trigger is not a problem and gets no diagnostic. Parse time
+// has no instance identity, so placeholders are checked against a stand-in.
 func triggerDiags(o *Ontology) []Diagnostic {
 	var diags []Diagnostic
 	for _, st := range CompileTriggers(o, validationIdentity, "").States {

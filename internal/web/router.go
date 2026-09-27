@@ -350,6 +350,7 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Get("/motifs/{key}", handleHALMotifCluster(b, p.motifs, p.factsCollection))
 				r.Get("/stats", handleHALStats(b, p.stats))
 				r.Get("/events", handleHALEvents())
+				r.Get("/triggers", handleHALTriggers(b))
 
 				r.Post("/synthesis-runs", handleStartSynthesis(s.LLMAdapter))
 				r.Get("/synthesis-runs", handleListJobs(s.JobRegistry, "synthesis-run"))

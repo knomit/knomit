@@ -122,6 +122,11 @@ type RepoInstance struct {
 	discoveryWGap         float64
 	discoveryWSpec        float64
 	onCommit              func(string, string) // re-applied to new svc after SwapStore
+	// triggers is the F07 trigger dispatcher, nil when this repo has none (a
+	// read-only server, or a subscription with no agent branch). Set once in
+	// build() and never reassigned, so ri.onCommit reads it without a lock;
+	// its goroutine starts from activate() and stops in shutdown().
+	triggers *triggerDispatcher
 	// handle is the current store generation; nil while no store is attached
 	// (mid-SwapStore, or a test instance without a service). closed marks the
 	// beginning of permanent teardown. Both are guarded by mu; all store access
@@ -651,6 +656,12 @@ func (ri *RepoInstance) shutdown() {
 	}
 	if ri.syncWg != nil {
 		ri.syncWg.Wait()
+	}
+	// The trigger dispatcher has its own ctx (not syncCtx, which ActivateSync
+	// restarts). Stop it before the store closes: its phases A and C hold an
+	// Acquire, which closeFn's drain would otherwise wait on.
+	if ri.triggers != nil {
+		ri.triggers.stop()
 	}
 	if ri.hub != nil {
 		ri.hub.Shutdown()

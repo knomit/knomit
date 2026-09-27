@@ -120,6 +120,13 @@ type LogConfig struct {
 	// SlowRequestMS logs any HTTP/MCP request slower than this at WARN.
 	// 0 disables the slow-request log.
 	SlowRequestMS int `toml:"slow_request_ms"`
+	// SlowTriggerMS logs a WARN "slow trigger" for any trigger whose own work
+	// (its `if` plus its action) takes longer than this, per (trigger, path)
+	// evaluation, the way slow_request_ms reports a slow request. 0 disables
+	// it. The default, 50, is structural: a trigger's `if` is capped at 100 ms
+	// by the sandbox, so a condition that has spent half its budget is worth
+	// naming, and the request default (1000) could never fire under that cap.
+	SlowTriggerMS int `toml:"slow_trigger_ms"`
 	// CrashFile, when non-empty, redirects fd 2 (stderr) to this append-only
 	// file at startup so runtime/CGO fatal tracebacks — which bypass the
 	// logger and write directly to fd 2 — are persisted. Off by default;
@@ -525,6 +532,7 @@ func Defaults() Config {
 			MaxBackups:    3,
 			MaxAgeDays:    7,
 			SlowRequestMS: 1000,
+			SlowTriggerMS: 50,
 		},
 	}
 }
@@ -637,6 +645,7 @@ func Load() (Config, error) {
 		envIntOr("KNOMIT_LOG_MAX_BACKUPS", &cfg.Log.MaxBackups),
 		envIntOr("KNOMIT_LOG_MAX_AGE", &cfg.Log.MaxAgeDays),
 		envIntOr("KNOMIT_LOG_SLOW_MS", &cfg.Log.SlowRequestMS),
+		envIntOr("KNOMIT_LOG_SLOW_TRIGGER_MS", &cfg.Log.SlowTriggerMS),
 	} {
 		if err != nil {
 			return Config{}, err
