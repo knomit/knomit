@@ -701,9 +701,8 @@ func (m *Manager) Start() error {
 	}
 
 	// Open the repo registry WITHOUT creating its schema, and store the handle
-	// before anything can fail: the boot guard below reads "the repos table has
-	// never existed here", and both creating that table and leaking the handle
-	// on an early return would cost us something Close cannot recover.
+	// before anything can fail, so a controlUp error below cannot leak it:
+	// Close releases whatever m.reg holds.
 	repoReg, err := OpenRegistryNoSchema(filepath.Join(m.deps.Cfg.Home, "control.db"))
 	if err != nil {
 		return fmt.Errorf("open repo registry: %w", err)
@@ -712,17 +711,9 @@ func (m *Manager) Start() error {
 	m.reg = repoReg
 	m.mu.Unlock()
 
-	// Nothing above this line has written to control.db, so a refusal here
-	// leaves the home exactly as migrate-registry expects to find it — and
-	// leaves the evidence intact for the next boot attempt.
-	if err := refuseUnmigratedHome(repoReg, reposDir); err != nil {
-		return err
-	}
-
-	// Only now may anything write to control.db. controlUp holds the second
-	// load-bearing ordering — the lens re-key before the versioned baseline —
-	// and is shared with OpenRegistry and OpenLensRegistry so no entry point can
-	// migrate this file without it.
+	// controlUp holds the load-bearing ordering — the lens re-key before the
+	// versioned baseline — and is shared with OpenRegistry and OpenLensRegistry
+	// so no entry point can migrate this file without it.
 	if err := controlUp(repoReg.DB()); err != nil {
 		return err
 	}
@@ -982,85 +973,6 @@ func (m *Manager) warnOrphanFiles(reposDir string, registered map[string]struct{
 			Msg("database file is not in the registry and will be ignored")
 	}
 	return orphans
-}
-
-// refuseUnmigratedHome refuses to boot a home that predates the control.db repo
-// registry, rather than coming up with every legacy .db invisible and a Create
-// free to be told a taken name is available.
-//
-// THREE INDEPENDENT ARMS, each keyed on evidence that SURVIVES a failed boot:
-// the legacy name-keyed lens column, a legacy archive directory holding
-// archived repo databases, and the absence of the `repos` table itself. The
-// first two are removed by `knomit migrate-registry` and by nothing else, so
-// they clear exactly when the home is genuinely converted.
-//
-// Arm 3 is the one that catches a legacy home with no lenses and no archive —
-// nothing but repos/<name>.db files — and it is the arm that has to be wired
-// with care, TWICE over:
-//
-// It is NOT "the registry is empty". Purge deletes a repo's registry row before
-// its file, so a failed unlink leaves an orphan .db on a fully migrated home
-// whose table already existed. That home must still boot. Hence SchemaExisted,
-// which distinguishes "never had a registry" from "has an empty one".
-//
-// And its evidence is destroyed by writing: whoever creates the `repos` table
-// makes SchemaExisted report true forever after. That is why Manager.Start
-// opens with OpenRegistryNoSchema and calls migrate.Control only once this
-// function has returned nil. Create the table on the way past and the guard
-// fires exactly once — retry the boot and the server comes up on an unconverted
-// home with every legacy .db invisible, which under a restart policy (systemd
-// Restart=on-failure, Docker) turns "refuse loudly" into "refuse once, at 3am,
-// into a log nobody reads".
-func refuseUnmigratedHome(repoReg *Registry, reposDir string) error {
-	// The command named here is deprecated and scheduled for removal, so the
-	// advice says "now": an operator who defers this until the next upgrade may
-	// find the only converter gone.
-	const advice = "this home predates the control.db repo registry. Run `knomit migrate-registry` to convert it now — that command is deprecated and will be removed in a future build"
-
-	legacyLenses, err := HasLegacyLensSchema(repoReg.DB())
-	if err != nil {
-		return fmt.Errorf("check control.db lens schema: %w", err)
-	}
-	if legacyLenses {
-		return fmt.Errorf(
-			"control.db still has the name-keyed lens tables (lenses.write_repo): %s", advice)
-	}
-
-	// The legacy archive lived at repos/archive/<ksuid>.db. anyRepoDBFile globs
-	// one directory only, so without this arm a home whose repos are ALL
-	// archived boots — and then every lens endpoint fails with a raw
-	// "no such column: write_uid", because the legacy `lenses` table survives
-	// CREATE TABLE IF NOT EXISTS untouched.
-	archiveDir := filepath.Join(reposDir, "archive")
-	if stray := anyRepoDBFile(archiveDir); stray != "" {
-		return fmt.Errorf(
-			"found %s in %s: %s", stray, archiveDir, advice)
-	}
-
-	if !repoReg.SchemaExisted() {
-		if stray := anyRepoDBFile(reposDir); stray != "" {
-			return fmt.Errorf(
-				"found %s in %s but the repo registry is empty: %s", stray, reposDir, advice)
-		}
-	}
-	return nil
-}
-
-// anyRepoDBFile returns the base name of the first non-session .db under dir,
-// or "" if there is none. Deliberately not a filename-shape test — a repo
-// name may legally look like a ksuid, so shape tells you nothing about
-// whether a file is a stray repo database.
-func anyRepoDBFile(dir string) string {
-	dbFiles, _ := filepath.Glob(filepath.Join(dir, "*.db"))
-	sort.Strings(dbFiles)
-	for _, p := range dbFiles {
-		base := filepath.Base(p)
-		if store.IsSessionDBFile(base) {
-			continue
-		}
-		return base
-	}
-	return ""
 }
 
 // openOne initialises a single repo from a SQLite database file. It only ever

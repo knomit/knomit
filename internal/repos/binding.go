@@ -105,14 +105,15 @@ func (b *Binding) Name() string { return b.name }
 //
 // Prefixed deliberately. Once one side stops being a name the two value
 // spaces are no longer self-evidently disjoint, and a legal repo name can
-// parse as a ksuid (see the migrate-registry ksuid-shaped-name gotcha). The
+// parse as a ksuid: isValidRepoName allows [a-z0-9_-] with no length cap, so
+// a 27-character lowercase-alphanumeric name CAN also be a valid ksuid. The
 // prefix removes the question instead of arguing about probabilities.
 func (b *Binding) PinID() string { return b.pinID }
 
 // pinOf builds a PinID value, failing CLOSED on an empty uid: it returns ""
 // rather than a bare "repo:"/"lens:" prefix. Four independent barriers make
-// an empty uid unreachable today (Registry.Insert rejects it; migrate-registry
-// mints one; every live instance's uid comes from a registry row; a corrupted
+// an empty uid unreachable today (Registry.Insert rejects it; Create mints
+// one; every live instance's uid comes from a registry row; a corrupted
 // row can't open, so it never reaches a constructor) — but every other
 // empty-uid site in this package guards explicitly (registry.go, swapstore.go,
 // manager.go), and this is the one that guards a security check, so it does

@@ -42,10 +42,17 @@ func controlVersion(t *testing.T, db *sql.DB) (int, bool) {
 }
 
 // Every control up-migration must consist of CREATE ... IF NOT EXISTS
-// statements only. migrate-registry executes ControlSchemaSQL — the WHOLE
-// chain concatenated — inside its own transaction against a home that may
-// already hold some of these objects, so any statement that is not idempotent
-// (ALTER TABLE, INSERT, DROP) would fail or corrupt on replay.
+// statements only, because recovery RE-RUNS a body against a database that may
+// already hold what it created: Control -> upWithRecovery -> recoverDirty
+// forces a dirty version N back to N-1 and calls Up again. With idempotent DDL
+// that re-run is a no-op and recovery succeeds on its first path. Anything else
+// leans on the fallback, forcePastCommittedBody, which recognises only
+// "already exists" / "duplicate column name": a re-run INSERT double-applies
+// silently and a re-run DROP fails with "no such table", leaving control.db
+// dirty — and a dirty control.db makes every repo unreachable at once.
+//
+// Relaxing the rule to "re-runnable" rather than "CREATE IF NOT EXISTS only"
+// is a separate decision, not implied by anything here.
 func TestControl_UpMigrationsAreIdempotentDDL(t *testing.T) {
 	ups, err := fs.Glob(controlFS, "control/*.up.sql")
 	require.NoError(t, err)
@@ -75,32 +82,16 @@ func stripSQLComments(s string) string {
 	return strings.Join(out, "\n")
 }
 
-// ControlSchemaSQL is the concatenation of every up-migration, in order, so a
-// database it is executed against ends up at the newest shape.
-func TestControlSchemaSQL_CreatesEveryObject(t *testing.T) {
-	db := controlDB(t)
-	body, err := ControlSchemaSQL()
-	require.NoError(t, err)
-	_, err = db.Exec(body)
-	require.NoError(t, err)
-	for _, name := range controlObjects {
-		require.True(t, objectExists(t, db, name), "expected %q to exist", name)
-	}
-}
-
-// Every object the control chain is responsible for: ten tables and seven
-// indexes. TestControl_FreshDatabase asserts the MIGRATOR creates each one and
-// TestControlSchemaSQL_CreatesEveryObject asserts the concatenated schema text
-// does — the two paths must not drift, so they share this list.
+// Every object the control chain is responsible for. TestControl_FreshDatabase
+// asserts the migrator creates each one.
 var controlObjects = []string{
 	"repos", "repos_active_name", "repos_active_repo_id",
 	"repo_origins", "lenses", "lenses_name", "lens_reads",
 	"repo_subscriptions",
 	"client_sessions", "client_sessions_last_seen", "client_sessions_binding",
 	// session_bindings is DEAD as of 000005 — nothing reads or writes it — but
-	// it is still created, because the control chain is replayed as one
-	// concatenated script and therefore admits no DROP. It stays listed so the
-	// two appliers keep agreeing about what the chain produces.
+	// it is still created, because the control chain admits no DROP (see
+	// TestControl_UpMigrationsAreIdempotentDDL), so it stays listed.
 	"session_bindings",
 	"binding_handles", "binding_handles_last_used",
 	"client_session_bindings", "client_session_bindings_binding",

@@ -70,11 +70,7 @@ type RepoRecord struct {
 type Registry struct {
 	db *sql.DB
 	// schemaExisted records whether the repos table was already present when
-	// this handle was opened. Manager.Start's boot guard needs exactly this
-	// distinction: "never had a registry" (legacy home, unmigrated) versus
-	// "has a registry that is currently empty" (a migrated home that has
-	// purged every repo, or never registered one) look identical to IsEmpty
-	// alone but must be treated differently — see SchemaExisted.
+	// this handle was opened — see SchemaExisted.
 	schemaExisted bool
 }
 
@@ -92,32 +88,16 @@ type Registry struct {
 // fails with "index lenses_name already exists". One stray caller that opened
 // the file without the re-key would brick the home for good.
 //
-// applyControlDB (cmd/migrate_registry.go) is the ONE deliberate exemption in
-// production code; the rest of a `migrate.Control` grep is tests. It is safe
-// because of what it does inside its transaction, BEFORE the stamp: it drops
-// lens_reads and lenses, recreates them by exec'ing the baseline's DDL text,
-// and rewrites the lens rows from its own captured plan. With no `lenses` table
-// left there is nothing for the re-key to convert and no lenses_name index to
-// collide with, so the re-key would be a no-op — it is skipped because it has
-// nothing to do, not because the ordering above stopped mattering.
-//
-// Note that it does NOT drop the schema_migrations stamp, and must not need to:
-// it rebuilds from the DDL text rather than from the migrator, so whatever the
-// stamp says is irrelevant. Rebuilding via migrate.Control instead would be the
-// data-destroying path — on an already-stamped home the migrator no-ops and the
-// lens tables stay dropped. See
-// TestMigrateRegistry_ConvertsAHomeAlreadyStampedByAnEarlierOpen.
+// Outside tests, nothing calls `migrate.Control` except through here.
 //
 // The re-key is Go, not a .sql file, because it mints ksuids.
 //
-// A GENUINELY pre-registry home (lenses.write_repo, membership by NAME) is the
-// one shape it skips the re-key for. upgradeLensSchema cannot convert that
-// shape — it copies write_uid, a column that home does not have — and nothing
-// here should try: `knomit migrate-registry` is the only thing that converts
-// it, and Manager.Start's guard refuses to boot it in the meantime. Skipping
-// leaves it exactly as migrate-registry expects to find it, and the guard's
-// write_repo arm still fires afterwards, so a home cannot be quietly half-
-// converted on the way past.
+// A GENUINELY pre-registry control.db (lenses.write_repo, membership by NAME)
+// is the one shape it skips the re-key for: upgradeLensSchema cannot convert
+// it, because it copies write_uid, a column that shape does not have. No home
+// in use has that shape any more (knomit#326 removed both its converter and
+// the boot check that refused it), so the skip only keeps the re-key from
+// failing on a column it cannot find; it converts nothing.
 func controlUp(db *sql.DB) error {
 	legacy, err := HasLegacyLensSchema(db)
 	if err != nil {
@@ -136,9 +116,8 @@ func controlUp(db *sql.DB) error {
 
 // OpenRegistry opens control.db at path and brings it fully up to date.
 //
-// Manager.Start deliberately does NOT use this: it opens with
-// OpenRegistryNoSchema, runs the unmigrated-home guard, and only then migrates.
-// See refuseUnmigratedHome for why the order is load-bearing.
+// Manager.Start opens with OpenRegistryNoSchema and calls controlUp itself, so
+// that it holds the handle before the migration can fail.
 func OpenRegistry(path string) (*Registry, error) {
 	r, err := OpenRegistryNoSchema(path)
 	if err != nil {
@@ -153,8 +132,8 @@ func OpenRegistry(path string) (*Registry, error) {
 
 // OpenRegistryNoSchema opens the repos tenant at path WITHOUT creating its
 // schema. Callers that intend to read or write rows must follow with
-// controlUp; the split exists so a caller can first observe whether the
-// repos table was ever there — evidence that creating it would destroy.
+// controlUp; the split lets a caller observe whether the repos table was
+// already there (SchemaExisted) before anything creates it.
 func OpenRegistryNoSchema(path string) (*Registry, error) {
 	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
 	if err != nil {
@@ -173,19 +152,7 @@ func OpenRegistryNoSchema(path string) (*Registry, error) {
 // lens tables: a `lenses` table with the name-keyed `write_repo` column, which
 // the uid-keyed schema replaced with `write_uid`.
 //
-// This is DURABLE evidence of an unmigrated home, and that is why the boot
-// guard leads with it: it is independent of SchemaExisted, whose durability
-// rests on Manager.Start deferring migrate.Control until the guard has passed.
-// Anything that creates the `repos` table on the way past makes SchemaExisted
-// report true on the second boot, and a guard resting on that arm alone would
-// fire only on the first — under a restart policy (systemd Restart=on-failure,
-// Docker, or an operator who simply tries again) nobody would ever see it.
-//
-// Nothing in a failed boot removes this column: the baseline migration's
-// CREATE TABLE IF NOT EXISTS is a no-op against the legacy table, and
-// controlUp skips the in-place re-key for this shape (see upgradeLensSchema).
-// `knomit migrate-registry` is the only thing that drops and rebuilds those
-// tables, so the signal clears exactly when the home is actually converted.
+// controlUp uses it to skip upgradeLensSchema, which cannot convert that shape.
 func HasLegacyLensSchema(db *sql.DB) (bool, error) {
 	ok, err := tableExists(db, "lenses")
 	if err != nil || !ok {
@@ -209,17 +176,9 @@ func tableExists(db *sql.DB, name string) (bool, error) {
 }
 
 // SchemaExisted reports whether the repos table was already present when this
-// handle was opened (true — a migrated home, whether or not it currently has
-// any rows) or absent (false — this home has never had a control.db registry).
-// The boot guard in Manager.Start fires only on false: a table that already
-// existed but is currently empty is a normal, valid state (e.g. every repo
-// purged), not an unmigrated home.
-//
-// This is DURABLE only because Manager.Start opens via OpenRegistryNoSchema and
-// defers migrate.Control until after the guard has passed. Creating the table on
-// the way past — which OpenRegistry does — makes the second boot against an
-// unconverted home report true, and the guard that should fire on every attempt
-// fires only on the first.
+// handle was opened by OpenRegistryNoSchema (true, whether or not it has rows)
+// or absent (false: nothing had created the registry yet). OpenRegistry's
+// handle always reports what it saw BEFORE controlUp created the table.
 func (r *Registry) SchemaExisted() bool {
 	return r.schemaExisted
 }
@@ -457,10 +416,7 @@ func (r *Registry) Delete(uid string) error {
 	return nil
 }
 
-// IsEmpty reports whether any repo is registered. NOT what the boot guard
-// uses to detect an unmigrated home — a migrated home that has purged every
-// repo is also empty, and must boot. See SchemaExisted for the signal
-// the guard actually needs.
+// IsEmpty reports whether any repo is registered.
 func (r *Registry) IsEmpty() (bool, error) {
 	var n int
 	if err := r.db.QueryRow(`SELECT COUNT(*) FROM repos`).Scan(&n); err != nil {

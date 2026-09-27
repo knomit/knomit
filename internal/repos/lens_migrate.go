@@ -22,16 +22,14 @@ import (
 //
 //   - "Membership already uid-keyed, lens row itself still name-keyed" is what
 //     THIS function handles: `lenses.write_uid` / `lens_reads.repo_uid` already
-//     point at repos(uid) (every home that has ever run `migrate-registry`),
+//     point at repos(uid) (every home converted to the control.db registry),
 //     but `lenses` is still keyed by name with no `uid` column of its own. It
 //     is re-keyed in place, here, on the open path.
 //   - A genuinely pre-registry control.db (`lenses.write_repo`, member
-//     references by NAME) never reaches here at all: Manager.Start's boot
-//     guard (HasLegacyLensSchema) refuses to boot such a home, so
-//     OpenLensRegistry never runs against it in practice, and controlUp skips
-//     this call for it. `migrate-registry` is the only thing that converts
-//     that shape — it DROPS the legacy tables, lets the baseline recreate
-//     them, and translates member references from names to uids as it goes.
+//     references by NAME) never reaches here: controlUp skips this call for
+//     it (HasLegacyLensSchema), because this function copies write_uid and
+//     that shape has none. No home in use has that shape any more; its
+//     one-shot converter was removed in knomit#326.
 //
 // Runs on every open and is idempotent: a database already carrying lenses.uid
 // returns immediately, so uids are never re-minted.
@@ -199,11 +197,8 @@ func upgradeLensSchema(db *sql.DB) (err error) {
 	return nil
 }
 
-// lensTableExists / lensColumnExists mirror migrate-registry's rawTableExists /
-// rawColumnExists (cmd/migrate_registry.go:1761,1770) — same sqlite_master /
-// PRAGMA table_info shapes. Duplicated rather than shared because cmd/ ->
-// internal/ is the only legal import direction; internal/repos cannot import
-// cmd's helpers.
+// lensTableExists / lensColumnExists probe sqlite_master and PRAGMA table_info
+// for the lens tables.
 func lensTableExists(db *sql.DB) (bool, error) {
 	var n int
 	if err := db.QueryRow(
