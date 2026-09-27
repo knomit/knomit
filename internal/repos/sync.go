@@ -125,7 +125,14 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 //
 // Interval is min(sync, push) interval from the Remote record. Configured
 // changes are picked up on the next tick (re-read from DB).
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error)) {
+//
+// kick (nil-safe) is the trigger dispatcher's kick (F07 PR 2): every tick
+// kicks it, so the `on: due` sweep runs on the existing reconcile tick with no
+// timer of its own. It is deferred as the FIRST statement of the tick, before
+// any of the tick's early returns — an offline machine fails its push on every
+// tick, and the sweep needs no network. A non-blocking send on a channel that
+// is never closed, so a kick during shutdown is harmless.
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func()) {
 	defer wg.Done()
 
 	// Initial config read for logging context.
@@ -150,6 +157,11 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	}
 
 	doTick := func(ctx context.Context) {
+		// The dispatcher's kick, whatever this tick does or fails to do below
+		// (see the function comment). FIRST, so no early return skips it.
+		if kick != nil {
+			defer kick()
+		}
 		// Read fresh remote record so resolveAuth picks up DB-stored auth.
 		fresh, err := svc.Remote().GetRemote("origin")
 		if err != nil {
@@ -308,7 +320,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 // It exits — rather than skipping — as soon as the repo has an origin, so the
 // two loops are mutually exclusive by the same fact. A subscription has no
 // agent branch and is excluded by the same guard.
-func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration) {
+func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func()) {
 	defer wg.Done()
 	runLocalReconcile(ctx, repo, agentBranch, interval,
 		func() (bool, error) {
@@ -318,7 +330,8 @@ func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.S
 		func() error {
 			_, err := svc.AdvanceLocalUpstream(ctx, agentBranch, svc.UpstreamBranch())
 			return err
-		})
+		},
+		kick)
 }
 
 // runLocalReconcile is the loop itself, parameterised on its two store reads.
@@ -337,17 +350,27 @@ func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.S
 // permanent staleness. This matches the sibling loop, which re-reads its
 // config fresh every tick and never exits on a read failure
 // (kb/architecture/repos/reconcile-loop-fresh-config-per-tick).
+//
+// kick (nil-safe) is the trigger dispatcher's kick (F07 PR 2), called on EVERY
+// tick of the ticker whatever hasOrigin or advance answered — the `on: due`
+// sweep needs neither — so a failing advance never silences the sweep.
 func runLocalReconcile(
 	ctx context.Context,
 	repo, agentBranch string,
 	interval time.Duration,
 	hasOrigin func() (bool, error),
 	advance func() error,
+	kick func(),
 ) {
 	if interval <= 0 || agentBranch == "" {
 		return
 	}
 	lg := log.With().Str("repo", repo).Logger()
+	kickTriggers := func() {
+		if kick != nil {
+			kick()
+		}
+	}
 
 	// ownsMain is true only on a DEFINITE "no origin". An unreadable answer
 	// decides nothing: skip the work and let the next tick ask again.
@@ -379,6 +402,7 @@ func runLocalReconcile(
 		lg.Info().Dur("interval", interval).Msg("local reconcile loop started")
 		tick()
 	}
+	kickTriggers()
 
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -388,6 +412,7 @@ func runLocalReconcile(
 			lg.Info().Msg("local reconcile loop stopped")
 			return
 		case <-t.C:
+			kickTriggers() // unconditional: before the origin read, before advance
 			owns, definite := ownsMain()
 			if definite && !owns {
 				lg.Info().Msg("local reconcile loop stopped: repo gained an origin")

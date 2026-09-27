@@ -17,8 +17,15 @@ var ErrInvalidExpires = errors.New("invalid expires")
 //
 // The field is a STRING, not a time.Time, on purpose: yaml.v3 decodes a
 // date-only value ("2026-10-01") into time.Time without error, so a time.Time
-// field would accept exactly the ambiguous input this validation refuses. The
-// value is kept as written (offset and all) so a round trip is byte-stable.
+// field would accept exactly the ambiguous input this validation refuses.
+//
+// All times are UTC (maintainer ruling, 2026-09-28: "all times MUST BE UTC -
+// expire, due, everything"). SerializeFact, the one write gate, normalises an
+// input carrying an offset to the same instant in UTC with an explicit Z at
+// whole seconds (NormalizeExpires), so every fact this build writes says
+// `…Z`. ParseFact stays lenient and keeps what a file says: an older fact
+// written with `+02:00` still parses, indexes and compares as the same
+// instant; it is rewritten to Z the next time it is serialized.
 
 // validateExpires is the write-side rule: empty, or a full RFC 3339 timestamp
 // with an explicit offset. Date-only and naive local times are refused.
@@ -35,6 +42,22 @@ func validateExpires(s string) error {
 // ValidateExpires exposes the write-side rule to callers that check input
 // before building a fact (MCP and REST handlers).
 func ValidateExpires(s string) error { return validateExpires(s) }
+
+// NormalizeExpires is the write-side normalisation: a valid value is returned
+// as the same instant in UTC, RFC 3339 with an explicit Z, at whole seconds
+// (the granularity every comparison uses). Empty stays empty; an invalid value
+// is returned unchanged with validateExpires's error, so callers keep one
+// error path.
+func NormalizeExpires(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return s, fmt.Errorf("%w %q: want an RFC 3339 timestamp with an offset, e.g. 2026-10-01T00:00:00Z", ErrInvalidExpires, s)
+	}
+	return t.UTC().Truncate(time.Second).Format(time.RFC3339), nil
+}
 
 // ExpiresAt returns the parsed expiry. ok is false when the fact has none.
 func (f Fact) ExpiresAt() (t time.Time, ok bool) {

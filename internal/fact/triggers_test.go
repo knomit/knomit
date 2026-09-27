@@ -243,25 +243,35 @@ func TestTriggers_ReservedDoIsUnsupported(t *testing.T) {
 	}
 }
 
-// `on: due` waits for PR 2's sweep. A trigger that lists it is unsupported as a
-// whole in this version, even alongside supported episodes.
-func TestTriggers_DueIsUnsupported(t *testing.T) {
+// `on: due` is active since F07 PR 2 (the due sweep): alone or alongside the
+// tree episodes, the trigger compiles and OnEpisode("due") is true for it and
+// false for a trigger that does not list it. Sabotage: drop TriggerOnDue from
+// activeTriggerOn.
+func TestTriggers_DueIsActive(t *testing.T) {
 	o := mustParseTriggerDoc(t, ontologyWithTriggers(`
   tasks:
     description: t
     triggers:
       - {name: expiring, on: [learn, due], do: emit}
       - {name: only-due, on: due, do: emit}
+      - {name: plain, on: learn, do: emit}
 `))
 	set := CompileTriggers(o, testIdentity, "b")
-	for _, n := range []string{"expiring", "only-due"} {
+	for _, n := range []string{"expiring", "only-due", "plain"} {
 		st := stateOf(t, set, n)
-		if st.State != TriggerUnsupported || !strings.Contains(st.Error, "on: due is not supported") {
-			t.Errorf("%s: want unsupported for on: due, got %+v", n, st)
+		if st.State != TriggerActive || st.Error != "" {
+			t.Errorf("%s: want active, got %+v", n, st)
 		}
-		if activeNamed(set, n) != nil {
-			t.Errorf("%s: a due trigger must not be active before PR 2", n)
+		ct := activeNamed(set, n)
+		if ct == nil {
+			t.Fatalf("%s: a due trigger compiles", n)
 		}
+		if got, want := ct.OnEpisode(TriggerOnDue), n != "plain"; got != want {
+			t.Errorf("%s: OnEpisode(due) = %v, want %v", n, got, want)
+		}
+	}
+	if activeNamed(set, "only-due").OnEpisode(TriggerOnLearn) {
+		t.Errorf("only-due must not listen to learn")
 	}
 }
 

@@ -14,43 +14,47 @@ import (
 // internal/store/changes_guard_test.go ("<receiver>.<method>", "?.<method>"
 // for an expression receiver, the bare name for a function). An ALLOWLIST on
 // purpose: the dispatcher never writes a fact, a ref or an object, and never
-// calls back into the store's write path. Its only store WRITES are the two
+// calls back into the store's write path. Its only store WRITES are the three
 // trigger tables, reached through RecordTriggerRuns and
-// AdvanceTriggerWatermarks; everything else is a read, the hub, the log, or
-// pure computation. A call that is not here fails the test — add it only
-// after checking it keeps that contract.
+// AdvanceTriggerWatermarks (bookmarks and due marks); everything else is a
+// read (DueCandidates and DueMarks are the `on: due` sweep's two reads), the
+// hub, the log, or pure computation. The one clock read that decides anything
+// is d.clock (time.Now().UTC(), once per run, for the sweep); the others time
+// durations. A call that is not here fails the test — add it only after
+// checking it keeps that contract.
 var triggersRepoAllowedCalls = map[string][]string{
 	"triggers.go": {
-		// the store: reads, and the two tables
+		// the store: reads, and the three tables
 		"d.ri.Acquire", "release", "svc.Triggers", "svc.Branches", "?.HeadCommit", "svc.UpstreamBranch", "svc.SignerFingerprint",
 		"tr.OntologyAtCommit", "tr.TriggerWatermarks", "tr.IsAncestor", "tr.DiffFacts", "tr.TreeReader",
 		"tr.UpstreamTip", "tr.AncestorSet", "tr.RecordTriggerRuns", "tr.AdvanceTriggerWatermarks",
-		"cr.tr.CommitInfo", "cr.tr.CommitSignerOf", "cr.trees.Toucher", "trees.BlobAt", "?.TriggerWatermarks", "?.RecentTriggerFires",
+		"tr.DueCandidates", "tr.DueMarks",
+		"cr.tr.CommitInfo", "cr.tr.CommitSignerOf", "cr.trees.Toucher", "cr.trees.BlobAt", "trees.BlobAt", "?.TriggerWatermarks", "?.RecentTriggerFires",
 		"ri.WithRead", "ri.Name",
 		// the compiled triggers
 		"d.cache.Get", "ct.OnEpisode", "ct.Matches", "p.trig.EvalIf",
-		"fact.ReadVerifySettings", "fact.ParseFact", "fact.FactGlobal",
+		"fact.ReadVerifySettings", "fact.ParseFact", "fact.FactGlobal", "fact.ExpiresUnix",
 		"store.TrailerValue",
 		// the hub and the log
 		"hub.broadcastTrigger", "log.Warn", "log.Error", "log.Info", "?.Err", "?.Str", "?.Dur", "?.Int64", "?.Interface", "?.Msg",
 		"crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
 		"newTriggerStats", "triggerIdentityFor", "isHex8", "currentTriggerHooks", "d.triggerKick", "d.loop", "d.safeRun",
-		"d.run", "d.phaseA", "d.phaseB", "d.buffer", "d.maybeFlush", "d.flush", "d.settle", "d.flushOnStop", "d.resetPending",
+		"d.run", "d.phaseA", "d.advance", "d.sweepDue", "d.phaseB", "d.buffer", "d.maybeFlush", "d.flush", "d.settle", "d.flushOnStop", "d.resetPending",
 		"d.overlayPending", "d.verifyModeOn", "d.verifiedBelow", "d.buildChange", "d.emit", "d.recordSet",
-		"d.lastCompiledSet", "d.logInvalidOnce", "d.logOntologyErrorOnce", "d.clearOntologyError",
-		"d.stats.record", "d.stats.recordRun", "d.stats.view", "d.stats.runView", "d.pending.empty",
+		"d.lastCompiledSet", "d.logInvalidOnce", "d.logOntologyErrorOnce", "d.clearOntologyError", "d.clock",
+		"d.stats.record", "d.stats.recordRun", "d.stats.view", "d.stats.runView", "d.pending.empty", "rs.didWork",
 		"cr.metaOf", "factGlobal", "nameStates", "episodeOf", "shortHash", "capForLog",
 		"d.cancel", "cancel", "timer.Stop", "h",
 		// sync and context
 		"d.mu.Lock", "d.mu.Unlock", "d.wg.Add", "d.wg.Wait", "d.wg.Done", "triggerHooksMu.Lock", "triggerHooksMu.Unlock",
 		"context.WithCancel", "context.WithTimeout", "context.Background", "ctx.Err", "ctx.Done",
 		// pure helpers
-		"time.Now", "time.Since", "time.Duration", "time.Sleep", "time.NewTimer", "?.Milliseconds",
+		"time.Now", "time.Since", "time.Duration", "time.Sleep", "time.NewTimer", "?.Milliseconds", "?.UTC", "?.Truncate", "rs.now.Unix",
 		"sha256.Sum256", "hex.EncodeToString", "signer.PublicKey", "?.Marshal",
 		"strings.TrimPrefix", "strings.LastIndex", "strings.HasSuffix", "strings.ToLower",
-		"plumbing.NewHash", "commit.String", "errors.As", "err.Error", "fmt.Sprintf",
-		"sort.Strings", "sort.SliceStable", "append", "len", "make", "delete", "recover",
+		"plumbing.NewHash", "commit.String", "head.String", "errors.As", "err.Error", "fmt.Sprintf",
+		"sort.Strings", "sort.Slice", "sort.SliceStable", "append", "len", "make", "delete", "recover",
 	},
 }
 

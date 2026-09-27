@@ -24,23 +24,48 @@ func expiresFixture(expires string) Fact {
 	return f
 }
 
-// TestExpires_RoundTrip: a fact carrying expires serializes it verbatim and
-// parses it back to the same string — offset and all, never normalised.
+// TestExpires_RoundTrip: a fact carrying expires serializes it NORMALISED to
+// UTC with an explicit Z at whole seconds (maintainer ruling 2026-09-28: all
+// times are UTC), parses back to that string, and a second serialization is
+// byte-identical. Sabotage: write the value as given (the +02:00 case keeps
+// its offset).
 func TestExpires_RoundTrip(t *testing.T) {
-	for _, v := range []string{"2026-10-01T00:00:00Z", "2026-10-01T02:00:00+02:00", "2026-10-01T00:00:00.5Z"} {
-		out, err := SerializeFact(expiresFixture(v))
-		require.NoError(t, err, v)
-		require.Contains(t, out, "\nexpires: \""+v+"\"\n", "expires must be written as a quoted string")
+	for in, want := range map[string]string{
+		"2026-10-01T00:00:00Z":      "2026-10-01T00:00:00Z",
+		"2026-10-01T02:00:00+02:00": "2026-10-01T00:00:00Z",
+		"2026-09-30T19:00:00-05:00": "2026-10-01T00:00:00Z",
+		"2026-10-01T00:00:00.5Z":    "2026-10-01T00:00:00Z",
+	} {
+		out, err := SerializeFact(expiresFixture(in))
+		require.NoError(t, err, in)
+		require.Contains(t, out, "\nexpires: \""+want+"\"\n", "%s: expires must be written as a quoted UTC string", in)
+		require.NotContains(t, out, "+02:00")
 
 		back, err := ParseFact("kb/decisions/x/y.md", out)
 		require.NoError(t, err)
-		require.Equal(t, v, back.Expires)
+		require.Equal(t, want, back.Expires)
 		require.Empty(t, back.ExpiresWarnings)
 
 		again, err := SerializeFact(back)
 		require.NoError(t, err)
 		require.Equal(t, out, again, "round trip must be byte-identical")
 	}
+}
+
+// TestExpires_ParseKeepsAnOlderOffset: the READ side is lenient and keeps what
+// a file says, so a fact written with an offset by an older build still parses
+// to the same instant; the next serialization rewrites it to Z.
+func TestExpires_ParseKeepsAnOlderOffset(t *testing.T) {
+	src := "---\ntype: hypothesis\ndomain: [x]\nconfidence: 0.5\nsources: 1\nentities: []\nrefs: []\nexpires: \"2026-10-01T02:00:00+02:00\"\n---\n# T\n\nb\n"
+	f, err := ParseFact("kb/a/b/c.md", src)
+	require.NoError(t, err)
+	require.Equal(t, "2026-10-01T02:00:00+02:00", f.Expires, "read: as written")
+	at, ok := f.ExpiresAt()
+	require.True(t, ok)
+	require.True(t, at.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)))
+	out, err := SerializeFact(f)
+	require.NoError(t, err)
+	require.Contains(t, out, "\nexpires: \"2026-10-01T00:00:00Z\"\n", "write: normalised")
 }
 
 // TestExpires_AbsentMeansNever: no expires is no key on disk, an empty field

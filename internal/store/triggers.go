@@ -1,9 +1,14 @@
 // Triggers (F07): the store half of the trigger dispatcher. Everything here is
-// a git READ or a write to the dispatcher's OWN two tables (trigger_watermarks,
-// trigger_fires, migration 000028). Nothing here writes a ref, an object or a
-// fact, and nothing here reads a clock except to stamp fired_at for the
-// operator. The dispatcher itself is internal/repos/triggers.go; this file is
-// what it calls under Acquire.
+// a git READ, a read of the index's liveness join (DueCandidates), or a write
+// to the dispatcher's OWN three tables (trigger_watermarks, trigger_fires,
+// migration 000029; trigger_due_fires, migration 000030). Nothing here writes
+// a ref, an object or a fact, and nothing here reads a clock except to stamp
+// fired_at for the operator — the ONE clock comparison in F07 (the due
+// sweep's `expires_at <= now`) is the dispatcher's, which reads its clock once
+// per run as UTC and passes the instant in. All times are UTC: Unix seconds in
+// the tables, RFC 3339 with an explicit Z wherever a row is rendered. The
+// dispatcher itself is internal/repos/triggers.go; this file is what it calls
+// under Acquire.
 package store
 
 import (
@@ -70,7 +75,34 @@ type TriggerFire struct {
 	DurationMS     int64  `json:"duration_ms,omitempty"`
 	DiffMS         int64  `json:"diff_ms,omitempty"`
 	ChangeMS       int64  `json:"change_ms,omitempty"`
-	FiredAt        int64  `json:"fired_at"`
+	// FiredAt is the row's stamp rendered as RFC 3339 UTC with an explicit Z
+	// (all times are UTC); stored as Unix seconds. For the operator, never
+	// read for ordering.
+	FiredAt string `json:"fired_at"`
+}
+
+// DueCandidate is one row of the sweep's liveness join: a dated fact live on
+// the branch at the index's view of its head, with its expiry as Unix seconds
+// (UTC). The dispatcher confirms each against the head's tree before firing.
+type DueCandidate struct {
+	Path      string
+	ExpiresAt int64
+}
+
+// DueKey identifies a due mark: one trigger's processing of one path.
+type DueKey struct {
+	Trigger string
+	Path    string
+}
+
+// DueMark is one row of trigger_due_fires: trigger has processed path at the
+// due instant ExpiresAt (whatever `if` said), stamped FiredAt (Unix seconds,
+// UTC, the run's clock).
+type DueMark struct {
+	Trigger   string
+	Path      string
+	ExpiresAt int64
+	FiredAt   int64
 }
 
 // TriggerRun is what one dispatcher run hands to RecordTriggerRun: the
@@ -158,11 +190,24 @@ type TriggerIndex interface {
 	// each with its own cap and its own run row. The dispatcher defers tx1
 	// while the writer is busy and flushes the runs together.
 	RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error)
-	// AdvanceTriggerWatermarks is tx2: upserts set, deletes del, then prunes
-	// trigger_fires to the newest TriggerFireRetention rows.
-	AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string) error
+	// AdvanceTriggerWatermarks is tx2: upserts set, deletes del (their
+	// bookmarks AND their due marks), upserts the due marks (chunked, never
+	// capped by TriggerFireRetention), then prunes trigger_fires to the newest
+	// TriggerFireRetention rows.
+	AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error
 	// RecentTriggerFires returns the newest limit rows for branch, newest first.
 	RecentTriggerFires(ctx context.Context, branch string, limit int) ([]TriggerFire, error)
+
+	// DueCandidates is the `on: due` sweep's candidate set: the dated facts
+	// LIVE on branch (branch_facts ⋈ fact_expires) whose expires_at is at or
+	// before nowUnix (F03's inclusive rule). A fact retracted, deleted,
+	// merged away, rewound or replaced has no branch_facts row for that
+	// version and cannot be a candidate; fact_expires alone (one row per dated
+	// fact VERSION, shared by every branch, orphans kept) is never read alone.
+	DueCandidates(ctx context.Context, branch string, nowUnix int64) ([]DueCandidate, error)
+	// DueMarks returns (trigger, path) → expires_at already processed on
+	// branch (trigger_due_fires); an index range on the primary key.
+	DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error)
 }
 
 // Triggers returns the trigger dispatcher's store surface.
@@ -497,7 +542,7 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 		return 0, fmt.Errorf("RecordTriggerRun: begin: %w", err)
 	}
 	defer tx.Rollback()
-	now := time.Now().Unix()
+	now := time.Now().UTC().Unix()
 	placeholder := "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 	logged := 0
 	for _, run := range runs {
@@ -549,12 +594,36 @@ func boolInt(b bool) int {
 }
 
 // AdvanceTriggerWatermarks implements TriggerIndex (tx2).
-func (rh *repoHandler) AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string) error {
+func (rh *repoHandler) AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error {
 	tx, err := rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("AdvanceTriggerWatermarks: begin: %w", err)
 	}
 	defer tx.Rollback()
+	// The due marks: one multi-row INSERT OR REPLACE per fireRowBatch rows (5
+	// columns × 500 = 2,500 bound parameters), like the bookmarks below. Every
+	// mark is written — the fire-log cap trims fire ROWS, never the record of
+	// what was processed: a run that evaluated 12,000 due facts logs 10,000
+	// rows and marks 12,000 facts.
+	for start := 0; start < len(due); start += fireRowBatch {
+		end := start + fireRowBatch
+		if end > len(due) {
+			end = len(due)
+		}
+		var sb strings.Builder
+		sb.WriteString("INSERT OR REPLACE INTO trigger_due_fires(branch, trigger, path, expires_at, fired_at) VALUES ")
+		args := make([]any, 0, (end-start)*5)
+		for i, m := range due[start:end] {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("(?, ?, ?, ?, ?)")
+			args = append(args, branch, m.Trigger, m.Path, m.ExpiresAt, m.FiredAt)
+		}
+		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("AdvanceTriggerWatermarks: due marks: %w", err)
+		}
+	}
 	names := make([]string, 0, len(set))
 	for n := range set {
 		names = append(names, n)
@@ -582,10 +651,18 @@ func (rh *repoHandler) AdvanceTriggerWatermarks(ctx context.Context, branch stri
 			return fmt.Errorf("AdvanceTriggerWatermarks: set: %w", err)
 		}
 	}
+	// A NAME that left the ontology forgets both its bookmark and its due
+	// marks: one rule for both bookkeeping tables, so a renamed or
+	// removed-then-re-added trigger is a new trigger (it fires the currently
+	// overdue set once, like a first appearance).
 	for _, n := range del {
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM trigger_watermarks WHERE trigger = ? AND branch = ?`, n, branch); err != nil {
 			return fmt.Errorf("AdvanceTriggerWatermarks: delete %q: %w", n, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM trigger_due_fires WHERE branch = ? AND trigger = ?`, branch, n); err != nil {
+			return fmt.Errorf("AdvanceTriggerWatermarks: delete due marks %q: %w", n, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
@@ -616,16 +693,73 @@ func (rh *repoHandler) RecentTriggerFires(ctx context.Context, branch string, li
 	for rows.Next() {
 		var f TriggerFire
 		var nonlinear int
+		var firedAt int64
 		if err := rows.Scan(&f.ID, &f.Trigger, &f.Branch, &f.Path, &f.Episode, &f.Source, &f.Commit, &f.Trace,
 			&f.Outcome, &f.Error, &nonlinear, &f.RangeFrom, &f.RangeTo, &f.Evaluated, &f.Paths, &f.Fires,
-			&f.FiresNotLogged, &f.DurationMS, &f.DiffMS, &f.ChangeMS, &f.FiredAt); err != nil {
+			&f.FiresNotLogged, &f.DurationMS, &f.DiffMS, &f.ChangeMS, &firedAt); err != nil {
 			return nil, fmt.Errorf("RecentTriggerFires: %w", err)
 		}
 		f.Nonlinear = nonlinear != 0
+		f.FiredAt = UTCStamp(firedAt)
 		out = append(out, f)
 	}
 	if err := rows.Err(); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("RecentTriggerFires: %w", err)
 	}
 	return out, nil
+}
+
+// UTCStamp renders Unix seconds as RFC 3339 in UTC with an explicit Z — the
+// one rendering every F07 timestamp uses, whatever the process's local zone.
+func UTCStamp(unix int64) string {
+	return time.Unix(unix, 0).UTC().Format(time.RFC3339)
+}
+
+// DueCandidates implements TriggerIndex. The plan is a range on the covering
+// index fact_expires_at then a probe of branch_facts_fact per row, so the cost
+// is linear in the number of PAST-DATED fact versions in the table (every
+// branch's, orphans included), independent of the KB's size: measured 5–11 µs
+// with none due, ~5 ms with 5,000, ~22 ms with 25,000 (proposal, Apple
+// M-series). Rows are ordered by path so a run's work is deterministic.
+func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix int64) ([]DueCandidate, error) {
+	rows, err := conn(ctx, rh.db).QueryContext(ctx,
+		`SELECT bf.path, fe.expires_at
+		   FROM fact_expires fe
+		   JOIN branch_facts bf ON bf.fact_id = fe.fact_id
+		  WHERE bf.branch_id = (SELECT id FROM branches WHERE name = ?)
+		    AND fe.expires_at <= ?
+		  ORDER BY bf.path`, branch, nowUnix)
+	if err != nil {
+		return nil, fmt.Errorf("DueCandidates: %w", err)
+	}
+	defer rows.Close()
+	out := []DueCandidate{}
+	for rows.Next() {
+		var c DueCandidate
+		if err := rows.Scan(&c.Path, &c.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("DueCandidates: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// DueMarks implements TriggerIndex.
+func (rh *repoHandler) DueMarks(ctx context.Context, branch string) (map[DueKey]int64, error) {
+	rows, err := conn(ctx, rh.db).QueryContext(ctx,
+		`SELECT trigger, path, expires_at FROM trigger_due_fires WHERE branch = ?`, branch)
+	if err != nil {
+		return nil, fmt.Errorf("DueMarks: %w", err)
+	}
+	defer rows.Close()
+	out := map[DueKey]int64{}
+	for rows.Next() {
+		var k DueKey
+		var at int64
+		if err := rows.Scan(&k.Trigger, &k.Path, &at); err != nil {
+			return nil, fmt.Errorf("DueMarks: %w", err)
+		}
+		out[k] = at
+	}
+	return out, rows.Err()
 }

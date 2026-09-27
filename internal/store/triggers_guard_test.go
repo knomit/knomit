@@ -12,11 +12,14 @@ import (
 
 // triggersAllowedCalls is EVERY call the store half of the trigger dispatcher
 // may make, keyed the way changes_guard_test.go keys them. An ALLOWLIST: the
-// dispatcher's store surface is git READS plus writes to its OWN two tables
-// (trigger_watermarks, trigger_fires) and nothing else — no ref move, no
-// object write, no fact write, no commit-log read. A call that is not here
-// fails the test; add it only after checking it keeps that contract. The one
-// clock read is time.Now for fired_at, written for the operator, never read.
+// dispatcher's store surface is git READS, ONE read of the index's liveness
+// join (DueCandidates: a SELECT over fact_expires ⋈ branch_facts) plus writes
+// to its OWN three tables (trigger_watermarks, trigger_fires,
+// trigger_due_fires) and nothing else — no ref move, no object write, no fact
+// write, no commit-log read. A call that is not here fails the test; add it
+// only after checking it keeps that contract. The one clock read is time.Now
+// for fired_at, written for the operator, never read; time.Unix/UTC/Format
+// render a stored stamp as RFC 3339 Z.
 var triggersAllowedCalls = map[string][]string{
 	"triggers.go": {
 		// git reads
@@ -25,13 +28,13 @@ var triggersAllowedCalls = map[string][]string{
 		"tt.commit", "tt.tree", "tt.blobHashAt", "rh.TreeReader", "?.Toucher", "?.BlobAt",
 		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verifyCommitSignature",
 		"fact.OntologyPathsNewestFirst",
-		// this store's own tables
+		// this store's own tables (and the read-only liveness join)
 		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
 		// the signer
 		"?.commitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
 		// pure helpers
-		"boolInt", "time.Now", "?.Unix", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
+		"boolInt", "UTCStamp", "time.Now", "time.Unix", "?.UTC", "?.Unix", "?.Format", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
 		"append", "len", "make",
 	},
 	"trailers.go": {
