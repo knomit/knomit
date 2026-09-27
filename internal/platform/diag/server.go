@@ -140,9 +140,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			return
 		}
 		if !hostguard.LoopbackHostOK(r.Host, s.opts.LoopbackHosts) {
-			http.Error(w, "the runtime diagnostics port does not answer Host "+strconv.Quote(r.Host)+
-				"; use localhost or an IP address, or add the name to [auth].loopback_hosts"+
-				" (shared with the main listener, where a loopback request carrying that Host is treated as the anonymous local user)", http.StatusMisdirectedRequest)
+			http.Error(w, "the runtime diagnostics port does not answer requests for Host "+strconv.Quote(r.Host)+
+				"; use localhost or an IP address, or add the name to [auth].loopback_hosts in this instance's knomit.toml and restart it.", http.StatusMisdirectedRequest)
 			return
 		}
 		next.ServeHTTP(w, r)

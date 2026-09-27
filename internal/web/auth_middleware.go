@@ -132,10 +132,13 @@ func authMiddleware(cfg config.AuthConfig, disabled bool, trustedOrigins []strin
 				// this branch runs exactly when anonymous is about to be
 				// minted, after the socket and TLS listeners have returned
 				// above, and the OAuth listener never runs this middleware.
+				// #320: the detail says "this instance's" knomit.toml but never
+				// its path — a rebound page is same-origin with this response
+				// and would read the data root and username.
 				if !loopbackHostOK(r.Host, cfg.LoopbackHosts) {
 					hal.WriteProblem(w, http.StatusMisdirectedRequest, "Misdirected Request",
 						"this knomit instance does not answer loopback requests for Host "+strconv.Quote(r.Host)+
-							"; a web page served from that name may not act as the local user. If this is your own proxy or tunnel, add the name to [auth].loopback_hosts in knomit.toml — anyone who reaches knomit through it then holds [auth].loopback_default",
+							". If this is your own proxy or tunnel, add the name to [auth].loopback_hosts in this instance's knomit.toml and restart it.",
 						r.URL.Path)
 					return
 				}

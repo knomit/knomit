@@ -127,7 +127,10 @@ const localAPIBase = "http://knomit.local/api/v1"
 
 // localAPIClient talks to the server on the local listener at path and
 // nowhere else — no TCP fallback: over TCP the server would not know who is
-// asking, and refuses these endpoints.
+// asking, and refuses these endpoints. auth.DialLocal also refuses a listener
+// owned by another account (auth.ErrForeignListener), so a process squatting
+// the pipe name can neither show this CLI a consent screen nor take its
+// approvals.
 func localAPIClient(path string) *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,

@@ -36,7 +36,7 @@ func (a *ClaudeCLIAdapter) Complete(ctx context.Context, system string, msgs []M
 	}
 	userContent := strings.Join(userParts, "\n\n")
 
-	args := []string{"-p", "--system", system, "--output-format", "text"}
+	args := []string{"-p", "--system-prompt", system, "--output-format", "text"}
 	if strings.HasPrefix(a.model, "claude-") {
 		args = append(args, "--model", a.model)
 	}
