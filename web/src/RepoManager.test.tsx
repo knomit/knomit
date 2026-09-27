@@ -706,7 +706,7 @@ describe('RepoManager', () => {
       expect(await screen.findByText(/re-read it and retry/i)).toBeInTheDocument();
     });
 
-    it('is disabled entirely when the repo is read-only', async () => {
+    it('is disabled entirely on a read-only instance', async () => {
       render(<RepoManager {...baseProps} serverReadOnly />);
       await selectRepo();
 
