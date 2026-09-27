@@ -1157,6 +1157,10 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+	// The ontology commit below is an AUTHORED write on the agent branch and is
+	// pushed: it must be signed like every later one. Without this it went out
+	// unsigned (and now fails with store.ErrNoSigner).
+	svc.SetSigner(m.deps.Signer)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
 	svc.SetRootOfTrust(m.deps.VerifyRoot)
 	// No Crypt is wired here, for the same reason initClone doesn't: the

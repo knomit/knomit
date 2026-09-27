@@ -27,12 +27,15 @@ import (
 //     no body: a request with no body has no Content-Type to judge.
 //   - maxBytes > 0 and the body is longer: 413. Zero means no limit; each
 //     caller passes the limit it already had, and none is invented here.
-//   - the body is not one JSON value of v's shape: 400 "Invalid request
-//     body", naming the byte offset (and the field, for a type mismatch).
+//   - the body is not exactly one JSON value of v's shape: 400 "Invalid
+//     request body", naming the byte offset (and the field, for a type
+//     mismatch). Whitespace after the value is fine; anything else is
+//     trailing data.
 //
-// v must be a non-nil pointer. It is written only on success: the body is
-// decoded into a fresh value and copied, so a half-decoded body never leaves a
-// caller holding partial input. Unknown fields are accepted, as they always
+// v must be a non-nil pointer, and callers pass a zero value: it is written
+// only on success, and then WHOLE (the body is decoded into a fresh value and
+// copied), so a half-decoded body never leaves a caller holding partial input
+// and a field the body omits ends up zero, not kept. Unknown fields are accepted, as they always
 // were; rejecting them is not a CSRF control and would break a client for
 // sending more than the server reads.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
@@ -42,33 +45,48 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) b
 	return decodeBodyInto(w, r, r.Body, v, maxBytes)
 }
 
-// decodeOptionalJSON is decodeJSON for a route whose body may be absent: an
-// empty body passes, whatever its Content-Type, and leaves v untouched. A
-// non-empty body is held to decodeJSON's rules. A body of unknown length
-// (chunked) is judged by peeking one byte, which is put back before decoding.
+// decodeOptionalJSON is decodeJSON for a route whose body may be absent: a
+// body that is empty or only JSON whitespace passes, whatever its
+// Content-Type, and leaves v untouched (curl -d ' ' sends a single space as a
+// form). A body with anything else in it is held to decodeJSON's rules. The
+// leading whitespace is read to find out, whatever the declared length, and
+// counts toward maxBytes.
 func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) bool {
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
 		return true
 	}
 	body := io.Reader(r.Body)
-	if r.ContentLength < 0 {
-		br := bufio.NewReaderSize(r.Body, 16)
-		if _, err := br.Peek(1); errors.Is(err, io.EOF) {
+	if maxBytes > 0 {
+		body = http.MaxBytesReader(w, r.Body, maxBytes)
+	}
+	br := bufio.NewReader(body)
+	for {
+		c, err := br.ReadByte()
+		if errors.Is(err, io.EOF) {
 			return true
 		}
-		body = br
+		if err != nil {
+			writeDecodeProblem(w, r, err)
+			return false
+		}
+		if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+			_ = br.UnreadByte()
+			break
+		}
 	}
 	if !requireJSONContentType(w, r) {
 		return false
 	}
-	return decodeBodyInto(w, r, body, v, maxBytes)
+	// The limit is already on body; decodeBodyInto must not add a second,
+	// fresh one that would not count the whitespace read above.
+	return decodeBodyInto(w, r, br, v, 0)
 }
 
 // requireJSONContentType writes the 415 and reports false unless r declares
 // application/json.
 func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 	ct := r.Header.Get("Content-Type")
-	if mt, _, err := mime.ParseMediaType(ct); err == nil && mt == "application/json" {
+	if isJSONMediaType(ct) {
 		return true
 	}
 	got := "none"
@@ -80,22 +98,51 @@ func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// isJSONMediaType reports whether a Content-Type header value declares
+// application/json: parameters such as charset, and letter case, are
+// tolerated, and a +json type is not application/json. It is the ONE
+// predicate for "this request says it is JSON"; browserProof uses it too, so
+// the two gates cannot come to disagree about what counts.
+func isJSONMediaType(contentType string) bool {
+	mt, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mt == "application/json"
+}
+
 func decodeBodyInto(w http.ResponseWriter, r *http.Request, body io.Reader, v any, maxBytes int64) bool {
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		panic("decodeJSON: v must be a non-nil pointer")
 	}
+	if body == nil {
+		// A request built by hand can carry a nil Body; the server never
+		// sends one (it uses http.NoBody). Read it as the empty body it is.
+		body = http.NoBody
+	}
 	if maxBytes > 0 {
 		body = http.MaxBytesReader(w, io.NopCloser(body), maxBytes)
 	}
 	fresh := reflect.New(rv.Elem().Type())
-	if err := json.NewDecoder(body).Decode(fresh.Interface()); err != nil {
+	dec := json.NewDecoder(body)
+	if err := dec.Decode(fresh.Interface()); err != nil {
+		writeDecodeProblem(w, r, err)
+		return false
+	}
+	// One JSON value, not the first of several: anything after it but
+	// whitespace is refused. Token, not More: More reports false for a stray
+	// closing bracket, which would let `{...}}` through.
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if !errors.As(err, &tooLarge) {
+			err = errTrailingData
+		}
 		writeDecodeProblem(w, r, err)
 		return false
 	}
 	rv.Elem().Set(fresh.Elem())
 	return true
 }
+
+var errTrailingData = errors.New("the request body has trailing data after the JSON value")
 
 func writeDecodeProblem(w http.ResponseWriter, r *http.Request, err error) {
 	var (
@@ -109,6 +156,8 @@ func writeDecodeProblem(w http.ResponseWriter, r *http.Request, err error) {
 		hal.WriteProblem(w, http.StatusRequestEntityTooLarge, "Request body too large",
 			fmt.Sprintf("the request body exceeds %d bytes", tooLarge.Limit), r.URL.Path)
 		return
+	case errors.Is(err, errTrailingData):
+		detail = err.Error()
 	case errors.As(err, &syntax):
 		detail = fmt.Sprintf("the request body is not valid JSON at byte %d: %v", syntax.Offset, err)
 	case errors.As(err, &wrongType):

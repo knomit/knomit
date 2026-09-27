@@ -97,6 +97,15 @@ func TestDecodeJSON(t *testing.T) {
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "empty"},
 		{name: "truncated body", contentType: "application/json", body: `{"name":`,
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body"},
+		{name: "a second value after the first", contentType: "application/json", body: good + ` {"name":"b"}`,
+			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "trailing data"},
+		{name: "a stray brace after the value", contentType: "application/json", body: good + `}`,
+			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "trailing data"},
+		{name: "trailing whitespace is not data", contentType: "application/json", body: good + "\n\t ",
+			wantOK: true, want: decodeTarget{Name: "a", Count: 2}},
+		{name: "trailing whitespace past the limit is over the limit", contentType: "application/json",
+			body: good + strings.Repeat(" ", 64), maxBytes: 40,
+			wantStatus: http.StatusRequestEntityTooLarge, wantTitle: "Request body too large"},
 
 		// ── optional body ──
 		{name: "optional: empty body, no content type", optional: true, body: "",
@@ -113,6 +122,21 @@ func TestDecodeJSON(t *testing.T) {
 			wantStatus: http.StatusUnsupportedMediaType, wantTitle: "Unsupported Media Type"},
 		{name: "optional: malformed json", optional: true, contentType: "application/json", body: `{`,
 			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body"},
+		// curl -d ' ' sends a space as application/x-www-form-urlencoded: no
+		// JSON value at all, so it is the absent body, not a refused one.
+		{name: "optional: whitespace-only body, form content type", optional: true,
+			contentType: "application/x-www-form-urlencoded", body: " ",
+			wantOK: true},
+		{name: "optional: whitespace-only chunked body, no content type", optional: true, body: "\r\n ", chunked: true,
+			wantOK: true},
+		{name: "optional: whitespace past the limit is over the limit", optional: true, body: strings.Repeat(" ", 64), maxBytes: 16,
+			wantStatus: http.StatusRequestEntityTooLarge, wantTitle: "Request body too large"},
+		{name: "optional: leading whitespace before json", optional: true, contentType: "application/json", body: "  \n" + good,
+			wantOK: true, want: decodeTarget{Name: "a", Count: 2}},
+		{name: "optional: leading whitespace before a body with no content type", optional: true, body: "  " + good,
+			wantStatus: http.StatusUnsupportedMediaType, wantTitle: "Unsupported Media Type"},
+		{name: "optional: trailing data", optional: true, contentType: "application/json", body: good + good,
+			wantStatus: http.StatusBadRequest, wantTitle: "Invalid request body", wantDetail: "trailing data"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +169,7 @@ func TestDecodeJSON(t *testing.T) {
 					t.Fatalf("a successful decode wrote a response: %s", rec.Body.String())
 				}
 				want := tc.want
-				if tc.optional && tc.body == "" {
+				if tc.optional && strings.TrimSpace(tc.body) == "" {
 					want = decodeTarget{Name: "untouched", Count: -1}
 				}
 				if v != want {
@@ -166,6 +190,23 @@ func TestDecodeJSON(t *testing.T) {
 				t.Fatalf("a failed decode changed v to %+v", v)
 			}
 		})
+	}
+}
+
+// decodeJSON on a request whose Body is nil answers the empty-body 400, not a
+// panic.
+func TestDecodeJSON_NilBody(t *testing.T) {
+	r, _ := http.NewRequest(http.MethodPost, "/x", nil)
+	r.Body = nil
+	r.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	var v decodeTarget
+	if decodeJSON(rec, r, &v, 0) {
+		t.Fatal("a nil body was accepted")
+	}
+	title, detail := decodeProblem(t, rec)
+	if rec.Code != http.StatusBadRequest || title != "Invalid request body" || !strings.Contains(detail, "empty") {
+		t.Fatalf("got %d %q %q; want 400 Invalid request body (empty)", rec.Code, title, detail)
 	}
 }
 

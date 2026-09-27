@@ -150,6 +150,8 @@ func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []t
 		{learnTool(), LearnHandler(embedders...), true, gateRequired},
 		{queryTool(), QueryHandler(embedders...), false, gateRequired},
 		{explainTool(), ExplainHandler(), false, gateRequired},
+		// A pure read of two trees of the upstream: no write path at all.
+		{changesTool(), ChangesHandler(), false, gateRequired},
 		{updateTool(), UpdateHandler(), true, gateRequired},
 		{retractTool(), RetractHandler(), true, gateRequired},
 		{hypothesizeTool(), HypothesizeHandler(), true, gateRequired},

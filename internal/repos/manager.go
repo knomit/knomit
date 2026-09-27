@@ -490,6 +490,12 @@ func (m *Manager) LensRegistry() *LensRegistry {
 	return m.registry
 }
 
+// Signer returns this instance's commit signer, for a caller that opens a
+// Service of its own and writes through it (the origin wizard's clone store).
+// Every Service that commits must carry it: a signer-less write is
+// store.ErrNoSigner. Set at construction and never changed, so no lock.
+func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
+
 // RootOfTrust returns F09's root of trust for a caller that opens a Service of
 // its own (the origin wizard's clone store). Nil when unconfigured. Set at
 // construction and never changed, so no lock.

@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/json"
 	"errors"
-	"mime"
 	"net"
 	"net/http"
 	"strconv"
@@ -231,8 +230,7 @@ func browserProof(r *http.Request) string {
 		return "the Origin " + strconv.Quote(r.Header.Get("Origin")) + " is not this listener's own origin http://" + host
 	}
 	if mutation {
-		mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if err != nil || mt != "application/json" {
+		if !isJSONMediaType(r.Header.Get("Content-Type")) {
 			return "the Content-Type " + strconv.Quote(r.Header.Get("Content-Type")) + " is not application/json"
 		}
 	}

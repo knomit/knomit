@@ -28,6 +28,10 @@ type FactIndex interface {
 	ListAll(ctx context.Context, branch string) ([]string, error)
 	ListAllWithHash(ctx context.Context, branch string) (paths []string, blobHashes []string, err error)
 	DiffFiles(ctx context.Context, branch, fromCommit string) (added, modified, deleted []string, err error)
+	// ChangesUnder reports each fact path under a folder that differs between
+	// the tree at q.Since and the tree at head: a read of two trees, no clock,
+	// no write (changes.go).
+	ChangesUnder(ctx context.Context, branch string, q ChangesQuery) (ChangesResult, error)
 }
 
 //go:generate go run go.uber.org/mock/mockgen -destination=../synthesize/mock_search_index_test.go -package=synthesize knomit/internal/store SearchIndex
