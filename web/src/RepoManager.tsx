@@ -856,8 +856,9 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
 }) {
   const [agentBranch, setAgentBranch] = useState('');
   // '' for an ordinary repo; 'subscribe' means it follows a remote branch
-  // read-only and has no agent branch of its own.
-  const [repoMode, setRepoMode] = useState<'subscribe' | ''>('');
+  // read-only and has no agent branch of its own. null until this repo's
+  // details answer — NOT '', which would claim "ordinary" before we know.
+  const [repoMode, setRepoMode] = useState<'subscribe' | '' | null>(null);
   const [description, setDescription] = useState('');
   // Owned here, not in DescriptionBody: the controls that set it live in the
   // block heading and the editor they open lives in the block body.
@@ -921,6 +922,7 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
     setLicense('');
     setLicenseOversize(false);
     setRenameTo(''); setRenameConfirm('');
+    setRepoMode(null);
     api.getRepo(name).then(r => {
       if (cancelled) return;
       setRepoMode(r.mode ?? '');
@@ -1023,9 +1025,15 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
   // browse state, which describes whatever repo is BROWSED — not necessarily
   // this one (#324).
   const subscribed = repoMode === 'subscribe';
+  // Until the mode is known, the page cannot tell a subscription from an
+  // ordinary repo, so everything a subscription withholds is withheld: an
+  // affordance that appears and then vanishes is one the reader may already
+  // have clicked into a 409/503. A failed details read leaves it unknown, and
+  // so locked — that page has no content to edit anyway.
+  const modeUnknown = repoMode === null;
   // Content edits are locked by creating exactly as they are by read-only, so
   // every control that already asks "may I write?" needs no new question.
-  const lockEdits = serverReadOnly || subscribed || creating;
+  const lockEdits = serverReadOnly || modeUnknown || subscribed || creating;
 
   if (creating && createJob) {
     sections.push({
@@ -1188,7 +1196,7 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
               fallen back to the READ branch, which equals the origin's branch,
               so passing it through would claim the repo is push-only when it is
               exactly the opposite. */}
-          <RemoteCard repo={name} agentBranch={subscribed ? '' : agentBranch} readOnly={serverReadOnly} subscription={subscribed}
+          <RemoteCard repo={name} agentBranch={subscribed ? '' : agentBranch} readOnly={serverReadOnly} lockOrigin={subscribed || modeUnknown}
             state={remote} onConnect={onConnect} onDisconnect={() => setConfirming('disconnect')}
             onChanged={onChanged} />
           {confirming === 'disconnect' && (

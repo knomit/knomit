@@ -1587,6 +1587,41 @@ describe('RepoManager — a subscription', () => {
   });
 });
 
+// Until a repo's details answer, the page cannot tell a subscription from an
+// ordinary repo. Showing the editors meanwhile would flash, on a subscription,
+// controls whose every use fails (#324) — so the unknown mode locks them, and
+// the lock lifts once the mode says "ordinary".
+describe('RepoManager — mode not yet known', () => {
+  it('withholds content editors and origin re-pointing until the mode resolves', async () => {
+    let resolveRepo!: (r: Awaited<ReturnType<typeof api.getRepo>>) => void;
+    vi.mocked(api.getRepo).mockReturnValue(new Promise(res => { resolveRepo = res; }));
+    vi.mocked(api.getAgentBranch).mockResolvedValue('machine/test');
+    vi.mocked(api.getOrigin).mockResolvedValue({
+      url: 'https://example.com/kb.git', branch: 'main', auth_method: 'none',
+    } as unknown as Awaited<ReturnType<typeof api.getOrigin>>);
+    render(
+      <RepoManager open repos={[{ name: 'core', uid: 'uid-core' }]} currentRepo="core"
+        serverReadOnly={false} hideRemoteConfig={false} onChanged={() => {}} onBrowse={() => {}} />,
+    );
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+
+    // The origin has loaded — the card is drawn — so the absences below are
+    // the mode gate, not an empty page.
+    expect(await screen.findByTestId('upstream-change')).toBeInTheDocument();
+    expect(screen.queryByTestId('remote-reconnect')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('remote-disconnect')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repo-description-edit')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('repo-license-edit')).not.toBeInTheDocument();
+    // Registry operations do not wait on the mode: a subscription keeps them.
+    expect(screen.getByTestId('repo-archive')).toBeEnabled();
+
+    await act(async () => { resolveRepo({ name: 'core', description: '' } as Awaited<ReturnType<typeof api.getRepo>>); });
+    expect(await screen.findByTestId('repo-description-edit')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-disconnect')).toBeInTheDocument();
+    expect(screen.getByTestId('remote-reconnect')).toBeInTheDocument();
+  });
+});
+
 // A read-only INSTANCE is the one thing that locks every control on a repo's
 // page — registry operations included, which a subscription leaves open.
 describe('RepoManager — a read-only instance', () => {
