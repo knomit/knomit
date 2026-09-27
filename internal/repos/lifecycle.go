@@ -1152,6 +1152,10 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	defer svc.Close()
 	svc.SetNetworkTimeout(m.deps.Cfg.Git.NetworkTimeout)
 	svc.SetOntologyRoot(m.deps.Cfg.OntologyRoot)
+	// The ontology commit below is an AUTHORED write on the agent branch and is
+	// pushed: it must be signed like every later one. Without this it went out
+	// unsigned (and now fails with store.ErrNoSigner).
+	svc.SetSigner(m.deps.Signer)
 	// No Crypt is wired here, for the same reason initClone doesn't: the
 	// credential is already resolved above, and its durable copy belongs to
 	// control.db's Origins, which holds the only Crypt.

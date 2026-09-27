@@ -485,6 +485,12 @@ func (m *Manager) LensRegistry() *LensRegistry {
 	return m.registry
 }
 
+// Signer returns this instance's commit signer, for a caller that opens a
+// Service of its own and writes through it (the origin wizard's clone store).
+// Every Service that commits must carry it: a signer-less write is
+// store.ErrNoSigner. Set at construction and never changed, so no lock.
+func (m *Manager) Signer() ssh.Signer { return m.deps.Signer }
+
 // Origins returns the per-repo origin store, or nil before Start.
 func (m *Manager) Origins() *Origins {
 	m.mu.RLock()

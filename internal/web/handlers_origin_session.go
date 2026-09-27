@@ -276,6 +276,11 @@ func handleTestConnectivity(rm *repos.Manager, sm *SessionManager, agentBranch s
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("open clone db: %v", err)})
 			return
 		}
+		// This store is where the disjoint-history commit REPLAYS this
+		// instance's facts (store.Replay), and SwapStore then installs it and
+		// pushes the result as our agent branch. Those commits must be signed:
+		// without a signer they went out unsigned (now store.ErrNoSigner).
+		remoteSvc.SetSigner(rm.Signer())
 
 		// Phase: cloning.
 		sendEvent(map[string]string{"phase": "cloning"})

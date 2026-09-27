@@ -254,7 +254,7 @@ func TestUnpushedCommits_SkipsMergeCommits(t *testing.T) {
 func makeDisjointRoot(t *testing.T, svc *Service, path, content string) plumbing.Hash {
 	t.Helper()
 	hash, _, err := writeFileToStore(
-		svc.rh.gits, plumbing.ZeroHash, path, content,
+		svc.rh.gits, nil, plumbing.ZeroHash, path, content,
 		"disjoint root",
 		object.Signature{Name: "test", Email: "t@t"},
 		object.Signature{Name: "test", Email: "t@t"},

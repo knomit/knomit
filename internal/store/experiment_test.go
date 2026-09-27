@@ -381,11 +381,11 @@ func TestRollbackExperiment_ReusedNameForksClean(t *testing.T) {
 // (kb/decisions/git/commit-signing-always-on), and a new write path that
 // synthesizes commits through plumbing would lose it silently.
 //
-// The fixture installs a signer explicitly, because signCommitInPlace is a
-// NO-OP when none is set — without this the assertion would be about the
-// fixture, and it would pass just as happily against a path that never called
-// the signing helper at all. The guard below proves the signer is live before
-// the experiment merge is judged by it.
+// The fixture installs a signer explicitly. A store without one now refuses
+// to commit (ErrNoSigner), but this test binary installs a fallback signer
+// (TestMain), so without its own key the assertion would be about the
+// fallback. The guard below proves the signer is live before the experiment
+// merge is judged by it.
 func TestExperimentCommits_AreSigned(t *testing.T) {
 	ctx := context.Background()
 	svc := newExperimentTestStore(t)

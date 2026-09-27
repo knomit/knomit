@@ -13,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"golang.org/x/crypto/ssh"
 
 	storegit "knomit/internal/store/git"
 )
@@ -43,8 +44,10 @@ func writeBlobToStore(s *storegit.Storer, content []byte) (plumbing.Hash, error)
 
 // writeFileToStore creates a blob+tree+commit for path/content.
 // parentCommitHash is ZeroHash for the initial commit (no parent).
+// signer signs the commit before it is stored (storeCommit); nil stores it
+// unsigned, which only the init commits of a new repository do.
 // Returns (commitHash, blobHash, error).
-func writeFileToStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, content, message string, author, committer object.Signature) (plumbing.Hash, plumbing.Hash, error) {
+func writeFileToStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash plumbing.Hash, path, content, message string, author, committer object.Signature) (plumbing.Hash, plumbing.Hash, error) {
 	// 1. Create blob.
 	blobObj := s.NewEncodedObject()
 	blobObj.SetType(plumbing.BlobObject)
@@ -92,13 +95,9 @@ func writeFileToStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, 
 		commit.ParentHashes = []plumbing.Hash{parentCommitHash}
 	}
 
-	commitObj := s.NewEncodedObject()
-	if err := commit.Encode(commitObj); err != nil {
-		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: encode commit: %w", err)
-	}
-	commitHash, err := s.SetEncodedObject(commitObj)
+	commitHash, err := storeCommit(s, signer, commit)
 	if err != nil {
-		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: store commit: %w", err)
+		return plumbing.ZeroHash, plumbing.ZeroHash, fmt.Errorf("writeFileToStore: %w", err)
 	}
 
 	return commitHash, blobHash, nil
@@ -179,8 +178,8 @@ func upsertEntry(s *storegit.Storer, existing *object.Tree, entry object.TreeEnt
 }
 
 // deleteFileFromStore creates a commit that removes path from the tree rooted
-// at parentCommitHash.
-func deleteFileFromStore(s *storegit.Storer, parentCommitHash plumbing.Hash, path, message string, author, committer object.Signature) (plumbing.Hash, error) {
+// at parentCommitHash, signed by signer before it is stored.
+func deleteFileFromStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash plumbing.Hash, path, message string, author, committer object.Signature) (plumbing.Hash, error) {
 	parentCommit, err := object.GetCommit(s, parentCommitHash)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: get parent commit: %w", err)
@@ -203,13 +202,9 @@ func deleteFileFromStore(s *storegit.Storer, parentCommitHash plumbing.Hash, pat
 		ParentHashes: []plumbing.Hash{parentCommitHash},
 	}
 
-	commitObj := s.NewEncodedObject()
-	if err := commit.Encode(commitObj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: encode commit: %w", err)
-	}
-	commitHash, err := s.SetEncodedObject(commitObj)
+	commitHash, err := storeCommit(s, signer, commit)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: store commit: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("deleteFileFromStore: %w", err)
 	}
 	return commitHash, nil
 }

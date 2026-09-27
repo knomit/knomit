@@ -13,6 +13,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/platform/fileuri"
 	"knomit/internal/store"
+	"knomit/internal/testsupport/testsigner"
 )
 
 // newRemoteModeManager returns a started Manager rooted at dir with
@@ -490,4 +491,38 @@ func TestActivateSync_AllowsTheSameKnowledgeBase(t *testing.T) {
 
 	require.NoError(t, ri.ActivateSync(url),
 		"a repo must be able to sync with the knowledge base it came from")
+}
+
+// TestCreate_InitializeSignsTheOntologyCommitWithTheInstanceKey: the initialize
+// flow opens its own store and writes the ontology commit through the fact
+// machinery, then PUSHES it as this instance's agent branch. That store had no
+// signer, so the commit went out unsigned (F09 PR 2). It must be signed by the
+// instance's key — Deps.Signer — not by the test binary's fallback key.
+func TestCreate_InitializeSignsTheOntologyCommitWithTheInstanceKey(t *testing.T) {
+	dir := t.TempDir()
+	url := seedBareRemoteNoOntology(t, filepath.Join(dir, "remote.git"))
+	bare := bareOf(url)
+
+	instance := testsigner.Named("initialize-instance")
+	m := New(context.Background(), Deps{
+		Cfg:                   config.Config{Home: dir, OntologyRoot: "kb", LocalOriginRoot: dir},
+		AgentBranch:           "agent/test-abc",
+		Signer:                instance,
+		DisableBackgroundSync: true,
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { m.Close() })
+
+	_, err := m.Create(context.Background(), CreateSpec{
+		Name: "kb", Mode: "initialize", OntologyPreset: "code",
+		Origin: &OriginSpec{URL: url},
+	}, nil)
+	require.NoError(t, err)
+
+	key, ok, err := testsigner.CommitSignerKey(bare, "refs/heads/agent/test-abc")
+	require.NoError(t, err)
+	require.True(t, ok, "the pushed ontology commit must carry an SSH signature")
+	require.True(t, testsigner.SameKey(key, instance.PublicKey()),
+		"the ontology commit must be signed by the instance key, not the test fallback")
+	require.False(t, testsigner.SameKey(key, testsigner.Signer().PublicKey()))
 }
