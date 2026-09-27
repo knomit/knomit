@@ -1240,6 +1240,68 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/branches/{branch}/changes:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    get:
+      tags: [commits]
+      summary: What is different under a folder since a commit
+      operationId: listChanges
+      description: |
+        Compares the folder at commit `since` with the folder at the head of
+        this branch and returns each fact path under it as `added`,
+        `modified` or `deleted`, plus `head` — the commit it compared against.
+
+        No timestamp is read anywhere: the answer depends only on the two
+        commits, so two synced machines get byte-identical answers. Nothing is
+        written. Keep `head` in your own state and pass it as `since` next
+        time; omit `since` to get the whole folder as it is now (all rows
+        `added`), which is also the recovery for a lost bookmark.
+
+        It is the NET difference: something added and removed between two
+        reads is not reported, because it is no longer there. A rename or move
+        is a `deleted` row plus an `added` row (no rename detection). Private
+        paths (any segment beginning with `.`) and non-`.md` files are never
+        returned.
+
+        If `since` is not behind head (it is not head and not one of its
+        ancestors — a bookmark from a machine that was further ahead, or from
+        another branch) the request is refused with 409 instead of reporting
+        false deletions: retry after sync, or omit `since`.
+
+        This route reads the branch in its URL. The MCP tool `knomit_changes`
+        always reads the repository's main (consensus) branch.
+      parameters:
+        - name: prefix
+          in: query
+          description: |
+            The folder, relative to the ontology root (`tasks/research` means
+            `kb/tasks/research`). Case-insensitive; leading and trailing `/`
+            are ignored; never given `.md`. Omit for the whole ontology root.
+            A folder that did not exist at `since`, or no longer exists at
+            head, reads as empty. `..` or a segment beginning with `.` is 400.
+          schema: { type: string }
+        - name: since
+          in: query
+          description: The caller's bookmark — the full 40-hex `head` a previous response returned. Omit to list the folder as it is now.
+          schema: { type: string, pattern: "^[0-9a-fA-F]{40}$" }
+        - name: cursor
+          in: query
+          description: Opaque page token from the `next` link. When present, `prefix` and `since` are ignored; the page continues the same comparison (the same two commits).
+          schema: { type: string }
+        - { name: limit, in: query, description: "1–100; out-of-range or non-integer is 400.", schema: { type: integer, default: 100, minimum: 1, maximum: 100 } }
+      responses:
+        "200":
+          description: One page of changed paths, sorted bytewise by path
+          content:
+            application/hal+json:
+              schema: { $ref: "#/components/schemas/ChangesPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/branches/{branch}/commits:
     parameters:
       - $ref: "#/components/parameters/Repo"
@@ -3362,6 +3424,31 @@ components:
                 commits:
                   type: array
                   items: { $ref: "#/components/schemas/CommitSummary" }
+
+    PathChange:
+      type: object
+      required: [path, change]
+      properties:
+        path:   { type: string, description: "Repo-relative fact path, e.g. kb/tasks/a/t1.md." }
+        change: { type: string, enum: [added, modified, deleted] }
+
+    ChangesPage:
+      allOf:
+        - $ref: "#/components/schemas/CollectionBase"
+        - type: object
+          required: [head, has_more, _embedded]
+          properties:
+            head:
+              type: string
+              description: The commit compared against (40-hex). Always present, including on an empty page. Store it and pass it as `since` next time — after the LAST page.
+            has_more: { type: boolean }
+            _embedded:
+              type: object
+              required: [changes]
+              properties:
+                changes:
+                  type: array
+                  items: { $ref: "#/components/schemas/PathChange" }
 
     CommitFile:
       type: object

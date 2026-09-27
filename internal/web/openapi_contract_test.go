@@ -94,3 +94,36 @@ func TestOpenAPI_ExpiryFiltersAndFieldsDeclared(t *testing.T) {
 	}
 	require.Contains(t, schemas["FactCreateRequest"].(map[string]any)["properties"], "expires")
 }
+
+// TestOpenAPI_ChangesDeclared (F05): the changes route is served in the spec
+// with the plain-English contract a client acts on — the bookmark idiom, the
+// net-difference semantics, the rename note and the 409 refusal — and its
+// schemas require the fields the handler always emits.
+func TestOpenAPI_ChangesDeclared(t *testing.T) {
+	doc := servedOpenAPI(t)
+	paths := doc["paths"].(map[string]any)
+	op, ok := paths["/repos/{repo}/branches/{branch}/changes"].(map[string]any)
+	require.True(t, ok, "the changes route must be in the served spec")
+	get := op["get"].(map[string]any)
+	desc := get["description"].(string)
+	for _, want := range []string{"No timestamp is read", "pass it as `since` next", "NET difference",
+		"`deleted` row plus an `added` row", "refused with 409", "Nothing is\nwritten"} {
+		require.Contains(t, desc, want)
+	}
+	var names []string
+	for _, p := range get["parameters"].([]any) {
+		if n, ok := p.(map[string]any)["name"].(string); ok {
+			names = append(names, n)
+		}
+	}
+	require.ElementsMatch(t, []string{"prefix", "since", "cursor", "limit"}, names)
+	require.Contains(t, get["responses"].(map[string]any), "409")
+
+	schemas := doc["components"].(map[string]any)["schemas"].(map[string]any)
+	pc := schemas["PathChange"].(map[string]any)
+	require.ElementsMatch(t, []any{"path", "change"}, pc["required"].([]any))
+	require.ElementsMatch(t, []any{"added", "modified", "deleted"},
+		pc["properties"].(map[string]any)["change"].(map[string]any)["enum"].([]any))
+	page := schemas["ChangesPage"].(map[string]any)["allOf"].([]any)[1].(map[string]any)
+	require.ElementsMatch(t, []any{"head", "has_more", "_embedded"}, page["required"].([]any))
+}
