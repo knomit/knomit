@@ -113,6 +113,11 @@ func TestIssue281_ReboundHostIsRefused(t *testing.T) {
 		if strings.Contains(p.Detail, "loopback_default") || strings.ContainsAny(p.Detail, `/\`) {
 			t.Errorf("%s %s: detail %q; want neither loopback_default nor a filesystem path", c.method, c.path, p.Detail)
 		}
+		// #320: "in knomit.toml" sent an operator to the wrong machine's
+		// file. The detail must say whose file, and that a restart applies it.
+		if !strings.Contains(p.Detail, "this instance's knomit.toml") || !strings.Contains(p.Detail, "restart") {
+			t.Errorf("%s %s: detail %q; want it to name this instance's knomit.toml and say restart", c.method, c.path, p.Detail)
+		}
 	}
 	if writer.writeCalls != 0 {
 		t.Fatalf("the rebound PUT reached the fact writer %d time(s)", writer.writeCalls)

@@ -59,8 +59,9 @@ func TestGuard_Table(t *testing.T) {
 			if rr.Code != c.want {
 				t.Fatalf("status = %d, want %d; body %q", rr.Code, c.want, rr.Body.String())
 			}
-			// #320: the 421 names whose config to edit, in the same words
-			// as the main listener's, so the two cannot drift apart.
+			// #320: the 421 names whose config to edit. Both listeners'
+			// tests pin this phrase, so a change to one text without the
+			// other fails a test.
 			if c.want == http.StatusMisdirectedRequest && !strings.Contains(rr.Body.String(), "this instance's knomit.toml") {
 				t.Fatalf("421 body %q does not say this instance's knomit.toml", rr.Body.String())
 			}
