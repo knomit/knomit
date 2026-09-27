@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -128,6 +129,9 @@ type TriggerIndex interface {
 	// Toucher finds the commit that introduced the blob path carries at head:
 	// git's own history simplification, with no clock. See the method.
 	Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error)
+	// TreeReader returns a reader that caches decoded trees across calls, for
+	// a run that reads many paths of the same few commits (see TriggerTrees).
+	TreeReader() TriggerTrees
 	CommitInfo(ctx context.Context, hash plumbing.Hash) (CommitInfo, error)
 	// CommitSignerOf returns the verified SSHSIG signer of a commit; the
 	// fingerprint is set ONLY when the signature verifies over the payload.
@@ -145,11 +149,15 @@ type TriggerIndex interface {
 
 	// TriggerWatermarks returns trigger name → commit hash for branch.
 	TriggerWatermarks(ctx context.Context, branch string) (map[string]string, error)
-	// RecordTriggerRun is tx1: the run's fire rows, capped at
+	// RecordTriggerRun is tx1 for one run: the run's fire rows, capped at
 	// TriggerFireRetention (the newest paths kept, the rest counted in the run
 	// row's fires_not_logged), plus exactly ONE run row. Returns how many fire
 	// rows were written.
 	RecordTriggerRun(ctx context.Context, run TriggerRun) (int, error)
+	// RecordTriggerRuns is tx1 for several buffered runs in ONE transaction,
+	// each with its own cap and its own run row. The dispatcher defers tx1
+	// while the writer is busy and flushes the runs together.
+	RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error)
 	// AdvanceTriggerWatermarks is tx2: upserts set, deletes del, then prunes
 	// trigger_fires to the newest TriggerFireRetention rows.
 	AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string) error
@@ -220,12 +228,59 @@ func (rh *repoHandler) OntologyAtCommit(ctx context.Context, commit plumbing.Has
 	return "", "", nil, ErrNoOntologyAtCommit
 }
 
+// TriggerTrees reads paths out of commit trees, caching every decoded tree
+// for its lifetime. One is made per dispatcher run: an advance touches the
+// same few commits for every matched path, and go-git decodes a commit's root
+// tree afresh on each Commit.Tree() call (a 10,000-entry folder is decoded
+// and indexed again per lookup), so without the cache a large advance costs
+// minutes. A Tree keeps its own subtree cache once decoded, so the second
+// lookup of a sibling path is a couple of map hits.
+type TriggerTrees interface {
+	Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error)
+	BlobAt(ctx context.Context, commit plumbing.Hash, path string) (content string, ok bool, err error)
+}
+
+type triggerTrees struct {
+	rh      *repoHandler
+	commits map[plumbing.Hash]*object.Commit
+	trees   map[plumbing.Hash]*object.Tree
+}
+
+// TreeReader implements TriggerIndex.
+func (rh *repoHandler) TreeReader() TriggerTrees {
+	return &triggerTrees{rh: rh, commits: map[plumbing.Hash]*object.Commit{}, trees: map[plumbing.Hash]*object.Tree{}}
+}
+
+func (tt *triggerTrees) commit(h plumbing.Hash) (*object.Commit, error) {
+	if c, ok := tt.commits[h]; ok {
+		return c, nil
+	}
+	c, err := tt.rh.repo.CommitObject(h)
+	if err != nil {
+		return nil, fmt.Errorf("triggers: commit %s: %w", h, err)
+	}
+	tt.commits[h] = c
+	return c, nil
+}
+
+func (tt *triggerTrees) tree(c *object.Commit) (*object.Tree, error) {
+	if t, ok := tt.trees[c.Hash]; ok {
+		return t, nil
+	}
+	t, err := c.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("triggers: tree of %s: %w", c.Hash, err)
+	}
+	tt.trees[c.Hash] = t
+	return t, nil
+}
+
 // blobHashAt returns the blob hash path carries in c's tree, or ZeroHash when
 // the path is absent there.
-func blobHashAt(c *object.Commit, path string) (plumbing.Hash, error) {
-	tree, err := c.Tree()
+func (tt *triggerTrees) blobHashAt(c *object.Commit, path string) (plumbing.Hash, error) {
+	tree, err := tt.tree(c)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("triggers: tree of %s: %w", c.Hash, err)
+		return plumbing.ZeroHash, err
 	}
 	entry, err := tree.FindEntry(path)
 	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
@@ -237,7 +292,7 @@ func blobHashAt(c *object.Commit, path string) (plumbing.Hash, error) {
 	return entry.Hash, nil
 }
 
-// Toucher implements TriggerIndex: the commit that introduced the blob `path`
+// Toucher implements TriggerTrees: the commit that introduced the blob `path`
 // carries at head (or, for a path absent at head, the commit that removed it).
 //
 // The rule is git's own history simplification, restricted to one path and
@@ -256,12 +311,12 @@ func blobHashAt(c *object.Commit, path string) (plumbing.Hash, error) {
 // ends at a real toucher inside the advance; the dispatcher does not call it
 // for a retract in a NONLINEAR advance, where the same-absent-blob walk would
 // run to the root.
-func (rh *repoHandler) Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error) {
-	cur, err := rh.repo.CommitObject(head)
+func (tt *triggerTrees) Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error) {
+	cur, err := tt.commit(head)
 	if err != nil {
-		return TouchResult{}, fmt.Errorf("triggers: toucher head %s: %w", head, err)
+		return TouchResult{}, err
 	}
-	curBlob, err := blobHashAt(cur, path)
+	curBlob, err := tt.blobHashAt(cur, path)
 	if err != nil {
 		return TouchResult{}, err
 	}
@@ -276,11 +331,11 @@ func (rh *repoHandler) Toucher(ctx context.Context, head plumbing.Hash, path str
 		}
 		var same *object.Commit
 		for i := 0; i < n; i++ {
-			p, err := cur.Parent(i)
+			p, err := tt.commit(cur.ParentHashes[i])
 			if err != nil {
-				return res, fmt.Errorf("triggers: toucher parent %d of %s: %w", i, cur.Hash, err)
+				return res, err
 			}
-			pb, err := blobHashAt(p, path)
+			pb, err := tt.blobHashAt(p, path)
 			if err != nil {
 				return res, err
 			}
@@ -296,6 +351,35 @@ func (rh *repoHandler) Toucher(ctx context.Context, head plumbing.Hash, path str
 		res.Steps++
 		cur = same
 	}
+}
+
+// BlobAt implements TriggerTrees.
+func (tt *triggerTrees) BlobAt(ctx context.Context, commit plumbing.Hash, path string) (string, bool, error) {
+	c, err := tt.commit(commit)
+	if err != nil {
+		return "", false, err
+	}
+	tree, err := tt.tree(c)
+	if err != nil {
+		return "", false, err
+	}
+	f, err := tree.File(path)
+	if errors.Is(err, object.ErrFileNotFound) || errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("triggers: file %q at %s: %w", path, commit, err)
+	}
+	content, err := f.Contents()
+	if err != nil {
+		return "", false, fmt.Errorf("triggers: contents %q at %s: %w", path, commit, err)
+	}
+	return content, true, nil
+}
+
+// Toucher implements TriggerIndex with a one-shot reader (see TriggerTrees).
+func (rh *repoHandler) Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error) {
+	return rh.TreeReader().Toucher(ctx, head, path)
 }
 
 // CommitInfo implements TriggerIndex.
@@ -322,28 +406,9 @@ func (rh *repoHandler) CommitSignerOf(ctx context.Context, hash plumbing.Hash) (
 	return verifyCommitSignature(c)
 }
 
-// BlobAt implements TriggerIndex.
+// BlobAt implements TriggerIndex with a one-shot reader (see TriggerTrees).
 func (rh *repoHandler) BlobAt(ctx context.Context, commit plumbing.Hash, path string) (string, bool, error) {
-	c, err := rh.repo.CommitObject(commit)
-	if err != nil {
-		return "", false, fmt.Errorf("triggers: commit %s: %w", commit, err)
-	}
-	tree, err := c.Tree()
-	if err != nil {
-		return "", false, fmt.Errorf("triggers: tree of %s: %w", commit, err)
-	}
-	f, err := tree.File(path)
-	if errors.Is(err, object.ErrFileNotFound) || errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("triggers: file %q at %s: %w", path, commit, err)
-	}
-	content, err := f.Contents()
-	if err != nil {
-		return "", false, fmt.Errorf("triggers: contents %q at %s: %w", path, commit, err)
-	}
-	return content, true, nil
+	return rh.TreeReader().BlobAt(ctx, commit, path)
 }
 
 // IsAncestor implements TriggerIndex: a is b or an ancestor of b.
@@ -402,45 +467,73 @@ func (rh *repoHandler) TriggerWatermarks(ctx context.Context, branch string) (ma
 	return out, rows.Err()
 }
 
-// RecordTriggerRun implements TriggerIndex (tx1). One transaction, so the
-// process-wide write lock (_txlock=immediate) is taken once, for at most
-// TriggerFireRetention+1 short inserts, never across `if` or emit.
+// triggerFireColumns is the column list of one trigger_fires row, in the
+// order fireRowArgs produces the values.
+const triggerFireColumns = `(trigger, branch, path, episode, source, commit_hash, trace, outcome, error, nonlinear,
+	 range_from, range_to, evaluated, paths, fires, fires_not_logged, duration_ms, diff_ms, change_ms, fired_at)`
+
+// fireRowBatch is how many rows one multi-row INSERT carries: 20 columns ×
+// 500 rows = 10,000 bound parameters, well under SQLite's limit. Fewer, larger
+// statements hold the process-wide write lock for less time than one
+// statement per row, and that lock is the one fact writes wait on.
+const fireRowBatch = 500
+
+// RecordTriggerRun implements TriggerIndex (tx1 for one run).
 func (rh *repoHandler) RecordTriggerRun(ctx context.Context, run TriggerRun) (int, error) {
-	rows := run.Rows
-	notLogged := 0
-	if len(rows) > TriggerFireRetention {
-		notLogged = len(rows) - TriggerFireRetention
-		rows = rows[notLogged:] // newest paths last: keep the last N
-	}
+	return rh.RecordTriggerRuns(ctx, []TriggerRun{run})
+}
+
+// RecordTriggerRuns implements TriggerIndex (tx1). One transaction, so the
+// process-wide write lock (_txlock=immediate) is taken once, for a few
+// multi-row inserts, never across `if` or emit.
+func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun) (int, error) {
 	tx, err := rh.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("RecordTriggerRun: begin: %w", err)
 	}
 	defer tx.Rollback()
 	now := time.Now().Unix()
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO trigger_fires
-		(trigger, branch, path, episode, source, commit_hash, trace, outcome, error, nonlinear,
-		 range_from, range_to, evaluated, paths, fires, fires_not_logged, duration_ms, diff_ms, change_ms, fired_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return 0, fmt.Errorf("RecordTriggerRun: prepare: %w", err)
-	}
-	defer stmt.Close()
-	for _, r := range rows {
-		if _, err := stmt.ExecContext(ctx, r.Trigger, run.Branch, r.Path, r.Episode, r.Source, r.Commit, r.Trace,
-			r.Outcome, r.Error, boolInt(r.Nonlinear), run.RangeFrom, run.RangeTo, 0, 0, 0, 0, 0, 0, 0, now); err != nil {
-			return 0, fmt.Errorf("RecordTriggerRun: fire row: %w", err)
+	placeholder := "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	logged := 0
+	for _, run := range runs {
+		rows := run.Rows
+		notLogged := 0
+		if len(rows) > TriggerFireRetention {
+			notLogged = len(rows) - TriggerFireRetention
+			rows = rows[notLogged:] // newest paths last: keep the last N
 		}
-	}
-	if _, err := stmt.ExecContext(ctx, "", run.Branch, "", "", "", "", "", TriggerOutcomeRun, "", boolInt(run.Nonlinear),
-		run.RangeFrom, run.RangeTo, run.Evaluated, run.Paths, run.Fires, notLogged,
-		run.DurationMS, run.DiffMS, run.ChangeMS, now); err != nil {
-		return 0, fmt.Errorf("RecordTriggerRun: run row: %w", err)
+		for start := 0; start < len(rows); start += fireRowBatch {
+			end := start + fireRowBatch
+			if end > len(rows) {
+				end = len(rows)
+			}
+			var sb strings.Builder
+			sb.WriteString("INSERT INTO trigger_fires " + triggerFireColumns + " VALUES ")
+			args := make([]any, 0, (end-start)*20)
+			for i, r := range rows[start:end] {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(placeholder)
+				args = append(args, r.Trigger, run.Branch, r.Path, r.Episode, r.Source, r.Commit, r.Trace,
+					r.Outcome, r.Error, boolInt(r.Nonlinear), run.RangeFrom, run.RangeTo, 0, 0, 0, 0, 0, 0, 0, now)
+			}
+			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+				return 0, fmt.Errorf("RecordTriggerRun: fire rows: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO trigger_fires "+triggerFireColumns+" VALUES "+placeholder,
+			"", run.Branch, "", "", "", "", "", TriggerOutcomeRun, "", boolInt(run.Nonlinear),
+			run.RangeFrom, run.RangeTo, run.Evaluated, run.Paths, run.Fires, notLogged,
+			run.DurationMS, run.DiffMS, run.ChangeMS, now); err != nil {
+			return 0, fmt.Errorf("RecordTriggerRun: run row: %w", err)
+		}
+		logged += len(rows)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("RecordTriggerRun: commit: %w", err)
 	}
-	return len(rows), nil
+	return logged, nil
 }
 
 func boolInt(b bool) int {
@@ -462,11 +555,26 @@ func (rh *repoHandler) AdvanceTriggerWatermarks(ctx context.Context, branch stri
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	for _, n := range names {
-		if _, err := tx.ExecContext(ctx,
-			`INSERT OR REPLACE INTO trigger_watermarks(trigger, branch, commit_hash) VALUES (?, ?, ?)`,
-			n, branch, set[n]); err != nil {
-			return fmt.Errorf("AdvanceTriggerWatermarks: set %q: %w", n, err)
+	// One multi-row upsert (chunked) rather than one statement per trigger:
+	// every active trigger's bookmark moves on every run, and the write lock
+	// is held for the whole transaction.
+	for start := 0; start < len(names); start += fireRowBatch {
+		end := start + fireRowBatch
+		if end > len(names) {
+			end = len(names)
+		}
+		var sb strings.Builder
+		sb.WriteString("INSERT OR REPLACE INTO trigger_watermarks(trigger, branch, commit_hash) VALUES ")
+		args := make([]any, 0, (end-start)*3)
+		for i, n := range names[start:end] {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString("(?, ?, ?)")
+			args = append(args, n, branch, set[n])
+		}
+		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("AdvanceTriggerWatermarks: set: %w", err)
 		}
 	}
 	for _, n := range del {

@@ -20,12 +20,16 @@
 //	B  (no store) per (trigger, path): `if` then emit, ctx checked per path;
 //	   timed as the trigger's own work for the statistics and the slow
 //	   detector.
-//	C  (Acquire) tx1: the run's fire rows + ONE run row; tx2: watermarks and
-//	   the prune. release
+//	C  (Acquire) tx1: the buffered runs' fire rows + ONE run row per run;
+//	   tx2: watermarks and the prune. release. Phase C is WRITE-BEHIND: a run
+//	   buffers it and it is flushed when no kick is pending (the writer is
+//	   quiet), when the buffer reaches its bound, or at shutdown — see
+//	   pendingFlush for the measurement that forced this.
 //
 // So a long `if` never holds a store reference (SwapStore and teardown do not
 // drain behind it), and the dispatcher's SQLite writes take the process-wide
-// write lock at most twice per run, never across user code.
+// write lock at most twice per flush, never across user code, and never while
+// the writer is mid-burst.
 //
 // The dispatcher has its OWN context and wait group. It must not share
 // syncCtx: ActivateSync cancels that to restart the reconcile loop and would
@@ -104,6 +108,10 @@ type triggerDispatcher struct {
 	lastHead string
 	lastBlob string
 	runSeq   int64
+	// completedHead is the head the last COMPLETED run read (set when run
+	// returns, whatever it did), so a test can wait for "the run for head H
+	// is over" rather than sleep.
+	completedHead string
 	// errLogged holds the name@blob keys already reported at ERROR, so a
 	// broken trigger is logged once per blob and not on every advance. Reset
 	// when the blob changes (the keys carry the blob, so old ones are dead).
@@ -118,6 +126,11 @@ type triggerDispatcher struct {
 		anchor plumbing.Hash
 		set    map[plumbing.Hash]bool
 	}
+	// pending is phase C's write-behind buffer (see pendingFlush).
+	pending pendingFlush
+	// verifyBlob/verifyOn memoise the F09 mode of the ontology blob at the head.
+	verifyBlob string
+	verifyOn   bool
 }
 
 // newTriggerDispatcher builds the dispatcher for ri WITHOUT starting it, so
@@ -213,9 +226,45 @@ func (d *triggerDispatcher) loop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			d.flushOnStop()
 			return
 		case <-d.kick:
 			d.safeRun(ctx)
+			d.settle(ctx)
+		}
+	}
+}
+
+// triggerFlushGrace is how long the writer must be silent before phase C is
+// flushed. A run usually finishes while the NEXT write is still in flight
+// (its kick is not pending yet), so "no kick pending" alone still put the
+// flush on top of that write. Waiting for a short silence puts it in the gap
+// after a burst instead. Emits are not delayed by this: they happened in the
+// run. Only the tables lag, by at most this long plus the flush.
+const triggerFlushGrace = 20 * time.Millisecond
+
+// settle waits for the writer to go quiet, then flushes. A kick that arrives
+// meanwhile is consumed and its run happens right away; the buffer keeps
+// growing until a gap (or a bound, see maybeFlush) flushes it.
+func (d *triggerDispatcher) settle(ctx context.Context) {
+	for {
+		d.mu.Lock()
+		empty := d.pending.empty()
+		d.mu.Unlock()
+		if empty {
+			return
+		}
+		timer := time.NewTimer(triggerFlushGrace)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return // loop's ctx.Done flushes on stop
+		case <-d.kick:
+			timer.Stop()
+			d.safeRun(ctx)
+		case <-timer.C:
+			d.flush(ctx)
+			return
 		}
 	}
 }
@@ -229,6 +278,9 @@ func (d *triggerDispatcher) safeRun(ctx context.Context) {
 			crashdump.ReportRecovered("triggers:"+d.repo, r)
 			log.Error().Str("repo", d.repo).Str("branch", d.branch).Interface("panic", r).
 				Msg("trigger dispatcher: run panicked; the range will be re-run")
+			// Whatever was buffered is suspect: the tables are the truth
+			// again, and the unflushed range re-fires.
+			d.resetPending()
 		}
 		d.mu.Lock()
 		d.runSeq++
@@ -256,6 +308,7 @@ type pendingFire struct {
 
 // runState is everything one run accumulates across the phases.
 type runState struct {
+	svc       *store.Service // identity of the store generation phase A read; never dereferenced after release
 	head      string
 	newWM     map[string]string
 	del       []string
@@ -268,17 +321,64 @@ type runState struct {
 	started   time.Time
 }
 
+// pendingFlush is phase C's write-behind buffer: the runs (with their fire
+// rows) and the watermark moves that have been EVALUATED AND EMITTED but not
+// yet written to the two tables.
+//
+// WHY A BUFFER. Phase C's two transactions take SQLite's process-wide write
+// lock, the same lock every fact write needs several times per commit, and a
+// writer that meets a held lock sleeps in the busy handler's millisecond
+// steps. Flushing after every run therefore cost a busy writer 5–7 ms per
+// write (measured: 10.2 → 17.1 ms median with 50 matching triggers), while
+// the kick alone cost nothing. So the run buffers its phase C and flushes
+// when the writer is QUIET — no kick pending — or when the buffer reaches its
+// bound, or at shutdown. Under a burst the fire rows and watermarks of several
+// runs land in ONE tx1 and ONE tx2 after the burst; a lone write flushes in
+// its own run. Measured: 5.4 → 6.5 ms median.
+//
+// WHAT DOES NOT CHANGE. Emits still happen per run, immediately. Each run
+// still produces exactly one run row. The stored watermark moves only after
+// its rows are logged (tx1 before tx2). Phase A overlays the buffered
+// watermarks on the stored ones, so a buffered advance is never diffed twice.
+// A crash before the flush loses the buffered log rows and re-fires the range
+// on restart — the at-least-once contract the proposal states for a crash
+// before tx1 — and a failed or panicking flush drops the buffer for the same
+// reason: what the tables say is then the truth, and the range re-fires.
+type pendingFlush struct {
+	svc  *store.Service // the store generation the buffer was built against
+	runs []store.TriggerRun
+	rows int
+	wm   map[string]string
+	del  map[string]bool
+}
+
+// maxBufferedRuns bounds the write-behind buffer by run count; the fire rows
+// are bounded by TriggerFireRetention. Either bound flushes regardless of
+// pending kicks.
+const maxBufferedRuns = 256
+
+func (p *pendingFlush) empty() bool {
+	return len(p.runs) == 0 && len(p.wm) == 0 && len(p.del) == 0
+}
+
 func (d *triggerDispatcher) run(ctx context.Context) {
 	rs := &runState{newWM: map[string]string{}, started: time.Now()}
+	defer func() {
+		d.mu.Lock()
+		d.completedHead = rs.head
+		d.mu.Unlock()
+	}()
 
 	// ---- Phase A: with the store.
 	svc, release, err := d.ri.Acquire()
 	if err != nil {
 		return // closed or mid-swap: the next commit kicks again
 	}
+	rs.svc = svc
 	ok := d.phaseA(ctx, svc, rs)
 	release()
 	if !ok {
+		d.maybeFlush(ctx)
 		return
 	}
 
@@ -288,39 +388,171 @@ func (d *triggerDispatcher) run(ctx context.Context) {
 		return // ctx cancelled: nothing is recorded, the range re-fires
 	}
 
-	// ---- Phase C: with the store, at most two short transactions.
-	svc, release, err = d.ri.Acquire()
-	if err != nil {
-		return
+	// ---- Phase C: buffered; written in at most two short transactions per
+	// flush, when the writer is quiet.
+	durationMS := time.Since(rs.started).Milliseconds()
+	if rs.paths > 0 {
+		d.stats.recordRun(TriggerLastRun{
+			RangeFrom: rs.rangeFrom, RangeTo: rs.head, Nonlinear: rs.nonlinear, Paths: rs.paths,
+			Evaluated: evaluated, Fires: fires, DurationMS: durationMS, DiffMS: rs.diffMS, ChangeMS: rs.changeMS,
+		})
 	}
-	defer release()
-	tr := svc.Triggers()
-	run := store.TriggerRun{
+	d.buffer(rs, store.TriggerRun{
 		Branch: d.branch, RangeFrom: rs.rangeFrom, RangeTo: rs.head, Nonlinear: rs.nonlinear,
 		Paths: rs.paths, Evaluated: evaluated, Fires: fires,
-		DurationMS: time.Since(rs.started).Milliseconds(), DiffMS: rs.diffMS, ChangeMS: rs.changeMS, Rows: rows,
+		DurationMS: durationMS, DiffMS: rs.diffMS, ChangeMS: rs.changeMS, Rows: rows,
+	})
+	d.maybeFlush(ctx)
+}
+
+// buffer merges one run's phase C into the write-behind buffer.
+func (d *triggerDispatcher) buffer(rs *runState, run store.TriggerRun) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	p := &d.pending
+	if p.svc != rs.svc {
+		// A different store generation (SwapStore): what was buffered
+		// describes the old store. Drop it; the tables are the truth.
+		*p = pendingFlush{}
+	}
+	p.svc = rs.svc
+	if p.wm == nil {
+		p.wm, p.del = map[string]string{}, map[string]bool{}
 	}
 	if rs.paths > 0 {
-		if _, err := tr.RecordTriggerRun(ctx, run); err != nil {
+		p.runs = append(p.runs, run)
+		p.rows += len(run.Rows)
+	}
+	for name, h := range rs.newWM {
+		p.wm[name] = h
+		delete(p.del, name)
+	}
+	for _, name := range rs.del {
+		p.del[name] = true
+		delete(p.wm, name)
+	}
+}
+
+// maybeFlush flushes the buffer when it has reached a bound; otherwise the
+// flush waits for the writer to go quiet (settle).
+func (d *triggerDispatcher) maybeFlush(ctx context.Context) {
+	d.mu.Lock()
+	full := !d.pending.empty() &&
+		(d.pending.rows >= store.TriggerFireRetention || len(d.pending.runs) >= maxBufferedRuns)
+	d.mu.Unlock()
+	if full {
+		d.flush(ctx)
+	}
+}
+
+// flushed reports whether nothing is buffered (tests wait on it).
+func (d *triggerDispatcher) flushed() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pending.empty()
+}
+
+// flush writes the buffer: tx1 (the runs' fire rows and run rows), then tx2
+// (the watermarks and the prune). Any failure — or a panic — drops the
+// buffer: the stored tables are then the truth and the unflushed range
+// re-fires (at-least-once).
+func (d *triggerDispatcher) flush(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			crashdump.ReportRecovered("triggers:"+d.repo, r)
+			log.Error().Str("repo", d.repo).Str("branch", d.branch).Interface("panic", r).
+				Msg("trigger dispatcher: flush panicked; the range will be re-run")
+			d.resetPending()
+		}
+	}()
+	svc, release, err := d.ri.Acquire()
+	if err != nil {
+		return // closed or mid-swap: retried by the next run, or dropped on the swap
+	}
+	defer release()
+	d.mu.Lock()
+	p := d.pending
+	if p.svc != svc {
+		d.pending = pendingFlush{}
+		d.mu.Unlock()
+		return
+	}
+	runs := p.runs
+	wm := make(map[string]string, len(p.wm))
+	for k, v := range p.wm {
+		wm[k] = v
+	}
+	del := make([]string, 0, len(p.del))
+	for n := range p.del {
+		del = append(del, n)
+	}
+	sort.Strings(del)
+	d.mu.Unlock()
+
+	tr := svc.Triggers()
+	if len(runs) > 0 {
+		if _, err := tr.RecordTriggerRuns(ctx, runs); err != nil {
 			log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: fire log write failed; the range will be re-run")
+			d.resetPending()
 			return
 		}
+		d.mu.Lock()
+		d.pending.runs, d.pending.rows = nil, 0 // durable now; a retry must not log them twice
+		d.mu.Unlock()
 	}
 	if h := currentTriggerHooks().beforeTx2; h != nil {
 		h()
 	}
-	if len(rs.newWM) > 0 || len(rs.del) > 0 {
-		if err := tr.AdvanceTriggerWatermarks(ctx, d.branch, rs.newWM, rs.del); err != nil {
+	if len(wm) > 0 || len(del) > 0 {
+		if err := tr.AdvanceTriggerWatermarks(ctx, d.branch, wm, del); err != nil {
 			log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: watermark write failed; the range will be re-run")
+			d.resetPending()
 			return
 		}
 	}
-	if rs.paths > 0 {
-		d.stats.recordRun(TriggerLastRun{
-			RangeFrom: rs.rangeFrom, RangeTo: rs.head, Nonlinear: rs.nonlinear, Paths: rs.paths,
-			Evaluated: evaluated, Fires: fires, DurationMS: run.DurationMS, DiffMS: rs.diffMS, ChangeMS: rs.changeMS,
-		})
+	d.resetPending()
+}
+
+// resetPending drops the write-behind buffer.
+func (d *triggerDispatcher) resetPending() {
+	d.mu.Lock()
+	d.pending = pendingFlush{}
+	d.mu.Unlock()
+}
+
+// overlayPending applies the buffered watermark moves on top of the stored
+// ones, so a run reads the bookmarks as they WILL be once flushed and never
+// diffs a buffered advance a second time. A buffer from another store
+// generation is dropped first.
+func (d *triggerDispatcher) overlayPending(svc *store.Service, wms map[string]string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.pending.svc != svc && !d.pending.empty() {
+		d.pending = pendingFlush{}
+		return
 	}
+	for n, h := range d.pending.wm {
+		wms[n] = h
+	}
+	for n := range d.pending.del {
+		delete(wms, n)
+	}
+}
+
+// flushOnStop writes what is buffered when the actor stops (a clean
+// shutdown), so a restart does not re-fire runs this process already
+// emitted. The store is still attached: shutdown stops the dispatcher before
+// it closes the store.
+func (d *triggerDispatcher) flushOnStop() {
+	d.mu.Lock()
+	empty := d.pending.empty()
+	d.mu.Unlock()
+	if empty {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	d.flush(ctx)
 }
 
 // phaseA reads everything the run needs and prepares the pending fires. It
@@ -360,6 +592,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 		log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: watermarks unreadable")
 		return false
 	}
+	d.overlayPending(svc, wms)
 
 	// Per declared name: first appearance, freeze, unsupported, or advance.
 	active := map[string]*fact.CompiledTrigger{}
@@ -402,13 +635,9 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 		return len(rs.newWM) > 0 || len(rs.del) > 0
 	}
 
-	// `verified` needs the mode at the head and the anchor's history.
-	verifyOn := false
-	if oerr == nil {
-		if vs, err := fact.ReadVerifySettings(data); err == nil && vs.Valid && vs.Mode != store.VerifyOff {
-			verifyOn = true
-		}
-	}
+	// `verified` needs the mode at the head and the anchor's history. The
+	// mode is read from the ontology blob, once per blob.
+	verifyOn := d.verifyModeOn(blob, data, oerr == nil)
 	var verifiedSet map[plumbing.Hash]bool
 	if verifyOn {
 		verifiedSet = d.verifiedBelow(ctx, tr, svc.UpstreamBranch())
@@ -418,6 +647,11 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	if root == "" {
 		root = "kb"
 	}
+	// One tree reader and one commit-meta cache for the whole run: every
+	// matched path of an advance reads the same few commits, and decoding a
+	// tree (or verifying a signature) once per path instead of once per
+	// commit is what made a large advance take minutes.
+	cr := &changeReader{trees: tr.TreeReader(), tr: tr, meta: map[plumbing.Hash]commitMeta{}, instanceFP: instanceFP}
 
 	// Normally every trigger shares one watermark, so this is ONE diff.
 	ws := make([]string, 0, len(byW))
@@ -472,7 +706,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 			// trigger that matched it; its cost is knomit's (change_ms), not
 			// the trigger's.
 			c0 := time.Now()
-			pf := d.buildChange(ctx, tr, head, wh, row.Path, episode, !linear, verifyOn, verifiedSet, instanceFP)
+			pf := d.buildChange(ctx, cr, head, wh, row.Path, episode, !linear, verifyOn, verifiedSet)
 			rs.changeMS += time.Since(c0).Milliseconds()
 			for _, ct := range matched {
 				p := pf
@@ -485,6 +719,25 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 		}
 	}
 	return true
+}
+
+// verifyModeOn reports whether the ontology blob at the head turns F09 on
+// (`verify_signatures: log|enforce`), parsing each distinct blob once.
+func (d *triggerDispatcher) verifyModeOn(blob string, data []byte, readable bool) bool {
+	if !readable {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.verifyBlob == blob {
+		return d.verifyOn
+	}
+	on := false
+	if vs, err := fact.ReadVerifySettings(data); err == nil && vs.Valid && vs.Mode != store.VerifyOff {
+		on = true
+	}
+	d.verifyBlob, d.verifyOn = blob, on
+	return on
 }
 
 // verifiedBelow is the set of commits F09 has accepted for the upstream: the
@@ -518,12 +771,63 @@ func (d *triggerDispatcher) verifiedBelow(ctx context.Context, tr store.TriggerI
 	return set
 }
 
+// changeReader is the per-run state buildChange reads through: the tree
+// reader (decoded trees cached) and, per commit, the author, trailer and
+// verified signer, read once however many paths the commit touched.
+type changeReader struct {
+	trees      store.TriggerTrees
+	tr         store.TriggerIndex
+	meta       map[plumbing.Hash]commitMeta
+	instanceFP string
+}
+
+// commitMeta is what one commit contributes to `change`.
+type commitMeta struct {
+	ok     bool
+	kind   string
+	id     string
+	fp     string
+	trace  string
+	source string
+}
+
+func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commitMeta {
+	if m, ok := cr.meta[commit]; ok {
+		return m
+	}
+	m := commitMeta{source: "merged"}
+	if info, err := cr.tr.CommitInfo(ctx, commit); err == nil {
+		m.ok = true
+		m.id = info.AuthorName
+		m.trace = store.TrailerValue(info.Message, triggerTraceTrailer)
+		m.kind = "human"
+		switch {
+		case strings.HasSuffix(strings.ToLower(info.AuthorEmail), "@agents.knomit.io"):
+			m.kind = "agent"
+		case info.AuthorName == "" && info.AuthorEmail == "":
+			m.kind = "unknown"
+		}
+		// fp only when the SSHSIG verifies over the payload; never from the
+		// embedded key alone. `source` is decided by the SIGNER, not the
+		// author text: an experiment's commits are authored exp/<name> yet
+		// signed by this instance, so they are local.
+		if signer, err := cr.tr.CommitSignerOf(ctx, commit); err == nil {
+			m.fp = signer.Fingerprint
+		}
+		if m.fp != "" && m.fp == cr.instanceFP {
+			m.source = "local"
+		}
+	}
+	cr.meta[commit] = m
+	return m
+}
+
 // buildChange builds the `change` global for one matched path: the ORIGINAL
 // commit via the treesame walk, its verified signer, `source`, `verified`,
 // the trace trailer, the fact at the head (at the watermark for a retract) and
 // `before` at the watermark.
-func (d *triggerDispatcher) buildChange(ctx context.Context, tr store.TriggerIndex, head, wm plumbing.Hash, repoPath, episode string,
-	nonlinear, verifyOn bool, verifiedSet map[plumbing.Hash]bool, instanceFP string) pendingFire {
+func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, head, wm plumbing.Hash, repoPath, episode string,
+	nonlinear, verifyOn bool, verifiedSet map[plumbing.Hash]bool) pendingFire {
 	if delay := currentTriggerHooks().changeDelay; delay > 0 {
 		time.Sleep(delay)
 	}
@@ -536,7 +840,7 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, tr store.TriggerInd
 	// the root: take the fallback directly.
 	found := false
 	if !(nonlinear && episode == fact.TriggerOnRetract) {
-		res, err := tr.Toucher(ctx, head, repoPath)
+		res, err := cr.trees.Toucher(ctx, head, repoPath)
 		if err == nil && res.Found {
 			commit, found = res.Commit, true
 		} else if err != nil {
@@ -544,27 +848,12 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, tr store.TriggerInd
 		}
 	}
 	if found {
-		info, err := tr.CommitInfo(ctx, commit)
-		if err == nil {
-			trace = store.TrailerValue(info.Message, triggerTraceTrailer)
-			kind := "human"
-			switch {
-			case strings.HasSuffix(strings.ToLower(info.AuthorEmail), "@agents.knomit.io"):
-				kind = "agent"
-			case info.AuthorName == "" && info.AuthorEmail == "":
-				kind = "unknown"
-			}
-			fp := ""
-			if signer, err := tr.CommitSignerOf(ctx, commit); err == nil {
-				fp = signer.Fingerprint
-			}
-			if fp != "" && fp == instanceFP {
-				source = "local"
-			}
+		if m := cr.metaOf(ctx, commit); m.ok {
+			source, trace = m.source, m.trace
 			author = map[string]any{
-				"kind":     kind,
-				"id":       info.AuthorName,
-				"fp":       fp,
+				"kind":     m.kind,
+				"id":       m.id,
+				"fp":       m.fp,
 				"verified": verifyOn && verifiedSet != nil && verifiedSet[commit],
 			}
 		}
@@ -579,10 +868,10 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, tr store.TriggerInd
 	if episode == fact.TriggerOnRetract {
 		factAt = wm
 	}
-	pf.factMap, pf.parseable = d.factGlobal(ctx, tr, factAt, repoPath)
+	pf.factMap, pf.parseable = factGlobal(ctx, cr.trees, factAt, repoPath)
 	var before any
 	if episode != fact.TriggerOnLearn {
-		if m, ok := d.factGlobal(ctx, tr, wm, repoPath); ok {
+		if m, ok := factGlobal(ctx, cr.trees, wm, repoPath); ok {
 			before = m
 		}
 	}
@@ -600,8 +889,8 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, tr store.TriggerInd
 
 // factGlobal reads and parses the fact at commit; ok is false when absent or
 // unparseable (the `if` then sees fact === null).
-func (d *triggerDispatcher) factGlobal(ctx context.Context, tr store.TriggerIndex, commit plumbing.Hash, repoPath string) (map[string]any, bool) {
-	content, ok, err := tr.BlobAt(ctx, commit, repoPath)
+func factGlobal(ctx context.Context, trees store.TriggerTrees, commit plumbing.Hash, repoPath string) (map[string]any, bool) {
+	content, ok, err := trees.BlobAt(ctx, commit, repoPath)
 	if err != nil || !ok {
 		return nil, false
 	}
@@ -809,11 +1098,12 @@ func (d *triggerDispatcher) clearOntologyError() {
 	d.ontErr = ""
 }
 
-// runSequence is how many runs have completed (any outcome). Tests wait on it.
-func (d *triggerDispatcher) runSequence() (head string, seq int64) {
+// runSequence is how many runs have completed (any outcome) and the head the
+// last completed run read. Tests wait on it.
+func (d *triggerDispatcher) runSequence() (completedHead string, seq int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.lastHead, d.runSeq
+	return d.completedHead, d.runSeq
 }
 
 // ---- The report behind GET …/branches/{branch}/triggers.
@@ -870,6 +1160,7 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 		if werr != nil {
 			return
 		}
+		d.overlayPending(svc, wms)
 		if logN > 0 {
 			rep.Fires, werr = svc.Triggers().RecentTriggerFires(ctx, d.branch, logN)
 		}
