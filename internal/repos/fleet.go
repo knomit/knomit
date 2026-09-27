@@ -183,10 +183,13 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 			return FleetStatus{}, fleetErr(http.StatusBadGateway, "clone_failed", cerr.Error())
 		}
 		if !fact.IsFleetOntology(created.Ontology()) {
+			msg := "the repository's ontology is not the fleet preset"
 			if derr := m.deleteRepo(created.Name()); derr != nil {
 				log.Warn().Err(derr).Str("repo", created.Name()).Msg("fleet: removing a non-fleet mount failed")
+				msg += fmt.Sprintf("; removing the mount %q failed (%v): archive it by hand", created.Name(), derr)
+				_ = recordFleetAttempt(db, errors.New(msg), time.Now())
 			}
-			return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "not_a_fleet", "the repository's ontology is not the fleet preset")
+			return FleetStatus{}, fleetErr(http.StatusUnprocessableEntity, "not_a_fleet", msg)
 		}
 		ri = created
 	}

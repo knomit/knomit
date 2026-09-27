@@ -312,9 +312,9 @@ func (b *repoBuilder) loadOntology() {
 // never ADDS or CHANGES a repository-level (root) attribute, only leaves it as
 // it was. SubsetDivergence already stops a stored root attribute from being
 // erased; this also stops a preset that carries one from introducing it. The
-// refresh commit is signed by this instance, and under F09 a signed change to
-// verify_signatures or verify_signers is a policy change: it must come from
-// the operator, never from an upgrade.
+// refresh commit is signed by this instance, and a change to verify_signatures
+// is a policy decision for whoever merges to the repo's main, never an
+// upgrade's.
 func refreshDivergence(stored, preset *fact.Ontology) string {
 	if d := stored.SubsetDivergence(preset); d != "" {
 		return d

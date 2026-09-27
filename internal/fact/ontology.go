@@ -294,8 +294,7 @@ type Ontology struct {
 	Description string                   `yaml:"description"`
 	Topics      map[string]*OntologyNode `yaml:"topics"`
 	Validations []Validation             `yaml:"validations,omitempty"`
-	// Attributes are REPOSITORY-level settings (verify_signatures,
-	// verify_signers). They do not inherit into topics, and a key declared for
+	// Attributes are REPOSITORY-level settings (verify_signatures). They do not inherit into topics, and a key declared for
 	// the other scope is reported (see attributeSpec.scope). Keys this binary
 	// does not declare are kept, so Serialize writes back what a newer knomit
 	// wrote.

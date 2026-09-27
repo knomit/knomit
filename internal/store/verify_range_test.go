@@ -344,3 +344,63 @@ func TestAgentIDOfAuthor(t *testing.T) {
 	require.Equal(t, "", agentIDOfAuthor("someone@example.com"))
 	require.False(t, strings.Contains(agentIDOfAuthor("a+b+c@agents.knomit.io"), "+"))
 }
+
+// R5-G1: an unsigned merge that adds content beyond its parents fails M3 and
+// is refused as a merge (not waived as "a merge").
+func TestCheckRange_UnsignedMergeFailingM3Refused(t *testing.T) {
+	f := newRangeFixture(t)
+	x := namedSigner(t, "x")
+	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())})
+	base := map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}
+	root := f.commit(f.kb, base, "", nil)
+	f.ref(f.kb, "main", root)
+	a := f.commit(f.kb, with(base, "kb/notes/a.md", "a"), "agent-x", x, root)
+	b := f.commit(f.kb, with(base, "kb/notes/b.md", "b"), "agent-x", x, root)
+	m := f.commit(f.kb, with(base, "kb/notes/a.md", "a", "kb/notes/b.md", "b", "kb/notes/smuggled.md", "s"), "", nil, a, b)
+	f.ref(f.kb, "cand", m)
+	v, err := f.check(VerifyEnforce)
+	require.NoError(t, err)
+	require.Equal(t, RuleMerge, refusedRule(t, v))
+	require.Equal(t, m.Hash.String(), v.Refused[0].Commit)
+	require.Equal(t, 1, v.ExitCode())
+}
+
+// R5-G2: the mode is read at MAIN's tip, never from the candidate. A
+// candidate that switches verification off in its own ontology is still
+// judged under main's enforce.
+func TestCheckRange_ModeFromMainNotCandidate(t *testing.T) {
+	f := newRangeFixture(t)
+	x, stranger := namedSigner(t, "x"), namedSigner(t, "stranger")
+	f.setFleet(map[string]string{"agent-x/1.md": memberFile("agent-x", fact.MemberActive, x.PublicKey())})
+	base := map[string]string{fact.OntologyFile: kbOntology(VerifyEnforce)}
+	root := f.commit(f.kb, base, "", nil)
+	f.ref(f.kb, "main", root)
+	off := with(base, fact.OntologyFile, kbOntology(VerifyOff))
+	c1 := f.commit(f.kb, off, "agent-x", x, root)
+	c2 := f.commit(f.kb, with(off, "kb/notes/s.md", "s"), "agent-stranger", stranger, c1)
+	f.ref(f.kb, "cand", c2)
+	v, err := f.check(VerifyEnforce)
+	require.NoError(t, err)
+	require.Equal(t, VerifyEnforce, v.Mode, "main's mode, not the candidate's")
+	require.Equal(t, RuleNoRecord, refusedRule(t, v))
+	require.Equal(t, c2.Hash.String(), v.Refused[0].Commit)
+	require.Equal(t, 1, v.ExitCode())
+}
+
+// R5-G2 (reverse): main off, the candidate switching verification ON: the
+// gate reads main's tip, sees off, and checks nothing (exit 0), even though
+// the candidate's commit is by a stranger.
+func TestCheckRange_MainOffCandidateOnChecksNothing(t *testing.T) {
+	f := newRangeFixture(t)
+	stranger := namedSigner(t, "stranger")
+	base := map[string]string{fact.OntologyFile: kbOntology("")}
+	root := f.commit(f.kb, base, "", nil)
+	f.ref(f.kb, "main", root)
+	c := f.commit(f.kb, with(base, fact.OntologyFile, kbOntology(VerifyEnforce)), "agent-stranger", stranger, root)
+	f.ref(f.kb, "cand", c)
+	v, err := CheckRange(RangeInput{KBDir: f.kbDir, Main: "main", Candidate: "cand"})
+	require.NoError(t, err, "no fleet needed: main is off")
+	require.Equal(t, VerifyOff, v.Mode)
+	require.Zero(t, v.Checked)
+	require.Equal(t, 0, v.ExitCode())
+}
