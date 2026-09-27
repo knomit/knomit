@@ -284,3 +284,31 @@ func TestGate_AdmittedAgentCannotEnable(t *testing.T) {
 	require.Equal(t, VerifyOff, res.Main.Verify.Mode, "only the operator may enable")
 	require.Equal(t, plumbing.ZeroHash, g.anchor())
 }
+
+// TestGate_AnchorContextNeverComesFromTheFile: R3-3 (V5-2). In log an admitted
+// agent's unauthorised relaxation is reported and ignored, and the anchor
+// passes it, so the file AT the anchor says off. After the verify_context cache
+// is lost, the next tick must still run in log (recomputed from the root),
+// never read the anchor's file.
+func TestGate_AnchorContextNeverComesFromTheFile(t *testing.T) {
+	g := newGateFixture(t)
+	files := with(g.baseFiles, g.ontPath, g.ont(VerifyLog, g.a, g.b))
+	e := g.commit(files, g.op, g.init)
+	relaxed := with(files, g.ontPath, g.ont(VerifyOff, g.a, g.b))
+	relax := g.commit(relaxed, g.a, e)
+	g.setOrigin(relax)
+	res := g.reconcile()
+	require.Len(t, res.Main.Verify.Reported, 1, "precondition: the relaxation is reported")
+	require.Equal(t, relax.Hash, g.anchor(), "precondition: in log the anchor passes the ignored relaxation")
+
+	_, err := g.svc.rh.db.Exec(`DELETE FROM verify_context`)
+	require.NoError(t, err)
+	g.svc.rh.verifyBelow = nil
+
+	stranger := g.commit(with(relaxed, "kb/s.md", "s"), g.stranger, relax)
+	g.setOrigin(stranger)
+	res = g.reconcile()
+	require.NotNil(t, res.Main.Verify, "verification must still be on")
+	require.Equal(t, VerifyLog, res.Main.Verify.Mode, "the anchor's context is recomputed by the fold, never read from its file (which says off)")
+	require.Len(t, res.Main.Verify.Refused, 1, "the stranger's commit is still refused (reported in log)")
+}

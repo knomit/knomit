@@ -31,9 +31,9 @@ func (e *ForeignLineageError) Error() string {
 	for _, r := range e.Refused {
 		b.WriteString("\n  " + r)
 	}
-	b.WriteString("\nNothing was discarded and no local agent branch was created. Either merge " + e.Branch +
-		" into the upstream on the forge and clone again, or, if these commits are yours from before signing, " +
-		"accept each one on this instance (knomit verify accept <commit>) and clone again.")
+	b.WriteString("\nNothing was discarded and no local agent branch was created. Merge " + e.Branch +
+		" into the upstream on the forge and clone again; or, if these commits are yours from before signing, " +
+		"accept each one with `knomit verify accept <commit>` (next release) and clone again.")
 	return b.String()
 }
 

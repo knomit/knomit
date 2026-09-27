@@ -239,7 +239,11 @@ func (v *verifier) settingsAt(c *object.Commit, cache map[plumbing.Hash]settings
 // authorClaimRe matches the fingerprint an agent author email claims:
 // <host>-<fp8>[+<op>]@agents.knomit.io. Experiment authors (exp/<name>+op@…)
 // carry no fingerprint and so make no claim.
-var authorClaimRe = regexp.MustCompile(`-([0-9a-f]{8})(?:\+[a-z0-9-]+)?@agents\.knomit\.io$`)
+//
+// Case-INSENSITIVE: email local parts are compared case-insensitively in
+// practice, so an uppercase claim of another agent's fingerprint must not slip
+// past the check.
+var authorClaimRe = regexp.MustCompile(`(?i)-([0-9a-f]{8})(?:\+[a-z0-9-]+)?@agents\.knomit\.io$`)
 
 // change is one accepted component of a policy change.
 type change struct {
@@ -316,16 +320,37 @@ func (v *verifier) fold(anchor plumbing.Hash, actx verifyContext, tip plumbing.H
 		inRange[c.Hash] = c
 	}
 
-	// Pass 1: settings per commit, policy changes, and the running context.
+	// Pass 1: settings per commit and policy changes. Each commit is judged
+	// against the context of ITS OWN ANCESTRY: the anchor's context with the
+	// accepted changes among its ancestors applied, in walk order. Never a
+	// single running context across sibling branches (a change on one branch
+	// would make a concurrent commit on another look like it undoes it), and
+	// never "equals one of its parents" (a merge could then adopt an older
+	// policy file unjudged).
 	cache := map[plumbing.Hash]settingsState{}
 	unreadable := map[plumbing.Hash]bool{}
 	rejected := map[plumbing.Hash]string{} // commit → reason (rejected policy change)
 	unrootedAt := map[plumbing.Hash]bool{}
 	var changes []change
-	g := verifyContext{Mode: actx.Mode, Signers: slices.Clone(actx.Signers)}
 	sigs := map[plumbing.Hash]sigResult{}
+	// inherited[c] lists, as indexes into changes (ascending, so walk order),
+	// the accepted changes made by c or any of its ancestors in the range.
+	inherited := map[plumbing.Hash][]int{}
+	contextOf := func(idx []int) verifyContext {
+		ctx := verifyContext{Mode: actx.Mode, Signers: slices.Clone(actx.Signers)}
+		for _, i := range idx {
+			ctx = applyChange(ctx, changes[i])
+		}
+		return ctx
+	}
 
 	for _, c := range order {
+		var before []int
+		for _, ph := range c.ParentHashes {
+			before = mergeSorted(before, inherited[ph])
+		}
+		inherited[c.Hash] = before
+
 		st, err := v.settingsAt(c, cache)
 		if err != nil {
 			return res, err
@@ -334,7 +359,17 @@ func (v *verifier) fold(anchor plumbing.Hash, actx verifyContext, tip plumbing.H
 			unreadable[c.Hash] = true
 			continue
 		}
-		var parents []settingsState
+		g := contextOf(before)
+		comps := diffContext(g, st.Settings)
+		if len(comps) == 0 {
+			continue // the file says exactly what this commit's ancestry has in force
+		}
+		// Nothing NEW happened if a parent carries the same file under the same
+		// context: that disagreement was already judged at the parent (or
+		// earlier), so it is not judged, or reported, again. A merge that adopts
+		// an older policy has no such parent (the older side's context differs),
+		// so it IS judged.
+		carried := false
 		for _, ph := range c.ParentHashes {
 			pc, err := object.GetCommit(v.st, ph)
 			if err != nil {
@@ -344,26 +379,20 @@ func (v *verifier) fold(anchor plumbing.Hash, actx verifyContext, tip plumbing.H
 			if err != nil {
 				return res, err
 			}
-			parents = append(parents, ps)
-		}
-		isChange := true
-		for _, ps := range parents {
-			if ps.Known && ps.Settings.Equal(st.Settings) {
-				isChange = false
+			pctx := actx // a parent below the anchor is under the anchor's context
+			if _, in := inRange[ph]; in {
+				pctx = contextOf(inherited[ph])
+			}
+			if ps.Known && ps.Settings.Equal(st.Settings) && sameContext(pctx, g) {
+				carried = true
+				break
 			}
 		}
-		if len(parents) == 0 && st.Settings.Mode == VerifyOff && len(st.Settings.Signers) == 0 {
-			isChange = false // a root commit that says nothing
-		}
-		if !isChange {
+		if carried {
 			continue
 		}
-		comps := diffContext(g, st.Settings)
-		if len(comps) == 0 {
-			continue // the file changed to what the fold already has in force
-		}
 		sig := v.sig(c, sigs)
-		var accepted []change
+		mine := slices.Clone(before)
 		for _, comp := range comps {
 			comp.at = c.Hash
 			needsOperator := !(comp.mode == VerifyEnforce && g.Mode == VerifyLog)
@@ -380,13 +409,18 @@ func (v *verifier) fold(anchor plumbing.Hash, actx verifyContext, tip plumbing.H
 				rejected[c.Hash] = describeChange(comp)
 				continue
 			}
-			accepted = append(accepted, comp)
+			changes = append(changes, comp)
+			mine = append(mine, len(changes)-1)
 		}
-		for _, a := range accepted {
-			g = applyChange(g, a)
-		}
-		changes = append(changes, accepted...)
+		inherited[c.Hash] = mine
 	}
+	// The final context: every accepted change in the range (all are ancestors
+	// of, or equal to, the tip), in walk order.
+	all := make([]int, len(changes))
+	for i := range all {
+		all[i] = i
+	}
+	g := contextOf(all)
 	res.Final = g
 	res.Unrooted = len(unrootedAt) > 0
 
@@ -600,6 +634,13 @@ func (v *verifier) judge(c *object.Commit, final verifyContext, finalFPs, signer
 			return false, RuleMerge, "", err.Error()
 		}
 		if !verdict.OK {
+			// --accept waives an unsigned merge that fails M3 (a criss-cross
+			// auto-merge, say): M3 exists only because such merges carry no
+			// signature. It never waives an unaccepted parent (above), a
+			// policy change or an author claim.
+			if v.accepted != nil && v.accepted(c.Hash) {
+				return true, "", "", ""
+			}
 			return false, RuleMerge, s.signer.Fingerprint, verdict.Reason
 		}
 		return true, "", "", ""
@@ -617,7 +658,7 @@ func (v *verifier) judge(c *object.Commit, final verifyContext, finalFPs, signer
 		}
 		return false, RuleSignature, s.signer.Fingerprint, "signer is not in verify_signers"
 	}
-	if m := authorClaimRe.FindStringSubmatch(c.Author.Email); m != nil && m[1] != pki.Short(s.signer.Fingerprint) {
+	if m := authorClaimRe.FindStringSubmatch(c.Author.Email); m != nil && strings.ToLower(m[1]) != pki.Short(s.signer.Fingerprint) {
 		return false, RuleAuthorClaim, s.signer.Fingerprint,
 			fmt.Sprintf("author claims %s, signed by %s", m[1], pki.Short(s.signer.Fingerprint))
 	}
@@ -724,4 +765,44 @@ func (v *verifier) walk(start plumbing.Hash, stop map[plumbing.Hash]bool, visit 
 		visit(f.c)
 	}
 	return nil
+}
+
+// mergeSorted returns the sorted union of two ascending int slices.
+func mergeSorted(a, b []int) []int {
+	if len(a) == 0 {
+		return slices.Clone(b)
+	}
+	if len(b) == 0 {
+		return a
+	}
+	out := make([]int, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) || j < len(b) {
+		switch {
+		case j == len(b) || (i < len(a) && a[i] < b[j]):
+			out = append(out, a[i])
+			i++
+		case i == len(a) || b[j] < a[i]:
+			out = append(out, b[j])
+			j++
+		default:
+			out = append(out, a[i])
+			i++
+			j++
+		}
+	}
+	return out
+}
+
+// sameContext reports whether two contexts are the same policy (signers as
+// sets).
+func sameContext(a, b verifyContext) bool {
+	if a.Mode != b.Mode || len(a.Signers) != len(b.Signers) {
+		return false
+	}
+	as := slices.Clone(a.Signers)
+	bs := slices.Clone(b.Signers)
+	slices.Sort(as)
+	slices.Sort(bs)
+	return slices.Equal(as, bs)
 }

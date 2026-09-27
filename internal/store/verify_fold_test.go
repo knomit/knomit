@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -480,4 +481,114 @@ func TestFold_AnchorContextComesFromTheFold(t *testing.T) {
 	if res.NewAnchor != relax.Hash || res.NewAnchorCtx.Mode != VerifyLog {
 		t.Fatalf("anchor context must be the fold's (log), not the file's (off): %+v", res)
 	}
+}
+
+// TestFold_ConcurrentChangesAreOrderIndependent: R3-1. The operator adds key K
+// on branch A while admitted agent a tightens log → enforce on sibling B; the
+// operator merges both. The tightening must be accepted in BOTH parent orders:
+// each commit is judged against its own ancestry, never a running context in
+// which A's addition makes B look like it removes K.
+func TestFold_ConcurrentChangesAreOrderIndependent(t *testing.T) {
+	for _, aFirst := range []bool{true, false} {
+		f := newFoldFixture(t)
+		k := namedSigner(t, "k")
+		root := f.commit(f.baseFiles, nil)
+		e := f.commit(with(f.baseFiles, f.ontPath, f.ont(VerifyLog, f.a)), f.op, root)
+		addK := f.commit(with(f.baseFiles, f.ontPath, f.ont(VerifyLog, f.a, k)), f.op, e)
+		tighten := f.commit(with(f.baseFiles, f.ontPath, f.ont(VerifyEnforce, f.a)), f.a, e)
+		both := with(f.baseFiles, f.ontPath, f.ont(VerifyEnforce, f.a, k))
+		var m *object.Commit
+		if aFirst {
+			m = f.commit(both, f.op, addK, tighten)
+		} else {
+			m = f.commit(both, f.op, tighten, addK)
+		}
+		res := f.rootFold(m)
+		require.Empty(t, res.Refused, "aFirst=%v: concurrent legitimate changes must both pass", aFirst)
+		require.Empty(t, res.Reported, "aFirst=%v", aFirst)
+		require.Equal(t, VerifyEnforce, res.Final.Mode, "aFirst=%v", aFirst)
+		require.Len(t, res.Final.Signers, 2, "aFirst=%v: K was added", aFirst)
+		require.Equal(t, m.Hash, res.NewAnchor, "aFirst=%v", aFirst)
+	}
+}
+
+// TestFold_MergeAdoptingAnOlderPolicyIsJudged: R3-1, second symptom. After an
+// operator enable, an admitted agent signs a merge of main and a branch forked
+// before the enable, taking the fork's (off) ontology. The merge equals one
+// parent's file, but not its ancestry's context: it is a relaxation, refused
+// in enforce and reported in log.
+func TestFold_MergeAdoptingAnOlderPolicyIsJudged(t *testing.T) {
+	for _, mode := range []string{VerifyEnforce, VerifyLog} {
+		for _, mainFirst := range []bool{true, false} {
+			f := newFoldFixture(t)
+			root := f.commit(f.baseFiles, nil)
+			fork := f.commit(with(f.baseFiles, "kb/f.md", "f"), f.a, root)
+			enFiles := with(f.baseFiles, f.ontPath, f.ont(mode, f.a))
+			e := f.commit(enFiles, f.op, root)
+			old := with(f.baseFiles, "kb/f.md", "f") // the fork's ontology: no attributes
+			var m *object.Commit
+			if mainFirst {
+				m = f.commit(old, f.a, e, fork)
+			} else {
+				m = f.commit(old, f.a, fork, e)
+			}
+			res := f.rootFold(m)
+			var rule string
+			if mode == VerifyEnforce {
+				rule = refusedSet(res)[m.Hash]
+			} else {
+				for _, r := range res.Reported {
+					if r.Commit == m.Hash.String() {
+						rule = r.Rule
+					}
+				}
+			}
+			require.Equal(t, RulePolicyChange, rule, "mode=%s mainFirst=%v: the merge adopting an older policy must be judged", mode, mainFirst)
+			require.Equal(t, mode, res.Final.Mode, "the relaxation never takes effect")
+		}
+	}
+}
+
+// TestFold_AuthorClaimIsCaseInsensitive: R3-2. An uppercase or mixed-case
+// claim of another agent's fingerprint is refused like a lowercase one.
+func TestFold_AuthorClaimIsCaseInsensitive(t *testing.T) {
+	for _, variant := range []func(string) string{strings.ToUpper, func(s string) string { return strings.ToUpper(s[:4]) + s[4:] }} {
+		f := newFoldFixture(t)
+		e, files := f.enabled(VerifyEnforce)
+		bFP, _ := keyFingerprint(f.b.PublicKey())
+		lie := f.commitAs(with(files, "kb/l.md", "l"), f.a, variant(bFP[:8]), e)
+		res := f.rootFold(lie)
+		require.Equal(t, RuleAuthorClaim, refusedSet(res)[lie.Hash], "claim %q signed by a must be refused", variant(bFP[:8]))
+	}
+}
+
+// TestFold_AcceptWaivesAnUnsignedMergeFailingM3: D3-1 (a). The criss-cross
+// auto-merge shape (aa7e5e12 on cyberai-kb) is refused by M3, and accepted once
+// its hash is on the accept list. The waiver never covers an unaccepted parent.
+func TestFold_AcceptWaivesAnUnsignedMergeFailingM3(t *testing.T) {
+	f := newFoldFixture(t)
+	e, files := f.enabled(VerifyEnforce)
+	x := f.commit(with(files, "kb/x.md", "x"), f.a, e)
+	y := f.commit(with(files, "kb/y.md", "y"), f.b, e)
+	both := with(files, "kb/x.md", "x", "kb/y.md", "y")
+	xy := f.commit(both, f.a, x, y)
+	yx := f.commit(both, f.b, y, x)
+	cc := f.commit(both, nil, xy, yx) // unsigned criss-cross
+	res := f.rootFold(cc)
+	require.Equal(t, RuleMerge, refusedSet(res)[cc.Hash], "precondition: M3 refuses the criss-cross")
+
+	v := f.verifier()
+	v.accepted = func(h plumbing.Hash) bool { return h == cc.Hash }
+	res, err := v.fold(plumbing.ZeroHash, verifyContext{Mode: VerifyOff}, cc.Hash)
+	require.NoError(t, err)
+	require.Empty(t, res.Refused, "an accepted criss-cross merge passes")
+	require.Equal(t, cc.Hash, res.NewAnchor)
+
+	// An unaccepted (refused) parent is not waived by accepting the merge.
+	bad := f.commit(with(files, "kb/z.md", "z"), nil, e)
+	m := f.commit(with(files, "kb/x.md", "x", "kb/z.md", "z"), nil, x, bad)
+	v.accepted = func(h plumbing.Hash) bool { return h == m.Hash }
+	res, err = v.fold(plumbing.ZeroHash, verifyContext{Mode: VerifyOff}, m.Hash)
+	require.NoError(t, err)
+	require.Equal(t, RuleMerge, refusedSet(res)[m.Hash], "accepting a merge never waives its refused parent")
 }
