@@ -29,6 +29,9 @@ type repoBuilder struct {
 	cfg         config.Config
 	signer      ssh.Signer
 	agentBranch string
+	// onPush observes every push the reconcile loop makes (the fleet state
+	// machine's retry: Manager.fleetPushed). Nil in tests that build alone.
+	onPush func(repo string, err error)
 	// subscribed builds a subscription: no agent branch is cut, the store is
 	// read-only, and readBranch() resolves to the followed upstream. Set by
 	// openOne from the origin's Mode, in the SAME statement block that clears
@@ -798,7 +801,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush)
 		return nil
 	}
 
@@ -952,7 +955,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	b.syncLoopMu.Lock()
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush)
 }
 
 // startExperimentSweep launches the expiry sweeper for this repo.

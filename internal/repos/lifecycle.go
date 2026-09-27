@@ -702,7 +702,17 @@ func (m *Manager) Create(ctx context.Context, spec CreateSpec, emit func(Event))
 // not deleted, and the error says so, because a caller told "deleted" would
 // otherwise never look in the archive for the row that remains.
 func (m *Manager) DeleteRepo(name string) error {
-	info, err := m.Archive(name)
+	if err := m.guardFleetRemoval(name); err != nil {
+		return err
+	}
+	return m.deleteRepo(name)
+}
+
+// deleteRepo is DeleteRepo without the fleet guard: the unregister path uses
+// it once the departure has been pushed.
+func (m *Manager) deleteRepo(name string) error {
+	wasFleet := m.IsFleetRepo(name)
+	info, err := m.archive(name)
 	if err != nil {
 		return err
 	}
@@ -710,6 +720,7 @@ func (m *Manager) DeleteRepo(name string) error {
 		return fmt.Errorf("delete %q: archived, but the purge that follows failed (the row remains in the archive): %w", name, perr)
 	}
 	log.Info().Str("repo", name).Str("uid", info.ID).Msg("deleted repo")
+	m.fleetRemoved(wasFleet)
 	return nil
 }
 
@@ -1443,6 +1454,19 @@ type ArchiveInfo struct {
 // ANY repo may be archived, including the last one: no repo is privileged, and
 // zero repos is a valid state.
 func (m *Manager) Archive(name string) (ArchiveInfo, error) {
+	if err := m.guardFleetRemoval(name); err != nil {
+		return ArchiveInfo{}, err
+	}
+	wasFleet := m.IsFleetRepo(name)
+	info, err := m.archive(name)
+	if err == nil {
+		m.fleetRemoved(wasFleet)
+	}
+	return info, err
+}
+
+// archive is Archive without the fleet guard (see deleteRepo).
+func (m *Manager) archive(name string) (ArchiveInfo, error) {
 	// Truncated to the second because that is the resolution the registry
 	// stores (SetState takes a Unix second) and therefore the resolution
 	// ListArchived renders back. Formatting the untruncated value here would

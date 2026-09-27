@@ -125,7 +125,7 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 //
 // Interval is min(sync, push) interval from the Remote record. Configured
 // changes are picked up on the next tick (re-read from DB).
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool) {
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error)) {
 	defer wg.Done()
 
 	// Initial config read for logging context.
@@ -233,6 +233,12 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			if tickAbandoned(ctx, err) {
 				lg.Debug().Err(err).Msg("reconcile: push abandoned; loop is stopping")
 				return
+			}
+			if onPush != nil {
+				// The fleet state machine retries its pending push HERE: a
+				// registration or unregistration completes on the first
+				// successful push of the fleet repository (Manager.fleetPushed).
+				onPush(repo, err)
 			}
 			if err != nil {
 				pushFails++

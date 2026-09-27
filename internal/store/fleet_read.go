@@ -133,3 +133,30 @@ func LoadFleet(dir, rev, root string) ([]FleetMember, error) {
 	}
 	return loadMembers(dir, c, root)
 }
+
+// FleetMembersAt returns the member records at branch in THIS store (a
+// mounted fleet repository), after checking that its ontology there is the
+// fleet preset. root is the store's fact root.
+func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %s: %w", branch, err)
+	}
+	c, err := object.GetCommit(s.rh.gits, ref.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %w", err)
+	}
+	raw, err := treeOntology(c)
+	if err != nil {
+		return nil, fmt.Errorf("fleet: ontology: %w", err)
+	}
+	ont, perr := fact.ParseOntology(raw)
+	if raw == nil || perr != nil || !fact.IsFleetOntology(ont) {
+		return nil, ErrNotFleet
+	}
+	root := s.rh.factRoot
+	if root == "" {
+		root = "kb"
+	}
+	return loadMembers("mounted", c, root)
+}

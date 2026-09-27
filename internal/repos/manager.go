@@ -717,6 +717,14 @@ func (m *Manager) Start() error {
 	if err := controlUp(repoReg.DB()); err != nil {
 		return err
 	}
+	// The instance identity row (F09): app.New writes it before the Manager
+	// exists; this only covers a Manager booted without app (tests, tools), so
+	// the fleet state machine always has its row.
+	if m.deps.AgentBranch != "" {
+		if _, err := resolveIdentity(repoReg.DB(), m.deps.AgentBranch, time.Now()); err != nil {
+			return err
+		}
+	}
 
 	// One handle for all three tenants: Registry owns it, the lens registry and
 	// Origins borrow it. Sharing is what lets the lens foreign keys into
@@ -987,6 +995,7 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		cfg:                   m.deps.Cfg,
 		signer:                m.deps.Signer,
 		agentBranch:           m.deps.AgentBranch,
+		onPush:                m.fleetPushed,
 		embedder:              m.deps.Embedder,
 		keyPath:               m.deps.KeyPath,
 		resumeWindow:          m.sessionCfg.PipelineResumeWindow,
