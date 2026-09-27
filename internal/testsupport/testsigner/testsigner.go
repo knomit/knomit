@@ -13,8 +13,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/pem"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -95,4 +98,26 @@ func CommitSignerKey(dir, rev string) (key ssh.PublicKey, ok bool, err error) {
 // SameKey reports whether a and b are the same public key.
 func SameKey(a, b ssh.PublicKey) bool {
 	return a != nil && b != nil && bytes.Equal(a.Marshal(), b.Marshal())
+}
+
+// WriteFallbackKey writes the fallback signer's private key (OpenSSH format,
+// 0600) and its .pub next to it under dir, and returns the private key's path.
+// A fixture that builds "this machine's" commits with stock git signs them
+// with it (git -c gpg.format=ssh -c user.signingkey=<path> commit -S), so a
+// signer-less store in the same test binary recognises them as its own.
+func WriteFallbackKey(dir string) (string, error) {
+	seed := sha256.Sum256([]byte("knomit test fallback signer"))
+	priv := ed25519.NewKeyFromSeed(seed[:])
+	block, err := ssh.MarshalPrivateKey(priv, "knomit test fallback")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "fallback_ed25519")
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path+".pub", ssh.MarshalAuthorizedKey(Signer().PublicKey()), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
 }
