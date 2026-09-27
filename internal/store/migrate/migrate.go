@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -65,9 +64,8 @@ func All(db *sql.DB) error {
 // file, so a permanently dirty version does not cost one repo, it makes every
 // repo unreachable at once (issue #33).
 //
-// MUST run after Manager.Start's unmigrated-home guard and after
-// upgradeLensSchema. See refuseUnmigratedHome and upgradeLensSchema for why
-// each ordering is load-bearing.
+// MUST run after upgradeLensSchema; repos.controlUp holds that ordering and
+// says why it is load-bearing.
 func Control(db *sql.DB) error {
 	m, err := newMigrator(db, controlFS, "control")
 	if err != nil {
@@ -77,40 +75,6 @@ func Control(db *sql.DB) error {
 		return fmt.Errorf("migrate.Control: %w", err)
 	}
 	return nil
-}
-
-// ControlSchemaSQL returns every control.db up-migration concatenated in
-// order, for the one caller that must create the control schema INSIDE its own
-// transaction: `knomit migrate-registry`, which drops the legacy lens tables
-// and rebuilds them in the uid shape.
-//
-// It cannot use Control for that. sqlite3.WithInstance takes a *sql.DB and
-// there is no *sql.Tx form, so the migrator can never join a caller's
-// transaction — and against control.db's SetMaxOpenConns(1) pool, calling it
-// while a transaction is open DEADLOCKS waiting for a second connection.
-//
-// The migrator does not need to be in the transaction — only the DDL does.
-// Every control migration is IF NOT EXISTS throughout with no data statements
-// (TestControl_UpMigrationsAreIdempotentDDL enforces this), so executing the
-// whole chain against a database that already holds some of these objects
-// recreates only what is missing. migrate-registry runs Control afterwards,
-// outside the transaction, purely to record the version.
-func ControlSchemaSQL() (string, error) {
-	names, err := fs.Glob(controlFS, "control/*.up.sql")
-	if err != nil {
-		return "", fmt.Errorf("migrate: list control migrations: %w", err)
-	}
-	sort.Strings(names)
-	var b strings.Builder
-	for _, n := range names {
-		body, rerr := controlFS.ReadFile(n)
-		if rerr != nil {
-			return "", fmt.Errorf("migrate: read %s: %w", n, rerr)
-		}
-		b.Write(body)
-		b.WriteString("\n")
-	}
-	return b.String(), nil
 }
 
 // upWithRecovery runs every pending migration, recovering ONCE from a dirty

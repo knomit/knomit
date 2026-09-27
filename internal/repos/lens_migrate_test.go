@@ -16,8 +16,8 @@ import (
 	storemigrate "knomit/internal/store/migrate"
 )
 
-// legacyLensDDL is the shape every home has after running `migrate-registry`
-// but before this change: lens MEMBERSHIP is already uid-keyed (write_uid /
+// legacyLensDDL is the registry-era lens shape from before the lens uid
+// re-key: lens MEMBERSHIP is already uid-keyed (write_uid /
 // repo_uid point at repos(uid)), but the `lenses` row itself is still keyed by
 // name, with no uid column of its own.
 //

@@ -4,7 +4,7 @@
 // It exists because the obvious construction is wrong on Windows and silently
 // right everywhere else. Two spellings were in the tree before this package:
 //
-//	"file:" + (&url.URL{Path: p}).String()   // cmd/migrate_registry.go
+//	"file:" + (&url.URL{Path: p}).String()   // the removed migrate tool
 //	"file://" + p                            // git remote fixtures
 //
 // Given p = `C:\Users\pba\core 1.db` the first yields

@@ -1,7 +1,6 @@
 package repos
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -99,20 +98,7 @@ func TestStart_ClassifiesUnavailableReasons(t *testing.T) {
 	require.Equal(t, "missing", un[1].Reason)
 }
 
-// An unmigrated home must fail loudly at boot, not half-work. Deliberately not
-// a filename-shape test: a repo name may legally look like a ksuid.
-func TestStart_RefusesUnmigratedHome(t *testing.T) {
-	m := newTestManager(t)
-	reposDir := filepath.Join(m.deps.Cfg.Home, "repos")
-	require.NoError(t, os.MkdirAll(reposDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(reposDir, "legacy.db"), []byte("x"), 0o644))
-
-	err := m.Start()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "migrate-registry")
-}
-
-// A fresh home with zero repos is a VALID steady state, not an unmigrated one.
+// A fresh home with zero repos is a VALID steady state.
 func TestStart_EmptyHomeIsFine(t *testing.T) {
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
@@ -120,11 +106,8 @@ func TestStart_EmptyHomeIsFine(t *testing.T) {
 }
 
 // A .db with no registry row is inert. Dropping a file into repos/ is no
-// longer a way to register anything.
-//
-// This is checked alongside a real registered repo, not on an otherwise-empty
-// registry: an empty registry plus any .db file is the unmigrated-home
-// signature (TestStart_RefusesUnmigratedHome) and must fail loudly instead.
+// longer a way to register anything. TestStart_EmptyRegistryTableToleratesOrphan
+// covers the same file beside an EMPTY registry.
 func TestStart_OrphanFileIsIgnored(t *testing.T) {
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
@@ -141,11 +124,10 @@ func TestStart_OrphanFileIsIgnored(t *testing.T) {
 
 // Purge (lifecycle.go) deletes a repo's registry row before its database
 // file, by design: "a failed unlink leaves an orphan file — logged at next
-// Start, harmless, deletable by hand." That orphan can leave a fully migrated
-// home with zero registry rows and a stray .db — the same shape as an
-// unmigrated home on the surface. It must still boot: the registry table
-// already existed here, purging simply emptied it.
-func TestStart_PurgeOrphanDoesNotTripUnmigratedGuard(t *testing.T) {
+// Start, harmless, deletable by hand." That orphan can leave a home with zero
+// registry rows and a stray .db. It must still boot: purging simply emptied
+// the registry.
+func TestStart_PurgeOrphanStillBoots(t *testing.T) {
 	m := newTestManager(t)
 	require.NoError(t, m.Start())
 	ri := createRepo(t, m, "core")
@@ -162,16 +144,13 @@ func TestStart_PurgeOrphanDoesNotTripUnmigratedGuard(t *testing.T) {
 	m2 := newTestManager(t)
 	m2.deps.Cfg.Home = m.deps.Cfg.Home
 	err = m2.Start()
-	require.NoError(t, err, "a purge-orphaned .db on an already-migrated home must not trip the unmigrated-home guard")
+	require.NoError(t, err, "a purge-orphaned .db must not stop the boot")
 	require.Empty(t, m2.Names())
 }
 
-// Restores, on an already-migrated home, the exact fixture
-// TestStart_OrphanFileIsIgnored used before the boot guard existed: zero
-// registry rows plus a stray .db. The registry TABLE already exists here
-// (Start created it on the first boot below), so this must boot — unlike
-// TestStart_RefusesUnmigratedHome, where the table itself is created fresh
-// during the failing Start call.
+// Zero registry rows plus a stray .db: the registry TABLE already exists here
+// (Start created it on the first boot below), and the orphan must not stop the
+// next boot.
 func TestStart_EmptyRegistryTableToleratesOrphan(t *testing.T) {
 	m := newTestManager(t)
 	require.NoError(t, m.Start()) // creates control.db and the repos table, zero rows
@@ -185,116 +164,6 @@ func TestStart_EmptyRegistryTableToleratesOrphan(t *testing.T) {
 	err := m2.Start()
 	require.NoError(t, err, "an orphan .db on a home whose registry table already exists must not be fatal")
 	require.Empty(t, m2.Names())
-}
-
-// writeLegacyLensTables writes the PRE-registry, name-keyed lens schema into a
-// control.db that has no `repos` table — the shape migrate-registry converts.
-func writeLegacyLensTables(t *testing.T, controlPath string) {
-	t.Helper()
-	db, err := sql.Open("sqlite3", controlPath)
-	require.NoError(t, err)
-	db.SetMaxOpenConns(1)
-	defer db.Close()
-	_, err = db.Exec(`
-CREATE TABLE lenses (
-    name        TEXT PRIMARY KEY,
-    write_repo  TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    created_at  INTEGER NOT NULL,
-    updated_at  INTEGER NOT NULL
-);
-CREATE TABLE lens_reads (
-    lens_name TEXT NOT NULL REFERENCES lenses(name) ON DELETE CASCADE,
-    repo      TEXT NOT NULL,
-    branch    TEXT NOT NULL DEFAULT '',
-    source    TEXT,
-    PRIMARY KEY (lens_name, repo)
-);
-INSERT INTO lenses (name, write_repo, created_at, updated_at) VALUES ('workspace', 'legacy', 1, 1);`)
-	require.NoError(t, err)
-}
-
-// The guard used to fire exactly ONCE. OpenRegistry probes for the `repos`
-// table and then commits it unconditionally, so the boot that refuses is also
-// the boot that destroys the evidence: retry and the table exists,
-// SchemaExisted is true, and the server comes up on an unconverted home
-// with every legacy .db invisible. Under systemd Restart=on-failure or a Docker
-// restart policy nobody ever sees the refusal.
-func TestStart_RefusesUnmigratedHomeOnEveryAttempt(t *testing.T) {
-	m := newTestManager(t)
-	home := m.deps.Cfg.Home
-	reposDir := filepath.Join(home, "repos")
-	require.NoError(t, os.MkdirAll(reposDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(reposDir, "legacy.db"), []byte("x"), 0o644))
-	writeLegacyLensTables(t, filepath.Join(home, "control.db"))
-
-	err := m.Start()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "migrate-registry")
-	require.NoError(t, m.Close())
-
-	m2 := newTestManager(t)
-	m2.deps.Cfg.Home = home
-	err = m2.Start()
-	require.Error(t, err, "the guard must not be disarmed by the boot it fired on")
-	require.Contains(t, err.Error(), "migrate-registry")
-	require.NoError(t, m2.Close())
-
-	// ...and again, because "twice" is not the property being claimed.
-	m3 := newTestManager(t)
-	m3.deps.Cfg.Home = home
-	require.Error(t, m3.Start())
-}
-
-// The commonest legacy home of all — repos/<name>.db files, no lenses ever
-// created, no archive directory — is carried by the stray-file arm ALONE. The
-// lens arm cannot help: there are no legacy lens tables to find, so it reports
-// false truthfully. That leaves an arm whose evidence is "the repos table has
-// never existed here", and a boot that creates that table on its way to
-// checking destroys it. This home refused once, then booted with every repo
-// invisible.
-func TestStart_RefusesLenslessUnmigratedHomeOnEveryAttempt(t *testing.T) {
-	m := newTestManager(t)
-	home := m.deps.Cfg.Home
-	reposDir := filepath.Join(home, "repos")
-	require.NoError(t, os.MkdirAll(reposDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(reposDir, "legacy.db"), []byte("x"), 0o644))
-
-	for attempt := 1; attempt <= 3; attempt++ {
-		mn := newTestManager(t)
-		mn.deps.Cfg.Home = home
-		err := mn.Start()
-		require.Errorf(t, err, "boot %d must refuse: nothing between attempts converts this home", attempt)
-		require.Contains(t, err.Error(), "migrate-registry")
-		require.NoError(t, mn.Close())
-	}
-
-	// And the refusal is non-destructive: a refused boot writes nothing to
-	// control.db, so migrate-registry still finds the home it expects — and the
-	// next attempt still finds the evidence.
-	reg, err := OpenRegistryNoSchema(filepath.Join(home, "control.db"))
-	require.NoError(t, err)
-	defer reg.Close()
-	require.False(t, reg.SchemaExisted(),
-		"a refused boot must not create the repos table; doing so disarms the guard it just fired")
-}
-
-// A legacy home whose repos are ALL archived has an empty repos/ and a
-// populated repos/archive/. anyRepoDBFile globs one directory only, so the
-// stray-file arm sees nothing and the server boots — after which every lens
-// endpoint fails with a raw "no such column: write_uid", because the legacy
-// `lenses` table survives CREATE TABLE IF NOT EXISTS untouched.
-func TestStart_RefusesUnmigratedHomeWithOnlyArchivedRepos(t *testing.T) {
-	m := newTestManager(t)
-	archiveDir := filepath.Join(m.deps.Cfg.Home, "repos", "archive")
-	require.NoError(t, os.MkdirAll(archiveDir, 0o755))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(archiveDir, "2Nq8vXbLKZmRt3wYc7dHfGjPqAs.db"), []byte("x"), 0o644))
-
-	err := m.Start()
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "migrate-registry")
-	require.Contains(t, err.Error(), "archive")
 }
 
 // An archived repo's database stays at RepoPath(uid) — Archive is a state flip
