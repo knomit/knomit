@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"knomit/internal/fact"
 	factpkg "knomit/internal/fact"
@@ -395,12 +396,13 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 	}
 }
 
-// ifCommitArg reads if_commit. Absent means no guard; anything present must
-// be a full lowercase 40-hex commit hash. A non-string must not read as ""
+// ifCommitArg reads if_commit. Absent, null and "" all mean no guard — some
+// MCP clients send null or "" for an unset optional. Anything else must be a
+// full lowercase 40-hex commit hash: a number or an array must not read as ""
 // and silently switch the guard off.
 func ifCommitArg(req mcpgo.CallToolRequest) (string, error) {
 	raw, ok := req.GetArguments()["if_commit"]
-	if !ok {
+	if !ok || raw == nil || raw == "" {
 		return "", nil
 	}
 	c, isString := raw.(string)
@@ -460,10 +462,18 @@ func firstDifference(sent, read string) string {
 	for i < len(sent) && i < len(read) && sent[i] == read[i] {
 		i++
 	}
+	// Back up to a rune boundary so neither window starts mid-character.
+	for i > 0 && i < len(sent) && !utf8.RuneStart(sent[i]) {
+		i--
+	}
 	window := func(s string) string {
-		s = s[i:]
+		s = s[min(i, len(s)):]
 		if len(s) > 30 {
-			s = s[:30] + "…"
+			cut := 30
+			for cut > 0 && !utf8.RuneStart(s[cut]) {
+				cut--
+			}
+			s = s[:cut] + "…"
 		}
 		return strconv.Quote(s)
 	}

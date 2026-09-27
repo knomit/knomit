@@ -415,7 +415,7 @@ func TestUpdateTool_ServesOpsAndIfCommit(t *testing.T) {
 func TestUpdateOps_IfCommitMalformedRejects(t *testing.T) {
 	svc, ctx, _ := newPrinciplesTestRepo(t)
 	writeSlot(t, ctx, svc, "abc")
-	for _, v := range []any{"not-a-hash", "", 42, []any{"x"}, strings.Repeat("A", 40)} {
+	for _, v := range []any{"not-a-hash", 42, []any{"x"}, strings.Repeat("A", 40)} {
 		args := opsArgs(opsSlot, replace("abc", "x"))
 		args["if_commit"] = v
 		res := callUpdate(t, ctx, args)
@@ -423,6 +423,14 @@ func TestUpdateOps_IfCommitMalformedRejects(t *testing.T) {
 		require.Contains(t, resultText(t, res), "40-character")
 	}
 	require.Equal(t, "abc", readBody(t, svc, opsSlot))
+
+	// null and "" are how some clients send an unset optional: no guard.
+	for i, v := range []any{nil, ""} {
+		args := opsArgs(opsSlot, map[string]any{"op": "append", "text": fmt.Sprintf("unset %d", i)})
+		args["if_commit"] = v
+		res := callUpdate(t, ctx, args)
+		require.False(t, res.IsError, "if_commit %#v must read as absent: %s", v, resultText(t, res))
+	}
 }
 
 // After an experiment lands with a {body} resolution, the slot's bytes exist
@@ -555,4 +563,17 @@ func TestUpdateOps_DeltaCountsStoredBytes(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &payload))
 	require.Equal(t, len("abc\n\ndef")-len("abc"), payload.Ops[0].Delta,
 		"trailing whitespace is not stored, so it is not counted")
+}
+
+// An em dash and an en dash share their first two UTF-8 bytes; the windows
+// must start at the character, not mid-rune, so neither quotes as \x bytes.
+func TestFirstDifference_CutsOnRuneBoundaries(t *testing.T) {
+	d := firstDifference("a—b", "a–b")
+	require.Equal(t, `at byte 1, sent "—b", would read "–b"`, d)
+
+	long := strings.Repeat("é", 20)
+	d = firstDifference("x"+long, "y"+long)
+	require.NotContains(t, d, `\x`, "a window cut mid-rune would quote raw bytes: %s", d)
+	require.Equal(t, "at byte 0", d[:9])
+	require.NotContains(t, firstDifference("abc", "abcdef"), `\x`)
 }
