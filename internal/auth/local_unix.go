@@ -51,13 +51,17 @@ func LocalPrincipal() (Principal, error) {
 // cannot come to disagree about what the transport is, the way they once
 // disagreed about where the data root was.
 //
-// Unlike the Windows half it does not verify who owns the listener, and needs
-// not: the socket lives in a directory that gates who can CREATE it — the
-// 0700 data root (privdir), or the 0700 owner-checked fallback directory
-// below — so another account cannot put a listener where this dials. The
-// Windows pipe namespace has no such directory, which is why it checks the
-// owner and returns ErrForeignListener (knomit#265). A client-side
-// SO_PEERCRED check would be parity polish, and is not done.
+// Unlike the Windows half it does not verify who owns the listener. For the
+// DEFAULT path it needs not: that socket lives in a directory that gates who
+// can CREATE it — the 0700 data root (privdir), or the 0700 owner-checked
+// fallback directory below — so another account cannot put a listener where
+// this dials. An operator-named socket (KNOMIT_SOCKET or the knomit.toml
+// socket key) is only required to be absolute (config's
+// checkExplicitSocket) and its directory is never owner-checked; where it
+// lives is the operator's choice. The Windows pipe namespace has no such
+// directory at all, which is why it checks the owner and returns
+// ErrForeignListener (knomit#265). A client-side SO_PEERCRED check would be
+// parity polish, and is not done.
 func DialLocal(ctx context.Context, path string, timeout time.Duration) (net.Conn, error) {
 	// The shared fallback directory is dialled only when it is private to
 	// this user: otherwise whatever listens there may not be knomit, and the

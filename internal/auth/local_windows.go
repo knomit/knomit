@@ -142,11 +142,17 @@ func DialLocal(ctx context.Context, path string, timeout time.Duration) (net.Con
 }
 
 // acceptedPipeOwner reports whether a pipe owned by owner may be trusted by a
-// client whose token user is self: this user, SYSTEM (a knomit run as a
-// service) or BUILTIN\Administrators (a server started before ownerOnlySDDL
-// named its owner, elevated). Only an administrator can produce either of the
-// last two, and an administrator is out of scope: it can already read this
-// user's data root.
+// client whose token user is self: this user, SYSTEM or
+// BUILTIN\Administrators.
+//
+// BUILTIN\Administrators is what a UAC-elevated server that predates
+// knomit#265 owns its pipe as, because its SDDL had no O: part. SYSTEM is
+// NOT accepted so that a knomit run as a service is reachable — its pipe is
+// DACL'd to its own SID and SYSTEM, so a user's client is refused with
+// access denied before any owner check runs. It is accepted because it costs
+// nothing: SYSTEM is admin-equivalent, only admin-level code can produce a
+// SYSTEM-owned pipe, and an administrator is out of scope — it can already
+// read this user's data root.
 //
 // It is a variable so a test can NARROW it: a pipe owned by another account
 // cannot be created without privileges the suite does not have.
@@ -208,8 +214,10 @@ func verifyPipeOwner(conn net.Conn, path string) error {
 		return err
 	}
 	if !acceptedPipeOwner(owner, self) {
-		return fmt.Errorf("%w: %s is owned by %s, not %s; another process holds the local listener's name. "+
-			"Pass an explicit URL (KNOMIT_BASE_URL or the URL argument) to skip the pipe if that server is yours",
+		// No escape-hatch advice here: what skips the pipe differs by
+		// caller (the bridge's URL argument, the hooks' KNOMIT_BASE_URL,
+		// nothing at all for `knomit oauth`), so each caller adds its own.
+		return fmt.Errorf("%w: %s is owned by %s, not %s; another process holds the local listener's name",
 			ErrForeignListener, path, owner.String(), self)
 	}
 	return nil

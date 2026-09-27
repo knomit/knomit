@@ -3,6 +3,7 @@ package knomitapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net"
 	"net/http"
@@ -131,7 +132,16 @@ func socketPreferringClient(timeout time.Duration, socketPath func() string) *ht
 				// name, which means a live process chose it, and the TCP
 				// path carries no verified identity either. The request
 				// fails, and the error says how to name a server explicitly.
+				//
+				// This is a SIGNAL for the case we can see, not a boundary:
+				// a squatter that denies READ_CONTROL (or all access) makes
+				// DialLocal fail with access denied, which lands in the
+				// unreachable branch below and falls back to TCP like any
+				// other listener we cannot open. Either way no byte reaches
+				// a foreign-owned pipe, which is the security property.
 				if errors.Is(err, auth.ErrForeignListener) {
+					err = fmt.Errorf("%w; pass an explicit URL (the URL argument, or KNOMIT_BASE_URL for the hooks client) "+
+						"to skip the pipe if that server is yours", err)
 					foreignOnce.Do(func() {
 						log.Warn().Err(err).Str("socket", p).Str("via", string(auth.LocalVia)).Str("addr", addr).
 							Msg("bridge: local listener is held by another account; refusing to talk to it and not falling back to TCP")

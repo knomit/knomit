@@ -52,9 +52,22 @@ var ErrUnsafeSocketDir = errors.New("local listener directory is not private to 
 // Callers must treat it as a FAILURE, not as "no listener": falling back to
 // TCP would reach a server with no verified identity either, while a live
 // process of another account sits on our name. Unlike ErrSocketInUse it is a
-// CLIENT-side error. It is declared on every platform so callers compile
-// everywhere; only the Windows DialLocal returns it — a unix socket lives
-// under a directory that already gates who can create it.
+// CLIENT-side error. It carries no advice on how to skip the pipe, because
+// that differs by caller; the caller adds its own.
+//
+// THE LIMIT: the no-fallback rule is a SIGNAL for the case DialLocal can
+// see, not a boundary. A squatter that withholds READ_CONTROL (or all access)
+// makes the dial itself fail with access denied, which callers treat as an
+// unreachable listener and, in the bridge, fall back to TCP from. The
+// security property — no byte reaches a foreign-owned pipe — holds either
+// way.
+//
+// It is declared on every platform so callers compile everywhere; only the
+// Windows DialLocal returns it. On unix the DEFAULT socket under the data
+// root, and the owner-checked /tmp fallback, live in directories that gate
+// who can create them; an operator-named socket (KNOMIT_SOCKET or the
+// knomit.toml socket key) is only required to be absolute and is never
+// owner-checked, which is the operator's choice.
 var ErrForeignListener = errors.New("local listener is owned by another account")
 
 // ListenLocal is the ONE place the local authenticated listener is opened.

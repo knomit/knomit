@@ -168,7 +168,7 @@ func TestDialLocal_RejectsAForeignOwner(t *testing.T) {
 	}
 	sid := mustOwnSID(t)
 	msg := err.Error()
-	for _, want := range []string{path, "owned by " + sid, "not " + sid, "KNOMIT_BASE_URL"} {
+	for _, want := range []string{path, "owned by " + sid, "not " + sid} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("the error must name %q; got %q", want, msg)
 		}
