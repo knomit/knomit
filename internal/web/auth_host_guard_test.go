@@ -23,6 +23,7 @@ package web
 import (
 	"bufio"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -33,6 +34,7 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
+	"knomit/internal/web/hal"
 )
 
 // rebound sends what a DNS-rebound page's own fetch() puts on the wire, over
@@ -96,6 +98,20 @@ func TestIssue281_ReboundHostIsRefused(t *testing.T) {
 		if code != http.StatusMisdirectedRequest || !strings.Contains(body, "Misdirected Request") ||
 			!strings.Contains(body, "loopback_hosts") || !strings.Contains(body, "attacker.example") {
 			t.Errorf("%s %s: got %d %.200s; want 421 naming the Host and [auth].loopback_hosts", c.method, c.path, code, body)
+		}
+		// #320: the detail is the rule and the command, nothing else. The
+		// rebound page is same-origin with this response and reads it, so
+		// it must carry no threat-model tail (loopback_default) and no
+		// filesystem path (the data root names the user). The path check
+		// is "no / or \ in detail", not in the body: "instance" is the
+		// request path and always has a slash, while net/http refuses a
+		// Host containing either with 400 before any handler runs.
+		var p hal.Problem
+		if err := json.Unmarshal([]byte(body), &p); err != nil {
+			t.Fatalf("%s %s: body is not a problem document: %v", c.method, c.path, err)
+		}
+		if strings.Contains(p.Detail, "loopback_default") || strings.ContainsAny(p.Detail, `/\`) {
+			t.Errorf("%s %s: detail %q; want neither loopback_default nor a filesystem path", c.method, c.path, p.Detail)
 		}
 	}
 	if writer.writeCalls != 0 {

@@ -3,6 +3,7 @@ package diag
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -57,6 +58,11 @@ func TestGuard_Table(t *testing.T) {
 			s.Handler().ServeHTTP(rr, req)
 			if rr.Code != c.want {
 				t.Fatalf("status = %d, want %d; body %q", rr.Code, c.want, rr.Body.String())
+			}
+			// #320: the 421 names whose config to edit, in the same words
+			// as the main listener's, so the two cannot drift apart.
+			if c.want == http.StatusMisdirectedRequest && !strings.Contains(rr.Body.String(), "this instance's knomit.toml") {
+				t.Fatalf("421 body %q does not say this instance's knomit.toml", rr.Body.String())
 			}
 		})
 	}
