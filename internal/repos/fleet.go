@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
 	"knomit/internal/store"
@@ -394,4 +395,24 @@ func sameFleetURL(a, b string) bool {
 func memberRecordPath(root, agentID string) string {
 	sum := sha256.Sum256([]byte(agentID))
 	return path.Join(root, fact.MembersTopic, strings.ToLower(agentID), hex.EncodeToString(sum[:4])+".md")
+}
+
+// ownFleetKeys is every key this instance's member record has held in its
+// fleet (the record's versions), for E4. Nil when standalone.
+func (m *Manager) ownFleetKeys() []ssh.PublicKey {
+	ri := m.fleetRepo()
+	if ri == nil {
+		return nil
+	}
+	upstream := "main"
+	if o, err := m.originOf(ri); err == nil && o != nil && o.Branch != "" {
+		upstream = o.Branch
+	}
+	var keys []ssh.PublicKey
+	_ = ri.WithRead(func(svc *store.Service) {
+		if svc != nil {
+			keys, _ = svc.FleetKeysOf(upstream, store.AgentIDOf(m.deps.AgentBranch))
+		}
+	})
+	return keys
 }

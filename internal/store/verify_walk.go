@@ -97,3 +97,8 @@ func (rh *repoHandler) acceptedCommit(ctx context.Context, h plumbing.Hash) bool
 		`SELECT 1 FROM verify_accepted WHERE commit_hash = ?`, h.String()).Scan(&one)
 	return err == nil
 }
+
+// SetOwnKeys installs the source of this instance's historical keys (its
+// fleet member record's versions) for E4. Re-applied on every store reopen,
+// like SetSigner.
+func (s *Service) SetOwnKeys(f func() []ssh.PublicKey) { s.rh.ownKeys = f }

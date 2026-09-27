@@ -49,13 +49,23 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
 	// The own key is the key this store signs with (commitSigner: the store's
 	// signer, or a test binary's fallback). No signer means no own key.
-	own := ""
+	own := map[string]bool{}
 	if signer, err := rh.commitSigner(); err == nil {
 		fp, err := keyFingerprint(signer.PublicKey())
 		if err != nil {
 			return fmt.Errorf("E4: own key: %w", err)
 		}
-		own = fp
+		own[fp] = true
+	}
+	// Registered in a fleet: every key this instance's own member record has
+	// held (its versions) is also its own, so a key rotation does not make the
+	// instance's earlier commits foreign.
+	if rh.ownKeys != nil {
+		for _, k := range rh.ownKeys() {
+			if fp, err := keyFingerprint(k); err == nil {
+				own[fp] = true
+			}
+		}
 	}
 	below := map[plumbing.Hash]bool{}
 	if upstream != plumbing.ZeroHash {
@@ -70,11 +80,11 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 		}
 		s, serr := verifyCommitSignature(c)
 		switch {
-		case own == "":
+		case len(own) == 0:
 			refused = append(refused, shortRefHash(c.Hash)+": this store has no signer to know its own key")
 		case serr != nil:
 			refused = append(refused, shortRefHash(c.Hash)+": "+serr.Error())
-		case s.Fingerprint != own:
+		case !own[s.Fingerprint]:
 			refused = append(refused, shortRefHash(c.Hash)+": signed by "+s.Fingerprint[:8])
 		}
 	})

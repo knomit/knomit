@@ -74,6 +74,10 @@ type repoHandler struct {
 
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
+	// ownKeys, when set, returns every key this instance's fleet member record
+	// has held (E4 accepts them as its own). Nil when standalone.
+	ownKeys func() []ssh.PublicKey
+
 	// im is the search-index manager. notifyCommit calls im.Sync after every
 	// commit so branch_facts / facts_vec / graph stay in sync with the new
 	// tree at HEAD. Set by Service.Open (via bindIndexManager). If nil,

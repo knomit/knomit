@@ -1017,6 +1017,7 @@ func (m *Manager) initClone(ctx context.Context, spec CreateSpec, uid, dbPath st
 	// the history, and the own key is what E4 checks origin's copy of this
 	// instance's agent branch against (a store with no signer refuses adoption).
 	svc.SetSigner(m.deps.Signer)
+	svc.SetOwnKeys(m.ownFleetKeys)
 	// No Crypt is wired here: the clone's credential is already resolved above
 	// (ResolveAuth) and its durable copy belongs to control.db's Origins, which
 	// holds the only Crypt. This store never stores a credential of its own.
@@ -1171,6 +1172,7 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// pushed: it must be signed like every later one. Without this it went out
 	// unsigned (and now fails with store.ErrNoSigner).
 	svc.SetSigner(m.deps.Signer)
+	svc.SetOwnKeys(m.ownFleetKeys)
 	// F09 first contact runs inside InitFromRemote / InitSubscription.
 	// No Crypt is wired here, for the same reason initClone doesn't: the
 	// credential is already resolved above, and its durable copy belongs to

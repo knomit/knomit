@@ -1811,8 +1811,90 @@ async function denyOAuthPending(id: string): Promise<void> {
   if (!r.ok) throw await oauthFailure(r);
 }
 
+// ─── Fleet (F09) ────────────────────────────────────────────────────────────
+// This instance's fleet membership state machine: standalone -> registering
+// -> registered -> unregistering -> standalone. record_state is this agent's
+// record as the fleet's MAIN says ("pending" until a human merges it).
+export type FleetState = 'standalone' | 'registering' | 'registered' | 'unregistering';
+
+export interface FleetStatus {
+  state: FleetState;
+  agent_id: string;
+  fleet_repo?: string;
+  fleet_url?: string;
+  record_state?: 'pending' | 'active' | 'left' | 'revoked';
+  since?: string;
+  registered_at?: string;
+  last_attempt?: string;
+  last_error?: string;
+}
+
+export interface FleetMember {
+  agent: string;
+  state: 'active' | 'left' | 'revoked';
+  host?: string;
+  branch?: string;
+  path?: string;
+}
+
+// FleetRefusal carries the server's machine-readable refusal code
+// (registration_pending, already_registered, not_a_fleet, clone_failed, ...).
+export class FleetRefusal extends Error {
+  code: string;
+  constructor(message: string, code: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+async function fleetFailure(r: Response): Promise<Error> {
+  let detail = r.statusText;
+  let code = '';
+  try {
+    const body = await r.json();
+    detail = errorText(body, detail);
+    code = typeof body?.code === 'string' ? body.code : '';
+  } catch {
+    // Non-JSON body; keep the statusText.
+  }
+  return new FleetRefusal(detail, code);
+}
+
+async function getFleet(): Promise<FleetStatus> {
+  const r = await fetch(apiUrl('/api/v1/fleet'), { headers: oauthHeaders(false) });
+  if (!r.ok) throw await fleetFailure(r);
+  return (await r.json()) as FleetStatus;
+}
+
+async function registerFleet(url: string, authToken?: string): Promise<FleetStatus> {
+  const r = await fetch(apiUrl('/api/v1/fleet'), {
+    method: 'PUT',
+    headers: oauthHeaders(true),
+    body: JSON.stringify({ url, auth_token: authToken || undefined }),
+  });
+  if (!r.ok) throw await fleetFailure(r);
+  return (await r.json()) as FleetStatus;
+}
+
+async function unregisterFleet(): Promise<FleetStatus> {
+  const r = await fetch(apiUrl('/api/v1/fleet'), { method: 'DELETE', headers: oauthHeaders(true) });
+  if (!r.ok) throw await fleetFailure(r);
+  return (await r.json()) as FleetStatus;
+}
+
+async function listFleetMembers(): Promise<FleetMember[]> {
+  const r = await fetch(apiUrl('/api/v1/fleet/members'), { headers: oauthHeaders(false) });
+  if (!r.ok) throw await fleetFailure(r);
+  const data = (await r.json()) as { members?: FleetMember[] };
+  return data.members ?? [];
+}
+
 export const api = {
   listOAuthPending,
+  getFleet,
+  registerFleet,
+  unregisterFleet,
+  listFleetMembers,
   approveOAuthPending,
   denyOAuthPending,
   listClientSessions,

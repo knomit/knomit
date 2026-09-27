@@ -11,6 +11,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/fact"
 )
@@ -159,4 +160,35 @@ func (s *Service) FleetMembersAt(branch string) ([]FleetMember, error) {
 		root = "kb"
 	}
 	return loadMembers("mounted", c, root)
+}
+
+// FleetKeysOf returns every key agentID's member record has held in this
+// store's (a mounted fleet repository's) history of branch: the record's
+// VERSIONS, which is where an agent's key history lives. Malformed versions
+// are skipped.
+func (s *Service) FleetKeysOf(branch, agentID string) ([]ssh.PublicKey, error) {
+	ref, err := s.rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	if err != nil {
+		return nil, fmt.Errorf("fleet: %s: %w", branch, err)
+	}
+	root := s.rh.factRoot
+	if root == "" {
+		root = "kb"
+	}
+	var keys []ssh.PublicKey
+	seen := map[string]bool{}
+	err = walkHistory(s.rh.gits, ref.Hash(), nil, func(c *object.Commit) {
+		ms, lerr := loadMembers("mounted", c, root)
+		if lerr != nil {
+			return
+		}
+		for _, m := range ms {
+			k := string(m.Key.Marshal())
+			if strings.EqualFold(m.Agent, agentID) && !seen[k] {
+				seen[k] = true
+				keys = append(keys, m.Key)
+			}
+		}
+	})
+	return keys, err
 }
