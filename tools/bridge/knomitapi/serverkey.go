@@ -1,5 +1,7 @@
 package knomitapi
 
+import "strings"
+
 // ServerKey derives the MCP-config `mcpServers` key a host writes for a knomit
 // server. Claude Code turns it into the tool-name prefix
 // `mcp__<key>__knomit_learn`; Antigravity uses it only as an identifier.
@@ -53,3 +55,38 @@ const MaxServerKeyLen = 64 - len("mcp____knomit_hypothesize")
 // what an error message must quote, since that is the knob the user turns.
 // Both axis prefixes are the same length, so one constant covers both.
 const MaxScopeNameLen = MaxServerKeyLen - len("knomit-repo-")
+
+// UnboundServerKey derives the key for an entry that starts knomit UNBOUND
+// (neither --repo nor --lens), from the directory init runs in.
+//
+// It keeps the repo-axis naming, so the key may carry the directory name — but
+// the name goes into the KEY only, never into the entry's args. Nothing may read
+// a scope back out of it: the hooks bind from args alone (ClassifyArgs). The
+// cost is that this key can equal ServerKey(dir, ""), which is why a flagless
+// re-init keeps an existing entry's scope instead of rewriting its args.
+//
+// The directory name is sanitized, never validated: init must not fail because
+// of where it runs. ASCII letters are lowercased, every other rune outside the
+// repos.IsValidName grammar becomes '-', and the result is cut to
+// MaxScopeNameLen so the key fits MaxServerKeyLen.
+func UnboundServerKey(dirName string) string {
+	var b strings.Builder
+	for _, c := range dirName {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			b.WriteRune(c + ('a' - 'A'))
+		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_':
+			b.WriteRune(c)
+		default:
+			b.WriteByte('-')
+		}
+		if b.Len() == MaxScopeNameLen {
+			break
+		}
+	}
+	name := b.String()
+	if name == "" {
+		name = "-"
+	}
+	return ServerKey(name, "")
+}

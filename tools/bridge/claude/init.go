@@ -31,9 +31,13 @@ var templatesFS embed.FS
 //     companion file is dropped only for the cases a merge cannot decide
 //     unambiguously (a knomit .mcp.json entry under a different key, a CLAUDE.md
 //     block with no closing delimiter).
+//   - With neither --repo nor --lens the .mcp.json entry is UNBOUND: its args
+//     carry no flag and the agent binds with knomit_bind. The directory name
+//     appears only in the key (knomitapi.UnboundServerKey). If .mcp.json
+//     already has a knomit entry, a flagless init keeps it as it is.
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
-	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
+	repo := flags.String("repo", "", "knomit repo name; omit both --repo and --lens for an unbound server the agent binds with knomit_bind")
 	lens := flags.String("lens", "", "lens name; writes a lens-scoped .mcp.json (mutually exclusive with --repo)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -48,40 +52,40 @@ func runInit(args []string) error {
 		return err
 	}
 	repoName := *repo
-	if repoName == "" {
-		repoName = filepath.Base(cwd)
-	}
+	unbound := *repo == "" && *lens == ""
 
 	// Validate names against the server's grammar BEFORE writing any file, so a
 	// value containing quotes, backslashes, or other JSON-hostile characters is
 	// rejected up front rather than silently baked into a broken .mcp.json. The
 	// grammar lives in internal/repos (single source of truth); the bridge does
 	// not duplicate it.
+	//
+	// Only an explicit name is validated. An unbound scaffold names nothing: the
+	// directory name is sanitized into the key and never fails init.
 	const nameRule = "must be lowercase letters, digits, hyphens, or underscores"
-	if *lens != "" {
+	serverKey := knomitapi.ServerKey(repoName, *lens)
+	switch {
+	case unbound:
+		serverKey = knomitapi.UnboundServerKey(filepath.Base(cwd))
+	case *lens != "":
 		if !repos.IsValidName(*lens) {
 			return fmt.Errorf("invalid --lens %q (%s)", *lens, nameRule)
 		}
-	} else {
+	default:
 		if !repos.IsValidName(repoName) {
 			return fmt.Errorf("invalid --repo %q (%s)", repoName, nameRule)
 		}
 	}
 	// Reject up front rather than emit a .mcp.json whose derived key produces a
-	// tool name over the API's 64-char limit. Repo mode can trip this without
-	// the user naming anything: repoName defaults to the directory basename, so
-	// a long directory name fails an otherwise flagless `claude init`. Say so —
-	// the remedy (name the repo explicitly) is not obvious from the error alone,
-	// because nothing else in the tool requires the repo to match the directory.
-	if key := knomitapi.ServerKey(repoName, *lens); len(key) > knomitapi.MaxServerKeyLen {
+	// tool name over the API's 64-char limit.
+	if !unbound && len(serverKey) > knomitapi.MaxServerKeyLen {
 		scope, flag := repoName, "--repo"
 		if *lens != "" {
 			scope, flag = *lens, "--lens"
 		}
 		return fmt.Errorf("derived MCP server key %q is %d characters (max %d), "+
-			"because %s name %q is %d (max %d); pass a shorter %s "+
-			"(it need not match the directory name)",
-			key, len(key), knomitapi.MaxServerKeyLen,
+			"because %s name %q is %d (max %d); pass a shorter %s",
+			serverKey, len(serverKey), knomitapi.MaxServerKeyLen,
 			strings.TrimPrefix(flag, "--"), scope, len(scope), knomitapi.MaxScopeNameLen, flag)
 	}
 
@@ -96,6 +100,20 @@ func runInit(args []string) error {
 	// fourth restatement the constant exists to remove.
 	if err := preflightSettings(filepath.Join(cwd, settingsRel)); err != nil {
 		return err
+	}
+
+	// A flagless init keeps an existing knomit config that names ONE usable
+	// scope, or is already unbound — knomitapi.SingleScope, the rule the
+	// Antigravity host shares:
+	// unbound is for a fresh scaffold. Without this, the same-key merge would
+	// rewrite `--repo <dir>` under knomit-repo-<dir> to []. A broken or
+	// ambiguous config is replaced by the unbound entry only when every knomit
+	// entry is under init's own key; init never edits another key (the legacy
+	// `knomit` one included), so otherwise it writes the companion instead.
+	var kept, replaced string
+	var mcpCompanion bool
+	if unbound {
+		kept, replaced, mcpCompanion = flaglessMcpPlan(filepath.Join(cwd, ".mcp.json"), serverKey)
 	}
 
 	var created []string
@@ -118,7 +136,7 @@ func runInit(args []string) error {
 			rendered, err = renderTemplate(string(data), map[string]string{
 				"RepoName":  repoName,
 				"Lens":      *lens,
-				"ServerKey": knomitapi.ServerKey(repoName, *lens),
+				"ServerKey": serverKey,
 			})
 			if err != nil {
 				return fmt.Errorf("render %s: %w", srcPath, err)
@@ -140,9 +158,11 @@ func runInit(args []string) error {
 			return nil
 		}
 		if exists {
-			note, err := mergeInto(dst, dstRel, []byte(rendered), knomitapi.ServerKey(repoName, *lens))
-			if err != nil {
-				return err
+			note := mergeNotPossible
+			if dstRel != ".mcp.json" || !mcpCompanion {
+				if note, err = mergeInto(dst, dstRel, []byte(rendered), serverKey); err != nil {
+					return err
+				}
 			}
 			if note == "" {
 				// Merged and nothing changed: the file already says what this
@@ -176,13 +196,21 @@ func runInit(args []string) error {
 			return nil
 		}
 		rel := strings.TrimPrefix(srcPath, "templates/")
-		// mcp.json.tmpl and mcp.json.lens.tmpl both target .mcp.json — select
-		// exactly one based on whether a lens was requested.
-		if rel == "mcp.json.tmpl" && *lens != "" {
-			return nil
-		}
-		if rel == "mcp.json.lens.tmpl" && *lens == "" {
-			return nil
+		// The three mcp.json templates all target .mcp.json — select exactly
+		// one by scope, or none when a flagless init keeps an existing entry.
+		switch rel {
+		case "mcp.json.tmpl":
+			if unbound || *lens != "" {
+				return nil
+			}
+		case "mcp.json.lens.tmpl":
+			if *lens == "" {
+				return nil
+			}
+		case "mcp.json.unbound.tmpl":
+			if !unbound || kept != "" {
+				return nil
+			}
 		}
 		dstRel := mapDestination(srcPath)
 		if dstRel == "" {
@@ -211,7 +239,47 @@ func runInit(args []string) error {
 	}
 
 	printSummary(created, overwritten, updated, conflicts)
+	if kept != "" {
+		fmt.Printf("Kept: .mcp.json knomit entry (%s). To change it, edit or remove that entry in .mcp.json, then re-run init.\n", kept)
+	}
+	if replaced != "" {
+		fmt.Printf("Replaced: .mcp.json knomit entry (%s) with an unbound entry\n", replaced)
+	}
 	return nil
+}
+
+// flaglessMcpPlan decides what a flagless init does to an existing .mcp.json:
+// keep a single usable scope or an already-unbound config (under any key), replace a broken or ambiguous config under init's
+// own key, or decline to a companion when another key is involved. It reads the
+// file with knomitEntries — the merge's own lenient index — so it can never
+// disagree with the merge about which entries exist.
+func flaglessMcpPlan(path, serverKey string) (kept, replaced string, companion bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", false
+	}
+	entries, found := knomitEntries(data)
+	if !found {
+		return "", "", false
+	}
+	args := make([][]string, len(entries))
+	ownKeyOnly := true
+	for i, e := range entries {
+		args[i] = e.args
+		ownKeyOnly = ownKeyOnly && e.key == serverKey
+	}
+	s, skip := knomitapi.SingleScope(args, repos.IsValidName)
+	switch {
+	case skip == "":
+		return s.String(), "", false
+	case skip == knomitapi.SkipUnbound:
+		// Already unbound is one scope, under any key. Going to the merge would
+		// take its other-key path: a companion and a false two-scopes warning.
+		return s.String(), "", false
+	case ownKeyOnly:
+		return "", knomitapi.ReplacedText(skip), false
+	}
+	return "", "", true
 }
 
 // preflightSettings reports a .claude/settings.json init cannot merge before it
@@ -375,7 +443,7 @@ const settingsRel = ".claude/settings.json"
 // routed by the second walk in runInit.
 func mapDestination(srcPath string) string {
 	switch strings.TrimPrefix(srcPath, "templates/") {
-	case "mcp.json.tmpl", "mcp.json.lens.tmpl":
+	case "mcp.json.tmpl", "mcp.json.lens.tmpl", "mcp.json.unbound.tmpl":
 		return ".mcp.json"
 	case "CLAUDE-md-block.txt":
 		return "CLAUDE.md"

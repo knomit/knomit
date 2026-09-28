@@ -1,6 +1,9 @@
 package knomitapi
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestServerKey(t *testing.T) {
 	for _, tc := range []struct{ repo, lens, want string }{
@@ -68,5 +71,27 @@ func TestServerKey_RepoLensSameNameNoCollision(t *testing.T) {
 	if repoKey, lensKey := ServerKey("eng", ""), ServerKey("eng", "eng"); repoKey == lensKey {
 		t.Errorf("ServerKey(%q, %q) = %q == ServerKey(%q, %q) = %q; repo and lens must never collide",
 			"eng", "", repoKey, "eng", "eng", lensKey)
+	}
+}
+
+// An unbound scaffold keeps the repo-axis naming (the key may carry the
+// directory name) but must never fail on the directory name: anything outside
+// the name grammar is replaced, and the result always fits MaxServerKeyLen.
+func TestUnboundServerKey(t *testing.T) {
+	for _, tc := range []struct{ dir, want string }{
+		{"ingestion", "knomit-repo-ingestion"},
+		{"My Project", "knomit-repo-my-project"},
+		{"a.b/c", "knomit-repo-a-b-c"},
+		{"été", "knomit-repo--t-"},
+		{"", "knomit-repo--"},
+		{strings.Repeat("x", 60), "knomit-repo-" + strings.Repeat("x", MaxScopeNameLen)},
+	} {
+		got := UnboundServerKey(tc.dir)
+		if got != tc.want {
+			t.Errorf("UnboundServerKey(%q) = %q, want %q", tc.dir, got, tc.want)
+		}
+		if len(got) > MaxServerKeyLen {
+			t.Errorf("UnboundServerKey(%q) = %q is %d chars, max %d", tc.dir, got, len(got), MaxServerKeyLen)
+		}
 	}
 }

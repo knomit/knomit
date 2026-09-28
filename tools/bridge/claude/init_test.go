@@ -329,7 +329,8 @@ func TestRunInit_ScaffoldedConfigBindsHooks(t *testing.T) {
 		if err := runInit([]string{"--repo", "team-kb"}); err != nil {
 			t.Fatalf("runInit: %v", err)
 		}
-		repo, lens, ambiguous := mcpBinding(dir)
+		repo, lens, skip := mcpBinding(dir)
+		ambiguous := skip == skipMultipleKnomitServers
 		if ambiguous {
 			t.Fatal("single server reported as ambiguous")
 		}
@@ -350,7 +351,8 @@ func TestRunInit_ScaffoldedConfigBindsHooks(t *testing.T) {
 		if err := runInit([]string{"--lens", "eng"}); err != nil {
 			t.Fatalf("runInit: %v", err)
 		}
-		repo, lens, ambiguous := mcpBinding(dir)
+		repo, lens, skip := mcpBinding(dir)
+		ambiguous := skip == skipMultipleKnomitServers
 		if ambiguous {
 			t.Fatal("single server reported as ambiguous")
 		}
@@ -378,7 +380,8 @@ func TestMcpBinding_MultipleKnomitServers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens, ambiguous := mcpBinding(dir)
+	repo, lens, skip := mcpBinding(dir)
+	ambiguous := skip == skipMultipleKnomitServers
 	if !ambiguous {
 		t.Fatalf("two knomit servers not reported as ambiguous (repo=%q lens=%q)", repo, lens)
 	}
@@ -397,8 +400,8 @@ func mustSkipReason(t *testing.T, dir string) string {
 }
 
 // TestRunInit_RejectsOverlongDerivedKey guards the tool-name ceiling. The key
-// used to be a 6-char constant so this was unreachable; it now derives from a
-// repo name that defaults to the directory basename.
+// used to be a 6-char constant so this was unreachable; it now derives from an
+// explicit repo name. (A flagless init sanitizes and truncates instead.)
 func TestRunInit_RejectsOverlongDerivedKey(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
@@ -410,13 +413,11 @@ func TestRunInit_RejectsOverlongDerivedKey(t *testing.T) {
 	if !strings.Contains(err.Error(), "server key") {
 		t.Errorf("error %q does not explain the key-length limit", err)
 	}
-	// The remedy has to be actionable: repo mode can trip this with no flag at
-	// all (the name defaults to the directory basename), so the message must
-	// quote the name budget and say the repo need not match the directory.
+	// The remedy has to be actionable: the message must quote the name budget
+	// and name the flag to shorten.
 	for _, want := range []string{
 		fmt.Sprintf("max %d", knomitapi.MaxScopeNameLen),
 		"--repo",
-		"need not match the directory",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)

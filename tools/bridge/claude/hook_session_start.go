@@ -49,9 +49,26 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 	repo, skip := resolveWriteRepo(in.Cwd)
 	if skip != "" {
 		skipReason = skip
-		// Every other skip reason is transient or benign. This one is a
-		// misconfiguration that will never resolve on its own, and the user
-		// cannot see the log field — so say it out loud.
+		// Unbound gets the bind note. A broken entry and multiple servers are
+		// misconfigurations that never resolve on their own, and the user
+		// cannot see the log field — so say it out loud. Every other skip is
+		// transient or benign.
+		if skip == skipUnbound {
+			// No repo to read context from: tell the agent how to bind instead.
+			if _, err := fmt.Fprintln(w, knomitapi.UnboundNote); err != nil {
+				return err
+			}
+			emitted = true
+		}
+		switch skip {
+		case knomitapi.SkipNoBinding, knomitapi.SkipLensUnusable, knomitapi.SkipInvalidScope:
+			// A broken entry never resolves on its own either.
+			if _, err := fmt.Fprint(w, "knomit hooks are DISABLED: the knomit entry in .mcp.json "+
+				"names no usable --repo or --lens. Fix or remove that entry.\n"); err != nil {
+				return err
+			}
+			emitted = true
+		}
 		if skip == skipMultipleKnomitServers {
 			_, err := fmt.Fprint(w, "knomit hooks are DISABLED: .mcp.json configures knomit "+
 				"servers for more than one scope, so there is no single repo to bind to. "+

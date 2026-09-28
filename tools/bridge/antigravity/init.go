@@ -30,9 +30,14 @@ const PluginDir = ".agents/plugins/knomit"
 // because no destination is a file the user also writes. So there are no
 // companion files, no block markers, and no ownership predicate — init
 // overwrites the whole tree on every run.
+//
+// With neither --repo nor --lens the server is UNBOUND: mcp_config.json's args
+// carry no flag and the agent binds with knomit_bind. The directory name
+// appears only in the key (knomitapi.UnboundServerKey). A flagless init over a
+// plugin whose mcp_config.json already names a scope keeps that scope.
 func runInit(args []string) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
-	repo := flags.String("repo", "", "knomit repo name (defaults to directory basename)")
+	repo := flags.String("repo", "", "knomit repo name; omit both --repo and --lens for an unbound server the agent binds with knomit_bind")
 	lens := flags.String("lens", "", "lens name; writes a lens-scoped config (mutually exclusive with --repo)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -45,20 +50,42 @@ func runInit(args []string) error {
 	if err != nil {
 		return err
 	}
-	repoName := *repo
-	if repoName == "" {
-		repoName = filepath.Base(cwd)
+	root := filepath.Join(cwd, PluginDir)
+	repoName, lensName := *repo, *lens
+
+	// A flagless init keeps the scope an existing mcp_config.json names:
+	// unbound is for a fresh scaffold, never a silent downgrade of a working
+	// plugin. Only ONE usable scope is kept (knomitapi.SingleScope, the rule the
+	// Claude Code host shares); anything else is replaced, and init says what.
+	var kept, replaced string
+	if repoName == "" && lensName == "" {
+		r, l, skip := pluginBinding(root)
+		_, statErr := os.Stat(filepath.Join(root, "mcp_config.json"))
+		switch {
+		case skip == "":
+			repoName, lensName = r, l
+			kept = knomitapi.Scope{Repo: r, RepoFlag: l == "", Lens: l, LensFlag: l != ""}.String()
+		case skip != skipUnbound && statErr == nil:
+			replaced = knomitapi.ReplacedText(skip)
+		}
 	}
+	unbound := repoName == "" && lensName == ""
 
 	// Validate BEFORE writing anything, so a value containing quotes or other
 	// JSON-hostile characters is rejected up front rather than baked into a
 	// broken mcp_config.json. The grammar lives in internal/repos.
+	// Only a name is validated; an unbound scaffold names nothing, and the
+	// directory name is sanitized into the key rather than failing init.
 	const nameRule = "must be lowercase letters, digits, hyphens, or underscores"
-	if *lens != "" {
-		if !repos.IsValidName(*lens) {
-			return fmt.Errorf("invalid --lens %q (%s)", *lens, nameRule)
+	serverKey := knomitapi.ServerKey(repoName, lensName)
+	switch {
+	case unbound:
+		serverKey = knomitapi.UnboundServerKey(filepath.Base(cwd))
+	case lensName != "":
+		if !repos.IsValidName(lensName) {
+			return fmt.Errorf("invalid --lens %q (%s)", lensName, nameRule)
 		}
-	} else if !repos.IsValidName(repoName) {
+	case !repos.IsValidName(repoName):
 		return fmt.Errorf("invalid --repo %q (%s)", repoName, nameRule)
 	}
 	// NOTE: knomitapi.MaxServerKeyLen is deliberately NOT enforced here. That
@@ -70,10 +97,9 @@ func runInit(args []string) error {
 
 	data := map[string]string{
 		"RepoName":  repoName,
-		"Lens":      *lens,
-		"ServerKey": knomitapi.ServerKey(repoName, *lens),
+		"Lens":      lensName,
+		"ServerKey": serverKey,
 	}
-	root := filepath.Join(cwd, PluginDir)
 
 	// Walk 1: this host's own templates.
 	err = fs.WalkDir(templatesFS, "templates", func(srcPath string, d fs.DirEntry, walkErr error) error {
@@ -84,15 +110,17 @@ func runInit(args []string) error {
 			return nil
 		}
 		rel := strings.TrimPrefix(srcPath, "templates/")
-		// Exactly one of the two mcp_config templates applies.
+		// Exactly one of the three mcp_config templates applies.
 		switch {
-		case rel == "mcp_config.json.tmpl" && *lens != "":
+		case rel == "mcp_config.json.tmpl" && (unbound || lensName != ""):
 			return nil
-		case rel == "mcp_config.json.lens.tmpl" && *lens == "":
+		case rel == "mcp_config.json.lens.tmpl" && lensName == "":
+			return nil
+		case rel == "mcp_config.json.unbound.tmpl" && !unbound:
 			return nil
 		}
 		dstRel := rel
-		if rel == "mcp_config.json.tmpl" || rel == "mcp_config.json.lens.tmpl" {
+		if strings.HasPrefix(rel, "mcp_config.json.") {
 			dstRel = "mcp_config.json"
 		}
 		return renderInto(templatesFS, srcPath, filepath.Join(root, dstRel), data)
@@ -117,7 +145,10 @@ func runInit(args []string) error {
 		return err
 	}
 
-	printSummary(repoName, *lens)
+	printSummary(repoName, lensName, kept)
+	if replaced != "" {
+		fmt.Printf("Replaced: mcp_config.json (%s) with an unbound server\n", replaced)
+	}
 	return nil
 }
 
@@ -176,12 +207,17 @@ func jsonStr(s string) string {
 	return string(b)
 }
 
-func printSummary(repoName, lens string) {
-	scope := "repo " + repoName
-	if lens != "" {
-		scope = "lens " + lens
+func printSummary(repoName, lens, kept string) {
+	switch {
+	case kept != "":
+		fmt.Printf("Wrote %s/ (kept existing scope: %s; pass --repo or --lens to change it)\n", PluginDir, kept)
+	case lens != "":
+		fmt.Printf("Wrote %s/ (bound to lens %s)\n", PluginDir, lens)
+	case repoName != "":
+		fmt.Printf("Wrote %s/ (bound to repo %s)\n", PluginDir, repoName)
+	default:
+		fmt.Printf("Wrote %s/ (unbound: the agent binds with knomit_bind)\n", PluginDir)
 	}
-	fmt.Printf("Wrote %s/ (bound to %s)\n", PluginDir, scope)
 	fmt.Println()
 	fmt.Println("Antigravity loads this plugin only when it has a registered workspace.")
 	fmt.Println("  Interactive:  run `agy` from this directory — nothing else needed.")

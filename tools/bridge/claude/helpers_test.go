@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"knomit/tools/bridge/knomitapi"
 )
 
 // ---- repoFromMCP ----
@@ -211,9 +213,10 @@ func TestMcpBinding_EqualsForms(t *testing.T) {
 
 // ---- resolveWriteRepo ----
 
-// TestResolveWriteRepo_LensNoValue_SkipsUnresolved confirms the degenerate
-// --lens config fails safe (clean skip), never a basename fallback.
-func TestResolveWriteRepo_LensNoValue_SkipsUnresolved(t *testing.T) {
+// TestResolveWriteRepo_LensNoValue_SkipsUnusable confirms the degenerate
+// --lens config fails safe (clean skip), never a basename fallback. The reason
+// is the one both hosts share (knomitapi.SingleScope).
+func TestResolveWriteRepo_LensNoValue_SkipsUnusable(t *testing.T) {
 	dir := t.TempDir()
 	mcp := `{"mcpServers": {"knomit": {"command": "kb", "args": ["--lens"]}}}`
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(mcp), 0o644); err != nil {
@@ -222,8 +225,8 @@ func TestResolveWriteRepo_LensNoValue_SkipsUnresolved(t *testing.T) {
 	closedKnomit(t)
 
 	repo, skip := resolveWriteRepo(dir)
-	if repo != "" || skip != "lens_unresolved" {
-		t.Errorf("resolveWriteRepo = (%q, %q), want (%q, %q)", repo, skip, "", "lens_unresolved")
+	if repo != "" || skip != knomitapi.SkipLensUnusable {
+		t.Errorf("resolveWriteRepo = (%q, %q), want (%q, %q)", repo, skip, "", knomitapi.SkipLensUnusable)
 	}
 }
 
@@ -387,7 +390,8 @@ func TestMcpBinding_LegacyConfigStillBinds(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens, ambiguous := mcpBinding(dir)
+	repo, lens, skip := mcpBinding(dir)
+	ambiguous := skip == skipMultipleKnomitServers
 	if ambiguous {
 		t.Fatal("single server reported ambiguous")
 	}
@@ -414,7 +418,8 @@ func TestMcpBinding_KeyMatchesNeverDiluteCommandMatches(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens, ambiguous := mcpBinding(dir)
+	repo, lens, skip := mcpBinding(dir)
+	ambiguous := skip == skipMultipleKnomitServers
 	if ambiguous {
 		t.Fatal("unrelated knomit-keyed servers made a single real bridge look ambiguous")
 	}
@@ -437,7 +442,8 @@ func TestMcpBinding_KeyTierStillBindsWhenNothingMatchesOnCommand(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens, ambiguous := mcpBinding(dir)
+	repo, lens, skip := mcpBinding(dir)
+	ambiguous := skip == skipMultipleKnomitServers
 	if ambiguous {
 		t.Fatal("single key-matched server reported ambiguous")
 	}
@@ -465,7 +471,8 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		repo, lens, ambiguous := mcpBinding(dir)
+		repo, lens, skip := mcpBinding(dir)
+		ambiguous := skip == skipMultipleKnomitServers
 		if ambiguous {
 			t.Fatal("two entries naming the same repo reported as ambiguous")
 		}
@@ -474,9 +481,11 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 		}
 	})
 
-	t.Run("basename fallback matches an explicit repo", func(t *testing.T) {
-		// The legacy entry carries no args and resolves to the directory
-		// basename; the derived entry names that same repo explicitly.
+	t.Run("a flagless entry is unbound, not the basename", func(t *testing.T) {
+		// A legacy entry with no args once resolved to the directory basename
+		// here. Since the bridge gained its unbound mode (#209), a flagless kb
+		// IS an unbound server, so the hooks read it from args alone (#341): it
+		// names no repo, and beside an explicit repo there is no single scope.
 		dir := t.TempDir()
 		base := filepath.Base(dir)
 		cfg := `{"mcpServers":{
@@ -486,12 +495,8 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		repo, lens, ambiguous := mcpBinding(dir)
-		if ambiguous {
-			t.Fatal("basename fallback and the equivalent explicit repo reported as ambiguous")
-		}
-		if repo != base || lens != "" {
-			t.Errorf("mcpBinding = (%q, %q), want (%q, %q)", repo, lens, base, "")
+		if _, _, skip := mcpBinding(dir); skip != skipMultipleKnomitServers {
+			t.Fatal("an unbound entry beside an explicit repo was not reported as ambiguous")
 		}
 	})
 
@@ -506,7 +511,8 @@ func TestMcpBinding_SameTargetDuplicatesAreNotAmbiguous(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		repo, lens, ambiguous := mcpBinding(dir)
+		repo, lens, skip := mcpBinding(dir)
+		ambiguous := skip == skipMultipleKnomitServers
 		if !ambiguous {
 			t.Fatalf("repo and lens scopes not reported as ambiguous (repo=%q lens=%q)", repo, lens)
 		}
