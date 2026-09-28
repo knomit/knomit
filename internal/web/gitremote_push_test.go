@@ -91,7 +91,7 @@ func pushOneCommit(t *testing.T, url, dst string) (plumbing.Hash, error) {
 	c := &object.Commit{
 		Author:    object.Signature{Name: "peer", Email: "peer-abcd1234+learn@agents.knomit.io", When: when},
 		Committer: object.Signature{Name: "peer", Email: "peer-abcd1234@agents.knomit.io", When: when},
-		Message: "pushed", TreeHash: th, ParentHashes: []plumbing.Hash{parent.Hash},
+		Message:   "pushed", TreeHash: th, ParentHashes: []plumbing.Hash{parent.Hash},
 	}
 	co := st.NewEncodedObject()
 	require.NoError(t, c.Encode(co))
