@@ -29,7 +29,7 @@ var triggersAllowedCalls = map[string][]string{
 		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verifyCommitSignature",
 		"fact.OntologyPathsNewestFirst",
 		// this store's own tables (and the read-only liveness join)
-		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn",
+		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.branchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
 		// the signer
 		"?.commitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",

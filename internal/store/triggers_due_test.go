@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -190,4 +191,51 @@ func TestTriggerFires_FiredAtIsUTCWithZ(t *testing.T) {
 	}
 	require.Equal(t, rendered["utc"], rendered["new-york"], "the local zone must not leak into the rendering")
 	require.Equal(t, "2026-09-28T12:34:56Z", UTCStamp(time.Date(2026, 9, 28, 14, 34, 56, 0, time.FixedZone("x", 2*3600)).Unix()))
+}
+
+// BenchmarkDueCandidates [T20, report-only]: the sweep's one query over N live
+// dated facts on the branch with `due` of them past the instant, rows inserted
+// directly (no git). Numbers go in the PR body; nothing is gated on them. The
+// cost is linear in the past-dated rows the covering index yields, independent
+// of N.
+func BenchmarkDueCandidates(b *testing.B) {
+	for _, tc := range []struct{ live, due int }{{1000, 0}, {1000, 500}, {10000, 0}, {10000, 100}, {10000, 5000}, {50000, 500}} {
+		b.Run(fmt.Sprintf("live=%d/due=%d", tc.live, tc.due), func(b *testing.B) {
+			svc, err := Open(filepath.Join(b.TempDir(), "k.db"))
+			require.NoError(b, err)
+			b.Cleanup(func() { svc.Close() })
+			require.NoError(b, svc.InitRepoWithUpstream(map[string]string{}, "main", "agent/a"))
+			ctx := context.Background()
+			var branchID int64
+			require.NoError(b, svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = 'agent/a'`).Scan(&branchID))
+			tx, err := svc.rh.db.BeginTx(ctx, nil)
+			require.NoError(b, err)
+			const now = int64(1_800_000_000)
+			for i := 0; i < tc.live; i++ {
+				path := fmt.Sprintf("kb/bench/f%06d.md", i)
+				res, err := tx.ExecContext(ctx, `INSERT INTO facts(path, blob_hash, title, kind, type, domain, entities, motifs, confidence, sources, refs, evidence_weight, origin)
+					VALUES (?, ?, ?, 'epistemic', 'observation', '[]', '[]', '[]', 0.5, 1, '[]', 0, 'authored')`, path, fmt.Sprintf("%040x", i), path)
+				require.NoError(b, err)
+				id, _ := res.LastInsertId()
+				at := now + 3600 // future
+				if i < tc.due {
+					at = now - 3600 // past
+				}
+				_, err = tx.ExecContext(ctx, `INSERT INTO fact_expires(fact_id, expires, expires_at) VALUES (?, ?, ?)`, id, UTCStamp(at), at)
+				require.NoError(b, err)
+				_, err = tx.ExecContext(ctx, `INSERT INTO branch_facts(branch_id, path, fact_id, commit_hash) VALUES (?, ?, ?, '')`, branchID, path, id)
+				require.NoError(b, err)
+			}
+			require.NoError(b, tx.Commit())
+			_, err = svc.rh.db.ExecContext(ctx, `ANALYZE`)
+			require.NoError(b, err)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				rows, err := svc.Triggers().DueCandidates(ctx, "agent/a", now)
+				if err != nil || len(rows) != tc.due {
+					b.Fatalf("rows=%d err=%v", len(rows), err)
+				}
+			}
+		})
+	}
 }

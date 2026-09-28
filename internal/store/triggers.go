@@ -722,13 +722,24 @@ func UTCStamp(unix int64) string {
 // with none due, ~5 ms with 5,000, ~22 ms with 25,000 (proposal, Apple
 // M-series). Rows are ordered by path so a run's work is deterministic.
 func (rh *repoHandler) DueCandidates(ctx context.Context, branch string, nowUnix int64) ([]DueCandidate, error) {
+	branchID, err := rh.branchID(ctx, branch)
+	if err != nil {
+		return nil, fmt.Errorf("DueCandidates: %w", err)
+	}
+	// CROSS JOIN, not JOIN: SQLite honours the written order for CROSS JOIN,
+	// and the order is the whole cost model. Left to itself the planner (with
+	// or without ANALYZE) drives from branch_facts by branch_id — linear in
+	// the LIVE facts on the branch on every run, even with nothing due
+	// (measured: ~0.5 ms per 10,000 live facts). Driven from the covering
+	// index fact_expires_at the query is linear in the PAST-DATED rows only,
+	// and an idle sweep is microseconds.
 	rows, err := conn(ctx, rh.db).QueryContext(ctx,
 		`SELECT bf.path, fe.expires_at
 		   FROM fact_expires fe
-		   JOIN branch_facts bf ON bf.fact_id = fe.fact_id
-		  WHERE bf.branch_id = (SELECT id FROM branches WHERE name = ?)
-		    AND fe.expires_at <= ?
-		  ORDER BY bf.path`, branch, nowUnix)
+		   CROSS JOIN branch_facts bf ON bf.fact_id = fe.fact_id
+		  WHERE fe.expires_at <= ?
+		    AND bf.branch_id = ?
+		  ORDER BY bf.path`, nowUnix, branchID)
 	if err != nil {
 		return nil, fmt.Errorf("DueCandidates: %w", err)
 	}
