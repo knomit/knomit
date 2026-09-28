@@ -3,12 +3,15 @@ package repos
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dop251/goja"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
@@ -16,9 +19,24 @@ import (
 	"knomit/internal/store"
 )
 
-// busyIf is an `if` that spins for about ms milliseconds, then holds.
+// busyLoop spins for a given number of iterations, then holds.
+const busyLoop = "(function(){ var x = 0; for (var i = 0; i < %d; i++) { x = (x + i) %% 7; } return true; })()"
+
+// busyItersPerMS calibrates busyLoop once per process on a throwaway VM.
+var busyItersPerMS = sync.OnceValue(func() float64 {
+	const n = 3_000_000
+	vm := goja.New()
+	start := time.Now()
+	_, _ = vm.RunString(fmt.Sprintf(busyLoop, n))
+	return n / math.Max(float64(time.Since(start).Microseconds())/1000, 1)
+})
+
+// busyIf is an `if` that spins for about ms milliseconds of CPU, then holds.
+// Since F07 PR 3 `Date.now()` in the sandbox is the RUN's pinned clock (no
+// clock access), so a wall-clock loop would never end; the spin is a
+// calibrated iteration count, which is why these tests say "about ms".
 func busyIf(ms int) string {
-	return fmt.Sprintf("(function(){ var s = Date.now(); while (Date.now() - s < %d) {} return true; })()", ms)
+	return fmt.Sprintf(busyLoop, int(busyItersPerMS()*float64(ms)))
 }
 
 // newSlowRepo boots a repo with slow_trigger_ms set.
@@ -37,13 +55,15 @@ func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoIn
 
 // ---- Slow-trigger detector and statistics
 
-// SlowIfIsReported: with slow_trigger_ms = 40, a trigger whose `if` spins ~90
+// SlowIfIsReported: with slow_trigger_ms = 40, a trigger whose `if` spins ~70
 // ms logs exactly one "slow trigger" WARN naming repo, branch, trigger, path
 // and elapsed, and its `slow` count is 1; a fast trigger in the same run logs
-// nothing. Sabotage: hard-code the threshold, or time the whole run.
+// nothing. Sabotage: hard-code the threshold, or time the whole run. (70, not
+// 90: the spin is a calibrated iteration count, and the 100 ms `if` budget
+// needs headroom under contention.)
 func TestDispatch_SlowIfIsReported(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
-	_, ri := newSlowRepo(t, 40, trig("slow", "learn", "", busyIf(90)), trig("fast", "learn", "", "true"))
+	_, ri := newSlowRepo(t, 40, trig("slow", "learn", "", busyIf(70)), trig("fast", "learn", "", "true"))
 	write(t, ri, "kb/tasks/x.md")
 	out := logs.String()
 	require.Equal(t, 1, strings.Count(out, `"message":"slow trigger"`), "%s", out)
@@ -53,7 +73,7 @@ func TestDispatch_SlowIfIsReported(t *testing.T) {
 	require.NotContains(t, out, `"trigger":"fast"`)
 	require.Equal(t, int64(1), ri.triggers.stats.view("slow").Slow)
 	require.Equal(t, int64(0), ri.triggers.stats.view("fast").Slow)
-	require.GreaterOrEqual(t, ri.triggers.stats.view("slow").Duration.MaxMS, 80.0)
+	require.GreaterOrEqual(t, ri.triggers.stats.view("slow").Duration.MaxMS, 55.0)
 }
 
 // ChangeCostNotChargedToTrigger [R2-2]: a slow `change` build (the toucher
@@ -81,7 +101,7 @@ func TestDispatch_ChangeCostNotChargedToTrigger(t *testing.T) {
 // slow duration; count, min and max are exact. Sabotage: report the mean, or
 // leave the slow samples out of the window.
 func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
-	cond := "change.path.indexOf('slow') >= 0 ? " + busyIf(90) + " : true"
+	cond := "change.path.indexOf('slow') >= 0 ? " + busyIf(60) + " : true"
 	_, ri := newTriggerRepo(t, trig("mixed", "learn", "", cond))
 	release := parkDispatcher(t, ri)
 	var last string
@@ -104,8 +124,8 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 	require.Equal(t, int64(44), st.Duration.Count)
 	require.Equal(t, int64(44), st.Evaluations)
 	require.Equal(t, int64(44), st.Fires)
-	require.GreaterOrEqual(t, st.Duration.P95RecentMS, 85.0, "4 slow of 44 puts the nearest-rank p95 on a slow sample")
-	require.GreaterOrEqual(t, st.Duration.MaxMS, 85.0)
+	require.GreaterOrEqual(t, st.Duration.P95RecentMS, 50.0, "4 slow of 44 puts the nearest-rank p95 on a slow sample")
+	require.GreaterOrEqual(t, st.Duration.MaxMS, 50.0)
 	require.Less(t, st.Duration.MinMS, 40.0)
 	require.Equal(t, triggerP95Window, st.Duration.P95Window)
 }
@@ -115,11 +135,11 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 // is in internal/config. Sabotage: a constant threshold.
 func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
-	_, ri := newSlowRepo(t, 0, trig("slow", "learn", "", busyIf(90)))
+	_, ri := newSlowRepo(t, 0, trig("slow", "learn", "", busyIf(70)))
 	write(t, ri, "kb/tasks/x.md")
 	require.NotContains(t, logs.String(), "slow trigger")
 	require.Equal(t, int64(0), ri.triggers.stats.view("slow").Slow)
-	require.GreaterOrEqual(t, ri.triggers.stats.view("slow").Duration.MaxMS, 80.0, "the duration is still measured")
+	require.GreaterOrEqual(t, ri.triggers.stats.view("slow").Duration.MaxMS, 55.0, "the duration is still measured")
 
 	// The default from config.Defaults reaches the dispatcher unchanged.
 	home := t.TempDir()

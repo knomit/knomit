@@ -27,7 +27,7 @@ var triggersAllowedCalls = map[string][]string{
 		"f.Contents", "walkHistory", "?.Reference", "?.IsFile", "ref.Hash", "?.String",
 		"tt.commit", "tt.tree", "tt.blobHashAt", "rh.TreeReader", "?.Toucher", "?.BlobAt",
 		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verifyCommitSignature",
-		"fact.OntologyPathsNewestFirst",
+		"fact.OntologyPathsNewestFirst", "fact.TriggerScriptPath",
 		// this store's own tables (and the read-only liveness join)
 		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.branchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
@@ -38,7 +38,10 @@ var triggersAllowedCalls = map[string][]string{
 		"append", "len", "make",
 	},
 	"trailers.go": {
+		// the reader, and the ctx transport of the trailer set (WithTrailers is
+		// read by the three fact builders in fact_write.go, never here)
 		"strings.TrimRight", "strings.LastIndex", "strings.Split", "strings.Cut", "strings.EqualFold", "strings.TrimSpace",
+		"context.WithValue", "ctx.Value", "t.IsZero",
 	},
 }
 

@@ -214,12 +214,38 @@ func TestTriggers_DuplicateNameShallowerWins(t *testing.T) {
 	}
 }
 
-// A reserved `do` (script, push, run) is valid syntax this version does not
-// act on: the trigger is `unsupported`, not `invalid` — declared (so a later
-// version finds it), not active, and NOT a problem (no warning diagnostic).
+// `do: script` is ACTIVE since F07 PR 3: compiled with its script name, and
+// the name must be kebab-case because it becomes .knomit/triggers/<name>.js
+// (a slash or `..` would name something else). Sabotage: drop script from
+// activeTriggerDo → unsupported; drop the name check → `../x` compiles.
+func TestTriggers_ScriptIsActive(t *testing.T) {
+	o := mustParseTriggerDoc(t, ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - {name: later, on: learn, do: script, script: inbox-dispatch}\n"))
+	set := CompileTriggers(o, testIdentity, "b")
+	st := stateOf(t, set, "later")
+	if st.State != TriggerActive || st.Script != "inbox-dispatch" {
+		t.Fatalf("want active with the script name, got %+v", st)
+	}
+	ct := activeNamed(set, "later")
+	if ct == nil || ct.Script != "inbox-dispatch" || ct.Do != TriggerDoScript {
+		t.Fatalf("the compiled trigger must carry the script name, got %+v", ct)
+	}
+	for _, bad := range []string{"../x", "a/b", "Inbox", "in box"} {
+		o := mustParseTriggerDoc(t, ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - {name: later, on: learn, do: script, script: \""+bad+"\"}\n"))
+		st := stateOf(t, CompileTriggers(o, testIdentity, "b"), "later")
+		if st.State != TriggerInvalid || !strings.Contains(st.Error, "kebab-case") {
+			t.Errorf("script %q: want invalid (kebab-case), got %+v", bad, st)
+		}
+	}
+	if TriggerScriptPath("inbox-dispatch") != ".knomit/triggers/inbox-dispatch.js" {
+		t.Fatalf("TriggerScriptPath: %s", TriggerScriptPath("inbox-dispatch"))
+	}
+}
+
+// A reserved `do` (push, run) is valid syntax this version does not act on:
+// the trigger is `unsupported`, not `invalid` — declared (so a later version
+// finds it), not active, and NOT a problem (no warning diagnostic).
 func TestTriggers_ReservedDoIsUnsupported(t *testing.T) {
 	for _, entry := range []string{
-		"{name: later, on: learn, do: script, script: inbox-dispatch}",
 		"{name: later, on: learn, do: push}",
 		"{name: later, on: learn, do: run, recipe: worker}",
 	} {
@@ -335,23 +361,23 @@ func TestTriggers_EvalIfFrozenGlobals(t *testing.T) {
 		"agent":  map[string]any{"id": "mindev.local-8ef0cd32"},
 		"change": map[string]any{"episode": "learn", "author": map[string]any{"kind": "agent"}},
 	}
-	if ok, err := compile("fact.type === 'signal' && change.author.kind === 'agent' && agent.id.startsWith('mindev')").EvalIf(globals); err != nil || !ok {
+	if ok, err := compile("fact.type === 'signal' && change.author.kind === 'agent' && agent.id.startsWith('mindev')").EvalIf(globals, time.Now()); err != nil || !ok {
 		t.Fatalf("condition over fact/agent/change: %v %v", ok, err)
 	}
-	if _, err := compile("fact.type = 'x'; true").EvalIf(globals); err == nil {
+	if _, err := compile("fact.type = 'x'; true").EvalIf(globals, time.Now()); err == nil {
 		t.Error("assigning into a frozen global did not throw")
 	}
 	if globals["fact"].(map[string]any)["type"] != "signal" {
 		t.Error("the condition mutated the caller's map")
 	}
-	if ok, err := compile("typeof require === 'undefined' && typeof process === 'undefined'").EvalIf(globals); err != nil || !ok {
+	if ok, err := compile("typeof require === 'undefined' && typeof process === 'undefined'").EvalIf(globals, time.Now()); err != nil || !ok {
 		t.Errorf("require/process reachable: %v %v", ok, err)
 	}
 	// Bounded here, so a missing interrupt fails THIS test by name instead of
 	// hanging the package until the suite's timeout.
 	busy := compile("while (true) {}")
 	done := make(chan error, 1)
-	go func() { _, err := busy.EvalIf(globals); done <- err }()
+	go func() { _, err := busy.EvalIf(globals, time.Now()); done <- err }()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "exceeded") {
@@ -361,7 +387,7 @@ func TestTriggers_EvalIfFrozenGlobals(t *testing.T) {
 		t.Fatal("a busy loop ran 5s: the condition's time budget is not enforced")
 	}
 	empty := activeNamed(CompileTriggers(mustParseTriggerDoc(t, ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - {name: e, on: learn, do: emit}\n")), testIdentity, "b"), "e")
-	if ok, err := empty.EvalIf(nil); err != nil || !ok {
+	if ok, err := empty.EvalIf(nil, time.Now()); err != nil || !ok {
 		t.Errorf("an empty condition must be true: %v %v", ok, err)
 	}
 }
@@ -379,7 +405,7 @@ func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := activeNamed(setA, "c").EvalIf(signal); !ok {
+	if ok, _ := activeNamed(setA, "c").EvalIf(signal, time.Now()); !ok {
 		t.Fatal("blob A: signal should match")
 	}
 	setB, err := c.Get("blobB", triggerDoc("fact.type === 'task'"), testIdentity)
@@ -390,10 +416,10 @@ func TestTriggerCache_ChangedIfRunsNewProgram(t *testing.T) {
 		t.Fatal("a changed blob returned the old set")
 	}
 	trB := activeNamed(setB, "c")
-	if ok, _ := trB.EvalIf(signal); ok {
+	if ok, _ := trB.EvalIf(signal, time.Now()); ok {
 		t.Error("blob B still runs the OLD program (signal matched)")
 	}
-	if ok, _ := trB.EvalIf(task); !ok {
+	if ok, _ := trB.EvalIf(task, time.Now()); !ok {
 		t.Error("blob B does not run the new program (task did not match)")
 	}
 	// Single entry: going back to A recompiles; A's old set is not kept.

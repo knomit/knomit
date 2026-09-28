@@ -29,6 +29,11 @@ type Deps struct {
 	Signer      ssh.Signer
 	AgentBranch string
 	Embedder    store.BatchEmbedder // nil if unavailable
+	// ScriptTools is the in-process MCP tool set a `do: script` trigger's
+	// host calls (F07 PR 3). Injected — internal/mcp imports this package —
+	// by internal/app as mcp.NewScriptTools(embedder). Nil means every host
+	// call throws "no script tools"; the dispatcher still runs scripts.
+	ScriptTools ScriptTools
 	KeyPath     string
 	// DisableBackgroundSync suppresses the background pull and push loops
 	// that would otherwise run on every managed repo. Tests use this to
@@ -1030,6 +1035,7 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		agentBranch:           m.deps.AgentBranch,
 		onPush:                m.fleetPushed,
 		embedder:              m.deps.Embedder,
+		scriptTools:           m.deps.ScriptTools,
 		keyPath:               m.deps.KeyPath,
 		resumeWindow:          m.sessionCfg.PipelineResumeWindow,
 		ctx:                   m.ctx,

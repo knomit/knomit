@@ -74,8 +74,10 @@ var (
 	// activeTriggerDo is what this version acts on. The others parse, so an
 	// ontology written for a later PR is not "unknown", but their triggers are
 	// `unsupported` here: they must not run, and they hold no watermark until
-	// a knomit that implements them arrives.
-	activeTriggerDo = map[string]bool{TriggerDoEmit: true}
+	// a knomit that implements them arrives. `script` became active in F07
+	// PR 3: a `do: script` trigger declared earlier starts at the head of the
+	// first advance this version sees (no back-fill).
+	activeTriggerDo = map[string]bool{TriggerDoEmit: true, TriggerDoScript: true}
 	// activeTriggerOn is the episodes this version acts on: learn, update and
 	// retract are derived from the tree diff of an advance; due is the
 	// dispatcher's sweep of dated facts live at the head (F07 PR 2).
@@ -89,8 +91,8 @@ var triggerKeys = []SchemaField{
 	{"Trigger", "match", "Path pattern relative to the ontology root, starting with this topic's path: * one segment, ** any depth, ? one character; {agent}, {host} and {fp8} are this instance's. Absent means everything under the topic. Never a dot path."},
 	{"Trigger", "on", "learn, update, retract, due — a single value or a list. due fires once per trigger when a matching fact's expires has passed (facts live at the head only); changing the fact's expires re-arms it."},
 	{"Trigger", "if", "Optional JavaScript condition over fact, agent and change; empty means always"},
-	{"Trigger", "do", "The action: emit (log line and SSE event). script, push and run are reserved for later versions."},
-	{"Trigger", "script", "For do: script — the name of .knomit/triggers/<name>.js"},
+	{"Trigger", "do", "The action: emit (log line and SSE event), or script (runs .knomit/triggers/<script>.js from the agent branch's head in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit). push and run are reserved for later versions."},
+	{"Trigger", "script", "For do: script — the name (kebab-case) of .knomit/triggers/<name>.js. Its writes are this machine's commits, stamped Knomit-Trace / Knomit-Cause / Knomit-Trigger; it may not write under .knomit/."},
 	{"Trigger", "recipe", "For do: run — the name of the recipe to invoke"},
 }
 
@@ -259,6 +261,11 @@ type CompiledTrigger struct {
 	On    []string
 	Do    string
 	If    string
+	// Script is the script NAME for `do: script` (the file is
+	// TriggerScriptPath(Script) at the observed head); empty otherwise. The
+	// program itself is not here: it is cached by the dispatcher per script
+	// blob, independently of the ontology blob this set is keyed by.
+	Script string
 
 	glob   *glob
 	ifProg *goja.Program
@@ -287,6 +294,8 @@ type TriggerState struct {
 	Match string
 	On    []string
 	Do    string
+	// Script is the `script:` name as written (for the endpoint).
+	Script string
 }
 
 // FactGlobal is the `fact` global a trigger's `if` sees: the same map the
@@ -370,7 +379,7 @@ func CompileTriggers(o *Ontology, id TriggerIdentity, blob string) *TriggerSet {
 	}
 	for i, d := range all {
 		st := TriggerState{Name: d.spec.Name, Node: d.node, Line: d.spec.line,
-			Match: d.spec.Match, On: append([]string(nil), d.spec.On...), Do: d.spec.Do}
+			Match: d.spec.Match, On: append([]string(nil), d.spec.On...), Do: d.spec.Do, Script: d.spec.Script}
 		if d.spec.Name != "" {
 			set.Declared[d.spec.Name] = true
 			st.Key = d.spec.Name + "@" + blob
@@ -429,6 +438,13 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 	if s.Do == TriggerDoScript && s.Script == "" {
 		return nil, "", fmt.Errorf("do: script needs a script name")
 	}
+	// The script name becomes a path (.knomit/triggers/<name>.js): the same
+	// kebab-case rule as the trigger name keeps it one file directly under
+	// that folder — a name with `/` or `..` would name something else. Path
+	// construction, not hardening.
+	if s.Script != "" && !validKeyRe.MatchString(s.Script) {
+		return nil, "", fmt.Errorf("script %q must be lowercase kebab-case (the name of .knomit/triggers/<name>.js)", s.Script)
+	}
 	if s.Do == TriggerDoRun && s.Recipe == "" {
 		return nil, "", fmt.Errorf("do: run needs a recipe name")
 	}
@@ -447,7 +463,7 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 	if !g.literalPrefix(strings.Split(node, "/")) {
 		return nil, "", fmt.Errorf("match %q leaves its topic: it must start with %q", s.Match, node+"/")
 	}
-	ct := &CompiledTrigger{Name: s.Name, Node: node, Match: sub, On: s.On, Do: s.Do, If: s.If, glob: g}
+	ct := &CompiledTrigger{Name: s.Name, Node: node, Match: sub, On: s.On, Do: s.Do, If: s.If, Script: s.Script, glob: g}
 	if strings.TrimSpace(s.If) != "" {
 		prog, err := goja.Compile("trigger "+s.Name, s.If, true)
 		if err != nil {
@@ -495,44 +511,79 @@ func triggerDiags(o *Ontology) []Diagnostic {
 var deepFreezeProg = goja.MustCompile("deepFreeze",
 	`(function f(o) { if (o !== null && typeof o === 'object') { Object.freeze(o); for (const k of Object.keys(o)) f(o[k]); } return o; })`, true)
 
-// EvalIf runs the trigger's condition with the given globals (fact, agent,
-// change in the dispatcher). An empty condition is true. It uses a FRESH VM
-// per call, the validations' time budget, no process/require, and frozen
-// copies of the globals. A throw or timeout is returned as an error, which the
-// dispatcher counts as false and records.
-func (t *CompiledTrigger) EvalIf(globals map[string]any) (bool, error) {
-	if t.ifProg == nil {
-		return true, nil
-	}
+// newSandboxVM is the trigger sandbox `if` and scripts share: a FRESH runtime
+// (goja's interrupt flag is sticky and its prototypes are the runtime's, so a
+// runtime is never reused), no process/require (goja has no host bindings;
+// the deletes are defensive), and `Date` pinned to the RUN's clock: goja is a
+// pure ECMAScript engine with no I/O, and `Date.now()` was the one clock a
+// condition could read. With SetTimeSource every `Date.now()`/`new Date()` in
+// one fire returns the same UTC instant the dispatcher read once per run, so
+// neither `if` nor a script has a clock of its own (F07: "no clock access";
+// PR 2: UTC everywhere).
+func newSandboxVM(now time.Time) *goja.Runtime {
 	vm := goja.New()
 	_ = vm.GlobalObject().Delete("process")
 	_ = vm.GlobalObject().Delete("require")
+	vm.SetTimeSource(func() time.Time { return now })
+	return vm
+}
+
+// sandboxGlobals binds every global as a frozen JSON copy under a
+// non-writable, non-enumerable, non-configurable property, and returns the
+// VM's JSON.parse for a caller that has more values to bring in the same way.
+func sandboxGlobals(vm *goja.Runtime, who string, globals map[string]any) (parse, freeze goja.Callable, err error) {
+	freezeV, err := vm.RunProgram(deepFreezeProg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: sandbox: %w", who, err)
+	}
+	freeze, _ = goja.AssertFunction(freezeV)
+	parse, _ = goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+	for _, k := range slices.Sorted(maps.Keys(globals)) {
+		v, err := jsValue(vm, parse, globals[k])
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: global %s: %w", who, k, err)
+		}
+		if v, err = freeze(goja.Undefined(), v); err != nil {
+			return nil, nil, fmt.Errorf("%s: global %s: %w", who, k, err)
+		}
+		if err := vm.GlobalObject().DefineDataProperty(k, v, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE); err != nil {
+			return nil, nil, fmt.Errorf("%s: bind %s: %w", who, k, err)
+		}
+	}
+	return parse, freeze, nil
+}
+
+// jsValue turns a Go value into a plain JavaScript value through JSON, so the
+// sandbox never holds a reference to a Go object (a bound Go struct or map
+// would expose its methods and share its memory with the caller).
+func jsValue(vm *goja.Runtime, parse goja.Callable, v any) (goja.Value, error) {
+	if v == nil {
+		return goja.Null(), nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return parse(goja.Undefined(), vm.ToValue(string(b)))
+}
+
+// EvalIf runs the trigger's condition with the given globals (fact, agent,
+// change in the dispatcher). An empty condition is true. It uses a FRESH VM
+// per call, the validations' time budget, no process/require, `Date` pinned
+// to now (the run's clock), and frozen copies of the globals. A throw or
+// timeout is returned as an error, which the dispatcher counts as false and
+// records.
+func (t *CompiledTrigger) EvalIf(globals map[string]any, now time.Time) (bool, error) {
+	if t.ifProg == nil {
+		return true, nil
+	}
+	vm := newSandboxVM(now)
 	timer := time.AfterFunc(ruleEvalTimeout, func() {
 		vm.Interrupt(fmt.Sprintf("trigger %s: if exceeded %s", t.Name, ruleEvalTimeout))
 	})
 	defer timer.Stop()
-
-	freezeV, err := vm.RunProgram(deepFreezeProg)
-	if err != nil {
-		return false, fmt.Errorf("trigger %s: sandbox: %w", t.Name, err)
-	}
-	freeze, _ := goja.AssertFunction(freezeV)
-	parse, _ := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
-	for _, k := range slices.Sorted(maps.Keys(globals)) {
-		b, err := json.Marshal(globals[k])
-		if err != nil {
-			return false, fmt.Errorf("trigger %s: global %s: %w", t.Name, k, err)
-		}
-		v, err := parse(goja.Undefined(), vm.ToValue(string(b)))
-		if err != nil {
-			return false, fmt.Errorf("trigger %s: global %s: %w", t.Name, k, err)
-		}
-		if v, err = freeze(goja.Undefined(), v); err != nil {
-			return false, fmt.Errorf("trigger %s: global %s: %w", t.Name, k, err)
-		}
-		if err := vm.GlobalObject().DefineDataProperty(k, v, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE); err != nil {
-			return false, fmt.Errorf("trigger %s: bind %s: %w", t.Name, k, err)
-		}
+	if _, _, err := sandboxGlobals(vm, "trigger "+t.Name, globals); err != nil {
+		return false, err
 	}
 	v, err := vm.RunProgram(t.ifProg)
 	if err != nil {

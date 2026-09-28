@@ -48,6 +48,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -64,10 +65,6 @@ import (
 	"knomit/internal/platform/crashdump"
 	"knomit/internal/store"
 )
-
-// triggerTraceTrailer is the commit trailer the dispatcher READS for
-// change.trace. Nothing stamps it before PR 3.
-const triggerTraceTrailer = "Knomit-Trace"
 
 // maxTriggerLogField caps repo content (trigger names, paths) in the slow
 // trigger WARN, the same bound the slow-request log applies to client fields.
@@ -97,6 +94,8 @@ type triggerHooks struct {
 	dueCandidates func([]store.DueCandidate) []store.DueCandidate
 	// trees wraps the run's tree reader (a test counts blob reads).
 	trees func(store.TriggerTrees) store.TriggerTrees
+	// scriptBudget replaces fact.ScriptEvalTimeout (5 s) for a script fire.
+	scriptBudget time.Duration
 }
 
 var (
@@ -152,12 +151,17 @@ type triggerDispatcher struct {
 	// verifyBlob/verifyOn memoise the F09 mode of the ontology blob at the head.
 	verifyBlob string
 	verifyOn   bool
+	// sc is the `do: script` state (trigger_script.go): the script cache, the
+	// injected tools, the rate cap and the WARN-once keys.
+	sc scriptState
 }
 
 // newTriggerDispatcher builds the dispatcher for ri WITHOUT starting it, so
 // the kick slot exists from build() (a write during the background heal kicks
 // it) while the goroutine starts from activate() after the initial index.
-func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh.Signer, slowMS int) *triggerDispatcher {
+// ratePerMinute is [triggers].script_rate_per_minute; tools the injected
+// in-process MCP tool set of `do: script` (nil on a build with none).
+func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh.Signer, slowMS, ratePerMinute int, tools ScriptTools) *triggerDispatcher {
 	return &triggerDispatcher{
 		ri:       ri,
 		repo:     repo,
@@ -166,6 +170,7 @@ func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh
 		slow:     time.Duration(slowMS) * time.Millisecond,
 		kick:     make(chan struct{}, 1),
 		stats:    newTriggerStats(),
+		sc:       newScriptState(tools, ratePerMinute),
 	}
 }
 
@@ -320,7 +325,13 @@ type pendingFire struct {
 	nonlinear bool
 	commit    string
 	source    string
-	trace     string
+	// trace is the fire's DERIVED trace (deriveTrace): the toucher's
+	// Knomit-Trace, else the task id, else the commit — never empty.
+	trace string
+	// byTrigger is the toucher's Knomit-Trigger: the trigger whose script
+	// made the commit, "" for any other write. The loop guard compares it to
+	// the trigger being fired (tree episodes only).
+	byTrigger string
 	change    map[string]any
 	factMap   map[string]any // nil when the fact is absent or unparseable
 	parseable bool
@@ -674,6 +685,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	}
 	d.recordSet(set, headStr, blob)
 	d.logInvalidOnce(set)
+	d.loadScripts(ctx, tr, head, set)
 
 	wms, err := tr.TriggerWatermarks(ctx, d.branch)
 	if err != nil {
@@ -826,6 +838,23 @@ func (d *triggerDispatcher) advance(ctx context.Context, tr store.TriggerIndex, 
 			pf := d.buildChange(ctx, cr, head, wh, row.Path, episode, !linear, verifyOn, verifiedSet)
 			rs.changeMS += time.Since(c0).Milliseconds()
 			for _, ct := range matched {
+				// The loop guard (F07: "a write made by a trigger does not
+				// re-fire the same trigger on the same path"), on the
+				// commit rather than the advance: a script's write is a NEW
+				// commit and therefore the NEXT advance, so the toucher's
+				// Knomit-Trigger is what identifies it — here, after a
+				// restart, and on every other machine (B's copy of T does
+				// not re-run on a write A's T made). A human's later edit
+				// carries no trailer and fires; another trigger's write
+				// carries ITS name and fires this one (chains across
+				// triggers are allowed). Tree episodes only: a due fire is
+				// caused by time, never `self-caused` (sweepDue has no such
+				// check), so a script that re-arms its own due trigger by
+				// changing `expires` fires again at the new instant.
+				if pf.byTrigger != "" && pf.byTrigger == ct.Name {
+					d.stats.recordSelfCaused(ct.Name)
+					continue
+				}
 				p := pf
 				p.trig = ct
 				rs.pending = append(rs.pending, p)
@@ -1020,14 +1049,18 @@ type changeReader struct {
 	instanceFP string
 }
 
-// commitMeta is what one commit contributes to `change`.
+// commitMeta is what one commit contributes to `change`: the author, the
+// three trace trailers (one message read, three scans of its last
+// paragraph) and the verified signer.
 type commitMeta struct {
-	ok     bool
-	kind   string
-	id     string
-	fp     string
-	trace  string
-	source string
+	ok      bool
+	kind    string
+	id      string
+	fp      string
+	trace   string // Knomit-Trace
+	cause   string // Knomit-Cause
+	trigger string // Knomit-Trigger
+	source  string
 }
 
 func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commitMeta {
@@ -1038,7 +1071,9 @@ func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commit
 	if info, err := cr.tr.CommitInfo(ctx, commit); err == nil {
 		m.ok = true
 		m.id = info.AuthorName
-		m.trace = store.TrailerValue(info.Message, triggerTraceTrailer)
+		m.trace = store.TrailerValue(info.Message, store.TrailerTrace)
+		m.cause = store.TrailerValue(info.Message, store.TrailerCause)
+		m.trigger = store.TrailerValue(info.Message, store.TrailerTrigger)
 		m.kind = "human"
 		switch {
 		case strings.HasSuffix(strings.ToLower(info.AuthorEmail), "@agents.knomit.io"):
@@ -1092,6 +1127,7 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, h
 	if found {
 		if m := cr.metaOf(ctx, commit); m.ok {
 			source, trace = m.source, m.trace
+			pf.byTrigger = m.trigger
 			author = map[string]any{
 				"kind":     m.kind,
 				"id":       m.id,
@@ -1103,7 +1139,7 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, h
 	if due {
 		source = fact.TriggerOnDue // the design fixes it; author.fp still says who wrote the fact
 	}
-	pf.commit, pf.source, pf.trace = commit.String(), source, trace
+	pf.commit, pf.source = commit.String(), source
 
 	// fact: at the head, or at the watermark for a retract (the path is gone
 	// at the head). before: the version at the WATERMARK — this machine's
@@ -1114,6 +1150,11 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, h
 		factAt = wm
 	}
 	pf.factMap, pf.parseable = factGlobal(ctx, cr.trees, factAt, repoPath)
+	// The fire's trace is derived from the trailer, the fact and the commit
+	// (deriveTrace) — never empty since PR 3 — and is what a script's writes
+	// carry forward as Knomit-Trace.
+	trace = deriveTrace(trace, pf.factMap, pf.commit)
+	pf.trace = trace
 	var before any
 	if episode != fact.TriggerOnLearn && !due {
 		if m, ok := factGlobal(ctx, cr.trees, wm, repoPath); ok {
@@ -1146,9 +1187,10 @@ func factGlobal(ctx context.Context, trees store.TriggerTrees, commit plumbing.H
 	return fact.FactGlobal(f), true
 }
 
-// phaseB evaluates every pending fire OUTSIDE the store: `if`, then emit. It
-// returns the rows to log (every outcome but if-false), the evaluation and
-// fire counts, and whether ctx cancelled the run.
+// phaseB evaluates every pending fire OUTSIDE the store: `if`, then the
+// action (emit, or the script — trigger_script.go). It returns the rows to
+// log (every outcome but if-false), the evaluation and fire counts, and
+// whether ctx cancelled the run.
 func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []store.TriggerFire, evaluated, fires int, aborted bool) {
 	agent := map[string]any{"id": d.identity.Agent, "host": d.identity.Host, "fp8": d.identity.FP8, "branch": d.branch}
 	for _, p := range rs.pending {
@@ -1161,10 +1203,14 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 		}
 		globals := map[string]any{"fact": factGlobal, "agent": agent, "change": p.change}
 
-		// The trigger's OWN work starts here: its `if` and its action.
+		// The trigger's OWN work starts here: its `if` and its action. The
+		// time a script spends INSIDE host calls (a write, a text query) is
+		// knomit's, like change_ms, and is taken out of the trigger's own
+		// duration before the statistics and the slow detector see it.
 		t0 := time.Now()
-		pass, err := p.trig.EvalIf(globals)
+		pass, err := p.trig.EvalIf(globals, rs.now)
 		outcome, errText := "", ""
+		var hostMS time.Duration
 		switch {
 		case err != nil:
 			var interrupted *goja.InterruptedError
@@ -1176,16 +1222,21 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 			errText = err.Error()
 		case !pass:
 			outcome = store.TriggerOutcomeIfFalse
+		case p.trig.Do == fact.TriggerDoScript:
+			outcome, errText, hostMS = d.runScript(ctx, rs, p, globals)
+			if ctx.Err() != nil {
+				return nil, 0, 0, true // the script was interrupted by the dispatcher's cancel
+			}
 		default:
 			outcome = store.TriggerOutcomeEmitted
 			if !p.parseable {
 				outcome = store.TriggerOutcomeUnparseable
 			}
-			d.emit(p)
+			d.emit(p, nil)
 		}
-		elapsed := time.Since(t0)
+		elapsed := time.Since(t0) - hostMS
 		evaluated++
-		if outcome == store.TriggerOutcomeEmitted || outcome == store.TriggerOutcomeUnparseable {
+		if outcome == store.TriggerOutcomeEmitted || outcome == store.TriggerOutcomeUnparseable || outcome == store.TriggerOutcomeRan {
 			fires++
 		}
 		slow := d.slow > 0 && elapsed > d.slow
@@ -1202,6 +1253,7 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 				Dur("elapsed", elapsed).
 				Dur("threshold", d.slow).
 				Int64("change_ms", rs.changeMS).
+				Int64("host_ms", hostMS.Milliseconds()).
 				Msg("slow trigger")
 		}
 		if outcome != store.TriggerOutcomeIfFalse {
@@ -1214,10 +1266,11 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 	return rows, evaluated, fires, false
 }
 
-// emit is the `emit` action: a log line and the SSE `trigger` event on the
-// branch stream, published straight to the hub (no debounce).
-func (d *triggerDispatcher) emit(p pendingFire) {
-	log.Info().
+// emit is the `emit` action, and knomit.emit(payload) from a script: a log
+// line and the SSE `trigger` event on the branch stream, published straight
+// to the hub (no debounce). payload is nil for the action.
+func (d *triggerDispatcher) emit(p pendingFire, payload json.RawMessage) {
+	ev := log.Info().
 		Str("repo", d.repo).
 		Str("branch", d.branch).
 		Str("trigger", capForLog(p.trig.Name)).
@@ -1225,12 +1278,15 @@ func (d *triggerDispatcher) emit(p pendingFire) {
 		Str("source", p.source).
 		Str("path", capForLog(p.repoPath)).
 		Str("commit", shortHash(p.commit)).
-		Str("trace", capForLog(p.trace)).
-		Msg("trigger fired")
+		Str("trace", capForLog(p.trace))
+	if payload != nil {
+		ev = ev.Str("payload", capForLog(string(payload)))
+	}
+	ev.Msg("trigger fired")
 	if hub := d.ri.hub; hub != nil {
 		hub.broadcastTrigger(TriggerEvent{
 			Branch: d.branch, Trigger: p.trig.Name, Path: p.repoPath, Episode: p.episode,
-			Source: p.source, Commit: p.commit, Trace: p.trace,
+			Source: p.source, Commit: p.commit, Trace: p.trace, Payload: payload,
 		})
 	}
 }
@@ -1368,13 +1424,17 @@ type TriggerReport struct {
 
 // TriggerView is one declared trigger as the endpoint shows it. State is
 // active | invalid | unsupported | frozen, where frozen is an invalid trigger
-// that holds a bookmark (its fires wait for the fix).
+// that holds a bookmark (its fires wait for the fix). A `do: script` trigger
+// whose script is missing or does not compile at the head shows `invalid`
+// with the error, though its bookmark keeps advancing (every fire is a
+// `script-error` row): fixing the file needs no catch-up.
 type TriggerView struct {
 	Name      string           `json:"name"`
 	Node      string           `json:"node"`
 	Match     string           `json:"match,omitempty"`
 	On        []string         `json:"on"`
 	Do        string           `json:"do"`
+	Script    string           `json:"script,omitempty"`
 	State     string           `json:"state"`
 	Error     string           `json:"error,omitempty"`
 	Watermark string           `json:"watermark,omitempty"`
@@ -1429,7 +1489,7 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 		active[ct.Name] = ct
 	}
 	for _, st := range set.States {
-		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, State: st.State, Error: st.Error}
+		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, State: st.State, Error: st.Error}
 		if v.On == nil {
 			v.On = []string{}
 		}
@@ -1440,6 +1500,13 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 			v.Watermark = wm
 			if st.State == fact.TriggerInvalid {
 				v.State = "frozen"
+			}
+		}
+		// The script's compile state overlays an ACTIVE script trigger: the
+		// entry is fine, the file is not (R5: state invalid with the error).
+		if st.State == fact.TriggerActive && st.Do == fact.TriggerDoScript {
+			if e := d.scriptError(st.Name); e != "" {
+				v.State, v.Error = fact.TriggerInvalid, e
 			}
 		}
 		v.Stats = d.stats.view(st.Name)

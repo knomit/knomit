@@ -18,6 +18,7 @@ import (
 	"knomit/internal/config"
 	"knomit/internal/embeddings"
 	"knomit/internal/llm"
+	"knomit/internal/mcp"
 	"knomit/internal/oauth"
 	"knomit/internal/oauth/idp"
 	"knomit/internal/pki"
@@ -207,6 +208,9 @@ func New(ctx context.Context, cfg config.Config, opts Options) (*App, error) {
 		AgentBranch: a.agentBranch,
 		Embedder:    embedder,
 		KeyPath:     keyPath,
+		// F07 `do: script`: the in-process MCP tool set a script's host
+		// calls, with the same embedder the MCP server gets below.
+		ScriptTools: mcp.NewScriptTools(embedder),
 	})
 
 	// Web server.

@@ -373,7 +373,11 @@ func TestDispatch_TraceFromTrailer(t *testing.T) {
 		if f.Path == "kb/tasks/with.md" {
 			require.Equal(t, "t-1", f.Trace)
 		} else {
-			require.Equal(t, "", f.Trace)
+			// Since F07 PR 3 the trace is DERIVED and never empty: a commit
+			// without a trailer (and a fact that is not a task) is its own
+			// story, keyed by its hash.
+			require.Equal(t, f.Commit, f.Trace, "a commit without a trailer is the root of its own story")
+			require.Len(t, f.Trace, 40)
 		}
 	}
 }
@@ -514,8 +518,10 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	logs := captureLogs(t, zerolog.ErrorLevel)
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
-	script := "      - {name: later, on: learn, do: script, script: inbox-dispatch}\n"
-	setOntology(t, ri, triggerOntology("", script))
+	// Since F07 PR 3 `do: script` is ACTIVE; `push` (PR 4) is the reserved
+	// value that is still unsupported here.
+	push := "      - {name: later, on: learn, do: push}\n"
+	setOntology(t, ri, triggerOntology("", push))
 	write(t, ri, "kb/tasks/while-unsupported.md")
 	require.NotContains(t, watermarks(t, ri), "later", "an unsupported trigger holds no bookmark")
 	rep, err := ri.TriggerReport(context.Background(), 0)
@@ -528,6 +534,19 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	require.Equal(t, enabled, watermarks(t, ri)["later"], "first set at the advance where it becomes active")
 	write(t, ri, "kb/tasks/after-enable.md")
 	require.Equal(t, []string{"kb/tasks/after-enable.md"}, pathsOf(firesOf(t, ri, "later")), "no back-fill")
+
+	// The activation half for `do: script` (T20): the SAME rule carries a
+	// trigger from unsupported (an older binary's view: the `push` above
+	// stands in for it) to active — the bookmark is set at the advance where
+	// the active declaration appears, and the writes made meanwhile never
+	// fire. Sabotage: bookmark the unsupported trigger.
+	write(t, ri, "kb/tasks/before-script.md")
+	scriptOn := setOntology(t, ri, triggerOntology("", "      - {name: scripted, on: learn, do: script, script: inbox-dispatch}\n"))
+	require.Equal(t, scriptOn, watermarks(t, ri)["scripted"], "a script trigger bookmarks the head of the advance that activates it")
+	rep, err = ri.TriggerReport(context.Background(), 0)
+	require.NoError(t, err)
+	require.Equal(t, "inbox-dispatch", rep.Triggers[0].Script)
+	require.Empty(t, firesOf(t, ri, "scripted"), "no back-fill on activation")
 
 	// Since F07 PR 2 a `due` trigger is ACTIVE (its sweep is triggers_due_test.go);
 	// only a reserved `do` is unsupported now.
@@ -806,8 +825,7 @@ func TestDispatch_SurvivesSwapStore(t *testing.T) {
 // completes without waiting for it, and teardown stops the run within one
 // evaluation. Sabotage: hold Acquire across phase B.
 func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
-	busy := "(function(){ var s = Date.now(); while (Date.now() - s < 90) {} return true; })()"
-	m, ri := newTriggerRepo(t, trig("slow", "learn", "", busy))
+	m, ri := newTriggerRepo(t, trig("slow", "learn", "", busyIf(70)))
 	write(t, ri, "kb/tasks/warm.md")
 	release := parkDispatcher(t, ri)
 	for i := 0; i < 30; i++ {
