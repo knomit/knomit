@@ -155,34 +155,43 @@ func TestWriteGate_MCPRoutesAreNotMethodGated(t *testing.T) {
 }
 
 // /git is mounted on the OUTER router, so the gate has to wrap the mount.
-// upload-pack is a FETCH — a read in git's terms — and must pass for a
-// read-only principal; receive-pack (F11) is the push and must not.
-func TestWriteGate_GitUploadPackExemptReceivePackGated(t *testing.T) {
+// Both git protocol POSTs pass the WRITE gate: upload-pack is a fetch, and
+// receive-pack (F11) is a push whose permission is push:own, not write. The
+// gate on the /git mount instead records push:own for a push request
+// (pushPermission), and the git handler turns a missing one into a git ERR
+// a client can render — which a 403 from the gate would not be.
+func TestWriteGate_GitProtocolExemptPushOwnRecorded(t *testing.T) {
+	var sawPushOwn []bool
 	s := &Server{
-		Manager:    newTestManagerWithRepos(t, "alpha"),
-		GitHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(299) }),
-		Auth:       config.AuthConfig{LoopbackDefault: []string{"read"}},
+		Manager: newTestManagerWithRepos(t, "alpha"),
+		GitHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isGitPush(r) {
+				sawPushOwn = append(sawPushOwn, holdsPushOwn(r))
+			}
+			w.WriteHeader(299)
+		}),
+		Auth: config.AuthConfig{LoopbackDefault: []string{"read"}},
 	}
 	h := s.Handler()
 
-	for _, path := range []string{"/git/alpha/git-upload-pack", "/git/alpha.git/git-upload-pack"} {
-		req := httptest.NewRequest("POST", path, nil)
+	for _, path := range []string{"/git/alpha/git-upload-pack", "/git/alpha.git/git-upload-pack", "/git/alpha/git-receive-pack", "/git/alpha/info/refs?service=git-receive-pack"} {
+		method := "POST"
+		if strings.Contains(path, "info/refs") {
+			method = "GET"
+		}
+		req := httptest.NewRequest(method, path, nil)
 		req.RemoteAddr = "127.0.0.1:1"
 		req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, req)
 		if rr.Code != 299 {
-			t.Fatalf("%s is a fetch and must reach the handler: %d %s", path, rr.Code, rr.Body.String())
+			t.Fatalf("%s %s must reach the git handler past the write gate: %d %s", method, path, rr.Code, rr.Body.String())
 		}
 	}
-
-	req := httptest.NewRequest("POST", "/git/alpha/git-receive-pack", nil)
-	req.RemoteAddr = "127.0.0.1:1"
-	req.Host = "localhost" // a browser on this machine; httptest's example.com is a rebound page (#281)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusForbidden || !bytes.Contains(rr.Body.Bytes(), []byte("Permission denied")) {
-		t.Fatalf("receive-pack must be refused by the GATE, not the handler: %d %s", rr.Code, rr.Body.String())
+	// The anonymous principal here holds only read: pushPermission recorded
+	// push:own as NOT held, for both halves of the push.
+	if len(sawPushOwn) != 2 || sawPushOwn[0] || sawPushOwn[1] {
+		t.Fatalf("pushPermission must record push:own=false for a read-only principal on both push requests, got %v", sawPushOwn)
 	}
 }
 
