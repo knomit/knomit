@@ -132,26 +132,78 @@ func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (
 // reconcileMainTo moves the local upstream to originHash by fast-forward,
 // create, or force-update. See reconcileMain.
 func (rh *repoHandler) reconcileMainTo(ctx context.Context, upstreamMain string, originHash plumbing.Hash) (MainReconcileResult, error) {
-	localMainName := plumbing.NewBranchReferenceName(upstreamMain)
-	if originHash == plumbing.ZeroHash {
-		return MainReconcileResult{Mode: ModeNoop}, nil // nothing to move to
-	}
-	localMainRef, err := rh.gits.Reference(localMainName)
+	res, class, err := rh.advanceBranchTo(ctx, upstreamMain, originHash)
 	if err != nil {
-		// Local upstream branch doesn't exist — create at origin/<upstreamMain>.
-		if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: create local %s: %w", upstreamMain, err)
+		return res, fmt.Errorf("reconcileMain: %w", err)
+	}
+	switch {
+	case res.Mode == ModeFF && class.created:
+		// Created at origin's tip: nothing to report beyond the result.
+	case res.Mode == ModeFF:
+		log.Info().Str("branch", upstreamMain).Str("to", originHash.String()[:8]).Msg("reconcileMain: fast-forward")
+	case res.Mode == ModeRewound:
+		logEv := log.Warn().
+			Str("branch", upstreamMain).
+			Str("local", class.from.String()[:8]).
+			Str("origin", originHash.String()[:8])
+		switch {
+		case class.BaseErr != nil:
+			logEv.Err(class.BaseErr).
+				Msgf("reconcileMain: origin/%s force-updated; MergeBase classification failed (disjoint detection unreliable — investigate object store)", upstreamMain)
+		case class.Disjoint:
+			logEv.Bool("disjoint", true).
+				Msgf("reconcileMain: origin/%s has DISJOINT history (no common ancestor); force-updated", upstreamMain)
+		default:
+			logEv.Bool("disjoint", false).
+				Msgf("reconcileMain: origin/%s is not a descendant of local %s; force-updated", upstreamMain, upstreamMain)
 		}
-		if _, err := rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure %s: %w", upstreamMain, err)
+	}
+	return res, nil
+}
+
+// advanceMove says how advanceBranchTo moved a branch, for its callers' logs:
+// the tip it moved from, whether it created the branch, and — on a rewind —
+// how the old and new tips relate.
+type advanceMove struct {
+	rewindClassification
+	from    plumbing.Hash
+	created bool
+}
+
+// advanceBranchTo moves refs/heads/<branch> to hash by create, fast-forward or
+// force-update, and brings every derived table along: the branches row,
+// branch_commits (purged first on a force-update, since populateCommitLog only
+// inserts), then notifyCommit (commit_log, index, observers). It is the body
+// reconcileMain has always run, factored out so receive-pack registers a
+// pushed branch through the SAME steps; it is name-neutral and logs nothing —
+// each caller words its own log lines.
+//
+// The caller holds lockBranch(branch). Every step after SetReference is
+// context-bound SQL, so a caller whose ctx can be cancelled (a request) must
+// pass one that cannot: a cancellation between the ref move and notifyCommit
+// is the torn state kb/invariants/store/notify-commit-single-chokepoint
+// forbids.
+func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash plumbing.Hash) (MainReconcileResult, advanceMove, error) {
+	refName := plumbing.NewBranchReferenceName(branch)
+	if hash == plumbing.ZeroHash {
+		return MainReconcileResult{Mode: ModeNoop}, advanceMove{}, nil // nothing to move to
+	}
+	localRef, err := rh.gits.Reference(refName)
+	if err != nil {
+		// The branch doesn't exist — create it at hash.
+		if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("create local %s: %w", branch, err)
 		}
-		if err := rh.populateCommitLog(ctx, upstreamMain); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after create: %w", err)
+		if _, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
+			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("ensure %s: %w", branch, err)
 		}
-		if err := rh.notifyCommit(ctx, upstreamMain, originHash); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after create: %w", err)
+		if err := rh.populateCommitLog(ctx, branch); err != nil {
+			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("populate commit_log after create: %w", err)
 		}
-		return MainReconcileResult{Mode: ModeFF, NewTip: originHash.String()}, nil
+		if err := rh.notifyCommit(ctx, branch, hash); err != nil {
+			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("notify after create: %w", err)
+		}
+		return MainReconcileResult{Mode: ModeFF, NewTip: hash.String()}, advanceMove{created: true}, nil
 	}
 
 	// Self-heal: a git ref can exist without a matching branches SQL row
@@ -161,80 +213,65 @@ func (rh *repoHandler) reconcileMainTo(ctx context.Context, upstreamMain string,
 	// which previously killed the entire reconcile loop. EnsureBranch is
 	// idempotent (INSERT OR IGNORE + cache), so this is a cheap invariant
 	// to assert on every success path.
-	if _, err := rh.EnsureBranch(ctx, upstreamMain, "refs/heads/"+upstreamMain); err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: ensure %s: %w", upstreamMain, err)
+	if _, err := rh.EnsureBranch(ctx, branch, "refs/heads/"+branch); err != nil {
+		return MainReconcileResult{}, advanceMove{}, fmt.Errorf("ensure %s: %w", branch, err)
 	}
-	localHash := localMainRef.Hash()
+	localHash := localRef.Hash()
+	move := advanceMove{from: localHash}
 
-	if localHash == originHash {
-		return MainReconcileResult{Mode: ModeNoop}, nil
+	if localHash == hash {
+		return MainReconcileResult{Mode: ModeNoop}, move, nil
 	}
 
 	localCommit, err := rh.repo.CommitObject(localHash)
 	if err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: local commit: %w", err)
+		return MainReconcileResult{}, move, fmt.Errorf("local commit: %w", err)
 	}
-	originCommit, err := rh.repo.CommitObject(originHash)
+	newCommit, err := rh.repo.CommitObject(hash)
 	if err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: origin commit: %w", err)
+		return MainReconcileResult{}, move, fmt.Errorf("target commit: %w", err)
 	}
 
-	isLocalAncestor, err := localCommit.IsAncestor(originCommit)
+	isLocalAncestor, err := localCommit.IsAncestor(newCommit)
 	if err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: IsAncestor: %w", err)
+		return MainReconcileResult{}, move, fmt.Errorf("IsAncestor: %w", err)
 	}
 	if isLocalAncestor {
 		// Fast-forward.
-		if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: fast-forward: %w", err)
+		if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+			return MainReconcileResult{}, move, fmt.Errorf("fast-forward: %w", err)
 		}
-		if err := rh.populateCommitLog(ctx, upstreamMain); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after fast-forward: %w", err)
+		if err := rh.populateCommitLog(ctx, branch); err != nil {
+			return MainReconcileResult{}, move, fmt.Errorf("populate commit_log after fast-forward: %w", err)
 		}
-		if err := rh.notifyCommit(ctx, upstreamMain, originHash); err != nil {
-			return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after fast-forward: %w", err)
+		if err := rh.notifyCommit(ctx, branch, hash); err != nil {
+			return MainReconcileResult{}, move, fmt.Errorf("notify after fast-forward: %w", err)
 		}
-		log.Info().Str("branch", upstreamMain).Str("to", originHash.String()[:8]).Msg("reconcileMain: fast-forward")
-		return MainReconcileResult{Mode: ModeFF, NewTip: originHash.String()}, nil
+		return MainReconcileResult{Mode: ModeFF, NewTip: hash.String()}, move, nil
 	}
 
-	// origin/main is not a descendant of local main → rewind / divergent advance.
-	// Classify the rewind so the operator log distinguishes ordinary
-	// rewind, disjoint history (origin replaced wholesale), and the rare
-	// case where MergeBase itself fails (object-store IO error).
-	class := classifyMainRewind(localCommit, originCommit)
+	// hash is not a descendant of the local tip → rewind / divergent advance.
+	// Classify the rewind so callers' logs can distinguish ordinary rewind,
+	// disjoint history (replaced wholesale), and the rare case where
+	// MergeBase itself fails (object-store IO error).
+	move.rewindClassification = classifyMainRewind(localCommit, newCommit)
 
-	if err := rh.gits.SetReference(plumbing.NewHashReference(localMainName, originHash)); err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: force-update: %w", err)
+	if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
+		return MainReconcileResult{}, move, fmt.Errorf("force-update: %w", err)
 	}
-	// The old chain is no longer reachable from the upstream branch. Purge
-	// stale branch_commits rows before repopulating; otherwise Verify reports
+	// The old chain is no longer reachable from the branch. Purge stale
+	// branch_commits rows before repopulating; otherwise Verify reports
 	// unreachable rows because populateCommitLog only INSERTs.
-	if err := rh.purgeBranchCommits(ctx, upstreamMain); err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: purge branch_commits after rewind: %w", err)
+	if err := rh.purgeBranchCommits(ctx, branch); err != nil {
+		return MainReconcileResult{}, move, fmt.Errorf("purge branch_commits after rewind: %w", err)
 	}
-	if err := rh.populateCommitLog(ctx, upstreamMain); err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: populate commit_log after force-update: %w", err)
+	if err := rh.populateCommitLog(ctx, branch); err != nil {
+		return MainReconcileResult{}, move, fmt.Errorf("populate commit_log after force-update: %w", err)
 	}
-	if err := rh.notifyCommit(ctx, upstreamMain, originHash); err != nil {
-		return MainReconcileResult{}, fmt.Errorf("reconcileMain: notify after force-update: %w", err)
+	if err := rh.notifyCommit(ctx, branch, hash); err != nil {
+		return MainReconcileResult{}, move, fmt.Errorf("notify after force-update: %w", err)
 	}
-	logEv := log.Warn().
-		Str("branch", upstreamMain).
-		Str("local", localHash.String()[:8]).
-		Str("origin", originHash.String()[:8])
-	switch {
-	case class.BaseErr != nil:
-		logEv.Err(class.BaseErr).
-			Msgf("reconcileMain: origin/%s force-updated; MergeBase classification failed (disjoint detection unreliable — investigate object store)", upstreamMain)
-	case class.Disjoint:
-		logEv.Bool("disjoint", true).
-			Msgf("reconcileMain: origin/%s has DISJOINT history (no common ancestor); force-updated", upstreamMain)
-	default:
-		logEv.Bool("disjoint", false).
-			Msgf("reconcileMain: origin/%s is not a descendant of local %s; force-updated", upstreamMain, upstreamMain)
-	}
-	return MainReconcileResult{Mode: ModeRewound, NewTip: originHash.String()}, nil
+	return MainReconcileResult{Mode: ModeRewound, NewTip: hash.String()}, move, nil
 }
 
 // purgeBranchCommits deletes every branch_commits row for the given branch.

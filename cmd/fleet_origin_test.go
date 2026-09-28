@@ -393,3 +393,76 @@ func lastSyncError(t *testing.T, ri *repos.RepoInstance) string {
 	}
 	return last
 }
+
+// F11 end to end (T12): an enrolled peer whose repo's ORIGIN is another
+// knomit instance pushes its own agent branch over knomit+https, through the
+// host's REAL /git stack on the mTLS listener — AuthMiddleware, the write
+// gate, pushPermission, GitRemoteHandler, the store's receive-pack — and the
+// host registers and indexes it. The push is the peer's ordinary origin-sync
+// push (Remote().Push), unchanged.
+//
+// SABOTAGE (against the commit that added this test): dropping PushOwn from
+// auth.CertGrants' implicit set turns this red ("principal instance:… does
+// not hold push:own"): with push:own implicit, this test is what pins the
+// wiring (review M4).
+func TestFleetOrigin_PeerPushesOwnBranchOverKnomitHTTPS(t *testing.T) {
+	ctx := context.Background()
+	f := pkitest.New(t)
+	host := newFleetServer(t, f)
+
+	aDir, aKey, aMember, aPrincipal := newFleetFetcherHome(t, f, "alpha")
+	if err := pki.InstallGitTransport(aDir, aKey); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	aBranch := "agent/alpha-" + pki.Short(aMember.Fingerprint())
+	aMgr := repos.New(ctx, repos.Deps{Cfg: config.Config{Home: t.TempDir(), OntologyRoot: "kb"},
+		KeyPath: aKey, AgentBranch: aBranch, DisableBackgroundSync: true})
+	if err := aMgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { aMgr.Close() })
+
+	fleetURL := pki.GitScheme + "://" + host.tlsAddr + "/git/kb"
+	riA, err := aMgr.Create(ctx, repos.CreateSpec{Name: "kb", Mode: "clone",
+		Origin: &repos.OriginSpec{URL: fleetURL, AuthMethod: "cert"}}, nil)
+	if err != nil {
+		t.Fatalf("clone from the host: %v", err)
+	}
+	if err := riA.WithRead(func(s *store.Service) {
+		if _, err := s.Facts().WriteFact(ctx, aBranch, "kb/pushed.md", factBody("pushed"), "pushed", ""); err != nil {
+			t.Fatal(err)
+		}
+		res, err := s.Remote().Push(ctx, aBranch, nil)
+		if err != nil {
+			t.Fatalf("push to the host: %v", err)
+		}
+		if !res.Pushed {
+			t.Fatal("push reported nothing pushed")
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := host.principals.get(); got != aPrincipal {
+		t.Fatalf("the host saw %q, want the peer's certificate principal %q", got, aPrincipal)
+	}
+	if err := host.kb.WithRead(func(s *store.Service) {
+		got, err := s.Facts().ReadFact(ctx, aBranch, "kb/pushed.md", nil)
+		if err != nil || !strings.Contains(got.Content, "pushed") {
+			t.Fatalf("the host has no %s at the peer's branch: %v", "kb/pushed.md", err)
+		}
+		branches, err := s.Branches().ListBranches(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed := false
+		for _, b := range branches {
+			listed = listed || b.Name == aBranch
+		}
+		if !listed {
+			t.Fatalf("%s is not a registered branch on the host: %+v", aBranch, branches)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

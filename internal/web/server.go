@@ -211,7 +211,9 @@ func (s *Server) Handler() http.Handler {
 		// NewAPIRouter, so the write gate has to wrap the MOUNT. A writeGate
 		// added only inside the API router would not touch it, and no
 		// existing test would notice.
-		r.With(writeGate(s.grants(), s.authDisabled)).Mount("/git", s.GitHandler)
+		// pushPermission records push:own for a receive-pack request, which
+		// writeGate exempts (a push is not a fact write, F11).
+		r.With(writeGate(s.grants(), s.authDisabled), pushPermission(s.grants())).Mount("/git", s.GitHandler)
 	}
 
 	// /docs is 8 KB of text/html and sits on the OUTER router, which carries
