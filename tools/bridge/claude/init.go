@@ -102,14 +102,17 @@ func runInit(args []string) error {
 		return err
 	}
 
-	// A flagless init keeps an existing knomit entry rather than unbinding it:
+	// A flagless init keeps an existing knomit entry that names ONE usable
+	// scope — knomitapi.SingleScope, the rule the Antigravity host shares:
 	// unbound is for a fresh scaffold. Without this, the same-key merge would
-	// rewrite `--repo <dir>` under knomit-repo-<dir> to [].
-	var kept string
+	// rewrite `--repo <dir>` under knomit-repo-<dir> to []. A broken or
+	// ambiguous config is replaced by the unbound entry only when every knomit
+	// entry is under init's own key; init never edits another key (the legacy
+	// `knomit` one included), so otherwise it writes the companion instead.
+	var kept, replaced string
+	var mcpCompanion bool
 	if unbound {
-		if existing, found := knomitServerArgs(cwd); found {
-			kept = describeScopes(existing)
-		}
+		kept, replaced, mcpCompanion = flaglessMcpPlan(filepath.Join(cwd, ".mcp.json"), serverKey)
 	}
 
 	var created []string
@@ -154,9 +157,11 @@ func runInit(args []string) error {
 			return nil
 		}
 		if exists {
-			note, err := mergeInto(dst, dstRel, []byte(rendered), serverKey)
-			if err != nil {
-				return err
+			note := mergeNotPossible
+			if dstRel != ".mcp.json" || !mcpCompanion {
+				if note, err = mergeInto(dst, dstRel, []byte(rendered), serverKey); err != nil {
+					return err
+				}
 			}
 			if note == "" {
 				// Merged and nothing changed: the file already says what this
@@ -234,38 +239,44 @@ func runInit(args []string) error {
 
 	printSummary(created, overwritten, updated, conflicts)
 	if kept != "" {
-		fmt.Printf("Kept: .mcp.json knomit entry (%s); pass --repo or --lens to change it\n", kept)
+		fmt.Printf("Kept: .mcp.json knomit entry (%s). To change it, edit or remove that entry in .mcp.json, then re-run init.\n", kept)
+	}
+	if replaced != "" {
+		fmt.Printf("Replaced: .mcp.json knomit entry (%s) with an unbound entry\n", replaced)
 	}
 	return nil
 }
 
-// describeScopes names the scope a set of knomit entries' args configure, for
-// the summary line of a flagless init that keeps them.
-func describeScopes(entries [][]string) string {
-	seen := map[string]bool{}
-	var scope string
-	for _, args := range entries {
-		scope = describeScope(args)
-		seen[scope] = true
+// flaglessMcpPlan decides what a flagless init does to an existing .mcp.json:
+// keep a single usable scope, replace a broken or ambiguous config under init's
+// own key, or decline to a companion when another key is involved. It reads the
+// file with knomitEntries — the merge's own lenient index — so it can never
+// disagree with the merge about which entries exist.
+func flaglessMcpPlan(path, serverKey string) (kept, replaced string, companion bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", false
 	}
-	if len(seen) > 1 {
-		return "more than one scope"
+	entries, found := knomitEntries(data)
+	if !found {
+		return "", "", false
 	}
-	return scope
-}
-
-func describeScope(args []string) string {
-	if knomitapi.IsUnbound(args) {
-		return "unbound"
+	args := make([][]string, len(entries))
+	ownKeyOnly := true
+	for i, e := range entries {
+		args[i] = e.args
+		ownKeyOnly = ownKeyOnly && e.key == serverKey
 	}
-	r, l, lensMode := knomitapi.ClassifyArgs(args)
+	s, skip := knomitapi.SingleScope(args, repos.IsValidName)
 	switch {
-	case lensMode && l != "":
-		return "lens " + l
-	case !lensMode && r != "":
-		return "repo " + r
+	case skip == "":
+		return s.String(), "", false
+	case skip == knomitapi.SkipUnbound:
+		return "", "", false // the merge keeps it, or declines another key
+	case ownKeyOnly:
+		return "", knomitapi.ReplacedText(skip), false
 	}
-	return "unusable scope"
+	return "", "", true
 }
 
 // preflightSettings reports a .claude/settings.json init cannot merge before it

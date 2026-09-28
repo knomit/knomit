@@ -12,26 +12,19 @@ import (
 
 // Skip reasons returned by resolveWriteRepo. Each names a distinct
 // misconfiguration so the bridge log — and, for the ones a user can act on,
-// the hook's own output — can say which one happened.
+// the hook's own output — can say which one happened. The binding reasons are
+// knomitapi's, shared with the Claude Code host.
 const (
-	skipNoBinding        = "no_binding"
-	skipAmbiguousBinding = "ambiguous_binding"
-	skipLensUnusable     = "lens_unusable"
-	skipInvalidScope     = "invalid_scope"
+	skipNoBinding        = knomitapi.SkipNoBinding
+	skipAmbiguousBinding = knomitapi.SkipAmbiguous
+	skipLensUnusable     = knomitapi.SkipLensUnusable
+	skipInvalidScope     = knomitapi.SkipInvalidScope
 	skipLensUnresolved   = "lens_unresolved"
 	// skipUnbound is not a misconfiguration: the entry starts knomit unbound
 	// and the agent binds with knomit_bind. The hook answers it with
 	// knomitapi.UnboundNote.
-	skipUnbound = "unbound"
+	skipUnbound = knomitapi.SkipUnbound
 )
-
-// target is one config entry's resolved knomit scope.
-type target struct {
-	repo     string
-	lens     string
-	lensMode bool
-	unbound  bool
-}
 
 // pluginBinding reads mcp_config.json in pluginDir and returns the knomit scope
 // it configures, or a skip reason.
@@ -41,7 +34,8 @@ type target struct {
 // monorepo scaffolder, or a second tool — and returning whichever entry a Go map
 // happened to yield first made the binding run-dependent, so a user could see
 // another project's facts intermittently with no reproducible trigger. Every
-// match is collected and compared; disagreement is a skip, never a coin flip.
+// match is handed to knomitapi.SingleScope, which skips on disagreement rather
+// than flipping a coin, and is the same rule the Claude Code host uses.
 //
 // Matching is two-tiered, mirroring the Claude host: COMMAND matches are proof,
 // KEY matches are a guess consulted only when nothing matched on command. The
@@ -75,66 +69,22 @@ func pluginBinding(pluginDir string) (repo, lens string, skip string) {
 	}
 	sort.Strings(keys)
 
-	var byCommand, byKey []target
+	var byCommand, byKey [][]string
 	for _, k := range keys {
 		srv := cfg.MCPServers[k]
-		r, l, mode := knomitapi.ClassifyArgs(srv.Args)
-		t := target{repo: r, lens: l, lensMode: mode, unbound: knomitapi.IsUnbound(srv.Args)}
 		switch {
 		case knomitapi.IsKnomitCommand(srv.Command):
-			byCommand = append(byCommand, t)
+			byCommand = append(byCommand, srv.Args)
 		case knomitapi.IsKnomitKey(k):
-			byKey = append(byKey, t)
+			byKey = append(byKey, srv.Args)
 		}
 	}
 	matches := byCommand
 	if len(matches) == 0 {
 		matches = byKey
 	}
-	if len(matches) == 0 {
-		return "", "", skipNoBinding
-	}
-
-	// Every match must agree. Two entries naming the same scope are fine — that
-	// is what a duplicated-but-consistent edit looks like — but two different
-	// scopes have no principled answer, so skip rather than pick one.
-	first := matches[0]
-	for _, t := range matches[1:] {
-		if t != first {
-			return "", "", skipAmbiguousBinding
-		}
-	}
-
-	// Neither flag: the server starts unbound. Read from the ARGS alone — the
-	// key may carry the directory name (knomitapi.UnboundServerKey) and names
-	// nothing.
-	if first.unbound {
-		return "", "", skipUnbound
-	}
-
-	// A lens-configured entry whose name is missing or empty is unusable, and
-	// it must NOT degrade into a repo scope. Checking lensMode rather than
-	// (lens != "") is what stops a stray or sibling --repo from winning here.
-	if first.lensMode {
-		if first.lens == "" {
-			return "", "", skipLensUnusable
-		}
-		if !repos.IsValidName(first.lens) {
-			return "", "", skipInvalidScope
-		}
-		return "", first.lens, ""
-	}
-	if first.repo == "" {
-		return "", "", skipNoBinding
-	}
-	// Re-validate on READ, not just on write. `init` validates before writing,
-	// but this file is hand-editable afterwards, and the value is interpolated
-	// into an API path — a name containing `..`, `?` or `#` would otherwise
-	// reach the server as a different resource.
-	if !repos.IsValidName(first.repo) {
-		return "", "", skipInvalidScope
-	}
-	return first.repo, "", ""
+	s, skip := knomitapi.SingleScope(matches, repos.IsValidName)
+	return s.Repo, s.Lens, skip
 }
 
 // resolveWriteRepo maps the plugin directory to the knomit repo whose

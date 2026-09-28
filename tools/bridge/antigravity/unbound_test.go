@@ -181,3 +181,46 @@ func captureStdout(t *testing.T, fn func()) string {
 	_ = w.Close()
 	return <-done
 }
+
+// Scope parsing stops where the bridge's flag.Parse stops: at the first
+// positional. This entry runs unbound, so it IS unbound.
+func TestPluginBinding_PositionalBeforeFlag_IsUnbound(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, dir, `{"mcpServers":{"knomit-repo-x":{"command":"kb","args":["http://host:8080","--repo","x"]}}}`)
+	if repo, lens, skip := pluginBinding(dir); repo != "" || lens != "" || skip != skipUnbound {
+		t.Errorf("pluginBinding = (%q, %q, %q), want unbound", repo, lens, skip)
+	}
+}
+
+// A flagless re-init keeps only ONE usable scope. A broken or ambiguous config
+// is replaced by the unbound entry, and init says what it replaced.
+func TestRunInit_NoFlags_BrokenConfig_ReplacedWithUnbound(t *testing.T) {
+	for _, tc := range []struct{ name, config, said string }{
+		{"degenerate lens", `{"mcpServers":{"knomit-lens-x":{"command":"kb","args":["--lens"]}}}`, "--lens with no value"},
+		{"degenerate repo", `{"mcpServers":{"knomit-repo-x":{"command":"kb","args":["--repo"]}}}`, "no usable scope"},
+		{"two scopes", `{"mcpServers":{
+			"knomit-repo-a":{"command":"kb","args":["--repo","a"]},
+			"knomit-repo-b":{"command":"kb","args":["--repo","b"]}}}`, "more than one scope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := namedWorkspace(t, "ingestion")
+			os.MkdirAll(filepath.Join(ws, pluginDir), 0o755)
+			writeConfig(t, filepath.Join(ws, pluginDir), tc.config)
+			chdir(t, ws)
+
+			out := captureStdout(t, func() {
+				if err := runInit(nil); err != nil {
+					t.Fatalf("runInit: %v", err)
+				}
+			})
+			servers := readServers(t, ws)
+			srv, ok := servers["knomit-repo-ingestion"]
+			if len(servers) != 1 || !ok || len(srv.Args) != 0 {
+				t.Errorf("servers = %v, want only an unbound knomit-repo-ingestion", servers)
+			}
+			if !strings.Contains(out, "Replaced") || !strings.Contains(out, tc.said) {
+				t.Errorf("summary does not say it replaced %s:\n%s", tc.said, out)
+			}
+		})
+	}
+}

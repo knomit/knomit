@@ -55,15 +55,18 @@ func runInit(args []string) error {
 
 	// A flagless init keeps the scope an existing mcp_config.json names:
 	// unbound is for a fresh scaffold, never a silent downgrade of a working
-	// plugin. Anything that names no single usable scope is replaced.
-	var kept string
+	// plugin. Only ONE usable scope is kept (knomitapi.SingleScope, the rule the
+	// Claude Code host shares); anything else is replaced, and init says what.
+	var kept, replaced string
 	if repoName == "" && lensName == "" {
-		if r, l, skip := pluginBinding(root); skip == "" {
+		r, l, skip := pluginBinding(root)
+		_, statErr := os.Stat(filepath.Join(root, "mcp_config.json"))
+		switch {
+		case skip == "":
 			repoName, lensName = r, l
-			kept = "repo " + r
-			if l != "" {
-				kept = "lens " + l
-			}
+			kept = knomitapi.Scope{Repo: r, RepoFlag: l == "", Lens: l, LensFlag: l != ""}.String()
+		case skip != skipUnbound && statErr == nil:
+			replaced = knomitapi.ReplacedText(skip)
 		}
 	}
 	unbound := repoName == "" && lensName == ""
@@ -143,6 +146,9 @@ func runInit(args []string) error {
 	}
 
 	printSummary(repoName, lensName, kept)
+	if replaced != "" {
+		fmt.Printf("Replaced: mcp_config.json (%s) with an unbound server\n", replaced)
+	}
 	return nil
 }
 

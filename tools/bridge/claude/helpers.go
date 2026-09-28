@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"knomit/internal/repos"
 	"knomit/tools/bridge/knomitapi"
 )
 
@@ -18,7 +19,7 @@ const skipMultipleKnomitServers = "multiple_knomit_servers"
 
 // skipUnbound is the skip reason for a knomit entry with neither --repo nor
 // --lens. The session-start hook answers it with knomitapi.UnboundNote.
-const skipUnbound = "unbound"
+const skipUnbound = knomitapi.SkipUnbound
 
 // isKnomitCommand reports whether an .mcp.json entry's COMMAND identifies the
 // knomit bridge. The implementation is shared with the Antigravity host — see
@@ -49,9 +50,22 @@ func isKnomitServer(key, command string) bool {
 	return isKnomitCommand(command) || isKnomitKey(key)
 }
 
-// knomitServerArgs returns the args of every knomit server entry in
-// projectDir's .mcp.json, and found=false when the file is missing, does not
-// parse, or has no knomit entry.
+// mcpEntry is one knomit server entry of an .mcp.json: its key and its args.
+type mcpEntry struct {
+	key  string
+	args []string
+}
+
+// knomitEntries returns every knomit server entry in an .mcp.json document,
+// and found=false when the document does not index or has none.
+//
+// It reads the file with indexJSON — the lenient, position-keeping parser the
+// .mcp.json MERGE uses — so the hooks, init's keep guard and the merge can
+// never disagree about which knomit entries exist. A strict struct decode
+// failed on any unrelated server with a non-string arg or an array command,
+// and then saw no knomit entry at all: the hooks fell back to the directory
+// basename, and a flagless init unbound the same-key entry it should have kept.
+// A value this parser cannot read as a string is taken as its raw JSON text.
 //
 // Select by COMMAND, not by key. The key used to be the constant "knomit",
 // but `claude init` now derives it from the scope so that two knomit servers
@@ -67,27 +81,24 @@ func isKnomitServer(key, command string) bool {
 // remove a knomit entry they do not have. So key matches are considered only
 // when nothing matched on command at all — which is exactly the legacy /
 // wrapper-script case the key fallback exists for.
-func knomitServerArgs(projectDir string) (args [][]string, found bool) {
-	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
+func knomitEntries(data []byte) (entries []mcpEntry, found bool) {
+	root, err := indexJSON(data)
 	if err != nil {
 		return nil, false
 	}
-	var cfg struct {
-		MCPServers map[string]struct {
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-		} `json:"mcpServers"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	servers := root.child("mcpServers")
+	if !servers.object() {
 		return nil, false
 	}
-	var byCommand, byKey [][]string
-	for key, srv := range cfg.MCPServers {
+	var byCommand, byKey []mcpEntry
+	for _, key := range servers.order {
+		command, args := entryFields(data, servers.child(key))
+		e := mcpEntry{key: key, args: args}
 		switch {
-		case isKnomitCommand(srv.Command):
-			byCommand = append(byCommand, srv.Args)
+		case isKnomitCommand(command):
+			byCommand = append(byCommand, e)
 		case isKnomitKey(key):
-			byKey = append(byKey, srv.Args)
+			byKey = append(byKey, e)
 		}
 	}
 	if len(byCommand) > 0 {
@@ -96,84 +107,69 @@ func knomitServerArgs(projectDir string) (args [][]string, found bool) {
 	return byKey, len(byKey) > 0
 }
 
-// mcpBinding classifies the knomit MCP server config in .mcp.json under
-// projectDir into lens mode, repo mode, or unbound. It is pure (no I/O beyond
-// the single file read) so the classification is unit-testable in isolation.
-//
-// Returns (repo, lens, unbound, ambiguous):
-//   - ambiguous: the project configures MORE THAN ONE knomit server RESOLVING
-//     TO DIFFERENT TARGETS. There is no principled answer to which repo the
-//     hooks should bind to, so the other results are zero and the caller must
-//     skip rather than pick one. Entries that resolve to the same target are
-//     not ambiguous — see the comparison below.
-//   - unbound: the knomit entry carries neither --repo nor --lens, so the
-//     server starts unbound and the agent binds with knomit_bind. This is read
-//     from the ARGS alone: the key may carry the directory name
-//     (`knomit-repo-<dir>`, see knomitapi.UnboundServerKey) and names nothing.
-//   - lens != "": lens mode — the file configures --lens <name>. repo is "".
-//     A lens-configured file NEVER falls back to the basename; the caller must
-//     resolve the write repo via the API and skip cleanly on failure.
-//   - lens == "", repo != "": repo mode — the --repo <name> arg, or the
-//     projectDir basename fallback when there is no knomit entry at all.
-//
-// Precedence when both flags appear (which `claude init` forbids, but a
-// hand-edited .mcp.json could contain): --lens wins, regardless of argument
-// order. A stray --repo must not demote a lens-configured session to a raw
-// repo scope — lens mode resolves via the API and fails safe (skips) rather
-// than risk reading the wrong repo.
-func mcpBinding(projectDir string) (repo, lens string, unbound, ambiguous bool) {
-	base := filepath.Base(projectDir)
-	matches, found := knomitServerArgs(projectDir)
-	if !found {
-		return base, "", false, false
+// entryFields reads one server entry's command and args without failing on
+// shapes a strict decode rejects: a command that is not a string reads as "",
+// and an arg that is not a string is kept as its raw JSON text.
+func entryFields(data []byte, srv *jsonNode) (command string, args []string) {
+	if !srv.object() {
+		return "", nil
 	}
-	repo, lens, unbound = classifyArgs(matches[0], base)
-	// Two or more knomit servers that name DIFFERENT targets: there is no
-	// principled answer to "which repo do the hooks bind to?", and guessing runs
-	// post-edit against possibly the wrong repo. Fail safe — the caller skips
-	// and says why.
-	//
-	// Same-target duplicates are not that case, and they are the likely one:
-	// `.mcp.json` is merge-required, so re-running init drops a companion and the
-	// obvious merge leaves the pre-existing entry beside the freshly derived one,
-	// both pointing at the same repo. Disabling the hooks over a config with a
-	// single unambiguous answer would be a fail-safe that fires on nothing.
-	// Map iteration order is random, so the comparison must be order-independent
-	// — it is: we return only when every match agrees.
-	for _, args := range matches[1:] {
-		r, l, u := classifyArgs(args, base)
-		if r != repo || l != lens || u != unbound {
-			return "", "", false, true
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data[srv.span.open:srv.span.close+1], &fields) != nil {
+		return "", nil
+	}
+	_ = json.Unmarshal(fields["command"], &command)
+	var raw []json.RawMessage
+	if json.Unmarshal(fields["args"], &raw) != nil {
+		return command, nil
+	}
+	args = make([]string, len(raw))
+	for i, r := range raw {
+		if json.Unmarshal(r, &args[i]) != nil {
+			args[i] = string(r)
 		}
 	}
-	return repo, lens, unbound, false
+	return command, args
 }
 
-// classifyArgs maps one server entry's args to its (repo, lens) target or to
-// unbound, with base as the repo-mode fallback.
+// mcpBinding resolves the knomit MCP server config in .mcp.json under
+// projectDir to the scope the hooks bind to, or a skip reason. The rule is
+// knomitapi.SingleScope, shared with the Antigravity host, so the two cannot
+// drift:
 //
-// The flag grammar and the lens-wins precedence live in knomitapi, shared with
-// the Antigravity host so the two cannot drift. An entry with neither flag is
-// UNBOUND and gets no basename: the directory name must never become a scope
-// for a server the agent binds itself.
-//
-// A lens-configured entry NEVER falls back to the basename, including the
-// degenerate case where the --lens value is missing — knomitapi.ClassifyArgs
-// reports that via lensMode, and an empty lens name resolves to a clean skip
-// downstream rather than the wrong-repo hazard a basename fallback would
-// reintroduce.
-func classifyArgs(args []string, base string) (repo, lens string, unbound bool) {
-	if knomitapi.IsUnbound(args) {
-		return "", "", true
+//   - repo != "": repo mode — the entry's --repo, or the projectDir basename
+//     when the project has NO knomit entry at all (no .mcp.json, or no kb
+//     server in it). That fallback is the only one; it is deferred, not
+//     endorsed (#341).
+//   - lens != "": lens mode. The caller resolves the lens's write repo via the
+//     API and skips cleanly on failure.
+//   - skip == skipUnbound: the entry carries neither flag, so the server starts
+//     unbound. Read from the ARGS alone — the key may carry the directory name
+//     (knomitapi.UnboundServerKey) and names nothing.
+//   - skip == skipMultipleKnomitServers: entries resolving to DIFFERENT targets.
+//     Entries naming the same scope are not ambiguous: `.mcp.json` is
+//     merge-required, so re-running init can leave the old entry beside the
+//     new one, both naming the same repo.
+//   - any other skip: a BROKEN entry (a flag with a missing or empty value, or
+//     an invalid name). It never falls back to the basename.
+func mcpBinding(projectDir string) (repo, lens, skip string) {
+	data, err := os.ReadFile(filepath.Join(projectDir, ".mcp.json"))
+	if err != nil {
+		return filepath.Base(projectDir), "", ""
 	}
-	r, l, lensMode := knomitapi.ClassifyArgs(args)
-	if lensMode {
-		return "", l, false
+	entries, found := knomitEntries(data)
+	if !found {
+		return filepath.Base(projectDir), "", ""
 	}
-	if r != "" {
-		return r, "", false
+	args := make([][]string, len(entries))
+	for i, e := range entries {
+		args[i] = e.args
 	}
-	return base, "", false
+	s, skip := knomitapi.SingleScope(args, repos.IsValidName)
+	if skip == knomitapi.SkipAmbiguous {
+		skip = skipMultipleKnomitServers
+	}
+	return s.Repo, s.Lens, skip
 }
 
 // repoFromMCP returns the repo-mode target for projectDir (the --repo arg or
@@ -181,7 +177,7 @@ func classifyArgs(args []string, base string) (repo, lens string, unbound bool) 
 // repo-mode call path and its regression tests; a lens-configured file yields
 // "" here, so lens-aware callers must use resolveWriteRepo instead.
 func repoFromMCP(projectDir string) string {
-	repo, _, _, _ := mcpBinding(projectDir)
+	repo, _, _ := mcpBinding(projectDir)
 	return repo
 }
 
@@ -189,9 +185,7 @@ func repoFromMCP(projectDir string) string {
 // agent_branch and facts the hooks should read.
 //
 // Repo mode: returns the configured repo (or basename) with an empty skip
-// reason — behavior is byte-identical to the pre-lens repoFromMCP path.
-//
-// Unbound (neither flag): returns ("", "unbound"); there is no repo to read.
+// reason.
 //
 // Lens mode: resolves the lens's WRITE repo via GET /api/v1/lenses/{name}. On
 // any error (server down, 404, decode) it returns ("", "lens_unresolved") so
@@ -199,28 +193,21 @@ func repoFromMCP(projectDir string) string {
 // basename, which could name an unrelated repo and run the hook against the
 // wrong data.
 //
+// Every skip mcpBinding reports is passed through: unbound, more than one
+// scope, or a broken entry.
+//
 // Scope note: hook reads are deliberately write-repo-scoped. Until lens
 // *browsing* REST exists (backlog A.1), the write repo is where the session's
 // facts land, so session-start / post-edit context stays accurate for the
 // write side.
 func resolveWriteRepo(projectDir string) (repo, skipReason string) {
-	r, lens, unbound, ambiguous := mcpBinding(projectDir)
-	if ambiguous {
-		// More than one knomit server in this project. Binding to an arbitrary
-		// one would run post-edit against possibly the wrong repo, so skip and
-		// say why rather than go silently dark.
-		return "", skipMultipleKnomitServers
-	}
-	if unbound {
-		// No repo to read: the agent binds with knomit_bind. Never the basename.
-		return "", skipUnbound
+	r, lens, skip := mcpBinding(projectDir)
+	if skip != "" {
+		return "", skip
 	}
 	if r != "" {
-		return r, "" // repo mode: configured --repo or basename fallback
+		return r, ""
 	}
-	// Lens mode: mcpBinding leaves repo empty. lens may itself be empty for a
-	// hand-mangled --lens with no value; that resolves to "" and skips cleanly
-	// below rather than falling back to the basename.
 	w := knomitapi.LensWriteRepo(lens)
 	if w == "" {
 		return "", "lens_unresolved"

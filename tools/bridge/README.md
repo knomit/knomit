@@ -136,10 +136,24 @@ alone, so an unbound entry is unbound whatever its key says: instead of corpus
 context, they inject one line telling the agent to call `knomit_repos`, then
 `knomit_bind`.
 
-A flagless re-`init` never unbinds a working install. If the project already
-has a knomit entry (Claude Code) or its `mcp_config.json` names a scope
-(Antigravity), `init` keeps that scope and says so. To switch an install to
-unbound, remove the knomit entry (or `mcp_config.json`) and re-run `init`.
+A flagless re-`init` never unbinds a working install. If the existing knomit
+config names exactly one usable scope, `init` keeps it and says so. A broken or
+ambiguous config (a `--repo` or `--lens` with no valid value, or entries naming
+two scopes) is replaced by the unbound entry, and `init` says what it replaced.
+On Claude Code that replacement happens only when every knomit entry is under
+the key `init` derives; an entry under any other key, including the legacy
+`knomit` key, is left alone and `init` writes the usual `.mcp.json.knomit`
+companion instead.
+
+To change a kept scope on Claude Code, edit or remove the knomit entry in
+`.mcp.json`, then re-run `init`. Passing a different `--repo` or `--lens`
+derives a different key and only writes a companion. On Antigravity, pass the
+flag you want, or delete `mcp_config.json` and re-run `init` for unbound.
+
+The hooks read an entry's `args` the way `kb` runs them: parsing stops at the
+first positional argument, so `["http://host:8080", "--repo", "x"]` is unbound.
+A `--repo` or `--lens` with no valid value disables the hooks with a notice; it
+never falls back to the directory name.
 
 `memory-guard` is a PreToolUse hook (matcher `Write|Edit|MultiEdit|Bash`). It
 denies a tool call that would write a team-relevant note into Claude Code's

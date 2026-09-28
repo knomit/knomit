@@ -329,7 +329,8 @@ func TestRunInit_ScaffoldedConfigBindsHooks(t *testing.T) {
 		if err := runInit([]string{"--repo", "team-kb"}); err != nil {
 			t.Fatalf("runInit: %v", err)
 		}
-		repo, lens, _, ambiguous := mcpBinding(dir)
+		repo, lens, skip := mcpBinding(dir)
+		ambiguous := skip == skipMultipleKnomitServers
 		if ambiguous {
 			t.Fatal("single server reported as ambiguous")
 		}
@@ -350,7 +351,8 @@ func TestRunInit_ScaffoldedConfigBindsHooks(t *testing.T) {
 		if err := runInit([]string{"--lens", "eng"}); err != nil {
 			t.Fatalf("runInit: %v", err)
 		}
-		repo, lens, _, ambiguous := mcpBinding(dir)
+		repo, lens, skip := mcpBinding(dir)
+		ambiguous := skip == skipMultipleKnomitServers
 		if ambiguous {
 			t.Fatal("single server reported as ambiguous")
 		}
@@ -378,7 +380,8 @@ func TestMcpBinding_MultipleKnomitServers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	repo, lens, _, ambiguous := mcpBinding(dir)
+	repo, lens, skip := mcpBinding(dir)
+	ambiguous := skip == skipMultipleKnomitServers
 	if !ambiguous {
 		t.Fatalf("two knomit servers not reported as ambiguous (repo=%q lens=%q)", repo, lens)
 	}
