@@ -27,6 +27,69 @@ import (
 // remote that happens to permit anonymous access).
 type remoteAuthFn func(remote *store.Remote) (transport.AuthMethod, error)
 
+// pushWakeWindow is the D-window ruling (F07 PR 4, user, 2026-09-28): a push
+// fire opens a countdown of this length, and when it ends ONE sync round runs
+// and carries everything on the branch at that moment. The countdown starts
+// at the FIRST fire and later fires neither restart nor extend it: it is NOT
+// the SSE batcher's debounce (commitObserver re-arms on every Notify). A code
+// constant, not a config or ontology key.
+const pushWakeWindow = time.Second
+
+// syncHooks are test seams for the sync loops. Every field is nil in
+// production.
+type syncHooks struct {
+	// window replaces time.After for the push-wake countdown, so a test holds
+	// it open, counts its opens and releases it (no real sleeps).
+	window func(d time.Duration) <-chan time.Time
+	// tick runs at the top of each runReconcileLoop tick (after the deferred
+	// dispatcher kick) and before each local-loop advance: a test counts the
+	// ticks of a loop it did not start (ActivateSync's, startSyncLoops') and
+	// can park one on its ctx.
+	tick func(ctx context.Context, repo string)
+}
+
+var (
+	syncHooksMu   sync.Mutex
+	syncTestHooks syncHooks
+)
+
+func currentSyncHooks() syncHooks {
+	syncHooksMu.Lock()
+	defer syncHooksMu.Unlock()
+	return syncTestHooks
+}
+
+// drainWake empties the 1-slot wake channel without blocking (nil-safe: a
+// nil channel is never ready, so the default arm is taken).
+func drainWake(wake <-chan struct{}) {
+	select {
+	case <-wake:
+	default:
+	}
+}
+
+// awaitPushWindow is the countdown after a push wake: it waits the window
+// from THIS (first) wake, without listening to the channel meanwhile — fires
+// during the countdown only fill the 1-slot channel, so they cannot restart
+// it — then drains the slot, because those fires are this round's. A fire
+// that lands while the round runs stays in the slot and opens the next
+// countdown when the round returns: one round running, one pending, never a
+// queue (the "defer, never discard" half of commitObserver, without its
+// debounce). false when ctx ended during the countdown.
+func awaitPushWindow(ctx context.Context, wake <-chan struct{}) bool {
+	after := time.After
+	if h := currentSyncHooks().window; h != nil {
+		after = h
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-after(pushWakeWindow):
+	}
+	drainWake(wake)
+	return true
+}
+
 // makeRemoteAuthFn builds a remoteAuthFn that resolves auth from a remote
 // record using the given fallback config and key path.
 func makeRemoteAuthFn(fallbackAuth config.RemoteAuthConfig, keyPath string) remoteAuthFn {
@@ -132,7 +195,14 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // any of the tick's early returns — an offline machine fails its push on every
 // tick, and the sweep needs no network. A non-blocking send on a channel that
 // is never closed, so a kick during shutdown is harmless.
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func()) {
+//
+// wake (nil-safe) is the OTHER direction (F07 PR 4): the 1-slot channel a
+// `do: push` fire or knomit.push() sends on (ri.wakeSync). It lives on the
+// RepoInstance, not here, so it survives ActivateSync's loop restart. A wake
+// opens the push countdown (awaitPushWindow) and then runs one ordinary
+// tick. The slot is drained once before the first tick, which covers any
+// wake left over from before this loop existed.
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}) {
 	defer wg.Done()
 
 	// Initial config read for logging context.
@@ -161,6 +231,9 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		// (see the function comment). FIRST, so no early return skips it.
 		if kick != nil {
 			defer kick()
+		}
+		if h := currentSyncHooks().tick; h != nil {
+			h(ctx, repo)
 		}
 		// Read fresh remote record so resolveAuth picks up DB-stored auth.
 		fresh, err := svc.Remote().GetRemote("origin")
@@ -273,10 +346,19 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		}
 	}
 
-	// Immediate first tick.
+	// Immediate first tick. It covers every commit made so far, so a wake
+	// already in the slot is drained first rather than causing a second one.
+	drainWake(wake)
 	doTick(ctx)
 
 	for {
+		// A cancelled loop (ActivateSync is restarting it, or shutdown) stops
+		// here, before the select could consume a wake it would not act on:
+		// the next loop's first tick then drains it deterministically.
+		if ctx.Err() != nil {
+			lg.Info().Msg("reconcile loop stopped")
+			return
+		}
 		// Re-read remote config every iteration to pick up interval changes.
 		fresh, err := svc.Remote().GetRemote("origin")
 		if err != nil {
@@ -301,6 +383,12 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			return
 		case <-time.After(time.Duration(interval) * time.Second):
 			doTick(ctx)
+		case <-wake:
+			if !awaitPushWindow(ctx, wake) {
+				lg.Info().Msg("reconcile loop stopped")
+				return
+			}
+			doTick(ctx)
 		}
 	}
 }
@@ -320,7 +408,12 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 // It exits — rather than skipping — as soon as the repo has an origin, so the
 // two loops are mutually exclusive by the same fact. A subscription has no
 // agent branch and is excluded by the same guard.
-func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func()) {
+//
+// wake is the push wake (see runReconcileLoop): with no origin, a push fire
+// moves main up to this machine's own branch after the countdown instead of
+// within the interval (D-local, user, 2026-09-28). It never publishes other
+// agents' branches: main follows only this machine's agent branch.
+func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}) {
 	defer wg.Done()
 	runLocalReconcile(ctx, repo, agentBranch, interval,
 		func() (bool, error) {
@@ -331,7 +424,7 @@ func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.S
 			_, err := svc.AdvanceLocalUpstream(ctx, agentBranch, svc.UpstreamBranch())
 			return err
 		},
-		kick)
+		kick, wake)
 }
 
 // runLocalReconcile is the loop itself, parameterised on its two store reads.
@@ -354,6 +447,10 @@ func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.S
 // kick (nil-safe) is the trigger dispatcher's kick (F07 PR 2), called on EVERY
 // tick of the ticker whatever hasOrigin or advance answered — the `on: due`
 // sweep needs neither — so a failing advance never silences the sweep.
+//
+// wake (nil-safe) is the push wake: after the countdown and the drain it runs
+// exactly the ticker's body — kickTriggers, then ownsMain with its exit on a
+// definite origin, then advance only when this loop owns main.
 func runLocalReconcile(
 	ctx context.Context,
 	repo, agentBranch string,
@@ -361,6 +458,7 @@ func runLocalReconcile(
 	hasOrigin func() (bool, error),
 	advance func() error,
 	kick func(),
+	wake <-chan struct{},
 ) {
 	if interval <= 0 || agentBranch == "" {
 		return
@@ -387,10 +485,31 @@ func runLocalReconcile(
 	}
 
 	tick := func() {
+		if h := currentSyncHooks().tick; h != nil {
+			h(ctx, repo)
+		}
 		if err := advance(); err != nil && ctx.Err() == nil {
 			lg.Warn().Err(err).Msg("local reconcile: advance failed; will retry next tick")
 		}
 	}
+
+	// One round of the ticker's body; false means "stop: the repo gained an
+	// origin" (reconcileMain owns main now).
+	round := func() bool {
+		kickTriggers() // unconditional: before the origin read, before advance
+		owns, definite := ownsMain()
+		if definite && !owns {
+			lg.Info().Msg("local reconcile loop stopped: repo gained an origin")
+			return false
+		}
+		if owns {
+			tick()
+		}
+		return true
+	}
+
+	// The first tick below covers every commit so far: drain a leftover wake.
+	drainWake(wake)
 
 	// Exit at start only on a definite "this repo has an origin" — then
 	// reconcileMain owns main and the two loops stay mutually exclusive by the
@@ -412,14 +531,16 @@ func runLocalReconcile(
 			lg.Info().Msg("local reconcile loop stopped")
 			return
 		case <-t.C:
-			kickTriggers() // unconditional: before the origin read, before advance
-			owns, definite := ownsMain()
-			if definite && !owns {
-				lg.Info().Msg("local reconcile loop stopped: repo gained an origin")
+			if !round() {
 				return
 			}
-			if owns {
-				tick()
+		case <-wake:
+			if !awaitPushWindow(ctx, wake) {
+				lg.Info().Msg("local reconcile loop stopped")
+				return
+			}
+			if !round() {
+				return
 			}
 		}
 	}

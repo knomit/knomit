@@ -1284,8 +1284,8 @@ paths:
             fire is a `script-error` row), `frozen` (invalid,
             and holding a bookmark: its fires wait for the fix and resume
             from where it stopped), or `unsupported` (valid, but a `do`
-            value this knomit version does not act on yet, such as
-            `do: push` or `do: run`; not an error, and it holds no bookmark
+            value this knomit version does not act on yet — today only
+            `do: run`; not an error, and it holds no bookmark
             until a version activates it — no back-fill).
           * `script`: for `do: script`, the script name: the file
             `.knomit/triggers/<script>.js` at the head of the agent branch.
@@ -1320,9 +1320,11 @@ paths:
         through the same code path as the MCP tools — validations, dedup,
         refs gate, CAS — authored and signed by this machine, never as the
         author whose change fired it; a script may not write under
-        `.knomit/`), `knomit.emit(payload)`, and `knomit.push()` /
-        `knomit.run()` which answer `{ok: false, status: "not-supported"}`
-        until later versions. Every commit a script makes ends with the
+        `.knomit/`), `knomit.emit(payload)`, `knomit.push()` (the `push`
+        action below; it takes no arguments and answers
+        `{ok: true, status: "kicked"}`; the fire stays `ran`), and
+        `knomit.run()` which answers `{ok: false, status: "not-supported"}`
+        until a later version. Every commit a script makes ends with the
         trailers `Knomit-Trace: <trace>` (the fire's `trace`, copied
         forward), `Knomit-Cause: <commit>` (the firing commit) and
         `Knomit-Trigger: <name>` inside the signed message, so
@@ -1338,6 +1340,22 @@ paths:
         uncompilable script is a `script-error` row with the message; a
         completed fire is `ran`. The trigger's own duration excludes the
         time spent inside host calls.
+
+        `do: push` (F07 PR 4). A fire asks THIS machine's sync loop for a
+        round now instead of at its interval. The first fire starts a fixed
+        1 s countdown; later fires during it neither restart nor extend it
+        (not a debounce) and are batched into it. When it ends, ONE ordinary
+        round runs — fetch, merge, and a push of this machine's own agent
+        branch as it is at that moment (never main, a peer's branch or an
+        experiment). Fires while that round runs start the next countdown
+        when it returns: at most one round running and one pending. With no
+        origin, the fire wakes the local loop, which moves `main` up to this
+        machine's own branch. The fire is a `kicked` row counted in `fires`,
+        with no SSE event and no commit; it does not report whether the round
+        succeeded — that is the remote's sync/push status. A trigger without
+        an `if` on `change.source` also fires on paths a round merges in, at
+        the cost of one more round that finds nothing;
+        `if: change.source === 'local'` avoids it.
 
         `on: due` fires (F07 PR 2). Every dispatcher run — kicked by a write
         on the agent branch or by the reconcile tick (30 s for an origin-less
@@ -3786,7 +3804,7 @@ components:
         source:           { type: string, enum: [local, merged, due], description: "local or merged for a tree episode (decided by the signer); due for a due fire." }
         commit:           { type: string, description: "The ORIGINAL commit that made the change." }
         trace:            { type: string, description: "The fire's story id: the commit's Knomit-Trace trailer, else the task id, else the commit; never empty." }
-        outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, ran, script-error, script-timeout, rate-limited, run] }
+        outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, ran, script-error, script-timeout, rate-limited, kicked, run] }
         error:            { type: string }
         nonlinear:        { type: boolean, description: "The advance's old head was not an ancestor of the new one (a rewind replay)." }
         range_from:       { type: string }

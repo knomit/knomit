@@ -452,7 +452,7 @@ func TestDue_SweepRunsOnReconcileTick_FailedLocalTick(t *testing.T) {
 		runLocalReconcile(ctx, "repo", trigAgent, 20*time.Millisecond,
 			func() (bool, error) { return false, nil },
 			func() error { advances.Add(1); return errors.New("advance fails every tick") },
-			ri.triggers.triggerKick)
+			ri.triggers.triggerKick, nil)
 	}()
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		10*time.Second, 20*time.Millisecond, "a failing advance must not silence the sweep")
@@ -480,7 +480,7 @@ func TestDue_SweepRunsOnReconcileTick_FailedRemoteTick(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.triggerKick)
+	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, failingAuth, "", false, nil, ri.triggers.triggerKick, nil)
 	require.Eventually(t, func() bool { return len(dueFiresOf(t, ri, "due")) == 1 },
 		10*time.Second, 20*time.Millisecond, "a tick that fails before Sync must still kick the sweep")
 	require.Greater(t, authCalls.Load(), int64(0), "fixture: the tick ran and failed at auth resolution")

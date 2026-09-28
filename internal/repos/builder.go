@@ -624,6 +624,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		discoveryWSpec:                b.cfg.Discovery.WSpec,
 		handle:                        newStoreHandle(b.svc),
 		hub:                           hub,
+		syncWake:                      make(chan struct{}, 1),
 		repoEventHub:                  b.repoEventHub,
 	}
 	ri.setName(b.name)
@@ -826,7 +827,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush, ri.triggerKick)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush, ri.triggerKick, ri.syncWake)
 		return nil
 	}
 
@@ -978,9 +979,13 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	// F07 PR 2: the tick kicks the trigger dispatcher (the `on: due` sweep
 	// rides the existing tick; no timer of its own). nil when the builder has
 	// no instance yet (a unit test of the loops) — the loops are nil-safe.
+	// F07 PR 4: the push wake goes the other way (a push fire → the loop);
+	// nil here too without an instance, and a nil channel is never ready.
 	var kick func()
+	var wake chan struct{}
 	if b.ri != nil {
 		kick = b.ri.triggerKick
+		wake = b.ri.syncWake
 	}
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
@@ -992,7 +997,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		b.syncLoopMu.Lock()
 		wg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runLocalReconcileLoop(ctx, wg, b.svc, b.name, b.agentBranch, b.cfg.Git.LocalReconcileInterval, kick)
+		go runLocalReconcileLoop(ctx, wg, b.svc, b.name, b.agentBranch, b.cfg.Git.LocalReconcileInterval, kick, wake)
 		return
 	}
 
@@ -1003,7 +1008,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	b.syncLoopMu.Lock()
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick, wake)
 }
 
 // startExperimentSweep launches the expiry sweeper for this repo.

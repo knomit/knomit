@@ -36,7 +36,10 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"fact.ReadVerifySettings", "fact.ParseFact", "fact.FactGlobal", "fact.ExpiresUnix",
 		"store.TrailerValue",
 		// the hub and the log
-		"hub.broadcastTrigger", "log.Warn", "log.Error", "log.Info", "?.Err", "?.Str", "?.Dur", "?.Int64", "?.Interface", "?.Msg",
+		"hub.broadcastTrigger", "log.Warn", "log.Error", "log.Info", "log.Debug", "?.Err", "?.Str", "?.Dur", "?.Int64", "?.Interface", "?.Msg",
+		// the push action (F07 PR 4): a non-blocking send on the sync wake,
+		// from phase B's own case — never a push, never the network
+		"d.wakeSync", "d.ri.wakeSync",
 		"crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
 		"newTriggerStats", "triggerIdentityFor", "isHex8", "currentTriggerHooks", "d.triggerKick", "d.loop", "d.safeRun",
@@ -72,7 +75,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// the sandbox
 		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath",
 		// the hub (through emit) and the log
-		"h.d.emit", "log.Error", "log.Warn", "?.Str", "?.Int", "?.Dur", "?.Msg", "crashdump.ReportRecovered",
+		"h.d.emit", "h.d.wakeSync", "log.Error", "log.Warn", "?.Str", "?.Int", "?.Dur", "?.Msg", "crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
 		"currentTriggerHooks", "d.scriptFor", "d.rateAllows", "d.warnOnce", "h.d.warnOnce", "h.functions", "h.call", "h.momentName", "h.factPath",
 		"d.mu.Lock", "d.mu.Unlock", "argAt", "stringArg", "objectArg", "capForLog",

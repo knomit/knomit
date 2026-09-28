@@ -41,8 +41,11 @@ const TriggerFireRetention = 10000
 // `rate-limited` outcomes are a `do: script` trigger's (F07 PR 3): `ran` is
 // its `emitted`; `self-caused` is the loop guard (the toucher of the path
 // carries `Knomit-Trigger: <this trigger>`, so the fire is skipped before
-// `if`); `rate-limited` is a fire DROPPED by the per-minute cap. The column
-// is free text; adding a kind needs no migration.
+// `if`); `rate-limited` is a fire DROPPED by the per-minute cap. `kicked` is
+// a `do: push` fire (F07 PR 4): it asked this machine's sync loop for a round
+// and says nothing about whether that round then succeeded — that is the
+// remote's sync/push status. The column is free text; adding a kind needs no
+// migration.
 const (
 	TriggerOutcomeEmitted       = "emitted"
 	TriggerOutcomeIfFalse       = "if-false"
@@ -55,6 +58,7 @@ const (
 	TriggerOutcomeScriptTimeout = "script-timeout"
 	TriggerOutcomeRateLimited   = "rate-limited"
 	TriggerOutcomeSelfCaused    = "self-caused"
+	TriggerOutcomeKicked        = "kicked"
 )
 
 // ErrNoScriptAtCommit: the commit's tree holds no `.knomit/triggers/<name>.js`

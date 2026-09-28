@@ -55,7 +55,7 @@ const (
 //     shows a warning and the dispatcher logs an ERROR once per blob. Its
 //     bookmark FREEZES so nothing is lost while it is being fixed.
 //   - unsupported: the entry is valid but names a capability this knomit
-//     version does not act on yet (`do: script|push|run`). It is NOT an
+//     version does not act on yet (today only `do: run`). It is NOT an
 //     error: no warning, no ERROR log, and
 //     it holds NO bookmark — when a later version activates it, it starts at
 //     the head of that advance, never back-filling (user ruling, 2026-09-27).
@@ -75,9 +75,10 @@ var (
 	// ontology written for a later PR is not "unknown", but their triggers are
 	// `unsupported` here: they must not run, and they hold no watermark until
 	// a knomit that implements them arrives. `script` became active in F07
-	// PR 3: a `do: script` trigger declared earlier starts at the head of the
-	// first advance this version sees (no back-fill).
-	activeTriggerDo = map[string]bool{TriggerDoEmit: true, TriggerDoScript: true}
+	// PR 3 and `push` in PR 4: a trigger declared earlier starts at the head
+	// of the first advance this version sees (no back-fill). Only `run` is
+	// still reserved.
+	activeTriggerDo = map[string]bool{TriggerDoEmit: true, TriggerDoScript: true, TriggerDoPush: true}
 	// activeTriggerOn is the episodes this version acts on: learn, update and
 	// retract are derived from the tree diff of an advance; due is the
 	// dispatcher's sweep of dated facts live at the head (F07 PR 2).
@@ -91,7 +92,7 @@ var triggerKeys = []SchemaField{
 	{"Trigger", "match", "Path pattern relative to the ontology root, starting with this topic's path: * one segment, ** any depth, ? one character; {agent}, {host} and {fp8} are this instance's. Absent means everything under the topic. Never a dot path."},
 	{"Trigger", "on", "learn, update, retract, due — a single value or a list. due fires once per trigger when a matching fact's expires has passed (facts live at the head only); changing the fact's expires re-arms it."},
 	{"Trigger", "if", "Optional JavaScript condition over fact, agent and change; empty means always"},
-	{"Trigger", "do", "The action: emit (log line and SSE event), or script (runs .knomit/triggers/<script>.js from the agent branch's head in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit). push and run are reserved for later versions."},
+	{"Trigger", "do", "The action: emit (log line and SSE event); script (runs .knomit/triggers/<script>.js from the agent branch's head in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit, push); or push (asks this machine's sync loop for a round now instead of at its interval: a 1 s countdown from the first fire batches a burst into one fetch, merge and push of this machine's own branch; fire log only, outcome kicked). run is reserved for a later version."},
 	{"Trigger", "script", "For do: script — the name (kebab-case) of .knomit/triggers/<name>.js. Its writes are this machine's commits, stamped Knomit-Trace / Knomit-Cause / Knomit-Trigger; it may not write under .knomit/."},
 	{"Trigger", "recipe", "For do: run — the name of the recipe to invoke"},
 }
