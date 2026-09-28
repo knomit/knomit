@@ -130,7 +130,8 @@ const expiresFieldDescription = `expires (optional): an RFC 3339 timestamp with 
 	`(expired, expires_before, expires_after). That is all: knomit never deletes, hides or retracts a fact ` +
 	`because it expired; you or a human decide whether to keep, update or retract it. Absent means never ` +
 	`expires; there is no default. Any kind or type may carry one — a hypothesis's settlement date, ` +
-	`a time-bound observation, a signal's lifetime. Date-only values (2026-10-01) are refused.`
+	`a time-bound observation, a signal's lifetime. Date-only values (2026-10-01) are refused. ` +
+	`All times are UTC: a value with another offset is stored as the same instant with an explicit Z.`
 
 func expiresProperty() map[string]any {
 	return map[string]any{"type": "string", "format": "date-time", "description": expiresFieldDescription}

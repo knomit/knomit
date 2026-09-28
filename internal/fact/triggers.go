@@ -55,8 +55,8 @@ const (
 //     shows a warning and the dispatcher logs an ERROR once per blob. Its
 //     bookmark FREEZES so nothing is lost while it is being fixed.
 //   - unsupported: the entry is valid but names a capability this knomit
-//     version does not act on yet (`do: script|push|run`, or `on: due` before
-//     the due sweep exists). It is NOT an error: no warning, no ERROR log, and
+//     version does not act on yet (`do: script|push|run`). It is NOT an
+//     error: no warning, no ERROR log, and
 //     it holds NO bookmark — when a later version activates it, it starts at
 //     the head of that advance, never back-filling (user ruling, 2026-09-27).
 //
@@ -76,10 +76,10 @@ var (
 	// `unsupported` here: they must not run, and they hold no watermark until
 	// a knomit that implements them arrives.
 	activeTriggerDo = map[string]bool{TriggerDoEmit: true}
-	// activeTriggerOn is the episodes this version derives from the tree. `due`
-	// waits for the sweep (PR 2); a trigger that lists it is `unsupported` as a
-	// whole.
-	activeTriggerOn = map[string]bool{TriggerOnLearn: true, TriggerOnUpdate: true, TriggerOnRetract: true}
+	// activeTriggerOn is the episodes this version acts on: learn, update and
+	// retract are derived from the tree diff of an advance; due is the
+	// dispatcher's sweep of dated facts live at the head (F07 PR 2).
+	activeTriggerOn = map[string]bool{TriggerOnLearn: true, TriggerOnUpdate: true, TriggerOnRetract: true, TriggerOnDue: true}
 )
 
 // triggerKeys is every key a trigger entry may carry, with its editor doc.
@@ -87,7 +87,7 @@ var (
 var triggerKeys = []SchemaField{
 	{"Trigger", "name", "Unique name of the trigger in this ontology (kebab-case). Its bookmark is keyed by it: renaming starts it fresh."},
 	{"Trigger", "match", "Path pattern relative to the ontology root, starting with this topic's path: * one segment, ** any depth, ? one character; {agent}, {host} and {fp8} are this instance's. Absent means everything under the topic. Never a dot path."},
-	{"Trigger", "on", "learn, update, retract (and due) — a single value or a list"},
+	{"Trigger", "on", "learn, update, retract, due — a single value or a list. due fires once per trigger when a matching fact's expires has passed (facts live at the head only); changing the fact's expires re-arms it."},
 	{"Trigger", "if", "Optional JavaScript condition over fact, agent and change; empty means always"},
 	{"Trigger", "do", "The action: emit (log line and SSE event). script, push and run are reserved for later versions."},
 	{"Trigger", "script", "For do: script — the name of .knomit/triggers/<name>.js"},

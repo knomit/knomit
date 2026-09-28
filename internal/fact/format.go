@@ -393,9 +393,13 @@ func SerializeFact(f Fact) (string, error) {
 	if err := ValidateRefs(f.Refs); err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
-	if err := validateExpires(f.Expires); err != nil {
+	// Normalised, not kept as written: every fact this build writes carries its
+	// expiry in UTC with an explicit Z (see expires.go).
+	norm, err := NormalizeExpires(f.Expires)
+	if err != nil {
 		return "", fmt.Errorf("SerializeFact %q: %w", f.path, err)
 	}
+	f.Expires = norm
 	// Order is load-bearing: VALIDATE first, then strip. A malformed motif is
 	// a misunderstanding of the field and the caller is told; a subject motif
 	// is an ordinary miss and is dropped in silence. Stripping first would let

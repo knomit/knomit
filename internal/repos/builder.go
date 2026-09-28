@@ -824,7 +824,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush, ri.triggerKick)
 		return nil
 	}
 
@@ -973,6 +973,13 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		return
 	}
 	b.startExperimentSweep(ctx, wg)
+	// F07 PR 2: the tick kicks the trigger dispatcher (the `on: due` sweep
+	// rides the existing tick; no timer of its own). nil when the builder has
+	// no instance yet (a unit test of the loops) — the loops are nil-safe.
+	var kick func()
+	if b.ri != nil {
+		kick = b.ri.triggerKick
+	}
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).
@@ -983,7 +990,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		b.syncLoopMu.Lock()
 		wg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runLocalReconcileLoop(ctx, wg, b.svc, b.name, b.agentBranch, b.cfg.Git.LocalReconcileInterval)
+		go runLocalReconcileLoop(ctx, wg, b.svc, b.name, b.agentBranch, b.cfg.Git.LocalReconcileInterval, kick)
 		return
 	}
 
@@ -994,7 +1001,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	b.syncLoopMu.Lock()
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick)
 }
 
 // startExperimentSweep launches the expiry sweeper for this repo.

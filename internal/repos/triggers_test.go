@@ -529,13 +529,15 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	write(t, ri, "kb/tasks/after-enable.md")
 	require.Equal(t, []string{"kb/tasks/after-enable.md"}, pathsOf(firesOf(t, ri, "later")), "no back-fill")
 
-	// A `due` trigger is unsupported in this version the same way.
-	setOntology(t, ri, triggerOntology("", trig("expiring", "[learn, due]", "", "")))
+	// Since F07 PR 2 a `due` trigger is ACTIVE (its sweep is triggers_due_test.go);
+	// only a reserved `do` is unsupported now.
+	enabled = setOntology(t, ri, triggerOntology("", trig("expiring", "[learn, due]", "", "")))
 	rep, err = ri.TriggerReport(context.Background(), 0)
 	require.NoError(t, err)
-	require.Equal(t, "unsupported", rep.Triggers[0].State)
-	write(t, ri, "kb/tasks/due-never.md")
-	require.Empty(t, firesOf(t, ri, "expiring"))
+	require.Equal(t, "active", rep.Triggers[0].State)
+	require.Equal(t, enabled, watermarks(t, ri)["expiring"], "an active due trigger bookmarks its learn side like any other")
+	write(t, ri, "kb/tasks/undated.md")
+	require.Equal(t, []string{"kb/tasks/undated.md"}, pathsOf(firesOf(t, ri, "expiring")), "the learn side fires; an undated fact is never due")
 }
 
 // ErrorLoggedOncePerBlob: an invalid trigger is reported at ERROR once per

@@ -191,11 +191,26 @@ func timedWrites(t *testing.T, ri *RepoInstance, prefix string, n int) []time.Du
 	return out
 }
 
-// within reports whether b is within max(1.25×a, a+2ms) of a [M1, M5].
+// within reports whether b is within max(1.25×a, a+2ms) of a [M1, M5]. It is
+// the bound of the load-bearing sabotage target (_BusyIf: synchronous
+// dispatch adds about a second per write, which no bound hides).
 func within(a, b time.Duration) bool {
 	bound := a + a/4
 	if a+2*time.Millisecond > bound {
 		bound = a + 2*time.Millisecond
+	}
+	return b <= bound
+}
+
+// withinMedian is the EVERYDAY bound, max(1.5×a, a+3ms) (1b follow-up, applied
+// in PR 2): the 1.25× bound failed 2 of 3 runs on a loaded laptop while CI
+// never failed it, and a loaded laptop is where the test is run by hand. The
+// sabotage that must still redden it is a flush after EVERY run (1b review
+// #15: 6.5 → 10.8 ms median, 1.66×).
+func withinMedian(a, b time.Duration) bool {
+	bound := a + a/2
+	if a+3*time.Millisecond > bound {
+		bound = a + 3*time.Millisecond
 	}
 	return b <= bound
 }
@@ -232,11 +247,13 @@ func abba(t *testing.T, ri *RepoInstance, entries []string, rounds, perBlock int
 }
 
 // WriteLatencyIndependentOfTriggers: 200 learns with 0 triggers and 200 with
-// 50 triggers that all match, in alternating blocks; the median AND the p90
-// with triggers are within max(1.25×, +2 ms) of the median and p90 without.
-// The fire log is writing during the loaded blocks (two short transactions
-// per run). Sabotage: call the dispatcher synchronously from ri.onCommit —
-// with the busy-if variant below every write gains ≥ 10 × 100 ms.
+// 50 triggers that all match, in alternating blocks; the median with triggers
+// is within max(1.5×, +3 ms) of the median without (withinMedian); the p90 is
+// reported, not gated (1b follow-up). The fire log is writing during the
+// loaded blocks (two short transactions per run). Sabotage: flush phase C
+// after every run (the median moves ~1.66×); or call the dispatcher
+// synchronously from ri.onCommit — with the busy-if variant below every write
+// gains ≥ 10 × 100 ms.
 func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
@@ -249,9 +266,8 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	b90, l90 := percentile(base, 0.9), percentile(loaded, 0.9)
-	t.Logf("median: 0 triggers %s, 50 triggers %s; p90: %s vs %s", bm, lm, b90, l90)
-	require.True(t, within(bm, lm), "median with 50 triggers (%s) is not within max(1.25×, +2ms) of 0 triggers (%s)", lm, bm)
-	require.True(t, within(b90, l90), "p90 with 50 triggers (%s) is not within max(1.25×, +2ms) of 0 triggers (%s)", l90, b90)
+	t.Logf("median: 0 triggers %s, 50 triggers %s; p90 (report only): %s vs %s", bm, lm, b90, l90)
+	require.True(t, withinMedian(bm, lm), "median with 50 triggers (%s) is not within max(1.5×, +3ms) of 0 triggers (%s)", lm, bm)
 	require.GreaterOrEqual(t, ri.triggers.stats.view("t00").Fires, int64(100), "the loaded blocks did fire")
 }
 
@@ -382,7 +398,7 @@ func BenchmarkDispatchAdvance(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				if len(names) > 0 {
-					must(svc.Triggers().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil))
+					must(svc.Triggers().AdvanceTriggerWatermarks(ctx, trigAgent, names, nil, nil))
 				}
 				b.StartTimer()
 				d.run(ctx)

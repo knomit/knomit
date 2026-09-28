@@ -183,11 +183,29 @@ func TestREST_WritesValidateExpires(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), "invalid expires")
 
-	put := `{"content":"---\ntype: hypothesis\nconfidence: 0.6\ndomain: [test]\nentities: []\nrefs: []\nexpires: 2027-01-01\n---\n# P\n\nbody\n"}`
-	rec = httptest.NewRecorder()
-	req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/"+b+"/facts/kb/technology/dated/never.md", strings.NewReader(put)))
-	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
+	put := func(content string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := fromLoopback(httptest.NewRequest(http.MethodPut, "/repos/alpha/branches/"+b+"/facts/kb/technology/dated/never.md", strings.NewReader(content)))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	rec = put(`{"content":"---\ntype: hypothesis\nconfidence: 0.6\ndomain: [test]\nentities: []\nrefs: []\nexpires: 2027-01-01\n---\n# P\n\nbody\n"}`)
 	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	require.Contains(t, rec.Body.String(), "2027-01-01")
+
+	// All times are UTC (maintainer ruling 2026-09-28): a PUT — the one write
+	// path that commits the client's bytes verbatim — carrying an offset is
+	// stored as the same instant with an explicit Z, like every other write.
+	// Sabotage: leave expires out of the PUT's rewrite condition.
+	rec = put(`{"content":"---\ntype: hypothesis\nconfidence: 0.6\ndomain: [test]\nentities: []\nrefs: []\nexpires: \"2027-01-01T02:00:00+02:00\"\n---\n# P\n\nbody\n"}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &view))
+	require.Equal(t, "2027-01-01T00:00:00Z", view["expires"], "the view shows the stored, normalised value")
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		stored, err := svc.Facts().ReadFact(context.Background(), ri.AgentBranch(), "kb/technology/dated/never.md", nil)
+		require.NoError(t, err)
+		require.Contains(t, stored.Content, "expires: \"2027-01-01T00:00:00Z\"")
+		require.NotContains(t, stored.Content, "+02:00")
+	}))
 }

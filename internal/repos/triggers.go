@@ -21,15 +21,23 @@
 //	   timed as the trigger's own work for the statistics and the slow
 //	   detector.
 //	C  (Acquire) tx1: the buffered runs' fire rows + ONE run row per run;
-//	   tx2: watermarks and the prune. release. Phase C is WRITE-BEHIND: a run
-//	   buffers it and it is flushed when no kick is pending (the writer is
-//	   quiet), when the buffer reaches its bound, or at shutdown — see
-//	   pendingFlush for the measurement that forced this.
+//	   tx2: watermarks, due marks and the prune. release. Phase C is
+//	   WRITE-BEHIND: a run buffers it and it is flushed when no kick is
+//	   pending (the writer is quiet), when the buffer reaches its bound, or at
+//	   shutdown — see pendingFlush for the measurement that forced this.
 //
 // So a long `if` never holds a store reference (SwapStore and teardown do not
 // drain behind it), and the dispatcher's SQLite writes take the process-wide
 // write lock at most twice per flush, never across user code, and never while
 // the writer is mid-burst.
+//
+// `on: due` (F07 PR 2) is a second source of fires inside the SAME run: phase
+// A also sweeps the dated facts live at the head whose instant has passed
+// (sweepDue), so a due fire shares the phases, the buffer, the statistics and
+// the slow detector with the advances. The sweep has no timer of its own: the
+// reconcile tick kicks the dispatcher (sync.go), and every run — tick-kicked or
+// write-kicked — sweeps. The run's clock is read ONCE, as UTC; it is the one
+// clock comparison in F07.
 //
 // The dispatcher has its OWN context and wait group. It must not share
 // syncCtx: ActivateSync cancels that to restart the reconcile loop and would
@@ -80,6 +88,15 @@ type triggerHooks struct {
 	// changeDelay is added inside the change build: knomit's per-path cost,
 	// which must not be charged to the trigger.
 	changeDelay time.Duration
+	// now is the run's clock — read ONCE per run, the one clock comparison in
+	// F07 (the due sweep's `expires_at <= now`). nil means time.Now().UTC().
+	now func() time.Time
+	// dueCandidates lets a test append STALE candidates (a path the index no
+	// longer lists) to what the liveness join returned, so the head
+	// confirmation is exercised on its own.
+	dueCandidates func([]store.DueCandidate) []store.DueCandidate
+	// trees wraps the run's tree reader (a test counts blob reads).
+	trees func(store.TriggerTrees) store.TriggerTrees
 }
 
 var (
@@ -322,7 +339,23 @@ type runState struct {
 	diffMS    int64
 	changeMS  int64
 	started   time.Time
+	// now is the run's clock (UTC), read once; the due sweep compares
+	// expires_at against it at whole seconds and stamps the marks with it.
+	now time.Time
+	// dueMarks is one mark per due (trigger, path) EVALUATION this run
+	// prepared — whatever `if` will say — written in phase C with the
+	// watermarks. len(dueMarks) is the run's due evaluation count.
+	dueMarks []store.DueMark
+	// duePaths is the number of distinct due paths evaluated (into the run
+	// row's paths next to the diff rows).
+	duePaths int
 }
+
+// didWork reports whether the run evaluated anything: diff rows in its range
+// or due evaluations. A run that did neither writes no run row and is not
+// counted — an idle 30 s tick on a repo whose due facts are all processed must
+// not put 2,880 rows a day into a 10,000-row log.
+func (rs *runState) didWork() bool { return rs.paths > 0 || len(rs.dueMarks) > 0 }
 
 // pendingFlush is phase C's write-behind buffer: the runs (with their fire
 // rows) and the watermark moves that have been EVALUATED AND EMITTED but not
@@ -353,6 +386,9 @@ type pendingFlush struct {
 	rows int
 	wm   map[string]string
 	del  map[string]bool
+	// due is the buffered due marks, keyed so a re-arm within one buffer keeps
+	// the latest instant. They ride tx2 with the watermarks.
+	due map[store.DueKey]store.DueMark
 }
 
 // maxBufferedRuns bounds the write-behind buffer by run count; the fire rows
@@ -361,7 +397,16 @@ type pendingFlush struct {
 const maxBufferedRuns = 256
 
 func (p *pendingFlush) empty() bool {
-	return len(p.runs) == 0 && len(p.wm) == 0 && len(p.del) == 0
+	return len(p.runs) == 0 && len(p.wm) == 0 && len(p.del) == 0 && len(p.due) == 0
+}
+
+// clock is the run's one clock read: UTC (all times are UTC) at whole seconds
+// — the granularity fact_expires.expires_at and F03's `expired` filter use.
+func (d *triggerDispatcher) clock() time.Time {
+	if h := currentTriggerHooks().now; h != nil {
+		return h().UTC().Truncate(time.Second)
+	}
+	return time.Now().UTC().Truncate(time.Second)
 }
 
 func (d *triggerDispatcher) run(ctx context.Context) {
@@ -378,6 +423,7 @@ func (d *triggerDispatcher) run(ctx context.Context) {
 		return // closed or mid-swap: the next commit kicks again
 	}
 	rs.svc = svc
+	rs.now = d.clock()
 	ok := d.phaseA(ctx, svc, rs)
 	release()
 	if !ok {
@@ -394,15 +440,19 @@ func (d *triggerDispatcher) run(ctx context.Context) {
 	// ---- Phase C: buffered; written in at most two short transactions per
 	// flush, when the writer is quiet.
 	durationMS := time.Since(rs.started).Milliseconds()
-	if rs.paths > 0 {
+	if rs.rangeFrom == "" {
+		rs.rangeFrom = rs.head // a run with no advance (a tick's sweep): range_from = range_to = head
+	}
+	paths := rs.paths + rs.duePaths
+	if rs.didWork() {
 		d.stats.recordRun(TriggerLastRun{
-			RangeFrom: rs.rangeFrom, RangeTo: rs.head, Nonlinear: rs.nonlinear, Paths: rs.paths,
+			RangeFrom: rs.rangeFrom, RangeTo: rs.head, Nonlinear: rs.nonlinear, Paths: paths,
 			Evaluated: evaluated, Fires: fires, DurationMS: durationMS, DiffMS: rs.diffMS, ChangeMS: rs.changeMS,
 		})
 	}
 	d.buffer(rs, store.TriggerRun{
 		Branch: d.branch, RangeFrom: rs.rangeFrom, RangeTo: rs.head, Nonlinear: rs.nonlinear,
-		Paths: rs.paths, Evaluated: evaluated, Fires: fires,
+		Paths: paths, Evaluated: evaluated, Fires: fires,
 		DurationMS: durationMS, DiffMS: rs.diffMS, ChangeMS: rs.changeMS, Rows: rows,
 	})
 	d.maybeFlush(ctx)
@@ -420,9 +470,9 @@ func (d *triggerDispatcher) buffer(rs *runState, run store.TriggerRun) {
 	}
 	p.svc = rs.svc
 	if p.wm == nil {
-		p.wm, p.del = map[string]string{}, map[string]bool{}
+		p.wm, p.del, p.due = map[string]string{}, map[string]bool{}, map[store.DueKey]store.DueMark{}
 	}
-	if rs.paths > 0 {
+	if rs.didWork() {
 		p.runs = append(p.runs, run)
 		p.rows += len(run.Rows)
 	}
@@ -430,9 +480,17 @@ func (d *triggerDispatcher) buffer(rs *runState, run store.TriggerRun) {
 		p.wm[name] = h
 		delete(p.del, name)
 	}
+	for _, m := range rs.dueMarks {
+		p.due[store.DueKey{Trigger: m.Trigger, Path: m.Path}] = m
+	}
 	for _, name := range rs.del {
 		p.del[name] = true
 		delete(p.wm, name)
+		for k := range p.due {
+			if k.Trigger == name {
+				delete(p.due, k) // the name is gone: its marks go with its bookmark
+			}
+		}
 	}
 }
 
@@ -490,6 +548,16 @@ func (d *triggerDispatcher) flush(ctx context.Context) {
 		del = append(del, n)
 	}
 	sort.Strings(del)
+	due := make([]store.DueMark, 0, len(p.due))
+	for _, m := range p.due {
+		due = append(due, m)
+	}
+	sort.Slice(due, func(i, j int) bool {
+		if due[i].Trigger != due[j].Trigger {
+			return due[i].Trigger < due[j].Trigger
+		}
+		return due[i].Path < due[j].Path
+	})
 	d.mu.Unlock()
 
 	tr := svc.Triggers()
@@ -506,8 +574,8 @@ func (d *triggerDispatcher) flush(ctx context.Context) {
 	if h := currentTriggerHooks().beforeTx2; h != nil {
 		h()
 	}
-	if len(wm) > 0 || len(del) > 0 {
-		if err := tr.AdvanceTriggerWatermarks(ctx, d.branch, wm, del); err != nil {
+	if len(wm) > 0 || len(del) > 0 || len(due) > 0 {
+		if err := tr.AdvanceTriggerWatermarks(ctx, d.branch, wm, del, due); err != nil {
 			log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: watermark write failed; the range will be re-run")
 			d.resetPending()
 			return
@@ -523,22 +591,36 @@ func (d *triggerDispatcher) resetPending() {
 	d.mu.Unlock()
 }
 
-// overlayPending applies the buffered watermark moves on top of the stored
-// ones, so a run reads the bookmarks as they WILL be once flushed and never
-// diffs a buffered advance a second time. A buffer from another store
-// generation is dropped first.
-func (d *triggerDispatcher) overlayPending(svc *store.Service, wms map[string]string) {
+// overlayPending applies the buffered watermark moves (and, when marks is not
+// nil, the buffered due marks) on top of the stored ones, so a run reads the
+// bookkeeping as it WILL be once flushed: it never diffs a buffered advance a
+// second time and never re-evaluates a due fact whose mark is still in the
+// buffer — a run kicked inside the 20 ms flush grace sees the mark. A buffer
+// from another store generation is dropped first. Either map may be nil.
+func (d *triggerDispatcher) overlayPending(svc *store.Service, wms map[string]string, marks map[store.DueKey]int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.pending.svc != svc && !d.pending.empty() {
 		d.pending = pendingFlush{}
 		return
 	}
-	for n, h := range d.pending.wm {
-		wms[n] = h
+	if wms != nil {
+		for n, h := range d.pending.wm {
+			wms[n] = h
+		}
+	}
+	if marks != nil {
+		for k, m := range d.pending.due {
+			marks[k] = m.ExpiresAt
+		}
 	}
 	for n := range d.pending.del {
 		delete(wms, n)
+		for k := range marks {
+			if k.Trigger == n {
+				delete(marks, k)
+			}
+		}
 	}
 }
 
@@ -598,7 +680,7 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 		log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: watermarks unreadable")
 		return false
 	}
-	d.overlayPending(svc, wms)
+	d.overlayPending(svc, wms, nil)
 
 	// Per declared name: first appearance, freeze, unsupported, or advance.
 	active := map[string]*fact.CompiledTrigger{}
@@ -637,7 +719,17 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 		}
 	}
 	sort.Strings(rs.del)
-	if len(byW) == 0 {
+	// The `on: due` triggers sweep on EVERY run (D4: tick-kicked or
+	// write-kicked), first-appearance ones included — a due fact is a state,
+	// so a trigger that just came alive processes the currently overdue set
+	// once (D2 (a), maintainer ruling 2026-09-28).
+	var dueTrigs []*fact.CompiledTrigger
+	for _, ct := range set.Active {
+		if states[ct.Name] == fact.TriggerActive && ct.OnEpisode(fact.TriggerOnDue) {
+			dueTrigs = append(dueTrigs, ct)
+		}
+	}
+	if len(byW) == 0 && len(dueTrigs) == 0 {
 		return len(rs.newWM) > 0 || len(rs.del) > 0
 	}
 
@@ -657,8 +749,27 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 	// matched path of an advance reads the same few commits, and decoding a
 	// tree (or verifying a signature) once per path instead of once per
 	// commit is what made a large advance take minutes.
-	cr := &changeReader{trees: tr.TreeReader(), tr: tr, meta: map[plumbing.Hash]commitMeta{}, instanceFP: instanceFP}
+	trees := tr.TreeReader()
+	if h := currentTriggerHooks().trees; h != nil {
+		trees = h(trees)
+	}
+	cr := &changeReader{trees: trees, tr: tr, meta: map[plumbing.Hash]commitMeta{}, instanceFP: instanceFP}
 
+	if !d.advance(ctx, tr, rs, cr, head, byW, root, verifyOn, verifiedSet) {
+		return false
+	}
+	if len(dueTrigs) > 0 && !d.sweepDue(ctx, tr, rs, cr, head, root, dueTrigs, verifyOn, verifiedSet) {
+		return false
+	}
+	return len(byW) > 0 || len(rs.dueMarks) > 0 || len(rs.newWM) > 0 || len(rs.del) > 0
+}
+
+// advance is the tree-episode half of phase A: one diff per distinct
+// watermark, glob matching, `change` built once per matched path. It returns
+// false only when ctx is cancelled.
+func (d *triggerDispatcher) advance(ctx context.Context, tr store.TriggerIndex, rs *runState, cr *changeReader, head plumbing.Hash,
+	byW map[string][]*fact.CompiledTrigger, root string, verifyOn bool, verifiedSet map[plumbing.Hash]bool) bool {
+	headStr := head.String()
 	// Normally every trigger shares one watermark, so this is ONE diff.
 	ws := make([]string, 0, len(byW))
 	for w := range byW {
@@ -725,6 +836,129 @@ func (d *triggerDispatcher) phaseA(ctx context.Context, svc *store.Service, rs *
 		}
 	}
 	return true
+}
+
+// sweepDue is the `on: due` half of phase A (F07 PR 2). Candidates are the
+// dated facts LIVE on the agent branch (the index's branch_facts ⋈
+// fact_expires) whose instant is at or before the run's clock; then, in this
+// order — cheap filters first, so an already-processed or unmatched due fact
+// never costs a blob read on any run:
+//
+//  1. the glob of the ACTIVE `due` triggers (none → drop the row);
+//  2. the marks: a trigger that has processed this path at this very instant
+//     drops out (a DIFFERENT instant is a re-arm: the fact's `expires`
+//     changed); the marks are read once, only when something matched, with
+//     the buffered marks overlaid;
+//  3. the head's tree is the truth: the blob is read and parsed, and a path
+//     absent, unparseable, undated or not yet due at the head is skipped —
+//     this closes the window between a writer moving the ref and the index
+//     Sync, and is what makes "a removed fact never fires" hold by
+//     construction rather than by index timing;
+//  4. `change` once per path (episode due, source due, commit = the toucher
+//     at the head, before null), one pendingFire and one mark per surviving
+//     trigger. The mark records the HEAD's instant, stamped with the run's
+//     clock.
+//
+// It returns false only when ctx is cancelled. Nothing else happens on
+// expiry: the sweep emits and marks; it never writes a fact.
+func (d *triggerDispatcher) sweepDue(ctx context.Context, tr store.TriggerIndex, rs *runState, cr *changeReader, head plumbing.Hash,
+	root string, trigs []*fact.CompiledTrigger, verifyOn bool, verifiedSet map[plumbing.Hash]bool) bool {
+	nowUnix := rs.now.Unix()
+	cands, err := tr.DueCandidates(ctx, d.branch, nowUnix)
+	if err != nil {
+		log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: due candidates unreadable; the sweep will re-run")
+		return true
+	}
+	if h := currentTriggerHooks().dueCandidates; h != nil {
+		cands = h(cands)
+	}
+	// Survivors of the cheap filters, ONE entry per path (the join lists a
+	// path once — UNIQUE(branch_id, path) — but the filters must not depend on
+	// it: two candidate rows for one path, e.g. a stale one, must not become
+	// two fires).
+	var paths []string
+	hits := map[string][]*fact.CompiledTrigger{}
+	var marks map[store.DueKey]int64
+	for _, c := range cands {
+		rel := strings.TrimPrefix(c.Path, root+"/")
+		var matched []*fact.CompiledTrigger
+		for _, ct := range trigs {
+			if ct.Matches(rel) {
+				matched = append(matched, ct)
+			}
+		}
+		if len(matched) == 0 {
+			continue
+		}
+		if marks == nil {
+			marks, err = tr.DueMarks(ctx, d.branch)
+			if err != nil {
+				log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: due marks unreadable; the sweep will re-run")
+				return true
+			}
+			d.overlayPending(rs.svc, nil, marks)
+		}
+		for _, ct := range matched {
+			if at, done := marks[store.DueKey{Trigger: ct.Name, Path: c.Path}]; done && at == c.ExpiresAt {
+				continue // processed at this instant, whatever `if` said
+			}
+			if _, seen := hits[c.Path]; !seen {
+				paths = append(paths, c.Path)
+			}
+			hits[c.Path] = appendTrigger(hits[c.Path], ct)
+		}
+	}
+	for _, path := range paths {
+		if ctx.Err() != nil {
+			return false
+		}
+		content, ok, err := cr.trees.BlobAt(ctx, head, path)
+		if err != nil || !ok {
+			continue // not at the head: the index is behind the ref, or the path is gone
+		}
+		f, err := fact.ParseFact(path, content)
+		if err != nil {
+			continue
+		}
+		at := fact.ExpiresUnix(f.Expires)
+		if at == nil || *at > nowUnix {
+			continue // the head's version is undated or not yet due
+		}
+		// The HEAD's instant is the one that counts: a trigger that processed
+		// this path at THIS instant is done, whatever instant the candidate
+		// row carried (the index may be behind the ref).
+		var fire []*fact.CompiledTrigger
+		for _, ct := range hits[path] {
+			if done, has := marks[store.DueKey{Trigger: ct.Name, Path: path}]; has && done == *at {
+				continue
+			}
+			fire = append(fire, ct)
+		}
+		if len(fire) == 0 {
+			continue
+		}
+		c0 := time.Now()
+		pf := d.buildChange(ctx, cr, head, head, path, fact.TriggerOnDue, false, verifyOn, verifiedSet)
+		rs.changeMS += time.Since(c0).Milliseconds()
+		rs.duePaths++
+		for _, ct := range fire {
+			p := pf
+			p.trig = ct
+			rs.pending = append(rs.pending, p)
+			rs.dueMarks = append(rs.dueMarks, store.DueMark{Trigger: ct.Name, Path: path, ExpiresAt: *at, FiredAt: nowUnix})
+		}
+	}
+	return true
+}
+
+// appendTrigger appends ct unless the same trigger is already listed.
+func appendTrigger(list []*fact.CompiledTrigger, ct *fact.CompiledTrigger) []*fact.CompiledTrigger {
+	for _, have := range list {
+		if have == ct {
+			return list
+		}
+	}
+	return append(list, ct)
 }
 
 // verifyModeOn reports whether the ontology blob at the head turns F09 on
@@ -830,7 +1064,9 @@ func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commit
 // buildChange builds the `change` global for one matched path: the ORIGINAL
 // commit via the treesame walk, its verified signer, `source`, `verified`,
 // the trace trailer, the fact at the head (at the watermark for a retract) and
-// `before` at the watermark.
+// `before` at the watermark. For a due fire (episode due, wm == head) there is
+// no advance: `source` is "due", `before` is null, and `commit` is the commit
+// that introduced the content the path carries at the head.
 func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, head, wm plumbing.Hash, repoPath, episode string,
 	nonlinear, verifyOn bool, verifiedSet map[plumbing.Hash]bool) pendingFire {
 	if delay := currentTriggerHooks().changeDelay; delay > 0 {
@@ -839,6 +1075,7 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, h
 	pf := pendingFire{repoPath: repoPath, episode: episode, nonlinear: nonlinear}
 	author := map[string]any{"kind": "unknown", "id": "", "fp": "", "verified": false}
 	commit, source, trace := head, "merged", ""
+	due := episode == fact.TriggerOnDue
 
 	// A retract in a NONLINEAR advance (a rewind replay) has no originating
 	// commit in the new history, and the same-absent-blob walk would run to
@@ -863,19 +1100,22 @@ func (d *triggerDispatcher) buildChange(ctx context.Context, cr *changeReader, h
 			}
 		}
 	}
+	if due {
+		source = fact.TriggerOnDue // the design fixes it; author.fp still says who wrote the fact
+	}
 	pf.commit, pf.source, pf.trace = commit.String(), source, trace
 
 	// fact: at the head, or at the watermark for a retract (the path is gone
 	// at the head). before: the version at the WATERMARK — this machine's
 	// last-processed version, not the toucher's parent, which could be an
-	// intermediate version this machine never saw.
+	// intermediate version this machine never saw. A due fire has no before.
 	factAt := head
 	if episode == fact.TriggerOnRetract {
 		factAt = wm
 	}
 	pf.factMap, pf.parseable = factGlobal(ctx, cr.trees, factAt, repoPath)
 	var before any
-	if episode != fact.TriggerOnLearn {
+	if episode != fact.TriggerOnLearn && !due {
 		if m, ok := factGlobal(ctx, cr.trees, wm, repoPath); ok {
 			before = m
 		}
@@ -1165,7 +1405,7 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 		if werr != nil {
 			return
 		}
-		d.overlayPending(svc, wms)
+		d.overlayPending(svc, wms, nil)
 		if logN > 0 {
 			rep.Fires, werr = svc.Triggers().RecentTriggerFires(ctx, d.branch, logN)
 		}

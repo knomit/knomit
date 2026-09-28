@@ -278,7 +278,7 @@ func TestTriggerFires_PrunesToRetention(t *testing.T) {
 	total, _, _, maxBefore := countFires(t, svc)
 	require.Equal(t, 10052, total)
 
-	require.NoError(t, svc.Triggers().AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"t": "c"}, nil))
+	require.NoError(t, svc.Triggers().AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"t": "c"}, nil, nil))
 	total, _, minID, maxID := countFires(t, svc)
 	require.Equal(t, TriggerFireRetention, total)
 	require.Equal(t, maxBefore, maxID, "the newest row survives")
@@ -287,7 +287,7 @@ func TestTriggerFires_PrunesToRetention(t *testing.T) {
 	// Steady state: another run of 3 rows prunes exactly 4 (3 fires + 1 run row).
 	_, err = svc.Triggers().RecordTriggerRun(ctx, TriggerRun{Branch: "agent/a", RangeFrom: "c", RangeTo: "d", Rows: fireRows(3, "three")})
 	require.NoError(t, err)
-	require.NoError(t, svc.Triggers().AdvanceTriggerWatermarks(ctx, "agent/a", nil, nil))
+	require.NoError(t, svc.Triggers().AdvanceTriggerWatermarks(ctx, "agent/a", nil, nil, nil))
 	total, _, _, _ = countFires(t, svc)
 	require.Equal(t, TriggerFireRetention, total)
 }
@@ -297,12 +297,12 @@ func TestTriggerWatermarks_RoundTrip(t *testing.T) {
 	svc := newChangesService(t)
 	ctx := context.Background()
 	tr := svc.Triggers()
-	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"x": "h1", "y": "h1"}, nil))
-	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/b", map[string]string{"x": "other"}, nil))
+	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"x": "h1", "y": "h1"}, nil, nil))
+	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/b", map[string]string{"x": "other"}, nil, nil))
 	wms, err := tr.TriggerWatermarks(ctx, "agent/a")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"x": "h1", "y": "h1"}, wms)
-	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"x": "h2"}, []string{"y"}))
+	require.NoError(t, tr.AdvanceTriggerWatermarks(ctx, "agent/a", map[string]string{"x": "h2"}, []string{"y"}, nil))
 	wms, err = tr.TriggerWatermarks(ctx, "agent/a")
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{"x": "h2"}, wms)

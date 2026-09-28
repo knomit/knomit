@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,11 +117,14 @@ func TestSearch_ExpiredBoundaryIsInclusive(t *testing.T) {
 }
 
 // TestSearch_ResultsCarryExpiresAsWritten: result rows carry the stored
-// string (offset kept) on every scanner.
+// string on every scanner. The fixture wrote `soon` with a +02:00 offset; the
+// write gate normalised it to UTC, so what is stored — and what every scanner
+// returns — is the Z form (maintainer ruling 2026-09-28: all times are UTC).
 func TestSearch_ResultsCarryExpiresAsWritten(t *testing.T) {
 	svc, branch := expiresFixture(t)
 	ctx := context.Background()
-	want := expNow.Add(24 * time.Hour).In(time.FixedZone("x", 2*3600)).Format(time.RFC3339)
+	want := expNow.Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	require.True(t, strings.HasSuffix(want, "Z"))
 
 	res, err := svc.fq.Search(ctx, branch, SearchOptions{Path: "kb/alpha/soon.md"})
 	require.NoError(t, err)
@@ -247,7 +251,7 @@ func TestResolveDeadRefs_KeepsExpires(t *testing.T) {
 
 	back, err := fact.ParseFact("kb/subject.md", out)
 	require.NoError(t, err)
-	require.Equal(t, "2026-10-01T02:00:00+02:00", back.Expires)
+	require.Equal(t, "2026-10-01T00:00:00Z", back.Expires, "the same instant, in UTC (the write gate normalises)")
 }
 
 // TestFactExpires_RebuildKeepsSpacedKey: `expires : …` is valid YAML and the

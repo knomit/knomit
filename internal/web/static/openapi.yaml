@@ -1275,10 +1275,10 @@ paths:
             in the entry — a typo, an unknown value, a bad `match`, an `if`
             that does not compile — with `error` verbatim), `frozen` (invalid,
             and holding a bookmark: its fires wait for the fix and resume
-            from where it stopped), or `unsupported` (valid, but a `do` or
-            `on` value this knomit version does not act on yet, such as
-            `do: script` or `on: due`; not an error, and it holds no bookmark
-            until a version activates it — no back-fill).
+            from where it stopped), or `unsupported` (valid, but a `do`
+            value this knomit version does not act on yet, such as
+            `do: script`; not an error, and it holds no bookmark until a
+            version activates it — no back-fill).
           * `watermark`: the last agent-branch head this trigger fully
             processed. First appearance sets it to the head of that advance,
             so facts committed together with the trigger never fire. It is
@@ -1296,6 +1296,27 @@ paths:
         appends the newest N fire-log rows; the log keeps the newest 10,000
         rows per repo. `enabled: false` with a `reason` on a read-only server
         or a subscription (no agent branch to observe).
+
+        `on: due` fires (F07 PR 2). Every dispatcher run — kicked by a write
+        on the agent branch or by the reconcile tick (30 s for an origin-less
+        repo, the remote's interval otherwise; no timer of its own) — sweeps
+        the dated facts LIVE at the observed head (the index's liveness join,
+        confirmed against the head's tree, so a retracted, deleted, merged-
+        away, rewound or replaced fact never fires) whose `expires` is at or
+        before the run's clock, read once per run as UTC at whole seconds.
+        Each `due` trigger whose `match` covers the path processes the fact
+        ONCE per due instant, whatever its `if` says; changing the fact's
+        `expires` re-arms it, a body-only edit does not. Facts already
+        overdue when a `due` trigger first appears (or after a store swap, a
+        rename or a remove-and-re-add) are processed once on the first sweep.
+        A due fire's row has `episode: due`, `source: due`, `commit` = the
+        commit that introduced the fact's current content, `range_from` =
+        `range_to` = the head the run read; a mixed `[learn, due]` trigger
+        fires both episodes for a fact learned already past its date. This
+        is the one clock-dependent behaviour in F07: a wrong system clock
+        fires early or late on this machine only. Nothing else happens on
+        expiry — knomit never hides, deletes or retracts a fact by itself.
+        All timestamps here (`fired_at`) are UTC with an explicit Z.
 
         What a trigger's `if` sees as `change.author`: `id` (the commit
         author's name), `kind` (`agent` for an @agents.knomit.io address,
@@ -3191,7 +3212,7 @@ components:
         confidence: { type: number, format: double }
         sources:   { type: integer }
         as_of:     { $ref: "#/components/schemas/FactAsOf" }
-        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         _links:    { $ref: "#/components/schemas/LinkMap" }
 
@@ -3206,7 +3227,7 @@ components:
         committed_at: { type: string, format: date-time }
         operation:    { type: string }
         motifs:       { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
-        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         _links:       { $ref: "#/components/schemas/LinkMap" }
 
@@ -3296,7 +3317,7 @@ components:
         refs:       { type: array, items: { type: string } }
         confidence: { type: number, format: double }
         sources:    { type: integer }
-        expires:    { type: string, format: date-time, description: "Optional RFC 3339 expiry with an offset (e.g. 2026-10-01T00:00:00Z). A date-only or malformed value is 400. Knomit never acts on it; it is searchable (`expired`, `expires_before`, `expires_after`)." }
+        expires:    { type: string, format: date-time, description: "Optional RFC 3339 expiry with an offset (e.g. 2026-10-01T00:00:00Z); stored as the same instant in UTC with an explicit Z. A date-only or malformed value is 400. Knomit never acts on it; it is searchable (`expired`, `expires_before`, `expires_after`)." }
 
     FactUpdateRequest:
       type: object
@@ -3547,7 +3568,7 @@ components:
         confidence:  { type: number, format: double }
         impact:      { type: integer, description: "Count of DISTINCT facts reached by outgoing DERIVED_FROM edges — how many facts this was derived from. Not an edge-row count (the same lineage can be asserted at more than one commit). Global: unaffected by the `path` filter." }
         committed_at: { type: integer, format: int64, description: Unix seconds. }
-        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
 
     Stats:
@@ -3693,8 +3714,8 @@ components:
         trigger:          { type: string }
         branch:           { type: string }
         path:             { type: string }
-        episode:          { type: string, enum: [learn, update, retract] }
-        source:           { type: string, enum: [local, merged] }
+        episode:          { type: string, enum: [learn, update, retract, due] }
+        source:           { type: string, enum: [local, merged, due], description: "local or merged for a tree episode (decided by the signer); due for a due fire." }
         commit:           { type: string, description: "The ORIGINAL commit that made the change." }
         trace:            { type: string }
         outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, run] }
@@ -3709,7 +3730,7 @@ components:
         duration_ms:      { type: integer }
         diff_ms:          { type: integer }
         change_ms:        { type: integer }
-        fired_at:         { type: integer, description: "Local Unix seconds, for the operator; never read for ordering." }
+        fired_at:         { type: string, format: date-time, description: "UTC, RFC 3339 with an explicit Z; for the operator, never read for ordering." }
 
     Triggers:
       type: object
@@ -4464,7 +4485,7 @@ components:
         operation:    { type: string }
         motifs:       { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         score:        { type: number, format: double }
-        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         source:       { $ref: "#/components/schemas/LensSource" }
 
@@ -4504,7 +4525,7 @@ components:
         entities:   { type: array, items: { type: string } }
         motifs:     { type: array, items: { type: string }, description: "The fact's motifs. Absent entirely on a fact carrying none." }
         confidence: { type: number, format: double }
-        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry, as written. Absent when the fact has none." }
+        expires:    { type: string, format: date-time, description: "The fact's optional RFC 3339 expiry as stored: UTC with an explicit Z for anything this build wrote (a write normalises an offset to the same instant in UTC). Absent when the fact has none." }
         expired:    { type: boolean, description: "True when `expires` is at or before the server's clock at read time. Absent when false. Knomit never acts on it." }
         source:     { $ref: "#/components/schemas/LensSource" }
 

@@ -141,11 +141,13 @@ func TestUpdateHandler_ExpiresSetChangeClear(t *testing.T) {
 	require.False(t, update(map[string]any{"expires": "2026-10-01T00:00:00Z"}).IsError)
 	require.Contains(t, read(), "expires: \"2026-10-01T00:00:00Z\"")
 
+	// An offset is accepted and stored as the same instant in UTC (all times
+	// are UTC; the write gate normalises).
 	require.False(t, update(map[string]any{"expires": "2027-01-01T00:00:00+01:00"}).IsError)
-	require.Contains(t, read(), "expires: \"2027-01-01T00:00:00+01:00\"")
+	require.Contains(t, read(), "expires: \"2026-12-31T23:00:00Z\"")
 
 	require.False(t, update(map[string]any{"confidence": 0.7}).IsError)
-	require.Contains(t, read(), "expires: \"2027-01-01T00:00:00+01:00\"", "omitting expires leaves it unchanged")
+	require.Contains(t, read(), "expires: \"2026-12-31T23:00:00Z\"", "omitting expires leaves it unchanged")
 
 	res := update(map[string]any{"expires": "next week"})
 	require.True(t, res.IsError)

@@ -259,11 +259,20 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		gatedMotifs := knomitfact.StripSubjectMotifs(f)
 		motifsChanged := len(f.MotifWarnings) > 0 || !slices.Equal(gatedMotifs, f.Motifs)
 
+		// The expires gate, for the same reason: all times are UTC (maintainer
+		// ruling 2026-09-28), and SerializeFact normalises an offset to the
+		// same instant with an explicit Z — but this path commits the client's
+		// bytes, so a `+02:00` typed into the raw editor would land on disk
+		// unless the rewrite is forced here.
+		normExpires, _ := knomitfact.NormalizeExpires(f.Expires) // validated above: no error possible
+		expiresChanged := normExpires != f.Expires
+		f.Expires = normExpires
+
 		// The client's bytes are stored verbatim unless a gate actually changed
 		// something — a PUT that needs no rewriting must not be silently
 		// reformatted by a round trip through SerializeFact.
 		content := body.Content
-		if changed || motifsChanged {
+		if changed || motifsChanged || expiresChanged {
 			f.Refs = canonRefs
 			// SerializeFact strips again on its way out; assigning here keeps
 			// the fact handed to BuildFactView below telling the same story as
