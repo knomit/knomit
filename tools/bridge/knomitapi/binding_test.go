@@ -85,3 +85,32 @@ func TestClassifyArgs_LensModeIsStickyEvenWhenUnusable(t *testing.T) {
 		})
 	}
 }
+
+// IsUnbound is the ONLY signal that an entry starts knomit unbound: neither
+// flag appears at all. A flag with a missing or empty value is a broken entry,
+// not an unbound one — the bridge itself exits 2 on it.
+func TestIsUnbound(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"nil args", nil, true},
+		{"empty args", []string{}, true},
+		{"base url only", []string{"http://host:8080"}, true},
+		{"unrelated flag", []string{"--verbose"}, true},
+		{"repo", []string{"--repo", "proj"}, false},
+		{"repo equals", []string{"-repo=proj"}, false},
+		{"lens", []string{"--lens", "eng"}, false},
+		{"lens equals", []string{"--lens=eng"}, false},
+		{"repo token, no value", []string{"--repo"}, false},
+		{"lens token, no value", []string{"-lens"}, false},
+		{"repo equals empty", []string{"--repo="}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsUnbound(tc.args); got != tc.want {
+				t.Errorf("IsUnbound(%q) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}

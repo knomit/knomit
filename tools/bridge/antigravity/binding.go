@@ -19,6 +19,10 @@ const (
 	skipLensUnusable     = "lens_unusable"
 	skipInvalidScope     = "invalid_scope"
 	skipLensUnresolved   = "lens_unresolved"
+	// skipUnbound is not a misconfiguration: the entry starts knomit unbound
+	// and the agent binds with knomit_bind. The hook answers it with
+	// knomitapi.UnboundNote.
+	skipUnbound = "unbound"
 )
 
 // target is one config entry's resolved knomit scope.
@@ -26,6 +30,7 @@ type target struct {
 	repo     string
 	lens     string
 	lensMode bool
+	unbound  bool
 }
 
 // pluginBinding reads mcp_config.json in pluginDir and returns the knomit scope
@@ -74,7 +79,7 @@ func pluginBinding(pluginDir string) (repo, lens string, skip string) {
 	for _, k := range keys {
 		srv := cfg.MCPServers[k]
 		r, l, mode := knomitapi.ClassifyArgs(srv.Args)
-		t := target{repo: r, lens: l, lensMode: mode}
+		t := target{repo: r, lens: l, lensMode: mode, unbound: knomitapi.IsUnbound(srv.Args)}
 		switch {
 		case knomitapi.IsKnomitCommand(srv.Command):
 			byCommand = append(byCommand, t)
@@ -98,6 +103,13 @@ func pluginBinding(pluginDir string) (repo, lens string, skip string) {
 		if t != first {
 			return "", "", skipAmbiguousBinding
 		}
+	}
+
+	// Neither flag: the server starts unbound. Read from the ARGS alone — the
+	// key may carry the directory name (knomitapi.UnboundServerKey) and names
+	// nothing.
+	if first.unbound {
+		return "", "", skipUnbound
 	}
 
 	// A lens-configured entry whose name is missing or empty is unusable, and

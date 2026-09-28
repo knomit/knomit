@@ -140,6 +140,10 @@ func hookPreInvocation(r io.Reader, w io.Writer) error {
 	repo, skip := resolveWriteRepo(pluginDir)
 	if skip != "" {
 		skipReason = skip
+		if skip == skipUnbound {
+			// No repo to read context from: tell the agent how to bind instead.
+			return emitNotice(w, knomitapi.UnboundNote)
+		}
 		if msg, visible := configSkips[skip]; visible {
 			return emitNotice(w, msg)
 		}
@@ -183,8 +187,9 @@ func emitEmpty(w io.Writer) error {
 }
 
 // emitNotice injects a one-off message about a misconfiguration the user can
-// fix. Used only for states that never resolve on their own; a memory system
-// whose hook goes silently dark is its worst failure mode.
+// fix, or the bind note for an unbound entry. Used only for states that never
+// resolve on their own; a memory system whose hook goes silently dark is its
+// worst failure mode.
 func emitNotice(w io.Writer, msg string) error {
 	out := preInvocationOutput{InjectSteps: []injectStep{{EphemeralMessage: msg}}}
 	if err := json.NewEncoder(w).Encode(out); err != nil {

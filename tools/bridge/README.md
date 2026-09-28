@@ -115,7 +115,8 @@ The bridge also wraps agent-host integration helpers (typically invoked by the
 host, not by hand):
 
 ```
-kb claude init [-repo <name>]           # scaffold Claude Code integration files here
+kb claude init [-repo <name>|-lens <name>]
+                                        # scaffold Claude Code integration files here
 kb claude hook <event>                  # event ∈ session-start, post-edit,
                                         #         post-ask, pre-compact,
                                         #         memory-guard
@@ -124,6 +125,21 @@ kb antigravity init [-repo <name>|-lens <name>]
                                         # scaffold the Antigravity plugin here
 kb antigravity hook <event>             # event ∈ pre-invocation
 ```
+
+With neither `-repo` nor `-lens`, both `init` commands scaffold an **unbound**
+server: its `args` carry no flag, so `kb` connects to the unscoped endpoint and
+the agent picks a repo or lens with `knomit_bind`. The server key still follows
+the repo naming, built from the directory name (`knomit-repo-ingestion` in a
+directory called `ingestion`; other characters become `-`), but the directory
+name never reaches `args` and never fails `init`. The hooks bind from `args`
+alone, so an unbound entry is unbound whatever its key says: instead of corpus
+context, they inject one line telling the agent to call `knomit_repos`, then
+`knomit_bind`.
+
+A flagless re-`init` never unbinds a working install. If the project already
+has a knomit entry (Claude Code) or its `mcp_config.json` names a scope
+(Antigravity), `init` keeps that scope and says so. To switch an install to
+unbound, remove the knomit entry (or `mcp_config.json`) and re-run `init`.
 
 `memory-guard` is a PreToolUse hook (matcher `Write|Edit|MultiEdit|Bash`). It
 denies a tool call that would write a team-relevant note into Claude Code's
@@ -187,7 +203,7 @@ are accepted before any subcommand.
 ```
 .agents/plugins/knomit/
 ├── plugin.json
-├── mcp_config.json      kb --repo <name> (or --lens <name>)
+├── mcp_config.json      kb --repo <name>, --lens <name>, or no flag (unbound)
 ├── hooks.json           PreInvocation → kb antigravity hook pre-invocation
 ├── rules/AGENTS.md      the "Working with knomit memory" block
 └── skills/knomit-*/SKILL.md
@@ -195,7 +211,8 @@ are accepted before any subcommand.
 
 Unlike the Claude Code scaffold, **nothing here is merge-required**: every file
 belongs to the integration and is overwritten on re-run, with no merging and no
-companion files. Delete the directory
+companion files. The one thing a flagless re-run carries over is the scope an
+existing `mcp_config.json` names. Delete the directory
 and re-run `init` to restore it. Use `agy plugin disable knomit` to switch it
 off — that setting lives in your own `config.json` and survives a re-`init`.
 
@@ -259,10 +276,9 @@ of the key so a repo and a lens sharing a name cannot collide:
 
 Claude Code turns the key into the tool-name prefix `mcp__<key>__knomit_learn`,
 and the API caps tool names at 64 characters, so the repo or lens name may be at
-most 27 characters. `claude init` checks this before writing anything and fails
-with the limit named. In repo mode the name defaults to the directory basename,
-so a deeply-named directory can trip it — pass `--repo <shorter>`; the repo name
-does not have to match the directory.
+most 27 characters. `claude init` checks an explicit `--repo` or `--lens` name
+before writing anything and fails with the limit named. An unbound scaffold's
+key is cut to fit instead, so the directory name never fails `init`.
 
 > **Claude Code projects: one knomit SCOPE per project.** The above is Claude
 > Desktop config, where multiple entries are fine. A Claude Code project's

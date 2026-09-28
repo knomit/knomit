@@ -25,6 +25,31 @@ func IsKnomitKey(key string) bool {
 	return key == "knomit" || strings.HasPrefix(key, "knomit-")
 }
 
+// IsUnbound reports whether an MCP server entry's args start knomit UNBOUND:
+// neither --repo nor --lens appears in any form. The bridge then proxies to the
+// unscoped endpoint and the agent picks a repo or lens with knomit_bind.
+//
+// This is decided from the ARGS alone — never from the config key, which may
+// carry a directory name (UnboundServerKey), and never from the directory. A
+// flag whose value is missing or empty is NOT unbound: it is a broken entry,
+// and the bridge exits 2 on it.
+func IsUnbound(args []string) bool {
+	for _, a := range args {
+		for _, f := range []string{"-repo", "--repo", "-lens", "--lens"} {
+			if a == f || strings.HasPrefix(a, f+"=") {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// UnboundNote is the one line both hosts' hooks inject when the knomit entry is
+// unbound: there is no repo to read context from, so the agent is told how to
+// bind instead.
+const UnboundNote = "knomit is connected unbound: call knomit_repos, then knomit_bind, " +
+	"and pass the returned binding on every knomit tool call."
+
 // ClassifyArgs maps one MCP server entry's args to the knomit scope it targets.
 //
 // lensMode is the load-bearing third value: it is true whenever a `--lens`
