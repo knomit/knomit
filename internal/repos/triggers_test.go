@@ -539,10 +539,10 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	logs := captureLogs(t, zerolog.ErrorLevel)
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
-	// Since F07 PR 3 `do: script` is ACTIVE; `push` (PR 4) is the reserved
-	// value that is still unsupported here.
-	push := "      - {name: later, on: learn, do: push}\n"
-	setOntology(t, ri, triggerOntology("", push))
+	// Since F07 PR 3 `do: script` and PR 4 `do: push` are ACTIVE; `run`
+	// (PR 5) is the reserved value that is still unsupported here.
+	run := "      - {name: later, on: learn, do: run, recipe: worker}\n"
+	setOntology(t, ri, triggerOntology("", run))
 	write(t, ri, "kb/tasks/while-unsupported.md")
 	require.NotContains(t, watermarks(t, ri), "later", "an unsupported trigger holds no bookmark")
 	rep, err := ri.TriggerReport(context.Background(), 0)
@@ -558,7 +558,7 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 
 	// The activation half for `do: script` (T20): the SAME rule carries a
 	// trigger from unsupported (an older binary's view: the `push` above
-	// stands in for it) to active — the bookmark is set at the advance where
+	// `run` stands in for it) to active — the bookmark is set at the advance where
 	// the active declaration appears, and the writes made meanwhile never
 	// fire. Sabotage: bookmark the unsupported trigger.
 	write(t, ri, "kb/tasks/before-script.md")
@@ -568,6 +568,17 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "inbox-dispatch", rep.Triggers[0].Script)
 	require.Empty(t, firesOf(t, ri, "scripted"), "no back-fill on activation")
+
+	// T10 (F07 PR 4): the same rule for `do: push` — declared under an older
+	// binary it was unsupported and held no bookmark; activated here it
+	// bookmarks the activating advance and never fires for earlier writes.
+	write(t, ri, "kb/tasks/before-push.md")
+	pushOn := setOntology(t, ri, triggerOntology("", "      - {name: fast, on: learn, do: push}\n"))
+	require.Equal(t, pushOn, watermarks(t, ri)["fast"], "a push trigger bookmarks the head of the advance that activates it")
+	rep, err = ri.TriggerReport(context.Background(), 0)
+	require.NoError(t, err)
+	require.Equal(t, "active", rep.Triggers[0].State)
+	require.Empty(t, firesOf(t, ri, "fast"), "no back-fill on activation")
 
 	// Since F07 PR 2 a `due` trigger is ACTIVE (its sweep is triggers_due_test.go);
 	// only a reserved `do` is unsupported now.

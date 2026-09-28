@@ -123,6 +123,8 @@ func (s *triggerStats) record(name, outcome string, d time.Duration, slow bool) 
 		st.ifTimeout++
 	case "ran":
 		st.fires++
+	case "kicked":
+		st.fires++
 	case "script-error":
 		st.scriptError++
 	case "script-timeout":

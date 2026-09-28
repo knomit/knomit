@@ -40,7 +40,7 @@ func TestRunLocalReconcileLoop_AdvancesMainOnTick(t *testing.T) {
 	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runLocalReconcileLoop(loopCtx, &wg, svc, ri.Name(), ri.AgentBranch(), 20*time.Millisecond, nil)
+	go runLocalReconcileLoop(loopCtx, &wg, svc, ri.Name(), ri.AgentBranch(), 20*time.Millisecond, nil, nil)
 
 	require.Eventually(t, func() bool {
 		u, err := svc.Branches().HeadCommit(ctx, "main")
@@ -87,7 +87,7 @@ func TestRunLocalReconcileLoop_ConvergesAtStart(t *testing.T) {
 	wg.Add(1)
 	// An interval far longer than the test: only the start-up tick can
 	// satisfy this.
-	go runLocalReconcileLoop(loopCtx, &wg, svc, ri.Name(), ri.AgentBranch(), time.Hour, nil)
+	go runLocalReconcileLoop(loopCtx, &wg, svc, ri.Name(), ri.AgentBranch(), time.Hour, nil, nil)
 
 	require.Eventually(t, func() bool {
 		u, err := svc.Branches().HeadCommit(ctx, "main")
@@ -115,7 +115,7 @@ func TestRunLocalReconcileLoop_ExitsWhenTheRepoHasAnOrigin(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runLocalReconcileLoop(ctx, &wg, svc, ri.Name(), ri.AgentBranch(), 10*time.Millisecond, nil)
+	go runLocalReconcileLoop(ctx, &wg, svc, ri.Name(), ri.AgentBranch(), 10*time.Millisecond, nil, nil)
 	wg.Wait() // returns on its own; no cancel needed
 
 	mainAfter, err := svc.Branches().HeadCommit(ctx, "main")
@@ -232,7 +232,7 @@ func TestRunLocalReconcile_TransientOriginReadErrorSkipsOneTickOnly(t *testing.T
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcile(ctx, "repo", "agent/a", 10*time.Millisecond, hasOrigin, advance, nil)
+		runLocalReconcile(ctx, "repo", "agent/a", 10*time.Millisecond, hasOrigin, advance, nil, nil)
 	}()
 
 	require.Eventually(t, func() bool { return advances.Load() >= 2 }, 2*time.Second, 5*time.Millisecond,
@@ -255,7 +255,7 @@ func TestRunLocalReconcile_ExitsOnADefiniteOrigin(t *testing.T) {
 		defer close(done)
 		runLocalReconcile(context.Background(), "repo", "agent/a", 10*time.Millisecond,
 			func() (bool, error) { return true, nil },
-			func() error { advances.Add(1); return nil }, nil)
+			func() error { advances.Add(1); return nil }, nil, nil)
 	}()
 	select {
 	case <-done:
@@ -273,7 +273,7 @@ func TestRunLocalReconcile_ExitsWhenAnOriginAppearsLater(t *testing.T) {
 		defer close(done)
 		runLocalReconcile(context.Background(), "repo", "agent/a", 10*time.Millisecond,
 			func() (bool, error) { return reads.Add(1) > 2, nil },
-			func() error { return nil }, nil)
+			func() error { return nil }, nil, nil)
 	}()
 	select {
 	case <-done:
@@ -291,6 +291,6 @@ func TestRunLocalReconcileLoop_ExitsWithoutAnAgentBranch(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runLocalReconcileLoop(context.Background(), &wg, svc, ri.Name(), "", 10*time.Millisecond, nil)
+	go runLocalReconcileLoop(context.Background(), &wg, svc, ri.Name(), "", 10*time.Millisecond, nil, nil)
 	wg.Wait()
 }

@@ -281,8 +281,9 @@ func outcomesOf(rows []store.TriggerFire) []string {
 // HostFunctions: every function reaches the tool set with the arguments the
 // MCP tool takes (moment_name defaults to trigger:<name>), the results come
 // back as the tool's JSON, emit carries the payload on the branch stream,
-// push/run answer not-supported, and the fire is `ran`. Sabotage: route a
-// function to the wrong tool; drop the moment_name default.
+// push answers kicked (F07 PR 4, T6), run answers not-supported, and the fire
+// is `ran`. Sabotage: route a function to the wrong tool; drop the
+// moment_name default; keep push's stub.
 func TestScript_HostFunctions(t *testing.T) {
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "host"))
 	putScript(t, ri, "host", `
@@ -304,7 +305,7 @@ knomit.emit({q: q, e: e, l: l, u: u, r: r, push: knomit.push(), run: knomit.run(
 	require.Equal(t, trigAgent, p["l"].(map[string]any)["written_to"])
 	require.Equal(t, "kb/tasks/out/learned.md", p["u"].(map[string]any)["file"])
 	require.Equal(t, "kb/tasks/out/learned.md", p["r"].(map[string]any)["file"])
-	require.Equal(t, map[string]any{"ok": false, "status": "not-supported"}, p["push"])
+	require.Equal(t, map[string]any{"ok": true, "status": "kicked"}, p["push"])
 	require.Equal(t, map[string]any{"ok": false, "status": "not-supported"}, p["run"])
 	require.Equal(t, c0, p["trace"], "a plain firing commit is the root of its own story")
 

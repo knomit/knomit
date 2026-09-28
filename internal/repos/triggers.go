@@ -17,7 +17,8 @@
 //	   watermark; glob matching in memory; `change` built ONCE per matched
 //	   path (the toucher walk, the signer, verified, the trailer).
 //	   release
-//	B  (no store) per (trigger, path): `if` then emit, ctx checked per path;
+//	B  (no store) per (trigger, path): `if` then the action (emit, script, or
+//	   push — one non-blocking send on ri.syncWake), ctx checked per path;
 //	   timed as the trigger's own work for the statistics and the slow
 //	   detector.
 //	C  (Acquire) tx1: the buffered runs' fire rows + ONE run row per run;
@@ -102,6 +103,10 @@ type triggerHooks struct {
 	// an `if` can no longer spin on the wall clock; a spin counted in
 	// iterations shrinks under contention and made the detector tests flaky.
 	evalDelay func(trigger, path string) time.Duration
+	// flushGrace, when non-zero, replaces triggerFlushGrace in settle: a long
+	// value holds phase C's buffer pending, so every later run meets it and
+	// only overlayPending keeps a range from re-firing.
+	flushGrace time.Duration
 }
 
 var (
@@ -249,6 +254,21 @@ func (ri *RepoInstance) triggerKick() {
 	}
 }
 
+// wakeSync is the push action (F07 PR 4): ask this machine's sync loop for a
+// round now. One non-blocking send on the instance's 1-slot channel — O(1),
+// never blocks, carries nothing (no branch, no payload): the loop pushes only
+// its own agent branch. Fire-and-forget: the round's outcome is the remote's
+// sync/push status, never reported back to the fire (D-report).
+func (ri *RepoInstance) wakeSync() {
+	select {
+	case ri.syncWake <- struct{}{}:
+	default:
+	}
+}
+
+// wakeSync on the dispatcher is how phase B and the script host reach it.
+func (d *triggerDispatcher) wakeSync() { d.ri.wakeSync() }
+
 // loop receives kicks. The kick is RECEIVED before the head ref is read
 // (inside run): the reverse order would swallow the kick of a commit that
 // lands between the ref read and the drain, the lost-wake-up shape.
@@ -285,7 +305,11 @@ func (d *triggerDispatcher) settle(ctx context.Context) {
 		if empty {
 			return
 		}
-		timer := time.NewTimer(triggerFlushGrace)
+		grace := triggerFlushGrace
+		if g := currentTriggerHooks().flushGrace; g > 0 {
+			grace = g
+		}
+		timer := time.NewTimer(grace)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -1236,6 +1260,15 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 			if ctx.Err() != nil {
 				return nil, 0, 0, true // the script was interrupted by the dispatcher's cancel
 			}
+		case p.trig.Do == fact.TriggerDoPush:
+			// The push action: a wake for this machine's sync loop, nothing
+			// else — no SSE event, no commit, no trailer (fire log only). It
+			// kicks on an unparseable fact too: what needs pushing is the
+			// commit, not the fact. Its OWN case, never the emit arm below.
+			d.wakeSync()
+			outcome = store.TriggerOutcomeKicked
+			log.Debug().Str("repo", d.repo).Str("trigger", capForLog(p.trig.Name)).
+				Str("path", capForLog(p.repoPath)).Str("commit", shortHash(p.commit)).Msg("trigger kicked sync")
 		default:
 			outcome = store.TriggerOutcomeEmitted
 			if !p.parseable {
@@ -1245,7 +1278,8 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 		}
 		elapsed := time.Since(t0) - hostMS
 		evaluated++
-		if outcome == store.TriggerOutcomeEmitted || outcome == store.TriggerOutcomeUnparseable || outcome == store.TriggerOutcomeRan {
+		if outcome == store.TriggerOutcomeEmitted || outcome == store.TriggerOutcomeUnparseable || outcome == store.TriggerOutcomeRan ||
+			outcome == store.TriggerOutcomeKicked {
 			fires++
 		}
 		slow := d.slow > 0 && elapsed > d.slow

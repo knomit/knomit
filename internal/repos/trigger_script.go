@@ -442,11 +442,18 @@ func (h *scriptHost) emit(args []any) (any, error) {
 	return nil, nil
 }
 
-// push and run are PR 4's and PR 5's; here they answer not-supported and do
-// nothing (no reconcile kick, no process).
+// push is the `push` action from a script (F07 PR 4): the same non-blocking
+// wake of this machine's sync loop, and `{ok: true, status: "kicked"}` — the
+// stub's shape, so a script can branch on status. It takes no arguments and
+// ignores any it is given: nothing can name a branch. Several calls in one
+// run (or in several fires) fold into the one slot; the per-minute script
+// cap already bounds the runs. The fire's outcome stays `ran`.
 func (h *scriptHost) push(args []any) (any, error) {
-	return map[string]any{"ok": false, "status": "not-supported"}, nil
+	h.d.wakeSync()
+	return map[string]any{"ok": true, "status": store.TriggerOutcomeKicked}, nil
 }
+
+// run is PR 5's; here it answers not-supported and starts no process.
 
 func (h *scriptHost) run(args []any) (any, error) {
 	return map[string]any{"ok": false, "status": "not-supported"}, nil

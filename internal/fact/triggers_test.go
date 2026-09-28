@@ -241,12 +241,31 @@ func TestTriggers_ScriptIsActive(t *testing.T) {
 	}
 }
 
-// A reserved `do` (push, run) is valid syntax this version does not act on:
-// the trigger is `unsupported`, not `invalid` — declared (so a later version
-// finds it), not active, and NOT a problem (no warning diagnostic).
+// T10 (F07 PR 4): `do: push` compiles ACTIVE, with or without match/if.
+// Sabotage: leave push out of activeTriggerDo — it compiles unsupported.
+func TestTriggers_PushIsActive(t *testing.T) {
+	for _, entry := range []string{
+		"{name: fast, on: learn, do: push}",
+		"{name: fast, on: [learn, update], do: push, match: \"tasks/**\", if: \"change.source === 'local'\"}",
+	} {
+		o := mustParseTriggerDoc(t, ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - "+entry+"\n"))
+		set := CompileTriggers(o, testIdentity, "b")
+		st := stateOf(t, set, "fast")
+		if st.State != TriggerActive || st.Error != "" {
+			t.Errorf("%s: want active, got %+v", entry, st)
+		}
+		if ct := activeNamed(set, "fast"); ct == nil || ct.Do != TriggerDoPush {
+			t.Errorf("%s: want an active push trigger, got %+v", entry, ct)
+		}
+	}
+}
+
+// A reserved `do` (run, since F07 PR 4 activated push) is valid syntax this
+// version does not act on: the trigger is `unsupported`, not `invalid` —
+// declared (so a later version finds it), not active, and NOT a problem (no
+// warning diagnostic).
 func TestTriggers_ReservedDoIsUnsupported(t *testing.T) {
 	for _, entry := range []string{
-		"{name: later, on: learn, do: push}",
 		"{name: later, on: learn, do: run, recipe: worker}",
 	} {
 		o := mustParseTriggerDoc(t, ontologyWithTriggers("  tasks:\n    description: t\n    triggers:\n      - "+entry+"\n"))

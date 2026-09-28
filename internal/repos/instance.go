@@ -127,6 +127,12 @@ type RepoInstance struct {
 	// build() and never reassigned, so ri.onCommit reads it without a lock;
 	// its goroutine starts from activate() and stops in shutdown().
 	triggers *triggerDispatcher
+	// syncWake is the push wake (F07 PR 4): a 1-slot channel a `do: push`
+	// fire or knomit.push() sends on without blocking (wakeSync), and the
+	// sync loop — runReconcileLoop, or runLocalReconcile with no origin —
+	// receives. It lives HERE, not in a loop, so a wake sent while
+	// ActivateSync restarts the loop is not lost. Set once in build().
+	syncWake chan struct{}
 	// handle is the current store generation; nil while no store is attached
 	// (mid-SwapStore, or a test instance without a service). closed marks the
 	// beginning of permanent teardown. Both are guarded by mu; all store access

@@ -19,7 +19,8 @@ func TestOpenAPI_TriggersDeclared(t *testing.T) {
 	require.True(t, ok, "the triggers route must be in the served spec")
 	desc := op["get"].(map[string]any)["description"].(string)
 	for _, want := range []string{"`do: script`", ".knomit/triggers/<script>.js", "Knomit-Trace", "Knomit-Cause", "Knomit-Trigger",
-		"script_rate_per_minute", "DROPPED", "`self_caused`", "`rate-limited`", "`script-timeout`", "`script-error`", "`ran`"} {
+		"script_rate_per_minute", "DROPPED", "`self_caused`", "`rate-limited`", "`script-timeout`", "`script-error`", "`ran`",
+		"`do: push`", "`kicked`", "not a debounce", "`{ok: true, status: \"kicked\"}`"} {
 		require.Contains(t, desc, want)
 	}
 	events := paths["/repos/{repo}/branches/{branch}/events"].(map[string]any)["get"].(map[string]any)["description"].(string)
@@ -33,7 +34,7 @@ func TestOpenAPI_TriggersDeclared(t *testing.T) {
 	}
 	require.ElementsMatch(t, []any{"learn", "update", "retract", "due"}, enumOf("episode"))
 	require.ElementsMatch(t, []any{"local", "merged", "due"}, enumOf("source"))
-	require.ElementsMatch(t, []any{"emitted", "if-error", "if-timeout", "unparseable", "ran", "script-error", "script-timeout", "rate-limited", "run"}, enumOf("outcome"))
+	require.ElementsMatch(t, []any{"emitted", "if-error", "if-timeout", "unparseable", "ran", "script-error", "script-timeout", "rate-limited", "kicked", "run"}, enumOf("outcome"))
 	require.Equal(t, "date-time", fire["fired_at"].(map[string]any)["format"])
 
 	trigger := schemas["Trigger"].(map[string]any)
