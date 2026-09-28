@@ -254,6 +254,29 @@ type ExperimentsConfig struct {
 	ExpiryDays int `toml:"expiry_days"`
 }
 
+// DefaultScriptRatePerMinute is the built-in per-trigger script rate cap
+// (F07 PR 3, maintainer ruling 2026-09-28: "keep the brake per minute, per
+// trigger", with a configurable default). Defaults() sets it; the dispatcher
+// also falls back to it when handed a Config that never went through Load
+// (a zero value), so "0 = unlimited" cannot happen anywhere.
+const DefaultScriptRatePerMinute = 60
+
+// TriggersConfig configures the trigger dispatcher (F07). The slow-trigger
+// detector's threshold lives under [log] beside the slow-request one; this
+// section holds what governs the triggers themselves.
+type TriggersConfig struct {
+	// ScriptRatePerMinute caps how many times ONE `do: script` trigger's
+	// script may run per minute on this machine (a sliding window of run
+	// instants, per trigger, in memory). Fires beyond the cap are DROPPED for
+	// good on this machine: the bookmark moves past them and they are never
+	// retried; each is recorded as `rate-limited` in the fire log and the
+	// statistics, and the cap logs one WARN when it first bites. It is the
+	// only brake on two scripts that feed each other (a script's own write
+	// never re-fires its own trigger on that path; chains across triggers are
+	// allowed on purpose). Default 60. Must be >= 1: there is no "unlimited".
+	ScriptRatePerMinute int `toml:"script_rate_per_minute"`
+}
+
 // Config is the root configuration, composed of section structs.
 type Config struct {
 	Home string `toml:"repo"`
@@ -300,6 +323,7 @@ type Config struct {
 	Session             SessionConfig      `toml:"session"`
 	Discovery           DiscoveryConfig    `toml:"discovery"`
 	Experiments         ExperimentsConfig  `toml:"experiments"`
+	Triggers            TriggersConfig     `toml:"triggers"`
 	Embeddings          EmbeddingsConfig   `toml:"embeddings"`
 	LLM                 LLMConfig          `toml:"llm"`
 	Remote              RemoteAuthConfig   `toml:"remote"`
@@ -542,6 +566,7 @@ func Defaults() Config {
 			Provider: "gemini",
 		},
 		Experiments: ExperimentsConfig{ExpiryDays: 30},
+		Triggers:    TriggersConfig{ScriptRatePerMinute: DefaultScriptRatePerMinute},
 		Git: GitConfig{
 			Serve:                  true,
 			NetworkTimeout:         120 * time.Second,
@@ -668,6 +693,7 @@ func Load() (Config, error) {
 		envIntOr("KNOMIT_LOG_MAX_AGE", &cfg.Log.MaxAgeDays),
 		envIntOr("KNOMIT_LOG_SLOW_MS", &cfg.Log.SlowRequestMS),
 		envIntOr("KNOMIT_LOG_SLOW_TRIGGER_MS", &cfg.Log.SlowTriggerMS),
+		envIntOr("KNOMIT_TRIGGERS_SCRIPT_RATE_PER_MINUTE", &cfg.Triggers.ScriptRatePerMinute),
 	} {
 		if err != nil {
 			return Config{}, err
@@ -771,6 +797,12 @@ func (c Config) Validate() error {
 	}
 	if err := ValidateNeighborKinds(c.ClusterCache.NeighborKinds); err != nil {
 		return err
+	}
+	// triggers.script_rate_per_minute is a brake, and a brake set to 0 would
+	// have to mean either "nothing runs" or "no brake" — both surprises. Fail
+	// at boot instead; there is no unlimited setting.
+	if c.Triggers.ScriptRatePerMinute < 1 {
+		return fmt.Errorf("config: triggers.script_rate_per_minute must be >= 1, got %d", c.Triggers.ScriptRatePerMinute)
 	}
 	// discovery.effort_default is consumed raw by the MCP review/hypothesize
 	// handlers (it is NOT coerced like discovery.bridge), so an unknown value

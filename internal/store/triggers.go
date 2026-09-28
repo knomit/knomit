@@ -35,17 +35,32 @@ import (
 // trail (the trail is the trace trailers in git).
 const TriggerFireRetention = 10000
 
-// Fire outcomes. `if-false` is COUNTED in the dispatcher's statistics and never
-// written as a row, so the cap holds real fires. `run` marks the one summary
-// row each dispatcher run writes.
+// Fire outcomes. `if-false` and `self-caused` are COUNTED in the dispatcher's
+// statistics and never written as a row, so the cap holds real fires. `run`
+// marks the one summary row each dispatcher run writes. The `script-*` and
+// `rate-limited` outcomes are a `do: script` trigger's (F07 PR 3): `ran` is
+// its `emitted`; `self-caused` is the loop guard (the toucher of the path
+// carries `Knomit-Trigger: <this trigger>`, so the fire is skipped before
+// `if`); `rate-limited` is a fire DROPPED by the per-minute cap. The column
+// is free text; adding a kind needs no migration.
 const (
-	TriggerOutcomeEmitted     = "emitted"
-	TriggerOutcomeIfFalse     = "if-false"
-	TriggerOutcomeIfError     = "if-error"
-	TriggerOutcomeIfTimeout   = "if-timeout"
-	TriggerOutcomeUnparseable = "unparseable"
-	TriggerOutcomeRun         = "run"
+	TriggerOutcomeEmitted       = "emitted"
+	TriggerOutcomeIfFalse       = "if-false"
+	TriggerOutcomeIfError       = "if-error"
+	TriggerOutcomeIfTimeout     = "if-timeout"
+	TriggerOutcomeUnparseable   = "unparseable"
+	TriggerOutcomeRun           = "run"
+	TriggerOutcomeRan           = "ran"
+	TriggerOutcomeScriptError   = "script-error"
+	TriggerOutcomeScriptTimeout = "script-timeout"
+	TriggerOutcomeRateLimited   = "rate-limited"
+	TriggerOutcomeSelfCaused    = "self-caused"
 )
+
+// ErrNoScriptAtCommit: the commit's tree holds no `.knomit/triggers/<name>.js`
+// for the trigger's script name. The trigger is `invalid` on the endpoint and
+// every fire is a `script-error` until the file exists at the head.
+var ErrNoScriptAtCommit = errors.New("script not found at the head")
 
 // ErrNoOntologyAtCommit: the commit's tree holds no ontology file at any of the
 // known paths. The dispatcher keeps its last good trigger set.
@@ -156,6 +171,11 @@ type TriggerIndex interface {
 	// fact.OntologyPathsNewestFirst that exists as a file), and returns its
 	// path, blob hash and content.
 	OntologyAtCommit(ctx context.Context, commit plumbing.Hash) (path, blob string, data []byte, err error)
+	// ScriptAt reads `.knomit/triggers/<name>.js` from the commit's own tree
+	// (the same rule as OntologyAtCommit: a directory or an unreadable blob is
+	// an error, never "absent"), returning its blob hash — the script cache's
+	// key — and content. ErrNoScriptAtCommit when the file is not there.
+	ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (blob string, data []byte, err error)
 	// Toucher finds the commit that introduced the blob path carries at head:
 	// git's own history simplification, with no clock. See the method.
 	Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error)
@@ -271,6 +291,40 @@ func (rh *repoHandler) OntologyAtCommit(ctx context.Context, commit plumbing.Has
 		return p, entry.Hash.String(), []byte(body), nil
 	}
 	return "", "", nil, ErrNoOntologyAtCommit
+}
+
+// ScriptAt implements TriggerIndex. The path is fact.TriggerScriptPath(name);
+// the name was validated kebab-case at compile time, so it names a file
+// directly under .knomit/triggers/ and nothing else.
+func (rh *repoHandler) ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
+	c, err := rh.repo.CommitObject(commit)
+	if err != nil {
+		return "", nil, fmt.Errorf("triggers: script at %s: %w", commit, err)
+	}
+	tree, err := c.Tree()
+	if err != nil {
+		return "", nil, fmt.Errorf("triggers: tree of %s: %w", commit, err)
+	}
+	p := fact.TriggerScriptPath(name)
+	entry, err := tree.FindEntry(p)
+	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return "", nil, ErrNoScriptAtCommit
+	}
+	if err != nil {
+		return "", nil, fmt.Errorf("triggers: script entry %q at %s: %w", p, commit, err)
+	}
+	if !entry.Mode.IsFile() {
+		return "", nil, fmt.Errorf("triggers: script path %q at %s is not a file", p, commit)
+	}
+	f, err := tree.TreeEntryFile(entry)
+	if err != nil {
+		return "", nil, fmt.Errorf("triggers: script blob %q at %s: %w", p, commit, err)
+	}
+	body, err := f.Contents()
+	if err != nil {
+		return "", nil, fmt.Errorf("triggers: script contents %q at %s: %w", p, commit, err)
+	}
+	return entry.Hash.String(), []byte(body), nil
 }
 
 // TriggerTrees reads paths out of commit trees, caching every decoded tree

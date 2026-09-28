@@ -43,9 +43,13 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"d.run", "d.phaseA", "d.advance", "d.sweepDue", "d.phaseB", "d.buffer", "d.maybeFlush", "d.flush", "d.settle", "d.flushOnStop", "d.resetPending",
 		"d.overlayPending", "d.verifyModeOn", "d.verifiedBelow", "d.buildChange", "d.emit", "d.recordSet",
 		"d.lastCompiledSet", "d.logInvalidOnce", "d.logOntologyErrorOnce", "d.clearOntologyError", "d.clock",
-		"d.stats.record", "d.stats.recordRun", "d.stats.view", "d.stats.runView", "d.pending.empty", "rs.didWork",
+		"d.stats.record", "d.stats.recordRun", "d.stats.recordSelfCaused", "d.stats.view", "d.stats.runView", "d.pending.empty", "rs.didWork",
 		"cr.metaOf", "factGlobal", "nameStates", "episodeOf", "shortHash", "capForLog", "appendTrigger",
 		"d.cancel", "cancel", "timer.Stop", "h",
+		// the `do: script` half (trigger_script.go has its own list below):
+		// the phase-A load, the phase-B run, the report overlay, the trace
+		"newScriptState", "d.loadScripts", "d.runScript", "d.scriptError", "deriveTrace", "hostMS.Milliseconds",
+		"ev.Str", "ev.Msg", "string",
 		// sync and context
 		"d.mu.Lock", "d.mu.Unlock", "d.wg.Add", "d.wg.Wait", "d.wg.Done", "triggerHooksMu.Lock", "triggerHooksMu.Unlock",
 		"context.WithCancel", "context.WithTimeout", "context.Background", "ctx.Err", "ctx.Done",
@@ -55,6 +59,27 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"strings.TrimPrefix", "strings.LastIndex", "strings.HasSuffix", "strings.ToLower",
 		"plumbing.NewHash", "commit.String", "head.String", "errors.As", "err.Error", "fmt.Sprintf",
 		"sort.Strings", "sort.Slice", "sort.SliceStable", "append", "len", "make", "delete", "recover",
+	},
+	// The script host: its ONLY way to the store is the injected ScriptTools
+	// (the MCP handlers, which take the branch lock like any writer) and the
+	// one tree read of the script (tr.ScriptAt); the hub for emit; the log;
+	// pure computation. Nothing here writes a fact, a ref or an object.
+	"trigger_script.go": {
+		// the store: the script blob at the head, and the injected tool set
+		"tr.ScriptAt", "?.Call",
+		// the binding and the trailers the handlers see
+		"NewBindingOfRepo", "WithBinding", "store.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
+		// the sandbox
+		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath",
+		// the hub (through emit) and the log
+		"h.d.emit", "log.Error", "log.Warn", "?.Str", "?.Int", "?.Dur", "?.Msg", "crashdump.ReportRecovered",
+		// the dispatcher's own state and helpers
+		"currentTriggerHooks", "d.scriptFor", "d.rateAllows", "d.warnOnce", "h.d.warnOnce", "h.functions", "h.call", "h.momentName", "h.factPath",
+		"d.mu.Lock", "d.mu.Unlock", "argAt", "stringArg", "objectArg", "capForLog",
+		// pure helpers
+		"time.Now", "time.Since", "now.Add", "?.After", "json.Marshal", "json.Unmarshal", "strings.TrimSpace",
+		"errors.Is", "errors.As", "errors.New", "fmt.Errorf", "fmt.Sprintf", "err.Error", "cs.err.Error",
+		"append", "len", "delete", "string", "recover",
 	},
 }
 

@@ -31,10 +31,13 @@ type triggerStats struct {
 // slow trigger.
 type triggerStat struct {
 	evaluations, fires, ifFalse, ifError, ifTimeout, unparseable, slow int64
-	count                                                              int64
-	min, max                                                           time.Duration
-	recent                                                             []time.Duration // ring of the last triggerP95Window
-	recentPos                                                          int
+	// the `do: script` outcomes (F07 PR 3); selfCaused counts fires the
+	// loop guard skipped before `if` (not evaluations, no row)
+	scriptError, scriptTimeout, rateLimited, selfCaused int64
+	count                                               int64
+	min, max                                            time.Duration
+	recent                                              []time.Duration // ring of the last triggerP95Window
+	recentPos                                           int
 }
 
 // TriggerLastRun is the last dispatcher run's numbers.
@@ -68,14 +71,22 @@ type TriggerDurationStats struct {
 
 // TriggerStatsView is one trigger's statistics as the endpoint shows them.
 type TriggerStatsView struct {
-	Evaluations int64                `json:"evaluations"`
-	Fires       int64                `json:"fires"`
-	IfFalse     int64                `json:"if_false"`
-	IfError     int64                `json:"if_error"`
-	IfTimeout   int64                `json:"if_timeout"`
-	Unparseable int64                `json:"unparseable"`
-	Slow        int64                `json:"slow"`
-	Duration    TriggerDurationStats `json:"duration"`
+	Evaluations int64 `json:"evaluations"`
+	Fires       int64 `json:"fires"`
+	IfFalse     int64 `json:"if_false"`
+	IfError     int64 `json:"if_error"`
+	IfTimeout   int64 `json:"if_timeout"`
+	Unparseable int64 `json:"unparseable"`
+	// The `do: script` kinds: ScriptError (a throw, a refused write, a
+	// missing or uncompilable script), ScriptTimeout (the budget),
+	// RateLimited (dropped by the per-minute cap), SelfCaused (skipped by
+	// the loop guard: the path's toucher was this trigger's own script).
+	ScriptError   int64                `json:"script_error"`
+	ScriptTimeout int64                `json:"script_timeout"`
+	RateLimited   int64                `json:"rate_limited"`
+	SelfCaused    int64                `json:"self_caused"`
+	Slow          int64                `json:"slow"`
+	Duration      TriggerDurationStats `json:"duration"`
 }
 
 func newTriggerStats() *triggerStats {
@@ -110,6 +121,14 @@ func (s *triggerStats) record(name, outcome string, d time.Duration, slow bool) 
 		st.ifError++
 	case "if-timeout":
 		st.ifTimeout++
+	case "ran":
+		st.fires++
+	case "script-error":
+		st.scriptError++
+	case "script-timeout":
+		st.scriptTimeout++
+	case "rate-limited":
+		st.rateLimited++
 	}
 	if slow {
 		st.slow++
@@ -127,6 +146,14 @@ func (s *triggerStats) record(name, outcome string, d time.Duration, slow bool) 
 		st.recent[st.recentPos] = d
 		st.recentPos = (st.recentPos + 1) % triggerP95Window
 	}
+}
+
+// recordSelfCaused counts a fire the loop guard skipped: not an evaluation
+// (no `if` ran), no duration, no row.
+func (s *triggerStats) recordSelfCaused(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stat(name).selfCaused++
 }
 
 // recordRun records one completed dispatcher run.
@@ -157,6 +184,7 @@ func (s *triggerStats) view(name string) TriggerStatsView {
 	return TriggerStatsView{
 		Evaluations: st.evaluations, Fires: st.fires, IfFalse: st.ifFalse, IfError: st.ifError,
 		IfTimeout: st.ifTimeout, Unparseable: st.unparseable, Slow: st.slow,
+		ScriptError: st.scriptError, ScriptTimeout: st.scriptTimeout, RateLimited: st.rateLimited, SelfCaused: st.selfCaused,
 		Duration: TriggerDurationStats{
 			Count:       st.count,
 			MinMS:       ms(st.min),

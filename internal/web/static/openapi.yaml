@@ -1093,14 +1093,19 @@ paths:
         `sync_ok` / `sync_error` / `verify-failed`, `push_ok` / `push_error`,
         and `trigger`.
 
-        `trigger` is F07's `emit` action: a trigger declared in the ontology
-        matched a fact path that changed on this repo's agent branch and its
-        `if` held. `data` is `{trigger, path, episode, source, commit, trace}`:
+        `trigger` is F07's `emit` action, or a script's `knomit.emit(payload)`:
+        a trigger declared in the ontology matched a fact path that changed
+        on this repo's agent branch and its `if` held. `data` is
+        `{trigger, path, episode, source, commit, trace, payload?}`:
         `episode` is `learn` | `update` | `retract` (derived from the tree
         difference, never from commit labels), `source` is `local` (this
         instance signed the originating commit) or `merged`, `commit` is the
-        ORIGINAL commit that made the change (not this machine's merge), and
-        `trace` is the commit's `Knomit-Trace` trailer when it carries one.
+        ORIGINAL commit that made the change (not this machine's merge),
+        `trace` is the fire's story id — the commit's `Knomit-Trace` trailer
+        when it carries one, else the task id when the fact is a task, else
+        the commit's own hash; never empty — and `payload` is whatever the
+        script passed to `knomit.emit` (any JSON value; absent for the
+        `emit` action).
         The event is sent ONLY on the stream of the agent branch it happened
         on, and it is published straight from the dispatcher, not through the
         debounced head-change path, so it arrives within the run that produced
@@ -1273,12 +1278,17 @@ paths:
 
           * `state`: `active` (compiled and evaluated), `invalid` (a problem
             in the entry — a typo, an unknown value, a bad `match`, an `if`
-            that does not compile — with `error` verbatim), `frozen` (invalid,
+            that does not compile — with `error` verbatim; or, for a
+            `do: script` trigger, a script that is missing at the head or
+            does not compile — then the bookmark keeps advancing and every
+            fire is a `script-error` row), `frozen` (invalid,
             and holding a bookmark: its fires wait for the fix and resume
             from where it stopped), or `unsupported` (valid, but a `do`
             value this knomit version does not act on yet, such as
-            `do: script`; not an error, and it holds no bookmark until a
-            version activates it — no back-fill).
+            `do: push` or `do: run`; not an error, and it holds no bookmark
+            until a version activates it — no back-fill).
+          * `script`: for `do: script`, the script name: the file
+            `.knomit/triggers/<script>.js` at the head of the agent branch.
           * `watermark`: the last agent-branch head this trigger fully
             processed. First appearance sets it to the head of that advance,
             so facts committed together with the trigger never fire. It is
@@ -1296,6 +1306,38 @@ paths:
         appends the newest N fire-log rows; the log keeps the newest 10,000
         rows per repo. `enabled: false` with a `reason` on a read-only server
         or a subscription (no agent branch to observe).
+
+        `do: script` (F07 PR 3). The script `.knomit/triggers/<script>.js` is
+        repo content read from the head of this machine's agent branch (a
+        changed file takes effect on the next fire, no restart; the change
+        itself fires nothing) and runs in the same sandbox as `if` — no
+        filesystem, network, process or clock (`Date.now()` is the run's UTC
+        instant) — with the same frozen `fact`, `agent` and `change` globals
+        plus one host object: `knomit.query(opts)`, `knomit.explain(path,
+        opts?)` (reads), `knomit.learn(fact | [facts], opts?)`,
+        `knomit.update(path, opts)`, `knomit.retract(path, opts?)` (REAL
+        writes: each is a signed commit on THIS machine's agent branch
+        through the same code path as the MCP tools — validations, dedup,
+        refs gate, CAS — authored and signed by this machine, never as the
+        author whose change fired it; a script may not write under
+        `.knomit/`), `knomit.emit(payload)`, and `knomit.push()` /
+        `knomit.run()` which answer `{ok: false, status: "not-supported"}`
+        until later versions. Every commit a script makes ends with the
+        trailers `Knomit-Trace: <trace>` (the fire's `trace`, copied
+        forward), `Knomit-Cause: <commit>` (the firing commit) and
+        `Knomit-Trigger: <name>` inside the signed message, so
+        `git log --all --grep='^Knomit-Trace: <id>'` on the origin or any
+        clone lists one story. A script's own write never re-fires its own
+        trigger on that path (`self_caused` in the statistics; a `due` fire
+        is never self-caused, so a script may re-arm its own due trigger);
+        two different triggers may feed each other on purpose, bounded only
+        by `[triggers].script_rate_per_minute` (default 60) per trigger per
+        machine — fires beyond it are DROPPED, not delayed: the bookmark
+        moves past them and each is a `rate-limited` row. One fire has a 5 s
+        budget (`script-timeout`); a throw, a refused write, a missing or
+        uncompilable script is a `script-error` row with the message; a
+        completed fire is `ran`. The trigger's own duration excludes the
+        time spent inside host calls.
 
         `on: due` fires (F07 PR 2). Every dispatcher run — kicked by a write
         on the agent branch or by the reconcile tick (30 s for an origin-less
@@ -3710,6 +3752,10 @@ components:
         if_error:    { type: integer }
         if_timeout:  { type: integer }
         unparseable: { type: integer }
+        script_error:   { type: integer, description: "do: script — a throw, a refused write, a missing or uncompilable script." }
+        script_timeout: { type: integer, description: "do: script — the 5 s budget." }
+        rate_limited:   { type: integer, description: "do: script — fires dropped by [triggers].script_rate_per_minute." }
+        self_caused:    { type: integer, description: "Fires skipped by the loop guard: the path's last writer was this trigger's own script (never counted as an evaluation, never logged)." }
         slow:        { type: integer, description: "Evaluations slower than [log].slow_trigger_ms." }
         duration:    { $ref: "#/components/schemas/TriggerDuration" }
 
@@ -3721,9 +3767,10 @@ components:
         node:      { type: string, description: "The ontology node that declares it (lowercase path)." }
         match:     { type: string, description: "The pattern after placeholder substitution for an active trigger; as written otherwise." }
         on:        { type: array, items: { type: string } }
-        do:        { type: string }
+        do:        { type: string, enum: [emit, script, push, run] }
+        script:    { type: string, description: "For do: script — the name of .knomit/triggers/<script>.js." }
         state:     { type: string, enum: [active, invalid, frozen, unsupported] }
-        error:     { type: string, description: "The problem (invalid/frozen) or the reason (unsupported), verbatim." }
+        error:     { type: string, description: "The problem (invalid/frozen; for do: script also a missing or uncompilable script) or the reason (unsupported), verbatim." }
         watermark: { type: string, description: "The last agent-branch head fully processed (40-hex); absent before first appearance and for unsupported triggers." }
         stats:     { $ref: "#/components/schemas/TriggerStats" }
 
@@ -3738,8 +3785,8 @@ components:
         episode:          { type: string, enum: [learn, update, retract, due] }
         source:           { type: string, enum: [local, merged, due], description: "local or merged for a tree episode (decided by the signer); due for a due fire." }
         commit:           { type: string, description: "The ORIGINAL commit that made the change." }
-        trace:            { type: string }
-        outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, run] }
+        trace:            { type: string, description: "The fire's story id: the commit's Knomit-Trace trailer, else the task id, else the commit; never empty." }
+        outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, ran, script-error, script-timeout, rate-limited, run] }
         error:            { type: string }
         nonlinear:        { type: boolean, description: "The advance's old head was not an ancestor of the new one (a rewind replay)." }
         range_from:       { type: string }

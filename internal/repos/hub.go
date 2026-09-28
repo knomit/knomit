@@ -2,6 +2,7 @@ package repos
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -235,6 +236,9 @@ type TriggerEvent struct {
 	Source  string `json:"source"`
 	Commit  string `json:"commit"`
 	Trace   string `json:"trace,omitempty"`
+	// Payload is what a script passed to knomit.emit(payload) — any JSON
+	// value; absent for the `emit` action. One event shape for both.
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
 // broadcastTrigger publishes one trigger fire to this repo's SSE subscribers.

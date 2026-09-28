@@ -200,20 +200,41 @@ func setHooks(t *testing.T, h triggerHooks) {
 }
 
 // parkDispatcher blocks the worker between the kick and the ref read until
-// release is called. Only the FIRST run is parked.
+// release is called. Only the FIRST run is parked. The hooks already
+// installed (a clock, a slow `if`) stay in force while parked and after.
 func parkDispatcher(t *testing.T, ri *RepoInstance) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
 	var once sync.Once
-	setHooks(t, triggerHooks{afterKick: func() {
+	prev := currentTriggerHooks()
+	parked := prev
+	parked.afterKick = func() {
 		<-gate
-	}})
+	}
+	setHooks(t, parked)
 	return func() {
 		once.Do(func() {
 			close(gate)
-			setHooks(t, triggerHooks{})
+			setHooks(t, prev)
 		})
 	}
+}
+
+// slowIf makes the named trigger's own work take ms of REAL wall time on the
+// paths match accepts (every path when match is nil), keeping the other
+// hooks installed. The sandbox's Date.now() is the run's pinned clock, so an
+// `if` cannot spin on the wall clock, and a spin counted in iterations
+// shrinks under CPU contention; a sleep inside the timed section does not.
+func slowIf(t *testing.T, trigger string, ms int, match func(path string) bool) {
+	t.Helper()
+	h := currentTriggerHooks()
+	h.evalDelay = func(name, path string) time.Duration {
+		if name == trigger && (match == nil || match(path)) {
+			return time.Duration(ms) * time.Millisecond
+		}
+		return 0
+	}
+	setHooks(t, h)
 }
 
 // newTriggerRepo boots a repo with the given trigger entries installed.
@@ -373,7 +394,11 @@ func TestDispatch_TraceFromTrailer(t *testing.T) {
 		if f.Path == "kb/tasks/with.md" {
 			require.Equal(t, "t-1", f.Trace)
 		} else {
-			require.Equal(t, "", f.Trace)
+			// Since F07 PR 3 the trace is DERIVED and never empty: a commit
+			// without a trailer (and a fact that is not a task) is its own
+			// story, keyed by its hash.
+			require.Equal(t, f.Commit, f.Trace, "a commit without a trailer is the root of its own story")
+			require.Len(t, f.Trace, 40)
 		}
 	}
 }
@@ -514,8 +539,10 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	logs := captureLogs(t, zerolog.ErrorLevel)
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
-	script := "      - {name: later, on: learn, do: script, script: inbox-dispatch}\n"
-	setOntology(t, ri, triggerOntology("", script))
+	// Since F07 PR 3 `do: script` is ACTIVE; `push` (PR 4) is the reserved
+	// value that is still unsupported here.
+	push := "      - {name: later, on: learn, do: push}\n"
+	setOntology(t, ri, triggerOntology("", push))
 	write(t, ri, "kb/tasks/while-unsupported.md")
 	require.NotContains(t, watermarks(t, ri), "later", "an unsupported trigger holds no bookmark")
 	rep, err := ri.TriggerReport(context.Background(), 0)
@@ -528,6 +555,19 @@ func TestDispatch_UnsupportedNoBackfill(t *testing.T) {
 	require.Equal(t, enabled, watermarks(t, ri)["later"], "first set at the advance where it becomes active")
 	write(t, ri, "kb/tasks/after-enable.md")
 	require.Equal(t, []string{"kb/tasks/after-enable.md"}, pathsOf(firesOf(t, ri, "later")), "no back-fill")
+
+	// The activation half for `do: script` (T20): the SAME rule carries a
+	// trigger from unsupported (an older binary's view: the `push` above
+	// stands in for it) to active — the bookmark is set at the advance where
+	// the active declaration appears, and the writes made meanwhile never
+	// fire. Sabotage: bookmark the unsupported trigger.
+	write(t, ri, "kb/tasks/before-script.md")
+	scriptOn := setOntology(t, ri, triggerOntology("", "      - {name: scripted, on: learn, do: script, script: inbox-dispatch}\n"))
+	require.Equal(t, scriptOn, watermarks(t, ri)["scripted"], "a script trigger bookmarks the head of the advance that activates it")
+	rep, err = ri.TriggerReport(context.Background(), 0)
+	require.NoError(t, err)
+	require.Equal(t, "inbox-dispatch", rep.Triggers[0].Script)
+	require.Empty(t, firesOf(t, ri, "scripted"), "no back-fill on activation")
 
 	// Since F07 PR 2 a `due` trigger is ACTIVE (its sweep is triggers_due_test.go);
 	// only a reserved `do` is unsupported now.
@@ -806,9 +846,9 @@ func TestDispatch_SurvivesSwapStore(t *testing.T) {
 // completes without waiting for it, and teardown stops the run within one
 // evaluation. Sabotage: hold Acquire across phase B.
 func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
-	busy := "(function(){ var s = Date.now(); while (Date.now() - s < 90) {} return true; })()"
-	m, ri := newTriggerRepo(t, trig("slow", "learn", "", busy))
+	m, ri := newTriggerRepo(t, trig("slow", "learn", "", ""))
 	write(t, ri, "kb/tasks/warm.md")
+	slowIf(t, "slow", 90, nil)
 	release := parkDispatcher(t, ri)
 	for i := 0; i < 30; i++ {
 		writeOn(t, ri, trigAgent, fmt.Sprintf("kb/tasks/p%02d.md", i))

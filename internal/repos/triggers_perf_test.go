@@ -16,10 +16,8 @@ import (
 	"knomit/internal/store"
 )
 
-// busyIf is an `if` that spins for about ms milliseconds, then holds.
-func busyIf(ms int) string {
-	return fmt.Sprintf("(function(){ var s = Date.now(); while (Date.now() - s < %d) {} return true; })()", ms)
-}
+// The slow `if` in these tests is slowIf (triggers_test.go): a real 90 ms of
+// wall time inside the trigger's timed section, whatever the CPU load.
 
 // newSlowRepo boots a repo with slow_trigger_ms set.
 func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoInstance) {
@@ -37,13 +35,14 @@ func newSlowRepo(t *testing.T, slowMS int, entries ...string) (*Manager, *RepoIn
 
 // ---- Slow-trigger detector and statistics
 
-// SlowIfIsReported: with slow_trigger_ms = 40, a trigger whose `if` spins ~90
-// ms logs exactly one "slow trigger" WARN naming repo, branch, trigger, path
-// and elapsed, and its `slow` count is 1; a fast trigger in the same run logs
-// nothing. Sabotage: hard-code the threshold, or time the whole run.
+// SlowIfIsReported: with slow_trigger_ms = 40, a trigger whose own work takes
+// 90 ms logs exactly one "slow trigger" WARN naming repo, branch, trigger,
+// path and elapsed, and its `slow` count is 1; a fast trigger in the same run
+// logs nothing. Sabotage: hard-code the threshold, or time the whole run.
 func TestDispatch_SlowIfIsReported(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
-	_, ri := newSlowRepo(t, 40, trig("slow", "learn", "", busyIf(90)), trig("fast", "learn", "", "true"))
+	_, ri := newSlowRepo(t, 40, trig("slow", "learn", "", "true"), trig("fast", "learn", "", "true"))
+	slowIf(t, "slow", 90, nil)
 	write(t, ri, "kb/tasks/x.md")
 	out := logs.String()
 	require.Equal(t, 1, strings.Count(out, `"message":"slow trigger"`), "%s", out)
@@ -81,8 +80,8 @@ func TestDispatch_ChangeCostNotChargedToTrigger(t *testing.T) {
 // slow duration; count, min and max are exact. Sabotage: report the mean, or
 // leave the slow samples out of the window.
 func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
-	cond := "change.path.indexOf('slow') >= 0 ? " + busyIf(90) + " : true"
-	_, ri := newTriggerRepo(t, trig("mixed", "learn", "", cond))
+	_, ri := newTriggerRepo(t, trig("mixed", "learn", "", "true"))
+	slowIf(t, "mixed", 90, func(path string) bool { return strings.Contains(path, "slow") })
 	release := parkDispatcher(t, ri)
 	var last string
 	for i := 0; i < 40; i++ {
@@ -115,7 +114,8 @@ func TestDispatch_P95MovesWithASlowTrigger(t *testing.T) {
 // is in internal/config. Sabotage: a constant threshold.
 func TestDispatch_SlowTriggerThresholdFromConfig(t *testing.T) {
 	logs := captureLogs(t, zerolog.WarnLevel)
-	_, ri := newSlowRepo(t, 0, trig("slow", "learn", "", busyIf(90)))
+	_, ri := newSlowRepo(t, 0, trig("slow", "learn", "", "true"))
+	slowIf(t, "slow", 90, nil)
 	write(t, ri, "kb/tasks/x.md")
 	require.NotContains(t, logs.String(), "slow trigger")
 	require.Equal(t, int64(0), ri.triggers.stats.view("slow").Slow)

@@ -41,6 +41,7 @@ type repoBuilder struct {
 	// has to uphold it.
 	subscribed            bool
 	embedder              store.BatchEmbedder
+	scriptTools           ScriptTools
 	keyPath               string
 	resumeWindow          time.Duration
 	ctx                   context.Context
@@ -655,7 +656,8 @@ func (b *repoBuilder) build() *RepoInstance {
 	// subscription (no agent branch to observe): then ri.triggers stays nil
 	// and the kick below is a nil check.
 	if b.agentBranch != "" && !b.subscribed && !b.cfg.ReadOnly {
-		ri.triggers = newTriggerDispatcher(ri, b.name, b.agentBranch, b.signer, b.cfg.Log.SlowTriggerMS)
+		ri.triggers = newTriggerDispatcher(ri, b.name, b.agentBranch, b.signer, b.cfg.Log.SlowTriggerMS,
+			b.cfg.Triggers.ScriptRatePerMinute, b.scriptTools)
 	}
 	// This closure runs under the writer's branch lock (store notifyCommit),
 	// so it must only schedule: the observer's debounce timer, and, for the
