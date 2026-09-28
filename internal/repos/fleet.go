@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -44,6 +43,40 @@ type FleetStatus struct {
 	RegisteredAt *time.Time `json:"registered_at,omitempty"`
 	LastAttempt  *time.Time `json:"last_attempt,omitempty"`
 	LastError    string     `json:"last_error,omitempty"`
+
+	// F10. ExternalAddresses is the configured list ([] when unset). Record is
+	// this instance's own record on its agent branch head (nil when there is
+	// none); RecordCurrent says whether it matches what the current config
+	// and binary advertise; RecordPendingUpdate says the fleet's main still
+	// holds an older version of it. Notice is set while no external address
+	// is configured.
+	ExternalAddresses   []string      `json:"external_addresses"`
+	Record              *MemberFields `json:"record,omitempty"`
+	RecordCurrent       *bool         `json:"record_current,omitempty"`
+	RecordPendingUpdate bool          `json:"record_pending_update"`
+	Notice              string        `json:"notice,omitempty"`
+}
+
+// MemberFields are a member record's advertised, informational fields as the
+// REST layer shows them (the key is not repeated here).
+type MemberFields struct {
+	Addresses    []string          `json:"addresses"`
+	Git          string            `json:"git,omitempty"`
+	Capabilities map[string]string `json:"capabilities"`
+	Host         string            `json:"host,omitempty"`
+}
+
+// MemberFieldsOf is m's advertised fields for display, as written (someone
+// else's odd values are shown, never used).
+func MemberFieldsOf(m fact.Member) MemberFields {
+	f := MemberFields{Addresses: m.Addresses, Git: m.Git, Capabilities: m.Capabilities, Host: m.Host}
+	if f.Addresses == nil {
+		f.Addresses = []string{}
+	}
+	if f.Capabilities == nil {
+		f.Capabilities = map[string]string{}
+	}
+	return f
 }
 
 func timePtr(t time.Time) *time.Time {
@@ -94,10 +127,21 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 	st := FleetStatus{
 		State: row.State, AgentID: row.AgentID, Since: timePtr(row.Since),
 		RegisteredAt: timePtr(row.RegisteredAt), LastAttempt: timePtr(row.LastAttempt), LastError: row.LastError,
+		ExternalAddresses: append([]string{}, m.deps.Cfg.ExternalAddresses...),
+	}
+	if len(st.ExternalAddresses) == 0 {
+		st.Notice = NoAddressesNotice
 	}
 	ri := m.fleetRepo()
 	if ri == nil {
 		return st, nil
+	}
+	head, onHead, _ := m.ownRecordAt(ri, ri.AgentBranch())
+	if onHead {
+		f := MemberFieldsOf(head.Member)
+		st.Record = &f
+		current := head.Member.SameAdvertised(m.advertised())
+		st.RecordCurrent = &current
 	}
 	st.FleetRepo = ri.Name()
 	if o, oerr := m.originOf(ri); oerr == nil && o != nil {
@@ -109,6 +153,10 @@ func (m *Manager) FleetStatus(ctx context.Context) (FleetStatus, error) {
 		for _, mem := range members {
 			if strings.EqualFold(mem.Agent, row.AgentID) {
 				st.RecordState = mem.State
+				// The RECORD differs, not "the branch is ahead": the sync
+				// loop merges main into the agent branch, so the branch is
+				// routinely ahead by merge commits with nothing to accept.
+				st.RecordPendingUpdate = onHead && mem.Blob != head.Blob
 				break
 			}
 		}
@@ -193,7 +241,7 @@ func (m *Manager) RegisterFleet(ctx context.Context, url, authMethod, authToken 
 		}
 		ri = created
 	}
-	if err := m.writeOwnRecord(ctx, ri, fact.MemberActive); err != nil {
+	if err := m.registerOwnRecord(ctx, ri); err != nil {
 		return FleetStatus{}, err
 	}
 	if err := setFleetState(db, FleetRegistering, time.Now()); err != nil {
@@ -343,34 +391,44 @@ func (m *Manager) fleetRemoved(wasFleet bool) {
 }
 
 // writeOwnRecord writes this instance's member record on the fleet
-// repository's agent branch: the persisted agent id, the CURRENT key, state,
-// host and branch. The path is stable per agent, so the record is one fact
+// repository's agent branch: the persisted agent id, state, and the advertised
+// fields the current config and binary give (key, host, branch, addresses,
+// git, capabilities). The path is stable per agent, so the record is one fact
 // whose versions are the agent's history.
 func (m *Manager) writeOwnRecord(ctx context.Context, ri *RepoInstance, state string) error {
-	if m.deps.Signer == nil {
-		return store.ErrNoSigner
+	rec := m.advertised()
+	rec.State = state
+	return m.writeRecord(ctx, ri, rec, "fleet: "+rec.Agent+" is "+state, "")
+}
+
+// registerOwnRecord is the record half of a registration. A first
+// registration writes the record. Registering again with the same fleet
+// compares first, like the boot reconcile: an active record whose advertised
+// fields are current is left alone (no commit); otherwise ONE new version is
+// written with state active and the record's notes kept.
+func (m *Manager) registerOwnRecord(ctx context.Context, ri *RepoInstance) error {
+	cur, found, err := m.ownRecordAt(ri, ri.AgentBranch())
+	if err != nil || !found {
+		// No record on the agent branch (a fresh mount, or unreadable):
+		// write it whole, as a first registration does.
+		return m.writeOwnRecord(ctx, ri, fact.MemberActive)
 	}
-	branch := ri.AgentBranch()
-	id := store.AgentIDOf(m.deps.AgentBranch)
-	host, _ := os.Hostname()
-	body := fact.RenderMember(fact.Member{Agent: id, State: state, Key: m.deps.Signer.PublicKey(), Host: host, Branch: m.deps.AgentBranch})
-	f := fact.Fact{Title: "member " + id, Body: body, Kind: fact.Pragmatic, Type: fact.Policy, Confidence: 1, Sources: 1, Entities: []string{id}}
-	content, err := fact.SerializeFact(f)
-	if err != nil {
+	want := m.advertised()
+	changed := cur.Member.AdvertisedDiff(want)
+	if cur.State == fact.MemberActive && len(changed) == 0 {
+		log.Info().Str("fleet", ri.Name()).Msg("fleet record current")
+		return nil
+	}
+	want.State, want.Notes = fact.MemberActive, cur.Notes
+	if cur.State != fact.MemberActive {
+		changed = append([]string{"state"}, changed...)
+	}
+	msg := "fleet: " + want.Agent + " record updated: " + strings.Join(changed, ", ")
+	if err := m.writeRecord(ctx, ri, want, msg, cur.Blob); err != nil {
 		return err
 	}
-	p := memberRecordPath(ri.OntologyRoot(), id)
-	var werr error
-	if err := ri.WithRead(func(svc *store.Service) {
-		if svc == nil {
-			werr = errors.New("fleet repository is not open")
-			return
-		}
-		_, werr = svc.Facts().WriteFact(ctx, branch, p, content, "fleet: "+id+" is "+state, "update")
-	}); err != nil {
-		return err
-	}
-	return werr
+	log.Info().Str("fleet", ri.Name()).Msg("fleet record updated: " + strings.Join(changed, ", "))
+	return nil
 }
 
 // freeFleetName picks a local name for the fleet repository mount: the URL's
