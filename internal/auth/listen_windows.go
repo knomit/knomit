@@ -57,8 +57,8 @@ func listenLocal(path string) (net.Listener, func(), error) {
 // winio.ListenPipe creates the first instance with the FILE_CREATE
 // disposition on NtCreateNamedPipeFile (makeServerPipeHandle, first == true),
 // which fails outright if the name already exists — the effect the Win32 API
-// spells FILE_FLAG_FIRST_PIPE_INSTANCE. The refusal is ERROR_ACCESS_DENIED, measured
-// on this hardware rather than inferred; see
+// spells FILE_FLAG_FIRST_PIPE_INSTANCE. The refusal is ERROR_ACCESS_DENIED,
+// measured on this hardware rather than inferred; see
 // TestListenLocal_LivePipeIsNotStolen, which records the errno it actually
 // got so a future Windows build changing it fails loudly.
 //
