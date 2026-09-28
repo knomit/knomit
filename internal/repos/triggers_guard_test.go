@@ -44,7 +44,7 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"d.overlayPending", "d.verifyModeOn", "d.verifiedBelow", "d.buildChange", "d.emit", "d.recordSet",
 		"d.lastCompiledSet", "d.logInvalidOnce", "d.logOntologyErrorOnce", "d.clearOntologyError", "d.clock",
 		"d.stats.record", "d.stats.recordRun", "d.stats.view", "d.stats.runView", "d.pending.empty", "rs.didWork",
-		"cr.metaOf", "factGlobal", "nameStates", "episodeOf", "shortHash", "capForLog",
+		"cr.metaOf", "factGlobal", "nameStates", "episodeOf", "shortHash", "capForLog", "appendTrigger",
 		"d.cancel", "cancel", "timer.Stop", "h",
 		// sync and context
 		"d.mu.Lock", "d.mu.Unlock", "d.wg.Add", "d.wg.Wait", "d.wg.Done", "triggerHooksMu.Lock", "triggerHooksMu.Unlock",

@@ -872,11 +872,12 @@ func (d *triggerDispatcher) sweepDue(ctx context.Context, tr store.TriggerIndex,
 	if h := currentTriggerHooks().dueCandidates; h != nil {
 		cands = h(cands)
 	}
-	type hit struct {
-		cand  store.DueCandidate
-		trigs []*fact.CompiledTrigger
-	}
-	var hits []hit
+	// Survivors of the cheap filters, ONE entry per path (the join lists a
+	// path once — UNIQUE(branch_id, path) — but the filters must not depend on
+	// it: two candidate rows for one path, e.g. a stale one, must not become
+	// two fires).
+	var paths []string
+	hits := map[string][]*fact.CompiledTrigger{}
 	var marks map[store.DueKey]int64
 	for _, c := range cands {
 		rel := strings.TrimPrefix(c.Path, root+"/")
@@ -897,26 +898,25 @@ func (d *triggerDispatcher) sweepDue(ctx context.Context, tr store.TriggerIndex,
 			}
 			d.overlayPending(rs.svc, nil, marks)
 		}
-		var fresh []*fact.CompiledTrigger
 		for _, ct := range matched {
 			if at, done := marks[store.DueKey{Trigger: ct.Name, Path: c.Path}]; done && at == c.ExpiresAt {
 				continue // processed at this instant, whatever `if` said
 			}
-			fresh = append(fresh, ct)
-		}
-		if len(fresh) > 0 {
-			hits = append(hits, hit{cand: c, trigs: fresh})
+			if _, seen := hits[c.Path]; !seen {
+				paths = append(paths, c.Path)
+			}
+			hits[c.Path] = appendTrigger(hits[c.Path], ct)
 		}
 	}
-	for _, h := range hits {
+	for _, path := range paths {
 		if ctx.Err() != nil {
 			return false
 		}
-		content, ok, err := cr.trees.BlobAt(ctx, head, h.cand.Path)
+		content, ok, err := cr.trees.BlobAt(ctx, head, path)
 		if err != nil || !ok {
 			continue // not at the head: the index is behind the ref, or the path is gone
 		}
-		f, err := fact.ParseFact(h.cand.Path, content)
+		f, err := fact.ParseFact(path, content)
 		if err != nil {
 			continue
 		}
@@ -924,18 +924,41 @@ func (d *triggerDispatcher) sweepDue(ctx context.Context, tr store.TriggerIndex,
 		if at == nil || *at > nowUnix {
 			continue // the head's version is undated or not yet due
 		}
+		// The HEAD's instant is the one that counts: a trigger that processed
+		// this path at THIS instant is done, whatever instant the candidate
+		// row carried (the index may be behind the ref).
+		var fire []*fact.CompiledTrigger
+		for _, ct := range hits[path] {
+			if done, has := marks[store.DueKey{Trigger: ct.Name, Path: path}]; has && done == *at {
+				continue
+			}
+			fire = append(fire, ct)
+		}
+		if len(fire) == 0 {
+			continue
+		}
 		c0 := time.Now()
-		pf := d.buildChange(ctx, cr, head, head, h.cand.Path, fact.TriggerOnDue, false, verifyOn, verifiedSet)
+		pf := d.buildChange(ctx, cr, head, head, path, fact.TriggerOnDue, false, verifyOn, verifiedSet)
 		rs.changeMS += time.Since(c0).Milliseconds()
 		rs.duePaths++
-		for _, ct := range h.trigs {
+		for _, ct := range fire {
 			p := pf
 			p.trig = ct
 			rs.pending = append(rs.pending, p)
-			rs.dueMarks = append(rs.dueMarks, store.DueMark{Trigger: ct.Name, Path: h.cand.Path, ExpiresAt: *at, FiredAt: nowUnix})
+			rs.dueMarks = append(rs.dueMarks, store.DueMark{Trigger: ct.Name, Path: path, ExpiresAt: *at, FiredAt: nowUnix})
 		}
 	}
 	return true
+}
+
+// appendTrigger appends ct unless the same trigger is already listed.
+func appendTrigger(list []*fact.CompiledTrigger, ct *fact.CompiledTrigger) []*fact.CompiledTrigger {
+	for _, have := range list {
+		if have == ct {
+			return list
+		}
+	}
+	return append(list, ct)
 }
 
 // verifyModeOn reports whether the ontology blob at the head turns F09 on
