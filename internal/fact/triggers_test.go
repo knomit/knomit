@@ -260,11 +260,12 @@ func TestTriggers_PushIsActive(t *testing.T) {
 	}
 }
 
-// A reserved `do` (run, since F07 PR 4 activated push) is valid syntax this
-// version does not act on: the trigger is `unsupported`, not `invalid` —
-// declared (so a later version finds it), not active, and NOT a problem (no
-// warning diagnostic).
+// A reserved `do` is valid syntax this version does not act on: the trigger
+// is `unsupported`, not `invalid` — declared (so a later version finds it),
+// not active, and NOT a problem (no warning diagnostic). Since F07 PR 5 no
+// value is reserved; `run` is deactivated here to stand in for one.
 func TestTriggers_ReservedDoIsUnsupported(t *testing.T) {
+	defer DeactivateTriggerDoForTest(TriggerDoRun)()
 	for _, entry := range []string{
 		"{name: later, on: learn, do: run, recipe: worker}",
 	} {
