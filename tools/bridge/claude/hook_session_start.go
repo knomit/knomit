@@ -64,7 +64,7 @@ func hookSessionStart(r io.Reader, w io.Writer) error {
 		case knomitapi.SkipNoBinding, knomitapi.SkipLensUnusable, knomitapi.SkipInvalidScope:
 			// A broken entry never resolves on its own either.
 			if _, err := fmt.Fprint(w, "knomit hooks are DISABLED: the knomit entry in .mcp.json "+
-				"has a --repo or --lens with no valid value. Fix or remove that entry.\n"); err != nil {
+				"names no usable --repo or --lens. Fix or remove that entry.\n"); err != nil {
 				return err
 			}
 			emitted = true

@@ -333,16 +333,54 @@ func TestRunInit_NoFlags_BrokenOrAmbiguousOtherKeys_Companion(t *testing.T) {
 // A broken entry never resolves on its own, so session-start says so rather
 // than going quiet — the same as the Antigravity host.
 func TestSessionStart_BrokenEntry_SaysSo(t *testing.T) {
-	dir := namedDir(t, "ingestion")
-	writeFixture(t, filepath.Join(dir, ".mcp.json"),
-		`{"mcpServers":{"knomit-repo-ingestion":{"command":"kb","args":["--repo"]}}}`)
-	t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
+	// A missing value and an invalid name are both "no usable" scope.
+	for _, args := range []string{`["--repo"]`, `["--repo","../evil"]`} {
+		t.Run(args, func(t *testing.T) {
+			dir := namedDir(t, "ingestion")
+			writeFixture(t, filepath.Join(dir, ".mcp.json"),
+				`{"mcpServers":{"knomit-repo-ingestion":{"command":"kb","args":`+args+`}}}`)
+			t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
 
-	var out bytes.Buffer
-	if err := hookSessionStart(strings.NewReader(`{"cwd":`+strconv.Quote(dir)+`}`), &out); err != nil {
-		t.Fatalf("hookSessionStart: %v", err)
+			var out bytes.Buffer
+			if err := hookSessionStart(strings.NewReader(`{"cwd":`+strconv.Quote(dir)+`}`), &out); err != nil {
+				t.Fatalf("hookSessionStart: %v", err)
+			}
+			if !strings.Contains(out.String(), "DISABLED") || !strings.Contains(out.String(), "names no usable --repo or --lens") {
+				t.Errorf("session-start output = %q, want the broken-entry notice", out.String())
+			}
+		})
 	}
-	if !strings.Contains(out.String(), "DISABLED") || !strings.Contains(out.String(), ".mcp.json") {
-		t.Errorf("session-start output = %q, want the broken-entry notice", out.String())
+}
+
+// REGRESSION (#342 round 2): an entry that is already UNBOUND is one scope,
+// whatever its key. A flagless re-init keeps it byte-identical; it must not go
+// to the merge, whose other-key path wrote a companion and a false two-scopes
+// warning.
+func TestRunInit_NoFlags_UnboundEntryUnderAnotherKey_Kept(t *testing.T) {
+	for _, mcp := range []string{
+		`{"mcpServers":{"knomit":{"command":"kb","args":[]}}}`,
+		`{"mcpServers":{"knomit-repo-olddir":{"command":"kb","args":[]}}}`,
+	} {
+		t.Run(mcp, func(t *testing.T) {
+			dir := namedDir(t, "ingestion")
+			chdir(t, dir)
+			writeFixture(t, filepath.Join(dir, ".mcp.json"), mcp)
+
+			out := captureStdout(t, func() {
+				if err := runInit(nil); err != nil {
+					t.Fatalf("runInit: %v", err)
+				}
+			})
+			if got := mustRead(t, filepath.Join(dir, ".mcp.json")); !bytes.Equal(got, []byte(mcp)) {
+				t.Errorf(".mcp.json changed:\n%s", got)
+			}
+			assertNoCompanion(t, dir, ".mcp.json")
+			if !strings.Contains(out, "Kept: .mcp.json knomit entry (unbound)") {
+				t.Errorf("summary does not say the unbound entry was kept:\n%s", out)
+			}
+			if strings.Contains(out, "WARNING") {
+				t.Errorf("a single unbound entry drew a warning:\n%s", out)
+			}
+		})
 	}
 }

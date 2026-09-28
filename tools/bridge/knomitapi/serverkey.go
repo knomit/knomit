@@ -61,7 +61,7 @@ const MaxScopeNameLen = MaxServerKeyLen - len("knomit-repo-")
 //
 // It keeps the repo-axis naming, so the key may carry the directory name — but
 // the name goes into the KEY only, never into the entry's args. Nothing may read
-// a scope back out of it: the hooks bind from args alone (see IsUnbound). The
+// a scope back out of it: the hooks bind from args alone (ClassifyArgs). The
 // cost is that this key can equal ServerKey(dir, ""), which is why a flagless
 // re-init keeps an existing entry's scope instead of rewriting its args.
 //

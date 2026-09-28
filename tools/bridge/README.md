@@ -137,7 +137,8 @@ context, they inject one line telling the agent to call `knomit_repos`, then
 `knomit_bind`.
 
 A flagless re-`init` never unbinds a working install. If the existing knomit
-config names exactly one usable scope, `init` keeps it and says so. A broken or
+config names exactly one usable scope, or is already unbound (under any key),
+`init` keeps it byte-identical and says so. A broken or
 ambiguous config (a `--repo` or `--lens` with no valid value, or entries naming
 two scopes) is replaced by the unbound entry, and `init` says what it replaced.
 On Claude Code that replacement happens only when every knomit entry is under
@@ -152,8 +153,9 @@ flag you want, or delete `mcp_config.json` and re-run `init` for unbound.
 
 The hooks read an entry's `args` the way `kb` runs them: parsing stops at the
 first positional argument, so `["http://host:8080", "--repo", "x"]` is unbound.
-A `--repo` or `--lens` with no valid value disables the hooks with a notice; it
-never falls back to the directory name.
+An entry that names no usable `--repo` or `--lens` (no value, or an invalid
+name) disables the hooks with a notice; it never falls back to the directory
+name.
 
 `memory-guard` is a PreToolUse hook (matcher `Write|Edit|MultiEdit|Bash`). It
 denies a tool call that would write a team-relevant note into Claude Code's

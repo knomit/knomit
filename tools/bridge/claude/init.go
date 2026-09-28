@@ -102,8 +102,9 @@ func runInit(args []string) error {
 		return err
 	}
 
-	// A flagless init keeps an existing knomit entry that names ONE usable
-	// scope — knomitapi.SingleScope, the rule the Antigravity host shares:
+	// A flagless init keeps an existing knomit config that names ONE usable
+	// scope, or is already unbound — knomitapi.SingleScope, the rule the
+	// Antigravity host shares:
 	// unbound is for a fresh scaffold. Without this, the same-key merge would
 	// rewrite `--repo <dir>` under knomit-repo-<dir> to []. A broken or
 	// ambiguous config is replaced by the unbound entry only when every knomit
@@ -248,7 +249,7 @@ func runInit(args []string) error {
 }
 
 // flaglessMcpPlan decides what a flagless init does to an existing .mcp.json:
-// keep a single usable scope, replace a broken or ambiguous config under init's
+// keep a single usable scope or an already-unbound config (under any key), replace a broken or ambiguous config under init's
 // own key, or decline to a companion when another key is involved. It reads the
 // file with knomitEntries — the merge's own lenient index — so it can never
 // disagree with the merge about which entries exist.
@@ -272,7 +273,9 @@ func flaglessMcpPlan(path, serverKey string) (kept, replaced string, companion b
 	case skip == "":
 		return s.String(), "", false
 	case skip == knomitapi.SkipUnbound:
-		return "", "", false // the merge keeps it, or declines another key
+		// Already unbound is one scope, under any key. Going to the merge would
+		// take its other-key path: a companion and a false two-scopes warning.
+		return s.String(), "", false
 	case ownKeyOnly:
 		return "", knomitapi.ReplacedText(skip), false
 	}
