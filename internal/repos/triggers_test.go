@@ -200,20 +200,41 @@ func setHooks(t *testing.T, h triggerHooks) {
 }
 
 // parkDispatcher blocks the worker between the kick and the ref read until
-// release is called. Only the FIRST run is parked.
+// release is called. Only the FIRST run is parked. The hooks already
+// installed (a clock, a slow `if`) stay in force while parked and after.
 func parkDispatcher(t *testing.T, ri *RepoInstance) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
 	var once sync.Once
-	setHooks(t, triggerHooks{afterKick: func() {
+	prev := currentTriggerHooks()
+	parked := prev
+	parked.afterKick = func() {
 		<-gate
-	}})
+	}
+	setHooks(t, parked)
 	return func() {
 		once.Do(func() {
 			close(gate)
-			setHooks(t, triggerHooks{})
+			setHooks(t, prev)
 		})
 	}
+}
+
+// slowIf makes the named trigger's own work take ms of REAL wall time on the
+// paths match accepts (every path when match is nil), keeping the other
+// hooks installed. The sandbox's Date.now() is the run's pinned clock, so an
+// `if` cannot spin on the wall clock, and a spin counted in iterations
+// shrinks under CPU contention; a sleep inside the timed section does not.
+func slowIf(t *testing.T, trigger string, ms int, match func(path string) bool) {
+	t.Helper()
+	h := currentTriggerHooks()
+	h.evalDelay = func(name, path string) time.Duration {
+		if name == trigger && (match == nil || match(path)) {
+			return time.Duration(ms) * time.Millisecond
+		}
+		return 0
+	}
+	setHooks(t, h)
 }
 
 // newTriggerRepo boots a repo with the given trigger entries installed.
@@ -825,8 +846,9 @@ func TestDispatch_SurvivesSwapStore(t *testing.T) {
 // completes without waiting for it, and teardown stops the run within one
 // evaluation. Sabotage: hold Acquire across phase B.
 func TestDispatch_NoStoreHeldDuringIf(t *testing.T) {
-	m, ri := newTriggerRepo(t, trig("slow", "learn", "", busyIf(70)))
+	m, ri := newTriggerRepo(t, trig("slow", "learn", "", ""))
 	write(t, ri, "kb/tasks/warm.md")
+	slowIf(t, "slow", 90, nil)
 	release := parkDispatcher(t, ri)
 	for i := 0; i < 30; i++ {
 		writeOn(t, ri, trigAgent, fmt.Sprintf("kb/tasks/p%02d.md", i))

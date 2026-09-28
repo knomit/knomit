@@ -651,7 +651,7 @@ func TestScript_RateCap(t *testing.T) {
 	settle(t, ri)
 
 	// A merge bringing 10 matching paths at once: ONE commit, one advance.
-	// (Not parkDispatcher: it replaces the hooks and would drop the clock.)
+	// One commit is the realistic shape of a merged burst.
 	files := map[string]string{}
 	for i := 0; i < 10; i++ {
 		p := fmt.Sprintf("kb/tasks/in/b%02d.md", i)

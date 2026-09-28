@@ -96,6 +96,12 @@ type triggerHooks struct {
 	trees func(store.TriggerTrees) store.TriggerTrees
 	// scriptBudget replaces fact.ScriptEvalTimeout (5 s) for a script fire.
 	scriptBudget time.Duration
+	// evalDelay is slept INSIDE the trigger's timed work (before its `if`),
+	// per (trigger, path): a trigger that is slow in real wall time whatever
+	// the CPU load. The sandbox's `Date.now()` is the run's pinned clock, so
+	// an `if` can no longer spin on the wall clock; a spin counted in
+	// iterations shrinks under contention and made the detector tests flaky.
+	evalDelay func(trigger, path string) time.Duration
 }
 
 var (
@@ -1208,6 +1214,9 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 		// knomit's, like change_ms, and is taken out of the trigger's own
 		// duration before the statistics and the slow detector see it.
 		t0 := time.Now()
+		if h := currentTriggerHooks().evalDelay; h != nil {
+			time.Sleep(h(p.trig.Name, p.repoPath))
+		}
 		pass, err := p.trig.EvalIf(globals, rs.now)
 		outcome, errText := "", ""
 		var hostMS time.Duration
