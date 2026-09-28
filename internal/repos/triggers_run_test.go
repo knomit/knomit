@@ -386,7 +386,13 @@ func TestRun_DispatcherNotBlockedByLongProcess(t *testing.T) {
 // table).
 func TestRun_ScriptGetsStartedAndResultIsLogged(t *testing.T) {
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("s", "learn", "tasks/in/**", "caller"))
-	putLocalRecipe(t, ri.triggers.home, "worker", `({status: "delivered", message: "k=" + payload.k + " path=" + task_path});`)
+	dir := t.TempDir()
+	block := filepath.Join(t.TempDir(), "release")
+	t.Cleanup(func() { _ = os.WriteFile(block, nil, 0o600) })
+	// The recipe's program blocks until the fire's own phase C is FLUSHED, so
+	// its result row cannot ride that flush: it must be flushed on its own.
+	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s});
+({status: "delivered", message: "k=" + payload.k + " path=" + task_path});`, jsString(helperExe(t)), helperEnv(dir, "HELPER_BLOCK_FILE", block)))
 	putScript(t, ri, "caller", `knomit.emit(knomit.run("worker", {k: 1}));`)
 	sink := subscribePayloads(t, ri, "s")
 	fired := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
@@ -396,6 +402,10 @@ func TestRun_ScriptGetsStartedAndResultIsLogged(t *testing.T) {
 	require.Equal(t, map[string]any{"ok": true, "status": "started", "id": id, "source": "local"}, got)
 	require.Regexp(t, `^run-[0-9a-f]{32}$`, id)
 
+	waitHelperReports(t, dir, "child", 1)
+	waitTriggerHead(t, ri, fired) // the fire is fully flushed; the buffer is empty
+	require.Len(t, rowsOf(t, ri, "s"), 2, "ran + started are in the table; the recipe still runs")
+	require.NoError(t, os.WriteFile(block, nil, 0o600))
 	rows := waitRows(t, ri, "s", 3)
 	require.Equal(t, []string{store.TriggerOutcomeRan, store.TriggerOutcomeStarted, store.TriggerOutcomeDelivered}, outcomesOf(rows))
 	require.Equal(t, id, rows[1].RunID)
