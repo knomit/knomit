@@ -19,6 +19,7 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	gogitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/format/packfile"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
@@ -628,4 +629,82 @@ func TestReceivePack_NewCommitWalkIsProportionalToThePush(t *testing.T) {
 	require.Len(t, commits, 2)
 	require.Equal(t, c2.Hash, commits[0].Hash)
 	require.Equal(t, 2, visited, "the walk must not descend into the host's %d-commit history", 31)
+}
+
+// Review B1: register holds lockBranch(peer) where it promotes and moves the
+// ref — the lock is what makes the old-hash check a compare-and-swap, and
+// what keeps a lockBranchRead reader (Verify) from seeing the ref ahead of
+// branch_commits and the index (kb/invariants/store/branch-lock-spans-notify).
+func TestReceivePack_RegisterHoldsBranchLock(t *testing.T) {
+	h := newPushHost(t, "", 1)
+	p := newPeer(t, h.srv.URL)
+	c := p.commit(p.head(), nil, "kb/notes/x.md", testFactBody("x", 0.9, nil))
+	p.setBranch("work", c)
+	held := false
+	pushRegisterHook = func() {
+		v, ok := h.svc.rh.branchMu.Load(peerBranch)
+		if ok && !v.(*sync.RWMutex).TryRLock() {
+			held = true
+		} else if ok {
+			v.(*sync.RWMutex).RUnlock()
+		}
+	}
+	t.Cleanup(func() { pushRegisterHook = nil })
+	require.NoError(t, p.push(h.srv.URL, &bytes.Buffer{}, "+refs/heads/work:refs/heads/"+peerBranch))
+	require.True(t, held, "register must hold lockBranch(peer) at the point it promotes and moves the ref")
+}
+
+// Review N1: a pack whose tree names an object that is neither in the pack
+// nor on the host is refused before anything is promoted — otherwise the ref
+// would move and the index sync would fail after it (a torn registration).
+func TestReceivePack_RefusesIncompletePush(t *testing.T) {
+	h := newPushHost(t, "", 1)
+	mainTip := h.ref("main")
+	st := memory.NewStorage()
+	missing := plumbing.NewHash("1111111111111111111111111111111111111111")
+	to := st.NewEncodedObject()
+	require.NoError(t, (&object.Tree{Entries: []object.TreeEntry{
+		{Name: "missing.md", Mode: 0o100644, Hash: missing},
+	}}).Encode(to))
+	treeH, err := st.SetEncodedObject(to)
+	require.NoError(t, err)
+	when := time.Unix(1790000000, 0).UTC()
+	c := &object.Commit{
+		Author:       object.Signature{Name: "peer-abcd1234", Email: "peer-abcd1234+learn@agents.knomit.io", When: when},
+		Committer:    object.Signature{Name: "peer-abcd1234", Email: "peer-abcd1234@agents.knomit.io", When: when},
+		Message:      "incomplete",
+		TreeHash:     treeH,
+		ParentHashes: []plumbing.Hash{mainTip},
+	}
+	co := st.NewEncodedObject()
+	require.NoError(t, c.Encode(co))
+	commitH, err := st.SetEncodedObject(co)
+	require.NoError(t, err)
+	var pack bytes.Buffer
+	_, err = packfile.NewEncoder(&pack, st, false).Encode([]plumbing.Hash{commitH, treeH}, 10)
+	require.NoError(t, err)
+	objs := h.objects()
+
+	out := rawPushPack(t, h.srv.URL, pack.Bytes(),
+		&packp.Command{Name: plumbing.NewBranchReferenceName(peerBranch), New: commitH})
+	require.Contains(t, out, "neither sent nor held by this host")
+	require.Equal(t, plumbing.ZeroHash, h.ref(peerBranch))
+	require.Equal(t, objs, h.objects())
+}
+
+// rawPushPack is rawPush with a pack after the commands.
+func rawPushPack(t *testing.T, url string, pack []byte, cmds ...*packp.Command) string {
+	t.Helper()
+	req := packp.NewReferenceUpdateRequest()
+	require.NoError(t, req.Capabilities.Set(capability.ReportStatus))
+	req.Commands = cmds
+	req.Packfile = io.NopCloser(bytes.NewReader(pack))
+	var buf bytes.Buffer
+	require.NoError(t, req.Encode(&buf))
+	resp, err := http.Post(url+"/git-receive-pack", "application/x-git-receive-pack-request", &buf)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return fmt.Sprintf("%d %s", resp.StatusCode, b)
 }
