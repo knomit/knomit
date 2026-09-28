@@ -122,9 +122,15 @@ type HistoryQuery interface {
 	Log(ctx context.Context, branch, path string) ([]LogEntry, error)
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
 	// RevisionsBefore returns up to `limit` revisions of `path` in the
-	// first-parent ancestry of `anchorCommit`, newest → oldest. Used by
-	// knomit_explain to build the root fact's bounded evolution history.
+	// first-parent ancestry of `anchorCommit`, newest → oldest: the version
+	// live at an anchor (explain's root commit, as_of dates).
 	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
+	// PathHistory returns every change to `path` in the history of
+	// `anchorCommit` — one entry per commit that introduced content for the
+	// path, merge-delivered writes included — newest change first by author
+	// date. Used by knomit_explain to enumerate the root fact's history;
+	// resolution stays on RevisionsBefore.
+	PathHistory(ctx context.Context, branch, path, anchorCommit string) ([]RevisionMeta, error)
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 }
