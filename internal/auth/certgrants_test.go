@@ -13,8 +13,13 @@ func TestCertGrants_InstanceHoldsReadImplicitlyAndRowsOnTop(t *testing.T) {
 	if !Allowed(ctx, g, inst, Read) {
 		t.Fatal("a chained instance with no rows must hold read")
 	}
-	if Allowed(ctx, g, inst, Write) {
-		t.Fatal("a chained instance with no rows must NOT hold write")
+	if !Allowed(ctx, g, inst, PushOwn) {
+		t.Fatal("a chained instance with no rows must hold push:own (F11 ruling)")
+	}
+	for _, perm := range []Permission{Write, MergeMain, Operator, Admin} {
+		if Allowed(ctx, g, inst, perm) {
+			t.Fatalf("a chained instance with no rows must NOT hold %s", perm)
+		}
 	}
 	g = CertGrants{Store: StaticGrants{inst.String(): {Write: {}}}}
 	if !Allowed(ctx, g, inst, Write) || !Allowed(ctx, g, inst, Read) {
@@ -39,6 +44,9 @@ func TestCertGrants_NoImplicitReadForAnyoneElse(t *testing.T) {
 	} {
 		if Allowed(ctx, g, p, Read) {
 			t.Fatalf("%s got implicit read", p)
+		}
+		if Allowed(ctx, g, p, PushOwn) {
+			t.Fatalf("%s got implicit push:own", p)
 		}
 	}
 }

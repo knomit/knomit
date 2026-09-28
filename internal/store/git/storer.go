@@ -114,6 +114,47 @@ func (s *Storer) SetEncodedObject(obj plumbing.EncodedObject) (plumbing.Hash, er
 	return hash, nil
 }
 
+// PutObjects persists objs in ONE transaction: all of them or none. It is
+// SetEncodedObject's insert (INSERT OR IGNORE, so an object already present
+// is not an error), batched for a caller that must not leave a partial set
+// behind — receive-pack promoting a push out of its quarantine. Delta objects
+// are refused, as SetEncodedObject refuses them.
+func (s *Storer) PutObjects(ctx context.Context, objs []plumbing.EncodedObject) error {
+	for _, obj := range objs {
+		if t := obj.Type(); t == plumbing.REFDeltaObject || t == plumbing.OFSDeltaObject {
+			return fmt.Errorf("storegit: PutObjects: delta object %s not supported", obj.Hash())
+		}
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("storegit: PutObjects: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO objects (hash, type, size, data) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("storegit: PutObjects: prepare: %w", err)
+	}
+	defer stmt.Close()
+	for _, obj := range objs {
+		r, err := obj.Reader()
+		if err != nil {
+			return fmt.Errorf("storegit: PutObjects: reader %s: %w", obj.Hash(), err)
+		}
+		data, err := io.ReadAll(r)
+		_ = r.Close()
+		if err != nil {
+			return fmt.Errorf("storegit: PutObjects: read %s: %w", obj.Hash(), err)
+		}
+		if _, err := stmt.ExecContext(ctx, obj.Hash().String(), int(obj.Type()), obj.Size(), data); err != nil {
+			return fmt.Errorf("storegit: PutObjects: insert %s: %w", obj.Hash(), err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("storegit: PutObjects: commit: %w", err)
+	}
+	return nil
+}
+
 // EncodedObject retrieves a single object by type and hash.
 func (s *Storer) EncodedObject(t plumbing.ObjectType, h plumbing.Hash) (plumbing.EncodedObject, error) {
 	var row *sql.Row

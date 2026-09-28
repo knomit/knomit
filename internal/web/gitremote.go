@@ -1,11 +1,16 @@
 package web
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
+	"knomit/internal/auth"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 )
 
 // gitHTTPProvider is the narrow interface GitRemoteHandler needs — just the
@@ -48,11 +53,17 @@ func splitGitRoute(p string) (repoName, suffix string) {
 	return repoName, suffix
 }
 
-// GitRemoteHandler returns an http.Handler implementing the read-only Smart
-// HTTP git protocol. It routes by repo name and delegates to git.Store.Handler().
+// GitRemoteHandler returns an http.Handler implementing the Smart HTTP git
+// protocol. It routes by repo name and delegates to the store's Handler().
 //
-//   - GET  /{repo}/info/refs?service=git-upload-pack — advertise refs
-//   - POST /{repo}/git-upload-pack                   — serve a fetch
+//   - GET  /{repo}/info/refs?service=git-upload-pack  — advertise refs
+//   - POST /{repo}/git-upload-pack                    — serve a fetch
+//   - GET  /{repo}/info/refs?service=git-receive-pack — advertise for a push
+//   - POST /{repo}/git-receive-pack                   — accept a push (F11)
+//
+// For the two push requests it decides WHO is pushing and attaches that to
+// the request as a store.PushPolicy (the store handler is cached per store,
+// so the pusher can only travel on the request).
 func GitRemoteHandler(rm *repos.Manager) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// chi's RoutePath is the mount-relative path, e.g. "/knomit/info/refs".
@@ -94,8 +105,40 @@ func GitRemoteHandler(rm *repos.Manager) http.Handler {
 		u2 := *r.URL
 		u2.Path = "/" + repoSuffix
 		u2.RawPath = ""
-		r2 := r.WithContext(r.Context())
+		ctx := r.Context()
+		if isGitPush(r) {
+			ctx = store.WithPushPolicy(ctx, pushPolicy(r, rm, ri))
+		}
+		r2 := r.WithContext(ctx)
 		r2.URL = &u2
 		provider.Handler().ServeHTTP(w, r2)
 	})
+}
+
+// pushPolicy is who is pushing to ri, as the store's receive-pack needs it.
+// Only an INSTANCE vouched for by a CERTIFICATE can push: its full-key
+// fingerprint names its own agent branch. Anonymous, socket and operator
+// principals have no agent branch here, and bearer tokens never reach /git
+// (the OAuth listener mounts no /git). The whole-request refusals are
+// decided here, where the principal and the repo are.
+func pushPolicy(r *http.Request, rm *repos.Manager, ri *repos.RepoInstance) store.PushPolicy {
+	p, _ := auth.FromContext(r.Context())
+	pol := store.PushPolicy{
+		OwnBranch: ri.AgentBranch(),
+		Members:   func(ctx context.Context) ([]store.FleetMember, error) { return rm.FleetMembers(ctx) },
+	}
+	switch {
+	case p.Kind != auth.KindInstance || p.Via != auth.ViaCert || p.ID == "":
+		pol.Refusal = fmt.Sprintf("knomit: pushing requires an enrolled instance certificate; principal %s is not one", p)
+	case !holdsPushOwn(r):
+		// With push:own implicit for every chained instance (CertGrants), this
+		// is the wiring rather than a separate behaviour: it is reachable only
+		// through a grants store that answers differently.
+		pol.Refusal = fmt.Sprintf("knomit: principal %s does not hold push:own", p)
+	case ri.Subscribed():
+		pol.Refusal = fmt.Sprintf("knomit: repo %q is a subscription; it accepts no pushes", ri.Name())
+	default:
+		pol.Pusher = p.ID
+	}
+	return pol
 }

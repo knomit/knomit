@@ -33,13 +33,17 @@ const packWindow = 10
 // reach it still gets the two lines that bracket every transfer.
 const packProgressWindow = 1 << 20
 
-// Handler returns an http.Handler implementing the read-only Smart HTTP git
-// protocol (https://git-scm.com/docs/http-protocol) for this store.
-// Only upload-pack (clone/fetch) is supported; push is not.
-// The handler is built lazily and cached.
+// Handler returns an http.Handler implementing the Smart HTTP git protocol
+// (https://git-scm.com/docs/http-protocol) for this store: upload-pack
+// (clone/fetch) for anyone the edge let in, and receive-pack (push) for an
+// enrolled peer updating its own agent branch only (F11). The handler is
+// built lazily and cached; everything per-request — above all who is
+// pushing — arrives on the request context (WithPushPolicy).
 //
-//   - GET  /info/refs?service=git-upload-pack — advertise refs
-//   - POST /git-upload-pack                   — serve a fetch
+//   - GET  /info/refs?service=git-upload-pack  — advertise refs
+//   - POST /git-upload-pack                    — serve a fetch
+//   - GET  /info/refs?service=git-receive-pack — advertise refs for a push
+//   - POST /git-receive-pack                   — accept a push
 func (s *Service) Handler() http.Handler {
 	s.handlerOnce.Do(func() {
 		s.handler = newGitHTTPHandler(s.rh, s.UpstreamBranch)
@@ -47,8 +51,8 @@ func (s *Service) Handler() http.Handler {
 	return s.handler
 }
 
-// newGitHTTPHandler builds an http.Handler serving the read-only git smart
-// HTTP endpoints for a single repository. Push (receive-pack) is not exposed.
+// newGitHTTPHandler builds an http.Handler serving the git smart HTTP
+// endpoints for a single repository. receive-pack is httphandler_receivepack.go.
 //
 // Neither endpoint goes through go-git's built-in server any more: that server
 // advertises only agent and ofs-delta, rejects every capability it did not
@@ -66,11 +70,17 @@ func newGitHTTPHandler(rh *repoHandler, upstream func() string) http.Handler {
 	// built on every request, and the first-parent walk to the root commit is
 	// the only part of it that is not a ref lookup.
 	roots := &rootCommitCache{}
+	rp := &receivePack{rh: rh, upstream: upstream}
+	mux.HandleFunc("/git-receive-pack", rp.serve)
 
 	mux.HandleFunc("/info/refs", func(w http.ResponseWriter, r *http.Request) {
 		service := r.URL.Query().Get("service")
+		if service == "git-receive-pack" {
+			rp.advertise(w, r)
+			return
+		}
 		if service != "git-upload-pack" {
-			http.Error(w, "only git-upload-pack is supported", http.StatusForbidden)
+			http.Error(w, "only git-upload-pack and git-receive-pack are supported", http.StatusForbidden)
 			return
 		}
 

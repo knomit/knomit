@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -62,21 +63,29 @@ func readOnlyGate(next http.Handler) http.Handler {
 }
 
 // isGitFetch reports whether a path is git's FETCH endpoint. upload-pack is
-// how a client reads — clone and fetch both POST to it — and receive-pack is
-// how it writes, so gating by HTTP method alone would refuse every clone.
+// how a client reads — clone and fetch both POST to it — so gating by HTTP
+// method alone would refuse every clone.
 //
 // Anchored on the FINAL path segment, deliberately. splitGitRoute trims one
 // ".git" suffix, so "/git/knomit.git/git-upload-pack" is a live route and a
 // prefix or contains test would have to enumerate the spellings of the repo
 // segment. Repo names admit only [a-z0-9-_] (isValidRepoName) and so contain
 // no slash, which makes the last segment unambiguous.
-//
-// Only upload-pack is exempt. receive-pack is not exposed at all today
-// (internal/store/httphandler.go: "Push (receive-pack) is not exposed"), so
-// the gate enforces nothing in phase 1 -- it is placed now so F11's
-// receive-pack lands behind it rather than beside it.
 func isGitFetch(path string) bool {
 	return strings.HasSuffix(path, "/git-upload-pack")
+}
+
+// isGitPush reports whether a request is git's PUSH conversation: the
+// receive-pack advertisement or the receive-pack POST. It is exempt from the
+// write gate because a push is not a fact write: its permission is push:own,
+// recorded by pushPermission and decided per request in GitRemoteHandler and
+// the store's receive-pack (F11). Anchored on the final segment for the same
+// reason as isGitFetch.
+func isGitPush(r *http.Request) bool {
+	if strings.HasSuffix(r.URL.Path, "/git-receive-pack") {
+		return true
+	}
+	return strings.HasSuffix(r.URL.Path, "/info/refs") && r.URL.Query().Get("service") == "git-receive-pack"
 }
 
 // writeGate is the permission twin of readOnlyGate: a mutating request needs
@@ -96,7 +105,7 @@ func writeGate(g auth.Grants, disabled bool) func(http.Handler) http.Handler {
 		}
 		gated := requireWrite(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isMutatingRequest(r.Method, r.URL.Path) && !isGitFetch(r.URL.Path) {
+			if isMutatingRequest(r.Method, r.URL.Path) && !isGitFetch(r.URL.Path) && !isGitPush(r) {
 				gated.ServeHTTP(w, r)
 				return
 			}
@@ -127,4 +136,30 @@ func refuseUnwritableBranch(w http.ResponseWriter, r *http.Request, ri *repos.Re
 	}
 	hal.WriteProblem(w, http.StatusForbidden, "Read-only branch", detail, r.URL.Path)
 	return true
+}
+
+type pushOwnKey struct{}
+
+// pushPermission records, for a push request only, whether the principal
+// holds push:own — the permission check for F11's receive-pack, run at the
+// /git mount where the Grants are (the store handler has none). It refuses
+// nothing itself: GitRemoteHandler turns the answer into the git-protocol
+// refusal a client can read, which a 403 here would not be.
+func pushPermission(g auth.Grants) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isGitPush(r) {
+				p, _ := auth.FromContext(r.Context())
+				ok := auth.Allowed(r.Context(), g, p, auth.PushOwn)
+				r = r.WithContext(context.WithValue(r.Context(), pushOwnKey{}, ok))
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// holdsPushOwn is pushPermission's answer; false when it did not run.
+func holdsPushOwn(r *http.Request) bool {
+	ok, _ := r.Context().Value(pushOwnKey{}).(bool)
+	return ok
 }
