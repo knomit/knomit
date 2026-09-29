@@ -6,6 +6,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -150,19 +151,58 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	return newCommitHash.String(), nil
 }
 
+// RetractMissingError is returned by BatchWriteFactsMustExist when one or
+// more paths the caller requires to exist are absent at the branch tip. The
+// check runs INSIDE the branch write lock, against the head the commit would
+// be parented on, so nothing can land between it and the commit: on this
+// error nothing was written. Paths lists every absent path, lowercased as the
+// store keys them.
+type RetractMissingError struct {
+	Paths []string
+}
+
+func (e *RetractMissingError) Error() string {
+	return "not on this branch: " + strings.Join(e.Paths, ", ")
+}
+
+// batchWriteUnlockedHook, when set, runs in batchWrite after the pre-flight
+// checks and BEFORE the branch lock is taken. Tests only: it holds the window
+// in which an existence check done outside the lock would go stale open, so a
+// test of the under-the-lock precondition fails reliably when the check is
+// moved out of the lock (F08 T-A3).
+var batchWriteUnlockedHook atomic.Pointer[func()]
+
+// SetBatchWriteUnlockedHookForTest installs f as the pre-lock hook of every
+// batch write in this process and returns the function that removes it.
+// EXISTS ONLY for tests.
+func SetBatchWriteUnlockedHookForTest(f func()) (restore func()) {
+	batchWriteUnlockedHook.Store(&f)
+	return func() { batchWriteUnlockedHook.Store(nil) }
+}
+
 // batchWrite writes and deletes multiple files in one commit on branch.
 // Returns the commit hash and a map of path → blob hash for each written file.
 //
 // Deletions are applied after the writes, so a path that appears in both ends
 // up deleted. Callers relying on write-then-delete of the same path are almost
 // certainly confused; keep the two sets disjoint.
-func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+//
+// mustExist is a precondition (F04, the atomic move): every path in it must be
+// present at the branch tip, checked UNDER the branch lock before any object
+// is written; otherwise nothing is written and the error is a
+// *RetractMissingError. nil means no precondition.
+func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
 	if fi.rh.readOnly {
 		return "", nil, ErrRepoReadOnly
 	}
 	if len(files) == 0 && len(deletes) == 0 {
 		return "", nil, nil
 	}
+	loweredMust := make([]string, len(mustExist))
+	for i, path := range mustExist {
+		loweredMust[i] = strings.ToLower(path)
+	}
+	mustExist = loweredMust
 
 	// Lowercase all paths.
 	lowered := make(map[string]string, len(files))
@@ -189,9 +229,13 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 		}
 	}
 
+	if h := batchWriteUnlockedHook.Load(); h != nil {
+		(*h)()
+	}
+
 	unlock := fi.rh.lockBranch(branch)
 	defer unlock()
-	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, deletes, message, operation)
+	cHash, blobHashes, err := fi.batchWriteLocked(ctx, branch, files, deletes, mustExist, message, operation)
 	if err != nil {
 		return "", nil, err
 	}
@@ -204,7 +248,7 @@ func (fi *factIndex) batchWrite(ctx context.Context, branch string, files map[st
 }
 
 // batchWriteLocked performs the actual batchWrite work. Caller must hold the branch lock.
-func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (plumbing.Hash, map[string]string, error) {
+func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (plumbing.Hash, map[string]string, error) {
 	// Before any object is written: a refused batch must leave nothing behind.
 	signer, err := fi.rh.commitSigner()
 	if err != nil {
@@ -213,6 +257,29 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: ref: %w", err)
+	}
+
+	// The move's precondition (F04): checked here, under the lock, against
+	// the head this commit is parented on. A delete of an absent LEAF would
+	// otherwise succeed silently (removeEntry filters by name), so two local
+	// takes of one task would both commit; checked here, the second sees the
+	// first's commit and is refused.
+	if len(mustExist) > 0 {
+		var missing []string
+		for _, path := range mustExist {
+			blob := ""
+			if headHash != plumbing.ZeroHash {
+				if blob, err = fi.rh.blobAtCommit(headHash, path); err != nil {
+					return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: precondition: %w", err)
+				}
+			}
+			if blob == "" {
+				missing = append(missing, path)
+			}
+		}
+		if len(missing) > 0 {
+			return plumbing.ZeroHash, nil, &RetractMissingError{Paths: missing}
+		}
 	}
 
 	parentHash := headHash
@@ -367,8 +434,17 @@ func (fi *factIndex) DeleteFact(ctx context.Context, branch, path, message strin
 // BatchWriteFacts writes and deletes multiple facts in a single commit. Index
 // sync happens inside batchWrite via rh.notifyCommit.
 func (fi *factIndex) BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
-	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, deletes, message, operation)
+	commitHash, blobHashes, err = fi.batchWrite(ctx, branch, files, deletes, nil, message, operation)
 	return
+}
+
+// BatchWriteFactsMustExist is BatchWriteFacts with a precondition: every path
+// in mustExist must be present at the branch tip, checked inside the branch
+// write lock. Otherwise nothing is written and the error is a
+// *RetractMissingError naming the absent paths. The F04 move passes its
+// retracted paths here.
+func (fi *factIndex) BatchWriteFactsMustExist(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error) {
+	return fi.batchWrite(ctx, branch, files, deletes, mustExist, message, operation)
 }
 
 // tag creates a lightweight tag ref at the tip of branch.

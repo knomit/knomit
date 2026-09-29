@@ -63,33 +63,42 @@ type ScriptHost map[string]ScriptHostFunc
 // is returned for either; the caller reads ctx.Err() to tell them apart. The
 // program's completion value is ignored; a throw is the error.
 func RunScript(ctx context.Context, prog *goja.Program, name string, globals map[string]any, host ScriptHost, now time.Time) error {
+	_, err := runSandboxed(ctx, prog, "script "+name, globals, host, now)
+	return err
+}
+
+// runSandboxed is RunScript's body, returning the program's completion value
+// (a script ignores it; a recipe's result is it). who names the program in
+// errors ("script x", "recipe y").
+func runSandboxed(ctx context.Context, prog *goja.Program, who string, globals map[string]any, host ScriptHost, now time.Time) (goja.Value, error) {
 	vm := newSandboxVM(now)
 	stop := context.AfterFunc(ctx, func() {
-		vm.Interrupt(fmt.Sprintf("script %s: %v", name, context.Cause(ctx)))
+		vm.Interrupt(fmt.Sprintf("%s: %v", who, context.Cause(ctx)))
 	})
 	defer stop()
 
-	parse, freeze, err := sandboxGlobals(vm, "script "+name, globals)
+	parse, freeze, err := sandboxGlobals(vm, who, globals)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	obj := vm.NewObject()
 	for _, fname := range slices.Sorted(maps.Keys(host)) {
 		f := host[fname]
 		if err := obj.Set(fname, hostFunc(vm, parse, fname, f)); err != nil {
-			return fmt.Errorf("script %s: bind knomit.%s: %w", name, fname, err)
+			return nil, fmt.Errorf("%s: bind knomit.%s: %w", who, fname, err)
 		}
 	}
 	if _, err := freeze(goja.Undefined(), obj); err != nil {
-		return fmt.Errorf("script %s: freeze knomit: %w", name, err)
+		return nil, fmt.Errorf("%s: freeze knomit: %w", who, err)
 	}
 	if err := vm.GlobalObject().DefineDataProperty("knomit", obj, goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE); err != nil {
-		return fmt.Errorf("script %s: bind knomit: %w", name, err)
+		return nil, fmt.Errorf("%s: bind knomit: %w", who, err)
 	}
-	if _, err := vm.RunProgram(prog); err != nil {
-		return fmt.Errorf("script %s: %w", name, err)
+	v, err := vm.RunProgram(prog)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", who, err)
 	}
-	return nil
+	return v, nil
 }
 
 // hostFunc adapts one ScriptHostFunc to the VM: arguments exported as plain

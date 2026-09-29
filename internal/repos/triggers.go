@@ -17,7 +17,10 @@
 //	   watermark; glob matching in memory; `change` built ONCE per matched
 //	   path (the toucher walk, the signer, verified, the trailer).
 //	   release
-//	B  (no store) per (trigger, path): `if` then emit, ctx checked per path;
+//	B  (no store) per (trigger, path): `if` then the action (emit, script,
+//	   push — one non-blocking send on ri.syncWake — or run, which resolves
+//	   the recipe and STARTS it beside the dispatcher, never waiting: see
+//	   trigger_recipe.go), ctx checked per path;
 //	   timed as the trigger's own work for the statistics and the slow
 //	   detector.
 //	C  (Acquire) tx1: the buffered runs' fire rows + ONE run row per run;
@@ -102,6 +105,13 @@ type triggerHooks struct {
 	// an `if` can no longer spin on the wall clock; a spin counted in
 	// iterations shrinks under contention and made the detector tests flaky.
 	evalDelay func(trigger, path string) time.Duration
+	// flushGrace, when non-zero, replaces triggerFlushGrace in settle: a long
+	// value holds phase C's buffer pending, so every later run meets it and
+	// only overlayPending keeps a range from re-firing.
+	flushGrace time.Duration
+	// skipFlushOnStop tears the loop down WITHOUT the final flush: a crash
+	// as far as the tables are concerned (T20 pins the M2 window with it).
+	skipFlushOnStop bool
 }
 
 var (
@@ -160,14 +170,29 @@ type triggerDispatcher struct {
 	// sc is the `do: script` state (trigger_script.go): the script cache, the
 	// injected tools, the rate cap and the WARN-once keys.
 	sc scriptState
+	// home is this machine's knomit home: <home>/recipes holds the local
+	// recipes, and a recipe's child gets it as KNOMIT_HOME.
+	home string
+	// rc is the `do: run` state (trigger_recipe.go): the recipe caches, the
+	// concurrency slots and the running recipes' wait group.
+	rc recipeState
+	// runCtx is the loop's ctx (set by start): every recipe derives from it,
+	// so stop() interrupts them and kills their processes.
+	runCtx context.Context
+	// lateIn is the inbox of recipe RESULT rows, filled by runner goroutines
+	// (addLate) and drained into pending.late by the dispatcher goroutine only
+	// (drainLate) [M1]. Behind lateMu, not mu.
+	lateMu sync.Mutex
+	lateIn []store.TriggerFire
 }
 
 // newTriggerDispatcher builds the dispatcher for ri WITHOUT starting it, so
 // the kick slot exists from build() (a write during the background heal kicks
 // it) while the goroutine starts from activate() after the initial index.
 // ratePerMinute is [triggers].script_rate_per_minute; tools the injected
-// in-process MCP tool set of `do: script` (nil on a build with none).
-func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh.Signer, slowMS, ratePerMinute int, tools ScriptTools) *triggerDispatcher {
+// in-process MCP tool set of `do: script` (nil on a build with none); home
+// the knomit home whose recipes/ folder holds this machine's recipes.
+func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh.Signer, slowMS, ratePerMinute int, tools ScriptTools, home string) *triggerDispatcher {
 	return &triggerDispatcher{
 		ri:       ri,
 		repo:     repo,
@@ -177,6 +202,8 @@ func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh
 		kick:     make(chan struct{}, 1),
 		stats:    newTriggerStats(),
 		sc:       newScriptState(tools, ratePerMinute),
+		home:     home,
+		rc:       newRecipeState(),
 	}
 }
 
@@ -218,13 +245,16 @@ func isHex8(s string) bool {
 func (d *triggerDispatcher) start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	d.cancel = cancel
+	d.runCtx = ctx
 	d.wg.Add(1)
 	d.triggerKick()
 	go d.loop(ctx)
 }
 
 // stop cancels the actor and waits for the current run to notice (phase B
-// checks ctx per path, so it returns within one evaluation).
+// checks ctx per path, so it returns within one evaluation), then for every
+// running recipe to be killed and to hand in its `stopped` row, which the
+// final flush writes.
 func (d *triggerDispatcher) stop() {
 	if d.cancel != nil {
 		d.cancel()
@@ -249,6 +279,21 @@ func (ri *RepoInstance) triggerKick() {
 	}
 }
 
+// wakeSync is the push action (F07 PR 4): ask this machine's sync loop for a
+// round now. One non-blocking send on the instance's 1-slot channel — O(1),
+// never blocks, carries nothing (no branch, no payload): the loop pushes only
+// its own agent branch. Fire-and-forget: the round's outcome is the remote's
+// sync/push status, never reported back to the fire (D-report).
+func (ri *RepoInstance) wakeSync() {
+	select {
+	case ri.syncWake <- struct{}{}:
+	default:
+	}
+}
+
+// wakeSync on the dispatcher is how phase B and the script host reach it.
+func (d *triggerDispatcher) wakeSync() { d.ri.wakeSync() }
+
 // loop receives kicks. The kick is RECEIVED before the head ref is read
 // (inside run): the reverse order would swallow the kick of a commit that
 // lands between the ref read and the drain, the lost-wake-up shape.
@@ -257,6 +302,14 @@ func (d *triggerDispatcher) loop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// The recipes derive from ctx: each is interrupted, its process
+			// group or job killed, and it ends within recipeWaitDelay of the
+			// kill. Wait for them FIRST, so their `stopped` rows reach the
+			// late inbox before the final flush reads it.
+			d.rc.wg.Wait()
+			if currentTriggerHooks().skipFlushOnStop {
+				return
+			}
 			d.flushOnStop()
 			return
 		case <-d.kick:
@@ -285,7 +338,11 @@ func (d *triggerDispatcher) settle(ctx context.Context) {
 		if empty {
 			return
 		}
-		timer := time.NewTimer(triggerFlushGrace)
+		grace := triggerFlushGrace
+		if g := currentTriggerHooks().flushGrace; g > 0 {
+			grace = g
+		}
+		timer := time.NewTimer(grace)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -363,9 +420,29 @@ type runState struct {
 	// prepared — whatever `if` will say — written in phase C with the
 	// watermarks. len(dueMarks) is the run's due evaluation count.
 	dueMarks []store.DueMark
+	// dueRetry is the due (trigger, path) evaluations phase B DROPPED for
+	// capacity — outcome rate-limited (the script cap) or busy (a `do: run`
+	// recipe at its `concurrent` limit). Their marks are NOT buffered, so the
+	// next sweep (the next tick or write) finds them unmarked and fires them
+	// again (F08 M3). A due fire is a STATE re-derived every sweep, so this
+	// is a re-evaluation, not a replay; learn/update/retract fires stay
+	// dropped for good. A script error or timeout keeps its mark: it is
+	// usually deterministic and would otherwise re-fire every tick for the
+	// life of the fact.
+	dueRetry map[store.DueKey]bool
 	// duePaths is the number of distinct due paths evaluated (into the run
 	// row's paths next to the diff rows).
 	duePaths int
+}
+
+// fireRange is the range a fire of this run belongs to, as its row will
+// carry it (a run with no advance has range_from = range_to = head). A
+// recipe's late result row copies it.
+func (rs *runState) fireRange() (from, to string) {
+	if rs.rangeFrom == "" {
+		return rs.head, rs.head
+	}
+	return rs.rangeFrom, rs.head
 }
 
 // didWork reports whether the run evaluated anything: diff rows in its range
@@ -406,6 +483,13 @@ type pendingFlush struct {
 	// due is the buffered due marks, keyed so a re-arm within one buffer keeps
 	// the latest instant. They ride tx2 with the watermarks.
 	due map[store.DueKey]store.DueMark
+	// late is recipe RESULT rows (F07 PR 5), moved here from the late inbox
+	// by the dispatcher goroutine. They carry no bookmark and are written by
+	// RecordTriggerResults with no run row. empty() counts them, so a result
+	// with no new commit is still flushed [M1]. A failed flush, a flush of
+	// another store generation, or a crash loses them — the fire itself was
+	// already logged as `started` (or re-fires, M2's window).
+	late []store.TriggerFire
 }
 
 // maxBufferedRuns bounds the write-behind buffer by run count; the fire rows
@@ -414,7 +498,7 @@ type pendingFlush struct {
 const maxBufferedRuns = 256
 
 func (p *pendingFlush) empty() bool {
-	return len(p.runs) == 0 && len(p.wm) == 0 && len(p.del) == 0 && len(p.due) == 0
+	return len(p.runs) == 0 && len(p.wm) == 0 && len(p.del) == 0 && len(p.due) == 0 && len(p.late) == 0
 }
 
 // clock is the run's one clock read: UTC (all times are UTC) at whole seconds
@@ -441,6 +525,10 @@ func (d *triggerDispatcher) run(ctx context.Context) {
 	}
 	rs.svc = svc
 	rs.now = d.clock()
+	// Recipe results that arrived since the last run join the buffer first:
+	// phase A may find nothing to do and return early, but they are then
+	// already buffered, and settle flushes them after the grace.
+	d.drainLate(svc)
 	ok := d.phaseA(ctx, svc, rs)
 	release()
 	if !ok {
@@ -498,7 +586,11 @@ func (d *triggerDispatcher) buffer(rs *runState, run store.TriggerRun) {
 		delete(p.del, name)
 	}
 	for _, m := range rs.dueMarks {
-		p.due[store.DueKey{Trigger: m.Trigger, Path: m.Path}] = m
+		k := store.DueKey{Trigger: m.Trigger, Path: m.Path}
+		if rs.dueRetry[k] {
+			continue // dropped for capacity: unmarked, retried next sweep (M3)
+		}
+		p.due[k] = m
 	}
 	for _, name := range rs.del {
 		p.del[name] = true
@@ -556,6 +648,7 @@ func (d *triggerDispatcher) flush(ctx context.Context) {
 		return
 	}
 	runs := p.runs
+	late := p.late
 	wm := make(map[string]string, len(p.wm))
 	for k, v := range p.wm {
 		wm[k] = v
@@ -586,6 +679,16 @@ func (d *triggerDispatcher) flush(ctx context.Context) {
 		}
 		d.mu.Lock()
 		d.pending.runs, d.pending.rows = nil, 0 // durable now; a retry must not log them twice
+		d.mu.Unlock()
+	}
+	if len(late) > 0 {
+		if err := tr.RecordTriggerResults(ctx, late); err != nil {
+			log.Warn().Err(err).Str("repo", d.repo).Msg("trigger dispatcher: recipe result rows lost (fire log write failed)")
+			d.resetPending()
+			return
+		}
+		d.mu.Lock()
+		d.pending.late = nil
 		d.mu.Unlock()
 	}
 	if h := currentTriggerHooks().beforeTx2; h != nil {
@@ -644,8 +747,13 @@ func (d *triggerDispatcher) overlayPending(svc *store.Service, wms map[string]st
 // flushOnStop writes what is buffered when the actor stops (a clean
 // shutdown), so a restart does not re-fire runs this process already
 // emitted. The store is still attached: shutdown stops the dispatcher before
-// it closes the store.
+// it closes the store. Recipe results still in the late inbox (the killed
+// recipes' `stopped` rows) are drained into the buffer first.
 func (d *triggerDispatcher) flushOnStop() {
+	if svc, release, err := d.ri.Acquire(); err == nil {
+		d.drainLate(svc)
+		release()
+	}
 	d.mu.Lock()
 	empty := d.pending.empty()
 	d.mu.Unlock()
@@ -1220,6 +1328,8 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 		pass, err := p.trig.EvalIf(globals, rs.now)
 		outcome, errText := "", ""
 		var hostMS time.Duration
+		var run runStart
+		var extra []store.TriggerFire
 		switch {
 		case err != nil:
 			var interrupted *goja.InterruptedError
@@ -1232,9 +1342,30 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 		case !pass:
 			outcome = store.TriggerOutcomeIfFalse
 		case p.trig.Do == fact.TriggerDoScript:
-			outcome, errText, hostMS = d.runScript(ctx, rs, p, globals)
+			outcome, errText, hostMS, extra = d.runScript(ctx, rs, p, globals)
 			if ctx.Err() != nil {
 				return nil, 0, 0, true // the script was interrupted by the dispatcher's cancel
+			}
+		case p.trig.Do == fact.TriggerDoPush:
+			// The push action: a wake for this machine's sync loop, nothing
+			// else — no SSE event, no commit, no trailer (fire log only). It
+			// kicks on an unparseable fact too: what needs pushing is the
+			// commit, not the fact. Its OWN case, never the emit arm below.
+			d.wakeSync()
+			outcome = store.TriggerOutcomeKicked
+			log.Debug().Str("repo", d.repo).Str("trigger", capForLog(p.trig.Name)).
+				Str("path", capForLog(p.repoPath)).Str("commit", shortHash(p.commit)).Msg("trigger kicked sync")
+		case p.trig.Do == fact.TriggerDoRun:
+			// The run action: resolve the recipe (main's tip, else this
+			// machine's) and START it beside the dispatcher — a slot taken
+			// without blocking, a run id minted, a goroutine. Never waits:
+			// the result is a later row with the same run id. Its OWN case,
+			// never the emit arm below.
+			rf, rt := rs.fireRange()
+			run = d.startRecipe(p, p.trig.Recipe, nil, globals, rf, rt)
+			outcome, errText = run.outcome, run.errText
+			if outcome == "" {
+				outcome = outcomeUnbound
 			}
 		default:
 			outcome = store.TriggerOutcomeEmitted
@@ -1243,9 +1374,17 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 			}
 			d.emit(p, nil)
 		}
+		if p.episode == fact.TriggerOnDue &&
+			(outcome == store.TriggerOutcomeRateLimited || outcome == store.TriggerOutcomeBusy) {
+			if rs.dueRetry == nil {
+				rs.dueRetry = map[store.DueKey]bool{}
+			}
+			rs.dueRetry[store.DueKey{Trigger: p.trig.Name, Path: p.repoPath}] = true
+		}
 		elapsed := time.Since(t0) - hostMS
 		evaluated++
-		if outcome == store.TriggerOutcomeEmitted || outcome == store.TriggerOutcomeUnparseable || outcome == store.TriggerOutcomeRan {
+		if outcome == store.TriggerOutcomeEmitted || outcome == store.TriggerOutcomeUnparseable || outcome == store.TriggerOutcomeRan ||
+			outcome == store.TriggerOutcomeKicked || outcome == store.TriggerOutcomeStarted {
 			fires++
 		}
 		slow := d.slow > 0 && elapsed > d.slow
@@ -1265,12 +1404,15 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 				Int64("host_ms", hostMS.Milliseconds()).
 				Msg("slow trigger")
 		}
-		if outcome != store.TriggerOutcomeIfFalse {
+		if outcome != store.TriggerOutcomeIfFalse && outcome != outcomeUnbound {
 			rows = append(rows, store.TriggerFire{
 				Trigger: p.trig.Name, Path: p.repoPath, Episode: p.episode, Source: p.source,
 				Commit: p.commit, Trace: p.trace, Outcome: outcome, Error: errText, Nonlinear: p.nonlinear,
+				RecipeSource: run.source, RecipeRev: run.rev, RunID: run.id,
 			})
 		}
+		// knomit.run from a script: its start rows, after the script's own.
+		rows = append(rows, extra...)
 	}
 	return rows, evaluated, fires, false
 }
@@ -1444,6 +1586,8 @@ type TriggerView struct {
 	On        []string         `json:"on"`
 	Do        string           `json:"do"`
 	Script    string           `json:"script,omitempty"`
+	JS        string           `json:"js,omitempty"`
+	Recipe    string           `json:"recipe,omitempty"`
 	State     string           `json:"state"`
 	Error     string           `json:"error,omitempty"`
 	Watermark string           `json:"watermark,omitempty"`
@@ -1498,7 +1642,8 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 		active[ct.Name] = ct
 	}
 	for _, st := range set.States {
-		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, State: st.State, Error: st.Error}
+		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, JS: st.JS, Recipe: st.Recipe,
+			State: st.State, Error: st.Error}
 		if v.On == nil {
 			v.On = []string{}
 		}
@@ -1523,6 +1668,26 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 	}
 	sort.SliceStable(rep.Triggers, func(i, j int) bool { return rep.Triggers[i].Name < rep.Triggers[j].Name })
 	return rep, nil
+}
+
+// TriggerFiresByRun returns the fire-log rows of one recipe run on the
+// observed agent branch, oldest first: the `started` row, then the result row
+// once the recipe has finished and its row is flushed (F07 PR 5, D5). A repo
+// with no dispatcher has none.
+func (ri *RepoInstance) TriggerFiresByRun(ctx context.Context, id string) ([]store.TriggerFire, error) {
+	out := []store.TriggerFire{}
+	d := ri.triggers
+	if d == nil {
+		return out, nil
+	}
+	var rerr error
+	err := ri.WithRead(func(svc *store.Service) {
+		out, rerr = svc.Triggers().TriggerFiresByRun(ctx, d.branch, id)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, rerr
 }
 
 // String renders the identity for logs.

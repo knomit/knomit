@@ -127,6 +127,19 @@ func (d *triggerDispatcher) loadScripts(ctx context.Context, tr store.TriggerInd
 		if ct.Do != fact.TriggerDoScript {
 			continue
 		}
+		if ct.JS != "" {
+			// Inline code (F08, R9): compiled with the ontology and cached by
+			// source hash (fact.compileInlineJS); the program is installed
+			// here keyed by that hash, so an unchanged `js` keeps its entry
+			// and a changed one replaces it before the next fire. It cannot
+			// be missing or fail to compile here: that made it invalid.
+			d.mu.Lock()
+			if cur := d.sc.scripts[ct.Name]; cur == nil || cur.blob != ct.JSKey || cur.prog != ct.JSProgram() {
+				d.sc.scripts[ct.Name] = &compiledScript{script: ct.Name + ":js", blob: ct.JSKey, prog: ct.JSProgram()}
+			}
+			d.mu.Unlock()
+			continue
+		}
 		blob, data, err := tr.ScriptAt(ctx, head, ct.Script)
 		d.mu.Lock()
 		cur := d.sc.scripts[ct.Name]
@@ -217,16 +230,18 @@ func (d *triggerDispatcher) warnOnce(key string) bool {
 }
 
 // runScript is phase B's action for a `do: script` trigger whose `if` held.
-// It returns the fire's outcome and error text, and the time spent inside
-// host calls (knomit's own cost, not the script's). The caller checks the
-// dispatcher ctx afterwards: a cancelled run has no outcome.
-func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendingFire, globals map[string]any) (outcome, errText string, hostMS time.Duration) {
+// It returns the fire's outcome and error text, the time spent inside host
+// calls (knomit's own cost, not the script's), and the extra rows the script's
+// knomit.run calls produced (their `started`/`busy`/`recipe-error` rows,
+// logged after the fire's own). The caller checks the dispatcher ctx
+// afterwards: a cancelled run has no outcome.
+func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendingFire, globals map[string]any) (outcome, errText string, hostMS time.Duration, extra []store.TriggerFire) {
 	cs := d.scriptFor(p.trig.Name)
 	if cs == nil {
-		return store.TriggerOutcomeScriptError, fmt.Sprintf("script %s: not loaded", p.trig.Script), 0
+		return store.TriggerOutcomeScriptError, fmt.Sprintf("script %s: not loaded", p.trig.Script), 0, nil
 	}
 	if cs.err != nil {
-		return store.TriggerOutcomeScriptError, cs.err.Error(), 0
+		return store.TriggerOutcomeScriptError, cs.err.Error(), 0, nil
 	}
 	if !d.rateAllows(p.trig.Name, rs.now) {
 		if d.warnOnce("rate:" + p.trig.Name + "@" + cs.blob) {
@@ -237,7 +252,7 @@ func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendi
 				Int("rate_per_minute", d.sc.rate).
 				Msg("trigger script rate cap reached; further fires this minute are dropped")
 		}
-		return store.TriggerOutcomeRateLimited, fmt.Sprintf("rate cap: %d script runs per minute", d.sc.rate), 0
+		return store.TriggerOutcomeRateLimited, fmt.Sprintf("rate cap: %d script runs per minute", d.sc.rate), 0, nil
 	}
 	// The cap episode ends with a run that goes through.
 	d.mu.Lock()
@@ -252,40 +267,53 @@ func (d *triggerDispatcher) runScript(ctx context.Context, rs *runState, p pendi
 	defer cancel()
 	hostCtx = WithBinding(hostCtx, NewBindingOfRepo(d.ri, d.branch))
 	hostCtx = store.WithTrailers(hostCtx, store.Trailers{Trace: p.trace, Cause: p.commit, Trigger: p.trig.Name})
-	h := &scriptHost{d: d, p: p, cs: cs, ctx: hostCtx}
+	rf, rt := rs.fireRange()
+	h := &scriptHost{d: d, p: p, cs: cs, ctx: hostCtx, globals: globals, rangeFrom: rf, rangeTo: rt}
+	h.onRow = func(r store.TriggerFire) { h.rows = append(h.rows, r) }
 
 	err := fact.RunScript(hostCtx, cs.prog, cs.script, globals, h.functions(), rs.now)
 	hostMS = h.spent
 	if ctx.Err() != nil {
-		return "", "", hostMS // the run is aborted; nothing is recorded
+		return "", "", hostMS, nil // the run is aborted; nothing is recorded
 	}
+	extra = h.rows
 	var interrupted *goja.InterruptedError
 	switch {
 	case err == nil:
-		return store.TriggerOutcomeRan, "", hostMS
+		return store.TriggerOutcomeRan, "", hostMS, extra
 	case errors.As(err, &interrupted) || errors.Is(hostCtx.Err(), context.DeadlineExceeded):
 		if d.warnOnce("timeout:" + p.trig.Name + "@" + cs.blob) {
 			log.Warn().Str("repo", d.repo).Str("branch", d.branch).Str("trigger", capForLog(p.trig.Name)).
 				Dur("budget", budget).Msg("trigger script exceeded its budget")
 		}
-		return store.TriggerOutcomeScriptTimeout, fmt.Sprintf("script %s exceeded %s", cs.script, budget), hostMS
+		return store.TriggerOutcomeScriptTimeout, fmt.Sprintf("script %s exceeded %s", cs.script, budget), hostMS, extra
 	default:
 		msg := err.Error()
 		if d.warnOnce("error:" + p.trig.Name + "@" + cs.blob + ":" + msg) {
 			log.Warn().Str("repo", d.repo).Str("branch", d.branch).Str("trigger", capForLog(p.trig.Name)).
 				Str("error", capForLog(msg)).Msg("trigger script failed")
 		}
-		return store.TriggerOutcomeScriptError, msg, hostMS
+		return store.TriggerOutcomeScriptError, msg, hostMS, extra
 	}
 }
 
-// scriptHost is the `knomit` object of one fire.
+// scriptHost is the `knomit` object of one fire — a script's, or a recipe's
+// (which adds `exec`, recipeHostFunctions).
 type scriptHost struct {
 	d     *triggerDispatcher
 	p     pendingFire
 	cs    *compiledScript
 	ctx   context.Context // budget deadline + binding + trailers
 	spent time.Duration   // time inside host calls (host_ms)
+	// globals is the fire's fact/agent/change, handed on to a recipe that
+	// knomit.run starts; rangeFrom/rangeTo the fire's range for its late row.
+	globals            map[string]any
+	rangeFrom, rangeTo string
+	// onRow receives the rows knomit.run records: a script collects them
+	// into rows (logged with its fire, phase B); a recipe sends them to the
+	// late inbox (it runs outside phase B).
+	onRow func(store.TriggerFire)
+	rows  []store.TriggerFire
 }
 
 // functions is the host object: exactly these eight names, nothing else is
@@ -383,7 +411,28 @@ func (h *scriptHost) learn(args []any) (any, error) {
 		}
 	}
 	opts := objectArg(args, 1)
-	return h.call("learn", map[string]any{"facts": facts, "moment_name": h.momentName(opts)})
+	call := map[string]any{"facts": facts, "moment_name": h.momentName(opts)}
+	// F04 (F08 PR A): opts.retract makes the call a move — the facts and the
+	// deletions in one commit, all-or-nothing under the branch lock. Each path
+	// passes the same private refusal as update/retract, so a script cannot
+	// delete under .knomit/ by this route either. knomit.learn([], {retract})
+	// is a batch retraction.
+	if raw, has := opts["retract"]; has && raw != nil {
+		list, ok := raw.([]any)
+		if !ok {
+			return nil, errors.New("knomit.learn: opts.retract must be a list of fact paths")
+		}
+		retract := make([]any, 0, len(list))
+		for i, v := range list {
+			p, err := h.privateRefused("learn", v)
+			if err != nil {
+				return nil, fmt.Errorf("knomit.learn: retract %d: %w", i, err)
+			}
+			retract = append(retract, p)
+		}
+		call["retract"] = retract
+	}
+	return h.call("learn", call)
 }
 
 func (h *scriptHost) update(args []any) (any, error) {
@@ -418,6 +467,16 @@ func (h *scriptHost) factPath(tool string, args []any) (string, error) {
 	if !ok || file == "" {
 		return "", fmt.Errorf("knomit.%s(path, opts?): path must be a string", tool)
 	}
+	return h.privateRefused(tool, file)
+}
+
+// privateRefused is factPath's rule for one path value: a non-empty string
+// whose normalised form is not under a private segment.
+func (h *scriptHost) privateRefused(tool string, v any) (string, error) {
+	file, ok := v.(string)
+	if !ok || file == "" {
+		return "", fmt.Errorf("knomit.%s: a path must be a non-empty string, got %v", tool, v)
+	}
 	root := h.d.ri.ontologyRoot
 	if root == "" {
 		root = "kb"
@@ -442,14 +501,60 @@ func (h *scriptHost) emit(args []any) (any, error) {
 	return nil, nil
 }
 
-// push and run are PR 4's and PR 5's; here they answer not-supported and do
-// nothing (no reconcile kick, no process).
+// push is the `push` action from a script (F07 PR 4): the same non-blocking
+// wake of this machine's sync loop, and `{ok: true, status: "kicked"}` — the
+// stub's shape, so a script can branch on status. It takes no arguments and
+// ignores any it is given: nothing can name a branch. Several calls in one
+// run (or in several fires) fold into the one slot; the per-minute script
+// cap already bounds the runs. The fire's outcome stays `ran`.
 func (h *scriptHost) push(args []any) (any, error) {
-	return map[string]any{"ok": false, "status": "not-supported"}, nil
+	h.d.wakeSync()
+	return map[string]any{"ok": true, "status": store.TriggerOutcomeKicked}, nil
 }
 
+// run is knomit.run(name, payload?) (F07 PR 5): the `run` action from a
+// script. The name must be a kebab-case recipe name (it becomes a path; a bad
+// one throws). It resolves and STARTS the recipe exactly as `do: run` does
+// and answers at once, never waiting for the recipe (ruling D5: "yes,
+// started, and hopefully with a task id which we can use to correlate the
+// results later on"):
+//
+//   - {ok: true, status: "started", id: "run-<32 hex>", source: "repo"|"local"}
+//   - {bound: false} — no recipe on main or on this machine (no row)
+//   - {ok: false, status: "busy"} — the recipe is at its `concurrent` limit
+//   - {ok: false, status: "recipe-error", error} — the recipe does not compile
+//
+// Every answer but unbound also logs a row for this trigger (started, busy
+// or recipe-error, with the run id when one was minted); the recipe's result
+// is a later row with the same run id, found with GET …/triggers?run=<id>.
+// payload is untrusted data a repo script chose: the recipe gets it as
+// `payload`, and the core never puts it into argv. The script's own fire
+// stays `ran`.
 func (h *scriptHost) run(args []any) (any, error) {
-	return map[string]any{"ok": false, "status": "not-supported"}, nil
+	name, ok := stringArg(args, 0)
+	if !ok || !fact.ValidRecipeName(name) {
+		return nil, fmt.Errorf("knomit.run(name, payload?): name must be a kebab-case recipe name (.knomit/recipes/<name>.js), got %v", argAt(args, 0))
+	}
+	st := h.d.startRecipe(h.p, name, argAt(args, 1), h.globals, h.rangeFrom, h.rangeTo)
+	if st.outcome == "" {
+		return map[string]any{"bound": false}, nil
+	}
+	h.d.stats.recordRecipe(h.p.trig.Name, st.outcome)
+	if h.onRow != nil {
+		h.onRow(store.TriggerFire{
+			Trigger: h.p.trig.Name, Branch: h.d.branch, Path: h.p.repoPath, Episode: h.p.episode, Source: h.p.source,
+			Commit: h.p.commit, Trace: h.p.trace, Nonlinear: h.p.nonlinear, RangeFrom: h.rangeFrom, RangeTo: h.rangeTo,
+			Outcome: st.outcome, Error: st.errText, RecipeSource: st.source, RecipeRev: st.rev, RunID: st.id,
+		})
+	}
+	switch st.outcome {
+	case store.TriggerOutcomeStarted:
+		return map[string]any{"ok": true, "status": st.outcome, "id": st.id, "source": st.source}, nil
+	case store.TriggerOutcomeBusy:
+		return map[string]any{"ok": false, "status": st.outcome}, nil
+	default:
+		return map[string]any{"ok": false, "status": st.outcome, "error": st.errText}, nil
+	}
 }
 
 func argAt(args []any, i int) any {

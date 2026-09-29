@@ -1,92 +1,21 @@
 package knomitapi
 
-import "strings"
+import "knomit/internal/serverkey"
 
-// ServerKey derives the MCP-config `mcpServers` key a host writes for a knomit
-// server. Claude Code turns it into the tool-name prefix
-// `mcp__<key>__knomit_learn`; Antigravity uses it only as an identifier.
-//
-// It is DERIVED rather than the constant "knomit" because the constant made
-// scaffolding structurally single-server: a second init in the same project
-// collided on the key, so two knomit servers could never coexist. A lens
-// scoping wins over a repo scoping because the two are mutually exclusive at
-// the flag layer and the lens is the thing actually being served.
-//
-// The prefix names the AXIS as well as the product, and is applied
-// UNCONDITIONALLY, so the mapping from scope to key is injective: distinct
-// scopes can never collide. Both halves are load-bearing.
-//
-// Naming the axis is what makes the two namespaces disjoint. Repos and lenses
-// are separate namespaces validated by the same repos.IsValidName, so nothing
-// stops a lens and a repo sharing a name, and a shared `knomit-` prefix would
-// map `--repo eng` and `--lens eng` to the same key. Since `knomit-repo-` and
-// `knomit-lens-` are fixed-length and differ, no repo key can ever equal a lens
-// key, whatever the names. See TestServerKey_IsInjective.
-//
-// Applying it unconditionally is the other half. An earlier draft skipped the
-// prefix when the name already carried it, to avoid the ugly `knomit-knomit`
-// for a repo named `knomit` — but that rule is inherently many-to-one (`web`
-// and `knomit-web` both map to `knomit-web`), which re-creates in one step
-// exactly the clobbering this function exists to remove.
-//
-// Callers must validate name/lens with repos.IsValidName first: the result is
-// interpolated into JSON, and this function does no escaping of its own.
-func ServerKey(repoName, lens string) string {
-	if lens != "" {
-		return "knomit-lens-" + lens
-	}
-	return "knomit-repo-" + repoName
-}
+// The MCP-config server key lives in internal/serverkey since F07 PR 5: the
+// trigger dispatcher (internal/repos) builds the same MCP configuration for a
+// recipe as `kb claude init` writes, and internal/ must not import tools/.
+// These names keep the bridge's API unchanged; see internal/serverkey for the
+// rules.
 
-// MaxServerKeyLen bounds the derived key so the fully-qualified tool name
-// Claude Code builds from it stays under the API's 64-character tool-name
-// limit. The longest tool is knomit_hypothesize, giving
-// len("mcp__") + len(key) + len("__") + len("knomit_hypothesize") = 25 + key.
-//
-// Bytes, not runes: repos.IsValidName restricts names to ASCII, so the two
-// counts coincide and the byte length is what the API actually measures.
-//
-// Antigravity does not need this bound — it exposes bare tool names — but a
-// repo scaffolded for both hosts must satisfy the stricter rule anyway, and one
-// conservative rule beats two divergent ones.
-const MaxServerKeyLen = 64 - len("mcp____knomit_hypothesize")
+// ServerKey is serverkey.ServerKey.
+func ServerKey(repoName, lens string) string { return serverkey.ServerKey(repoName, lens) }
 
-// MaxScopeNameLen is the resulting budget for the repo or lens NAME itself —
-// what an error message must quote, since that is the knob the user turns.
-// Both axis prefixes are the same length, so one constant covers both.
-const MaxScopeNameLen = MaxServerKeyLen - len("knomit-repo-")
+// UnboundServerKey is serverkey.UnboundServerKey.
+func UnboundServerKey(dirName string) string { return serverkey.UnboundServerKey(dirName) }
 
-// UnboundServerKey derives the key for an entry that starts knomit UNBOUND
-// (neither --repo nor --lens), from the directory init runs in.
-//
-// It keeps the repo-axis naming, so the key may carry the directory name — but
-// the name goes into the KEY only, never into the entry's args. Nothing may read
-// a scope back out of it: the hooks bind from args alone (ClassifyArgs). The
-// cost is that this key can equal ServerKey(dir, ""), which is why a flagless
-// re-init keeps an existing entry's scope instead of rewriting its args.
-//
-// The directory name is sanitized, never validated: init must not fail because
-// of where it runs. ASCII letters are lowercased, every other rune outside the
-// repos.IsValidName grammar becomes '-', and the result is cut to
-// MaxScopeNameLen so the key fits MaxServerKeyLen.
-func UnboundServerKey(dirName string) string {
-	var b strings.Builder
-	for _, c := range dirName {
-		switch {
-		case c >= 'A' && c <= 'Z':
-			b.WriteRune(c + ('a' - 'A'))
-		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_':
-			b.WriteRune(c)
-		default:
-			b.WriteByte('-')
-		}
-		if b.Len() == MaxScopeNameLen {
-			break
-		}
-	}
-	name := b.String()
-	if name == "" {
-		name = "-"
-	}
-	return ServerKey(name, "")
-}
+// MaxServerKeyLen is serverkey.MaxServerKeyLen.
+const MaxServerKeyLen = serverkey.MaxServerKeyLen
+
+// MaxScopeNameLen is serverkey.MaxScopeNameLen.
+const MaxScopeNameLen = serverkey.MaxScopeNameLen

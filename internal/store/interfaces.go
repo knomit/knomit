@@ -26,6 +26,11 @@ type FactIndex interface {
 	// separate DeleteFact call would be a second commit that can land without
 	// its partner (see the learn-subsume path in internal/mcp/learn.go).
 	BatchWriteFacts(ctx context.Context, branch string, files map[string]string, deletes []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
+	// BatchWriteFactsMustExist is BatchWriteFacts with a precondition: every
+	// path in mustExist must exist at the branch tip, checked INSIDE the
+	// branch write lock; otherwise nothing is written and the error is a
+	// *RetractMissingError. The F04 move (knomit_learn `retract`) uses it.
+	BatchWriteFactsMustExist(ctx context.Context, branch string, files map[string]string, deletes, mustExist []string, message, operation string) (commitHash string, blobHashes map[string]string, err error)
 	DeleteFact(ctx context.Context, branch, path, message string) (string, error)
 	FactExists(ctx context.Context, branch, path string) (bool, error)
 	ListDir(ctx context.Context, branch, path string) ([]DirEntry, error)

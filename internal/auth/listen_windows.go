@@ -30,6 +30,13 @@ func listenLocal(path string) (net.Listener, func(), error) {
 	if err != nil {
 		return nil, noop, err
 	}
+	// go-winio MUST be at microsoft/go-winio#388 (7e8af9b09c) or later, which
+	// no tagged release contains yet — move to the first one that does. In
+	// v0.6.2 a Close that raced a client connecting and hanging up could lose
+	// its one close signal and block forever (knomit#344): the listener's
+	// routine consumed it, got back an errno other than ErrFileClosed
+	// (ERROR_OPERATION_ABORTED, measured) and went on listening. That is
+	// every server's shutdown, not only a test's cleanup.
 	ln, err := winio.ListenPipe(path, &winio.PipeConfig{SecurityDescriptor: sddl})
 	if err != nil {
 		if isPipeNameTaken(err) {
@@ -48,10 +55,10 @@ func listenLocal(path string) (net.Listener, func(), error) {
 // pipe name", which is the Windows spelling of ErrSocketInUse.
 //
 // winio.ListenPipe creates the first instance with the FILE_CREATE
-// disposition on NtCreateNamedPipeFile (pipe.go:378-381 in v0.6.2), which
-// fails outright if the name already exists — the effect the Win32 API spells
-// FILE_FLAG_FIRST_PIPE_INSTANCE. The refusal is ERROR_ACCESS_DENIED, measured
-// on this hardware rather than inferred; see
+// disposition on NtCreateNamedPipeFile (makeServerPipeHandle, first == true),
+// which fails outright if the name already exists — the effect the Win32 API
+// spells FILE_FLAG_FIRST_PIPE_INSTANCE. The refusal is ERROR_ACCESS_DENIED,
+// measured on this hardware rather than inferred; see
 // TestListenLocal_LivePipeIsNotStolen, which records the errno it actually
 // got so a future Windows build changing it fails loudly.
 //

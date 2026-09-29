@@ -281,8 +281,10 @@ func outcomesOf(rows []store.TriggerFire) []string {
 // HostFunctions: every function reaches the tool set with the arguments the
 // MCP tool takes (moment_name defaults to trigger:<name>), the results come
 // back as the tool's JSON, emit carries the payload on the branch stream,
-// push/run answer not-supported, and the fire is `ran`. Sabotage: route a
-// function to the wrong tool; drop the moment_name default.
+// push answers kicked (F07 PR 4, T6), run with no recipe anywhere answers
+// {bound: false} (F07 PR 5, T1) and logs nothing, and the fire is `ran`.
+// Sabotage: route a function to the wrong tool; drop the moment_name default;
+// keep push's stub.
 func TestScript_HostFunctions(t *testing.T) {
 	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "host"))
 	putScript(t, ri, "host", `
@@ -304,8 +306,8 @@ knomit.emit({q: q, e: e, l: l, u: u, r: r, push: knomit.push(), run: knomit.run(
 	require.Equal(t, trigAgent, p["l"].(map[string]any)["written_to"])
 	require.Equal(t, "kb/tasks/out/learned.md", p["u"].(map[string]any)["file"])
 	require.Equal(t, "kb/tasks/out/learned.md", p["r"].(map[string]any)["file"])
-	require.Equal(t, map[string]any{"ok": false, "status": "not-supported"}, p["push"])
-	require.Equal(t, map[string]any{"ok": false, "status": "not-supported"}, p["run"])
+	require.Equal(t, map[string]any{"ok": true, "status": "kicked"}, p["push"])
+	require.Equal(t, map[string]any{"bound": false}, p["run"], "no recipe on main or on this machine: unbound")
 	require.Equal(t, c0, p["trace"], "a plain firing commit is the root of its own story")
 
 	calls := tools.recorded()
@@ -978,4 +980,60 @@ knomit.emit(out);`)
 	require.Empty(t, tools.recorded(), "refused before any tool ran")
 	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
 	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
+}
+
+// ---- F08 PR A, M2: knomit.learn(facts, {retract}) — the F04 move from a
+// script.
+
+// LearnRetractForwarded [T-A8, host half]: opts.retract reaches the learn
+// tool as `retract`, verbatim, beside the defaulted moment_name; `[]` with a
+// retract is forwarded as a batch retraction. The real one-commit result is
+// TestScript_MoveThroughRealTools (internal/web). Sabotage: forward only
+// moment_name → no `retract` argument → red.
+func TestScript_LearnRetractForwarded(t *testing.T) {
+	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "take"))
+	tools.hook = func(ctx context.Context, tool string, args map[string]any) (string, bool, error, bool) {
+		return `{"commits":[]}`, false, nil, true
+	}
+	putScript(t, ri, "take", `
+knomit.learn({topic: "tasks", category: "working", title: "w"}, {retract: [change.path]});
+knomit.learn([], {retract: [change.path, "kb/tasks/in/other.md"], moment_name: "drop"});`)
+	writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	settle(t, ri)
+	calls := tools.recorded()
+	require.Len(t, calls, 2)
+	require.Equal(t, "learn", calls[0].Tool)
+	require.Equal(t, []any{"kb/tasks/in/a.md"}, calls[0].Args["retract"])
+	require.Equal(t, "trigger:t", calls[0].Args["moment_name"])
+	require.Equal(t, []any{}, calls[1].Args["facts"])
+	require.Equal(t, []any{"kb/tasks/in/a.md", "kb/tasks/in/other.md"}, calls[1].Args["retract"])
+	require.Equal(t, "drop", calls[1].Args["moment_name"])
+	require.Equal(t, []string{store.TriggerOutcomeRan}, outcomesOf(firesOf(t, ri, "t")))
+}
+
+// LearnRetractPrivateRefused [T-A7, script half]: a retract path under a
+// private segment — .knomit/ job state (which the MCP tool itself accepts)
+// or a .drafts fact — throws in the HOST before any tool runs; so does a
+// retract that is not a list of strings. Sabotage: skip the private check on
+// opts.retract → the tool is called → red.
+func TestScript_LearnRetractPrivateRefused(t *testing.T) {
+	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "priv"))
+	putScript(t, ri, "priv", `
+var out = {};
+try { knomit.learn({topic: "tasks", category: "w", title: "x"}, {retract: [".knomit/jobs/x.md"]}); } catch (e) { out.job = e.message; }
+try { knomit.learn([], {retract: ["kb/.drafts/x.md"]}); } catch (e) { out.drafts = e.message; }
+try { knomit.learn([], {retract: "kb/tasks/in/a.md"}); } catch (e) { out.notList = e.message; }
+try { knomit.learn([], {retract: [5]}); } catch (e) { out.notString = e.message; }
+knomit.emit(out);`)
+	sink := subscribePayloads(t, ri, "t")
+	before := settle(t, ri)
+	c0 := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	settle(t, ri)
+	p := sink.wait(t, 1)[0]
+	require.Contains(t, p["job"], "a script may not write under .knomit/")
+	require.Contains(t, p["drafts"], "a script may not write under .knomit/")
+	require.Contains(t, p["notList"], "must be a list")
+	require.Contains(t, p["notString"], "non-empty string")
+	require.Empty(t, tools.recorded(), "refused before any tool ran")
+	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
 }

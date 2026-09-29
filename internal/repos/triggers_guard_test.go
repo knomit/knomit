@@ -36,7 +36,10 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"fact.ReadVerifySettings", "fact.ParseFact", "fact.FactGlobal", "fact.ExpiresUnix",
 		"store.TrailerValue",
 		// the hub and the log
-		"hub.broadcastTrigger", "log.Warn", "log.Error", "log.Info", "?.Err", "?.Str", "?.Dur", "?.Int64", "?.Interface", "?.Msg",
+		"hub.broadcastTrigger", "log.Warn", "log.Error", "log.Info", "log.Debug", "?.Err", "?.Str", "?.Dur", "?.Int64", "?.Interface", "?.Msg",
+		// the push action (F07 PR 4): a non-blocking send on the sync wake,
+		// from phase B's own case — never a push, never the network
+		"d.wakeSync", "d.ri.wakeSync",
 		"crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
 		"newTriggerStats", "triggerIdentityFor", "isHex8", "currentTriggerHooks", "d.triggerKick", "d.loop", "d.safeRun",
@@ -50,6 +53,12 @@ var triggersRepoAllowedCalls = map[string][]string{
 		// the phase-A load, the phase-B run, the report overlay, the trace
 		"newScriptState", "d.loadScripts", "d.runScript", "d.scriptError", "deriveTrace", "hostMS.Milliseconds",
 		"ev.Str", "ev.Msg", "string",
+		// the `do: run` half (trigger_recipe.go has its own list below): the
+		// start (never a wait), the late result rows into phase C and their
+		// write (RecordTriggerResults: the fire-log table, no run row), the
+		// lookup by run id, and the stop order (wait for the recipes, then
+		// flush)
+		"newRecipeState", "d.startRecipe", "rs.fireRange", "d.drainLate", "tr.RecordTriggerResults", "?.TriggerFiresByRun", "?.Wait",
 		// sync and context
 		"d.mu.Lock", "d.mu.Unlock", "d.wg.Add", "d.wg.Wait", "d.wg.Done", "triggerHooksMu.Lock", "triggerHooksMu.Unlock",
 		"context.WithCancel", "context.WithTimeout", "context.Background", "ctx.Err", "ctx.Done",
@@ -67,19 +76,54 @@ var triggersRepoAllowedCalls = map[string][]string{
 	"trigger_script.go": {
 		// the store: the script blob at the head, and the injected tool set
 		"tr.ScriptAt", "?.Call",
+		// knomit.run (F07 PR 5): the name rule, the start (trigger_recipe.go),
+		// its row handed to the fire (or the late inbox), the counter
+		"fact.ValidRecipeName", "h.d.startRecipe", "h.onRow", "?.recordRecipe", "rs.fireRange",
 		// the binding and the trailers the handlers see
 		"NewBindingOfRepo", "WithBinding", "store.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
 		// the sandbox
 		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath",
+		// an inline js: program, compiled with the ontology (F08 M4): a getter
+		"ct.JSProgram",
 		// the hub (through emit) and the log
-		"h.d.emit", "log.Error", "log.Warn", "?.Str", "?.Int", "?.Dur", "?.Msg", "crashdump.ReportRecovered",
+		"h.d.emit", "h.d.wakeSync", "log.Error", "log.Warn", "?.Str", "?.Int", "?.Dur", "?.Msg", "crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
 		"currentTriggerHooks", "d.scriptFor", "d.rateAllows", "d.warnOnce", "h.d.warnOnce", "h.functions", "h.call", "h.momentName", "h.factPath",
+		"h.privateRefused", // factPath's rule for one path, also on knomit.learn's opts.retract (F08 M2)
 		"d.mu.Lock", "d.mu.Unlock", "argAt", "stringArg", "objectArg", "capForLog",
 		// pure helpers
 		"time.Now", "time.Since", "now.Add", "?.After", "json.Marshal", "json.Unmarshal", "strings.TrimSpace",
 		"errors.Is", "errors.As", "errors.New", "fmt.Errorf", "fmt.Sprintf", "err.Error", "cs.err.Error",
-		"append", "len", "delete", "string", "recover",
+		"append", "len", "delete", "string", "recover", "make",
+	},
+	// The recipe runner (F07 PR 5): its only store use is two READS of main
+	// (the tip, and the recipe file in that tip's tree) — never the agent
+	// branch, never a signer, a certificate or a last writer (user ruling
+	// D1) — plus the ONE local file it may read (<home>/recipes/<name>.js).
+	// A recipe's writes go through the same script host (the injected tools);
+	// its result row goes to the late inbox, never to the tables directly.
+	// Processes are started only by trigger_recipe_exec.go (see
+	// TestRecipe_OSExecOnlyInExecFile), never from here.
+	"trigger_recipe.go": {
+		// the store: main's tip and the recipe blob at it
+		"d.ri.Acquire", "release", "svc.Triggers", "svc.UpstreamBranch", "tr.UpstreamTip", "tr.RecipeAt", "tip.IsZero",
+		// the local tier
+		"os.Stat", "os.ReadFile", "filepath.Join", "fi.Mode", "?.IsRegular", "fi.ModTime", "fi.Size", "cur.mtime.Equal",
+		"sha256.Sum256", "hex.EncodeToString",
+		// the sandbox and the host
+		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "WithBinding", "NewBindingOfRepo", "store.WithTrailers",
+		"recipeHostFunctions", "recipeMCP", "serverkey.ServerKey", "json.Marshal", "os.Environ", "mergeEnv",
+		"d.recipeGlobals", "d.recipeEnv",
+		// the runner: resolution, slots, the goroutine, the late inbox, a kick
+		"d.resolveRecipe", "d.mainRecipe", "d.localRecipe", "d.compileRecipe", "d.rc.tryTake", "d.rc.release",
+		"?.Add", "?.Done", "d.runJob", "d.execRecipe", "d.addLate", "d.triggerKick", "d.stats.recordRecipe",
+		"newRunID", "rand.Read", "mathrand.Int64N", "?.Lock", "?.Unlock", "rc.mu.Lock", "rc.mu.Unlock",
+		"d.lateMu.Lock", "d.lateMu.Unlock", "d.mu.Lock", "d.mu.Unlock", "p.empty",
+		// the log and pure helpers
+		"log.Error", "log.Debug", "?.Str", "?.Msg", "capForLog", "cr.err.Error", "err.Error",
+		"context.Background", "context.WithTimeout", "cancel", "ctx.Err", "ctx.Done", "budget.Err",
+		"time.Now", "time.Since", "time.NewTimer", "time.Duration", "t.Stop", "?.Milliseconds", "?.UTC",
+		"errors.Is", "errors.As", "fmt.Errorf", "fmt.Sprintf", "int64", "string", "append", "len", "delete", "recover",
 	},
 }
 

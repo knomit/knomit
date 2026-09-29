@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -152,7 +154,7 @@ func TestREST_TriggersExposed(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/"+urlBranch(agent), nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `"triggers":{"href":"`)
-	require.Contains(t, rec.Body.String(), "/triggers{?log}")
+	require.Contains(t, rec.Body.String(), "/triggers{?log,run}")
 }
 
 // A repo whose store has no dispatcher (a bare test instance) still answers,
@@ -205,4 +207,74 @@ func TestSSE_TriggerOnlyOnItsBranchStream(t *testing.T) {
 	mainCancel()
 	<-agentDone
 	<-mainDone
+}
+
+// TriggersByRun (F07 PR 5, D5): a `do: run` fire's run id finds exactly its
+// two rows on GET …/triggers?run=<id> — `started`, then the recipe's result —
+// both with that run_id, the same trace and recipe_source; ?run replaces the
+// recent log; a malformed id is a 400. Sabotage: serve ?run from the recent
+// log (red: the other rows show) or skip the id check (red: no 400).
+func TestREST_TriggersByRun(t *testing.T) {
+	m, home := newTestLensManager(t, "alpha")
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "recipes"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "recipes", "worker.js"),
+		[]byte(`({status: "done", message: "ran " + run.id});`), 0o600))
+	ri := m.Get("alpha")
+	var head string
+	ontology := "id: t\nname: T\ntopics:\n  tasks:\n    description: t\n    triggers:\n" +
+		"      - {name: work, on: learn, do: run, recipe: worker}\n      - {name: all, on: learn, do: emit}\n  other:\n    description: o\n"
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		res, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), repos.OntologyPath, ontology, "ontology", "updated")
+		require.NoError(t, err)
+		head = res.CommitHash
+	}))
+	r := (&Server{Manager: m, AgentBranch: "machine/test", OntologyRoot: "kb"}).NewAPIRouter()
+	base := "/repos/alpha/branches/" + urlBranch(ri.AgentBranch()) + "/triggers"
+	waitTriggersHead(t, r, base, head)
+	seedOn(t, ri, ri.AgentBranch(), "kb/tasks/a/fire.md")
+
+	var id string
+	require.Eventually(t, func() bool {
+		_, p := getTriggers(t, r, base+"?log=50")
+		for _, f := range p.Fires {
+			if f.Trigger == "work" && f.Outcome == store.TriggerOutcomeStarted {
+				id = f.RunID
+			}
+		}
+		return id != ""
+	}, 20*time.Second, 20*time.Millisecond, "the started row never showed")
+	require.Regexp(t, `^run-[0-9a-f]{32}$`, id)
+
+	var page triggersPage
+	require.Eventually(t, func() bool {
+		rec, p := getTriggers(t, r, base+"?log=50&run="+id)
+		page = p
+		return rec.Code == http.StatusOK && len(p.Fires) == 2
+	}, 20*time.Second, 20*time.Millisecond, "the run's two rows never showed: %+v", page.Fires)
+	require.Equal(t, store.TriggerOutcomeStarted, page.Fires[0].Outcome)
+	require.Equal(t, store.TriggerOutcomeDone, page.Fires[1].Outcome)
+	require.Equal(t, "ran "+id, page.Fires[1].Error, "the recipe saw run.id")
+	for _, f := range page.Fires {
+		require.Equal(t, id, f.RunID)
+		require.Equal(t, "work", f.Trigger)
+		require.Equal(t, page.Fires[0].Trace, f.Trace)
+		require.Equal(t, store.RecipeSourceLocal, f.RecipeSource)
+	}
+	found := false
+	for _, tr := range page.Triggers {
+		if tr.Name == "work" {
+			found = true
+			require.Equal(t, "worker", tr.Recipe)
+			require.Equal(t, int64(1), tr.Stats.Started)
+		}
+	}
+	require.True(t, found)
+
+	for _, bad := range []string{"x", "run-XYZ", "run-0123", "RUN-0123456789abcdef0123456789abcdef"} {
+		rec, _ := getTriggers(t, r, base+"?run="+bad)
+		require.Equal(t, http.StatusBadRequest, rec.Code, bad)
+	}
+	rec, p := getTriggers(t, r, base+"?run=run-00000000000000000000000000000000")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Empty(t, p.Fires, "an unknown run id has no rows")
 }

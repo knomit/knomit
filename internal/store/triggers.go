@@ -41,8 +41,22 @@ const TriggerFireRetention = 10000
 // `rate-limited` outcomes are a `do: script` trigger's (F07 PR 3): `ran` is
 // its `emitted`; `self-caused` is the loop guard (the toucher of the path
 // carries `Knomit-Trigger: <this trigger>`, so the fire is skipped before
-// `if`); `rate-limited` is a fire DROPPED by the per-minute cap. The column
-// is free text; adding a kind needs no migration.
+// `if`); `rate-limited` is a fire DROPPED by the per-minute cap. `kicked` is
+// a `do: push` fire (F07 PR 4): it asked this machine's sync loop for a round
+// and says nothing about whether that round then succeeded — that is the
+// remote's sync/push status. The column is free text; adding a kind needs no
+// migration.
+//
+// The `do: run` / knomit.run kinds (F07 PR 5). `started` is the fire: the
+// recipe was resolved and handed to the runner with a fresh run id, and
+// nothing waited for it (counted as a fire). `busy` is a fire DROPPED because
+// the recipe is at its `concurrent` limit (no queue). `recipe-error` is a
+// recipe that failed to resolve (does not compile, bad header) or, as the
+// result row, one that threw, returned `status: "error"` or an invalid value,
+// or was stopped; `recipe-timeout` one that ran past its budget. `done`,
+// `spawned`, `delivered` and `unreachable` are the recipe's own reported
+// status on the result row. A started fire's result row carries the SAME
+// run_id; an unbound fire (no recipe anywhere) writes no row.
 const (
 	TriggerOutcomeEmitted       = "emitted"
 	TriggerOutcomeIfFalse       = "if-false"
@@ -55,12 +69,32 @@ const (
 	TriggerOutcomeScriptTimeout = "script-timeout"
 	TriggerOutcomeRateLimited   = "rate-limited"
 	TriggerOutcomeSelfCaused    = "self-caused"
+	TriggerOutcomeKicked        = "kicked"
+
+	TriggerOutcomeStarted       = "started"
+	TriggerOutcomeBusy          = "busy"
+	TriggerOutcomeRecipeError   = "recipe-error"
+	TriggerOutcomeRecipeTimeout = "recipe-timeout"
+	TriggerOutcomeDone          = "done"
+	TriggerOutcomeSpawned       = "spawned"
+	TriggerOutcomeDelivered     = "delivered"
+	TriggerOutcomeUnreachable   = "unreachable"
+)
+
+// Recipe sources of a `do: run` row (recipe_source).
+const (
+	RecipeSourceRepo  = "repo"
+	RecipeSourceLocal = "local"
 )
 
 // ErrNoScriptAtCommit: the commit's tree holds no `.knomit/triggers/<name>.js`
 // for the trigger's script name. The trigger is `invalid` on the endpoint and
 // every fire is a `script-error` until the file exists at the head.
 var ErrNoScriptAtCommit = errors.New("script not found at the head")
+
+// ErrNoRecipeAtCommit: the commit's tree holds no `.knomit/recipes/<name>.js`.
+// The dispatcher then falls through to the machine-local recipe.
+var ErrNoRecipeAtCommit = errors.New("recipe not found at the commit")
 
 // ErrNoOntologyAtCommit: the commit's tree holds no ontology file at any of the
 // known paths. The dispatcher keeps its last good trigger set.
@@ -90,6 +124,14 @@ type TriggerFire struct {
 	DurationMS     int64  `json:"duration_ms,omitempty"`
 	DiffMS         int64  `json:"diff_ms,omitempty"`
 	ChangeMS       int64  `json:"change_ms,omitempty"`
+	// RecipeSource, RecipeRev and RunID are a `do: run` / knomit.run row's
+	// (F07 PR 5; "" on every other row): where the recipe came from (repo =
+	// main's tip, local = <home>/recipes), which exact code ran (the blob
+	// hash at main, or sha256[:12] of the local file), and the run id the
+	// `started` row and its result row share.
+	RecipeSource string `json:"recipe_source,omitempty"`
+	RecipeRev    string `json:"recipe_rev,omitempty"`
+	RunID        string `json:"run_id,omitempty"`
 	// FiredAt is the row's stamp rendered as RFC 3339 UTC with an explicit Z
 	// (all times are UTC); stored as Unix seconds. For the operator, never
 	// read for ordering.
@@ -176,6 +218,11 @@ type TriggerIndex interface {
 	// an error, never "absent"), returning its blob hash — the script cache's
 	// key — and content. ErrNoScriptAtCommit when the file is not there.
 	ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (blob string, data []byte, err error)
+	// RecipeAt reads `.knomit/recipes/<name>.js` from the commit's own tree —
+	// the dispatcher passes the tip of main, never the agent branch (user
+	// ruling D1) — with the same rules as ScriptAt. ErrNoRecipeAtCommit when
+	// the file is not there.
+	RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (blob string, data []byte, err error)
 	// Toucher finds the commit that introduced the blob path carries at head:
 	// git's own history simplification, with no clock. See the method.
 	Toucher(ctx context.Context, head plumbing.Hash, path string) (TouchResult, error)
@@ -215,8 +262,16 @@ type TriggerIndex interface {
 	// capped by TriggerFireRetention), then prunes trigger_fires to the newest
 	// TriggerFireRetention rows.
 	AdvanceTriggerWatermarks(ctx context.Context, branch string, set map[string]string, del []string, due []DueMark) error
+	// RecordTriggerResults is the write of a recipe's LATE result rows (F07
+	// PR 5): each row as given, with its own branch and range (copied from the
+	// fire that started it), and NO run row — a result is not a dispatcher run.
+	// One transaction; the retention prune runs in the same transaction.
+	RecordTriggerResults(ctx context.Context, rows []TriggerFire) error
 	// RecentTriggerFires returns the newest limit rows for branch, newest first.
 	RecentTriggerFires(ctx context.Context, branch string, limit int) ([]TriggerFire, error)
+	// TriggerFiresByRun returns branch's rows carrying run_id id, oldest
+	// first: the `started` row, then the result row once it is logged.
+	TriggerFiresByRun(ctx context.Context, branch, id string) ([]TriggerFire, error)
 
 	// DueCandidates is the `on: due` sweep's candidate set: the dated facts
 	// LIVE on branch (branch_facts ⋈ fact_expires) whose expires_at is at or
@@ -297,32 +352,43 @@ func (rh *repoHandler) OntologyAtCommit(ctx context.Context, commit plumbing.Has
 // the name was validated kebab-case at compile time, so it names a file
 // directly under .knomit/triggers/ and nothing else.
 func (rh *repoHandler) ScriptAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
+	return rh.privateFileAt(commit, "script", fact.TriggerScriptPath(name), ErrNoScriptAtCommit)
+}
+
+// RecipeAt implements TriggerIndex. The path is fact.TriggerRecipePath(name);
+// the name is validated kebab-case by every caller.
+func (rh *repoHandler) RecipeAt(ctx context.Context, commit plumbing.Hash, name string) (string, []byte, error) {
+	return rh.privateFileAt(commit, "recipe", fact.TriggerRecipePath(name), ErrNoRecipeAtCommit)
+}
+
+// privateFileAt reads one file of a commit's own tree: absent is notFound; a
+// directory or an unreadable blob is an error, never "absent".
+func (rh *repoHandler) privateFileAt(commit plumbing.Hash, what, p string, notFound error) (string, []byte, error) {
 	c, err := rh.repo.CommitObject(commit)
 	if err != nil {
-		return "", nil, fmt.Errorf("triggers: script at %s: %w", commit, err)
+		return "", nil, fmt.Errorf("triggers: %s at %s: %w", what, commit, err)
 	}
 	tree, err := c.Tree()
 	if err != nil {
 		return "", nil, fmt.Errorf("triggers: tree of %s: %w", commit, err)
 	}
-	p := fact.TriggerScriptPath(name)
 	entry, err := tree.FindEntry(p)
 	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
-		return "", nil, ErrNoScriptAtCommit
+		return "", nil, notFound
 	}
 	if err != nil {
-		return "", nil, fmt.Errorf("triggers: script entry %q at %s: %w", p, commit, err)
+		return "", nil, fmt.Errorf("triggers: %s entry %q at %s: %w", what, p, commit, err)
 	}
 	if !entry.Mode.IsFile() {
-		return "", nil, fmt.Errorf("triggers: script path %q at %s is not a file", p, commit)
+		return "", nil, fmt.Errorf("triggers: %s path %q at %s is not a file", what, p, commit)
 	}
 	f, err := tree.TreeEntryFile(entry)
 	if err != nil {
-		return "", nil, fmt.Errorf("triggers: script blob %q at %s: %w", p, commit, err)
+		return "", nil, fmt.Errorf("triggers: %s blob %q at %s: %w", what, p, commit, err)
 	}
 	body, err := f.Contents()
 	if err != nil {
-		return "", nil, fmt.Errorf("triggers: script contents %q at %s: %w", p, commit, err)
+		return "", nil, fmt.Errorf("triggers: %s contents %q at %s: %w", what, p, commit, err)
 	}
 	return entry.Hash.String(), []byte(body), nil
 }
@@ -574,13 +640,22 @@ func (rh *repoHandler) TriggerWatermarks(ctx context.Context, branch string) (ma
 // triggerFireColumns is the column list of one trigger_fires row, in the
 // order fireRowArgs produces the values.
 const triggerFireColumns = `(trigger, branch, path, episode, source, commit_hash, trace, outcome, error, nonlinear,
-	 range_from, range_to, evaluated, paths, fires, fires_not_logged, duration_ms, diff_ms, change_ms, fired_at)`
+	 range_from, range_to, evaluated, paths, fires, fires_not_logged, duration_ms, diff_ms, change_ms, fired_at,
+	 recipe_source, recipe_rev, run_id)`
 
-// fireRowBatch is how many rows one multi-row INSERT carries: 20 columns ×
-// 500 rows = 10,000 bound parameters, well under SQLite's limit. Fewer, larger
+// triggerFirePlaceholder is one row's placeholders (23 columns).
+const triggerFirePlaceholder = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+
+// triggerFireSelect is the SELECT list the readers scan with scanTriggerFire.
+const triggerFireSelect = `SELECT id, trigger, branch, path, episode, source, commit_hash, trace,
+		outcome, error, nonlinear, range_from, range_to, evaluated, paths, fires, fires_not_logged,
+		duration_ms, diff_ms, change_ms, fired_at, recipe_source, recipe_rev, run_id FROM trigger_fires`
+
+// fireRowBatch is how many rows one multi-row INSERT carries: 23 columns ×
+// 400 rows = 9,200 bound parameters, well under SQLite's limit. Fewer, larger
 // statements hold the process-wide write lock for less time than one
 // statement per row, and that lock is the one fact writes wait on.
-const fireRowBatch = 500
+const fireRowBatch = 400
 
 // RecordTriggerRun implements TriggerIndex (tx1 for one run).
 func (rh *repoHandler) RecordTriggerRun(ctx context.Context, run TriggerRun) (int, error) {
@@ -597,7 +672,7 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 	}
 	defer tx.Rollback()
 	now := time.Now().UTC().Unix()
-	placeholder := "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	placeholder := triggerFirePlaceholder
 	logged := 0
 	for _, run := range runs {
 		rows := run.Rows
@@ -613,14 +688,15 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 			}
 			var sb strings.Builder
 			sb.WriteString("INSERT INTO trigger_fires " + triggerFireColumns + " VALUES ")
-			args := make([]any, 0, (end-start)*20)
+			args := make([]any, 0, (end-start)*23)
 			for i, r := range rows[start:end] {
 				if i > 0 {
 					sb.WriteString(", ")
 				}
 				sb.WriteString(placeholder)
 				args = append(args, r.Trigger, run.Branch, r.Path, r.Episode, r.Source, r.Commit, r.Trace,
-					r.Outcome, r.Error, boolInt(r.Nonlinear), run.RangeFrom, run.RangeTo, 0, 0, 0, 0, 0, 0, 0, now)
+					r.Outcome, r.Error, boolInt(r.Nonlinear), run.RangeFrom, run.RangeTo, 0, 0, 0, 0, 0, 0, 0, now,
+					r.RecipeSource, r.RecipeRev, r.RunID)
 			}
 			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
 				return 0, fmt.Errorf("RecordTriggerRun: fire rows: %w", err)
@@ -629,7 +705,7 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 		if _, err := tx.ExecContext(ctx, "INSERT INTO trigger_fires "+triggerFireColumns+" VALUES "+placeholder,
 			"", run.Branch, "", "", "", "", "", TriggerOutcomeRun, "", boolInt(run.Nonlinear),
 			run.RangeFrom, run.RangeTo, run.Evaluated, run.Paths, run.Fires, notLogged,
-			run.DurationMS, run.DiffMS, run.ChangeMS, now); err != nil {
+			run.DurationMS, run.DiffMS, run.ChangeMS, now, "", "", ""); err != nil {
 			return 0, fmt.Errorf("RecordTriggerRun: run row: %w", err)
 		}
 		logged += len(rows)
@@ -638,6 +714,49 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 		return 0, fmt.Errorf("RecordTriggerRun: commit: %w", err)
 	}
 	return logged, nil
+}
+
+// RecordTriggerResults implements TriggerIndex (F07 PR 5 [M1]): the late
+// result rows of recipes, each with its own branch and range, no run row, and
+// the retention prune in the same transaction (the prune otherwise rides tx2,
+// which a result-only flush does not run).
+func (rh *repoHandler) RecordTriggerResults(ctx context.Context, rows []TriggerFire) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	tx, err := rh.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("RecordTriggerResults: begin: %w", err)
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Unix()
+	for start := 0; start < len(rows); start += fireRowBatch {
+		end := min(start+fireRowBatch, len(rows))
+		var sb strings.Builder
+		sb.WriteString("INSERT INTO trigger_fires " + triggerFireColumns + " VALUES ")
+		args := make([]any, 0, (end-start)*23)
+		for i, r := range rows[start:end] {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(triggerFirePlaceholder)
+			args = append(args, r.Trigger, r.Branch, r.Path, r.Episode, r.Source, r.Commit, r.Trace,
+				r.Outcome, r.Error, boolInt(r.Nonlinear), r.RangeFrom, r.RangeTo, 0, 0, 0, 0, r.DurationMS, 0, 0, now,
+				r.RecipeSource, r.RecipeRev, r.RunID)
+		}
+		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("RecordTriggerResults: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM trigger_fires WHERE id <= (SELECT COALESCE(MAX(id), 0) FROM trigger_fires) - ?`,
+		TriggerFireRetention); err != nil {
+		return fmt.Errorf("RecordTriggerResults: prune: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("RecordTriggerResults: commit: %w", err)
+	}
+	return nil
 }
 
 func boolInt(b bool) int {
@@ -735,12 +854,23 @@ func (rh *repoHandler) RecentTriggerFires(ctx context.Context, branch string, li
 	if limit <= 0 {
 		return []TriggerFire{}, nil
 	}
-	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT id, trigger, branch, path, episode, source, commit_hash, trace,
-		outcome, error, nonlinear, range_from, range_to, evaluated, paths, fires, fires_not_logged,
-		duration_ms, diff_ms, change_ms, fired_at
-		FROM trigger_fires WHERE branch = ? ORDER BY id DESC LIMIT ?`, branch, limit)
+	return rh.queryTriggerFires(ctx, "RecentTriggerFires",
+		triggerFireSelect+` WHERE branch = ? ORDER BY id DESC LIMIT ?`, branch, limit)
+}
+
+// TriggerFiresByRun implements TriggerIndex.
+func (rh *repoHandler) TriggerFiresByRun(ctx context.Context, branch, id string) ([]TriggerFire, error) {
+	if id == "" {
+		return []TriggerFire{}, nil
+	}
+	return rh.queryTriggerFires(ctx, "TriggerFiresByRun",
+		triggerFireSelect+` WHERE branch = ? AND run_id = ? ORDER BY id`, branch, id)
+}
+
+func (rh *repoHandler) queryTriggerFires(ctx context.Context, who, query string, args ...any) ([]TriggerFire, error) {
+	rows, err := conn(ctx, rh.db).QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("RecentTriggerFires: %w", err)
+		return nil, fmt.Errorf("%s: %w", who, err)
 	}
 	defer rows.Close()
 	out := []TriggerFire{}
@@ -750,15 +880,16 @@ func (rh *repoHandler) RecentTriggerFires(ctx context.Context, branch string, li
 		var firedAt int64
 		if err := rows.Scan(&f.ID, &f.Trigger, &f.Branch, &f.Path, &f.Episode, &f.Source, &f.Commit, &f.Trace,
 			&f.Outcome, &f.Error, &nonlinear, &f.RangeFrom, &f.RangeTo, &f.Evaluated, &f.Paths, &f.Fires,
-			&f.FiresNotLogged, &f.DurationMS, &f.DiffMS, &f.ChangeMS, &firedAt); err != nil {
-			return nil, fmt.Errorf("RecentTriggerFires: %w", err)
+			&f.FiresNotLogged, &f.DurationMS, &f.DiffMS, &f.ChangeMS, &firedAt,
+			&f.RecipeSource, &f.RecipeRev, &f.RunID); err != nil {
+			return nil, fmt.Errorf("%s: %w", who, err)
 		}
 		f.Nonlinear = nonlinear != 0
 		f.FiredAt = UTCStamp(firedAt)
 		out = append(out, f)
 	}
 	if err := rows.Err(); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("RecentTriggerFires: %w", err)
+		return nil, fmt.Errorf("%s: %w", who, err)
 	}
 	return out, nil
 }
