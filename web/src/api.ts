@@ -448,6 +448,44 @@ export class ExperimentConflictError extends Error {
   }
 }
 
+// PushedBranchRow is one branch a peer pushed to this host (F11), as
+// GET /repos/{repo}/pushed-branches lists it. to_merge is 0 once merged.
+export interface PushedBranchRow {
+  name: string;
+  tip: string;
+  tip_time: string;
+  tip_author: string;
+  to_merge: number;
+  in_agent_branch: boolean;
+  merge_base?: string;
+  other_files_changed: number;
+}
+
+// PushedMergeConflictError is a REFUSED pushed-branch merge: the same facts
+// changed on this host and on the peer's branch. It carries the commits each
+// side's version lives at, so the dialog can show both before anyone chooses.
+export class PushedMergeConflictError extends Error {
+  readonly paths: string[];
+  readonly hostCommit: string;
+  readonly peerCommit: string;
+  constructor(message: string, paths: string[], hostCommit: string, peerCommit: string) {
+    super(message);
+    this.name = 'PushedMergeConflictError';
+    this.paths = paths;
+    this.hostCommit = hostCommit;
+    this.peerCommit = peerCommit;
+  }
+}
+
+// BranchMovedError: the peer pushed again after the dialog was opened, so the
+// merge was refused rather than taking commits nobody reviewed.
+export class BranchMovedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BranchMovedError';
+  }
+}
+
 export interface ExperimentInfo {
   name: string;
   description?: string;
@@ -2259,6 +2297,47 @@ export const api = {
       throw new ExperimentConflictError(body.detail || 'experiment has conflicting changes', body.conflicting_paths);
     }
     throw new Error(body.detail || body.title || `${action} → ${r.status} ${r.statusText}`);
+  },
+
+  listPushedBranches: async (repo: string): Promise<PushedBranchRow[]> => {
+    const data = await fetchJSON<{ _embedded?: { pushed_branches?: PushedBranchRow[] } }>(`${repoBase(repo)}/pushed-branches`);
+    return data._embedded?.pushed_branches || [];
+  },
+
+  // branchChanges lists the facts that differ between `since` and the
+  // branch's head, and that HEAD — the exact commit the list describes, which
+  // a merge dialog pins as its expected_tip. One page (the first 100).
+  branchChanges: async (repo: string, branch: string, since: string): Promise<{ head: string; changes: { path: string; change: string }[]; hasMore: boolean }> => {
+    const q = since ? `?since=${encodeURIComponent(since)}` : '';
+    const data = await fetchJSON<{ head: string; has_more?: boolean; _embedded?: { changes?: { path: string; change: string }[] } }>(`${branchBase(repo, branch)}/changes${q}`);
+    return { head: data.head, changes: data._embedded?.changes || [], hasMore: !!data.has_more };
+  },
+
+  // mergePushedBranch merges a peer's pushed branch, at exactly expectedTip,
+  // into this repo's agent branch. resolution settles EVERY conflicting fact:
+  // 'host' keeps this host's version, 'peer' takes the pushed branch's.
+  mergePushedBranch: async (
+    repo: string, branch: string, expectedTip: string, resolution?: 'host' | 'peer',
+  ): Promise<{ mode: string; new_tip: string; into: string }> => {
+    const r = await fetch(`${branchBase(repo, branch)}/merge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(resolution ? { expected_tip: expectedTip, resolution } : { expected_tip: expectedTip }),
+    });
+    let body: {
+      title?: string; detail?: string; conflicting_paths?: unknown; host_commit?: string; peer_commit?: string;
+      mode?: string; new_tip?: string; into?: string;
+    } = {};
+    try { body = await r.json(); } catch { /* a non-JSON error body is still a failure */ }
+    if (r.ok) return { mode: body.mode || '', new_tip: body.new_tip || '', into: body.into || '' };
+    if (r.status === 409 && Array.isArray(body.conflicting_paths)) {
+      throw new PushedMergeConflictError(body.detail || 'merge has conflicting changes',
+        body.conflicting_paths as string[], body.host_commit || '', body.peer_commit || '');
+    }
+    if (r.status === 409 && body.title === 'Branch moved') {
+      throw new BranchMovedError(body.detail || 'the branch moved since you reviewed it');
+    }
+    throw new Error(body.detail || body.title || `merge → ${r.status} ${r.statusText}`);
   },
 
   retractFact: (repo: string, branch: string, path: string): Promise<void> =>
