@@ -491,6 +491,14 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	// Rebuild of the 10k branch with everything derived (the common case),
 	// and the worst wait of a concurrent writer on another branch.
 	require.NoError(b, svc.Branches().CreateBranch(ctx, "writer", "main"))
+	// Baseline: the same writer with no rebuild running.
+	var base time.Duration
+	for i := range 20 {
+		s := time.Now()
+		_, err := svc.Facts().WriteFact(ctx, "writer", fmt.Sprintf("kb/base%d.md", i), testFactBody("w", 0.5, nil), "w", "")
+		require.NoError(b, err)
+		base = max(base, time.Since(s))
+	}
 	var worst time.Duration
 	stop := make(chan struct{})
 	done := make(chan struct{})
@@ -515,7 +523,7 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 	elapsed := time.Since(start)
 	close(stop)
 	<-done
-	b.Logf("rebuild of %d commits: %v; worst concurrent write: %v", n, elapsed, worst)
+	b.Logf("rebuild of %d commits: %v; swap transaction %v; worst concurrent write %v (worst of 20 writes with no rebuild: %v)", n, elapsed, time.Duration(lastSwapDuration.Load()), worst, base)
 }
 
 func fullHistoryB(b *testing.B, svc *Service, branch, path, anchor string) []FactRevision {
