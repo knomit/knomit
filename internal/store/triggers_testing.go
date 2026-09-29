@@ -28,6 +28,16 @@ func (s *Service) TestingSetRef(name, hash string) error {
 	return s.rh.gits.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(name), plumbing.NewHash(hash)))
 }
 
+// TestingDeleteRef removes a git reference WITHOUT notifyCommit — for a test
+// that needs a repo with no upstream branch (F07 PR 5: no main means no repo
+// recipe tier). Test-only by contract (see TestingSetRef).
+func (s *Service) TestingDeleteRef(name string) error {
+	if !testing.Testing() {
+		panic("store.TestingDeleteRef called outside a test binary")
+	}
+	return s.rh.gits.RemoveReference(plumbing.ReferenceName(name))
+}
+
 // TestingCommitFiles commits files onto branch as ONE signed commit, moving
 // the ref but skipping notifyCommit — no commit_log row, no index sync, no
 // observer. It exists for a test that needs a very large advance (thousands of

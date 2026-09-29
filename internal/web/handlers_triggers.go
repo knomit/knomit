@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"regexp"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -13,6 +14,9 @@ import (
 
 // triggersMaxLog caps `?log=N`, the number of recent fire-log rows returned.
 const triggersMaxLog = 500
+
+// runIDRe is the shape of a recipe run id (F07 PR 5): `run-` and 32 hex.
+var runIDRe = regexp.MustCompile(`^run-[0-9a-f]{32}$`)
 
 // triggersView is the HAL body of GET …/branches/{branch}/triggers: each
 // declared trigger with its state, error, watermark and statistics, the run
@@ -49,11 +53,28 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 			}
 			logN = n
 		}
+		// ?run=<id>: the rows of one recipe run (the `started` row and its
+		// result row) INSTEAD of the recent log.
+		runID := r.URL.Query().Get("run")
+		if runID != "" && !runIDRe.MatchString(runID) {
+			hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
+				"run must be a run id: run- followed by 32 lowercase hex", r.URL.Path)
+			return
+		}
+		if runID != "" {
+			logN = 0
+		}
 
 		rep, err := ri.TriggerReport(r.Context(), logN)
 		if err != nil {
 			writeStoreError(w, r, err, "Failed to read triggers", branch)
 			return
+		}
+		if runID != "" {
+			if rep.Fires, err = ri.TriggerFiresByRun(r.Context(), runID); err != nil {
+				writeStoreError(w, r, err, "Failed to read triggers", branch)
+				return
+			}
 		}
 		self := b.Branch(repoName, hal.Anchor{Branch: branch}) + "/triggers"
 		hal.WriteHAL(w, http.StatusOK, triggersView{

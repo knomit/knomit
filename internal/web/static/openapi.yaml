@@ -1283,12 +1283,13 @@ paths:
             does not compile — then the bookmark keeps advancing and every
             fire is a `script-error` row), `frozen` (invalid,
             and holding a bookmark: its fires wait for the fix and resume
-            from where it stopped), or `unsupported` (valid, but a `do`
-            value this knomit version does not act on yet — today only
-            `do: run`; not an error, and it holds no bookmark
+            from where it stopped), or `unsupported` (valid, but a value
+            this knomit version does not act on yet — none today, since
+            `do: run` became active; not an error, and it holds no bookmark
             until a version activates it — no back-fill).
           * `script`: for `do: script`, the script name: the file
             `.knomit/triggers/<script>.js` at the head of the agent branch.
+          * `recipe`: for `do: run`, the recipe name (see `do: run` below).
           * `watermark`: the last agent-branch head this trigger fully
             processed. First appearance sets it to the head of that advance,
             so facts committed together with the trigger never fire. It is
@@ -1304,7 +1305,8 @@ paths:
         `runs` carries the run count and the last run's coalesced range,
         path count, evaluations, fires and durations. `?log=N` (0–500)
         appends the newest N fire-log rows; the log keeps the newest 10,000
-        rows per repo. `enabled: false` with a `reason` on a read-only server
+        rows per repo; `?run=<id>` returns instead the rows of one recipe run
+        (see `do: run`). `enabled: false` with a `reason` on a read-only server
         or a subscription (no agent branch to observe).
 
         `do: script` (F07 PR 3). The script `.knomit/triggers/<script>.js` is
@@ -1323,8 +1325,8 @@ paths:
         `.knomit/`), `knomit.emit(payload)`, `knomit.push()` (the `push`
         action below; it takes no arguments and answers
         `{ok: true, status: "kicked"}`; the fire stays `ran`), and
-        `knomit.run()` which answers `{ok: false, status: "not-supported"}`
-        until a later version. Every commit a script makes ends with the
+        `knomit.run(name, payload?)` (the `run` action below, started from a
+        script; the fire stays `ran`). Every commit a script makes ends with the
         trailers `Knomit-Trace: <trace>` (the fire's `trace`, copied
         forward), `Knomit-Cause: <commit>` (the firing commit) and
         `Knomit-Trigger: <name>` inside the signed message, so
@@ -1356,6 +1358,45 @@ paths:
         an `if` on `change.source` also fires on paths a round merges in, at
         the cost of one more round that finds nothing;
         `if: change.source === 'local'` avoids it.
+
+        `do: run` (F07 PR 5). A fire starts the recipe named by `recipe` on
+        THIS machine and does not wait for it. The recipe is
+        `.knomit/recipes/<recipe>.js` at the tip of the repo's main (upstream)
+        branch — never the agent branch, and with no check of who put it
+        there — else `<home>/recipes/<recipe>.js` on this machine; with
+        neither, the fire is an `unbound` no-op (counted, no row). A main
+        recipe that does not compile is a `recipe-error`, never a fall-back to
+        the local one; a repo with no main branch uses only local recipes.
+        A recipe runs in the same sandbox as a script with one more host
+        function, `knomit.exec(argv, {stdin, env, cwd, timeout_ms})` →
+        `{exit, stdout, stderr, truncated?}`: argv only, never a shell; the
+        environment is knomit's own plus `KNOMIT_HOME`, `KNOMIT_TRACE`,
+        `KNOMIT_CAUSE` and `KNOMIT_RUN`, with `env` merged over it; the
+        process group (job object on Windows) is killed at a timeout or when
+        knomit stops. Its globals are the fire's `fact`, `agent` and `change`,
+        plus `payload` (from knomit.run; untrusted), `task_path` (the firing
+        fact's path), `mcp` (`server`, `config` — this repo's MCP
+        configuration as `kb claude init` writes it — and `tools`, the
+        `mcp__<server>` allow form) and `run.id`. Its first line may be a
+        header, `// knomit: {"concurrent": 1, "jitter_ms": 0, "timeout_ms":
+        1800000}` (those are the defaults). The fire's row is `started`
+        (counted in `fires`) with a fresh `run_id` (`run-` + 32 hex), or
+        `busy` when the recipe already runs `concurrent` times on this
+        machine (DROPPED, not queued), or `recipe-error`. When the recipe
+        ends, a second row with the SAME `run_id` records its result: the
+        status it returned (`done`, `spawned`, `delivered`, `unreachable`;
+        `error` becomes `recipe-error`), `recipe-error` for a throw, an
+        invalid result or a knomit stop, or `recipe-timeout`. Both rows carry
+        `recipe_source` (`repo` or `local`), `recipe_rev` (the file's blob at
+        main, or the first 12 hex of the local file's sha256) and the fire's
+        `trace`; `?run=<id>` returns exactly them. `knomit.run(name,
+        payload?)` from a script answers at once
+        `{ok: true, status: "started", id, source}`, `{bound: false}`,
+        `{ok: false, status: "busy"}` or
+        `{ok: false, status: "recipe-error", error}` and logs the start row
+        the same way. A clean stop kills running recipes and nothing re-runs
+        them; a crash in the few milliseconds before a fire is flushed
+        re-runs it once on restart.
 
         `on: due` fires (F07 PR 2). Every dispatcher run — kicked by a write
         on the agent branch or by the reconcile tick (30 s for an origin-less
@@ -1400,6 +1441,11 @@ paths:
           required: false
           schema: { type: integer, minimum: 0, maximum: 500, default: 0 }
           description: How many recent fire-log rows to include.
+        - name: run
+          in: query
+          required: false
+          schema: { type: string, pattern: "^run-[0-9a-f]{32}$" }
+          description: A recipe run id; `fires` is then that run's rows (the `started` row and, once logged, its result row) instead of the recent log.
       responses:
         "200":
           description: The trigger resource
@@ -3774,6 +3820,15 @@ components:
         script_timeout: { type: integer, description: "do: script — the 5 s budget." }
         rate_limited:   { type: integer, description: "do: script — fires dropped by [triggers].script_rate_per_minute." }
         self_caused:    { type: integer, description: "Fires skipped by the loop guard: the path's last writer was this trigger's own script (never counted as an evaluation, never logged)." }
+        started:        { type: integer, description: "do: run — fires that started a recipe (plus knomit.run starts)." }
+        busy:           { type: integer, description: "do: run — fires dropped because the recipe was at its concurrent limit." }
+        unbound:        { type: integer, description: "do: run — evaluations that found no recipe on main or on this machine (no row)." }
+        recipe_error:   { type: integer, description: "do: run — a recipe that failed to compile, threw, returned error or an invalid result, or was stopped." }
+        recipe_timeout: { type: integer, description: "do: run — a recipe that ran past its timeout_ms." }
+        done:           { type: integer, description: "do: run — recipe results." }
+        spawned:        { type: integer }
+        delivered:      { type: integer }
+        unreachable:    { type: integer }
         slow:        { type: integer, description: "Evaluations slower than [log].slow_trigger_ms." }
         duration:    { $ref: "#/components/schemas/TriggerDuration" }
 
@@ -3787,6 +3842,7 @@ components:
         on:        { type: array, items: { type: string } }
         do:        { type: string, enum: [emit, script, push, run] }
         script:    { type: string, description: "For do: script — the name of .knomit/triggers/<script>.js." }
+        recipe:    { type: string, description: "For do: run — the recipe name: .knomit/recipes/<recipe>.js at main's tip, else <home>/recipes/<recipe>.js." }
         state:     { type: string, enum: [active, invalid, frozen, unsupported] }
         error:     { type: string, description: "The problem (invalid/frozen; for do: script also a missing or uncompilable script) or the reason (unsupported), verbatim." }
         watermark: { type: string, description: "The last agent-branch head fully processed (40-hex); absent before first appearance and for unsupported triggers." }
@@ -3804,7 +3860,7 @@ components:
         source:           { type: string, enum: [local, merged, due], description: "local or merged for a tree episode (decided by the signer); due for a due fire." }
         commit:           { type: string, description: "The ORIGINAL commit that made the change." }
         trace:            { type: string, description: "The fire's story id: the commit's Knomit-Trace trailer, else the task id, else the commit; never empty." }
-        outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, ran, script-error, script-timeout, rate-limited, kicked, run] }
+        outcome:          { type: string, enum: [emitted, if-error, if-timeout, unparseable, ran, script-error, script-timeout, rate-limited, kicked, started, busy, recipe-error, recipe-timeout, done, spawned, delivered, unreachable, run] }
         error:            { type: string }
         nonlinear:        { type: boolean, description: "The advance's old head was not an ancestor of the new one (a rewind replay)." }
         range_from:       { type: string }
@@ -3817,6 +3873,9 @@ components:
         diff_ms:          { type: integer }
         change_ms:        { type: integer }
         fired_at:         { type: string, format: date-time, description: "UTC, RFC 3339 with an explicit Z; for the operator, never read for ordering." }
+        recipe_source:    { type: string, enum: [repo, local], description: "do: run / knomit.run rows — repo (the file at main's tip) or local (<home>/recipes)." }
+        recipe_rev:       { type: string, description: "do: run rows — which code ran: the file's blob at main, or sha256[:12] of the local file." }
+        run_id:           { type: string, description: "do: run rows — the run id (run- + 32 hex) the started row and its result row share." }
 
     Triggers:
       type: object

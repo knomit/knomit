@@ -34,10 +34,15 @@ type triggerStat struct {
 	// the `do: script` outcomes (F07 PR 3); selfCaused counts fires the
 	// loop guard skipped before `if` (not evaluations, no row)
 	scriptError, scriptTimeout, rateLimited, selfCaused int64
-	count                                               int64
-	min, max                                            time.Duration
-	recent                                              []time.Duration // ring of the last triggerP95Window
-	recentPos                                           int
+	// the `do: run` kinds (F07 PR 5): started is a fire; busy and unbound are
+	// evaluations that started nothing; the rest count the recipes' RESULTS
+	// (and knomit.run's own starts), which are never evaluations and never
+	// timed — a recipe's minutes are not dispatcher lag.
+	started, busy, unbound, recipeError, recipeTimeout, done, spawned, delivered, unreachable int64
+	count                                                                                     int64
+	min, max                                                                                  time.Duration
+	recent                                                                                    []time.Duration // ring of the last triggerP95Window
+	recentPos                                                                                 int
 }
 
 // TriggerLastRun is the last dispatcher run's numbers.
@@ -81,10 +86,23 @@ type TriggerStatsView struct {
 	// missing or uncompilable script), ScriptTimeout (the budget),
 	// RateLimited (dropped by the per-minute cap), SelfCaused (skipped by
 	// the loop guard: the path's toucher was this trigger's own script).
-	ScriptError   int64                `json:"script_error"`
-	ScriptTimeout int64                `json:"script_timeout"`
-	RateLimited   int64                `json:"rate_limited"`
-	SelfCaused    int64                `json:"self_caused"`
+	ScriptError   int64 `json:"script_error"`
+	ScriptTimeout int64 `json:"script_timeout"`
+	RateLimited   int64 `json:"rate_limited"`
+	SelfCaused    int64 `json:"self_caused"`
+	// The `do: run` kinds: Started (fires that started a recipe, and
+	// knomit.run starts), Busy (dropped at the `concurrent` limit), Unbound
+	// (no recipe on main or on this machine: a counted no-op), RecipeError
+	// and RecipeTimeout, and the recipes' reported results.
+	Started       int64                `json:"started"`
+	Busy          int64                `json:"busy"`
+	Unbound       int64                `json:"unbound"`
+	RecipeError   int64                `json:"recipe_error"`
+	RecipeTimeout int64                `json:"recipe_timeout"`
+	Done          int64                `json:"done"`
+	Spawned       int64                `json:"spawned"`
+	Delivered     int64                `json:"delivered"`
+	Unreachable   int64                `json:"unreachable"`
 	Slow          int64                `json:"slow"`
 	Duration      TriggerDurationStats `json:"duration"`
 }
@@ -131,6 +149,15 @@ func (s *triggerStats) record(name, outcome string, d time.Duration, slow bool) 
 		st.scriptTimeout++
 	case "rate-limited":
 		st.rateLimited++
+	case "started":
+		st.fires++
+		st.started++
+	case "busy":
+		st.busy++
+	case "unbound":
+		st.unbound++
+	case "recipe-error":
+		st.recipeError++
 	}
 	if slow {
 		st.slow++
@@ -147,6 +174,34 @@ func (s *triggerStats) record(name, outcome string, d time.Duration, slow bool) 
 	} else {
 		st.recent[st.recentPos] = d
 		st.recentPos = (st.recentPos + 1) % triggerP95Window
+	}
+}
+
+// recordRecipe counts a recipe outcome that is NOT an evaluation: a recipe's
+// result row (done, spawned, delivered, unreachable, recipe-error,
+// recipe-timeout), or what a script's knomit.run started (started, busy,
+// recipe-error). No duration, no `fires` (the script's own fire is `ran`).
+func (s *triggerStats) recordRecipe(name, outcome string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.stat(name)
+	switch outcome {
+	case "started":
+		st.started++
+	case "busy":
+		st.busy++
+	case "recipe-error":
+		st.recipeError++
+	case "recipe-timeout":
+		st.recipeTimeout++
+	case "done":
+		st.done++
+	case "spawned":
+		st.spawned++
+	case "delivered":
+		st.delivered++
+	case "unreachable":
+		st.unreachable++
 	}
 }
 
@@ -187,6 +242,8 @@ func (s *triggerStats) view(name string) TriggerStatsView {
 		Evaluations: st.evaluations, Fires: st.fires, IfFalse: st.ifFalse, IfError: st.ifError,
 		IfTimeout: st.ifTimeout, Unparseable: st.unparseable, Slow: st.slow,
 		ScriptError: st.scriptError, ScriptTimeout: st.scriptTimeout, RateLimited: st.rateLimited, SelfCaused: st.selfCaused,
+		Started: st.started, Busy: st.busy, Unbound: st.unbound, RecipeError: st.recipeError, RecipeTimeout: st.recipeTimeout,
+		Done: st.done, Spawned: st.spawned, Delivered: st.delivered, Unreachable: st.unreachable,
 		Duration: TriggerDurationStats{
 			Count:       st.count,
 			MinMS:       ms(st.min),

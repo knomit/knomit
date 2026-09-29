@@ -28,6 +28,10 @@ var triggersAllowedCalls = map[string][]string{
 		"tt.commit", "tt.tree", "tt.blobHashAt", "rh.TreeReader", "?.Toucher", "?.BlobAt",
 		"object.GetCommit", "ac.IsAncestor", "plumbing.NewBranchReferenceName", "verifyCommitSignature",
 		"fact.OntologyPathsNewestFirst", "fact.TriggerScriptPath",
+		// F07 PR 5: the recipe file at a commit (the dispatcher passes main's tip) and
+		// the shared tree-entry reader; the fire-log reader shared by the recent
+		// log and the lookup by run id
+		"fact.TriggerRecipePath", "rh.privateFileAt", "rh.queryTriggerFires",
 		// this store's own tables (and the read-only liveness join)
 		"?.QueryContext", "rows.Next", "rows.Scan", "rows.Close", "rows.Err", "conn", "rh.branchID",
 		"?.BeginTx", "tx.Rollback", "tx.Commit", "tx.ExecContext", "sb.WriteString", "sb.String", "rh.RecordTriggerRuns",
@@ -35,7 +39,7 @@ var triggersAllowedCalls = map[string][]string{
 		"?.commitSigner", "signer.PublicKey", "cpk.CryptoPublicKey", "pki.Fingerprint",
 		// pure helpers
 		"boolInt", "UTCStamp", "time.Now", "time.Unix", "?.UTC", "?.Unix", "?.Format", "ctx.Err", "errors.Is", "errors.New", "fmt.Errorf", "sort.Strings",
-		"append", "len", "make",
+		"append", "len", "make", "min",
 	},
 	"trailers.go": {
 		// the reader, and the ctx transport of the trailer set (WithTrailers is
