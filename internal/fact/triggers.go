@@ -55,8 +55,9 @@ const (
 //     shows a warning and the dispatcher logs an ERROR once per blob. Its
 //     bookmark FREEZES so nothing is lost while it is being fixed.
 //   - unsupported: the entry is valid but names a capability this knomit
-//     version does not act on yet (today only `do: run`). It is NOT an
-//     error: no warning, no ERROR log, and
+//     version does not act on yet (since F07 PR 5 activated `run`, no
+//     ontology value produces it; the state stays for a future one). It is
+//     NOT an error: no warning, no ERROR log, and
 //     it holds NO bookmark — when a later version activates it, it starts at
 //     the head of that advance, never back-filling (user ruling, 2026-09-27).
 //
@@ -75,10 +76,13 @@ var (
 	// ontology written for a later PR is not "unknown", but their triggers are
 	// `unsupported` here: they must not run, and they hold no watermark until
 	// a knomit that implements them arrives. `script` became active in F07
-	// PR 3 and `push` in PR 4: a trigger declared earlier starts at the head
-	// of the first advance this version sees (no back-fill). Only `run` is
-	// still reserved.
-	activeTriggerDo = map[string]bool{TriggerDoEmit: true, TriggerDoScript: true, TriggerDoPush: true}
+	// PR 3, `push` in PR 4 and `run` in PR 5: a trigger declared earlier
+	// starts at the head of the first advance this version sees (no
+	// back-fill). No `do` value is reserved any more.
+	activeTriggerDo = map[string]bool{TriggerDoEmit: true, TriggerDoScript: true, TriggerDoPush: true, TriggerDoRun: true}
+	// activeDoMu guards activeTriggerDo against DeactivateTriggerDoForTest
+	// (a test flips it while a dispatcher goroutine compiles).
+	activeDoMu sync.RWMutex
 	// activeTriggerOn is the episodes this version acts on: learn, update and
 	// retract are derived from the tree diff of an advance; due is the
 	// dispatcher's sweep of dated facts live at the head (F07 PR 2).
@@ -92,9 +96,9 @@ var triggerKeys = []SchemaField{
 	{"Trigger", "match", "Path pattern relative to the ontology root, starting with this topic's path: * one segment, ** any depth, ? one character; {agent}, {host} and {fp8} are this instance's. Absent means everything under the topic. Never a dot path."},
 	{"Trigger", "on", "learn, update, retract, due — a single value or a list. due fires once per trigger when a matching fact's expires has passed (facts live at the head only); changing the fact's expires re-arms it."},
 	{"Trigger", "if", "Optional JavaScript condition over fact, agent and change; empty means always"},
-	{"Trigger", "do", "The action: emit (log line and SSE event); script (runs .knomit/triggers/<script>.js from the agent branch's head in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit, push); or push (asks this machine's sync loop for a round now instead of at its interval: a 1 s countdown from the first fire batches a burst into one fetch, merge and push of this machine's own branch; fire log only, outcome kicked). run is reserved for a later version."},
+	{"Trigger", "do", "The action: emit (log line and SSE event); script (runs .knomit/triggers/<script>.js from the agent branch's head in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit, push); or push (asks this machine's sync loop for a round now instead of at its interval: a 1 s countdown from the first fire batches a burst into one fetch, merge and push of this machine's own branch; fire log only, outcome kicked); or run (starts the recipe named by `recipe` on this machine, without waiting: outcome started with a run id, and the recipe's result is a second fire-log row with the same id)."},
 	{"Trigger", "script", "For do: script — the name (kebab-case) of .knomit/triggers/<name>.js. Its writes are this machine's commits, stamped Knomit-Trace / Knomit-Cause / Knomit-Trigger; it may not write under .knomit/."},
-	{"Trigger", "recipe", "For do: run — the name of the recipe to invoke"},
+	{"Trigger", "recipe", "For do: run — the name (kebab-case) of the recipe: .knomit/recipes/<name>.js at the tip of the repo's main branch wins, else <home>/recipes/<name>.js on this machine, else the fire is an unbound no-op. A recipe may run programs (exec)."},
 }
 
 // TriggerSpec is one declared trigger as written. Raw holds the entry's keys
@@ -267,6 +271,10 @@ type CompiledTrigger struct {
 	// program itself is not here: it is cached by the dispatcher per script
 	// blob, independently of the ontology blob this set is keyed by.
 	Script string
+	// Recipe is the recipe NAME for `do: run` (kebab-case, validated here):
+	// TriggerRecipePath(Recipe) at the tip of main, else
+	// <home>/recipes/<Recipe>.js. Resolved per fire by the dispatcher.
+	Recipe string
 
 	glob   *glob
 	ifProg *goja.Program
@@ -297,6 +305,8 @@ type TriggerState struct {
 	Do    string
 	// Script is the `script:` name as written (for the endpoint).
 	Script string
+	// Recipe is the `recipe:` name as written (for the endpoint).
+	Recipe string
 }
 
 // FactGlobal is the `fact` global a trigger's `if` sees: the same map the
@@ -380,7 +390,8 @@ func CompileTriggers(o *Ontology, id TriggerIdentity, blob string) *TriggerSet {
 	}
 	for i, d := range all {
 		st := TriggerState{Name: d.spec.Name, Node: d.node, Line: d.spec.line,
-			Match: d.spec.Match, On: append([]string(nil), d.spec.On...), Do: d.spec.Do, Script: d.spec.Script}
+			Match: d.spec.Match, On: append([]string(nil), d.spec.On...), Do: d.spec.Do, Script: d.spec.Script,
+			Recipe: d.spec.Recipe}
 		if d.spec.Name != "" {
 			set.Declared[d.spec.Name] = true
 			st.Key = d.spec.Name + "@" + blob
@@ -449,6 +460,12 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 	if s.Do == TriggerDoRun && s.Recipe == "" {
 		return nil, "", fmt.Errorf("do: run needs a recipe name")
 	}
+	// The recipe name becomes a path too (.knomit/recipes/<name>.js and
+	// <home>/recipes/<name>.js): the same kebab-case rule, so `../x` never
+	// names a file outside either folder (H7).
+	if s.Recipe != "" && !ValidRecipeName(s.Recipe) {
+		return nil, "", fmt.Errorf("recipe %q must be lowercase kebab-case (the name of .knomit/recipes/<name>.js)", s.Recipe)
+	}
 	pattern := s.Match
 	if pattern == "" {
 		pattern = node + "/**"
@@ -464,7 +481,7 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 	if !g.literalPrefix(strings.Split(node, "/")) {
 		return nil, "", fmt.Errorf("match %q leaves its topic: it must start with %q", s.Match, node+"/")
 	}
-	ct := &CompiledTrigger{Name: s.Name, Node: node, Match: sub, On: s.On, Do: s.Do, If: s.If, Script: s.Script, glob: g}
+	ct := &CompiledTrigger{Name: s.Name, Node: node, Match: sub, On: s.On, Do: s.Do, If: s.If, Script: s.Script, Recipe: s.Recipe, glob: g}
 	if strings.TrimSpace(s.If) != "" {
 		prog, err := goja.Compile("trigger "+s.Name, s.If, true)
 		if err != nil {
@@ -473,7 +490,10 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 		ct.ifProg = prog
 	}
 	// Valid. Is it something this version acts on?
-	if !activeTriggerDo[s.Do] {
+	activeDoMu.RLock()
+	doActive := activeTriggerDo[s.Do]
+	activeDoMu.RUnlock()
+	if !doActive {
 		return nil, fmt.Sprintf("do: %s is not supported in this knomit version; the trigger waits for a version that implements it", s.Do), nil
 	}
 	for _, e := range s.On {
