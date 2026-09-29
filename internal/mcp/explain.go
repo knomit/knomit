@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"knomit/internal/fact"
@@ -369,7 +368,7 @@ func resolveExplainTarget(b *repos.Binding, file string) (explainTarget, error) 
 		}
 	}
 	rel = fact.NormalizePath(rt.RI.OntologyRoot(), rel)
-	if !explainablePath(rt.RI.OntologyRoot(), rel) {
+	if !fact.IsFactFilePath(rt.RI.OntologyRoot(), rel) {
 		return explainTarget{}, fmt.Errorf("%s is not a fact path: explain takes a fact under %s/ or a job slot under %s/<area>/", file, rt.RI.OntologyRoot(), fact.PrivateRoot)
 	}
 	s, release, err := storeIndices(rt.RI)
@@ -383,18 +382,6 @@ func resolveExplainTarget(b *repos.Binding, file string) (explainTarget, error) 
 	return t, nil
 }
 
-// explainablePath reports whether a normalized path can hold a fact explain
-// reads: a .md under the ontology root with no dot segment, or a job slot
-// under the private root (.knomit/<area>/).
-func explainablePath(ontologyRoot, rel string) bool {
-	if !strings.HasSuffix(rel, ".md") {
-		return false
-	}
-	if fact.IsPrivatePath(rel) {
-		return fact.IsWritablePrivatePath(rel)
-	}
-	return strings.HasPrefix(rel, ontologyRoot+"/")
-}
 
 // explainHistoryPage serves a history_cursor call: the next page of the root's
 // change list from the cursor's keyset position. No body, no graph walk. The

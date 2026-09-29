@@ -47,3 +47,17 @@ func BuildFactPath(ontologyRoot, topic, category string) string {
 	category = strings.ToLower(strings.TrimPrefix(strings.TrimSuffix(category, "/"), "/"))
 	return fmt.Sprintf("%s/%s/%s/%s.md", ontologyRoot, topic, category, id)
 }
+
+// IsFactFilePath reports whether a normalized path can hold a fact a reader
+// may open: a .md file under the ontology root with no dot-prefixed segment,
+// or a job slot under PrivateRoot (IsWritablePrivatePath). Anything else —
+// .github/notes.md, README.md, a directory — is not a fact file.
+func IsFactFilePath(ontologyRoot, path string) bool {
+	if !strings.HasSuffix(path, ".md") {
+		return false
+	}
+	if IsPrivatePath(path) {
+		return IsWritablePrivatePath(path)
+	}
+	return strings.HasPrefix(path, ontologyRoot+"/")
+}
