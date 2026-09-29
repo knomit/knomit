@@ -3,11 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"knomit/internal/fact"
+	"knomit/internal/federate"
 	"knomit/internal/refs"
 	"knomit/internal/repos"
 	"knomit/internal/store"
@@ -76,8 +78,20 @@ func learnTool() mcpgo.Tool {
 				"additionalProperties": false,
 			}),
 		),
+		mcpgo.WithArray("retract",
+			mcpgo.Description(retractArgDescription),
+			mcpgo.Items(map[string]any{"type": "string"}),
+		),
 	)
 }
+
+// retractArgDescription is knomit_learn's `retract` argument (F04, the atomic
+// move). Kept beside the schema so the text a client reads and the rules the
+// handler applies are reviewed together.
+const retractArgDescription = "Optional: fact paths to RETRACT in the SAME commit as the facts written — an atomic move (write the working copy AND delete the task, or neither). " +
+	"Every path must exist on this branch at the moment of the write, checked under the branch's write lock: if any is already gone (another move took it first), the WHOLE call is refused and nothing is written. " +
+	"A path may not be both written and retracted. `facts` may be empty when `retract` is not: a batch retraction in one commit. " +
+	"Atomic on THIS branch only: two agents on two branches can each move the same fact; nothing in knomit makes a move exclusive across agents."
 
 // learnToolSchemaProperties is the knomit_learn input schema's properties map.
 //
@@ -537,6 +551,12 @@ func topicPathOf(ontologyRoot, path string) string {
 	return categoryDirOf(path[len(prefix):])
 }
 
+// onDedupSkipRetracted, when set, is told every dedup match declined because
+// the call retracts it (F08 T-A5 proves with it that dedup scored the
+// retracted candidate, so the exclusion is exercised, not bypassed). Tests
+// only.
+var onDedupSkipRetracted func(path string)
+
 // applyDedupMerge searches under each incoming fact's category directory — a
 // raw path PREFIX, see the scope comment at the search — for a near-duplicate
 // and folds any match in, mutating facts and files in place.
@@ -560,6 +580,7 @@ func applyDedupMerge(
 	paths []string,
 	files map[string]string,
 	localRepoID string,
+	retracting map[string]bool,
 ) (map[string][]float32, []string, map[string][]string, map[int]bool, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
 	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
@@ -709,6 +730,17 @@ func applyDedupMerge(
 		}
 		if consumed[match.Path] {
 			// Already absorbed an earlier fact in this call — see `consumed`.
+			continue
+		}
+		// F04: the call retracts the match. Folding the incoming fact into it
+		// would retarget the write onto a path the same commit deletes, and
+		// the new fact would vanish with it. Declined; the fact is written at
+		// its own freshly-minted path (and a hypothesis being retracted is
+		// not "subsumed" either: the caller already retracts it).
+		if retracting[strings.ToLower(match.Path)] {
+			if onDedupSkipRetracted != nil {
+				onDedupSkipRetracted(match.Path)
+			}
 			continue
 		}
 		// Read existing fact to get its full metadata (refs, etc.)
@@ -879,8 +911,18 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		if err := unmarshalArgStrict(req, "facts", &factInputs); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		if len(factInputs) == 0 {
-			return mcpgo.NewToolResultError("facts must not be empty"), nil
+		// F04: the paths this call retracts in the same commit, normalised as
+		// knomit_retract normalises its one path.
+		retractPaths, err := learnRetractPaths(b, req, ontologyRoot)
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		if len(factInputs) == 0 && len(retractPaths) == 0 {
+			return mcpgo.NewToolResultError("facts must not be empty (unless retract names what to retract)"), nil
+		}
+		retracting := make(map[string]bool, len(retractPaths))
+		for _, p := range retractPaths {
+			retracting[strings.ToLower(p)] = true
 		}
 
 		// Validate batch type consistency: cannot mix observed and inferred types.
@@ -906,6 +948,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// both as written: one file, two commit entries, one body silently
 		// gone. Checked over every path, not just explicit ones: a collision is
 		// the same silent loss whatever minted it.
+		if err := refuseWriteAndRetract(paths, retracting); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
 		seen := make(map[string]int, len(paths))
 		for i, fi := range factInputs {
 			if first, dup := seen[paths[i]]; dup {
@@ -937,8 +982,15 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Embedding happens HERE, once, because two stages need the same
 		// vectors: the dedup merge below and the same-subject gate after it.
 		dedupVecs := dedupEmbed(ctx, batchEmb, facts)
-		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID())
+		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID(), retracting)
 		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// Again after the merge: a dedup merge RETARGETS a fact onto an
+		// existing path, which is how a write could land on a path this call
+		// deletes by a second route. applyDedupMerge already declines such a
+		// match; this is the check that the rule held.
+		if err := refuseWriteAndRetract(paths, retracting); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
@@ -947,7 +999,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// refused, and BEFORE any write — including before evidence weighting,
 		// since a refused call should pay for nothing. Refusing here costs the
 		// caller one round trip and the corpus nothing.
-		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb); err != nil {
+		if err := checkSameSubjectCollisions(ctx, s, writeBranch, ontology, factInputs, facts, topicCategories, paths, touched, dedupVecs, batchEmb, retracting); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
@@ -992,10 +1044,35 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			}
 		}
 
-		// 4. BatchWrite all facts — and any subsumed hypotheses' retractions —
-		// in one commit, so a learn call is all-or-nothing.
-		commitMsg := fmt.Sprintf("learn: %s", momentName)
-		hash, _, err := s.facts.BatchWriteFacts(ctx, writeBranch, files, retract, commitMsg, "learn")
+		// 4. BatchWrite all facts — and any subsumed hypotheses' retractions,
+		// and the caller's own `retract` paths — in one commit, so a learn
+		// call is all-or-nothing. The caller's paths are a PRECONDITION too
+		// (F04): each must still exist at the tip, checked under the branch
+		// lock, or nothing is written — that is what makes two takes of one
+		// task on this branch serialise. Subsumed hypotheses come from the
+		// index and are not preconditions.
+		operation := "learn"
+		switch {
+		case len(retractPaths) > 0 && len(facts) > 0:
+			operation = "move"
+		case len(retractPaths) > 0:
+			operation = "retract"
+		}
+		commitMsg := fmt.Sprintf("%s: %s", operation, momentName)
+		deletes := retract
+		for _, p := range retractPaths {
+			deletes = fact.AppendUnique(deletes, p)
+		}
+		var hash string
+		if len(retractPaths) > 0 {
+			hash, _, err = s.facts.BatchWriteFactsMustExist(ctx, writeBranch, files, deletes, retractPaths, commitMsg, operation)
+		} else {
+			hash, _, err = s.facts.BatchWriteFacts(ctx, writeBranch, files, deletes, commitMsg, operation)
+		}
+		var missing *store.RetractMissingError
+		if errors.As(err, &missing) {
+			return mcpgo.NewToolResultError(fmt.Sprintf("%v; nothing written", missing)), nil
+		}
 		if err != nil {
 			return mcpgo.NewToolResultError(fmt.Sprintf("write error: %v", err)), nil
 		}
@@ -1011,10 +1088,22 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 
 		dest := describeWriteDestination(b)
+		what := pluralFacts(len(facts))
+		switch {
+		case len(retractPaths) > 0 && len(facts) == 0:
+			what = pluralRetractions(len(retractPaths))
+		case len(retractPaths) > 0:
+			what = fmt.Sprintf("%s and %s", what, pluralRetractions(len(retractPaths)))
+		}
 		result := map[string]interface{}{
 			"commits":    commits,
 			"written_to": dest,
-			"summary":    dest.summary(pluralFacts(len(facts))),
+			"summary":    dest.summary(what),
+			"operation":  operation,
+		}
+		if len(retractPaths) > 0 {
+			result["retracted"] = retractPaths
+			result["commit"] = hash
 		}
 		if notes := expiresNotAppliedNotes(factInputs, facts); len(notes) > 0 {
 			result["notes"] = notes
@@ -1043,4 +1132,55 @@ func expiresNotAppliedNotes(inputs []learnFactInput, facts []fact.Fact) []string
 			i, facts[i].Path(), facts[i].Path()))
 	}
 	return notes
+}
+
+// learnRetractPaths reads knomit_learn's `retract` argument (F04): each path
+// is normalised exactly as knomit_retract normalises its one path — resolved
+// against the write repo of a lens, NormalizePath, and refused when private
+// and not writable job state — and duplicates collapse. An absent argument is
+// an empty list.
+func learnRetractPaths(b *repos.Binding, req mcpgo.CallToolRequest, ontologyRoot string) ([]string, error) {
+	if _, ok := req.GetArguments()["retract"]; !ok {
+		return nil, nil
+	}
+	var raw []string
+	if err := unmarshalArgStrict(req, "retract", &raw); err != nil {
+		return nil, fmt.Errorf("retract must be a list of fact paths: %v", err)
+	}
+	var out []string
+	for i, p := range raw {
+		if strings.TrimSpace(p) == "" {
+			return nil, fmt.Errorf("retract %d: path is empty", i)
+		}
+		p, err := federate.WriteRepoPath(b, p)
+		if err != nil {
+			return nil, fmt.Errorf("retract %d: %v", i, err)
+		}
+		p = fact.NormalizePath(ontologyRoot, p)
+		if fact.IsPrivatePath(p) && !fact.IsWritablePrivatePath(p) {
+			return nil, fmt.Errorf("retract %d: %s is private: a path segment beginning with '.' cannot hold a fact, "+
+				"except under %s/<area>/", i, p, fact.PrivateRoot)
+		}
+		out = fact.AppendUnique(out, p)
+	}
+	return out, nil
+}
+
+// refuseWriteAndRetract refuses a call that writes a path it also retracts.
+// The store applies deletes after writes, so the delete would win silently
+// and the written fact would be lost from a call that reported it written.
+func refuseWriteAndRetract(paths []string, retracting map[string]bool) error {
+	for i, p := range paths {
+		if retracting[strings.ToLower(p)] {
+			return fmt.Errorf("fact %d: %s is both written and retracted in this call; a path is one or the other", i, p)
+		}
+	}
+	return nil
+}
+
+func pluralRetractions(n int) string {
+	if n == 1 {
+		return "1 retraction"
+	}
+	return fmt.Sprintf("%d retractions", n)
 }

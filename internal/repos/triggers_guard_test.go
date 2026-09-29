@@ -83,15 +83,18 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"NewBindingOfRepo", "WithBinding", "store.WithTrailers", "context.WithTimeout", "cancel", "ctx.Err", "hostCtx.Err",
 		// the sandbox
 		"fact.CompileScript", "fact.RunScript", "fact.TriggerScriptPath", "fact.NormalizePath", "fact.IsPrivatePath",
+		// an inline js: program, compiled with the ontology (F08 M4): a getter
+		"ct.JSProgram",
 		// the hub (through emit) and the log
 		"h.d.emit", "h.d.wakeSync", "log.Error", "log.Warn", "?.Str", "?.Int", "?.Dur", "?.Msg", "crashdump.ReportRecovered",
 		// the dispatcher's own state and helpers
 		"currentTriggerHooks", "d.scriptFor", "d.rateAllows", "d.warnOnce", "h.d.warnOnce", "h.functions", "h.call", "h.momentName", "h.factPath",
+		"h.privateRefused", // factPath's rule for one path, also on knomit.learn's opts.retract (F08 M2)
 		"d.mu.Lock", "d.mu.Unlock", "argAt", "stringArg", "objectArg", "capForLog",
 		// pure helpers
 		"time.Now", "time.Since", "now.Add", "?.After", "json.Marshal", "json.Unmarshal", "strings.TrimSpace",
 		"errors.Is", "errors.As", "errors.New", "fmt.Errorf", "fmt.Sprintf", "err.Error", "cs.err.Error",
-		"append", "len", "delete", "string", "recover",
+		"append", "len", "delete", "string", "recover", "make",
 	},
 	// The recipe runner (F07 PR 5): its only store use is two READS of main
 	// (the tip, and the recipe file in that tip's tree) — never the agent
