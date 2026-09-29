@@ -299,6 +299,10 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 // dispatch would add about a second to every write, a difference no bound
 // hides. Under -race the bound is withinRace, max(3×, +250ms): the tight one
 // failed on CPU contention alone (see withinRace).
+// The valid sabotage is "the writer waits for its own run" (triggerKick
+// blocks until the run it kicked completes). Running the dispatcher directly
+// inside triggerKick is not: onCommit runs under the writer's branch lock
+// (builder.go), and the test then stalls instead of measuring latency.
 func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)

@@ -90,7 +90,9 @@ func rpcAt(t *testing.T, h http.Handler, mount, sid, body string) (map[string]an
 	// first puts its notifications/tasks/status on the stream before the
 	// tools/call's CreateTaskResult. Skip every message with a "method"
 	// (notifications, and server→client requests, which also carry an id) and
-	// take the response to THIS request's id.
+	// take the response to THIS request's id. A JSON-RPC error with "id": null
+	// (a parse error) is therefore skipped when the request had an id, and
+	// the helper fails on "no response" rather than returning it.
 	messages := []string{payload}
 	if strings.HasPrefix(strings.TrimSpace(payload), "event:") || strings.Contains(payload, "\ndata: ") {
 		messages = nil
@@ -101,6 +103,7 @@ func rpcAt(t *testing.T, h http.Handler, mount, sid, body string) (map[string]an
 				messages = append(messages, rest)
 			}
 		}
+		require.NoError(t, sc.Err(), "reading the SSE stream")
 	}
 	var sent struct {
 		ID any `json:"id"`
