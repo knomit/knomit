@@ -209,7 +209,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge base: %w", err)
 	}
 	if len(bases) == 0 {
-		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: no common ancestor between %q and %q (disjoint histories)", src, dst)
+		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: no common ancestor between %q and %q (disjoint histories): %w", src, dst, ErrUnrelatedHistories)
 	}
 	baseCommit := bases[0]
 

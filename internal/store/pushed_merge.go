@@ -20,6 +20,10 @@ import (
 // hashes.
 var ErrBranchMoved = errors.New("branch moved since it was reviewed")
 
+// ErrUnrelatedHistories: the two branches share no commit, so there is no
+// merge base to merge from.
+var ErrUnrelatedHistories = errors.New("unrelated histories")
+
 // BranchMovedError is MergePushed's refusal when src is not at srcTip. Nothing
 // was written: the caller shows the new tip and asks again.
 type BranchMovedError struct {

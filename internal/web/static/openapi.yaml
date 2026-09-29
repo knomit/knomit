@@ -589,6 +589,120 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/Problem" }
 
+  /repos/{repo}/pushed-branches:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+    get:
+      tags: [branches]
+      summary: Branches peers pushed to this host, with what merging each would bring
+      description: |
+        Every `agent/*` branch a peer pushed to this host (F11) — not this
+        instance's own agent branch, not the upstream, not an experiment.
+        `to_merge` counts commits reachable from the tip and not from this
+        repo's agent branch; 0 once merged. `other_files_changed` counts paths
+        outside the ontology root that differ between `merge_base` and the tip
+        (the `changes` link lists facts only). A subscription has none.
+      operationId: listPushedBranches
+      responses:
+        "200":
+          description: Collection of pushed branches
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  _links: { type: object }
+                  _embedded:
+                    type: object
+                    properties:
+                      pushed_branches:
+                        type: array
+                        items:
+                          type: object
+                          required: [name, tip, tip_time, tip_author, to_merge, in_agent_branch, other_files_changed]
+                          properties:
+                            name: { type: string }
+                            tip: { type: string, description: Full commit hash of the branch tip }
+                            tip_time: { type: string, format: date-time }
+                            tip_author: { type: string }
+                            to_merge: { type: integer }
+                            in_agent_branch: { type: boolean }
+                            merge_base: { type: string, description: Absent when the histories are unrelated }
+                            other_files_changed: { type: integer }
+                            _links:
+                              type: object
+                              description: self (the branch), merge (POST), changes (facts changed since merge_base)
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/Problem" }
+
+  /repos/{repo}/branches/{branch}/merge:
+    parameters:
+      - $ref: "#/components/parameters/Repo"
+      - $ref: "#/components/parameters/Branch"
+    post:
+      tags: [branches]
+      summary: Merge a peer's pushed branch into this repo's agent branch
+      description: |
+        Merges `{branch}` — a branch a peer pushed to this host — at exactly
+        `expected_tip` into THIS repo's agent branch. The target is never a
+        parameter. Always writes one merge commit signed by this instance,
+        parents [agent tip, expected_tip]; never a fast-forward. The only
+        no-op is "already merged". The pushed branch is never written.
+
+        **Requires the `operator` permission** (this is the first route that
+        enforces it) as well as `write`. The shipped `[auth].loopback_default`
+        holds both, so the web UI and the desktop app merge with no setup; a
+        peer's instance certificate holds neither.
+
+        A conflict (the same fact changed on both sides) is refused and
+        nothing changes, unless `resolution` settles every conflicting fact:
+        `host` keeps this host's version, `peer` takes the pushed branch's.
+        `ours`/`theirs` are not accepted.
+      operationId: mergePushedBranch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_tip]
+              properties:
+                expected_tip:
+                  type: string
+                  pattern: "^[0-9a-f]{40}$"
+                  description: The pushed branch's commit you reviewed (the `head` of its changes list)
+                resolution:
+                  type: string
+                  enum: [host, peer]
+      responses:
+        "200":
+          description: Merged, or already merged (mode noop)
+          content:
+            application/hal+json:
+              schema:
+                type: object
+                properties:
+                  mode: { type: string, enum: [merge, noop] }
+                  new_tip: { type: string }
+                  merged: { type: string }
+                  merged_tip: { type: string }
+                  into: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409":
+          description: |
+            Refused, nothing changed. "Merge has conflicting changes" carries
+            conflicting_paths, paths_without_base, base_commit, host_commit and
+            peer_commit. "Branch moved" carries expected_tip and actual_tip.
+            Also "Unrelated histories", "Cannot sign", "Repository has no agent
+            branch".
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
+
   /repos/{repo}/branches/{branch}/facts:
     parameters:
       - $ref: "#/components/parameters/Repo"
