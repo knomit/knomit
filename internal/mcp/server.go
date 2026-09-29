@@ -29,7 +29,19 @@ import (
 // per-repo store.GraphStore (SubgraphEdges) — no cluster cache or background
 // warmer is involved.
 func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, grants auth.Grants, embedders ...store.BatchEmbedder) *server.MCPServer {
+	return newServer(nil, defaultOntologyRoot, mgr, readOnly, grants, embedders...)
+}
+
+// newServer is NewServer with extra mcp-go options appended after knomit's
+// own. Only tests pass any: a pagination limit, so the prompt layer's
+// cursor-clearing is falsifiable (knomit itself configures none).
+func newServer(extra []server.ServerOption, defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, grants auth.Grants, embedders ...store.BatchEmbedder) *server.MCPServer {
 	hooks := &server.Hooks{}
+	// Skills (F08 PR C): ONE source, so the prompts and knomit_skill share
+	// the parse cache and the WARN-once record.
+	skills := newSkillSource()
+	prompts := newPromptLayer(skills)
+	prompts.addHooks(hooks)
 	// Name the tool for the HTTP layer. Over streamable HTTP every call is the
 	// same POST .../mcp, so without this a slow-request warning cannot say which
 	// tool was slow. The annotation rides in the request context (mcp-go derives
@@ -66,7 +78,7 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, gr
 		result.Instructions = BindingInstructions(b, profileFor(mgr, b.Write()))
 	})
 
-	regs := enabledTools(toolRegistrations(mgr, embedders...), readOnly)
+	regs := enabledTools(toolRegistrationsWith(skills, mgr, embedders...), readOnly)
 	writeTools := make(map[string]bool, len(regs))
 	for _, t := range regs {
 		if t.write {
@@ -74,7 +86,7 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, gr
 		}
 	}
 
-	s := server.NewMCPServer("knomit", "1.0.0",
+	opts := []server.ServerOption{
 		server.WithHooks(hooks),
 		// Advertise tasks capability so clients that support it can invoke
 		// long-running tools (knomit_review) asynchronously and poll for
@@ -85,7 +97,14 @@ func NewServer(defaultOntologyRoot string, mgr *repos.Manager, readOnly bool, gr
 		// registration seam, because a filter cannot stop a call that never
 		// listed.
 		server.WithToolFilter(permissionFilter(grants, writeTools)),
-	)
+		// Skills are served as prompts (prompts.go). listChanged is false:
+		// the list is recomputed per binding on every prompts/list, so there
+		// is nothing to notify, and a true here would make every lazy name
+		// registration broadcast to every session.
+		server.WithPromptCapabilities(false),
+	}
+	s := server.NewMCPServer("knomit", "1.0.0", append(opts, extra...)...)
+	prompts.srv = s
 
 	// Both gates wrap the handler BEFORE registration, which is the one seam
 	// both dispatch paths share — see gateBinding for why neither a hook nor
@@ -146,12 +165,22 @@ type toolReg struct {
 
 // toolRegistrations is the full catalog in registration order.
 func toolRegistrations(mgr *repos.Manager, embedders ...store.BatchEmbedder) []toolReg {
+	return toolRegistrationsWith(newSkillSource(), mgr, embedders...)
+}
+
+// toolRegistrationsWith is toolRegistrations over a given skill source, the
+// one the server's prompt layer shares.
+func toolRegistrationsWith(skills *skillSource, mgr *repos.Manager, embedders ...store.BatchEmbedder) []toolReg {
 	return []toolReg{
 		{learnTool(), LearnHandler(embedders...), true, gateRequired},
 		{queryTool(), QueryHandler(embedders...), false, gateRequired},
 		{explainTool(), ExplainHandler(), false, gateRequired},
 		// A pure read of two trees of the upstream: no write path at all.
 		{changesTool(), ChangesHandler(), false, gateRequired},
+		// A pure read of the consensus branch's .knomit/skills: gated like
+		// knomit_query (on the unscoped mount it needs a handle, and serves
+		// that binding's write repo), never a write tool.
+		{skillTool(), SkillHandler(skills), false, gateRequired},
 		{updateTool(), UpdateHandler(), true, gateRequired},
 		{retractTool(), RetractHandler(), true, gateRequired},
 		{hypothesizeTool(), HypothesizeHandler(), true, gateRequired},

@@ -47,9 +47,11 @@ func (e *ForeignLineageError) Is(target error) bool { return target == ErrForeig
 // included): the input an attacker cannot choose. Every commit reachable from
 // agentTip and not from upstream (origin's main, trusted since it was accepted
 // at its own gate) must carry a valid SSHSIG
-// by this instance's own key, compared by full fingerprint, or be on this
-// instance's accept list. A store that has no signer cannot know its own key:
-// every such commit is refused.
+// by this instance's own key, compared by full fingerprint, be on this
+// instance's accept list, or have been brought in by an own-signed merge
+// commit (reachable from one of its non-first parents: the transitive trust
+// of a peer merge made in the web UI). A store that has no signer cannot know
+// its own key: every such commit is refused.
 func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agentTip, upstream plumbing.Hash) error {
 	// The own key is the key this store signs with (commitSigner: the store's
 	// signer, or a test binary's fallback). No signer means no own key.
@@ -77,9 +79,18 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 			return err
 		}
 	}
-	var refused, commits []string
+	// COLLECT first, JUDGE second. walkHistory is post-order — a commit is
+	// visited after its parents — so judging inside the visit would reach a
+	// merged-in commit before the own merge that vouches for it.
+	type seenCommit struct {
+		c      *object.Commit
+		reason string // "" = own-signed or accepted
+		ownSig bool   // signed by an own key (accepted alone does not vouch)
+	}
+	var order []seenCommit
 	err := walkHistory(rh.gits, agentTip, below, func(c *object.Commit) {
 		if rh.acceptedCommit(c.Hash) {
+			order = append(order, seenCommit{c: c})
 			return
 		}
 		s, serr := verifyCommitSignature(c)
@@ -92,13 +103,40 @@ func (rh *repoHandler) checkOwnLineage(ctx context.Context, branch string, agent
 		case !own[s.Fingerprint]:
 			reason = "signed by " + s.Fingerprint[:8]
 		}
-		if reason != "" {
-			refused = append(refused, shortRefHash(c.Hash)+": "+reason)
-			commits = append(commits, c.Hash.String())
-		}
+		order = append(order, seenCommit{c: c, reason: reason, ownSig: reason == ""})
 	})
 	if err != nil {
 		return err
+	}
+
+	// Transitive trust (F11 UI merge, user ruling D4, "chain of trust"): a
+	// merge commit signed by an OWN key vouches for every commit it brought in
+	// — everything reachable from its NON-FIRST parents within this range.
+	// Nothing else vouches: not its first parent (that is this instance's own
+	// line, judged on its own), not an own non-merge commit, not a merge
+	// signed by anyone else or by no one, and not an accept-list entry.
+	vouched := map[plumbing.Hash]bool{}
+	for _, sc := range order {
+		if !sc.ownSig || len(sc.c.ParentHashes) < 2 {
+			continue
+		}
+		for _, p := range sc.c.ParentHashes[1:] {
+			if below[p] || vouched[p] {
+				continue
+			}
+			if err := walkHistory(rh.gits, p, below, func(c *object.Commit) { vouched[c.Hash] = true }); err != nil {
+				return err
+			}
+		}
+	}
+
+	var refused, commits []string
+	for _, sc := range order {
+		if sc.reason == "" || vouched[sc.c.Hash] {
+			continue
+		}
+		refused = append(refused, shortRefHash(sc.c.Hash)+": "+sc.reason)
+		commits = append(commits, sc.c.Hash.String())
 	}
 	if len(refused) > 0 {
 		return &ForeignLineageError{Branch: branch, Refused: refused, Commits: commits}

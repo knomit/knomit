@@ -163,3 +163,13 @@ func holdsPushOwn(r *http.Request) bool {
 	ok, _ := r.Context().Value(pushOwnKey{}).(bool)
 	return ok
 }
+
+// requireOperator is Require(operator), switched off exactly when writeGate is
+// (Form B, authDisabled), so a test server with auth disabled is not refused
+// on one route alone.
+func requireOperator(g auth.Grants, disabled bool) func(http.Handler) http.Handler {
+	if disabled {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	return Require(g, auth.Operator)
+}

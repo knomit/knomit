@@ -307,6 +307,10 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 			// the BranchMiddleware subtree.
 			r.Get("/branches", handleHALBranches(b, p.branchesLister))
 
+			// Branches a peer pushed to this host (F11), and what merging each
+			// would bring. The merge itself is per branch, below.
+			r.Get("/pushed-branches", handleHALPushedBranches(b, p.branchesLister))
+
 			// Experiments hang off the REPO, not off a branch: an experiment
 			// IS a branch, so nesting it under /branches/{branch} would make
 			// its URL depend on which branch the caller happened to be on.
@@ -330,6 +334,12 @@ func (s *Server) apiRouter(edge func(http.Handler) http.Handler, g auth.Grants) 
 				r.Use(BranchMiddleware)
 
 				r.Get("/", handleHALBranch(b, p.branchRootReader, s.AgentBranch, s.EmbeddingsEnabled, s.ExperimentExpiryDays))
+
+				// Merge THIS pushed branch into the repo's agent branch (F11 UI
+				// merge). The first route that enforces `operator`: the host's
+				// operator, never a peer (a peer's certificate holds read and
+				// push:own only). writeGate adds `write` as for every mutation.
+				r.With(requireOperator(g, s.authDisabled)).Post("/merge", handlePushedMerge())
 
 				r.Get("/facts", handleHALFactsCollection(b, p.factsCollection))
 				r.Post("/facts", handleFactCreate(b, s.OntologyRoot, p.factWriter))

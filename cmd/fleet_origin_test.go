@@ -5,11 +5,14 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"knomit/internal/app"
 	"knomit/internal/auth"
@@ -182,11 +185,29 @@ type fleetServer struct {
 	plain, tlsAddr string
 	hdrs           *headerLog
 	principals     *principalLog
+	// key and signer are B's own key. signer is set only by
+	// newSignedFleetServer; otherwise B's commits carry the test binary's
+	// fallback key, shared with every other store in this process.
+	key    string
+	signer ssh.Signer
 }
 
 // newFleetServer is B: enrolled in f, the production stack on both
 // listeners, serving repo kb (fact "first") and kb2 (fact "plainfact").
 func newFleetServer(t *testing.T, f *pkitest.Fleet) *fleetServer {
+	t.Helper()
+	return newFleetServerOpts(t, f, false)
+}
+
+// newSignedFleetServer is newFleetServer with B signing its commits with its
+// OWN key, as a real instance does — needed wherever a test tells B's commits
+// from a peer's by signer (E4).
+func newSignedFleetServer(t *testing.T, f *pkitest.Fleet) *fleetServer {
+	t.Helper()
+	return newFleetServerOpts(t, f, true)
+}
+
+func newFleetServerOpts(t *testing.T, f *pkitest.Fleet, signed bool) *fleetServer {
 	t.Helper()
 	ctx := context.Background()
 	bCfg := config.Defaults()
@@ -194,7 +215,11 @@ func newFleetServer(t *testing.T, f *pkitest.Fleet) *fleetServer {
 	bCfg.OntologyRoot = "kb"
 	bCfg.TLS = config.TLSConfig{Addr: "127.0.0.1:0", Dir: filepath.Join(bCfg.Home, "pki")}
 	bKey, _ := pkitest.NewKey(t)
-	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, AgentBranch: fleetServerAgent, DisableBackgroundSync: true})
+	var bSigner ssh.Signer
+	if signed {
+		bSigner = keySigner(t, bKey)
+	}
+	bMgr := repos.New(ctx, repos.Deps{Cfg: bCfg, KeyPath: bKey, Signer: bSigner, AgentBranch: fleetServerAgent, DisableBackgroundSync: true})
 	if err := bMgr.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +246,22 @@ func newFleetServer(t *testing.T, f *pkitest.Fleet) *fleetServer {
 		t.Fatal(err)
 	}
 	publish(t, kb2, fleetServerAgent, "plainfact")
-	return &fleetServer{cfg: bCfg, kb: kb, kb2: kb2, plain: plain, tlsAddr: tlsAddr, hdrs: hdrs, principals: principals}
+	return &fleetServer{cfg: bCfg, kb: kb, kb2: kb2, plain: plain, tlsAddr: tlsAddr, hdrs: hdrs, principals: principals, key: bKey, signer: bSigner}
+}
+
+// keySigner reads an OpenSSH private key file (pkitest.NewKey's) as a commit
+// signer.
+func keySigner(t *testing.T, path string) ssh.Signer {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := ssh.ParsePrivateKey(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 // newFleetFetcherHome enrolls a fresh key in f and installs its files, as

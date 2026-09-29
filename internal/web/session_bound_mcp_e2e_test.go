@@ -193,6 +193,7 @@ func TestSessionBoundMCP_HandleErrors(t *testing.T) {
 		"knomit_query":       `{"text":"x"}`,
 		"knomit_explain":     `{"file":"kb/architecture/x/1.md"}`,
 		"knomit_changes":     `{"prefix":"tasks"}`,
+		"knomit_skill":       `{}`,
 		"knomit_learn":       `{"moment_name":"m","facts":[{"topic":"architecture","category":"x/y","title":"t","body":"b"}]}`,
 		"knomit_update":      `{"file":"kb/architecture/x/1.md"}`,
 		"knomit_retract":     `{"file":"kb/architecture/x/1.md"}`,
