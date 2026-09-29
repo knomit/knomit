@@ -127,6 +127,19 @@ func (d *triggerDispatcher) loadScripts(ctx context.Context, tr store.TriggerInd
 		if ct.Do != fact.TriggerDoScript {
 			continue
 		}
+		if ct.JS != "" {
+			// Inline code (F08, R9): compiled with the ontology and cached by
+			// source hash (fact.compileInlineJS); the program is installed
+			// here keyed by that hash, so an unchanged `js` keeps its entry
+			// and a changed one replaces it before the next fire. It cannot
+			// be missing or fail to compile here: that made it invalid.
+			d.mu.Lock()
+			if cur := d.sc.scripts[ct.Name]; cur == nil || cur.blob != ct.JSKey || cur.prog != ct.JSProgram() {
+				d.sc.scripts[ct.Name] = &compiledScript{script: ct.Name + ":js", blob: ct.JSKey, prog: ct.JSProgram()}
+			}
+			d.mu.Unlock()
+			continue
+		}
 		blob, data, err := tr.ScriptAt(ctx, head, ct.Script)
 		d.mu.Lock()
 		cur := d.sc.scripts[ct.Name]

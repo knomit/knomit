@@ -1586,6 +1586,7 @@ type TriggerView struct {
 	On        []string         `json:"on"`
 	Do        string           `json:"do"`
 	Script    string           `json:"script,omitempty"`
+	JS        string           `json:"js,omitempty"`
 	Recipe    string           `json:"recipe,omitempty"`
 	State     string           `json:"state"`
 	Error     string           `json:"error,omitempty"`
@@ -1641,7 +1642,7 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 		active[ct.Name] = ct
 	}
 	for _, st := range set.States {
-		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, Recipe: st.Recipe,
+		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, JS: st.JS, Recipe: st.Recipe,
 			State: st.State, Error: st.Error}
 		if v.On == nil {
 			v.On = []string{}
