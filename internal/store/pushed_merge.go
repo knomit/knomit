@@ -90,22 +90,28 @@ func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip pl
 		mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true})
 }
 
-// onlyMergeCommits reports whether every commit reachable from src and not
-// from dst has two or more parents.
+// onlyMergeCommits reports whether src brings at least one commit dst lacks
+// and every such commit has two or more parents. A src already in dst brings
+// none and answers false: that case is the reachable-tip no-op's, and this
+// rule must not stand in for it (each is pinned by its own test).
 func (rh *repoHandler) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
 	inDst := map[plumbing.Hash]bool{}
 	if err := walkHistory(rh.gits, dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
 		return false, err
 	}
-	only := true
+	if inDst[src] {
+		return false, nil
+	}
+	only, n := true, 0
 	if err := walkHistory(rh.gits, src, inDst, func(c *object.Commit) {
+		n++
 		if len(c.ParentHashes) < 2 {
 			only = false
 		}
 	}); err != nil {
 		return false, err
 	}
-	return only, nil
+	return only && n > 0, nil
 }
 
 // OntologyAt returns the ontology file at branch's tip, trying every ontology
