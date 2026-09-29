@@ -660,15 +660,26 @@ func (b *repoBuilder) build() *RepoInstance {
 		ri.triggers = newTriggerDispatcher(ri, b.name, b.agentBranch, b.signer, b.cfg.Log.SlowTriggerMS,
 			b.cfg.Triggers.ScriptRatePerMinute, b.scriptTools, b.cfg.Home)
 	}
+	// F08: the consensus merger, built under the same guard as the
+	// dispatcher (an agent branch to merge into, writes allowed) and started
+	// in activate(). It acts only when the ontology at the consensus branch's
+	// tip says `consensus: auto` and the repo has no origin.
+	if b.agentBranch != "" && !b.subscribed && !b.cfg.ReadOnly {
+		ri.consensus = newConsensusMerger(ri, b.name, b.agentBranch)
+	}
 	// This closure runs under the writer's branch lock (store notifyCommit),
-	// so it must only schedule: the observer's debounce timer, and, for the
-	// agent branch, one non-blocking send on the dispatcher's 1-slot channel.
-	// Nothing else may happen here. main and exp/* never kick.
+	// so it must only schedule: the observer's debounce timer, and one
+	// non-blocking send on a 1-slot channel — the dispatcher's for the agent
+	// branch, the consensus merger's for every other branch except exp/* (a
+	// peer's pushed branch, or the consensus branch advancing). Nothing else
+	// may happen here; neither ever reads the store.
 	agentBranchForKick := b.agentBranch
 	ri.onCommit = func(branch, hash string) {
 		obs.Notify(hash)
 		if branch == agentBranchForKick {
 			ri.triggerKick()
+		} else if consensusKicks(branch, agentBranchForKick) {
+			ri.consensusKick()
 		}
 	}
 	b.svc.SetOnCommit(ri.onCommit)
@@ -861,6 +872,20 @@ func (b *repoBuilder) activate() {
 	b.recoverFromOrigin()
 	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
 	b.startTriggerDispatcher()
+	b.startConsensusMerger()
+}
+
+// startConsensusMerger launches the F08 merger built in build(), after the
+// initial index, on its own context from b.ctx (never syncCtx, which
+// ActivateSync restarts). Like the dispatcher it runs regardless of
+// DisableBackgroundSync: it merges only when a peer's push landed and the
+// consensus branch says auto, and a repo without that does one cheap read per
+// kick.
+func (b *repoBuilder) startConsensusMerger() {
+	if b.ri == nil || b.ri.consensus == nil {
+		return
+	}
+	b.ri.consensus.start(b.ctx)
 }
 
 // startTriggerDispatcher launches the F07 dispatcher built in build(), after
