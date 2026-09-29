@@ -58,6 +58,10 @@ func treeEntryInsensitiveVia(load func(plumbing.Hash) (*object.Tree, error), tre
 		if i == len(parts)-1 {
 			return matched, nil
 		}
+		if matched.Mode != filemode.Dir {
+			// A file where the path expects a directory: the path is absent.
+			return nil, fmt.Errorf("component %q is not a directory: %w", part, ErrPathNotFound)
+		}
 		sub, err := load(matched.Hash)
 		if err != nil {
 			return nil, fmt.Errorf("subtree %q: %w", part, err)

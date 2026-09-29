@@ -128,7 +128,8 @@ type HistoryQuery interface {
 	LogPaginated(ctx context.Context, branch, path string, limit int, after, from, before string) ([]LogEntryWithTags, string, string, error)
 	// RevisionsBefore returns up to `limit` revisions of `path` in the
 	// first-parent ancestry of `anchorCommit`, newest → oldest: the version
-	// live at an anchor (explain's root commit, as_of dates).
+	// live at an anchor (as_of dates). Resolution stays on RevisionsBefore;
+	// PathHistory enumerates.
 	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
 	// PathHistory returns up to limit changes of `path` — commits that
 	// introduced content none of their parents had, merge-delivered writes
@@ -138,7 +139,8 @@ type HistoryQuery interface {
 	// only. ErrHistoryChanged on a continuation whose history is gone.
 	PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *PathHistoryCursor, limit int) ([]FactRevision, *PathHistoryCursor, error)
 	// LiveRevision is RevisionsBefore(anchor, 1) for a .md path, answered
-	// from path_changes' jump pointers instead of a first-parent walk.
+	// from path_changes' jump pointers instead of a first-parent walk. Used
+	// only by knomit_explain (the root's commit next to its history).
 	LiveRevision(ctx context.Context, branch, path, anchor string) (string, error)
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)

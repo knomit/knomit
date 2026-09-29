@@ -99,6 +99,13 @@ func changedFilesInCommit(c *object.Commit) ([]changedFileEntry, error) {
 			return nil, fmt.Errorf("changedFilesInCommit: parent tree: %w", err)
 		}
 	}
+	return changedFilesBetween(fromTree, toTree)
+}
+
+// changedFilesBetween returns every file added/modified/deleted from fromTree
+// (nil: an empty tree) to toTree — changedFilesInCommit's diff, for callers
+// that load the trees themselves.
+func changedFilesBetween(fromTree, toTree *object.Tree) ([]changedFileEntry, error) {
 	changes, err := object.DiffTree(fromTree, toTree)
 	if err != nil {
 		return nil, fmt.Errorf("changedFilesInCommit: diff: %w", err)

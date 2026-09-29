@@ -25,29 +25,37 @@ import (
 // the path that none of their parents had — linked to the entries they were
 // edited from. See kb/decisions/mcp/explain/history-enumeration.
 //
-// WHEN rows are written: in the transaction that records a commit in
-// branch_commits (CommitLogApply's Derive hook, see populateCommitLog and
-// AppendCommitLog), parents before children. Everything read from git objects
-// (blobs, diffs) is PREPARED before that transaction opens; inside it only
-// SQL runs (apply). An indexed commit is therefore
-// never visible without its rows, and knomit_explain never derives anything.
-// A database that predates the tables, or a pathChangesVersion bump, is
-// derived in one batched pass (deriveUnderived) at the start of the first
-// populate — while the repo opens, before it serves a request.
+// DERIVATION DEPENDS ON GIT ALONE. A commit's rows (path_changes, links, and
+// its commit_fp depth and jump pointers) are computed from its git objects and
+// the rows of its ancestors, never from branch_commits or commit_log. Deriving
+// a commit first derives its underived ancestors, walking git parents first
+// (deriveClosure). Rows are content-addressed and IMMUTABLE per hash: nothing
+// deletes them on a rewind or a rebuild; a pathChangesVersion bump is the only
+// reset.
 //
-// Every row is content-addressed: keyed by commit and computed only from git
-// objects and the rows of the commit's ancestors, which never change for a
-// given hash. Branch visibility is applied at read time.
+// WHEN: a commit's rows are committed no later than the transaction that
+// records it in branch_commits — in that very transaction (CommitLogApply's
+// hook) for new commits, or in an earlier short transaction for their
+// underived ancestors and for a rewind or a rebuild. The hook re-checks in the
+// recording transaction, so an indexed commit is never visible without its
+// rows, and knomit_explain never derives anything.
+//
+// LOCKING: every git object read (and diff) is PREPARED outside any
+// transaction; inside, apply runs SQL only (see CommitLogApply).
+//
+// ERRORS: any git read error fails the derivation and nothing of it is
+// recorded; a later pass retries. Only real absence — an object not in the
+// store, a path not in a tree — counts as absent.
 
-// pathChangesVersion is the version of the derivation below. A mismatch with
-// the stored meta value empties the tables so deriveUnderived recomputes them.
+// pathChangesVersion is the version of the derivation below. A stored value
+// that differs resets the tables (atomically) before they are re-derived.
 const pathChangesVersion = "1"
 
 const pathChangesVersionKey = "path_changes_version"
 
-// pathChangeBatch is how many commits one transaction derives during the
-// one-time pass and bulk population: one commit per transaction would cost
-// one WAL commit each.
+// pathChangeBatch is how many commits one short transaction derives: one
+// commit per transaction would cost one WAL commit each; all of them in one
+// would hold the write lock for seconds.
 const pathChangeBatch = 1000
 
 // ErrHistoryChanged is returned for a PathHistory continuation whose anchor
@@ -55,16 +63,26 @@ const pathChangeBatch = 1000
 // branch: the history it was paging is gone, and the caller must restart.
 var ErrHistoryChanged = errors.New("path history changed since this position was issued")
 
-// errParentUnderived is returned when a commit is offered for derivation
-// before one of its parents. Deriving it anyway would record an unresolved
-// link, and the history below it would stay truncated.
+// errParentUnderived is returned by apply for a commit whose parent (present
+// in the object store) is not derived. deriveClosure orders parents first, so
+// it signals a bug, never a state to record around.
 var errParentUnderived = errors.New("parent commit is not derived yet")
 
-// deriveUnderived derives every indexed commit (any branch) that has no
-// commit_fp mark — the tables' first fill on an upgraded database, or their
-// refill after a pathChangesVersion bump — parents first, in batched
-// transactions. A no-op costs one version lookup and one existence probe.
-func (rh *repoHandler) deriveUnderived(ctx context.Context) error {
+// errNotDerived is returned by the recording hook for a commit whose rows are
+// not derived: recording it would make it visible without its history.
+var errNotDerived = errors.New("commit is not derived")
+
+// deriveObjectHook, when set (tests only), runs before every git object read
+// of the derivation; a non-nil error is returned as that read's error.
+var deriveObjectHook func(kind string, h plumbing.Hash) error
+
+// ensureAllDerived brings the tables to the current derivation version for
+// every commit reachable from any branch tip. With the version current it is
+// one lookup. A STALE version resets all derived rows and the version key in
+// one transaction first; a MISSING key (an upgraded database, or a pass that
+// was interrupted) just derives what is missing. The key is written only
+// when every tip's history is derived, so an interrupted pass resumes.
+func (rh *repoHandler) ensureAllDerived(ctx context.Context) error {
 	if rh.repo == nil {
 		return nil
 	}
@@ -74,104 +92,131 @@ func (rh *repoHandler) deriveUnderived(ctx context.Context) error {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("path changes: version: %w", err)
 	}
-	if v != pathChangesVersion {
+	if v == pathChangesVersion {
+		return nil
+	}
+	if v != "" {
+		ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
+		if err != nil {
+			return fmt.Errorf("path changes: reset: %w", err)
+		}
 		for _, stmt := range []string{
-			`DELETE FROM path_changes`, `DELETE FROM path_change_links`,
-			`DELETE FROM commit_fp`,
+			`DELETE FROM path_changes`, `DELETE FROM path_change_links`, `DELETE FROM commit_fp`,
+			`DELETE FROM meta WHERE key = 'path_changes_version'`,
 		} {
-			if _, err := q.ExecContext(ctx, stmt); err != nil {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if own {
+					tx.Rollback() //nolint:errcheck
+				}
 				return fmt.Errorf("path changes: reset: %w", err)
 			}
 		}
-		if _, err := q.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, pathChangesVersionKey, pathChangesVersion); err != nil {
-			return fmt.Errorf("path changes: version: %w", err)
+		if own {
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("path changes: reset: %w", err)
+			}
 		}
 	}
 
-	rows, err := q.QueryContext(ctx, `
-		SELECT DISTINCT bc.commit_hash FROM branch_commits bc
-		 WHERE NOT EXISTS (SELECT 1 FROM commit_fp f WHERE f.commit_hash = bc.commit_hash)`)
+	rows, err := q.QueryContext(ctx, `SELECT name FROM branches`)
 	if err != nil {
-		return fmt.Errorf("path changes: pending: %w", err)
+		return fmt.Errorf("path changes: branches: %w", err)
 	}
-	var hashes []plumbing.Hash
+	var names []string
 	for rows.Next() {
-		var h string
-		if err := rows.Scan(&h); err != nil {
+		var n string
+		if err := rows.Scan(&n); err != nil {
 			rows.Close()
 			return err
 		}
-		hashes = append(hashes, plumbing.NewHash(h))
+		names = append(names, n)
 	}
 	rows.Close()
-	if err := rows.Err(); err != nil || len(hashes) == 0 {
+	if err := rows.Err(); err != nil {
 		return err
 	}
-
-	start := time.Now()
-	commits := make([]*object.Commit, 0, len(hashes))
-	for _, h := range hashes {
-		c, err := rh.repo.CommitObject(h)
-		if err != nil {
-			return fmt.Errorf("path changes: commit %s: %w", h, err)
+	var tips []plumbing.Hash
+	for _, n := range names {
+		if h, err := rh.resolveRef(ctx, n); err == nil {
+			tips = append(tips, h)
 		}
-		commits = append(commits, c)
 	}
-	order := parentsFirst(commits)
-	d := newDeriver(rh)
+	start := time.Now()
+	n, err := rh.deriveClosure(ctx, newDeriver(rh), tips)
+	if err != nil {
+		return err
+	}
+	if _, err := q.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, pathChangesVersionKey, pathChangesVersion); err != nil {
+		return fmt.Errorf("path changes: version: %w", err)
+	}
+	log.Info().Int("commits", n).Dur("elapsed", time.Since(start)).Msg("path changes: derived")
+	return nil
+}
+
+// deriveClosure derives every underived commit reachable from starts through
+// git parents (starts included), parents first, in short transactions of
+// pathChangeBatch commits, each prepared from git before it opens. It stops at
+// derived commits and at commits absent from the object store. A read error
+// fails it; what earlier batches committed stays (it is complete per commit).
+// Returns how many commits it derived.
+func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []plumbing.Hash) (int, error) {
+	q := conn(ctx, rh.db)
+	var pending []*object.Commit
+	seen := map[plumbing.Hash]bool{}
+	stack := append([]plumbing.Hash(nil), starts...)
+	for len(stack) > 0 {
+		h := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		var marked int
+		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, h.String()).Scan(&marked); err != nil {
+			return 0, fmt.Errorf("path changes: mark: %w", err)
+		}
+		if marked > 0 {
+			continue
+		}
+		c, err := d.commit(h)
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			continue // a shallow boundary: no history below
+		}
+		if err != nil {
+			return 0, err
+		}
+		pending = append(pending, c)
+		stack = append(stack, c.ParentHashes...)
+	}
+	order := parentsFirst(pending)
 	for i := 0; i < len(order); i += pathChangeBatch {
 		chunk := order[i:min(i+pathChangeBatch, len(order))]
-		// Prepare (object reads, diffs) outside any transaction; apply (SQL
-		// only) in one transaction per chunk. See CommitLogApply on why.
 		prepared := make([]*preparedCommit, len(chunk))
 		for j, c := range chunk {
-			paths, err := changedMarkdownPaths(ctx, q, c.Hash.String())
-			if err != nil {
-				return err
-			}
-			if prepared[j], err = d.prepare(c, paths); err != nil {
-				return err
+			var err error
+			if prepared[j], err = d.prepare(c, nil); err != nil {
+				return 0, err
 			}
 		}
 		bctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
 		if err != nil {
-			return fmt.Errorf("path changes: begin: %w", err)
+			return 0, fmt.Errorf("path changes: begin: %w", err)
 		}
 		for _, p := range prepared {
 			if err := d.apply(bctx, tx, p); err != nil {
 				if own {
 					tx.Rollback() //nolint:errcheck
 				}
-				return err
+				return 0, err
 			}
 		}
 		if own {
 			if err := tx.Commit(); err != nil {
-				return fmt.Errorf("path changes: commit: %w", err)
+				return 0, fmt.Errorf("path changes: commit: %w", err)
 			}
 		}
 	}
-	log.Info().Int("commits", len(order)).Dur("elapsed", time.Since(start)).Msg("path changes: derived")
-	return nil
-}
-
-// changedMarkdownPaths returns the .md paths commit_log records as added or
-// modified in hash (against its first parent).
-func changedMarkdownPaths(ctx context.Context, q storegit.CtxExecer, hash string) ([]string, error) {
-	rows, err := q.QueryContext(ctx, `SELECT path FROM commit_log WHERE commit_hash = ? AND action IN ('added','modified') AND path LIKE '%.md'`, hash)
-	if err != nil {
-		return nil, fmt.Errorf("path changes: changed paths: %w", err)
-	}
-	defer rows.Close()
-	var paths []string
-	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			return nil, err
-		}
-		paths = append(paths, p)
-	}
-	return paths, rows.Err()
+	return len(order), nil
 }
 
 // markdownChanges picks the .md add/modify paths out of a commit's
@@ -227,23 +272,29 @@ func parentsFirst(commits []*object.Commit) []*object.Commit {
 }
 
 // deriver derives commits into path_changes. It keeps git object caches for
-// the life of one populate or one-time pass; every SQL statement runs on the
-// transaction it is handed, so the rows of parents derived earlier in the
-// same transaction are visible.
+// the life of one populate or one pass. prepare reads git; apply writes SQL
+// on the transaction it is handed.
 type deriver struct {
 	rh      *repoHandler
 	trees   map[plumbing.Hash]*object.Tree
 	commits map[plumbing.Hash]*object.Commit
-	facts   map[plumbing.Hash]*fact.Fact // parsed blobs; nil when unparseable
+	facts   map[plumbing.Hash]*fact.Fact // parsed blobs; nil when not a fact
 }
 
 func newDeriver(rh *repoHandler) *deriver {
 	return &deriver{rh: rh, trees: map[plumbing.Hash]*object.Tree{}, commits: map[plumbing.Hash]*object.Commit{}, facts: map[plumbing.Hash]*fact.Fact{}}
 }
 
+// commit loads a commit; an absent one is an error wrapping
+// plumbing.ErrObjectNotFound.
 func (d *deriver) commit(h plumbing.Hash) (*object.Commit, error) {
 	if c, ok := d.commits[h]; ok {
 		return c, nil
+	}
+	if deriveObjectHook != nil {
+		if err := deriveObjectHook("commit", h); err != nil {
+			return nil, err
+		}
 	}
 	c, err := d.rh.repo.CommitObject(h)
 	if err != nil {
@@ -260,9 +311,14 @@ func (d *deriver) tree(h plumbing.Hash) (*object.Tree, error) {
 	if t, ok := d.trees[h]; ok {
 		return t, nil
 	}
+	if deriveObjectHook != nil {
+		if err := deriveObjectHook("tree", h); err != nil {
+			return nil, err
+		}
+	}
 	t, err := d.rh.repo.TreeObject(h)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("path changes: tree %s: %w", h, err)
 	}
 	if len(d.trees) > 16384 {
 		clear(d.trees)
@@ -271,56 +327,61 @@ func (d *deriver) tree(h plumbing.Hash) (*object.Tree, error) {
 	return t, nil
 }
 
-// parsed returns the fact in a blob, parsed once per deriver; nil when the
-// blob cannot be read or is not a fact.
-func (d *deriver) parsed(path string, h plumbing.Hash) *fact.Fact {
+// parsed returns the fact in a blob, parsed once per deriver: nil (no error)
+// when the content is not a fact; an error when the blob cannot be read.
+func (d *deriver) parsed(path string, h plumbing.Hash) (*fact.Fact, error) {
 	if f, ok := d.facts[h]; ok {
-		return f
+		return f, nil
+	}
+	if deriveObjectHook != nil {
+		if err := deriveObjectHook("blob", h); err != nil {
+			return nil, err
+		}
+	}
+	b, err := d.rh.repo.BlobObject(h)
+	if err != nil {
+		return nil, fmt.Errorf("path changes: blob %s: %w", h, err)
+	}
+	r, err := b.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("path changes: blob %s: %w", h, err)
+	}
+	raw, err := io.ReadAll(r)
+	r.Close()
+	if err != nil {
+		return nil, fmt.Errorf("path changes: blob %s: %w", h, err)
 	}
 	var out *fact.Fact
-	if b, err := d.rh.repo.BlobObject(h); err == nil {
-		if r, err := b.Reader(); err == nil {
-			raw, err := io.ReadAll(r)
-			r.Close()
-			if err == nil {
-				if f, err := fact.ParseFact(path, string(raw)); err == nil {
-					out = &f
-				}
-			}
-		}
+	if f, err := fact.ParseFact(path, string(raw)); err == nil {
+		out = &f
 	}
 	if len(d.facts) > 1024 {
 		clear(d.facts)
 	}
 	d.facts[h] = out
-	return out
+	return out, nil
 }
 
-// blobAt returns path's blob in commit's tree, matching each component
+// blobAt returns path's blob in the tree, matching each component
 // case-insensitively (fact paths are lowercase-canonical; the tree may not
-// be). Zero when absent.
-func (d *deriver) blobAt(commit plumbing.Hash, path string) (plumbing.Hash, error) {
-	c, err := d.commit(commit)
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
-	root, err := d.tree(c.TreeHash)
-	if err != nil {
-		return plumbing.ZeroHash, err
-	}
+// be). Zero only when the path is really absent; a read error is an error.
+func (d *deriver) blobAt(root *object.Tree, path string) (plumbing.Hash, error) {
 	e, err := treeEntryInsensitiveVia(d.tree, root, path)
-	if err != nil {
+	if errors.Is(err, ErrPathNotFound) {
 		return plumbing.ZeroHash, nil
+	}
+	if err != nil {
+		return plumbing.ZeroHash, err
 	}
 	return e.Hash, nil
 }
 
 // preparedCommit is everything deriving a commit needs from git objects —
-// read before the indexing transaction opens. apply turns it into rows with
-// SQL only.
+// read before any transaction opens. apply turns it into rows with SQL only.
 type preparedCommit struct {
-	c     *object.Commit
-	paths []preparedPath
+	c            *object.Commit
+	parentAbsent []bool // parent i is not in the object store (a shallow boundary)
+	paths        []preparedPath
 }
 
 type preparedPath struct {
@@ -331,13 +392,43 @@ type preparedPath struct {
 	diff   string          // RevisionDiff JSON against the first parent that has the path
 }
 
-// prepare reads, for each changed .md path of c, its blob at c and at every
-// parent (case-insensitively), and computes the diff an entry would store.
-// Git object reads only; no SQL.
-func (d *deriver) prepare(c *object.Commit, paths []string) (*preparedCommit, error) {
-	pc := &preparedCommit{c: c}
-	for _, path := range paths {
-		to, err := d.blobAt(c.Hash, path)
+// prepare reads from git everything apply needs for c: which .md paths it
+// changed against its first parent (entries, when the caller already
+// computed them for commit_log; else diffed here), each path's blob at c and
+// at every parent, and the diff an entry stores. Git reads only; no SQL.
+func (d *deriver) prepare(c *object.Commit, entries []storegit.CommitLogEntry) (*preparedCommit, error) {
+	pc := &preparedCommit{c: c, parentAbsent: make([]bool, len(c.ParentHashes))}
+	toTree, err := d.tree(c.TreeHash)
+	if err != nil {
+		return nil, err
+	}
+	parentTrees := make([]*object.Tree, len(c.ParentHashes))
+	for i, p := range c.ParentHashes {
+		pcm, err := d.commit(p)
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			pc.parentAbsent[i] = true
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if parentTrees[i], err = d.tree(pcm.TreeHash); err != nil {
+			return nil, err
+		}
+	}
+	if entries == nil {
+		var from *object.Tree
+		if len(parentTrees) > 0 {
+			from = parentTrees[0]
+		}
+		files, err := changedFilesBetween(from, toTree)
+		if err != nil {
+			return nil, fmt.Errorf("path changes: diff %s: %w", c.Hash, err)
+		}
+		entries = commitEntries(c, files)
+	}
+	for _, path := range markdownChanges(entries) {
+		to, err := d.blobAt(toTree, path)
 		if err != nil {
 			return nil, err
 		}
@@ -345,11 +436,11 @@ func (d *deriver) prepare(c *object.Commit, paths []string) (*preparedCommit, er
 			continue
 		}
 		pp := preparedPath{path: path, to: to, blobs: make([]plumbing.Hash, len(c.ParentHashes)), sameAs: -1}
-		for i, p := range c.ParentHashes {
-			if _, err := d.commit(p); err != nil {
-				continue // not in the object store (a shallow boundary)
+		for i, pt := range parentTrees {
+			if pt == nil {
+				continue
 			}
-			if pp.blobs[i], err = d.blobAt(p, path); err != nil {
+			if pp.blobs[i], err = d.blobAt(pt, path); err != nil {
 				return nil, err
 			}
 			if pp.blobs[i] == to && pp.sameAs < 0 {
@@ -367,8 +458,16 @@ func (d *deriver) prepare(c *object.Commit, paths []string) (*preparedCommit, er
 				}
 				// The first parent that has the path is the content this
 				// change was edited from: its diff base.
-				if cur := d.parsed(path, to); cur != nil {
-					if rd := revisionDelta(d.parsed(path, b), *cur); rd != nil {
+				cur, err := d.parsed(path, to)
+				if err != nil {
+					return nil, err
+				}
+				prev, err := d.parsed(path, b)
+				if err != nil {
+					return nil, err
+				}
+				if cur != nil {
+					if rd := revisionDelta(prev, *cur); rd != nil {
 						js, _ := json.Marshal(rd)
 						pp.diff = string(js)
 					}
@@ -382,9 +481,9 @@ func (d *deriver) prepare(c *object.Commit, paths []string) (*preparedCommit, er
 }
 
 // apply writes a prepared commit's first-parent depth and jump pointers and
-// its path_changes rows, on tx — SQL only. A commit already derived
-// (content-addressed, e.g. through another branch) is left as is. Every parent
-// in the object store must be derived first; otherwise errParentUnderived.
+// its path_changes rows, on tx — SQL ONLY, never a git read. A commit already
+// derived (content-addressed) is left as is. Every parent present in the
+// object store must be derived already (errParentUnderived otherwise).
 func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) error {
 	c := pc.c
 	hash := c.Hash.String()
@@ -397,12 +496,12 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 	}
 	depths := make([]int, len(c.ParentHashes))
 	for i, p := range c.ParentHashes {
+		if pc.parentAbsent[i] {
+			depths[i] = -1
+			continue
+		}
 		err := tx.QueryRowContext(ctx, `SELECT depth FROM commit_fp WHERE commit_hash = ?`, p.String()).Scan(&depths[i])
 		if errors.Is(err, sql.ErrNoRows) {
-			if _, oerr := d.commit(p); oerr != nil {
-				depths[i] = -1 // not in the object store (a shallow boundary): no history below
-				continue
-			}
 			return fmt.Errorf("%w: %s (parent of %s)", errParentUnderived, p, hash)
 		}
 		if err != nil {
@@ -443,10 +542,6 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 
 func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *object.Commit, hash string, depth int, parentDepths []int, msg string, pp preparedPath) error {
 	path := pp.path
-	// A re-derivation (:rebuild) replaces the rows it writes.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM path_change_links WHERE path = ? AND commit_hash = ?`, path, hash); err != nil {
-		return fmt.Errorf("path changes: clear links: %w", err)
-	}
 	if pp.sameAs >= 0 {
 		// A carry: the commit took this content from parent sameAs.
 		from, _, err := liveChange(ctx, tx, path, c.ParentHashes[pp.sameAs].String(), 0)
@@ -490,6 +585,20 @@ func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *object.Commit, h
 		INSERT OR REPLACE INTO path_changes (path, commit_hash, entry, resolves_to, blob, action, author_at, order_at, gen, message, diff, fp_depth)
 		VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, path, hash, hash, pp.to.String(), action, author, orderAt, gen, msg, pp.diff, depth)
 	return err
+}
+
+// hook is the CommitLogApply Derive hook for items whose hashes are hashes:
+// apply the prepared commit (SQL only), then — whether it was prepared here or
+// derived earlier — refuse to record a commit that is not derived.
+func (d *deriver) hook(hashes []string, prepared []*preparedCommit) func(ctx context.Context, tx *sql.Tx, i int) error {
+	return func(ctx context.Context, tx *sql.Tx, i int) error {
+		if prepared != nil && prepared[i] != nil {
+			if err := d.apply(ctx, tx, prepared[i]); err != nil {
+				return err
+			}
+		}
+		return verifyDerived(ctx, tx, hashes[i])
+	}
 }
 
 // liveChange returns the change of path live at commit X: the nearest commit
@@ -672,11 +781,9 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 			return nil, nil, err
 		}
 		next.AnchorOnBranch = anchorOn
-		// On-branch anchor: every first-parent ancestor is on the branch, so
-		// no per-row branch filter is needed.
-		scope := branchID
+		// Candidate rows are always scoped to the branch: rows of commits on
+		// no branch (never garbage-collected) are not even scanned.
 		if anchorOn {
-			scope = 0
 			// Indexing derives every commit it records, so an indexed but
 			// underived anchor is a broken invariant (e.g. a failed open-time
 			// pass): say so rather than answer with an empty history.
@@ -688,7 +795,7 @@ func (hq *historyQuery) PathHistory(ctx context.Context, branch, path, anchorCom
 				return nil, nil, fmt.Errorf("PathHistory: commit %s is indexed on %s but its history was never derived", anchorCommit, branch)
 			}
 		}
-		head, _, err := liveChange(ctx, db, path, anchorCommit, scope)
+		head, _, err := liveChange(ctx, db, path, anchorCommit, branchID)
 		if err != nil || head == "" {
 			return nil, nil, err
 		}
@@ -824,4 +931,18 @@ func (h *changeHeap) Pop() any {
 	n := old[len(old)-1]
 	*h = old[:len(old)-1]
 	return n
+}
+
+// verifyDerived fails with errNotDerived unless hash has its commit_fp mark:
+// the recording transaction's guarantee that a commit never becomes visible
+// in branch_commits without its history rows.
+func verifyDerived(ctx context.Context, tx *sql.Tx, hash string) error {
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, hash).Scan(&n); err != nil {
+		return fmt.Errorf("path changes: verify: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("%w: %s", errNotDerived, hash)
+	}
+	return nil
 }

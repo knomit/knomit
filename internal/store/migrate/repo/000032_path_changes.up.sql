@@ -1,15 +1,13 @@
 -- Precomputed per-path change history for knomit_explain (see
 -- internal/store/path_changes.go and
--- kb/decisions/mcp/explain/history-enumeration). DERIVED STATE, regenerated from
--- git, and written in the SAME transaction that records a commit in
--- branch_commits (CommitLogSyncWith's Derive hook), parents first: an indexed
--- commit is never visible without its rows. A database that predates this
--- migration, or a pathChangesVersion bump, is derived in one batched pass when
--- the repo opens (deriveUnderived), before anything reads it.
---
--- Every row is CONTENT-ADDRESSED: keyed by commit and derived only from git
--- objects (the commit, its parents' trees) and the rows of its ancestors, which
--- never change for a given hash. Branch visibility is applied at read time.
+-- kb/decisions/mcp/explain/history-enumeration). DERIVED STATE, computed from
+-- git objects alone and IMMUTABLE per commit hash: nothing deletes these rows
+-- on a rewind or a rebuild; a pathChangesVersion bump is the only reset.
+-- A commit's rows are committed no later than the transaction that records it
+-- in branch_commits (storegit.CommitLogApply's Derive hook re-checks), so an
+-- indexed commit is never visible without them. A database that predates this
+-- migration is derived for every branch tip on its first populate
+-- (ensureAllDerived), while the repo opens.
 
 -- One row per (path, commit) where the path's blob at the commit differs from
 -- its blob at the FIRST parent (the commit_log add/modify rows, for .md paths):
@@ -63,8 +61,5 @@ CREATE TABLE IF NOT EXISTS commit_fp (
     depth       INTEGER NOT NULL,
     ups         BLOB    NOT NULL
 );
-
--- The derivation version the (empty) tables are consistent with, so the first
--- open does not treat a fresh database as stale. Keep equal to
--- pathChangesVersion at the time of this migration.
-INSERT OR IGNORE INTO meta (key, value) VALUES ('path_changes_version', '1');
+-- No path_changes_version row: its absence makes the first populate derive
+-- every branch tip's history (ensureAllDerived), then write the version.

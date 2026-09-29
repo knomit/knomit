@@ -69,142 +69,6 @@ func (s *Storer) commitLogTableExists() bool {
 	return true
 }
 
-// CommitLogPayload produces the rows for one commit: its ordered parent hashes
-// and its commit_log entries.
-//
-// It is deliberately a thunk rather than a value. CommitLogSync calls it ONLY
-// for a commit that is not yet recorded on the branch, because computing it is
-// expensive — in the production caller it is an object.DiffTree of the commit
-// against its first parent, ~300 SQLite object loads and ~2 ms per commit. A
-// warm repo open re-walks a fully-populated DAG, so nearly every commit is a
-// dedup hit; computing the payload eagerly made repo open cost ~2 ms per commit
-// (4.2 s for a 1831-commit repo) to produce rows that were immediately thrown
-// away. See CommitLogSync's dedup step.
-//
-// `parents` is the ordered list of parent commit hashes for this commit
-// (parents[0] is the first parent, etc.). Used by resolveActiveCommitForPath's
-// recursive-CTE walk and replaces the retired first_parent_chain virtual
-// table whose Go cursor callback could re-enter the *sql.DB pool mid-scan
-// and deadlock.
-type CommitLogPayload func() (parents []string, entries []CommitLogEntry, err error)
-
-// CommitLogSync is the core write method for commit_log.
-// It calls iter() repeatedly until it returns ("", nil, nil) (sentinel for done).
-// For each non-empty hash: if the commit is already recorded as visible on this
-// branch it is skipped WITHOUT calling its payload, and the walk continues. All
-// rows for a hash — commit_log entries, branch_commits visibility, and
-// commit_parents edges — are inserted in a single transaction.
-// The commitLog atomic is marked true once the table is confirmed to exist
-// and has been previously written to (either via a new insert or confirmed
-// via an existing indexed commit).
-//
-// iter must return the hash cheaply; all per-commit work belongs in the
-// returned CommitLogPayload so the dedup check can gate it.
-func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, payload CommitLogPayload, err error)) error {
-	if !s.CommitLogAvailable() {
-		return nil
-	}
-
-	// Require branch to exist. Callers must EnsureBranch before this runs.
-	if branchName == "" {
-		return fmt.Errorf("CommitLogSync: branchName is empty")
-	}
-	var branchID int64
-	err := s.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, branchName).Scan(&branchID)
-	if err != nil {
-		return fmt.Errorf("CommitLogSync: branch %q not registered in branches table: %w", branchName, err)
-	}
-
-	for {
-		hash, payload, err := iter()
-		if err != nil {
-			return fmt.Errorf("CommitLogSync: iter: %w", err)
-		}
-		if hash == "" {
-			// Done.
-			s.commitLog.Store(true)
-			return nil
-		}
-
-		// Dedup: is this commit already recorded as visible on this branch?
-		// For linear history an existing row means all ancestors are already
-		// recorded too, so we could stop. But for merge commits the iterator
-		// is walking a DAG — hitting a known commit on one parent's line says
-		// nothing about the other parent's ancestry. Skip this commit and
-		// continue walking rather than short-circuiting.
-		//
-		// This check runs BEFORE payload() so a known commit costs one indexed
-		// lookup instead of a full tree diff.
-		var cnt int
-		if err := s.db.QueryRow(
-			`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
-			branchID, hash).Scan(&cnt); err != nil {
-			return fmt.Errorf("CommitLogSync: dedup check: %w", err)
-		}
-		if cnt > 0 {
-			s.commitLog.Store(true)
-			continue
-		}
-
-		var parents []string
-		var entries []CommitLogEntry
-		if payload != nil {
-			if parents, entries, err = payload(); err != nil {
-				return fmt.Errorf("CommitLogSync: payload for %s: %w", hash, err)
-			}
-		}
-
-		tx, err := s.db.Begin()
-		if err != nil {
-			return fmt.Errorf("CommitLogSync: begin tx: %w", err)
-		}
-
-		if len(entries) > 0 {
-			stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_name, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-			if err != nil {
-				tx.Rollback()
-				return fmt.Errorf("CommitLogSync: prepare commit_log: %w", err)
-			}
-			for _, e := range entries {
-				if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorName, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
-					stmt.Close()
-					tx.Rollback()
-					return fmt.Errorf("CommitLogSync: insert commit_log: %w", err)
-				}
-			}
-			stmt.Close()
-		}
-
-		// Record visibility for this commit on this branch.
-		if _, err := tx.Exec(
-			`INSERT OR IGNORE INTO branch_commits (branch_id, commit_hash) VALUES (?, ?)`,
-			branchID, hash); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("CommitLogSync: insert branch_commits: %w", err)
-		}
-
-		// Record parent edges. INSERT OR IGNORE keeps this idempotent across
-		// branches and re-syncs: every branch that walks the same DAG
-		// converges on the same commit_parents rows.
-		for i, p := range parents {
-			if p == "" {
-				continue
-			}
-			if _, err := tx.Exec(
-				`INSERT OR IGNORE INTO commit_parents (commit_hash, parent_order, parent_hash) VALUES (?, ?, ?)`,
-				hash, i, p); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("CommitLogSync: insert commit_parents: %w", err)
-			}
-		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("CommitLogSync: commit tx: %w", err)
-		}
-		s.commitLog.Store(true)
-	}
-}
-
 // CommitLogItem is one commit to record: its ordered parents and commit_log
 // entries, computed by the caller before CommitLogApply opens its transaction.
 type CommitLogItem struct {
@@ -224,7 +88,9 @@ type CommitLogApplyOptions struct {
 	Derive func(ctx context.Context, tx *sql.Tx, i int) error
 }
 
-// CommitLogApply records items on branchName in ONE transaction — the one
+// CommitLogApply is the ONLY writer of branch_commits visibility for new
+// commits (with CreateBranch's copy of an already-indexed branch). It records
+// items on branchName in ONE transaction — the one
 // ctx carries, if any (then nothing is committed here), else its own:
 // Before, then for each item not yet visible on the branch its commit_log,
 // branch_commits and commit_parents rows and Derive.
