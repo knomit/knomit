@@ -75,7 +75,10 @@ func (rh *repoHandler) ensurePathChangesVersion(ctx context.Context) error {
 // that has not been derived yet, parents before children. Idempotent and
 // cheap when nothing is pending.
 func (rh *repoHandler) syncPathChanges(ctx context.Context) error {
-	if rh.repo == nil {
+	if rh.repo == nil || storegit.TxFromContext(ctx) != nil {
+		// Under a caller's transaction (which holds the write lock) deriving
+		// would wait on that lock; the next sync, or the next history read,
+		// derives instead.
 		return nil
 	}
 	if err := rh.ensurePathChangesVersion(ctx); err != nil {
@@ -120,8 +123,8 @@ func (rh *repoHandler) syncPathChanges(ctx context.Context) error {
 // When the commit is already derived it is a single lookup; when any of its
 // indexed parents is not derived yet it falls back to the full sync.
 func (rh *repoHandler) syncPathChangesFor(ctx context.Context, hash string) error {
-	if rh.repo == nil {
-		return nil
+	if rh.repo == nil || storegit.TxFromContext(ctx) != nil {
+		return nil // see syncPathChanges
 	}
 	var done int
 	if err := rh.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM path_change_commits WHERE commit_hash = ?`, hash).Scan(&done); err != nil {
@@ -202,14 +205,7 @@ func (rh *repoHandler) pendingTopoOrder(ctx context.Context, pending map[string]
 }
 
 func (rh *repoHandler) derivePathChangesBatch(ctx context.Context, commits []string) error {
-	ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
-	if err != nil {
-		return fmt.Errorf("path changes: begin: %w", err)
-	}
-	if own {
-		defer tx.Rollback() //nolint:errcheck
-	}
-	d, err := newDeriver(ctx, rh, tx)
+	d, err := newDeriver(ctx, rh)
 	if err != nil {
 		return err
 	}
@@ -219,16 +215,19 @@ func (rh *repoHandler) derivePathChangesBatch(ctx context.Context, commits []str
 			return err
 		}
 	}
-	if own {
-		return tx.Commit()
-	}
 	return nil
 }
 
-// deriver holds one derivation batch's prepared statements and object caches.
+// deriver holds one derivation run's prepared statements and object caches.
 // The work per commit is bounded by the .md paths it changed: commit_log
 // already names them (against the first parent), so only those paths' blobs
 // are looked up — never a tree diff.
+//
+// LOCKING: every read (git objects, commit_log, ancestors' rows) and every
+// diff happens OUTSIDE a transaction; a commit's rows are buffered and written
+// in one short transaction of their own. The repo DB takes the write lock at
+// BEGIN (_txlock=immediate), so holding a transaction across the reads would
+// stall every other writer on every branch for the duration.
 type deriver struct {
 	rh       *repoHandler
 	changed  *sql.Stmt
@@ -239,12 +238,19 @@ type deriver struct {
 	insLink  *sql.Stmt
 	mark     *sql.Stmt
 	nearest  *sql.Stmt
+	pending  []pendingWrite
 	trees    map[plumbing.Hash]*object.Tree
 	commits  map[plumbing.Hash]*object.Commit
 	facts    map[plumbing.Hash]*fact.Fact // parsed blobs; nil when unparseable
 }
 
-func newDeriver(ctx context.Context, rh *repoHandler, tx *sql.Tx) (*deriver, error) {
+// pendingWrite is one buffered insert of the commit being derived.
+type pendingWrite struct {
+	st   *sql.Stmt
+	args []any
+}
+
+func newDeriver(ctx context.Context, rh *repoHandler) (*deriver, error) {
 	d := &deriver{rh: rh, trees: map[plumbing.Hash]*object.Tree{}, commits: map[plumbing.Hash]*object.Commit{}, facts: map[plumbing.Hash]*fact.Fact{}}
 	for _, p := range []struct {
 		dst **sql.Stmt
@@ -259,7 +265,7 @@ func newDeriver(ctx context.Context, rh *repoHandler, tx *sql.Tx) (*deriver, err
 		{&d.mark, `INSERT OR IGNORE INTO path_change_commits (commit_hash) VALUES (?)`},
 		{&d.nearest, nearestChangeSQL(false)},
 	} {
-		st, err := tx.PrepareContext(ctx, p.sql)
+		st, err := rh.db.PrepareContext(ctx, p.sql)
 		if err != nil {
 			d.close()
 			return nil, fmt.Errorf("path changes: prepare: %w", err)
@@ -275,6 +281,27 @@ func (d *deriver) close() {
 			st.Close()
 		}
 	}
+}
+
+func (d *deriver) write(st *sql.Stmt, args ...any) {
+	d.pending = append(d.pending, pendingWrite{st: st, args: args})
+}
+
+// flush writes the buffered rows of one commit, and its derived mark, in one
+// short transaction.
+func (d *deriver) flush(ctx context.Context) error {
+	tx, err := d.rh.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("path changes: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, w := range d.pending {
+		if _, err := tx.StmtContext(ctx, w.st).ExecContext(ctx, w.args...); err != nil {
+			return fmt.Errorf("path changes: write: %w", err)
+		}
+	}
+	d.pending = d.pending[:0]
+	return tx.Commit()
 }
 
 func (d *deriver) commit(h plumbing.Hash) (*object.Commit, error) {
@@ -382,10 +409,8 @@ func (d *deriver) derive(ctx context.Context, hash string) error {
 			}
 		}
 	}
-	if _, err := d.mark.ExecContext(ctx, hash); err != nil {
-		return fmt.Errorf("path changes: mark: %w", err)
-	}
-	return nil
+	d.write(d.mark, hash)
+	return d.flush(ctx)
 }
 
 func (d *deriver) derivePath(ctx context.Context, c *object.Commit, path string) error {
@@ -417,9 +442,7 @@ func (d *deriver) derivePath(ctx context.Context, c *object.Commit, path string)
 		if err != nil {
 			return err
 		}
-		if _, err := d.insCarry.ExecContext(ctx, path, hash, from, to.String(), msg); err != nil {
-			return fmt.Errorf("path changes: carry: %w", err)
-		}
+		d.write(d.insCarry, path, hash, from, to.String(), msg)
 		return nil
 	}
 
@@ -455,13 +478,9 @@ func (d *deriver) derivePath(ctx context.Context, c *object.Commit, path string)
 			orderAt = max(orderAt, fo)
 			gen = max(gen, fg+1)
 		}
-		if _, err := d.insLink.ExecContext(ctx, path, hash, i, from, b.String()); err != nil {
-			return fmt.Errorf("path changes: link: %w", err)
-		}
+		d.write(d.insLink, path, hash, i, from, b.String())
 	}
-	if _, err := d.insEntry.ExecContext(ctx, path, hash, hash, to.String(), action, author, orderAt, gen, msg, diff); err != nil {
-		return fmt.Errorf("path changes: entry: %w", err)
-	}
+	d.write(d.insEntry, path, hash, hash, to.String(), action, author, orderAt, gen, msg, diff)
 	return nil
 }
 

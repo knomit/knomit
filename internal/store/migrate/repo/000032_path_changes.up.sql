@@ -55,3 +55,8 @@ CREATE TABLE IF NOT EXISTS path_change_links (
 CREATE TABLE IF NOT EXISTS path_change_commits (
     commit_hash TEXT PRIMARY KEY
 );
+
+-- The derivation version the (empty) tables are consistent with, so the first
+-- sync does not treat a fresh database as stale. Keep equal to
+-- pathChangesVersion at the time of this migration.
+INSERT OR IGNORE INTO meta (key, value) VALUES ('path_changes_version', '1');
