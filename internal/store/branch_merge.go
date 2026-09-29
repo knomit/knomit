@@ -68,8 +68,11 @@ func (rh *repoHandler) mergeIntoBranchResolved(
 //
 // When the three-way merge produces a tree identical to dst's tree (every
 // src change was either no-op or skipped by strategy), the result is
-// reported as ModeNoop rather than synthesizing a zero-diff merge commit —
-// this preserves the commit-log parity invariant.
+// reported as ModeNoop rather than synthesizing a zero-diff merge commit, so
+// a sync that changes nothing leaves no trace. (It is not needed for
+// commit-log parity: checkCommitLogParity compares against branch_commits
+// visibility and accepts no-op commits. The peer merge's `record` option
+// writes such a commit on purpose — mergeOpts.)
 //
 // Errors if dst/src refs cannot be resolved or if histories are disjoint
 // (no common ancestor — the caller is responsible for routing to the
@@ -87,6 +90,31 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 	src, dst string,
 	strategy ConflictStrategy,
 	resolutions map[string]Resolution,
+) (AgentReconcileResult, error) {
+	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, resolutions, mergeOpts{})
+}
+
+// mergeOpts are the peer-merge caller's options (F11 UI merge). The zero value
+// is the merge every other caller has always had.
+type mergeOpts struct {
+	// srcTip, when set, is the src commit the caller confirmed: the merge
+	// refuses with *BranchMovedError if src no longer points there, and
+	// otherwise merges exactly that commit.
+	srcTip plumbing.Hash
+	// record always writes a merge commit [dst, src]: never a fast-forward and
+	// never a tree-identical no-op. Only "src is already in dst" is a no-op.
+	record bool
+	// side, when set, settles EVERY conflicting path with that side, detected
+	// under the dst lock (the whole-set choice of the UI merge dialog).
+	side ResolutionSide
+}
+
+func (rh *repoHandler) mergeIntoBranchLockedOpts(
+	ctx context.Context,
+	src, dst string,
+	strategy ConflictStrategy,
+	resolutions map[string]Resolution,
+	o mergeOpts,
 ) (AgentReconcileResult, error) {
 	if strategy == "" {
 		strategy = StrategyLocalWins
@@ -112,6 +140,9 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 	}
 	srcHash := srcRef.Hash()
 	dstHash := dstRef.Hash()
+	if !o.srcTip.IsZero() && srcHash != o.srcTip {
+		return AgentReconcileResult{}, &BranchMovedError{Branch: src, Expected: o.srcTip.String(), Actual: srcHash.String()}
+	}
 
 	if srcHash == dstHash {
 		// Nothing to merge means nothing conflicted, so every resolution the
@@ -149,7 +180,7 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: check dst ancestor: %w", err)
 	}
-	if isDstAncestor {
+	if isDstAncestor && !o.record {
 		// A fast-forward takes src wholesale: nothing conflicted, so a
 		// resolution here adjudicated nothing. Checked BEFORE the ref moves —
 		// a rejected call must leave the branch exactly where it was.
@@ -181,6 +212,17 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: no common ancestor between %q and %q (disjoint histories)", src, dst)
 	}
 	baseCommit := bases[0]
+
+	if o.side != "" && len(resolutions) == 0 {
+		detected, derr := rh.detectConflicts(ctx, baseCommit, srcCommit, dstCommit)
+		if derr != nil {
+			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: detect conflicts: %w", derr)
+		}
+		resolutions = make(map[string]Resolution, len(detected))
+		for p := range detected {
+			resolutions[p] = Resolution{Side: o.side}
+		}
+	}
 
 	// EVERY resolution is checked against the real conflict set BEFORE the
 	// merge that consumes them. Doing it inside the walk cannot be complete:
@@ -226,7 +268,7 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: three-way merge: %w", err)
 	}
 
-	if mergedTreeHash == dstCommit.TreeHash {
+	if mergedTreeHash == dstCommit.TreeHash && !o.record {
 		log.Info().
 			Str("src", src).Str("dst", dst).
 			Str("strategy", string(strategy)).
