@@ -516,6 +516,16 @@ describe('RepoManager', () => {
     }
   });
 
+  // Pushed branches (F11 UI merge) sit directly under Experiments on an
+  // ordinary repo: both are other branches whose facts can be brought in.
+  it('shows the Pushed branches block right after Experiments', async () => {
+    render(<RepoManager {...baseProps} />);
+    await selectRepo();
+    const pushed = await screen.findByTestId('block-pushed-branches');
+    const exps = screen.getByTestId('block-experiments');
+    expect(exps.compareDocumentPosition(pushed) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   // The contents rail is an index, not a nav: every block is already on the
   // page, so it lists them all rather than gating any behind a selection.
   it('lists every block in the contents rail', async () => {
@@ -1533,6 +1543,14 @@ describe('RepoManager — a subscription', () => {
 
     await waitFor(() => expect(api.getOrigin).toHaveBeenCalledWith('core'));
     expect(screen.queryByTestId('upstream-warning')).not.toBeInTheDocument();
+  });
+
+  // Nothing can be merged into a subscription: it has no agent branch.
+  it('has no Pushed branches block', async () => {
+    render(<RepoManager {...subProps} />);
+    fireEvent.click(await screen.findByTestId('repomgr-item-core'));
+    await waitFor(() => expect(screen.getByTestId('repo-readonly-badge')).toBeInTheDocument());
+    expect(screen.queryByTestId('block-pushed-branches')).not.toBeInTheDocument();
   });
 
   it('names the read branch and badges it read-only', async () => {

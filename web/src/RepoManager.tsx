@@ -22,6 +22,7 @@ import { ManageOAuth } from './ManageOAuth';
 import { useClientSessionChanges } from './useClientSessionChanges';
 import { btn, card, cardIconBtn, cardLabel, confirmBox, confirmInput, writeCard } from './manageStyles';
 import { ExperimentsPanel } from './ExperimentsPanel';
+import { PushedBranchesPanel } from './PushedBranchesPanel';
 import { SettingsPage } from './SettingsPage';
 import type { Section } from './SettingsPage';
 import type { BrowseContext } from './state';
@@ -1181,6 +1182,26 @@ function RepoDetail({ name, lenses, focus, canArchive, serverReadOnly, hideRemot
           disabledReason={subscribed
             ? 'This repository is a subscription: it follows a remote branch read-only and has no agent branch to fork an experiment from.'
             : undefined}
+        />
+      ),
+    });
+  }
+
+  // Pushed branches sit under Experiments: both are other branches whose facts
+  // can be brought into the agent branch. A subscription has no agent branch
+  // and so nothing can be merged into it; the block is absent rather than
+  // disabled, because no peer can push to one either. Withheld while the mode
+  // is unknown, like everything else a subscription lacks.
+  if (!creating && !subscribed && !modeUnknown && agentBranch) {
+    sections.push({
+      id: 'pushed-branches',
+      title: 'Pushed branches',
+      hint: 'branches other instances pushed here; merge one into the agent branch',
+      body: (
+        <PushedBranchesPanel
+          repo={name}
+          agentBranch={agentBranch}
+          onEnterBranch={onEnterBranch ?? (() => {})}
         />
       ),
     });
