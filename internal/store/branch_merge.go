@@ -104,6 +104,13 @@ type mergeOpts struct {
 	// record always writes a merge commit [dst, src]: never a fast-forward and
 	// never a tree-identical no-op. Only "src is already in dst" is a no-op.
 	record bool
+	// skipMergeOnly (with record) adds ONE no-op: the merge would leave
+	// dst's tree unchanged AND every commit src brings is itself a merge
+	// commit — src only merged dst's own history back in. The consensus
+	// merger needs it: a peer whose sync always writes a merge commit (never
+	// fast-forwards) would otherwise get a new host merge commit to merge
+	// back on every round, forever.
+	skipMergeOnly bool
 	// side, when set, settles EVERY conflicting path with that side, detected
 	// under the dst lock (the whole-set choice of the UI merge dialog).
 	side ResolutionSide
@@ -274,6 +281,17 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 			Str("strategy", string(strategy)).
 			Msg("mergeIntoBranch: no-op (merged tree identical to dst)")
 		return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
+	}
+	if mergedTreeHash == dstCommit.TreeHash && o.skipMergeOnly {
+		only, err := rh.onlyMergeCommits(srcHash, dstHash)
+		if err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
+		}
+		if only {
+			log.Debug().Str("src", src).Str("dst", dst).
+				Msg("mergeIntoBranch: no-op (src brings only merge commits and no change)")
+			return AgentReconcileResult{Mode: ModeNoop, NewTip: dstHash.String()}, nil
+		}
 	}
 
 	mc := &object.Commit{

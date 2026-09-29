@@ -23,7 +23,7 @@ func OntologySchema() []SchemaField {
 		{"Ontology", "description", "What this ontology is for"},
 		{"Ontology", "topics", "Map of top-level topic keys to their definitions"},
 		{"Ontology", "validations", "Rules applied to every fact, whatever its topic"},
-		{"Ontology", "attributes", "Repository-level settings. verify_signatures: off (default), log or enforce — verify commit signatures of the upstream for this repository"},
+		{"Ontology", "attributes", "Repository-level settings. verify_signatures: off (default), log or enforce — verify commit signatures of the upstream for this repository. consensus: off (default) or auto — on the instance that hosts this repository with no origin, merge every branch a peer pushes into this instance's agent branch as soon as it lands (a conflict is left for a human; a repo with an origin ignores it)"},
 
 		{"OntologyNode", "description", "What this topic covers"},
 		{"OntologyNode", "children", "Map of nested sub-topic keys to their definitions"},

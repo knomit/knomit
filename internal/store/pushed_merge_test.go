@@ -256,3 +256,114 @@ func TestPushedBranches_OtherFilesChanged(t *testing.T) {
 	require.Equal(t, 1, got[0].OtherFilesChanged)
 	require.NotEmpty(t, got[0].MergeBase)
 }
+
+// noFFMerge writes, on the PEER branch, a merge commit [peer tip, other]
+// whose tree is tree, signed by the peer: what a peer whose sync never
+// fast-forwards leaves after merging the host back in. The ref moves
+// directly, as receive-pack's register would leave a pushed tip.
+func (f *pushedFixture) noFFMerge(other plumbing.Hash, tree plumbing.Hash) plumbing.Hash {
+	f.t.Helper()
+	parent := f.tip(pmPeer)
+	c := &object.Commit{
+		Author:    object.Signature{Name: "peer", Email: "peer-bbbbbbbb+merge@agents.knomit.io"},
+		Committer: object.Signature{Name: "peer", Email: "peer-bbbbbbbb@agents.knomit.io"},
+		Message:   "merge: main into " + pmPeer, TreeHash: tree,
+		ParentHashes: []plumbing.Hash{parent, other},
+	}
+	h, err := storeCommit(f.svc.rh.gits, f.peer, c)
+	require.NoError(f.t, err)
+	require.NoError(f.t, f.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(pmPeer), h)))
+	require.NoError(f.t, f.svc.rh.populateCommitLog(context.Background(), pmPeer))
+	return h
+}
+
+// F08 PR B, the ping-pong fix: MergeConsensus no-ops on a peer tip that only
+// merged the host back in (every new commit a merge, the merge changing
+// nothing), and records everything else as MergePushed does — a peer's
+// authored commit even when its content is already here, and a merge-only
+// tip that DOES change something.
+//
+// SABOTAGE: dropping `skipMergeOnly: true` from MergeConsensus turns the
+// first case red (a host merge commit for a merge that brings nothing).
+func TestMergeConsensus_SkipsMergeOnlyNoChange(t *testing.T) {
+	f := newPushedFixture(t)
+	ctx := context.Background()
+	mergeC := func(tip plumbing.Hash) AgentReconcileResult {
+		t.Helper()
+		res, err := f.svc.MergeConsensus(ctx, pmPeer, pmAgent, tip)
+		require.NoError(t, err)
+		return res
+	}
+
+	// The first exchange: the peer's authored fact is merged and recorded.
+	p1 := f.onPeer("kb/p1.md", "p1")
+	require.Equal(t, ModeMerge, mergeC(p1).Mode)
+	h1 := f.tip(pmAgent)
+
+	// The peer merges the host's merge back in with a merge commit of its
+	// own (no fast-forward), tree = the host's: nothing new.
+	pm := f.noFFMerge(h1, f.commit(h1).TreeHash)
+	require.Equal(t, ModeNoop, mergeC(pm).Mode, "a merge-only, change-free peer tip is not recorded")
+	require.Equal(t, h1, f.tip(pmAgent), "the host's branch did not move")
+
+	// Again, with the host moving on in between: still nothing to record.
+	f.onHost("kb/h2.md", "h2")
+	h2 := f.tip(pmAgent)
+	pm2 := f.noFFMerge(h2, f.commit(h2).TreeHash)
+	require.Equal(t, ModeNoop, mergeC(pm2).Mode)
+	require.Equal(t, h2, f.tip(pmAgent))
+
+	// A merge-only tip that CHANGES something (an edited merge) is recorded.
+	require.NoError(t, f.svc.Branches().CreateBranch(ctx, "scratch", pmAgent))
+	scratch := plumbing.NewHash(writeMergeFact(t, f.svc, "scratch", "kb/evil.md", "evil", "evil"))
+	pm3 := f.noFFMerge(h2, f.commit(scratch).TreeHash)
+	require.Equal(t, ModeMerge, mergeC(pm3).Mode, "a merge commit that brings a change is merged")
+	f.requireHostMerge(h2, pm3)
+
+	// A peer's AUTHORED commit whose content the host already has is still
+	// recorded (MergePushed's M3 behaviour): only merge-only tips are skipped.
+	f.onHost("kb/same.md", "same")
+	peerSame := f.onPeer("kb/same.md", "same")
+	hostBefore := f.tip(pmAgent)
+	require.Equal(t, f.commit(hostBefore).TreeHash, f.commit(peerSame).TreeHash, "fixture: trees are identical")
+	require.Equal(t, ModeMerge, mergeC(peerSame).Mode, "an authored commit is recorded")
+	f.requireHostMerge(hostBefore, peerSame)
+	verifyMergeClean(t, f.svc, pmAgent)
+}
+
+// MergeConsensus refuses a conflict (no side, nothing moves) and a moved tip,
+// like MergePushed.
+func TestMergeConsensus_RefusesConflictAndMovedTip(t *testing.T) {
+	f := newPushedFixture(t)
+	ctx := context.Background()
+	peerTip := f.onPeer("kb/base.md", "peer's")
+	hostBefore := f.onHost("kb/base.md", "host's")
+
+	_, err := f.svc.MergeConsensus(ctx, pmPeer, pmAgent, peerTip)
+	var conflict *MergeConflictError
+	require.ErrorAs(t, err, &conflict)
+	require.Equal(t, []string{"kb/base.md"}, conflict.Paths)
+	require.Equal(t, hostBefore, f.tip(pmAgent), "a refused merge moves nothing")
+
+	_, err = f.svc.MergeConsensus(ctx, pmPeer, pmAgent, hostBefore)
+	require.ErrorIs(t, err, ErrBranchMoved)
+}
+
+// OntologyAt reads the ontology at a branch's tip, nil when there is none.
+func TestOntologyAt(t *testing.T) {
+	f := newPushedFixture(t)
+	ctx := context.Background()
+	got, err := f.svc.OntologyAt(ctx, pmAgent)
+	require.NoError(t, err)
+	require.Nil(t, got, "no ontology in this tree")
+	_, err = f.svc.Facts().WriteFact(ctx, pmAgent, ".knomit/ontology.yaml", "id: x\nattributes:\n  consensus: auto\n", "ont", "updated")
+	require.NoError(t, err)
+	got, err = f.svc.OntologyAt(ctx, pmAgent)
+	require.NoError(t, err)
+	require.Contains(t, string(got), "consensus: auto")
+	got, err = f.svc.OntologyAt(ctx, "main")
+	require.NoError(t, err)
+	require.Nil(t, got, "read at THAT branch's tip, not another's")
+	_, err = f.svc.OntologyAt(ctx, "no-such-branch")
+	require.ErrorIs(t, err, ErrBranchNotFound)
+}
