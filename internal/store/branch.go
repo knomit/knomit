@@ -333,6 +333,12 @@ func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch stri
 	if err != nil {
 		return fmt.Errorf("CreateBranch: resolve source %q: %w", fromBranch, err)
 	}
+	// The copied visibility below must only name derived commits: the
+	// source's commits are (indexing derives them), so this is a lookup —
+	// unless the source predates path_changes, when it derives them now.
+	if err := rh.deriveBeforeAdvance(ctx, fromHash); err != nil {
+		return fmt.Errorf("CreateBranch: %w", err)
+	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
 		return fmt.Errorf("CreateBranch: set ref: %w", err)
 	}

@@ -81,6 +81,11 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 		return "", "", err
 	}
 
+	// Derive the commit's history rows BEFORE the ref moves: a failure here
+	// leaves the branch where it was, never moved with the call failed.
+	if err := fi.rh.deriveBeforeAdvance(ctx, newCommitHash); err != nil {
+		return "", "", err
+	}
 	// Update the branch ref to point to the new commit.
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
@@ -139,6 +144,9 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 		return "", err
 	}
 
+	if err := fi.rh.deriveBeforeAdvance(ctx, newCommitHash); err != nil {
+		return "", err
+	}
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, newCommitHash)); err != nil {
 		return "", err
@@ -372,6 +380,9 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
 	}
 
+	if err := fi.rh.deriveBeforeAdvance(ctx, cHash); err != nil {
+		return plumbing.ZeroHash, nil, err
+	}
 	branchRefName := plumbing.NewBranchReferenceName(branch)
 	if err := fi.rh.gits.SetReference(plumbing.NewHashReference(branchRefName, cHash)); err != nil {
 		return plumbing.ZeroHash, nil, err

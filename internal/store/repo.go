@@ -110,9 +110,10 @@ func (s *Service) OpenRepo() error {
 	if _, err := s.rh.EnsureBranch(context.Background(), branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("OpenRepo: ensure branch %q: %w", branch, err)
 	}
-	// Backfill commit_parents for commits indexed before that table existed
-	// FIRST: populate (and the one-time path_changes pass it starts with)
-	// must see a complete parent graph.
+	// Backfill commit_parents for commits indexed before that table existed.
+	// Order no longer matters for history derivation (it reads parents from
+	// git objects); it is kept first so RevisionsBefore and the graph
+	// resolvers see a complete parent graph as early as possible.
 	if err := backfillCommitParents(context.Background(), s.rh); err != nil {
 		log.Warn().Err(err).Msg("commit_parents: backfill failed")
 	}

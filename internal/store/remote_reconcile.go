@@ -191,6 +191,9 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	localRef, err := rh.gits.Reference(refName)
 	if err != nil {
 		// The branch doesn't exist — create it at hash.
+		if err := rh.deriveBeforeAdvance(ctx, hash); err != nil {
+			return MainReconcileResult{}, advanceMove{}, err
+		}
 		if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 			return MainReconcileResult{}, advanceMove{}, fmt.Errorf("create local %s: %w", branch, err)
 		}
@@ -238,6 +241,9 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	}
 	if isLocalAncestor {
 		// Fast-forward.
+		if err := rh.deriveBeforeAdvance(ctx, hash); err != nil {
+			return MainReconcileResult{}, move, err
+		}
 		if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 			return MainReconcileResult{}, move, fmt.Errorf("fast-forward: %w", err)
 		}
@@ -256,6 +262,9 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	// MergeBase itself fails (object-store IO error).
 	move.rewindClassification = classifyMainRewind(localCommit, newCommit)
 
+	if err := rh.deriveBeforeAdvance(ctx, hash); err != nil {
+		return MainReconcileResult{}, move, err
+	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(refName, hash)); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("force-update: %w", err)
 	}
@@ -269,21 +278,6 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 		return MainReconcileResult{}, move, fmt.Errorf("notify after force-update: %w", err)
 	}
 	return MainReconcileResult{Mode: ModeRewound, NewTip: hash.String()}, move, nil
-}
-
-// purgeBranchCommits deletes every branch_commits row for the given branch.
-// Used by reconcileMain on a rewind so populateCommitLog can repopulate from
-// the new HEAD without leaving stranded rows for commits that are no longer
-// reachable.
-func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) error {
-	id, err := rh.branchID(ctx, branch)
-	if err != nil {
-		return fmt.Errorf("purgeBranchCommits: branchID: %w", err)
-	}
-	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = ?`, id); err != nil {
-		return fmt.Errorf("purgeBranchCommits: delete: %w", err)
-	}
-	return nil
 }
 
 // reconcileAgent dispatches to either the merge-based steady-state path

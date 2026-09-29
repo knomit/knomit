@@ -156,6 +156,9 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 		if err := noLeftoverResolutions(resolutions, nil); err != nil {
 			return AgentReconcileResult{}, err
 		}
+		if err := rh.deriveBeforeAdvance(ctx, srcHash); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
+		}
 		newRef := plumbing.NewHashReference(dstRefName, srcHash)
 		if err := rh.gits.SetReference(newRef); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: fast-forward ref: %w", err)
@@ -247,6 +250,9 @@ func (rh *repoHandler) mergeIntoBranchLockedResolved(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge commit: %w", err)
 	}
 
+	if err := rh.deriveBeforeAdvance(ctx, mergeHash); err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
+	}
 	newRef := plumbing.NewHashReference(dstRefName, mergeHash)
 	if err := rh.gits.SetReference(newRef); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: update dst ref: %w", err)

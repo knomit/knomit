@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestPathHistory_TipFirstIndexingNeverTruncates(t *testing.T) {
 	moveBranch(t, svc, "main", tip)
 
 	// Recording a commit that is not derived is refused, and nothing lands.
-	d := newDeriver(svc.rh)
+	d := newDeriver(svc.rh, activeTables)
 	err := svc.rh.gits.CommitLogApply(ctx, "main", []storegit.CommitLogItem{{Hash: tip, Parents: []string{parent}}},
 		storegit.CommitLogApplyOptions{Derive: d.hook([]string{tip}, nil)})
 	require.ErrorIs(t, err, errNotDerived)
@@ -299,12 +300,19 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 			}
 		}
 	}()
+	start := time.Now()
 	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+	elapsed := time.Since(start)
 	close(stop)
 	wg.Wait()
 	require.NoError(t, werr, "a concurrent writer never fails with a lock timeout")
-	t.Logf("worst concurrent write during the rebuild: %v", worst)
+	swap := time.Duration(lastSwapDuration.Load())
+	t.Logf("rebuild %v (re-deriving 2000 commits); swap transaction %v; worst concurrent write %v", elapsed, swap, worst)
 	require.Less(t, worst, 5*time.Second)
+	// The lock is held only for the swap: re-deriving 2000 commits happens
+	// before it, in short batches. A rebuild that derived inside the swap
+	// would hold it for most of the run.
+	require.Less(t, swap, elapsed/4, "the swap transaction is a small part of the rebuild")
 }
 
 // TestPathHistory_IndexedButUnderivedIsAnError: indexing guarantees every
@@ -461,7 +469,8 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if err := svc.rh.gits.CommitLogApply(ctx, "nodrv", items, storegit.CommitLogApplyOptions{}); err != nil {
+			noDerive := func(context.Context, *sql.Tx, int) error { return nil }
+			if err := svc.rh.gits.CommitLogApply(ctx, "nodrv", items, storegit.CommitLogApplyOptions{Derive: noDerive}); err != nil {
 				b.Fatal(err)
 			}
 			nodrvTip = h

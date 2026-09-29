@@ -403,6 +403,9 @@ func (rh *repoHandler) replayOntoUpstream(
 
 	// Atomic move: agent ref → new tip. Temp ref is cleaned up by the
 	// deferred removal above.
+	if err := rh.deriveBeforeAdvance(ctx, current); err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: %w", err)
+	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localRefName, current)); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: atomic move: %w", err)
 	}

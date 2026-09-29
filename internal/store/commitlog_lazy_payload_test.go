@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -41,7 +42,8 @@ func applySynthetic(t *testing.T, s *Service, branch string, hashes []string) {
 			Action: "added", CommittedAt: 1000 + int64(i),
 		}}}
 	}
-	require.NoError(t, s.rh.gits.CommitLogApply(context.Background(), branch, items, storegit.CommitLogApplyOptions{}))
+	noDerive := func(context.Context, *sql.Tx, int) error { return nil }
+	require.NoError(t, s.rh.gits.CommitLogApply(context.Background(), branch, items, storegit.CommitLogApplyOptions{Derive: noDerive}))
 }
 
 // TestPopulateCommitLog_SkipsPayloadForKnownCommits is the regression anchor

@@ -402,7 +402,10 @@ func TestPathHistory_ContinuationAfterPurgeIsHistoryChanged(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, cur)
 
-	require.NoError(t, svc.rh.purgeBranchCommits(ctx, "main"))
+	// A purge of the branch's visibility (what a rewind in progress looked
+	// like before the swap became one transaction).
+	_, err = svc.rh.db.ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = (SELECT id FROM branches WHERE name = 'main')`)
+	require.NoError(t, err)
 	_, _, err = svc.Search().PathHistory(ctx, "main", "kb/t.md", last, cur, 2)
 	require.ErrorIs(t, err, ErrHistoryChanged)
 

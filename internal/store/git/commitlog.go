@@ -82,9 +82,10 @@ type CommitLogApplyOptions struct {
 	// Before runs first inside the transaction — a purge or clear that must
 	// become visible atomically with the re-recording that follows.
 	Before func(ctx context.Context, tx *sql.Tx) error
-	// Derive runs inside the transaction for every item newly recorded on the
-	// branch, right after its rows, in item order (callers order parents
-	// first). Whatever it writes becomes visible atomically with the commit.
+	// Derive (REQUIRED) runs inside the transaction for every item newly
+	// recorded on the branch, right after its rows, in item order (callers
+	// order parents first). Whatever it writes becomes visible atomically with
+	// the commit, and an error rolls the whole transaction back.
 	Derive func(ctx context.Context, tx *sql.Tx, i int) error
 }
 
@@ -106,6 +107,11 @@ func (s *Storer) CommitLogApply(ctx context.Context, branchName string, items []
 	}
 	if branchName == "" {
 		return fmt.Errorf("CommitLogApply: branchName is empty")
+	}
+	if opts.Derive == nil {
+		// Recording a commit without the hook would make it visible without
+		// its derived history (see internal/store/path_changes.go).
+		return fmt.Errorf("CommitLogApply: Derive is required")
 	}
 	ctx, tx, own, err := BeginTxIfNeeded(ctx, s.db)
 	if err != nil {
@@ -155,10 +161,8 @@ func (s *Storer) CommitLogApply(ctx context.Context, branchName string, items []
 				return fmt.Errorf("CommitLogApply: insert commit_parents: %w", err)
 			}
 		}
-		if opts.Derive != nil {
-			if err := opts.Derive(ctx, tx, i); err != nil {
-				return fmt.Errorf("CommitLogApply: derive %s: %w", it.Hash, err)
-			}
+		if err := opts.Derive(ctx, tx, i); err != nil {
+			return fmt.Errorf("CommitLogApply: derive %s: %w", it.Hash, err)
 		}
 	}
 	if own {
