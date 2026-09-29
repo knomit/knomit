@@ -68,6 +68,68 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 		mergeOpts{srcTip: srcTip, record: true, side: side})
 }
 
+// MergeConsensus is MergePushed as the consensus merger (F08, `consensus:
+// auto`) calls it: dst's lock, StrategyRefuse with no side (a conflict is
+// refused and left for a human), and a host-signed merge commit [dst, srcTip]
+// — plus ONE more no-op than MergePushed: when the merge would leave dst's
+// tree unchanged AND every commit srcTip brings is a merge commit. That is a
+// peer that only merged this host's history back into its branch, and
+// recording it would hand the peer a new host commit to merge back on its next
+// round: a merge commit per round, forever, between two idle instances.
+//
+// A peer's authored commit is never skipped this way, even when its content
+// is already here: it is recorded like MergePushed records it.
+func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip plumbing.Hash) (AgentReconcileResult, error) {
+	if srcTip.IsZero() {
+		return AgentReconcileResult{}, fmt.Errorf("MergeConsensus: the tip of %s is required", src)
+	}
+	rh := s.rh
+	unlock := rh.lockBranch(dst)
+	defer unlock()
+	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, StrategyRefuse, nil,
+		mergeOpts{srcTip: srcTip, record: true, skipMergeOnly: true})
+}
+
+// onlyMergeCommits reports whether src brings at least one commit dst lacks
+// and every such commit has two or more parents. A src already in dst brings
+// none and answers false: that case is the reachable-tip no-op's, and this
+// rule must not stand in for it (each is pinned by its own test).
+func (rh *repoHandler) onlyMergeCommits(src, dst plumbing.Hash) (bool, error) {
+	inDst := map[plumbing.Hash]bool{}
+	if err := walkHistory(rh.gits, dst, nil, func(c *object.Commit) { inDst[c.Hash] = true }); err != nil {
+		return false, err
+	}
+	if inDst[src] {
+		return false, nil
+	}
+	only, n := true, 0
+	if err := walkHistory(rh.gits, src, inDst, func(c *object.Commit) {
+		n++
+		if len(c.ParentHashes) < 2 {
+			only = false
+		}
+	}); err != nil {
+		return false, err
+	}
+	return only && n > 0, nil
+}
+
+// OntologyAt returns the ontology file at branch's tip, trying every ontology
+// path newest first: (nil, nil) when that tree has none. The consensus merger
+// reads the repo's settings where the repo's owner decides them, the tip of
+// the consensus branch.
+func (s *Service) OntologyAt(ctx context.Context, branch string) ([]byte, error) {
+	h, err := s.rh.resolveRef(ctx, branch)
+	if err != nil {
+		return nil, err
+	}
+	c, err := object.GetCommit(s.rh.gits, h)
+	if err != nil {
+		return nil, fmt.Errorf("OntologyAt %s: %w", branch, err)
+	}
+	return treeOntology(c)
+}
+
 // PushedBranchInfo is what the pushed-branches list shows for one branch.
 type PushedBranchInfo struct {
 	Name      string

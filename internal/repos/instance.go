@@ -127,6 +127,11 @@ type RepoInstance struct {
 	// build() and never reassigned, so ri.onCommit reads it without a lock;
 	// its goroutine starts from activate() and stops in shutdown().
 	triggers *triggerDispatcher
+	// consensus is the F08 consensus merger (`consensus: auto`), nil when this
+	// repo can have none: a read-only server, or a subscription with no agent
+	// branch. Set once in build() and never reassigned, like triggers; its
+	// goroutine starts from activate() and stops in shutdown().
+	consensus *consensusMerger
 	// syncWake is the push wake (F07 PR 4): a 1-slot channel a `do: push`
 	// fire or knomit.push() sends on without blocking (wakeSync), and the
 	// sync loop — runReconcileLoop, or runLocalReconcile with no origin —
@@ -668,6 +673,11 @@ func (ri *RepoInstance) shutdown() {
 	// Acquire, which closeFn's drain would otherwise wait on.
 	if ri.triggers != nil {
 		ri.triggers.stop()
+	}
+	// The consensus merger holds an Acquire for each run, like the
+	// dispatcher: stop it before the store closes.
+	if ri.consensus != nil {
+		ri.consensus.stop()
 	}
 	if ri.hub != nil {
 		ri.hub.Shutdown()

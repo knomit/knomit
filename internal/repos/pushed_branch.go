@@ -7,18 +7,28 @@ import (
 )
 
 // IsPushedBranch reports whether branch is one a PEER pushed to this host
-// (F11) and may therefore be merged into this instance's agent branch from
-// the web UI: an `agent/*` branch that is neither this instance's agent
-// branch, nor the repo's upstream, nor this instance's own branch from before
-// a hostname change (same `-<fp8>` suffix as the current agent branch).
+// (F11) and may therefore be merged into this instance's agent branch: an
+// `agent/*` branch that is neither this instance's agent branch, nor the
+// repo's upstream, nor this instance's own branch from before a hostname
+// change (same `-<fp8>` suffix as the current agent branch).
 //
 // It classifies by NAME, which kb/invariants/store/branch-roles warns
-// against for roles that reconcile acts on destructively. Nothing automatic
-// acts on this answer: it only decides which branches the list shows and a
-// human-started, conflict-refusing merge into this instance's own branch may
-// take as its source. A subscription has no agent branch and no pushed
-// branches.
+// against for roles that reconcile acts on destructively. Two things act on
+// this answer, and neither is destructive: a human-started, conflict-refusing
+// merge from the web UI, and — with `consensus: auto` on the host's consensus
+// branch — the consensus merger (consensus.go), which makes the same
+// conflict-refusing merge into this instance's own branch without a human.
+// Neither ever writes the pushed branch. A subscription has no agent branch
+// and no pushed branches.
 func (ri *RepoInstance) IsPushedBranch(branch string) bool {
+	upstream := ""
+	_ = ri.WithRead(func(svc *store.Service) { upstream = svc.UpstreamBranch() })
+	return ri.isPushedBranch(branch, upstream)
+}
+
+// isPushedBranch is IsPushedBranch with the upstream already read, for a
+// caller that holds the store (the consensus merger lists every branch).
+func (ri *RepoInstance) isPushedBranch(branch, upstream string) bool {
 	if ri.subscribed || ri.agentBranch == "" || branch == ri.agentBranch {
 		return false
 	}
@@ -28,8 +38,6 @@ func (ri *RepoInstance) IsPushedBranch(branch string) bool {
 	if own := fp8Suffix(ri.agentBranch); own != "" && fp8Suffix(branch) == own {
 		return false
 	}
-	upstream := ""
-	_ = ri.WithRead(func(svc *store.Service) { upstream = svc.UpstreamBranch() })
 	return branch != upstream
 }
 

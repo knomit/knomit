@@ -405,6 +405,18 @@ const (
 // comes from the fleet repository's member records, never from here.
 const AttrVerifySignatures = "verify_signatures"
 
+// AttrConsensus is the repository-level attribute (F08) that says how pushed
+// peer branches reach this repository's consensus branch on the instance that
+// OWNS it (no origin). "auto": every branch a peer pushes here is merged into
+// this instance's agent branch as soon as it lands, and the consensus branch
+// follows. "off" (and absent): only a human's merge does it. A repo WITH an
+// origin ignores it — the origin owns the consensus branch.
+//
+// The value set is closed today, like every key here, but its reader
+// (ReadConsensus) reads any other value as off: a later value such as a
+// recipe reference is then ignored by this binary rather than acted on.
+const AttrConsensus = "consensus"
+
 // attributeRegistry is the ONLY place an attribute key is declared.
 //
 // A key missing from this map is NOT an error: it may have been written by a
@@ -443,6 +455,17 @@ var attributeRegistry = map[string]attributeSpec{
 			return ok && (s == "off" || s == "log" || s == "enforce")
 		},
 		absent: "off",
+		scope:  scopeRoot,
+	},
+	// Exactly "off" or "auto"; "off" behaves as absent. A yaml bool is
+	// rejected for the same reason as learn_dedup's.
+	AttrConsensus: {
+		accepts: `"off" or "auto"`,
+		valid: func(v any) bool {
+			s, ok := v.(string)
+			return ok && (s == ConsensusOff || s == ConsensusAuto)
+		},
+		absent: ConsensusOff,
 		scope:  scopeRoot,
 	},
 }
