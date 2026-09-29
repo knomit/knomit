@@ -398,7 +398,28 @@ func (h *scriptHost) learn(args []any) (any, error) {
 		}
 	}
 	opts := objectArg(args, 1)
-	return h.call("learn", map[string]any{"facts": facts, "moment_name": h.momentName(opts)})
+	call := map[string]any{"facts": facts, "moment_name": h.momentName(opts)}
+	// F04 (F08 PR A): opts.retract makes the call a move — the facts and the
+	// deletions in one commit, all-or-nothing under the branch lock. Each path
+	// passes the same private refusal as update/retract, so a script cannot
+	// delete under .knomit/ by this route either. knomit.learn([], {retract})
+	// is a batch retraction.
+	if raw, has := opts["retract"]; has && raw != nil {
+		list, ok := raw.([]any)
+		if !ok {
+			return nil, errors.New("knomit.learn: opts.retract must be a list of fact paths")
+		}
+		retract := make([]any, 0, len(list))
+		for i, v := range list {
+			p, err := h.privateRefused("learn", v)
+			if err != nil {
+				return nil, fmt.Errorf("knomit.learn: retract %d: %w", i, err)
+			}
+			retract = append(retract, p)
+		}
+		call["retract"] = retract
+	}
+	return h.call("learn", call)
 }
 
 func (h *scriptHost) update(args []any) (any, error) {
@@ -432,6 +453,16 @@ func (h *scriptHost) factPath(tool string, args []any) (string, error) {
 	file, ok := stringArg(args, 0)
 	if !ok || file == "" {
 		return "", fmt.Errorf("knomit.%s(path, opts?): path must be a string", tool)
+	}
+	return h.privateRefused(tool, file)
+}
+
+// privateRefused is factPath's rule for one path value: a non-empty string
+// whose normalised form is not under a private segment.
+func (h *scriptHost) privateRefused(tool string, v any) (string, error) {
+	file, ok := v.(string)
+	if !ok || file == "" {
+		return "", fmt.Errorf("knomit.%s: a path must be a non-empty string, got %v", tool, v)
 	}
 	root := h.d.ri.ontologyRoot
 	if root == "" {
