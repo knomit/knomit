@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
 )
 
@@ -223,7 +224,21 @@ func (rh *repoHandler) replayCommit(
 	// callers can pass the strategy they actually mean. (See replayCommit
 	// doc comment.)
 	var mergeStrategy ConflictStrategy
+	var resolutions map[string]Resolution
+	var trailers []string
 	switch strategy {
+	case StrategyMergeFacts, StrategyMergeFactsUpstream:
+		// The fact-level merge, with THIS framing's sides: the consensus
+		// branch is ontoCommit (dst), and a path it cannot merge keeps
+		// today's replay rule, the agent's commit (src) wins. Its lines go on
+		// the replayed commit's own message — a replay writes no merge commit.
+		rule, _ := mergeFactsRule(strategy)
+		res, lines, err := rh.factMergeResolutions(ctx, baseCommit, orig, ontoCommit,
+			factMerge{rule: rule, upstream: fact.MergeDst, fallback: StrategyRemoteWins})
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("replayCommit: merge facts: %w", err)
+		}
+		mergeStrategy, resolutions, trailers = StrategyRefuse, res, lines
 	case StrategyLocalWins:
 		mergeStrategy = StrategyRemoteWins
 	case StrategyRemoteWins:
@@ -237,7 +252,7 @@ func (rh *repoHandler) replayCommit(
 	// Three-way merge: base = baseCommit (orig's parent or empty),
 	//                  src  = orig (what orig adds),
 	//                  dst  = ontoCommit (what we're replaying on top of).
-	mergedTreeHash, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy, nil)
+	mergedTreeHash, walkTrailers, err := rh.mergeTreesWithStrategy(ctx, baseCommit, orig, ontoCommit, mergeStrategy, resolutions)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("replayCommit: three-way merge: %w", err)
 	}
@@ -249,7 +264,7 @@ func (rh *repoHandler) replayCommit(
 			Email: "knomit@local",
 			When:  timeNow(),
 		},
-		Message:      orig.Message,
+		Message:      appendTrailerLines(orig.Message, append(trailers, walkTrailers...)),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{ontoHash},
 	}
