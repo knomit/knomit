@@ -92,7 +92,7 @@ func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order [
 				return fmt.Errorf("derived mark: %w", err)
 			}
 			if marked == 0 {
-				if prepared[j], err = d.prepare(c, items[j].Entries); err != nil {
+				if prepared[j], err = d.prepare(ctx, c, items[j].Entries); err != nil {
 					return err
 				}
 			}

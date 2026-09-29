@@ -194,7 +194,7 @@ func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []p
 		prepared := make([]*preparedCommit, len(chunk))
 		for j, c := range chunk {
 			var err error
-			if prepared[j], err = d.prepare(c, nil); err != nil {
+			if prepared[j], err = d.prepare(ctx, c, nil); err != nil {
 				return 0, err
 			}
 		}
@@ -393,10 +393,15 @@ type preparedPath struct {
 }
 
 // prepare reads from git everything apply needs for c: which .md paths it
-// changed against its first parent (entries, when the caller already
-// computed them for commit_log; else diffed here), each path's blob at c and
-// at every parent, and the diff an entry stores. Git reads only; no SQL.
-func (d *deriver) prepare(c *object.Commit, entries []storegit.CommitLogEntry) (*preparedCommit, error) {
+// changed against its first parent, each path's blob at c and at every
+// parent, and the diff an entry stores. Nothing is written.
+//
+// The changed paths are the commit's tree diff against its first parent:
+// entries when the caller already computed it; else the commit_log rows that
+// recorded that same diff when the commit was indexed (a diff of a large tree
+// costs ~8 ms, and an upgrade derives every commit); else — a commit never
+// indexed, such as a legacy gap, or one with no changes — the diff itself.
+func (d *deriver) prepare(ctx context.Context, c *object.Commit, entries []storegit.CommitLogEntry) (*preparedCommit, error) {
 	pc := &preparedCommit{c: c, parentAbsent: make([]bool, len(c.ParentHashes))}
 	toTree, err := d.tree(c.TreeHash)
 	if err != nil {
@@ -413,6 +418,24 @@ func (d *deriver) prepare(c *object.Commit, entries []storegit.CommitLogEntry) (
 			return nil, err
 		}
 		if parentTrees[i], err = d.tree(pcm.TreeHash); err != nil {
+			return nil, err
+		}
+	}
+	if entries == nil {
+		rows, err := conn(ctx, d.rh.db).QueryContext(ctx, `SELECT path, action FROM commit_log WHERE commit_hash = ?`, c.Hash.String())
+		if err != nil {
+			return nil, fmt.Errorf("path changes: recorded diff: %w", err)
+		}
+		for rows.Next() {
+			var e storegit.CommitLogEntry
+			if err := rows.Scan(&e.Path, &e.Action); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			entries = append(entries, e)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
 			return nil, err
 		}
 	}
