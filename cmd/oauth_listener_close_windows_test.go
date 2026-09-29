@@ -22,8 +22,9 @@ import (
 //
 // A refused dial is the trigger: DialLocal connects, reads the owner, refuses
 // it and hangs up. On v0.6.2 this path hung about once in 35 rounds
-// (measured), so 300 rounds catch a regression all but certainly in a few
-// seconds. Close is bounded so a regression fails here, not as a timeout.
+// (measured), so 300 rounds catch a regression all but certainly. A pass takes
+// a few seconds; Close is bounded, so a hang fails at that 10 s bound rather
+// than at the package timeout.
 func TestLocalListener_CloseAfterRefusedDialDoesNotHang(t *testing.T) {
 	const rounds = 300
 	base := oauthLocalListenerPath(t)
