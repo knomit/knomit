@@ -431,9 +431,9 @@ func TestConsensus_QuiescentAfterPeerMergeCommit(t *testing.T) {
 	before := h.commits(t)
 	attempts := h.stats().Attempts
 	for i := 0; i < K; i++ {
-		h.advance(t)
 		p.round(t)
 		h.settle(t)
+		h.advance(t)
 	}
 	after := h.commits(t)
 	for c := range after {
