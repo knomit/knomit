@@ -420,6 +420,16 @@ type runState struct {
 	// prepared — whatever `if` will say — written in phase C with the
 	// watermarks. len(dueMarks) is the run's due evaluation count.
 	dueMarks []store.DueMark
+	// dueRetry is the due (trigger, path) evaluations phase B DROPPED for
+	// capacity — outcome rate-limited (the script cap) or busy (a `do: run`
+	// recipe at its `concurrent` limit). Their marks are NOT buffered, so the
+	// next sweep (the next tick or write) finds them unmarked and fires them
+	// again (F08 M3). A due fire is a STATE re-derived every sweep, so this
+	// is a re-evaluation, not a replay; learn/update/retract fires stay
+	// dropped for good. A script error or timeout keeps its mark: it is
+	// usually deterministic and would otherwise re-fire every tick for the
+	// life of the fact.
+	dueRetry map[store.DueKey]bool
 	// duePaths is the number of distinct due paths evaluated (into the run
 	// row's paths next to the diff rows).
 	duePaths int
@@ -576,7 +586,11 @@ func (d *triggerDispatcher) buffer(rs *runState, run store.TriggerRun) {
 		delete(p.del, name)
 	}
 	for _, m := range rs.dueMarks {
-		p.due[store.DueKey{Trigger: m.Trigger, Path: m.Path}] = m
+		k := store.DueKey{Trigger: m.Trigger, Path: m.Path}
+		if rs.dueRetry[k] {
+			continue // dropped for capacity: unmarked, retried next sweep (M3)
+		}
+		p.due[k] = m
 	}
 	for _, name := range rs.del {
 		p.del[name] = true
@@ -1360,6 +1374,13 @@ func (d *triggerDispatcher) phaseB(ctx context.Context, rs *runState) (rows []st
 			}
 			d.emit(p, nil)
 		}
+		if p.episode == fact.TriggerOnDue &&
+			(outcome == store.TriggerOutcomeRateLimited || outcome == store.TriggerOutcomeBusy) {
+			if rs.dueRetry == nil {
+				rs.dueRetry = map[store.DueKey]bool{}
+			}
+			rs.dueRetry[store.DueKey{Trigger: p.trig.Name, Path: p.repoPath}] = true
+		}
 		elapsed := time.Since(t0) - hostMS
 		evaluated++
 		if outcome == store.TriggerOutcomeEmitted || outcome == store.TriggerOutcomeUnparseable || outcome == store.TriggerOutcomeRan ||
@@ -1565,6 +1586,7 @@ type TriggerView struct {
 	On        []string         `json:"on"`
 	Do        string           `json:"do"`
 	Script    string           `json:"script,omitempty"`
+	JS        string           `json:"js,omitempty"`
 	Recipe    string           `json:"recipe,omitempty"`
 	State     string           `json:"state"`
 	Error     string           `json:"error,omitempty"`
@@ -1620,7 +1642,7 @@ func (ri *RepoInstance) TriggerReport(ctx context.Context, logN int) (TriggerRep
 		active[ct.Name] = ct
 	}
 	for _, st := range set.States {
-		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, Recipe: st.Recipe,
+		v := TriggerView{Name: st.Name, Node: st.Node, Match: st.Match, On: st.On, Do: st.Do, Script: st.Script, JS: st.JS, Recipe: st.Recipe,
 			State: st.State, Error: st.Error}
 		if v.On == nil {
 			v.On = []string{}

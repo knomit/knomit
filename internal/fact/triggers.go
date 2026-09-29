@@ -1,6 +1,8 @@
 package fact
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -96,8 +98,9 @@ var triggerKeys = []SchemaField{
 	{"Trigger", "match", "Path pattern relative to the ontology root, starting with this topic's path: * one segment, ** any depth, ? one character; {agent}, {host} and {fp8} are this instance's. Absent means everything under the topic. Never a dot path."},
 	{"Trigger", "on", "learn, update, retract, due — a single value or a list. due fires once per trigger when a matching fact's expires has passed (facts live at the head only); changing the fact's expires re-arms it."},
 	{"Trigger", "if", "Optional JavaScript condition over fact, agent and change; empty means always"},
-	{"Trigger", "do", "The action: emit (log line and SSE event); script (runs .knomit/triggers/<script>.js from the agent branch's head in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit, push); or push (asks this machine's sync loop for a round now instead of at its interval: a 1 s countdown from the first fire batches a burst into one fetch, merge and push of this machine's own branch; fire log only, outcome kicked); or run (starts the recipe named by `recipe` on this machine, without waiting: outcome started with a run id, and the recipe's result is a second fire-log row with the same id)."},
-	{"Trigger", "script", "For do: script — the name (kebab-case) of .knomit/triggers/<name>.js. Its writes are this machine's commits, stamped Knomit-Trace / Knomit-Cause / Knomit-Trigger; it may not write under .knomit/."},
+	{"Trigger", "do", "The action: emit (log line and SSE event); script (runs the inline `js` code, or .knomit/triggers/<script>.js from the agent branch's head, in the sandbox, with the knomit host API: query, explain, learn, update, retract, emit, push, run); or push (asks this machine's sync loop for a round now instead of at its interval: a 1 s countdown from the first fire batches a burst into one fetch, merge and push of this machine's own branch; fire log only, outcome kicked); or run (starts the recipe named by `recipe` on this machine, without waiting: outcome started with a run id, and the recipe's result is a second fire-log row with the same id)."},
+	{"Trigger", "script", "For do: script — the name (kebab-case) of .knomit/triggers/<name>.js. Its writes are this machine's commits, stamped Knomit-Trace / Knomit-Cause / Knomit-Trigger; it may not write under .knomit/. Exactly one of script and js."},
+	{"Trigger", "js", "For do: script — the script's code INLINE (a YAML block scalar `js: |` for several lines), instead of a file: same sandbox, host API, loop guard and rate cap. Compiled with the ontology and cached by its source hash; code that does not compile makes the trigger invalid. Exactly one of script and js."},
 	{"Trigger", "recipe", "For do: run — the name (kebab-case) of the recipe: .knomit/recipes/<name>.js at the tip of the repo's main branch wins, else <home>/recipes/<name>.js on this machine, else the fire is an unbound no-op. A recipe may run programs (exec)."},
 }
 
@@ -112,6 +115,9 @@ type TriggerSpec struct {
 	Do     string
 	Script string
 	Recipe string
+	// JS is inline `do: script` code (F08, ruling R9), mutually exclusive
+	// with Script.
+	JS string
 
 	Raw     map[string]any
 	problem string
@@ -183,7 +189,7 @@ func decodeTriggerSpec(item *yaml.Node) TriggerSpec {
 		return true
 	}
 	if !str("name", &s.Name) || !str("match", &s.Match) || !str("if", &s.If) ||
-		!str("do", &s.Do) || !str("script", &s.Script) || !str("recipe", &s.Recipe) {
+		!str("do", &s.Do) || !str("script", &s.Script) || !str("recipe", &s.Recipe) || !str("js", &s.JS) {
 		return s
 	}
 	switch v := raw["on"].(type) {
@@ -275,10 +281,20 @@ type CompiledTrigger struct {
 	// TriggerRecipePath(Recipe) at the tip of main, else
 	// <home>/recipes/<Recipe>.js. Resolved per fire by the dispatcher.
 	Recipe string
+	// JS is the inline `do: script` source (F08, R9); empty for a file
+	// script. JSKey is "js:" + the first 16 hex of its sha256 — the
+	// dispatcher's staleness key for the program, standing where a file
+	// script's blob stands.
+	JS    string
+	JSKey string
 
 	glob   *glob
 	ifProg *goja.Program
+	jsProg *goja.Program
 }
+
+// JSProgram is the compiled inline script (nil for a file script).
+func (t *CompiledTrigger) JSProgram() *goja.Program { return t.jsProg }
 
 // Matches reports whether a fact path (relative to the ontology root) is under
 // this trigger. It allocates nothing.
@@ -307,6 +323,8 @@ type TriggerState struct {
 	Script string
 	// Recipe is the `recipe:` name as written (for the endpoint).
 	Recipe string
+	// JS is the inline `js:` code as written (for the endpoint).
+	JS string
 }
 
 // FactGlobal is the `fact` global a trigger's `if` sees: the same map the
@@ -391,7 +409,7 @@ func CompileTriggers(o *Ontology, id TriggerIdentity, blob string) *TriggerSet {
 	for i, d := range all {
 		st := TriggerState{Name: d.spec.Name, Node: d.node, Line: d.spec.line,
 			Match: d.spec.Match, On: append([]string(nil), d.spec.On...), Do: d.spec.Do, Script: d.spec.Script,
-			Recipe: d.spec.Recipe}
+			Recipe: d.spec.Recipe, JS: d.spec.JS}
 		if d.spec.Name != "" {
 			set.Declared[d.spec.Name] = true
 			st.Key = d.spec.Name + "@" + blob
@@ -447,8 +465,15 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 	if !knownTriggerDo[s.Do] {
 		return nil, "", fmt.Errorf("unknown do value %q (known: emit, script, push, run)", s.Do)
 	}
-	if s.Do == TriggerDoScript && s.Script == "" {
-		return nil, "", fmt.Errorf("do: script needs a script name")
+	hasJS := strings.TrimSpace(s.JS) != ""
+	if hasJS && s.Do != TriggerDoScript {
+		return nil, "", fmt.Errorf("js is only for do: script (this trigger is do: %s)", s.Do)
+	}
+	if s.Do == TriggerDoScript && s.Script != "" && hasJS {
+		return nil, "", fmt.Errorf("js and script are mutually exclusive: give the code inline or name the file, not both")
+	}
+	if s.Do == TriggerDoScript && s.Script == "" && !hasJS {
+		return nil, "", fmt.Errorf("do: script needs script (a file name) or js (inline code)")
 	}
 	// The script name becomes a path (.knomit/triggers/<name>.js): the same
 	// kebab-case rule as the trigger name keeps it one file directly under
@@ -488,6 +513,13 @@ func compileTrigger(node string, s TriggerSpec, id TriggerIdentity) (*CompiledTr
 			return nil, "", fmt.Errorf("if does not compile: %w", err)
 		}
 		ct.ifProg = prog
+	}
+	if hasJS {
+		prog, key, err := compileInlineJS(s.Name, s.JS)
+		if err != nil {
+			return nil, "", fmt.Errorf("js does not compile: %w", err)
+		}
+		ct.JS, ct.JSKey, ct.jsProg = s.JS, key, prog
 	}
 	// Valid. Is it something this version acts on?
 	activeDoMu.RLock()
@@ -643,4 +675,53 @@ func (c *TriggerCache) Get(blob string, data []byte, id TriggerIdentity) (*Trigg
 	c.compiles++
 	c.set, c.id = CompileTriggers(o, id, blob), id
 	return c.set, nil
+}
+
+// inlineJS is the process-wide cache of compiled inline trigger scripts,
+// keyed by (trigger name, sha256 of the source) — ruling R9's "cached by
+// source hash". The TriggerSet is recompiled whenever the ontology BLOB
+// changes, which is every edit anywhere in the file; this cache is what keeps
+// an edit to another topic from recompiling a trigger whose `js` did not
+// change. The name is in the key only because it is in the program's name
+// (stack traces say "script <trigger>:js"). A *goja.Program is immutable and
+// runs in any number of runtimes. Bounded: past inlineJSCap entries the map
+// is dropped and refilled, which costs recompiles, never correctness.
+var inlineJS = struct {
+	sync.Mutex
+	progs    map[string]*goja.Program
+	compiles int
+}{progs: map[string]*goja.Program{}}
+
+const inlineJSCap = 4096
+
+// compileInlineJS returns the compiled program of trigger name's inline
+// source and its staleness key ("js:" + 16 hex of sha256(src)).
+func compileInlineJS(name, src string) (*goja.Program, string, error) {
+	sum := sha256.Sum256([]byte(src))
+	hash := hex.EncodeToString(sum[:])
+	key := "js:" + hash[:16]
+	cacheKey := name + "\x00" + hash
+	inlineJS.Lock()
+	defer inlineJS.Unlock()
+	if p, ok := inlineJS.progs[cacheKey]; ok {
+		return p, key, nil
+	}
+	inlineJS.compiles++
+	prog, err := CompileScript(name+":js", src)
+	if err != nil {
+		return nil, key, err
+	}
+	if len(inlineJS.progs) >= inlineJSCap {
+		inlineJS.progs = map[string]*goja.Program{}
+	}
+	inlineJS.progs[cacheKey] = prog
+	return prog, key, nil
+}
+
+// InlineJSCompilesForTest is how many inline trigger scripts this process has
+// compiled (a cache miss each). EXISTS ONLY for tests.
+func InlineJSCompilesForTest() int {
+	inlineJS.Lock()
+	defer inlineJS.Unlock()
+	return inlineJS.compiles
 }

@@ -1289,6 +1289,10 @@ paths:
             until a version activates it — no back-fill).
           * `script`: for `do: script`, the script name: the file
             `.knomit/triggers/<script>.js` at the head of the agent branch.
+          * `js`: for `do: script`, the inline code instead of a file
+            (exactly one of `script` and `js`). It is compiled with the
+            ontology, so code that does not compile makes the trigger
+            `invalid` (never a per-fire `script-error`).
           * `recipe`: for `do: run`, the recipe name (see `do: run` below).
           * `watermark`: the last agent-branch head this trigger fully
             processed. First appearance sets it to the head of that advance,
@@ -3842,6 +3846,7 @@ components:
         on:        { type: array, items: { type: string } }
         do:        { type: string, enum: [emit, script, push, run] }
         script:    { type: string, description: "For do: script — the name of .knomit/triggers/<script>.js." }
+        js:        { type: string, description: "For do: script — the inline code as written (exclusive with script); compiled with the ontology and cached by its source hash. Code that does not compile makes the trigger invalid." }
         recipe:    { type: string, description: "For do: run — the recipe name: .knomit/recipes/<recipe>.js at main's tip, else <home>/recipes/<recipe>.js." }
         state:     { type: string, enum: [active, invalid, frozen, unsupported] }
         error:     { type: string, description: "The problem (invalid/frozen; for do: script also a missing or uncompilable script) or the reason (unsupported), verbatim." }

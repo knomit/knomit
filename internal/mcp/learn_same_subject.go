@@ -342,6 +342,7 @@ func checkSameSubjectCollisions(
 	touched map[int]bool,
 	vecs [][]float32,
 	emb store.BatchEmbedder,
+	retracting map[string]bool,
 ) error {
 	// distinct_from is validated even when nothing would have been refused: a
 	// caller naming a path that does not exist has checked nothing, and
@@ -458,6 +459,10 @@ func checkSameSubjectCollisions(
 			// the colliding path to refs — so it needs at least as much
 			// visibility as distinct_from, or the telemetry under-reports.
 			switch {
+			case retracting[strings.ToLower(c.Path)]:
+				// F04: this call retracts the candidate in the same commit, so
+				// the subject it would collide with is going away.
+				logBypass(i, c, th, modelID, "learn: same-subject candidate skipped, retracted in the same call")
 			case namedIn(inputs[i].DistinctFrom, c.Path):
 				logBypass(i, c, th, modelID, "learn: same-subject candidate bypassed by distinct_from")
 			case citedIn(f.Refs, c.Path):
