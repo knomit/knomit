@@ -583,12 +583,11 @@ func TestSampleRecipe_ArgvHasPathNotBody(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		fake += ".exe"
 	}
-	exe := helperExe(t)
-	if err := os.Link(exe, fake); err != nil {
-		data, rerr := os.ReadFile(exe)
-		require.NoError(t, rerr)
-		require.NoError(t, os.WriteFile(fake, data, 0o755))
-	}
+	// A COPY, never a hard link: on Windows a link to the running test binary
+	// shares its lock, and TempDir's cleanup cannot delete it.
+	data, err := os.ReadFile(helperExe(t))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(fake, data, 0o755))
 	dir := t.TempDir()
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv(recipeHelperEnv, dir)
