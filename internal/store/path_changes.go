@@ -283,10 +283,15 @@ func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, bool, e
 // served tables — called BEFORE a ref moves to hash, so a derivation failure
 // leaves the ref where it was. Missing objects never fail it (they become a
 // boundary or content_unavailable); only other read errors do.
+//
+// Caller cancellation is dropped, as in notifyCommit: a write that has built
+// its commit completes (fact_write_cancel_test.go); honouring cancellation
+// here would fail it for no reason the store can act on.
 func (rh *repoHandler) deriveBeforeAdvance(ctx context.Context, hash plumbing.Hash) error {
 	if rh.repo == nil || !rh.gits.CommitLogAvailable() {
 		return nil
 	}
+	ctx = context.WithoutCancel(ctx)
 	_, err := rh.deriveClosure(ctx, newDeriver(rh, activeTables), []plumbing.Hash{hash})
 	return err
 }
