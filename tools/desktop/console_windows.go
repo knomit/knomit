@@ -15,7 +15,7 @@ import (
 const attachParentProcess = ^uintptr(0)
 
 // procAttachConsole is kernel32!AttachConsole, reached through a lazy proc
-// because golang.org/x/sys/windows v0.46.0 has no wrapper for it (it has
+// because golang.org/x/sys/windows v0.48.0 has no wrapper for it (it has
 // SetStdHandle and the STD_* handle constants, but nothing that attaches a
 // console). Resolved lazily, so the DLL is only touched on the path that needs it.
 var (

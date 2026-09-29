@@ -12,7 +12,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// ImpersonateNamedPipeClient is not in golang.org/x/sys/windows v0.46, so it
+// ImpersonateNamedPipeClient is not in golang.org/x/sys/windows v0.48, so it
 // is resolved by hand. Everything else this file needs (the pid call,
 // OpenThreadToken, RevertToSelf) is there.
 var procImpersonateNamedPipeClient = windows.NewLazySystemDLL("advapi32.dll").
