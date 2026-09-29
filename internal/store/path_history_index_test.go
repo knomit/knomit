@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/require"
 
 	storegit "knomit/internal/store/git"
@@ -32,14 +33,12 @@ func TestPathHistory_TipFirstIndexingNeverTruncates(t *testing.T) {
 
 	// (2) The hook, offered the tip first (the round-2 shape), refuses.
 	d := newDeriver(svc.rh)
-	sent := false
-	err := svc.rh.gits.CommitLogSyncWith(ctx, "main", func() (string, storegit.CommitLogPayload, error) {
-		if sent {
-			return "", nil, nil
-		}
-		sent = true
-		return tip, func() ([]string, []storegit.CommitLogEntry, error) { return []string{parent}, nil, nil }, nil
-	}, storegit.CommitLogSyncOptions{Derive: d.derive})
+	tc, err := svc.rh.repo.CommitObject(plumbing.NewHash(tip))
+	require.NoError(t, err)
+	pc, err := d.prepare(tc, []string{p})
+	require.NoError(t, err)
+	err = svc.rh.gits.CommitLogApply(ctx, "main", []storegit.CommitLogItem{{Hash: tip, Parents: []string{parent}}},
+		storegit.CommitLogApplyOptions{Derive: d.hook([]*preparedCommit{pc})})
 	require.ErrorIs(t, err, errParentUnderived)
 	var marked int
 	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, tip).Scan(&marked))
@@ -137,7 +136,7 @@ func TestPathHistory_UnbackfilledDatabaseDerivesFullHistory(t *testing.T) {
 	}
 	for _, stmt := range []string{
 		`DELETE FROM commit_parents`, `DELETE FROM meta WHERE key = 'commit_parents_backfilled'`,
-		`DELETE FROM path_changes`, `DELETE FROM path_change_links`, `DELETE FROM commit_fp`, `DELETE FROM commit_fp_up`,
+		`DELETE FROM path_changes`, `DELETE FROM path_change_links`, `DELETE FROM commit_fp`,
 	} {
 		_, err := svc.rh.db.Exec(stmt)
 		require.NoError(t, err)
@@ -274,6 +273,39 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 			if _, err := svc.Search().LiveRevision(ctx, "main", p, tip); err != nil {
 				b.Fatal(err)
 			}
+		}
+	})
+	// The same append through dev's indexing path (CommitLogSync, no
+	// derivation) on its own branch, for the per-write overhead comparison.
+	require.NoError(b, svc.Branches().CreateBranch(ctx, "nodrv", "main"))
+	nodrvTip := tip
+	b.Run("AppendOneCommitWithoutDerive", func(b *testing.B) {
+		for i := 0; b.Loop(); i++ {
+			b.StopTimer()
+			h := writeRawCommit(b, svc, []string{nodrvTip}, map[string]string{p: testFactBody(fmt.Sprintf("y%d", i), 0.5, nil), "kb/noise.md": "n"}, t0.Add(time.Duration(n+i)*time.Minute), "append")
+			moveBranch(b, svc, "nodrv", h)
+			b.StartTimer()
+			done := false
+			if err := svc.rh.gits.CommitLogSync("nodrv", func() (string, storegit.CommitLogPayload, error) {
+				if done {
+					return "", nil, nil
+				}
+				done = true
+				return h, func() ([]string, []storegit.CommitLogEntry, error) {
+					c, err := svc.rh.repo.CommitObject(plumbing.NewHash(h))
+					if err != nil {
+						return nil, nil, err
+					}
+					files, err := changedFilesInCommit(c)
+					if err != nil {
+						return nil, nil, err
+					}
+					return parentHashes(c), commitEntries(c, files), nil
+				}, nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+			nodrvTip = h
 		}
 	})
 	b.Run("AppendOneCommit", func(b *testing.B) {

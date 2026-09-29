@@ -52,21 +52,16 @@ CREATE TABLE IF NOT EXISTS path_change_links (
     PRIMARY KEY (path, commit_hash, parent_order)
 );
 
--- Every derived commit, with its first-parent depth (0 for a root). Presence
--- is the "derived" mark.
+-- Every derived commit: its first-parent depth (0 for a root) and its
+-- first-parent JUMP POINTERS (binary lifting): ups is the concatenation of
+-- 20-byte raw hashes, entry k being the commit 2^k first-parent steps below.
+-- "Is R on X's first-parent line" then costs O(log depth) lookups instead of
+-- a walk. One row per commit keeps the per-write footprint to one row.
+-- Presence is the "derived" mark.
 CREATE TABLE IF NOT EXISTS commit_fp (
     commit_hash TEXT    PRIMARY KEY,
-    depth       INTEGER NOT NULL
-);
-
--- First-parent jump pointers (binary lifting): ancestor is the commit
--- 2^level first-parent steps below commit_hash. Makes "is R on X's
--- first-parent line" O(log depth) lookups instead of a walk.
-CREATE TABLE IF NOT EXISTS commit_fp_up (
-    commit_hash TEXT    NOT NULL,
-    level       INTEGER NOT NULL,
-    ancestor    TEXT    NOT NULL,
-    PRIMARY KEY (commit_hash, level)
+    depth       INTEGER NOT NULL,
+    ups         BLOB    NOT NULL
 );
 
 -- The derivation version the (empty) tables are consistent with, so the first

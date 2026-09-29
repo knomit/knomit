@@ -1,4 +1,3 @@
-DROP TABLE IF EXISTS commit_fp_up;
 DROP TABLE IF EXISTS commit_fp;
 DROP TABLE IF EXISTS path_change_links;
 DROP INDEX IF EXISTS path_changes_depth;

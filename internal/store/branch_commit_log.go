@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -17,21 +18,17 @@ import (
 
 // populateCommitLog indexes every commit reachable from the tip of branch
 // that is not yet recorded on it: commit_log, branch_commits, commit_parents
-// and — in the same transaction, through the Derive hook — its path_changes
-// rows. Commits are fed parents first, so each is derived after its parents
-// (go-git's log order is children first). When ctx carries a transaction the
-// whole population joins it.
+// and — in the same transaction — its path_changes rows. Commits are recorded
+// parents first (go-git's log order is children first), in transactions of
+// pathChangeBatch commits; everything read from git objects is prepared
+// before each transaction opens.
 func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) error {
 	return rh.populate(ctx, branch, true)
 }
 
-// populate is populateCommitLog; oneTimePass=false skips deriveUnderived, for
-// rebuildCommitLog, whose cleared commits all re-enter through the Derive hook
-// right after their commit_log rows (the one-time pass would derive the ones
-// shared with other branches before those rows exist).
+// populate is populateCommitLog; oneTimePass=false skips deriveUnderived.
 func (rh *repoHandler) populate(ctx context.Context, branch string, oneTimePass bool) error {
-	hash, err := rh.resolveRef(ctx, branch)
-	if err != nil {
+	if _, err := rh.resolveRef(ctx, branch); err != nil {
 		// Branch not found (empty repo) — just mark available if table exists.
 		_ = rh.gits.CommitLogAvailable()
 		return nil
@@ -51,89 +48,138 @@ func (rh *repoHandler) populate(ctx context.Context, branch string, oneTimePass 
 	if err != nil {
 		return fmt.Errorf("populateCommitLog: branch %q: %w", branch, err)
 	}
-
-	logIter, err := rh.repo.Log(&gogit.LogOptions{
-		From:  hash,
-		Order: gogit.LogOrderDefault,
-	})
+	fresh, total, err := rh.reachableCommits(ctx, branch, branchID)
 	if err != nil {
-		return fmt.Errorf("populateCommitLog: log: %w", err)
-	}
-	defer logIter.Close()
-
-	// Collect the commits this branch has not recorded (one indexed lookup
-	// each), then order them parents first.
-	q := conn(ctx, rh.db)
-	var fresh []*object.Commit
-	count := 0
-	if err := logIter.ForEach(func(c *object.Commit) error {
-		count++
-		var n int
-		if err := q.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
-			branchID, c.Hash.String()).Scan(&n); err != nil {
-			return err
-		}
-		if n == 0 {
-			fresh = append(fresh, c)
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("populateCommitLog: walk: %w", err)
-	}
-	if len(fresh) == 0 {
-		return nil
+		return fmt.Errorf("populateCommitLog: %w", err)
 	}
 	order := parentsFirst(fresh)
-
-	// The payload is a thunk: changedFilesInCommit is an object.DiffTree
-	// costing ~2 ms per commit, and CommitLogSyncWith calls it only for a
-	// commit it will actually insert.
 	d := newDeriver(rh)
-	i := 0
-	err = rh.gits.CommitLogSyncWith(ctx, branch, func() (string, storegit.CommitLogPayload, error) {
-		if i == len(order) {
-			return "", nil, nil
+	for i := 0; i < len(order); i += pathChangeBatch {
+		items, prepared, err := rh.indexItems(ctx, d, order[i:min(i+pathChangeBatch, len(order))], false)
+		if err != nil {
+			return fmt.Errorf("populateCommitLog: %w", err)
 		}
-		c := order[i]
-		i++
-		return c.Hash.String(), func() ([]string, []storegit.CommitLogEntry, error) {
-			files, err := changedFilesInCommit(c)
-			if err != nil {
-				return nil, nil, err
-			}
-			return parentHashes(c), commitEntries(c, files), nil
-		}, nil
-	}, storegit.CommitLogSyncOptions{Derive: d.derive, Batch: pathChangeBatch})
-	if err != nil {
-		return fmt.Errorf("populateCommitLog: sync: %w", err)
+		if err := rh.gits.CommitLogApply(ctx, branch, items, storegit.CommitLogApplyOptions{Derive: d.hook(prepared)}); err != nil {
+			return fmt.Errorf("populateCommitLog: %w", err)
+		}
 	}
-	log.Debug().Int("commits", count).Int("indexed", len(order)).Msg("commit_log: populated")
+	log.Debug().Int("commits", total).Int("indexed", len(order)).Msg("commit_log: populated")
 	return nil
 }
 
-// repopulateBranch replaces the branch's commit visibility with the commits
-// reachable from its tip — purge, then populate — in ONE transaction, so a
-// reader never sees the branch empty or half-indexed in between (a rewind of
-// main, the rebase replay after one).
-func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) error {
-	ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
+// reachableCommits walks the branch tip and returns the commits NOT yet
+// recorded on the branch (all of them when branchID is 0), and how many
+// commits it walked.
+func (rh *repoHandler) reachableCommits(ctx context.Context, branch string, branchID int64) ([]*object.Commit, int, error) {
+	hash, err := rh.resolveRef(ctx, branch)
 	if err != nil {
-		return fmt.Errorf("repopulateBranch: begin: %w", err)
+		return nil, 0, nil
 	}
-	if own {
-		defer tx.Rollback() //nolint:errcheck
+	logIter, err := rh.repo.Log(&gogit.LogOptions{From: hash, Order: gogit.LogOrderDefault})
+	if err != nil {
+		return nil, 0, fmt.Errorf("log: %w", err)
 	}
-	if err := rh.purgeBranchCommits(ctx, branch); err != nil {
-		return err
+	defer logIter.Close()
+	q := conn(ctx, rh.db)
+	var fresh []*object.Commit
+	total := 0
+	err = logIter.ForEach(func(c *object.Commit) error {
+		total++
+		if branchID != 0 {
+			var n int
+			if err := q.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
+				branchID, c.Hash.String()).Scan(&n); err != nil {
+				return err
+			}
+			if n > 0 {
+				return nil
+			}
+		}
+		fresh = append(fresh, c)
+		return nil
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("walk: %w", err)
 	}
-	if err := rh.populateCommitLog(ctx, branch); err != nil {
-		return err
+	return fresh, total, nil
+}
+
+// indexItems prepares commits (already in parents-first order) for
+// CommitLogApply — OUTSIDE any transaction, since it reads git objects.
+// A commit already derived (commit_fp) was indexed before, so its commit_log
+// rows exist: it gets no payload diff and no path_changes preparation, unless
+// all is set (rebuildCommitLog, which clears and rewrites both).
+func (rh *repoHandler) indexItems(ctx context.Context, d *deriver, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, []*preparedCommit, error) {
+	q := conn(ctx, rh.db)
+	items := make([]storegit.CommitLogItem, len(commits))
+	prepared := make([]*preparedCommit, len(commits))
+	for i, c := range commits {
+		items[i] = storegit.CommitLogItem{Hash: c.Hash.String(), Parents: parentHashes(c)}
+		if !all {
+			var marked int
+			if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, items[i].Hash).Scan(&marked); err != nil {
+				return nil, nil, fmt.Errorf("derived mark: %w", err)
+			}
+			if marked > 0 {
+				continue
+			}
+		}
+		files, err := changedFilesInCommit(c)
+		if err != nil {
+			return nil, nil, fmt.Errorf("changed files %s: %w", c.Hash, err)
+		}
+		items[i].Entries = commitEntries(c, files)
+		if prepared[i], err = d.prepare(c, markdownChanges(items[i].Entries)); err != nil {
+			return nil, nil, err
+		}
 	}
-	if own {
-		return tx.Commit()
+	return items, prepared, nil
+}
+
+// hook is the CommitLogApply Derive hook for prepared items: apply, SQL only.
+// An item left unprepared was already derived; apply's mark check skips it.
+func (d *deriver) hook(prepared []*preparedCommit) func(ctx context.Context, tx *sql.Tx, i int) error {
+	return func(ctx context.Context, tx *sql.Tx, i int) error {
+		if prepared[i] == nil {
+			return nil
+		}
+		return d.apply(ctx, tx, prepared[i])
 	}
-	return nil
+}
+
+// repopulateBranch replaces the branch's commit visibility with the commits
+// reachable from its tip — purge, then record — in ONE short transaction, so a
+// reader never sees the branch empty or half-indexed in between (a rewind of
+// main, the rebase replay after one). Everything read from git objects is
+// prepared before the transaction opens.
+func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) error {
+	if !rh.gits.CommitLogAvailable() {
+		return nil
+	}
+	if err := rh.deriveUnderived(ctx); err != nil {
+		return fmt.Errorf("repopulateBranch: %w", err)
+	}
+	branchID, err := rh.branchID(ctx, branch)
+	if err != nil {
+		return fmt.Errorf("repopulateBranch: branch %q: %w", branch, err)
+	}
+	all, _, err := rh.reachableCommits(ctx, branch, 0)
+	if err != nil {
+		return fmt.Errorf("repopulateBranch: %w", err)
+	}
+	d := newDeriver(rh)
+	items, prepared, err := rh.indexItems(ctx, d, parentsFirst(all), false)
+	if err != nil {
+		return fmt.Errorf("repopulateBranch: %w", err)
+	}
+	return rh.gits.CommitLogApply(ctx, branch, items, storegit.CommitLogApplyOptions{
+		Before: func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = ?`, branchID)
+			return err
+		},
+		Derive: d.hook(prepared),
+	})
 }
 
 // rebuildCommitLog rewrites this branch's commit_log — and re-derives the
@@ -145,13 +191,13 @@ func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) erro
 // per-commit metadata are re-read from the source of truth, and :rebuild can
 // repair path_changes.
 //
-// It runs in ONE transaction: readers keep seeing the old rows until the
-// rebuilt ones commit, never an empty branch.
+// Everything is prepared from git first; then the clear and the re-record run
+// in ONE transaction, so readers keep the old rows until the rebuilt ones
+// commit, never an empty branch.
 //
 // Scope is per-branch: only rows for commits visible to THIS branch are
-// cleared, and every one of them re-enters the index on this branch, so the
-// Derive hook re-derives each right after its commit_log rows. Commits
-// unique to other branches are untouched.
+// cleared, and every one of them is re-recorded (and re-derived) on this
+// branch. Commits unique to other branches are untouched.
 func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) error {
 	if !rh.gits.CommitLogAvailable() {
 		return nil
@@ -160,33 +206,33 @@ func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) erro
 	if err != nil {
 		return fmt.Errorf("rebuildCommitLog: branch id: %w", err)
 	}
-	ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
+	all, _, err := rh.reachableCommits(ctx, branch, 0)
 	if err != nil {
-		return fmt.Errorf("rebuildCommitLog: begin: %w", err)
+		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
-	if own {
-		defer tx.Rollback() //nolint:errcheck
+	d := newDeriver(rh)
+	items, prepared, err := rh.indexItems(ctx, d, parentsFirst(all), true)
+	if err != nil {
+		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
-	// Every DELETE selects through branch_commits, so branch_commits goes last.
-	for _, stmt := range []struct{ what, sql string }{
-		{"commit_log", `DELETE FROM commit_log WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
-		{"path_changes", `DELETE FROM path_changes WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
-		{"path_change_links", `DELETE FROM path_change_links WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
-		{"commit_fp_up", `DELETE FROM commit_fp_up WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
-		{"commit_fp", `DELETE FROM commit_fp WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
-		{"branch_commits", `DELETE FROM branch_commits WHERE branch_id = ?`},
-	} {
-		if _, err := tx.ExecContext(ctx, stmt.sql, branchID); err != nil {
-			return fmt.Errorf("rebuildCommitLog: clear %s: %w", stmt.what, err)
-		}
-	}
-	if err := rh.populate(ctx, branch, false); err != nil {
-		return err
-	}
-	if own {
-		return tx.Commit()
-	}
-	return nil
+	return rh.gits.CommitLogApply(ctx, branch, items, storegit.CommitLogApplyOptions{
+		Before: func(ctx context.Context, tx *sql.Tx) error {
+			// Every DELETE selects through branch_commits, so it goes last.
+			for _, stmt := range []struct{ what, sql string }{
+				{"commit_log", `DELETE FROM commit_log WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
+				{"path_changes", `DELETE FROM path_changes WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
+				{"path_change_links", `DELETE FROM path_change_links WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
+				{"commit_fp", `DELETE FROM commit_fp WHERE commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?)`},
+				{"branch_commits", `DELETE FROM branch_commits WHERE branch_id = ?`},
+			} {
+				if _, err := tx.ExecContext(ctx, stmt.sql, branchID); err != nil {
+					return fmt.Errorf("rebuildCommitLog: clear %s: %w", stmt.what, err)
+				}
+			}
+			return nil
+		},
+		Derive: d.hook(prepared),
+	})
 }
 
 // AppendCommitLog indexes a single new commit (and derives its path_changes
@@ -202,8 +248,7 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 	if !rh.gits.CommitLogAvailable() {
 		return nil
 	}
-	hash := plumbing.NewHash(hashStr)
-	c, err := rh.repo.CommitObject(hash)
+	c, err := rh.repo.CommitObject(plumbing.NewHash(hashStr))
 	if err != nil {
 		return fmt.Errorf("AppendCommitLog: get commit %s: %w", hashStr, err)
 	}
@@ -219,24 +264,12 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 			}
 		}
 	}
-	done := false
 	d := newDeriver(rh)
-	// Same lazy-payload shape as populateCommitLog: diffing the commit
-	// against its parent is skipped entirely when it is already recorded on
-	// this branch.
-	if err := rh.gits.CommitLogSyncWith(ctx, branch, func() (string, storegit.CommitLogPayload, error) {
-		if done {
-			return "", nil, nil
-		}
-		done = true
-		return hash.String(), func() ([]string, []storegit.CommitLogEntry, error) {
-			files, err := changedFilesInCommit(c)
-			if err != nil {
-				return nil, nil, fmt.Errorf("changed files %s: %w", hashStr, err)
-			}
-			return parentHashes(c), commitEntries(c, files), nil
-		}, nil
-	}, storegit.CommitLogSyncOptions{Derive: d.derive}); err != nil {
+	items, prepared, err := rh.indexItems(ctx, d, []*object.Commit{c}, false)
+	if err != nil {
+		return fmt.Errorf("AppendCommitLog: %w", err)
+	}
+	if err := rh.gits.CommitLogApply(ctx, branch, items, storegit.CommitLogApplyOptions{Derive: d.hook(prepared)}); err != nil {
 		return fmt.Errorf("AppendCommitLog: sync %s: %w", hashStr, err)
 	}
 	return nil
