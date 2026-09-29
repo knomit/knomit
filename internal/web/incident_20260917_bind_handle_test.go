@@ -84,18 +84,42 @@ func rpcAt(t *testing.T, h http.Handler, mount, sid, body string) (map[string]an
 	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 
 	payload := rec.Body.String()
-	// A streamable-HTTP server may answer as SSE; take the first data: line.
+	// A streamable-HTTP server may answer as SSE, and the stream can carry
+	// server messages AHEAD of the response: mcp-go v0.45.0 drains pending
+	// notifications before it writes the response, so a task that completes
+	// first puts its notifications/tasks/status on the stream before the
+	// tools/call's CreateTaskResult. Skip every message with a "method"
+	// (notifications, and server→client requests, which also carry an id) and
+	// take the response to THIS request's id.
+	messages := []string{payload}
 	if strings.HasPrefix(strings.TrimSpace(payload), "event:") || strings.Contains(payload, "\ndata: ") {
+		messages = nil
 		sc := bufio.NewScanner(strings.NewReader(payload))
+		sc.Buffer(nil, 16<<20)
 		for sc.Scan() {
 			if rest, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
-				payload = rest
-				break
+				messages = append(messages, rest)
 			}
 		}
 	}
+	var sent struct {
+		ID any `json:"id"`
+	}
+	_ = json.Unmarshal([]byte(body), &sent)
 	var out map[string]any
-	require.NoError(t, json.Unmarshal([]byte(payload), &out), "payload: %s", payload)
+	for _, m := range messages {
+		var msg map[string]any
+		require.NoError(t, json.Unmarshal([]byte(m), &msg), "payload: %s", m)
+		if _, isServerMessage := msg["method"]; isServerMessage {
+			continue
+		}
+		if sent.ID != nil && fmt.Sprint(msg["id"]) != fmt.Sprint(sent.ID) {
+			continue
+		}
+		out = msg
+		break
+	}
+	require.NotNil(t, out, "no response to id %v in: %s", sent.ID, payload)
 
 	got := rec.Header().Get("Mcp-Session-Id")
 	if got == "" {
