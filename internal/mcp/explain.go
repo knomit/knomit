@@ -382,7 +382,6 @@ func resolveExplainTarget(b *repos.Binding, file string) (explainTarget, error) 
 	return t, nil
 }
 
-
 // explainHistoryPage serves a history_cursor call: the next page of the root's
 // change list from the cursor's keyset position. No body, no graph walk. The
 // cursor must belong to this binding, mount and (normalized) path, and the
@@ -400,7 +399,9 @@ func explainHistoryPage(ctx context.Context, b *repos.Binding, file, token strin
 	if hc.Mount != t.mount || hc.Path != t.rel {
 		return mcpgo.NewToolResultError(fmt.Sprintf("history_cursor belongs to another fact — pass it with the file it came from (%s)", hc.Path)), nil
 	}
-	if _, _, _, ok := readNode(ctx, t.s, t.rt.Branch, t.rel, hc.Anchor); !ok {
+	// The fact must be readable at the anchor (as the first call required).
+	// readFactVersion, not readNode: a page needs no HEAD-liveness lookup.
+	if _, ok := readFactVersion(ctx, t.s, t.rt.Branch, t.rel, hc.Anchor); !ok {
 		return mcpgo.NewToolResultError(errUnknownHistoryCursor), nil
 	}
 
@@ -474,16 +475,17 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 	}
 
 	// The root's own commit is its effective revision at the anchor: the
-	// first-parent resolution (RevisionsBefore), NOT the newest entry of the
-	// change list. Seen-keys and edge pins are first-parent commits, and the
-	// two differ when the newest change arrived through a merge.
+	// first-parent resolution (LiveRevision = RevisionsBefore(anchor, 1),
+	// without the walk), NOT the newest entry of the change list. Seen-keys
+	// and edge pins are first-parent commits, and the two differ when the
+	// newest change arrived through a merge.
 	rootCommit := anchor
-	live, err := s.history.RevisionsBefore(ctx, branch, rel, anchor, 1)
+	live, err := s.history.LiveRevision(ctx, branch, rel, anchor)
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("history error: %v", err)), nil
 	}
-	if len(live) > 0 {
-		rootCommit = live[0].Commit
+	if live != "" {
+		rootCommit = live
 	}
 
 	refs := classifyRefs(parsed.Refs, fact.ID12(rt.RI.ID()))

@@ -77,6 +77,24 @@ func blobOf(t *testing.T, svc *Service, commit, path string) string {
 // to it and indexes it. For topologies and dates the write API cannot make.
 func rawCommit(t *testing.T, svc *Service, branch string, parents []string, files map[string]string, author time.Time, msg string) string {
 	t.Helper()
+	h := writeRawCommit(t, svc, parents, files, author, msg)
+	moveBranch(t, svc, branch, h)
+	require.NoError(t, svc.rh.populateCommitLog(context.Background(), branch))
+	return h
+}
+
+// moveBranch points branch at h (registering it) WITHOUT indexing anything.
+func moveBranch(t testing.TB, svc *Service, branch, h string) {
+	t.Helper()
+	_, err := svc.rh.EnsureBranch(context.Background(), branch, "refs/heads/"+branch)
+	require.NoError(t, err)
+	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), plumbing.NewHash(h))))
+}
+
+// writeRawCommit writes a commit object whose tree is exactly files (path
+// case preserved) and returns its hash. It indexes nothing and moves no ref.
+func writeRawCommit(t testing.TB, svc *Service, parents []string, files map[string]string, author time.Time, msg string) string {
+	t.Helper()
 	st := svc.rh.repo.Storer
 	type dir struct {
 		files map[string]plumbing.Hash
@@ -135,10 +153,6 @@ func rawCommit(t *testing.T, svc *Service, branch string, parents []string, file
 	require.NoError(t, c.Encode(obj))
 	h, err := st.SetEncodedObject(obj)
 	require.NoError(t, err)
-	_, err = svc.rh.EnsureBranch(context.Background(), branch, "refs/heads/"+branch)
-	require.NoError(t, err)
-	require.NoError(t, svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
-	require.NoError(t, svc.rh.populateCommitLog(context.Background(), branch))
 	return h.String()
 }
 
@@ -268,6 +282,16 @@ func TestPathHistory_DiffBaseIsTheEditedFromContent(t *testing.T) {
 	require.Equal(t, bBlob, byCommit[y.CommitHash].FromBlob, "Y was edited from B")
 	require.Equal(t, bBlob, byCommit[x.CommitHash].FromBlob, "X was edited from B")
 	require.Equal(t, blobOf(t, svc, y.CommitHash, p), byCommit[m].FromBlob, "a composing merge diffs against its first parent")
+	// The STORED diff agrees with FromBlob: against Y (first parent) the merge
+	// changed only confidence 0.5 -> 0.7; against X (second parent) it would
+	// have been a body change instead.
+	require.NotNil(t, byCommit[m].Diff)
+	require.Equal(t, []float64{0.5, 0.7}, byCommit[m].Diff.Confidence)
+	require.Empty(t, byCommit[m].Diff.Body)
+	require.Equal(t, []float64{0.5, 0.7}, byCommit[x.CommitHash].Diff.Confidence)
+	// Y changed only the title (untracked) against B, so it has no diff;
+	// against its list neighbour X it would have shown a fake 0.7 -> 0.5.
+	require.Nil(t, byCommit[y.CommitHash].Diff)
 	require.Equal(t, b.CommitHash, revs[len(revs)-1].Commit)
 }
 
@@ -418,6 +442,6 @@ func TestPathHistory_RebuildAndVersionResetAreConsistent(t *testing.T) {
 
 	_, err = svc.rh.db.ExecContext(ctx, `UPDATE meta SET value = 'stale' WHERE key = ?`, pathChangesVersionKey)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.syncPathChanges(ctx))
+	require.NoError(t, svc.rh.deriveUnderived(ctx))
 	require.Equal(t, before, historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip)))
 }

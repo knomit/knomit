@@ -262,11 +262,8 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 	// The old chain is no longer reachable from the branch. Purge stale
 	// branch_commits rows before repopulating; otherwise Verify reports
 	// unreachable rows because populateCommitLog only INSERTs.
-	if err := rh.purgeBranchCommits(ctx, branch); err != nil {
-		return MainReconcileResult{}, move, fmt.Errorf("purge branch_commits after rewind: %w", err)
-	}
-	if err := rh.populateCommitLog(ctx, branch); err != nil {
-		return MainReconcileResult{}, move, fmt.Errorf("populate commit_log after force-update: %w", err)
+	if err := rh.repopulateBranch(ctx, branch); err != nil {
+		return MainReconcileResult{}, move, fmt.Errorf("repopulate commit_log after force-update: %w", err)
 	}
 	if err := rh.notifyCommit(ctx, branch, hash); err != nil {
 		return MainReconcileResult{}, move, fmt.Errorf("notify after force-update: %w", err)
@@ -283,7 +280,7 @@ func (rh *repoHandler) purgeBranchCommits(ctx context.Context, branch string) er
 	if err != nil {
 		return fmt.Errorf("purgeBranchCommits: branchID: %w", err)
 	}
-	if _, err := rh.db.ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = ?`, id); err != nil {
+	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM branch_commits WHERE branch_id = ?`, id); err != nil {
 		return fmt.Errorf("purgeBranchCommits: delete: %w", err)
 	}
 	return nil

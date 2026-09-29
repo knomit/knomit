@@ -271,20 +271,21 @@ func mustSerializeConf(t *testing.T, path, title string, conf float64) string {
 }
 
 // TestExplain_HistoryCursorAfterRewindIsHistoryChanged is the regression for
-// review finding 4: after the branch is rewound past the cursor's anchor the
+// review finding 4: after the branch is rewound past the cursor's ANCHOR the
 // page is a distinguishable "history changed" error — not a short page and not
-// an empty "complete" one — and a cursor naming an unknown anchor is refused.
+// an empty "complete" one. The rewind keeps every change the frontier names on
+// the branch, so only the anchor check can refuse; and a cursor naming an
+// unknown anchor is "unknown", not empty.
 func TestExplain_HistoryCursorAfterRewindIsHistoryChanged(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	ctx := repos.WithRepoInstance(context.Background(), ri)
-	writeVersions(t, ctx, ri, "kb/r.md", 2)
+	writeVersions(t, ctx, ri, "kb/r.md", 7)
 	ri.WithRead(func(svc *store.Service) {
 		require.NoError(t, svc.Branches().CreateBranch(ctx, "old", explainTestBranch))
 	})
-	writeVersions(t, ctx, ri, "kb/r.md", 6)
+	writeVersions(t, ctx, ri, "kb/r.md", 1) // the anchor: the only commit the rewind drops
 	hc := firstHistoryCursor(t, ctx, "kb/r.md")
 
-	// Rewind the bound branch to "old".
 	ri.WithRead(func(svc *store.Service) {
 		require.NoError(t, svc.Branches().DropBranch(ctx, explainTestBranch))
 		require.NoError(t, svc.Branches().CreateBranch(ctx, explainTestBranch, "old"))
@@ -293,13 +294,34 @@ func TestExplain_HistoryCursorAfterRewindIsHistoryChanged(t *testing.T) {
 	require.True(t, isErr, text)
 	require.Contains(t, text, "history changed")
 
-	// A cursor whose anchor is not a commit at all is unknown, not empty.
 	c, ok := decodeHistoryCursor(hc)
 	require.True(t, ok)
 	c.Anchor = strings.Repeat("0f", 20)
 	text, isErr = callExplain(t, ctx, map[string]any{"file": "kb/r.md", "history_cursor": encodeHistoryCursor(c)})
 	require.True(t, isErr, text)
 	require.Contains(t, text, "unknown history_cursor")
+}
+
+// TestExplain_HistoryCursorFrontierOffBranchIsHistoryChanged: the anchor is
+// still on the branch, but the position names a change visible only on
+// another branch, so only the frontier check can refuse.
+func TestExplain_HistoryCursorFrontierOffBranchIsHistoryChanged(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := repos.WithRepoInstance(context.Background(), ri)
+	writeVersions(t, ctx, ri, "kb/f.md", 6)
+	var side string
+	ri.WithRead(func(svc *store.Service) {
+		require.NoError(t, svc.Branches().CreateBranch(ctx, "side", explainTestBranch))
+		r, err := svc.Facts().WriteFact(ctx, "side", "kb/f.md", mustSerializeConf(t, "kb/f.md", "Side", 0.5), "side", "")
+		require.NoError(t, err)
+		side = r.CommitHash
+	})
+	c, ok := decodeHistoryCursor(firstHistoryCursor(t, ctx, "kb/f.md"))
+	require.True(t, ok)
+	c.Frontier = []string{side}
+	text, isErr := callExplain(t, ctx, map[string]any{"file": "kb/f.md", "history_cursor": encodeHistoryCursor(c)})
+	require.True(t, isErr, text)
+	require.Contains(t, text, "history changed")
 }
 
 // TestExplain_HistoryCursorBoundToBindingAndFactPaths is the regression for

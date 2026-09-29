@@ -53,11 +53,17 @@ func BuildFactPath(ontologyRoot, topic, category string) string {
 // or a job slot under PrivateRoot (IsWritablePrivatePath). Anything else —
 // .github/notes.md, README.md, a directory — is not a fact file.
 func IsFactFilePath(ontologyRoot, path string) bool {
-	if !strings.HasSuffix(path, ".md") {
+	if !IsMarkdownPath(path) {
 		return false
 	}
 	if IsPrivatePath(path) {
 		return IsWritablePrivatePath(path)
 	}
 	return strings.HasPrefix(path, ontologyRoot+"/")
+}
+
+// IsMarkdownPath reports whether a path names a markdown file — the file kind
+// every fact is stored as.
+func IsMarkdownPath(path string) bool {
+	return strings.HasSuffix(path, ".md")
 }

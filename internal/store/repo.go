@@ -110,11 +110,14 @@ func (s *Service) OpenRepo() error {
 	if _, err := s.rh.EnsureBranch(context.Background(), branch, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("OpenRepo: ensure branch %q: %w", branch, err)
 	}
-	if err := s.rh.populateCommitLog(context.Background(), branch); err != nil {
-		log.Warn().Err(err).Msg("commit_log: open populate failed")
-	}
+	// Backfill commit_parents for commits indexed before that table existed
+	// FIRST: populate (and the one-time path_changes pass it starts with)
+	// must see a complete parent graph.
 	if err := backfillCommitParents(context.Background(), s.rh); err != nil {
 		log.Warn().Err(err).Msg("commit_parents: backfill failed")
+	}
+	if err := s.rh.populateCommitLog(context.Background(), branch); err != nil {
+		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
 	return nil
 }

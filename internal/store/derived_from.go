@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/fact"
 	storegit "knomit/internal/store/git"
 )
 
@@ -147,7 +148,29 @@ func (rh *repoHandler) resolveActiveCommitForPath(ctx context.Context, branch, p
 	if fromCommit == "" {
 		return "", false, nil
 	}
+	// Fast path, same answer: for a .md path at a derived commit,
+	// path_changes holds a row for exactly the commit_log add/modify rows, so
+	// the nearest one on the first-parent line is found with jump pointers
+	// (O(log depth) lookups) instead of walking the chain.
+	// TestResolveActiveCommitForPath_FastPathEqualsWalk pins the equivalence.
+	if fact.IsMarkdownPath(path) {
+		q := conn(ctx, rh.db)
+		var marked int
+		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, fromCommit).Scan(&marked); err == nil && marked > 0 {
+			_, row, err := liveChange(ctx, q, path, fromCommit, 0)
+			if err != nil {
+				return "", false, fmt.Errorf("resolveActiveCommitForPath: %w", err)
+			}
+			return row, row != "", nil
+		}
+	}
+	return rh.resolveActiveCommitForPathWalk(ctx, branch, path, fromCommit)
+}
 
+// resolveActiveCommitForPathWalk is resolveActiveCommitForPath by walking the
+// first-parent chain: the answer for paths and commits path_changes does not
+// cover.
+func (rh *repoHandler) resolveActiveCommitForPathWalk(ctx context.Context, branch, path, fromCommit string) (string, bool, error) {
 	var hash string
 	err := conn(ctx, rh.db).QueryRowContext(ctx, firstParentChainCTE+`
 		SELECT cl.commit_hash

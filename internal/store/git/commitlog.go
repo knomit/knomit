@@ -4,6 +4,7 @@
 package git
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -87,58 +88,106 @@ func (s *Storer) commitLogTableExists() bool {
 // and deadlock.
 type CommitLogPayload func() (parents []string, entries []CommitLogEntry, err error)
 
-// CommitLogSync is the core write method for commit_log.
+// CommitLogSyncOptions tunes CommitLogSyncWith.
+type CommitLogSyncOptions struct {
+	// Derive, when set, runs INSIDE the transaction that records hash — after
+	// its commit_log, branch_commits and commit_parents rows are written — so
+	// whatever it derives becomes visible atomically with the commit. It is
+	// called for every commit newly recorded on the branch, in iteration order;
+	// the caller iterates parents before children when Derive needs them.
+	Derive func(ctx context.Context, tx *sql.Tx, hash string) error
+	// Batch is how many commits one transaction records (default 1). Larger
+	// batches amortise the commit (one WAL fsync) over many commits for bulk
+	// population; they also hold the write lock for longer.
+	Batch int
+}
+
+// CommitLogSync is CommitLogSyncWith with no options: one transaction per
+// commit, no derivation.
+func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, payload CommitLogPayload, err error)) error {
+	return s.CommitLogSyncWith(context.Background(), branchName, iter, CommitLogSyncOptions{})
+}
+
+// CommitLogSyncWith is the core write method for commit_log.
 // It calls iter() repeatedly until it returns ("", nil, nil) (sentinel for done).
 // For each non-empty hash: if the commit is already recorded as visible on this
 // branch it is skipped WITHOUT calling its payload, and the walk continues. All
-// rows for a hash — commit_log entries, branch_commits visibility, and
-// commit_parents edges — are inserted in a single transaction.
-// The commitLog atomic is marked true once the table is confirmed to exist
-// and has been previously written to (either via a new insert or confirmed
-// via an existing indexed commit).
+// rows for a hash — commit_log entries, branch_commits visibility,
+// commit_parents edges and whatever opts.Derive writes — are inserted in one
+// transaction (shared by up to opts.Batch commits).
+//
+// When ctx carries a transaction (TxFromContext), everything runs inside it and
+// nothing is committed here: the caller owns atomicity (a purge or rebuild
+// that must not expose an empty branch between delete and repopulate).
 //
 // iter must return the hash cheaply; all per-commit work belongs in the
 // returned CommitLogPayload so the dedup check can gate it.
-func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, payload CommitLogPayload, err error)) error {
+func (s *Storer) CommitLogSyncWith(ctx context.Context, branchName string, iter func() (hash string, payload CommitLogPayload, err error), opts CommitLogSyncOptions) error {
 	if !s.CommitLogAvailable() {
 		return nil
 	}
-
-	// Require branch to exist. Callers must EnsureBranch before this runs.
 	if branchName == "" {
 		return fmt.Errorf("CommitLogSync: branchName is empty")
 	}
+	batch := max(opts.Batch, 1)
+	outer := TxFromContext(ctx)
+	q := Conn(ctx, s.db)
+
+	// Require branch to exist. Callers must EnsureBranch before this runs.
 	var branchID int64
-	err := s.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, branchName).Scan(&branchID)
-	if err != nil {
+	if err := q.QueryRowContext(ctx, `SELECT id FROM branches WHERE name = ?`, branchName).Scan(&branchID); err != nil {
 		return fmt.Errorf("CommitLogSync: branch %q not registered in branches table: %w", branchName, err)
+	}
+
+	var tx *sql.Tx
+	pending := 0
+	commit := func() error {
+		if tx == nil || tx == outer {
+			tx, pending = nil, 0
+			return nil
+		}
+		err := tx.Commit()
+		tx, pending = nil, 0
+		if err != nil {
+			return fmt.Errorf("CommitLogSync: commit tx: %w", err)
+		}
+		return nil
+	}
+	fail := func(err error) error {
+		if tx != nil && tx != outer {
+			tx.Rollback()
+		}
+		return err
 	}
 
 	for {
 		hash, payload, err := iter()
 		if err != nil {
-			return fmt.Errorf("CommitLogSync: iter: %w", err)
+			return fail(fmt.Errorf("CommitLogSync: iter: %w", err))
 		}
 		if hash == "" {
-			// Done.
+			if err := commit(); err != nil {
+				return err
+			}
 			s.commitLog.Store(true)
 			return nil
 		}
 
 		// Dedup: is this commit already recorded as visible on this branch?
-		// For linear history an existing row means all ancestors are already
-		// recorded too, so we could stop. But for merge commits the iterator
-		// is walking a DAG — hitting a known commit on one parent's line says
-		// nothing about the other parent's ancestry. Skip this commit and
-		// continue walking rather than short-circuiting.
-		//
-		// This check runs BEFORE payload() so a known commit costs one indexed
-		// lookup instead of a full tree diff.
+		// For merge commits the iterator walks a DAG — hitting a known commit on
+		// one parent's line says nothing about the other parent's ancestry — so
+		// skip and continue rather than short-circuiting. Checked through the
+		// open transaction when there is one, so rows written earlier in the
+		// same batch, or deleted by the caller's transaction, are seen.
+		dq := q
+		if tx != nil {
+			dq = tx
+		}
 		var cnt int
-		if err := s.db.QueryRow(
+		if err := dq.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM branch_commits WHERE branch_id = ? AND commit_hash = ?`,
 			branchID, hash).Scan(&cnt); err != nil {
-			return fmt.Errorf("CommitLogSync: dedup check: %w", err)
+			return fail(fmt.Errorf("CommitLogSync: dedup check: %w", err))
 		}
 		if cnt > 0 {
 			s.commitLog.Store(true)
@@ -149,39 +198,31 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, payl
 		var entries []CommitLogEntry
 		if payload != nil {
 			if parents, entries, err = payload(); err != nil {
-				return fmt.Errorf("CommitLogSync: payload for %s: %w", hash, err)
+				return fail(fmt.Errorf("CommitLogSync: payload for %s: %w", hash, err))
 			}
 		}
 
-		tx, err := s.db.Begin()
-		if err != nil {
-			return fmt.Errorf("CommitLogSync: begin tx: %w", err)
+		if tx == nil {
+			if outer != nil {
+				tx = outer
+			} else if tx, err = s.db.BeginTx(ctx, nil); err != nil {
+				return fmt.Errorf("CommitLogSync: begin tx: %w", err)
+			}
 		}
 
-		if len(entries) > 0 {
-			stmt, err := tx.Prepare(`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_name, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-			if err != nil {
-				tx.Rollback()
-				return fmt.Errorf("CommitLogSync: prepare commit_log: %w", err)
+		for _, e := range entries {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_name, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				e.Hash, e.Path, e.Message, e.Operation, e.AuthorName, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
+				return fail(fmt.Errorf("CommitLogSync: insert commit_log: %w", err))
 			}
-			for _, e := range entries {
-				if _, err := stmt.Exec(e.Hash, e.Path, e.Message, e.Operation, e.AuthorName, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
-					stmt.Close()
-					tx.Rollback()
-					return fmt.Errorf("CommitLogSync: insert commit_log: %w", err)
-				}
-			}
-			stmt.Close()
 		}
-
 		// Record visibility for this commit on this branch.
-		if _, err := tx.Exec(
+		if _, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO branch_commits (branch_id, commit_hash) VALUES (?, ?)`,
 			branchID, hash); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("CommitLogSync: insert branch_commits: %w", err)
+			return fail(fmt.Errorf("CommitLogSync: insert branch_commits: %w", err))
 		}
-
 		// Record parent edges. INSERT OR IGNORE keeps this idempotent across
 		// branches and re-syncs: every branch that walks the same DAG
 		// converges on the same commit_parents rows.
@@ -189,18 +230,23 @@ func (s *Storer) CommitLogSync(branchName string, iter func() (hash string, payl
 			if p == "" {
 				continue
 			}
-			if _, err := tx.Exec(
+			if _, err := tx.ExecContext(ctx,
 				`INSERT OR IGNORE INTO commit_parents (commit_hash, parent_order, parent_hash) VALUES (?, ?, ?)`,
 				hash, i, p); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("CommitLogSync: insert commit_parents: %w", err)
+				return fail(fmt.Errorf("CommitLogSync: insert commit_parents: %w", err))
 			}
 		}
-
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("CommitLogSync: commit tx: %w", err)
+		if opts.Derive != nil {
+			if err := opts.Derive(WithTx(ctx, tx), tx, hash); err != nil {
+				return fail(fmt.Errorf("CommitLogSync: derive %s: %w", hash, err))
+			}
 		}
 		s.commitLog.Store(true)
+		if pending++; pending >= batch {
+			if err := commit(); err != nil {
+				return err
+			}
+		}
 	}
 }
 

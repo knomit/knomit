@@ -284,6 +284,21 @@ func (mr *MockSearchIndexMockRecorder) OutgoingAtCommit(ctx, branch, path, commi
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "OutgoingAtCommit", reflect.TypeOf((*MockSearchIndex)(nil).OutgoingAtCommit), ctx, branch, path, commitHash)
 }
 
+// LiveRevision mocks base method.
+func (m *MockSearchIndex) LiveRevision(ctx context.Context, branch, path, anchor string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LiveRevision", ctx, branch, path, anchor)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// LiveRevision indicates an expected call of LiveRevision.
+func (mr *MockSearchIndexMockRecorder) LiveRevision(ctx, branch, path, anchor any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LiveRevision", reflect.TypeOf((*MockSearchIndex)(nil).LiveRevision), ctx, branch, path, anchor)
+}
+
 // PathHistory mocks base method.
 func (m *MockSearchIndex) PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *store.PathHistoryCursor, limit int) ([]store.FactRevision, *store.PathHistoryCursor, error) {
 	m.ctrl.T.Helper()

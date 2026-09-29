@@ -129,10 +129,12 @@ type HistoryQuery interface {
 	// introduced content none of their parents had, merge-delivered writes
 	// included — in the history of `anchorCommit`, newest first, never a
 	// change below one it descends from, and the keyset position to continue
-	// from (nil at the end). Precomputed (path_changes): indexed lookups only.
-	// ErrHistoryChanged on a continuation whose history is gone. Used by
-	// knomit_explain; resolution stays on RevisionsBefore.
+	// from (nil at the end). Precomputed at index time (path_changes): reads
+	// only. ErrHistoryChanged on a continuation whose history is gone.
 	PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *PathHistoryCursor, limit int) ([]FactRevision, *PathHistoryCursor, error)
+	// LiveRevision is RevisionsBefore(anchor, 1) for a .md path, answered
+	// from path_changes' jump pointers instead of a first-parent walk.
+	LiveRevision(ctx context.Context, branch, path, anchor string) (string, error)
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 }
