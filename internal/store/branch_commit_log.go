@@ -63,6 +63,12 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 	}
 
 	log.Debug().Int("commits", count).Int("computed", computed).Msg("commit_log: populated")
+	// Derived per-path history (path_changes). A failure here must not fail
+	// the caller: the tables are a self-healing cache, and every later sync —
+	// and every history read at an underived anchor — retries.
+	if err := rh.syncPathChanges(ctx); err != nil {
+		log.Warn().Err(err).Str("branch", branch).Msg("path changes: sync failed; will retry")
+	}
 	return nil
 }
 
@@ -132,6 +138,11 @@ func (rh *repoHandler) AppendCommitLog(ctx context.Context, branch, hashStr stri
 		}, nil
 	}); err != nil {
 		return fmt.Errorf("AppendCommitLog: sync %s: %w", hashStr, err)
+	}
+	// See populateCommitLog: path_changes is a self-healing cache, and the ref
+	// has already moved, so failing the write here would tear it.
+	if err := rh.syncPathChangesFor(ctx, hashStr); err != nil {
+		log.Warn().Err(err).Str("commit", hashStr).Msg("path changes: derive failed; will retry")
 	}
 	return nil
 }

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"knomit/internal/fact"
@@ -13,7 +15,6 @@ import (
 	"knomit/internal/store"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
-	"github.com/pmezard/go-difflib/difflib"
 )
 
 const explainPageSize = 25
@@ -31,7 +32,7 @@ const explainHistoryPageSize = 20
 // explainTool returns the Tool definition for knomit_explain.
 func explainTool() mcpgo.Tool {
 	return mcpgo.NewTool("knomit_explain",
-		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its evolution `history`: every commit that changed the fact's content, including writes that arrived through a merge, newest first, each with its `action` (added/modified) and the confidence/content diff from the next older revision. The first call shows the newest few. To read the whole history, call again with the same `file` and `history_cursor` set to the returned `history.history_cursor`, and repeat until `more_available` is false — those pages carry the history only, no body and no graph. Do NOT page history by passing an older revision as `commit`: that skips revisions. When `more_available` is false the list is complete; its last revision is the fact's creation (`action: added`). Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
+		mcpgo.WithDescription("Explain a fact by walking its versioned provenance graph. The walk is anchored at a commit: pass `commit` to explain the fact AS OF that version (the graph is rewound to how it stood then); omit it to explain at HEAD. The graph is versioned per-edge — every referenced fact is read at the exact version the referrer pointed to, recursively. The root fact is returned in full, with its `history`: the commits that changed its content, merge-delivered writes included, newest first. Each revision carries its `action` (added/modified) and its confidence/content diff against the content it was edited from. The first call returns the newest few. To read more, call again with the same `file` and `history_cursor` set to `history.history_cursor`; repeat while a `history_cursor` is returned. Those calls return history only. Do NOT page history by passing an older revision as `commit`. On a \"history changed\" error, call again without `history_cursor`. Every OTHER fact is returned as a lean summary (no body), marked `summary: true` — to read a summary's full body, history, and its own subtree, call knomit_explain again with that fact's `path` AND `commit`. A summary may carry `deleted: true` (the source was retracted since this edge formed) or `superseded: true` (the source is still live but its HEAD revision is newer than the version the referrer reasoned over — re-explain at HEAD to see how it has changed). Call with `file` to start; pass `cursor` to page the walk."),
 		bindingArg(true),
 		mcpgo.WithString("file",
 			mcpgo.Required(),
@@ -44,7 +45,7 @@ func explainTool() mcpgo.Tool {
 			mcpgo.Description("Session ID from a previous call. Omit to start."),
 		),
 		mcpgo.WithString("history_cursor",
-			mcpgo.Description("The `history.history_cursor` value from a previous explain of the same `file`: returns the next page of that history only. Pass it with the same `file`, without `commit` or `cursor`."),
+			mcpgo.Description("Pass `history.history_cursor` from your previous explain of this `file` to get the next page of its history (history only). Pass it with the same `file`, without `commit` or `cursor`, and unchanged."),
 		),
 	)
 }
@@ -140,15 +141,22 @@ type explainRevision struct {
 	Diff    *revisionDiff `json:"diff"`
 }
 
-// historyCursor is the opaque history_cursor token: the change list is always
-// recomputed from the ORIGINAL anchor and sliced at Offset, so paging never
-// depends on the ancestry of whichever revision a page happened to end on.
-// File is the file argument exactly as the caller passed it; a cursor is
-// refused for any other file.
+// historyCursor is the opaque history_cursor token: a keyset position in the
+// root's change list (store.PathHistoryCursor) plus what it is valid for. It
+// grants nothing beyond explain(file, commit) itself, and is refused unless
+// every binding field matches the call that presents it:
+//   - Pin and ReadSet: the binding it was issued to (PinID + read-set
+//     fingerprint), exactly as explain's session cursor is bound.
+//   - Mount and Path: the mount and NORMALIZED fact path it pages.
+//   - Anchor: the commit the history is as of; the fact must be readable there.
 type historyCursor struct {
-	File   string `json:"f"`
-	Anchor string `json:"a"`
-	Offset int    `json:"o"`
+	Pin            string   `json:"b"`
+	ReadSet        string   `json:"r"`
+	Mount          string   `json:"m"`
+	Path           string   `json:"p"`
+	Anchor         string   `json:"a"`
+	Frontier       []string `json:"f"`
+	AnchorOnBranch bool     `json:"o"`
 }
 
 func encodeHistoryCursor(c historyCursor) string {
@@ -156,25 +164,26 @@ func encodeHistoryCursor(c historyCursor) string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-func decodeHistoryCursor(s string) (historyCursor, error) {
+// errUnknownHistoryCursor is returned for any history_cursor this call cannot
+// accept as its own; deliberately one message, like an expired session.
+const errUnknownHistoryCursor = "unknown history_cursor — call knomit_explain without history_cursor and use the history_cursor it returns"
+
+// errHistoryChanged is returned when the history a valid cursor was paging is
+// gone (the branch was rewound, or its index is being rebuilt).
+const errHistoryChanged = "history changed since this history_cursor was issued — call knomit_explain again without history_cursor to restart"
+
+func decodeHistoryCursor(s string) (historyCursor, bool) {
 	var c historyCursor
 	b, err := base64.RawURLEncoding.DecodeString(s)
-	if err == nil {
-		err = json.Unmarshal(b, &c)
+	if err != nil || json.Unmarshal(b, &c) != nil || c.Anchor == "" || c.Path == "" || len(c.Frontier) == 0 {
+		return historyCursor{}, false
 	}
-	if err != nil || c.Anchor == "" || c.Offset < 0 {
-		return historyCursor{}, fmt.Errorf("invalid history_cursor — pass the history.history_cursor value from a previous explain unchanged")
-	}
-	return c, nil
+	return c, true
 }
 
-// revisionDiff is the delta from a revision's predecessor. Each field is
-// present only when it changed; a nil revisionDiff means "no tracked change"
-// (e.g. the fact's creation, which has no predecessor).
-type revisionDiff struct {
-	Confidence []float64 `json:"confidence,omitempty"` // [old, new]
-	Body       string    `json:"body,omitempty"`       // smaller of unified diff vs "+N/-M"
-}
+// revisionDiff is a revision's delta from the content it was edited from,
+// precomputed by the store (see store.RevisionDiff).
+type revisionDiff = store.RevisionDiff
 
 // classifyRefs splits a fact's refs into the local fact edges the provenance
 // walk descends into, and everything else. It consumes fact.ClassifyRef — the
@@ -294,110 +303,38 @@ func readNode(ctx context.Context, s mcpStore, branch, path, commit string) (par
 	return parsed, deleted, superseded, true
 }
 
-// bodyDelta returns "" if the bodies are identical, else the smaller of a
-// unified diff and a compact "+added/-removed" magnitude.
-func bodyDelta(a, b string) string {
-	if a == b {
-		return ""
-	}
-	aLines := difflib.SplitLines(a)
-	bLines := difflib.SplitLines(b)
-	added, removed := 0, 0
-	for _, op := range difflib.NewMatcher(aLines, bLines).GetOpCodes() {
-		switch op.Tag {
-		case 'r':
-			removed += op.I2 - op.I1
-			added += op.J2 - op.J1
-		case 'd':
-			removed += op.I2 - op.I1
-		case 'i':
-			added += op.J2 - op.J1
-		}
-	}
-	magnitude := fmt.Sprintf("+%d/-%d", added, removed)
-	unified, _ := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: aLines, B: bLines, Context: 1})
-	if unified != "" && len(unified) < len(magnitude) {
-		return unified
-	}
-	return magnitude
-}
-
-// revisionDelta computes the diff from prev → cur. nil when there is no
-// predecessor or nothing tracked changed.
-func revisionDelta(prev *fact.Fact, cur fact.Fact) *revisionDiff {
-	if prev == nil {
-		return nil
-	}
-	d := &revisionDiff{}
-	changed := false
-	if prev.Confidence != cur.Confidence {
-		d.Confidence = []float64{prev.Confidence, cur.Confidence}
-		changed = true
-	}
-	if body := bodyDelta(prev.Body, cur.Body); body != "" {
-		d.Body = body
-		changed = true
-	}
-	if !changed {
-		return nil
-	}
-	return d
-}
-
-// buildHistory assembles one page of the root's change list: the revisions of
-// store.PathHistory(anchor) at [offset, offset+size), each with the diff from
-// its next older revision. HistoryCursor is set when older revisions remain;
-// file is the caller's file argument, bound into that cursor.
-func buildHistory(ctx context.Context, s mcpStore, branch, path, anchor, file string, offset, size int) (*explainHistory, error) {
-	revs, err := s.history.PathHistory(ctx, branch, path, anchor)
+// buildHistory assembles one page of the root's change list
+// (store.PathHistory, precomputed: indexed lookups only, diffs included — no
+// blob is read). pos is nil for the first page. Each revision's diff is against
+// the content it was edited from.
+// When older revisions remain, HistoryCursor carries the keyset position, bound
+// to the binding, mount and path by bind.
+func buildHistory(ctx context.Context, s mcpStore, branch, path, anchor string, pos *store.PathHistoryCursor, size int, bind historyCursor) (*explainHistory, error) {
+	revs, next, err := s.history.PathHistory(ctx, branch, path, anchor, pos, size)
 	if err != nil {
 		return nil, err
 	}
-	if offset >= len(revs) {
-		if offset == 0 {
-			return nil, nil
-		}
-		return &explainHistory{Revisions: []explainRevision{}}, nil
+	if len(revs) == 0 && pos == nil {
+		return nil, nil
 	}
 
-	// Parse each revision's fact once, on demand. History only needs the
-	// pinned content, so this skips the HEAD-liveness query readNode adds.
-	cache := map[string]*fact.Fact{}
-	parseAt := func(commit string) *fact.Fact {
-		if f, ok := cache[commit]; ok {
-			return f
-		}
-		var out *fact.Fact
-		if p, ok := readFactVersion(ctx, s, branch, path, commit); ok {
-			out = &p
-		}
-		cache[commit] = out
-		return out
-	}
-
-	end := min(offset+size, len(revs))
 	h := &explainHistory{
-		MoreAvailable: end < len(revs),
-		Revisions:     make([]explainRevision, 0, end-offset),
+		MoreAvailable: next != nil,
+		Revisions:     make([]explainRevision, 0, len(revs)),
 	}
-	if h.MoreAvailable {
-		h.HistoryCursor = encodeHistoryCursor(historyCursor{File: file, Anchor: anchor, Offset: end})
+	if next != nil {
+		bind.Anchor = anchor
+		bind.Frontier = next.Frontier
+		bind.AnchorOnBranch = next.AnchorOnBranch
+		h.HistoryCursor = encodeHistoryCursor(bind)
 	}
-	for i := offset; i < end; i++ {
-		var diff *revisionDiff
-		if cur := parseAt(revs[i].Commit); cur != nil {
-			var prev *fact.Fact
-			if i+1 < len(revs) {
-				prev = parseAt(revs[i+1].Commit)
-			}
-			diff = revisionDelta(prev, *cur)
-		}
+	for _, r := range revs {
 		h.Revisions = append(h.Revisions, explainRevision{
-			Commit:  revs[i].Commit,
-			Date:    time.Unix(revs[i].CommittedAt, 0).UTC().Format(time.RFC3339),
-			Message: revs[i].Message,
-			Action:  revs[i].Action,
-			Diff:    diff,
+			Commit:  r.Commit,
+			Date:    time.Unix(r.AuthoredAt, 0).UTC().Format(time.RFC3339),
+			Message: r.Message,
+			Action:  r.Action,
+			Diff:    r.Diff,
 		})
 	}
 	return h, nil
@@ -409,6 +346,7 @@ type explainTarget struct {
 	s       mcpStore
 	release func()
 	rel     string // repo-relative, normalized
+	mount   string // "" for the write repo, else the mount's 12-hex id
 }
 
 // resolveExplainTarget routes the input fact to its mount: a kb://-qualified
@@ -430,35 +368,62 @@ func resolveExplainTarget(b *repos.Binding, file string) (explainTarget, error) 
 			return explainTarget{}, fmt.Errorf("repo %s is not mounted in this binding", id)
 		}
 	}
+	rel = fact.NormalizePath(rt.RI.OntologyRoot(), rel)
+	if !explainablePath(rt.RI.OntologyRoot(), rel) {
+		return explainTarget{}, fmt.Errorf("%s is not a fact path: explain takes a fact under %s/ or a job slot under %s/<area>/", file, rt.RI.OntologyRoot(), fact.PrivateRoot)
+	}
 	s, release, err := storeIndices(rt.RI)
 	if err != nil {
 		return explainTarget{}, err
 	}
-	return explainTarget{rt: rt, s: s, release: release, rel: fact.NormalizePath(rt.RI.OntologyRoot(), rel)}, nil
+	t := explainTarget{rt: rt, s: s, release: release, rel: rel}
+	if rt.RI != b.Write() {
+		t.mount = federate.ID12(rt.RI.ID())
+	}
+	return t, nil
+}
+
+// explainablePath reports whether a normalized path can hold a fact explain
+// reads: a .md under the ontology root with no dot segment, or a job slot
+// under the private root (.knomit/<area>/).
+func explainablePath(ontologyRoot, rel string) bool {
+	if !strings.HasSuffix(rel, ".md") {
+		return false
+	}
+	if fact.IsPrivatePath(rel) {
+		return fact.IsWritablePrivatePath(rel)
+	}
+	return strings.HasPrefix(rel, ontologyRoot+"/")
 }
 
 // explainHistoryPage serves a history_cursor call: the next page of the root's
-// change list, recomputed from the cursor's anchor. No body, no graph walk.
+// change list from the cursor's keyset position. No body, no graph walk. The
+// cursor must belong to this binding, mount and (normalized) path, and the
+// fact must be readable at its anchor.
 func explainHistoryPage(ctx context.Context, b *repos.Binding, file, token string) (*mcpgo.CallToolResult, error) {
-	hc, err := decodeHistoryCursor(token)
-	if err != nil {
-		return mcpgo.NewToolResultError(err.Error()), nil
-	}
-	if hc.File != file {
-		return mcpgo.NewToolResultError(fmt.Sprintf("history_cursor belongs to file %q — pass that file with it", hc.File)), nil
+	hc, ok := decodeHistoryCursor(token)
+	if !ok || hc.Pin == "" || hc.Pin != b.PinID() || hc.ReadSet != federate.ReadSetFingerprint(b) {
+		return mcpgo.NewToolResultError(errUnknownHistoryCursor), nil
 	}
 	t, err := resolveExplainTarget(b, file)
 	if err != nil {
 		return mcpgo.NewToolResultError(err.Error()), nil
 	}
 	defer t.release()
+	if hc.Mount != t.mount || hc.Path != t.rel {
+		return mcpgo.NewToolResultError(fmt.Sprintf("history_cursor belongs to another fact — pass it with the file it came from (%s)", hc.Path)), nil
+	}
+	if _, _, _, ok := readNode(ctx, t.s, t.rt.Branch, t.rel, hc.Anchor); !ok {
+		return mcpgo.NewToolResultError(errUnknownHistoryCursor), nil
+	}
 
-	history, err := buildHistory(ctx, t.s, t.rt.Branch, t.rel, hc.Anchor, file, hc.Offset, explainHistoryPageSize)
+	pos := &store.PathHistoryCursor{Frontier: hc.Frontier, AnchorOnBranch: hc.AnchorOnBranch}
+	history, err := buildHistory(ctx, t.s, t.rt.Branch, t.rel, hc.Anchor, pos, explainHistoryPageSize, hc)
+	if errors.Is(err, store.ErrHistoryChanged) {
+		return mcpgo.NewToolResultError(errHistoryChanged), nil
+	}
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("history error: %v", err)), nil
-	}
-	if history == nil {
-		history = &explainHistory{Revisions: []explainRevision{}}
 	}
 	out, err := json.Marshal(map[string]any{
 		"path":    file,
@@ -511,7 +476,12 @@ func explainFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, fi
 		return mcpgo.NewToolResultError(fmt.Sprintf("could not read %s at %s", wire(rel), anchor)), nil
 	}
 
-	history, err := buildHistory(ctx, s, branch, rel, anchor, file, 0, explainHistoryDisplay)
+	history, err := buildHistory(ctx, s, branch, rel, anchor, nil, explainHistoryDisplay, historyCursor{
+		Pin:     b.PinID(),
+		ReadSet: federate.ReadSetFingerprint(b),
+		Mount:   t.mount,
+		Path:    rel,
+	})
 	if err != nil {
 		return mcpgo.NewToolResultError(fmt.Sprintf("history error: %v", err)), nil
 	}

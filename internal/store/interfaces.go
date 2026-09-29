@@ -125,12 +125,14 @@ type HistoryQuery interface {
 	// first-parent ancestry of `anchorCommit`, newest → oldest: the version
 	// live at an anchor (explain's root commit, as_of dates).
 	RevisionsBefore(ctx context.Context, branch, path, anchorCommit string, limit int) ([]RevisionMeta, error)
-	// PathHistory returns every change to `path` in the history of
-	// `anchorCommit` — one entry per commit that introduced content for the
-	// path, merge-delivered writes included — newest change first by author
-	// date. Used by knomit_explain to enumerate the root fact's history;
-	// resolution stays on RevisionsBefore.
-	PathHistory(ctx context.Context, branch, path, anchorCommit string) ([]RevisionMeta, error)
+	// PathHistory returns up to limit changes of `path` — commits that
+	// introduced content none of their parents had, merge-delivered writes
+	// included — in the history of `anchorCommit`, newest first, never a
+	// change below one it descends from, and the keyset position to continue
+	// from (nil at the end). Precomputed (path_changes): indexed lookups only.
+	// ErrHistoryChanged on a continuation whose history is gone. Used by
+	// knomit_explain; resolution stays on RevisionsBefore.
+	PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *PathHistoryCursor, limit int) ([]FactRevision, *PathHistoryCursor, error)
 	CommitDetail(ctx context.Context, commitHash, pathPrefix string) (*CommitDetailResult, error)
 	Activity(ctx context.Context, branch, path string) (ActivityResult, error)
 }

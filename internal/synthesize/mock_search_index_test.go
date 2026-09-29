@@ -285,18 +285,19 @@ func (mr *MockSearchIndexMockRecorder) OutgoingAtCommit(ctx, branch, path, commi
 }
 
 // PathHistory mocks base method.
-func (m *MockSearchIndex) PathHistory(ctx context.Context, branch, path, anchorCommit string) ([]store.RevisionMeta, error) {
+func (m *MockSearchIndex) PathHistory(ctx context.Context, branch, path, anchorCommit string, cur *store.PathHistoryCursor, limit int) ([]store.FactRevision, *store.PathHistoryCursor, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "PathHistory", ctx, branch, path, anchorCommit)
-	ret0, _ := ret[0].([]store.RevisionMeta)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret := m.ctrl.Call(m, "PathHistory", ctx, branch, path, anchorCommit, cur, limit)
+	ret0, _ := ret[0].([]store.FactRevision)
+	ret1, _ := ret[1].(*store.PathHistoryCursor)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // PathHistory indicates an expected call of PathHistory.
-func (mr *MockSearchIndexMockRecorder) PathHistory(ctx, branch, path, anchorCommit any) *gomock.Call {
+func (mr *MockSearchIndexMockRecorder) PathHistory(ctx, branch, path, anchorCommit, cur, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PathHistory", reflect.TypeOf((*MockSearchIndex)(nil).PathHistory), ctx, branch, path, anchorCommit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PathHistory", reflect.TypeOf((*MockSearchIndex)(nil).PathHistory), ctx, branch, path, anchorCommit, cur, limit)
 }
 
 // RecentFacts mocks base method.
