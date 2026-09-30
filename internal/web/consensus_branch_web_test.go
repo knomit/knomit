@@ -116,6 +116,10 @@ func TestDeleteOrigin_StartsTheLocalReconcileLoopAtOnce(t *testing.T) {
 		t.Fatalf("consensus branch after detach = %q, want trunk", consensus)
 	}
 
+	// Trunk's tip BEFORE the write: the loop may advance trunk as soon as the
+	// write lands (its push wake), so comparing against trunk read afterwards
+	// would race the very thing under test.
+	before := tipOf(t, ri, "trunk")
 	var written string
 	if err := ri.WithRead(func(svc *store.Service) {
 		_, err := svc.Facts().WriteFact(context.Background(), ri.AgentBranch(), "kb/notes/after-detach.md",
@@ -127,8 +131,8 @@ func TestDeleteOrigin_StartsTheLocalReconcileLoopAtOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	written = tipOf(t, ri, ri.AgentBranch())
-	if written == "" || written == tipOf(t, ri, "trunk") {
-		t.Fatalf("precondition: the agent branch must be ahead of trunk after the write (agent %q)", written)
+	if written == "" || before == "" || written == before {
+		t.Fatalf("precondition: the write must move the agent branch past trunk's pre-write tip (agent %q, trunk before %q)", written, before)
 	}
 
 	// A few intervals, not one: the bound only has to be finite, because
