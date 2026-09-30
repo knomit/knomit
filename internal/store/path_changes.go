@@ -183,18 +183,17 @@ func (rh *repoHandler) openHistory(ctx context.Context) error {
 		pending = append(pending, c)
 		stack = append(stack, c.Parents...)
 	}
-	order := parentsFirst(pending)
-	pending = nil
+	order := parentsFirst(pending, metaNode)
 	prepared := make([]*preparedCommit, len(order))
 	for i, c := range order {
 		if prepared[i], err = d.prepare(ctx, c); err != nil {
 			return err
 		}
 	}
-	// Everything prepared is all the transaction needs: drop the walk and
-	// the object caches before it, so the pass holds one set, not two.
+	// Everything prepared is all the transaction needs: dropCaches frees
+	// the object caches before it, so the pass holds one set, not two (the
+	// walk's slices are dead past this point).
 	n := len(order)
-	order = nil
 	d.dropCaches()
 
 	ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
@@ -336,7 +335,7 @@ func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []p
 		pending = append(pending, c)
 		stack = append(stack, c.Parents...)
 	}
-	return len(pending), rh.deriveCommits(ctx, d, parentsFirst(pending), false)
+	return len(pending), rh.deriveCommits(ctx, d, parentsFirst(pending, metaNode), false)
 }
 
 // deriveCommits prepares and applies commits (parents first) in batched
@@ -422,7 +421,7 @@ func (rh *repoHandler) rederiveDegraded(ctx context.Context) (int, error) {
 	if _, err := rh.deriveClosure(ctx, d, parents); err != nil {
 		return 0, err
 	}
-	return len(commits), rh.deriveCommits(ctx, d, parentsFirst(commits), true)
+	return len(commits), rh.deriveCommits(ctx, d, parentsFirst(commits, metaNode), true)
 }
 
 // markdownChanges picks the .md add/modify paths out of a commit's changes,
@@ -445,24 +444,10 @@ func markdownChanges(entries []storegit.CommitLogEntry) []string {
 }
 
 // parentsFirst orders commits so every commit follows those of its parents
-// that are in the set (Kahn; ties in input order).
-func parentsFirst[C interface{ *object.Commit | *commitMeta }](commits []C) []C {
-	hash := func(c C) plumbing.Hash {
-		switch c := any(c).(type) {
-		case *object.Commit:
-			return c.Hash
-		default:
-			return c.(*commitMeta).Hash
-		}
-	}
-	parents := func(c C) []plumbing.Hash {
-		switch c := any(c).(type) {
-		case *object.Commit:
-			return c.ParentHashes
-		default:
-			return c.(*commitMeta).Parents
-		}
-	}
+// that are in the set (Kahn; ties in input order). node gives a commit's hash
+// and parents (metaNode, commitNode).
+func parentsFirst[C any](commits []C, node func(C) (plumbing.Hash, []plumbing.Hash)) []C {
+	hash := func(c C) plumbing.Hash { h, _ := node(c); return h }
 	in := make(map[plumbing.Hash]bool, len(commits))
 	for _, c := range commits {
 		in[hash(c)] = true
@@ -470,9 +455,10 @@ func parentsFirst[C interface{ *object.Commit | *commitMeta }](commits []C) []C 
 	indeg := map[plumbing.Hash]int{}
 	children := map[plumbing.Hash][]C{}
 	for _, c := range commits {
-		for _, p := range parents(c) {
+		h, parents := node(c)
+		for _, p := range parents {
 			if in[p] {
-				indeg[hash(c)]++
+				indeg[h]++
 				children[p] = append(children[p], c)
 			}
 		}
@@ -492,6 +478,9 @@ func parentsFirst[C interface{ *object.Commit | *commitMeta }](commits []C) []C 
 	}
 	return order
 }
+
+func metaNode(c *commitMeta) (plumbing.Hash, []plumbing.Hash)      { return c.Hash, c.Parents }
+func commitNode(c *object.Commit) (plumbing.Hash, []plumbing.Hash) { return c.Hash, c.ParentHashes }
 
 // deriver derives commits into one table set. It keeps git object caches for
 // the life of one populate or pass. prepare reads git; apply writes SQL on

@@ -46,7 +46,7 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 	if len(fresh) == 0 {
 		return nil
 	}
-	if err := rh.recordCommits(ctx, branch, parentsFirst(fresh)); err != nil {
+	if err := rh.recordCommits(ctx, branch, parentsFirst(fresh, commitNode)); err != nil {
 		return fmt.Errorf("populateCommitLog: %w", err)
 	}
 	log.Debug().Int("commits", total).Int("indexed", len(fresh)).Msg("commit_log: populated")
@@ -238,7 +238,7 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 	if _, err := rh.deriveClosure(ctx, d, tips); err != nil {
 		return err
 	}
-	order := parentsFirst(added)
+	order := parentsFirst(added, commitNode)
 	items, err := rh.indexItems(ctx, d, order, false)
 	if err != nil {
 		return err
