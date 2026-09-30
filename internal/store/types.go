@@ -114,6 +114,17 @@ const (
 	// empty strategy to StrategyLocalWins, so a zero-value "refuse" would be
 	// silently downgraded to the very resolution it exists to prevent.
 	StrategyRefuse ConflictStrategy = "refuse"
+	// StrategyMergeFacts merges the two versions of a conflicting FACT field
+	// by field against their base (fact.MergeVersions, the confidence rule);
+	// a fact one side deleted stays deleted. It runs on the refusing walk as
+	// per-path resolutions, and a path it cannot merge gets the calling
+	// site's own side-picking strategy (mergeOpts.factFallback). Chosen by the
+	// sites whose repo says `conflicts: merge` at its consensus branch tip.
+	StrategyMergeFacts ConflictStrategy = "merge_facts"
+	// StrategyMergeFactsUpstream is StrategyMergeFacts whose both-changed
+	// fields go to the consensus branch's version (`conflicts:
+	// merge:upstream`).
+	StrategyMergeFactsUpstream ConflictStrategy = "merge_facts_upstream"
 )
 
 // ReplayConfig controls replay behavior.

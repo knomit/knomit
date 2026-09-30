@@ -417,6 +417,21 @@ const AttrVerifySignatures = "verify_signatures"
 // recipe reference is then ignored by this binary rather than acted on.
 const AttrConsensus = "consensus"
 
+// AttrConflicts is the repository-level attribute that says what a merge does
+// with a fact BOTH sides changed (a git-level conflict). "merge": the two
+// versions are merged field by field against their common ancestor
+// (MergeVersions), a field both changed going to the more confident version;
+// "merge:upstream": the same, a field both changed going to the consensus
+// branch's version. "off" (and absent): each merge site picks a side as it
+// always has — a peer's sync keeps its own, the host refuses. Either way every
+// conflict a merge commit settles is recorded on it (the Knomit-Merge and
+// Knomit-Conflict trailers).
+//
+// Every merge site reads it at the tip of the CONSENSUS branch, so both
+// instances of a conflict read one value. Its reader (ReadConflicts) reads any
+// other value as off, like consensus: off is today's behaviour.
+const AttrConflicts = "conflicts"
+
 // attributeRegistry is the ONLY place an attribute key is declared.
 //
 // A key missing from this map is NOT an error: it may have been written by a
@@ -466,6 +481,16 @@ var attributeRegistry = map[string]attributeSpec{
 			return ok && (s == ConsensusOff || s == ConsensusAuto)
 		},
 		absent: ConsensusOff,
+		scope:  scopeRoot,
+	},
+	// Exactly "off", "merge" or "merge:upstream"; "off" behaves as absent.
+	AttrConflicts: {
+		accepts: `"off", "merge" or "merge:upstream"`,
+		valid: func(v any) bool {
+			s, ok := v.(string)
+			return ok && (s == ConflictsOff || s == ConflictsMerge || s == ConflictsMergeUpstream)
+		},
+		absent: ConflictsOff,
 		scope:  scopeRoot,
 	},
 }

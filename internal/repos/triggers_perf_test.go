@@ -202,6 +202,20 @@ func within(a, b time.Duration) bool {
 	return b <= bound
 }
 
+// withinRace is the -race bound for _BusyIf, max(3×a, a+250ms). Under the race
+// detector on a shared CI runner the loaded arm measured 1.25–1.50× the base
+// (Race runs 36354285281..36614313171): each busy `if` spins a core to its
+// interrupt and the runner is also running other packages, so the writer loses
+// CPU although dispatch is asynchronous. The synchronous-dispatch sabotage adds
+// about a second per write, which this bound still catches.
+func withinRace(a, b time.Duration) bool {
+	bound := 3 * a
+	if a+250*time.Millisecond > bound {
+		bound = a + 250*time.Millisecond
+	}
+	return b <= bound
+}
+
 // withinMedian is the EVERYDAY bound, max(1.5×a, a+3ms) (1b follow-up, applied
 // in PR 2): the 1.25× bound failed 2 of 3 runs on a loaded laptop while CI
 // never failed it, and a loaded laptop is where the test is run by hand. The
@@ -254,6 +268,11 @@ func abba(t *testing.T, ri *RepoInstance, entries []string, rounds, perBlock int
 // after every run (the median moves ~1.66×); or call the dispatcher
 // synchronously from ri.onCommit — with the busy-if variant below every write
 // gains ≥ 10 × 100 ms.
+//
+// Under -race the median is LOGGED, not gated: the flush-per-run sabotage
+// moves it ~1.66× while race-detector noise on CI already reached 1.50×, so no
+// bound separates them there. The test still runs under -race for its race
+// coverage; the gate is the non-race run (tests.yml).
 func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
@@ -266,15 +285,24 @@ func TestDispatch_WriteLatencyIndependentOfTriggers(t *testing.T) {
 
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
 	b90, l90 := percentile(base, 0.9), percentile(loaded, 0.9)
-	t.Logf("median: 0 triggers %s, 50 triggers %s; p90 (report only): %s vs %s", bm, lm, b90, l90)
-	require.True(t, withinMedian(bm, lm), "median with 50 triggers (%s) is not within max(1.5×, +3ms) of 0 triggers (%s)", lm, bm)
+	t.Logf("median: 0 triggers %s, 50 triggers %s (%.2f×); p90 (report only): %s vs %s", bm, lm, float64(lm)/float64(bm), b90, l90)
+	if raceEnabled {
+		t.Log("-race: the median is reported, not gated")
+	} else {
+		require.True(t, withinMedian(bm, lm), "median with 50 triggers (%s) is not within max(1.5×, +3ms) of 0 triggers (%s)", lm, bm)
+	}
 	require.GreaterOrEqual(t, ri.triggers.stats.view("t00").Fires, int64(100), "the loaded blocks did fire")
 }
 
 // The sabotage target [M5]: 10 triggers whose `if` busy-loops to the 100 ms
 // interrupt. Asynchronous dispatch leaves the writes untouched; synchronous
 // dispatch would add about a second to every write, a difference no bound
-// hides.
+// hides. Under -race the bound is withinRace, max(3×, +250ms): the tight one
+// failed on CPU contention alone (see withinRace).
+// The valid sabotage is "the writer waits for its own run" (triggerKick
+// blocks until the run it kicked completes). Running the dispatcher directly
+// inside triggerKick is not: onCommit runs under the writer's branch lock
+// (builder.go), and the test then stalls instead of measuring latency.
 func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	m := newTestManager(t)
 	ri := bootRepo(t, m)
@@ -285,8 +313,12 @@ func TestDispatch_WriteLatencyIndependentOfTriggers_BusyIf(t *testing.T) {
 	base, loaded := abba(t, ri, entries, 2, 20)
 
 	bm, lm := percentile(base, 0.5), percentile(loaded, 0.5)
-	t.Logf("median: 0 triggers %s, 10 busy triggers %s", bm, lm)
-	require.True(t, within(bm, lm), "median with busy triggers (%s) is not within max(1.25×, +2ms) of 0 triggers (%s)", lm, bm)
+	t.Logf("median: 0 triggers %s, 10 busy triggers %s (%.2f×)", bm, lm, float64(lm)/float64(bm))
+	if raceEnabled {
+		require.True(t, withinRace(bm, lm), "median with busy triggers (%s) is not within max(3×, +250ms) of 0 triggers (%s) under -race", lm, bm)
+	} else {
+		require.True(t, within(bm, lm), "median with busy triggers (%s) is not within max(1.25×, +2ms) of 0 triggers (%s)", lm, bm)
+	}
 	// Teardown must not wait for the backlog: ctx is checked per evaluation.
 	started := time.Now()
 	ri.triggers.stop()

@@ -23,7 +23,7 @@ func OntologySchema() []SchemaField {
 		{"Ontology", "description", "What this ontology is for"},
 		{"Ontology", "topics", "Map of top-level topic keys to their definitions"},
 		{"Ontology", "validations", "Rules applied to every fact, whatever its topic"},
-		{"Ontology", "attributes", "Repository-level settings. verify_signatures: off (default), log or enforce — verify commit signatures of the upstream for this repository. consensus: off (default) or auto — on the instance that hosts this repository with no origin, merge every branch a peer pushes into this instance's agent branch as soon as it lands (a conflict is left for a human; a repo with an origin ignores it)"},
+		{"Ontology", "attributes", "Repository-level settings. verify_signatures: off (default), log or enforce — verify commit signatures of the upstream for this repository. consensus: off (default) or auto — on the instance that hosts this repository with no origin, merge every branch a peer pushes into this instance's agent branch as soon as it lands (a conflict is left for a human; a repo with an origin ignores it). conflicts: off (default), merge or merge:upstream — when both sides of a merge changed the same fact, merge the two versions field by field against their common ancestor (a field both changed goes to the more confident version, or with merge:upstream to the consensus branch's) instead of picking a side; read at the consensus branch's tip; every conflict a merge settles is recorded on its merge commit"},
 
 		{"OntologyNode", "description", "What this topic covers"},
 		{"OntologyNode", "children", "Map of nested sub-topic keys to their definitions"},

@@ -333,15 +333,22 @@ knomit.emit({q: q, e: e, l: l, u: u, r: r, push: knomit.push(), run: knomit.run(
 // host functions; `Date.now()` is pinned to the run's instant (no clock);
 // `knomit` is frozen. Sabotage: vm.Set("require", …) → red; leave Date on the
 // wall clock → red; add a ninth function → red.
+//
+// The clock is proved by pinning the run's clock to a past instant and reading
+// it back, NOT by spinning between two reads: a spin long enough to cross a
+// wall-clock millisecond on a fast machine overran the 5 s script budget under
+// -race (goja ~14× slower), so the fire timed out before emit.
 func TestScript_NoIOPrimitives(t *testing.T) {
+	pinned := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
+	setHooks(t, triggerHooks{now: func() time.Time { return pinned }})
 	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "probe"))
 	putScript(t, ri, "probe", `
-var d1 = Date.now(); var s = 0; for (var i = 0; i < 1500000; i++) { s = (s + i) % 7; } var d2 = Date.now();
+var d1 = Date.now(); var d2 = new Date().getTime();
 var reassigned = false; try { knomit.query = null; reassigned = true; } catch (e) {}
 knomit.emit({
   names: Object.getOwnPropertyNames(knomit).sort(),
   typeofs: [typeof require, typeof process, typeof fetch, typeof setTimeout, typeof XMLHttpRequest],
-  sameClock: d1 === d2, frozen: Object.isFrozen(knomit), reassigned: reassigned,
+  d1: d1, d2: d2, frozen: Object.isFrozen(knomit), reassigned: reassigned,
   globals: Object.keys(globalThis), utc: new Date().toISOString().slice(-1)
 });`)
 	sink := subscribePayloads(t, ri, "t1")
@@ -350,7 +357,8 @@ knomit.emit({
 	p := sink.wait(t, 1)[0]
 	require.Equal(t, []any{"emit", "explain", "learn", "push", "query", "retract", "run", "update"}, p["names"])
 	require.Equal(t, []any{"undefined", "undefined", "undefined", "undefined", "undefined"}, p["typeofs"])
-	require.Equal(t, true, p["sameClock"], "Date.now() is the run's pinned clock, not the wall clock")
+	require.Equal(t, float64(pinned.UnixMilli()), p["d1"], "Date.now() is the run's pinned clock, not the wall clock")
+	require.Equal(t, float64(pinned.UnixMilli()), p["d2"], "new Date() is the run's pinned clock, not the wall clock")
 	require.Equal(t, true, p["frozen"])
 	require.Equal(t, false, p["reassigned"], "the host object cannot be rewritten")
 	for _, bound := range []string{"fact", "agent", "change", "knomit"} {
