@@ -173,16 +173,20 @@ func (m *Manager) FleetMembers(ctx context.Context) ([]store.FleetMember, error)
 	return m.fleetMembersAtMain(ri)
 }
 
+// fleetMembersAtMain reads the member records at the fleet repository's
+// consensus branch: the origin's branch, else the one recorded with the repo
+// (store.UpstreamBranch). Never a name assumed for it.
 func (m *Manager) fleetMembersAtMain(ri *RepoInstance) ([]store.FleetMember, error) {
-	upstream := "main"
-	if o, err := m.originOf(ri); err == nil && o != nil && o.Branch != "" {
-		upstream = o.Branch
-	}
 	var out []store.FleetMember
 	var lerr error
 	if err := ri.WithRead(func(svc *store.Service) {
 		if svc == nil {
 			lerr = errors.New("fleet repository is not open")
+			return
+		}
+		upstream := svc.UpstreamBranch()
+		if upstream == "" {
+			lerr = fmt.Errorf("fleet repository: %w", store.ErrNoConsensusBranch)
 			return
 		}
 		out, lerr = svc.FleetMembersAt(upstream)
@@ -465,13 +469,12 @@ func (m *Manager) ownFleetKeys() []ssh.PublicKey {
 	if ri == nil {
 		return nil
 	}
-	upstream := "main"
-	if o, err := m.originOf(ri); err == nil && o != nil && o.Branch != "" {
-		upstream = o.Branch
-	}
 	var keys []ssh.PublicKey
 	_ = ri.WithRead(func(svc *store.Service) {
-		if svc != nil {
+		if svc == nil {
+			return
+		}
+		if upstream := svc.UpstreamBranch(); upstream != "" {
 			keys, _ = svc.FleetKeysOf(upstream, store.AgentIDOf(m.deps.AgentBranch))
 		}
 	})

@@ -165,59 +165,63 @@ func plainPath(u string) string {
 	return p
 }
 
-// seedBareRemoteHeadNotMain builds a remote whose HEAD is an ontology-LESS
-// "develop", alongside a "main" that IS a knowledge base. The two differ, which
-// is the only way to tell whether a caller resolves the branch by the
-// prefer-main rule or just follows HEAD.
-func seedBareRemoteHeadNotMain(t *testing.T, bare string) string {
+// seedBareRemoteHeadIsAgentBranch builds a remote whose HEAD is an
+// ontology-LESS agent branch (a forge whose default branch was set to one,
+// the #82 case), alongside a "trunk" that IS a knowledge base. The two differ,
+// which is the only way to tell whether a caller resolves the branch by the
+// create's rule (store.ChooseConsensusBranch skips an agent-branch HEAD) or
+// just follows HEAD.
+func seedBareRemoteHeadIsAgentBranch(t *testing.T, bare string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
-	runGit(t, "", "init", "--bare", "--initial-branch=develop", bare)
+	runGit(t, "", "init", "--bare", "--initial-branch=trunk", bare)
 	work := t.TempDir()
 	runGit(t, "", "clone", bare, work)
+	runGit(t, work, "checkout", "-B", "trunk")
 
-	// develop: an ordinary branch, no ontology.
-	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
-	runGit(t, work, "add", "-A")
-	runGit(t, work, "commit", "-m", "develop seed")
-	runGit(t, work, "push", "origin", "develop")
-
-	// main: the knowledge base.
-	runGit(t, work, "checkout", "-b", "main")
+	// trunk: the knowledge base.
 	ont, err := fact.DefaultOntology().Serialize()
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(work, filepath.Dir(OntologyPath)), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(work, OntologyPath), ont, 0o644))
 	runGit(t, work, "add", "-A")
-	runGit(t, work, "commit", "-m", "main kb")
-	runGit(t, work, "push", "origin", "main")
+	runGit(t, work, "commit", "-m", "trunk kb")
+	runGit(t, work, "push", "origin", "trunk")
 
-	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/develop")
+	// agent/other-host: an orphan branch with no ontology, and the remote's HEAD.
+	runGit(t, work, "checkout", "--orphan", "agent/other-host")
+	runGit(t, work, "rm", "-rf", "--quiet", ".")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "seed.txt"), []byte("seed"), 0o644))
+	runGit(t, work, "add", "-A")
+	runGit(t, work, "commit", "-m", "agent seed")
+	runGit(t, work, "push", "origin", "agent/other-host")
+
+	runGit(t, bare, "symbolic-ref", "HEAD", "refs/heads/agent/other-host")
 	return fileuri.New(bare)
 }
 
 // With no branch requested, the preflight must resolve the branch by the SAME
-// prefer-main rule the create uses (store.resolveUpstream), not by the remote's
-// HEAD. Otherwise a remote whose HEAD is not main but whose main is a knowledge
-// base gets a confident, wrong "not a knowledge base" — and the create that
-// follows would have succeeded.
+// rule the create uses (store.ChooseConsensusBranch), not by the remote's raw
+// HEAD. Otherwise a remote whose HEAD is an agent branch but whose consensus
+// branch is a knowledge base gets a confident, wrong "not a knowledge base" —
+// and the create that follows would have succeeded.
 func TestCreate_SubscribeMode_PreflightResolvesByTheCreateRule(t *testing.T) {
 	root := t.TempDir()
 	m := newSubscribeTestManager(t, root)
-	url := seedBareRemoteHeadNotMain(t, filepath.Join(root, "headnotmain.git"))
+	url := seedBareRemoteHeadIsAgentBranch(t, filepath.Join(root, "headisagent.git"))
 
 	require.NoError(t,
 		m.CreatePreflight(context.Background(), CreateSpec{
 			Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url},
 		}),
-		"main carries the ontology, so the preflight must not refuse")
+		"trunk carries the ontology, so the preflight must not refuse")
 
 	// The inverse, checked BEFORE the create below: naming the ontology-less
 	// branch explicitly is still refused. (After the create it could not be
 	// checked at all — the origin-in-use gate fires first and would mask this.)
 	require.ErrorIs(t,
 		m.CreatePreflight(context.Background(), CreateSpec{
-			Name: "sub2", Mode: "subscribe", Origin: &OriginSpec{URL: url, Branch: "develop"},
+			Name: "sub2", Mode: "subscribe", Origin: &OriginSpec{URL: url, Branch: "agent/other-host"},
 		}),
 		ErrRemoteNotInitialized,
 		"an explicitly named ontology-less branch is still refused")
@@ -226,12 +230,11 @@ func TestCreate_SubscribeMode_PreflightResolvesByTheCreateRule(t *testing.T) {
 		Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url},
 	}, nil)
 	require.NoError(t, err)
-	require.Equal(t, "main", ri.ReadBranch(), "the create adopts main, not the remote's HEAD")
+	require.Equal(t, "trunk", ri.ReadBranch(), "the create adopts trunk, not the remote's agent-branch HEAD")
 }
 
 // seedBareRemoteMasterOnly builds a knowledge base on "master" with no "main"
-// anywhere — the case where prefer-main has nothing to prefer and both rules
-// must fall through to the remote's HEAD.
+// anywhere, HEAD on master: both rules follow the remote's HEAD.
 func seedBareRemoteMasterOnly(t *testing.T, bare string) string {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(bare, 0o755))
@@ -250,12 +253,11 @@ func seedBareRemoteMasterOnly(t *testing.T, bare string) string {
 	return fileuri.New(bare)
 }
 
-// The preflight and the create resolve the branch through TWIN rules that live
-// in different packages and cannot share an implementation: the preflight uses
-// resolveUpstream in probe.go (from an ls-remote listing), the create uses
-// store.resolveUpstream in store/repo.go (from a fetched repo). Nothing else
-// pins them together, and Task 7 shipped a bug that existed precisely because
-// they disagreed.
+// The preflight and the create resolve the branch from different data: the
+// preflight in probe.go (from an ls-remote listing), the create in
+// store/repo.go (from a fetched repo). Both now call one rule,
+// store.ChooseConsensusBranch, but they still gather its inputs separately,
+// and Task 7 shipped a bug that existed precisely because they disagreed.
 //
 // This asserts they agree on every shape that distinguishes them: the branch
 // the preflight INSPECTS is the branch the create ADOPTS. The inspected branch
@@ -269,7 +271,7 @@ func TestSubscribe_PreflightInspectsTheBranchTheCreateAdopts(t *testing.T) {
 		wantRead string
 	}{
 		{"head is main", seedBareRemote, "", "main"},
-		{"head is develop, main carries the ontology", seedBareRemoteHeadNotMain, "", "main"},
+		{"head is an agent branch, trunk carries the ontology", seedBareRemoteHeadIsAgentBranch, "", "trunk"},
 		{"master-only remote", seedBareRemoteMasterOnly, "", "master"},
 		{"explicit master on a master-only remote", seedBareRemoteMasterOnly, "master", "master"},
 	}

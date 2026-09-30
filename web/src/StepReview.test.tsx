@@ -63,6 +63,15 @@ describe('StepReview initializing a remote that is not a knowledge base yet', ()
     expect(screen.getByText(/merge request from knomit's branch into main/)).toBeInTheDocument();
   });
 
+  // With no branch named by the user or the probe, the review says so rather
+  // than naming a branch that may not exist.
+  // SABOTAGE: restore the `|| 'main'` fallback → "main is not changed" → red.
+  it('never names main when no branch is known', () => {
+    render(<StepReview state={{ ...remote('no', { upstream_branch: '' }), branch: '' }} dispatch={vi.fn()} />);
+    expect(screen.queryByText(/main is not changed/)).not.toBeInTheDocument();
+    expect(screen.getByText(/\(unknown\) is not changed/)).toBeInTheDocument();
+  });
+
   it('names the ontology it will actually write', () => {
     render(<StepReview state={{ ...remote('no'), preset: 'code', seedPreset: 'code' }} dispatch={vi.fn()} />);
     expect(screen.getByText(/the "code" ontology/)).toBeInTheDocument();

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"knomit/internal/store"
 	"knomit/internal/synthesize"
 )
 
@@ -146,4 +147,31 @@ func TestCorpusDedupThreshold_UnknownIsNotADefault(t *testing.T) {
 	require.NotEqual(t, params.Defaults().Dedup, got,
 		"precondition: this model's threshold must DIFFER from the default, or the "+
 			"test cannot tell which one was used")
+}
+
+// --branch has no default name: unset, the report reads the index's own
+// consensus branch (here trunk, recorded when the repo was made).
+//
+// SABOTAGE: restore the flag default "main" → DefValue is "main" → red.
+func TestBridgesBranch_DefaultsToTheIndexConsensusBranch(t *testing.T) {
+	cmd := newRootCmd()
+	sub, _, err := cmd.Find([]string{"bridges"})
+	require.NoError(t, err)
+	require.Equal(t, "", sub.Flags().Lookup("branch").DefValue, "no branch is assumed by name")
+
+	path := filepath.Join(t.TempDir(), "k.db")
+	svc, err := store.Open(path)
+	require.NoError(t, err)
+	require.NoError(t, svc.InitRepoWithUpstream(map[string]string{}, "trunk", "agent/test"))
+	require.NoError(t, svc.Close())
+
+	svc, err = store.Open(path) // as the command opens it: no OpenRepo
+	require.NoError(t, err)
+	defer svc.Close()
+	got, err := branchOrConsensus(svc, "")
+	require.NoError(t, err)
+	require.Equal(t, "trunk", got)
+	got, err = branchOrConsensus(svc, "agent/test")
+	require.NoError(t, err)
+	require.Equal(t, "agent/test", got, "an explicit --branch wins")
 }

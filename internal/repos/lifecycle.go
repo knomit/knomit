@@ -163,12 +163,13 @@ func (s CreateSpec) joinsRemoteOntology() bool { return s.Mode == "clone" || s.M
 // actually adopt.
 //
 // Those must agree. InitSubscription resolves an unrequested branch through
-// store.resolveUpstream (prefer "main", else the remote's HEAD); answering the
-// shape question about HEAD instead would refuse a remote whose HEAD is not
-// main but whose main IS a knowledge base — a confident wrong "no" in front of
-// a create that would have succeeded. ProbeResult.UpstreamBranch is the
-// repos-side twin of that rule (see resolveUpstream in probe.go), computed from
-// a ref listing the preflight has already made.
+// store.ChooseConsensusBranch (the remote's HEAD unless it is an agent branch,
+// else the one other branch); answering the shape question about HEAD instead
+// would refuse a remote whose HEAD is an agent branch but whose consensus
+// branch IS a knowledge base — a confident wrong "no" in front of a create
+// that would have succeeded. ProbeResult.UpstreamBranch applies that same
+// function (see resolveUpstream in probe.go) to a ref listing the preflight has
+// already made.
 //
 // usable is passed in rather than re-derived here so CreatePreflight keeps ONE
 // definition of it: the same `probeUsable` it computes two lines above for the
@@ -359,14 +360,14 @@ func (m *Manager) CreatePreflight(ctx context.Context, spec CreateSpec) error {
 			// The consensus branch, never the adopted one: see ProbeInitializedOn.
 			//
 			// With no branch requested this must resolve the SAME way the create
-			// will. InitSubscription runs store.resolveUpstream (prefer "main",
-			// else the remote's HEAD); passing "" here would instead inspect
-			// whatever HEAD points at, so a remote whose HEAD is not main but
-			// whose main IS a knowledge base would be refused with a confident
-			// wrong "no" — and the create right behind it would have succeeded.
-			// ProbeResult.UpstreamBranch is the repos-side twin of that rule
-			// (probe.go, resolveUpstream), computed from the listing already
-			// made above.
+			// will. InitSubscription runs store.ChooseConsensusBranch (the
+			// remote's HEAD unless it is an agent branch, else the one other
+			// branch); passing "" here would instead inspect whatever HEAD
+			// points at, so a remote whose HEAD is an agent branch but whose
+			// consensus branch IS a knowledge base would be refused with a
+			// confident wrong "no" — and the create right behind it would have
+			// succeeded. ProbeResult.UpstreamBranch applies that same function
+			// (probe.go, resolveUpstream) to the listing already made above.
 			//
 			// If the probe yielded nothing usable, pass "" and let the create's
 			// own check stay authoritative: an UNKNOWN here refuses nothing.
@@ -978,9 +979,10 @@ func rejectOntologySpecForClone(spec CreateSpec) error {
 // into control.db, once initClone returns.
 //
 // The returned upstream is the branch the clone ACTUALLY adopted, resolved by
-// svc.InitFromRemote against the remote (prefer "main", else its symbolic
-// HEAD) whenever spec.Origin.Branch is empty. Create MUST persist exactly this
-// value, never the requested spec.Origin.Branch and never a defaulted "main":
+// svc.InitFromRemote against the remote (store.ChooseConsensusBranch: its
+// symbolic HEAD unless that is an agent branch, else its one other branch)
+// whenever spec.Origin.Branch is empty. Create MUST persist exactly this
+// value, never the requested spec.Origin.Branch and never a defaulted name:
 // this repo's local branch and fetch refspecs were built from the RESOLVED
 // branch, so persisting anything else writes an origin that disagrees with
 // them, and every later sync reads a nonexistent origin/<branch>.

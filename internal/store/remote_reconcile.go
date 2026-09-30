@@ -100,8 +100,8 @@ type MainReconcileResult struct {
 // — the caller must then re-migrate the agent branch against the new
 // upstream.
 //
-// upstreamMain selects the consensus branch (typically "main" but
-// configurable to "master" or any other name). Empty defaults to "main".
+// upstreamMain is the consensus branch (whatever the origin names; never
+// empty here, see Sync).
 //
 // The disjoint-history sub-case (no MergeBase between local and origin)
 // is detected and logged distinctly from a plain rewind; both still
@@ -116,9 +116,6 @@ type MainReconcileResult struct {
 // commit_log is repopulated and the index manager is notified so
 // downstream readers see consistent state.
 func (rh *repoHandler) reconcileMain(ctx context.Context, upstreamMain string) (MainReconcileResult, error) {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
 	originMainName := plumbing.NewRemoteReferenceName("origin", upstreamMain)
 	originMainRef, err := rh.gits.Reference(originMainName)
 	if err != nil {
@@ -298,9 +295,6 @@ func (rh *repoHandler) advanceBranchTo(ctx context.Context, branch string, hash 
 // rh.lockBranch(agentBranch) for the entire body, including the
 // watermark write.
 func (rh *repoHandler) reconcileAgent(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy, mainRewound bool) (AgentReconcileResult, error) {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
 	if mainRewound {
 		return rh.reconcileAgentRebase(ctx, agentBranch, upstreamMain, strategy)
 	}

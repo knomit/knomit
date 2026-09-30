@@ -842,6 +842,56 @@ func (b *repoBuilder) build() *RepoInstance {
 		return nil
 	}
 
+	// startLocalSync is startSync's origin-less twin, run when a live repo's
+	// origin is REMOVED (DELETE .../origin). The loop is otherwise chosen only
+	// at open (startSyncLoops), so before this a detached repo ran no loop at
+	// all until it reopened: nothing fast-forwarded its consensus branch from
+	// the agent branch, and merged peer work and the host's own facts never
+	// reached it.
+	//
+	// Same drain as startSync (cancel the running loops, wait them out under
+	// syncLoopMu, new ctx), then the loops startSyncLoops would have started for
+	// a repo with no origin: the experiment sweep (the cancel took it too) and
+	// runLocalReconcileLoop, on the CURRENT store so a SwapStore is followed.
+	// The caller has already removed the origin, so the loop's own ownsMain
+	// check finds none and advances. DisableBackgroundSync is honoured here as
+	// everywhere a loop starts (kb/gotchas/repos/sync/activatesync-honours-
+	// disable-flag): the drain still runs, the loops do not.
+	ri.startLocalSync = func() error {
+		currentSvc, release, err := ri.Acquire()
+		if err != nil {
+			return fmt.Errorf("StartLocalSync: %w", err)
+		}
+		defer release()
+
+		b.syncLoopMu.Lock()
+		syncCancel()
+		syncWg.Wait()
+		b.syncLoopMu.Unlock()
+
+		var newCtx context.Context
+		newCtx, syncCancel = context.WithCancel(ctx)
+		ri.mu.Lock()
+		ri.syncCancel = syncCancel
+		ri.mu.Unlock()
+
+		if noBackgroundSync {
+			return nil
+		}
+		if !b.subscribed && cfg.Experiments.ExpiryDays > 0 {
+			b.syncLoopMu.Lock()
+			syncWg.Add(1)
+			b.syncLoopMu.Unlock()
+			go runExperimentSweepLoop(newCtx, &syncWg, currentSvc, name,
+				cfg.Experiments.ExpiryDays, defaultExperimentSweepInterval)
+		}
+		b.syncLoopMu.Lock()
+		syncWg.Add(1)
+		b.syncLoopMu.Unlock()
+		go runLocalReconcileLoop(newCtx, &syncWg, currentSvc, name, agentBranch, cfg.Git.LocalReconcileInterval, ri.triggerKick, ri.syncWake)
+		return nil
+	}
+
 	ri.closeFn = func() {
 		obs.Stop()
 		// Detach the handle (marking the instance closed so any later Acquire —

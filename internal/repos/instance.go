@@ -154,7 +154,10 @@ type RepoInstance struct {
 	indexCancel context.CancelFunc
 	indexWg     *sync.WaitGroup
 	startSync   func(url string) error
-	closeFn     func()
+	// startLocalSync is startSync's origin-less twin (repoBuilder.build), run
+	// when the origin is removed from a live repo.
+	startLocalSync func() error
+	closeFn        func()
 
 	indexState atomic.Int32 // indexReady | indexIndexing | indexFailed
 	indexDone  atomic.Int64
@@ -621,6 +624,19 @@ func (ri *RepoInstance) ActivateSync(url string) error {
 		return nil
 	}
 	return ri.startSync(url)
+}
+
+// StartLocalSync replaces the running loops with the ones a repo WITHOUT an
+// origin runs (the local reconcile loop and the experiment sweep), at once,
+// with no reopen. Call it after the origin has been removed; the origin-backed
+// loop is cancelled and drained first. An instance built without the builder's
+// wiring (a unit test) only stops its loops, as DeactivateSync does.
+func (ri *RepoInstance) StartLocalSync() error {
+	if ri.startLocalSync == nil {
+		ri.DeactivateSync()
+		return nil
+	}
+	return ri.startLocalSync()
 }
 
 // DeactivateSync cancels the running sync/push loops so the repo stops talking

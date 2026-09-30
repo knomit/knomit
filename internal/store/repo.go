@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -128,23 +129,23 @@ func (s *Service) OpenRepo() error {
 	return nil
 }
 
-// InitRepo creates a new knomit git repo using the Service's storer with
-// "main" as the local consensus branch name. initFiles are additional files
-// to create in the initial commit. agentBranch defaults to "agent/<hostname>"
-// if empty. Thin wrapper around InitRepoWithUpstream — most callers (no
-// origin, default branch naming) should use this.
+// InitRepo creates a new knomit git repo using the Service's storer, with
+// DefaultConsensusBranch as the local consensus branch name (nobody named one,
+// and a local create has nothing to detect it from). The name is recorded, so
+// it is read back rather than assumed from then on. initFiles are additional
+// files to create in the initial commit. agentBranch defaults to
+// "agent/<hostname>" if empty. Thin wrapper around InitRepoWithUpstream.
 func (s *Service) InitRepo(initFiles map[string]string, agentBranch string) error {
-	return s.InitRepoWithUpstream(initFiles, "main", agentBranch)
+	return s.InitRepoWithUpstream(initFiles, "", agentBranch)
 }
 
 // InitRepoWithUpstream is InitRepo parameterized on the local consensus
-// branch name. Use when the local repo should default to "master" (or any
-// non-"main" name) — typically only test fixtures need this; production
-// callers either go through InitFromRemote (which detects from the remote)
-// or use the default "main".
+// branch name. An empty name is a create nobody named a branch for, and gets
+// DefaultConsensusBranch; production callers otherwise go through
+// InitFromRemote, which takes the name from the remote.
 func (s *Service) InitRepoWithUpstream(initFiles map[string]string, upstreamMain, agentBranch string) error {
 	if upstreamMain == "" {
-		upstreamMain = "main"
+		upstreamMain = DefaultConsensusBranch
 	}
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
@@ -298,16 +299,16 @@ func (s *Service) CloneFrom(url string, auth transport.AuthMethod, progress func
 
 // InitFromRemote initializes a knomit git repo by fetching from a remote origin.
 //
-// upstreamMain selects the remote's consensus branch (typically "main",
-// configurable to "master" or any other name). When empty, the helper
-// inspects the remote's symbolic HEAD after the initial fetch and uses
-// whatever it points at, falling back to "main" if detection fails.
+// upstreamMain selects the remote's consensus branch. When empty, it is
+// resolved from the remote after the initial fetch by ChooseConsensusBranch
+// (its HEAD unless that is an agent branch, else its one other branch), and a
+// remote that answers neither is refused with ErrNoConsensusBranch.
 //
 // The resolved upstream is RETURNED so the caller can persist the branch the
 // clone actually adopted rather than the one it asked for. Callers that pass
-// "" and then persist their own fallback would silently rewrite a master-
-// convention remote to "main" — the refspecs and remotes row would disagree
-// with the branch this function created locally.
+// "" and then persist their own fallback would silently rewrite a trunk- or
+// master-convention remote to some other name: the refspecs and remotes row
+// would disagree with the branch this function created locally.
 //
 // If the remote has an existing agent branch for this hostname, it is used.
 // Otherwise a new agent branch is created from origin/<upstreamMain>.
@@ -402,7 +403,10 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 		agentBranch = defaultAgentBranch()
 	}
 
-	upstreamMain = s.resolveUpstream(repo, auth, upstreamMain)
+	upstreamMain, err = s.resolveUpstream(repo, auth, upstreamMain)
+	if err != nil {
+		return "", false, fmt.Errorf("InitFromRemote: %w", err)
+	}
 
 	// Publish the freshly-initialised repo on the handler BEFORE
 	// configureRemote — that helper reaches into rh.repo to read and rewrite
@@ -548,25 +552,44 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 }
 
 // resolveUpstream applies the consensus-branch rule shared by every remote
-// init path: honour a requested name; otherwise PREFER "main" — a remote whose
-// symbolic HEAD points at an agent branch must NOT make that our consensus —
-// then the remote's HEAD branch (e.g. a "master"-convention repo), then "main"
-// as a last resort. Must run AFTER the wildcard fetch so remoteHasBranch can
-// see the remote-tracking refs.
-func (s *Service) resolveUpstream(repo *gogit.Repository, auth transport.AuthMethod, requested string) string {
+// init path, ChooseConsensusBranch: a requested name; else the remote's
+// symbolic HEAD when it is not an agent/experiment/generated branch (a remote
+// whose HEAD points at an agent branch must NOT make that our consensus); else
+// the one fetched branch with no other role. Anything else is refused with
+// ErrNoConsensusBranch naming the candidates, never resolved by a branch's
+// name. Must run AFTER the wildcard fetch so the remote-tracking refs exist.
+func (s *Service) resolveUpstream(repo *gogit.Repository, auth transport.AuthMethod, requested string) (string, error) {
 	if requested != "" {
-		return requested
+		return requested, nil
 	}
-	if remoteHasBranch(repo, "main") {
-		return "main"
+	branches := remoteTrackingBranches(repo)
+	head := detectRemoteUpstream(repo, auth, s.rh.netTimeout)
+	if b := ChooseConsensusBranch("", head, branches); b != "" {
+		log.Info().Str("upstream", b).Str("remote_head", head).Msg("resolveUpstream: adopted the remote's consensus branch")
+		return b, nil
 	}
-	detected := detectRemoteUpstream(repo, auth, s.rh.netTimeout)
-	if detected == "" {
-		log.Warn().Msg("resolveUpstream: no \"main\" branch and could not detect remote HEAD; defaulting to \"main\"")
-		return "main"
+	return "", fmt.Errorf("%w: the remote's HEAD is %q and its branches are %v; name the consensus branch", ErrNoConsensusBranch, head, branches)
+}
+
+// remoteTrackingBranches lists the branches the wildcard fetch brought in, by
+// their refs/remotes/origin/* names, sorted.
+func remoteTrackingBranches(repo *gogit.Repository) []string {
+	iter, err := repo.References()
+	if err != nil {
+		return nil
 	}
-	log.Info().Str("upstream", detected).Msg("resolveUpstream: no \"main\"; using detected remote HEAD branch")
-	return detected
+	defer iter.Close()
+	const prefix = "refs/remotes/origin/"
+	var out []string
+	_ = iter.ForEach(func(ref *plumbing.Reference) error {
+		n := ref.Name().String()
+		if strings.HasPrefix(n, prefix) && n != prefix+"HEAD" {
+			out = append(out, strings.TrimPrefix(n, prefix))
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
 }
 
 // InitSubscription initialises a repo that FOLLOWS a remote branch read-only.
@@ -610,7 +633,10 @@ func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, 
 		return "", fmt.Errorf("InitSubscription: fetch: %w", err)
 	}
 
-	upstreamMain = s.resolveUpstream(repo, auth, upstreamMain)
+	upstreamMain, err = s.resolveUpstream(repo, auth, upstreamMain)
+	if err != nil {
+		return "", fmt.Errorf("InitSubscription: %w", err)
+	}
 
 	// Publish before configureRemote, which reads and rewrites rh.repo's config.
 	s.rh.repo = repo
@@ -651,8 +677,8 @@ func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, 
 }
 
 // detectRemoteUpstream queries origin's symbolic HEAD to determine the default
-// branch (e.g. "main", "master"). Returns "" when detection fails; the caller
-// must fall back to "main".
+// branch. Returns "" when detection fails; ChooseConsensusBranch then decides
+// from the fetched branches alone.
 //
 // Uses remote.List (which issues a separate ls-remote round-trip) rather than
 // reading a local ref, because go-git's default fetch refspecs do not bring
@@ -666,19 +692,12 @@ func detectRemoteUpstream(repo *gogit.Repository, auth transport.AuthMethod, tim
 	return detectFromRemote(remote, auth, timeout)
 }
 
-// remoteHasBranch reports whether origin has the given branch, by checking the
-// remote-tracking ref populated by the wildcard fetch in InitFromRemote.
-func remoteHasBranch(repo *gogit.Repository, branch string) bool {
-	_, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branch), false)
-	return err == nil
-}
-
 // Detection from a bare URL (a throwaway in-memory repo with `origin` attached,
 // queried for its symbolic HEAD) used to exist here for the repos builder, which
 // resolved the upstream BEFORE cloning. Nothing needs that ordering now:
 // InitFromRemote fetches first and detects against the real repo, which is
-// strictly better — it can prefer an existing "main" over whatever HEAD points
-// at, and it reports what it resolved.
+// strictly better: it can see which branches exist beside whatever HEAD points
+// at (an agent-branch HEAD is skipped), and it reports what it resolved.
 
 func detectFromRemote(remote *gogit.Remote, auth transport.AuthMethod, timeout time.Duration) string {
 	ctx, cancel := netCtxWith(context.Background(), timeout)
@@ -698,14 +717,14 @@ func detectFromRemote(remote *gogit.Remote, auth transport.AuthMethod, timeout t
 // initFromEmptyRemote handles the empty-remote fallback for InitFromRemote.
 // initFiles are written as additional seed files on top of the root manifest
 // so the new agent branch matches the layout produced by InitRepo.
-// upstreamMain is the consensus branch name to bootstrap (defaults to "main"
-// when empty). The empty-remote path has no remote HEAD to detect from, so
-// the caller's value (or "main") is authoritative. It is returned for the same
-// reason InitFromRemote returns it: the caller persists what was bootstrapped,
-// not what it requested.
+// upstreamMain is the consensus branch name to bootstrap. The empty-remote
+// path has no remote HEAD to detect from and CREATES the branch, so the
+// caller's value is authoritative and an empty one gets DefaultConsensusBranch.
+// It is returned for the same reason InitFromRemote returns it: the caller
+// persists what was bootstrapped, not what it requested.
 func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string) (string, error) {
 	if upstreamMain == "" {
-		upstreamMain = "main"
+		upstreamMain = DefaultConsensusBranch
 	}
 	rootManifest := "# Knowledge Base\n\nRoot manifest.\n"
 	initSig := object.Signature{Name: "knomit", Email: "knomit@local", When: time.Now()}

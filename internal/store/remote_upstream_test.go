@@ -185,8 +185,9 @@ func TestInitFromRemote_DetectsRemoteHEAD(t *testing.T) {
 // TestInitFromRemote_PrefersMainOverAgentBranchHEAD regresses the clone bug:
 // a remote whose symbolic HEAD points at an agent branch (e.g. its GitHub
 // default branch was set to agent/<host>) must NOT make that agent branch the
-// local consensus upstream. When the remote HAS "main", InitFromRemote must
-// adopt "main" regardless of where HEAD points.
+// local consensus upstream. The agent-branch HEAD is skipped and the remote's
+// one other branch (here main) is adopted; not because of its name, since a
+// remote with two such branches is refused (TestResolveUpstream_UndecidableIsRefused).
 func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	bareDir := t.TempDir()
 	mustRun(t, "", "git", "init", "--bare", "--initial-branch=main", bareDir)
@@ -216,7 +217,7 @@ func TestInitFromRemote_PrefersMainOverAgentBranchHEAD(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 
-	// Empty upstreamMain → must prefer "main", NOT the agent-branch HEAD.
+	// Empty upstreamMain → the one non-agent branch, NOT the agent-branch HEAD.
 	upstream, wasEmpty, err := svc.InitFromRemote(fileuri.New(bareDir), nil, "", "agent/test", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, "main", upstream, "InitFromRemote must return the branch it resolved")

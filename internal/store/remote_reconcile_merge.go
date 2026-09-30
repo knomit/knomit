@@ -23,12 +23,9 @@ import (
 // is atomic with the merge — without this, a concurrent Sync could
 // observe (or write) a stale watermark between the merge and the write.
 //
-// upstreamMain is the consensus branch name to merge from (typically "main",
-// configurable to "master" etc.). Empty defaults to "main".
+// upstreamMain is the consensus branch name to merge from (never empty here,
+// see Sync).
 func (rh *repoHandler) reconcileAgentMerge(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy) (AgentReconcileResult, error) {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
 	unlock := rh.lockBranch(agentBranch)
 	defer unlock()
 

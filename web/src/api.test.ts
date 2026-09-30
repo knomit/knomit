@@ -239,6 +239,24 @@ describe('api.getAgentBranch', () => {
     const branch = await api.getAgentBranch('core');
     expect(branch).toBe('agent/host-1');
   });
+
+  // With no agent branch and several others, there is no answer: it throws
+  // rather than picking one because it is called main (or inventing 'main').
+  // SABOTAGE: restore the main preference / `|| 'main'` → resolves 'main' → red.
+  it('never picks a branch by its name', async () => {
+    const serve = (names: string[]) => vi.fn().mockImplementation(async (url: string) => {
+      if (url.endsWith('/branches')) {
+        return { ok: true, status: 200, json: async () => ({ _embedded: { branches: names.map(name => ({ name })) } }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ name: 'core' }) };
+    });
+    globalThis.fetch = serve(['trunk', 'main']);
+    await expect(api.getAgentBranch('core')).rejects.toThrow(/cannot tell which branch/);
+    globalThis.fetch = serve([]);
+    await expect(api.getAgentBranch('core')).rejects.toThrow(/cannot tell which branch/);
+    globalThis.fetch = serve(['trunk']);
+    await expect(api.getAgentBranch('core')).resolves.toBe('trunk');
+  });
 });
 
 describe('api.getOrigin', () => {

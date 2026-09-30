@@ -36,6 +36,65 @@ import (
 // consensusBranchKey is the meta key holding the recorded consensus branch.
 const consensusBranchKey = "consensus_branch"
 
+// DefaultConsensusBranch is the ONE name knomit gives a consensus branch it
+// has to CREATE when nobody named one and there is nothing to detect it from:
+// a local create (its modes carry no branch) and the empty-remote seed path (an
+// empty remote advertises no HEAD). It is defined here and nowhere else; every
+// other path takes the name from a request, from the remote, or from the
+// record below (TestNoHardcodedBranchLiterals holds that).
+//
+// A constant rather than git's init.defaultBranch: the name matters only at
+// birth, because it is recorded and read back from then on. Reading the
+// running account's gitconfig would make two hosts created by the same request
+// disagree, and a daemon or desktop app often has no gitconfig at all.
+const DefaultConsensusBranch = "main"
+
+// ErrNoConsensusBranch reports that no consensus branch could be established:
+// none was requested, and the remote (or the stored origin) names none that
+// can be adopted without guessing. The caller must name one.
+var ErrNoConsensusBranch = errors.New("no consensus branch: none was named and none can be determined")
+
+// IsRoleBranch reports whether branch already has a role that is not
+// consensus: an agent branch (this machine's or a peer's), an experiment, or a
+// generated okf branch. Such a branch is never adopted as a consensus branch
+// on its own authority, whatever a remote's HEAD says.
+func IsRoleBranch(branch string) bool {
+	return strings.HasPrefix(branch, "agent/") || strings.HasPrefix(branch, "exp/") || isGeneratedRef(branch)
+}
+
+// ChooseConsensusBranch is the consensus-branch rule for a repository that has
+// branches (a remote after the fetch, or a probe's ref listing): the requested
+// name; else the remote's symbolic HEAD when it names one of branches and has
+// no other role (IsRoleBranch); else the one branch that has no other role.
+// Otherwise "" (several candidates, or none) and the caller refuses with
+// ErrNoConsensusBranch rather than picking one by its name.
+//
+// It never prefers a branch because of what it is called. A remote whose HEAD
+// is an agent branch (the #82 case) falls through to the single remaining
+// candidate; a remote holding main and trunk with HEAD on trunk answers trunk.
+func ChooseConsensusBranch(requested, head string, branches []string) string {
+	if requested != "" {
+		return requested
+	}
+	if head != "" && !IsRoleBranch(head) {
+		for _, b := range branches {
+			if b == head {
+				return head
+			}
+		}
+	}
+	var cand []string
+	for _, b := range branches {
+		if !IsRoleBranch(b) {
+			cand = append(cand, b)
+		}
+	}
+	if len(cand) == 1 {
+		return cand[0]
+	}
+	return ""
+}
+
 // UpstreamBranch is the repo's consensus branch name: the origin row's
 // Remote.Branch when the repo has an origin, else the recorded one. Served
 // HEAD, the local reconcile, skills, recipes and the consensus merger all key
@@ -129,7 +188,7 @@ func (s *Service) consensusCandidates() []string {
 			continue
 		}
 		b := ref.Name().Short()
-		if strings.HasPrefix(b, "agent/") || strings.HasPrefix(b, "exp/") || isGeneratedRef(b) {
+		if IsRoleBranch(b) {
 			continue
 		}
 		out = append(out, b)

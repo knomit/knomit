@@ -32,12 +32,9 @@ var errNoOriginRemote = errors.New("no origin git remote configured")
 // consensus branch is populated and reconcile can run. The agent ref will
 // materialize on the next fetch after the first Push.
 //
-// upstreamMain selects the consensus branch (typically "main", configurable
-// to "master" or any other name). Empty defaults to "main".
+// upstreamMain is the consensus branch, never empty here: every caller has
+// resolved it (InitFromRemote, InitSubscription) or refused an empty one (Sync).
 func fetchOrigin(ctx context.Context, repo *gogit.Repository, auth transport.AuthMethod, upstreamMain string, timeout time.Duration) error {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
 	strictCtx, strictCancel := netCtxWith(ctx, timeout)
 	err := repo.FetchContext(strictCtx, &gogit.FetchOptions{RemoteName: "origin", Auth: auth})
 	strictCancel()
@@ -144,9 +141,13 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 		}
 	}()
 
+	// The origin's branch is the consensus branch. An origin without one names
+	// nothing to reconcile against, and is reported rather than guessed at: this
+	// is the one entry that reads it, so fetchOrigin, reconcileNow and the
+	// reconcile steps below never see an empty name.
 	upstreamMain := remote.Branch
 	if upstreamMain == "" {
-		upstreamMain = "main"
+		return SyncResult{}, fmt.Errorf("Sync: the origin has no branch: %w", ErrNoConsensusBranch)
 	}
 
 	// Hold the config READ lock across the origin existence check and the fetch.
@@ -187,12 +188,9 @@ func (ri *remoteIndex) Sync(ctx context.Context, agentBranch string, auth transp
 // before reconcileAgent acquires rh.lockBranch(agentBranch). This avoids
 // holding two branch locks simultaneously.
 //
-// upstreamMain is the consensus branch name (typically "main" but
-// configurable to "master" or any other). Empty defaults to "main".
+// upstreamMain is the consensus branch name; Sync, the only production
+// caller, refuses an empty one before getting here.
 func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMain string) (SyncResult, error) {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
 
 	// Degenerate config: the configured consensus branch IS this machine's
 	// own agent branch (e.g. a clone whose remote HEAD was an agent branch,

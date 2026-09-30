@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,4 +101,34 @@ func TestOwns(t *testing.T) {
 	for _, p := range []string{"README.md", "LICENSE", ".github/ci.yml", "kbextra/x.md", "docs/kb/x.md"} {
 		require.False(t, owns(p), "%s must NOT be owned", p)
 	}
+}
+
+// With no usable source HEAD, the default branch is the sole fetched branch;
+// several are refused (pass -b), never resolved by picking main or master.
+//
+// SABOTAGE: restore the main/master preference loop → main is returned → red.
+func TestDefaultSourceBranch_NeverPicksByName(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644))
+	_, err = wt.Add("f")
+	require.NoError(t, err)
+	h, err := wt.Commit("c", &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@t", When: time.Unix(1700000000, 0)}})
+	require.NoError(t, err)
+	set := func(b string) {
+		require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.ReferenceName(sourceRefPrefix+b), h)))
+	}
+	const unreachable = "http://127.0.0.1:1/kb.git" // no HEAD can be asked for
+
+	set("trunk")
+	got, err := defaultSourceBranch(repo, unreachable, nil)
+	require.NoError(t, err)
+	require.Equal(t, "trunk", got, "the sole fetched branch")
+
+	set("main")
+	_, err = defaultSourceBranch(repo, unreachable, nil)
+	require.ErrorContains(t, err, "pass -b", "two branches and no HEAD: refused, not main")
 }

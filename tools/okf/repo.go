@@ -334,8 +334,9 @@ func resolveSourceBranch(repo *git.Repository, branch string) (plumbing.Hash, er
 }
 
 // defaultSourceBranch resolves the source's own HEAD branch, falling back to
-// "main"/"master" and finally to the sole fetched branch. Mirroring the
-// source's default is what makes `clone` need no -b in the common case.
+// the sole fetched branch. Mirroring the source's default is what makes
+// `clone` need no -b in the common case. It never picks a branch because of
+// its name: several branches and no usable HEAD is refused, asking for -b.
 func defaultSourceBranch(repo *git.Repository, url string, auth transport.AuthMethod) (string, error) {
 	if name, err := remoteHeadBranch(repo, url, auth); err == nil && name != "" {
 		if _, err := repo.Reference(plumbing.ReferenceName(sourceRefPrefix+name), true); err == nil {
@@ -345,13 +346,6 @@ func defaultSourceBranch(repo *git.Repository, url string, auth transport.AuthMe
 	available, err := sourceBranches(repo)
 	if err != nil {
 		return "", err
-	}
-	for _, pref := range []string{"main", "master"} {
-		for _, b := range available {
-			if b == pref {
-				return b, nil
-			}
-		}
 	}
 	if len(available) == 1 {
 		return available[0], nil

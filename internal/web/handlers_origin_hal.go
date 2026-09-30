@@ -210,14 +210,16 @@ func (defaultOriginProvider) SetOrigin(_ context.Context, m *repos.Manager, ri *
 		}
 
 		// Resolve the upstream consensus branch: explicit request > existing
-		// remote record > "main". The HAL request lets master-default repos
-		// pin the branch without going through the session-based flow.
+		// remote record > the repo's own consensus branch (recorded at init,
+		// kept across a detach: store.UpstreamBranch). Attaching an origin to a
+		// trunk repo therefore tracks trunk. There is no name to fall back to:
+		// with none of the three, ConfigureRemote refuses below.
 		upstreamMain := req.Branch
 		if upstreamMain == "" && existing != nil {
 			upstreamMain = existing.Branch
 		}
 		if upstreamMain == "" {
-			upstreamMain = "main"
+			upstreamMain = svc.UpstreamBranch()
 		}
 
 		if cerr := svc.ConfigureRemote(u, upstreamMain, ri.AgentBranch()); cerr != nil {
@@ -373,8 +375,15 @@ func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, r
 	if err != nil {
 		return err
 	}
-	// Stop the sync loop now that the remote is gone.
-	ri.DeactivateSync()
+	// The remote is gone: stop its loop and start the one a repo without an
+	// origin runs, now rather than at the next open, so the consensus branch
+	// keeps following the agent branch (kb/gotchas/repos/origin/
+	// detach-starts-no-local-loop). It runs AFTER SetOrigin(nil): the local
+	// loop exits on a definite origin, so starting it earlier would end it.
+	// The detach itself has succeeded; a failure here is logged, not returned.
+	if serr := ri.StartLocalSync(); serr != nil {
+		log.Warn().Err(serr).Str("repo", ri.Name()).Msg("DeleteOrigin: origin removed, but the local reconcile loop did not start")
+	}
 	return nil
 }
 
