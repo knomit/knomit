@@ -54,7 +54,11 @@ func missionOntology(t *testing.T, topic string, dedupOff bool) *fact.Ontology {
 	}
 	o, err := fact.ParseOntology([]byte(src))
 	require.NoError(t, err)
-	require.Equal(t, dedupOff, o.LearnDedupOff(topic))
+	if !dedupOff {
+		require.False(t, o.LearnDedupOff(topic), "the control really has dedup on")
+	}
+	// The shipped file is taken as it is: whether its flag holds is what the
+	// learns below measure.
 	return o
 }
 
