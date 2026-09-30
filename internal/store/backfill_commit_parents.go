@@ -11,7 +11,7 @@ import (
 
 // commitParentsBackfillKey is the meta-table sentinel that records whether
 // the one-time commit_parents backfill has run for this database. Once set,
-// CommitLogSync maintains commit_parents incrementally for every new commit.
+// CommitLogApply maintains commit_parents incrementally for every new commit.
 const commitParentsBackfillKey = "commit_parents_backfilled"
 
 // backfillCommitParents populates commit_parents for every commit already
@@ -21,7 +21,7 @@ const commitParentsBackfillKey = "commit_parents_backfilled"
 // Why this is needed: commit_parents was added after commit_log, so existing
 // repos boot with commit_log populated but commit_parents empty. The
 // recursive-CTE walk in resolveActiveCommitForPath would short-circuit at
-// depth 1 without this. New commits are appended in-line by CommitLogSync;
+// depth 1 without this. New commits are appended in-line by CommitLogApply;
 // only the historical backfill needs this one-off pass.
 func backfillCommitParents(ctx context.Context, rh *repoHandler) error {
 	db := rh.db

@@ -57,6 +57,9 @@ func (s *Service) EnsureLocalUpstream(ctx context.Context, upstream string) (boo
 	if err != nil {
 		return false, nil
 	}
+	if err := rh.deriveBeforeAdvance(ctx, originRef.Hash()); err != nil {
+		return false, fmt.Errorf("EnsureLocalUpstream: %w", err)
+	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(local, originRef.Hash())); err != nil {
 		return false, fmt.Errorf("EnsureLocalUpstream: create %s: %w", upstream, err)
 	}
@@ -127,6 +130,9 @@ func (s *Service) AdvanceLocalUpstream(ctx context.Context, agentBranch, upstrea
 	}
 	if _, err := rh.EnsureBranch(ctx, upstream, "refs/heads/"+upstream); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: ensure %s: %w", upstream, err)
+	}
+	if err := rh.deriveBeforeAdvance(ctx, agentRef.Hash()); err != nil {
+		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: %w", err)
 	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(upstreamName, agentRef.Hash())); err != nil {
 		return MainReconcileResult{}, fmt.Errorf("AdvanceLocalUpstream: fast-forward: %w", err)

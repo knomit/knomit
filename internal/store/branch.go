@@ -72,6 +72,10 @@ type repoHandler struct {
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer ssh.Signer        // SSH signer for commit signing (shared)
 
+	// changes holds each derived commit's tree diff until its commit_log rows
+	// are built from it: one diff per commit (changeLists).
+	changes changeLists
+
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
 	// acceptList is the operator's accept list (control.db), bound to this
@@ -332,6 +336,12 @@ func (rh *repoHandler) CreateBranch(ctx context.Context, branch, fromBranch stri
 	fromHash, err := rh.resolveRef(ctx, fromBranch)
 	if err != nil {
 		return fmt.Errorf("CreateBranch: resolve source %q: %w", fromBranch, err)
+	}
+	// The copied visibility below must only name derived commits: the
+	// source's commits are (indexing derives them), so this is a lookup —
+	// unless the source predates path_changes, when it derives them now.
+	if err := rh.deriveBeforeAdvance(ctx, fromHash); err != nil {
+		return fmt.Errorf("CreateBranch: %w", err)
 	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(newRefName, fromHash)); err != nil {
 		return fmt.Errorf("CreateBranch: set ref: %w", err)
