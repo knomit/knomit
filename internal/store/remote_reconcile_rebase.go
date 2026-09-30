@@ -226,22 +226,22 @@ func (rh *repoHandler) replayCommit(
 	var mergeStrategy ConflictStrategy
 	var resolutions map[string]Resolution
 	var trailers []string
-	switch strategy {
-	case StrategyMergeFacts, StrategyMergeFactsUpstream:
-		// The fact-level merge, with THIS framing's sides: the consensus
-		// branch is ontoCommit (dst), and a path it cannot merge keeps
-		// today's replay rule, the agent's commit (src) wins. Its lines go on
-		// the replayed commit's own message — a replay writes no merge commit.
-		rule, _ := mergeFactsRule(strategy)
+	policy, settle := conflictsPolicyOf(strategy)
+	switch {
+	case settle:
+		// The `conflicts` setting, with THIS framing's sides: the consensus
+		// side is ontoCommit (dst), and a key set to off keeps today's replay
+		// rule, the agent's commit (src) wins. Its lines go on the replayed
+		// commit's own message — a replay writes no merge commit.
 		res, lines, err := rh.factMergeResolutions(ctx, baseCommit, orig, ontoCommit,
-			factMerge{rule: rule, upstream: fact.MergeDst, fallback: StrategyRemoteWins})
+			factMerge{policy: policy, consensus: fact.MergeDst, fallback: StrategyRemoteWins})
 		if err != nil {
 			return plumbing.ZeroHash, fmt.Errorf("replayCommit: merge facts: %w", err)
 		}
 		mergeStrategy, resolutions, trailers = StrategyRefuse, res, lines
-	case StrategyLocalWins:
+	case strategy == StrategyLocalWins:
 		mergeStrategy = StrategyRemoteWins
-	case StrategyRemoteWins:
+	case strategy == StrategyRemoteWins:
 		mergeStrategy = StrategyLocalWins
 	default:
 		// Empty / unrecognized: default to agent-wins (the project decision

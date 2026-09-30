@@ -29,13 +29,30 @@ func cmFact(t *testing.T, body string, conf float64, entities ...string) string 
 	return s
 }
 
+// cmOntology is an ontology whose `conflicts` sets facts (and state, when
+// given as "facts/state"); "" sets nothing.
 func cmOntology(conflicts string) string {
 	s := "id: x\nname: X\n"
 	if conflicts != "" {
-		s += "attributes:\n  conflicts: " + conflicts + "\n"
+		facts, state, _ := strings.Cut(conflicts, "/")
+		s += "attributes:\n  conflicts:\n"
+		if facts != "" {
+			s += "    facts: " + facts + "\n"
+		}
+		if state != "" {
+			s += "    state: " + state + "\n"
+		}
 	}
 	return s + "topics:\n  notes:\n    description: d\n"
 }
+
+// Strategies as the sites build them from a `conflicts` setting.
+var (
+	stratMerge          = conflictsPolicy{facts: fact.ConflictsMerge, state: fact.ConflictsOff}.strategy()
+	stratMergeConsensus = conflictsPolicy{facts: fact.ConflictsMergeConsensus, state: fact.ConflictsOff}.strategy()
+	stratConsensus      = conflictsPolicy{facts: fact.ConflictsConsensus, state: fact.ConflictsOff}.strategy()
+	stratMergeState     = conflictsPolicy{facts: fact.ConflictsMerge, state: fact.ConflictsConsensus}.strategy()
+)
 
 type cmRepo struct {
 	t   *testing.T
@@ -107,7 +124,7 @@ func (r *cmRepo) setOriginTip(branch string) {
 }
 
 func mergeLine(path string, base, src, dst, out plumbing.Hash, decided string) string {
-	return fmt.Sprintf("%s strategy=confidence base=%s src=%s dst=%s out=%s decided=%s",
+	return fmt.Sprintf("%s strategy=merge base=%s src=%s dst=%s out=%s decided=%s",
 		path, blobName(base), blobName(src), blobName(dst), blobName(out), decided)
 }
 
@@ -165,7 +182,7 @@ func TestPeerSync_MergeFacts_NonMainConsensus(t *testing.T) {
 	baseBlob, _ := r.blob(base, "kb/notes/f.md")
 	srcBlob, _ := r.blob(consensusTip, "kb/notes/f.md")
 	dstBlob, _ := r.blob(agentTip, "kb/notes/f.md")
-	require.True(t, strings.HasPrefix(tip.Message, "merge: master into "+agent+" (merge_facts)\n"), tip.Message)
+	require.True(t, strings.HasPrefix(tip.Message, "merge: master into "+agent+" (conflicts:merge/off)\n"), tip.Message)
 	require.Equal(t, []string{mergeLine("kb/notes/f.md", baseBlob, srcBlob, dstBlob, outBlob, "body")},
 		TrailerValues(tip.Message, TrailerMerge), "message:\n%s", tip.Message)
 	require.Empty(t, TrailerValues(tip.Message, TrailerConflict))
@@ -254,9 +271,9 @@ func TestPeerSync_MergeFacts_FallbackAndRetraction(t *testing.T) {
 
 	merges := strings.Join(TrailerValues(tip.Message, TrailerMerge), "\n")
 	conflicts := strings.Join(TrailerValues(tip.Message, TrailerConflict), "\n")
-	require.Contains(t, merges, "kb/notes/f.md strategy=confidence ")
-	require.Regexp(t, `kb/notes/d1\.md strategy=confidence base=[0-9a-f]{40} src=none dst=[0-9a-f]{40} out=none dropped=dst-modify decided=delete`, merges)
-	require.Regexp(t, `kb/notes/d2\.md strategy=confidence base=[0-9a-f]{40} src=[0-9a-f]{40} dst=none out=none dropped=src-modify decided=delete`, merges)
+	require.Contains(t, merges, "kb/notes/f.md strategy=merge ")
+	require.Regexp(t, `kb/notes/d1\.md strategy=merge base=[0-9a-f]{40} src=none dst=[0-9a-f]{40} out=none dropped=dst-modify decided=delete`, merges)
+	require.Regexp(t, `kb/notes/d2\.md strategy=merge base=[0-9a-f]{40} src=[0-9a-f]{40} dst=none out=none dropped=src-modify decided=delete`, merges)
 	require.Regexp(t, `notes\.txt kept=dst dropped=src-modify strategy=local_wins .* reason=not-a-fact`, conflicts)
 	require.Regexp(t, `kb/notes/bad\.md kept=dst dropped=src-modify strategy=local_wins .* reason=src-unparsable`, conflicts)
 	require.Regexp(t, `extra\.txt kept=src dropped=dst-add strategy=local_wins base=none .* reason=not-a-fact`, conflicts)
@@ -303,21 +320,21 @@ func TestMergePushed_MergeFacts_NonMainUpstream(t *testing.T) {
 	require.Equal(t, 0.8, f.Confidence)
 	require.Equal(t, []string{"HostAdded"}, f.Entities)
 	require.Len(t, TrailerValues(tip.Message, TrailerMerge), 1, tip.Message)
-	require.Contains(t, tip.Message, "(merge_facts)")
+	require.Contains(t, tip.Message, "(conflicts:merge/off)")
 }
 
-// merge:upstream on the host: the host's branch is the upstream side, so a
+// merge:consensus on the host: the host's branch is the consensus side, so a
 // field both changed takes the host's value even against a more confident
 // peer.
-func TestMergePushed_MergeFactsUpstream_HostIsUpstream(t *testing.T) {
-	r, peerTip := hostFork(t, "merge:upstream")
+func TestMergePushed_MergeConsensus_HostIsConsensus(t *testing.T) {
+	r, peerTip := hostFork(t, "merge:consensus")
 	_, err := r.svc.MergePushed(context.Background(), pmPeer, pmAgent, peerTip, "")
 	require.NoError(t, err)
 	tip := r.tip(pmAgent)
 	_, out := r.blob(tip, "kb/notes/f.md")
 	require.Equal(t, "host body", r.parse(out).Body)
-	require.Contains(t, TrailerValues(tip.Message, TrailerMerge)[0], "strategy=upstream ")
-	require.Contains(t, tip.Message, "(merge_facts_upstream)")
+	require.Contains(t, TrailerValues(tip.Message, TrailerMerge)[0], "strategy=merge_consensus ")
+	require.Contains(t, tip.Message, "(conflicts:merge:consensus/off)")
 }
 
 // An explicit side is a human's whole-set choice: the setting never overrides
@@ -364,7 +381,7 @@ func TestMergePushed_NoSetting_Refuses(t *testing.T) {
 // record goes on the replayed commit's own message — inside its existing
 // trailer paragraph, so its Knomit-Trace still reads.
 //
-// SABOTAGE: drop the StrategyMergeFacts case in replayCommit (S12b; it falls
+// SABOTAGE: drop the `conflicts` case in replayCommit (S12b; it falls
 // to the default agent-wins arm) → the agent's F wholesale, no trailer → red.
 func TestReplay_MergeFacts(t *testing.T) {
 	r := newCMRepo(t)
@@ -378,7 +395,7 @@ func TestReplay_MergeFacts(t *testing.T) {
 	require.NoError(t, err)
 	onto := r.write("main", "kb/notes/f.md", cmFact(t, "main body", 0.5, "MainAdded"))
 
-	res, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", StrategyMergeFacts, true)
+	res, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratMerge, true)
 	require.NoError(t, err)
 	require.Equal(t, ModeRebase, res.Mode)
 	tip := r.tip(agent)
@@ -412,21 +429,21 @@ func replayFork(t *testing.T) (*cmRepo, string, plumbing.Hash) {
 	return r, agent, r.tip("main").Hash
 }
 
-// B1 (a): merge:upstream on the replay takes ONTO's version of a field both
+// B1 (a): merge:consensus on the replay takes ONTO's version of a field both
 // changed — onto is the consensus side here, although it is dst.
 //
-// SABOTAGE: replayCommit's factMerge with upstream: fact.MergeSrc (S18a) →
+// SABOTAGE: replayCommit's factMerge with consensus: fact.MergeSrc (S18a) →
 // the agent's body → red.
-func TestReplay_MergeFactsUpstream_OntoIsUpstream(t *testing.T) {
+func TestReplay_MergeConsensus_OntoIsConsensus(t *testing.T) {
 	r, agent, _ := replayFork(t)
-	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", StrategyMergeFactsUpstream, true)
+	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratMergeConsensus, true)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	_, out := r.blob(tip, "kb/notes/f.md")
-	require.Equal(t, "main body", r.parse(out).Body, "upstream = onto (the rewound consensus branch)")
+	require.Equal(t, "main body", r.parse(out).Body, "consensus = onto (the rewound consensus branch)")
 	lines := TrailerValues(tip.Message, TrailerMerge)
 	require.Len(t, lines, 1, tip.Message)
-	require.Contains(t, lines[0], "strategy=upstream ")
+	require.Contains(t, lines[0], "strategy=merge_consensus ")
 }
 
 // B1 (b): what the replay cannot merge keeps today's replay rule — the
@@ -438,7 +455,7 @@ func TestReplay_MergeFacts_FallbackAgentWins(t *testing.T) {
 	r, agent, _ := replayFork(t)
 	r.write("main", "notes.txt", "main\n")
 	r.write(agent, "notes.txt", "agent\n")
-	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", StrategyMergeFacts, true)
+	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", stratMerge, true)
 	require.NoError(t, err)
 	tip := r.tip(agent)
 	_, notes := r.blob(tip, "notes.txt")

@@ -418,18 +418,55 @@ const AttrVerifySignatures = "verify_signatures"
 const AttrConsensus = "consensus"
 
 // AttrConflicts is the repository-level attribute that says what a merge does
-// with a fact BOTH sides changed (a git-level conflict). "merge": the two
-// versions are merged field by field against their common ancestor
-// (MergeVersions), a field both changed going to the more confident version;
-// "merge:upstream": the same, a field both changed going to the consensus
-// branch's version. "off" (and absent): each merge site picks a side as it
-// always has — a peer's sync keeps its own, the host refuses. Either way every
-// conflict a merge commit settles is recorded on it (the Knomit-Merge and
-// Knomit-Conflict trailers).
+// with a path BOTH sides changed (a git-level conflict). It is an object with
+// two keys:
 //
-// Every merge site reads it at the tip of the CONSENSUS branch, so both
-// instances of a conflict read one value. Its reader (ReadConflicts) reads any
-// other value as off, like consensus: off is today's behaviour.
+//	conflicts:
+//	  facts: merge        # off | merge | merge:consensus | consensus
+//	  state: consensus    # off | consensus
+//
+// `facts` settles a fact both sides changed. "merge": the two versions are
+// merged field by field against their common ancestor (MergeVersions), a
+// field both changed going to the more confident version; "merge:consensus":
+// the same, a field both changed going to the consensus side's version;
+// "consensus": no field merge, the consensus side's whole version wins. Under
+// both merge values a fact one side retracted stays retracted.
+//
+// `state` settles every other path (the ontology, .knomit state, any file
+// that is not a fact) AND a fact the merge cannot take without losing
+// something (unparsable, kinds differ, a frontmatter key this build does not
+// know). "consensus": the consensus side's version wins. `merge:consensus` is
+// not a state value — there is nothing to merge field by field.
+//
+// "off" for either key is the side-pick each merge site has always made: a
+// peer's sync keeps its own, the host refuses and leaves it for a human. The
+// consensus side is the side that is on, or will reach, the consensus branch:
+// the incoming consensus branch at a peer's sync (and in the rebase replay),
+// the host's own agent branch when the host merges a pushed branch.
+//
+// Absent: a key that is not set reads "off" — except under `consensus: auto`,
+// where it reads `facts: merge` / `state: consensus`. The default keys on the
+// `consensus: auto` ATTRIBUTE alone, whether or not the repository has an
+// origin (on a repo with one the merger ignores auto, and the default is
+// harmless there: its peers' syncs merge instead of keeping their own). An
+// explicit "off" stays off. Every conflict a merge commit settles is recorded
+// on it (the Knomit-Merge and Knomit-Conflict trailers) whatever the setting.
+//
+// SET IT ONCE AND FORGET IT. Choose the value when the repository is created
+// and leave it. Every merge site reads it at the tip of the CONSENSUS branch,
+// so both instances of a conflict read one value — but an instance whose copy
+// of the consensus branch lags reads the older value for that round, and
+// nothing coordinates a change of this setting across instances mid-flight.
+// Nothing is meant to: it is repository policy, not a knob to turn while
+// instances are merging.
+//
+// A bad value — the old scalar form `conflicts: merge`, an unknown inner key,
+// a value outside a key's set — is handled exactly as for `consensus`: a
+// WARNING when an existing repository opens (it keeps opening and accepting
+// writes), fatal only for a NEW ontology (ParseNewOntology), and its reader
+// (ReadConflicts) reads it as off for both keys — not as the auto default —
+// and each merge site warns once. Off is today's behaviour, so an unreadable
+// value never merges anything.
 const AttrConflicts = "conflicts"
 
 // attributeRegistry is the ONLY place an attribute key is declared.
@@ -483,15 +520,13 @@ var attributeRegistry = map[string]attributeSpec{
 		absent: ConsensusOff,
 		scope:  scopeRoot,
 	},
-	// Exactly "off", "merge" or "merge:upstream"; "off" behaves as absent.
+	// A mapping with only the keys "facts" ("off", "merge", "merge:consensus"
+	// or "consensus") and "state" ("off" or "consensus"). No value behaves as
+	// absent: what an absent key means depends on `consensus` (ReadConflicts).
 	AttrConflicts: {
-		accepts: `"off", "merge" or "merge:upstream"`,
-		valid: func(v any) bool {
-			s, ok := v.(string)
-			return ok && (s == ConflictsOff || s == ConflictsMerge || s == ConflictsMergeUpstream)
-		},
-		absent: ConflictsOff,
-		scope:  scopeRoot,
+		accepts: `a mapping with "facts" ("off", "merge", "merge:consensus" or "consensus") and/or "state" ("off" or "consensus")`,
+		valid:   validConflicts,
+		scope:   scopeRoot,
 	},
 }
 

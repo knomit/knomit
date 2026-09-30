@@ -116,19 +116,19 @@ type mergeOpts struct {
 	// side, when set, settles EVERY conflicting path with that side, detected
 	// under the dst lock (the whole-set choice of the UI merge dialog).
 	side ResolutionSide
-	// factUpstream and factFallback say how a merge-facts strategy runs at
-	// this site: which side is the consensus branch (the upstream rule) and
-	// the side-picking strategy a path it cannot merge gets. The zero values
-	// are the peer sync's: the consensus branch is src (merged INTO the
-	// agent branch), and an unmergeable path is LocalWins, as always.
-	factUpstream fact.MergeSide
-	factFallback ConflictStrategy
+	// factConsensus and factFallback say how a `conflicts` strategy runs at
+	// this site: which side is the consensus side, and the side-picking
+	// strategy a key set to off gets. The zero values are the peer sync's:
+	// the consensus branch is src (merged INTO the agent branch), and an off
+	// key is LocalWins, as always.
+	factConsensus fact.MergeSide
+	factFallback  ConflictStrategy
 }
 
-func (o mergeOpts) factMerge(rule fact.MergeRule) factMerge {
-	fm := factMerge{rule: rule, upstream: o.factUpstream, fallback: o.factFallback}
-	if fm.upstream == "" {
-		fm.upstream = fact.MergeSrc
+func (o mergeOpts) factMerge(p conflictsPolicy) factMerge {
+	fm := factMerge{policy: p, consensus: o.factConsensus, fallback: o.factFallback}
+	if fm.consensus == "" {
+		fm.consensus = fact.MergeSrc
 	}
 	if fm.fallback == "" {
 		fm.fallback = StrategyLocalWins
@@ -240,7 +240,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	}
 	baseCommit := bases[0]
 
-	rule, mergeFacts := mergeFactsRule(strategy)
+	policy, mergeFacts := conflictsPolicyOf(strategy)
 	if mergeFacts && (len(resolutions) > 0 || o.side != "") {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %s computes its own resolutions; none may be given", strategy)
 	}
@@ -283,12 +283,12 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
 
-	// A merge-facts strategy settles the conflict set up front, as per-path
+	// A `conflicts` strategy settles the conflict set up front, as per-path
 	// resolutions the REFUSING walk applies; whatever it could not settle
 	// (its site falls back to Refuse) is refused exactly as before.
 	walk := strategy
 	if mergeFacts {
-		res, lines, ferr := rh.factMergeResolutions(ctx, baseCommit, srcCommit, dstCommit, o.factMerge(rule))
+		res, lines, ferr := rh.factMergeResolutions(ctx, baseCommit, srcCommit, dstCommit, o.factMerge(policy))
 		if ferr != nil {
 			return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: merge facts: %w", ferr)
 		}
