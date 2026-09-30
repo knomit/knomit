@@ -414,10 +414,11 @@ func (rh *repoHandler) stageCommitLog(ctx context.Context, branchID int64, commi
 	return nil
 }
 
-// AppendCommitLog indexes a single new commit, deriving its path_changes rows
-// in the same transaction (and any underived ancestors first, from git). When
-// a parent is not recorded on this branch — a gap left by an older index —
-// the branch is populated instead, which records every missing ancestor.
+// AppendCommitLog records a single new commit on branch. Every caller moved
+// the ref only after deriveBeforeAdvance derived the commit and its ancestors,
+// so recording derives nothing: the hook only verifies. When a parent is not
+// recorded on this branch — a gap left by an older index — the branch is
+// populated instead, which records every missing ancestor (all derived too).
 // Returns an error so callers (notifyCommit) can propagate append failures
 // — previously the error was swallowed to a log.Warn which let silent
 // branches drift out of commit_log parity. The property test P3 surfaced

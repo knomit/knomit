@@ -6,9 +6,8 @@
 -- visible advances, and storegit.CommitLogApply's hook refuses to record one
 -- that is not, so an indexed commit is never visible without its rows.
 -- There is deliberately no path_changes_version row: its absence makes the
--- first populate derive every branch tip into shadow tables and flip them in
--- (ensureAllDerived); a version bump does the same. The columns here must
--- match createTablesSQL.
+-- next open derive every branch's history in one transaction before the repo
+-- serves anything (openHistory); a version change does the same.
 
 -- One row per (path, commit) where the path's blob at the commit differs from
 -- its blob at the FIRST parent (the tree diff's add/modify rows, for .md
