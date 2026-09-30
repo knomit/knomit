@@ -44,6 +44,11 @@ const (
 
 const autoAttrs = "attributes:\n  consensus: auto\n"
 
+// autoOffAttrs is `consensus: auto` with `conflicts` explicitly off: since
+// conflict-merge PR 2 an ABSENT `conflicts` under auto reads as facts: merge /
+// state: consensus, so a test of the refusing merger says off out loud.
+const autoOffAttrs = "attributes:\n  consensus: auto\n  conflicts:\n    facts: off\n    state: off\n"
+
 type cHost struct {
 	m   *Manager
 	ri  *RepoInstance
@@ -595,7 +600,7 @@ func TestConsensus_QuiescentWithNoFFPeer(t *testing.T) {
 // SABOTAGE: StrategyLocalWins in MergeConsensus → the first merge goes
 // through with the host's version kept silently → "nothing merged" red.
 func TestConsensus_ConflictLeftForHuman(t *testing.T) {
-	h := newConsensusHost(t, triggerOntology(autoAttrs), hostOpts{})
+	h := newConsensusHost(t, triggerOntology(autoOffAttrs), hostOpts{})
 	writeOn(t, h.ri, cHostAgent, "kb/tasks/shared.md")
 	h.advance(t)
 	p := newConsensusPeer(t, h.url)

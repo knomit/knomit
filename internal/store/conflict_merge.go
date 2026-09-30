@@ -1,6 +1,7 @@
-// Fact-level conflict merge: what a merge does with a path BOTH sides changed
-// when the repo's `conflicts` attribute says merge, and the record every merge
-// commit now carries of each conflict it settled (merged or side-picked).
+// Conflict settlement: what a merge does with a path BOTH sides changed when
+// the repo's `conflicts` attribute (an object: facts, state) says to settle it
+// rather than pick a side, and the record every merge commit now carries of
+// each conflict it settled (merged or side-picked).
 package store
 
 import (
@@ -23,7 +24,7 @@ import (
 // (or replayed) commit's message with any other Knomit-* trailer.
 const (
 	// TrailerMerge names a path whose two versions were merged:
-	//   Knomit-Merge: <path> strategy=<confidence|upstream> base=<blob|none>
+	//   Knomit-Merge: <path> strategy=<merge|merge_consensus> base=<blob|none>
 	//     src=<blob|none> dst=<blob|none> out=<blob|none> decided=<field,…>
 	// plus `dropped=<side>-modify` when one side deleted the fact and the
 	// deletion won (out=none, decided=delete). Both input versions stay in
@@ -32,40 +33,69 @@ const (
 	// TrailerConflict names a path whose conflict was settled by picking a
 	// side, with the change that lost:
 	//   Knomit-Conflict: <path> kept=<src|dst> dropped=<side>-<modify|delete|add>
-	//     strategy=<conflict strategy> base=… src=… dst=… [reason=<why>]
-	// reason is set when a merge was asked for and this path could not be
-	// merged (not a fact, unparsable, kind mismatch, lossy), or when a human
-	// chose the side for every path ("chosen").
+	//     strategy=<consensus|site strategy> base=… src=… dst=… [reason=<why>]
+	// strategy=consensus names a pick of the consensus side (`facts:
+	// consensus`, or `state: consensus`); any other strategy is the site's
+	// own side-pick. reason is set when a merge was asked for and this path
+	// could not be merged (not a fact, unparsable, kind mismatch, lossy), or
+	// when a human chose the side for every path ("chosen").
 	TrailerConflict = "Knomit-Conflict"
 )
 
-// mergeFactsRule is the fact.MergeRule a merge-facts strategy names; ok is
-// false for a strategy that picks sides.
-func mergeFactsRule(s ConflictStrategy) (fact.MergeRule, bool) {
-	switch s {
-	case StrategyMergeFacts:
-		return fact.MergeConfidence, true
-	case StrategyMergeFactsUpstream:
-		return fact.MergeUpstream, true
-	}
-	return "", false
+// recordConsensus is the strategy a Knomit-Conflict line names when the
+// consensus side's version was taken. It is a record name only, never a
+// strategy a merge runs.
+const recordConsensus ConflictStrategy = "consensus"
+
+// conflictsStrategyPrefix starts every ConflictStrategy that carries a
+// `conflicts` policy: "conflicts:<facts>/<state>".
+const conflictsStrategyPrefix = "conflicts:"
+
+// conflictsPolicy is the `conflicts` setting as a merge site runs it: the two
+// keys' values (fact.Conflicts*). It travels as a ConflictStrategy value, so
+// every site's signature stays the one it had, and the merge commit's subject
+// names it.
+type conflictsPolicy struct {
+	facts string // off | merge | merge:consensus | consensus
+	state string // off | consensus
 }
 
-// mergeFactsStrategy is the ConflictStrategy for a `conflicts` rule.
-func mergeFactsStrategy(rule fact.MergeRule) ConflictStrategy {
-	if rule == fact.MergeUpstream {
-		return StrategyMergeFactsUpstream
-	}
-	return StrategyMergeFacts
+func (p conflictsPolicy) strategy() ConflictStrategy {
+	return ConflictStrategy(conflictsStrategyPrefix + p.facts + "/" + p.state)
 }
 
-// factMerge is how one merge site runs a merge-facts strategy: which side is
-// the consensus branch (for the upstream rule) and what a path that cannot be
-// merged gets — the site's own side-picking strategy, unchanged.
+// conflictsPolicyOf is the policy a strategy carries; ok is false for a
+// strategy that picks sides (or refuses) and for a malformed value.
+func conflictsPolicyOf(s ConflictStrategy) (conflictsPolicy, bool) {
+	rest, ok := strings.CutPrefix(string(s), conflictsStrategyPrefix)
+	if !ok {
+		return conflictsPolicy{}, false
+	}
+	i := strings.LastIndex(rest, "/")
+	if i < 0 {
+		return conflictsPolicy{}, false
+	}
+	p := conflictsPolicy{facts: rest[:i], state: rest[i+1:]}
+	switch p.facts {
+	case fact.ConflictsOff, fact.ConflictsMerge, fact.ConflictsMergeConsensus, fact.ConflictsConsensus:
+	default:
+		return conflictsPolicy{}, false
+	}
+	switch p.state {
+	case fact.ConflictsOff, fact.ConflictsConsensus:
+	default:
+		return conflictsPolicy{}, false
+	}
+	return p, true
+}
+
+// factMerge is how one merge site runs a `conflicts` policy: which side is the
+// consensus side, and what a key set to off gets — the site's own
+// side-picking strategy, unchanged.
 type factMerge struct {
-	rule     fact.MergeRule
-	upstream fact.MergeSide
-	fallback ConflictStrategy // StrategyLocalWins, StrategyRemoteWins or StrategyRefuse
+	policy    conflictsPolicy
+	consensus fact.MergeSide   // the side that is on, or will reach, the consensus branch
+	fallback  ConflictStrategy // StrategyLocalWins, StrategyRemoteWins or StrategyRefuse
 }
 
 // conflictShape is one conflicting path's three versions; a zero hash is an
@@ -121,17 +151,26 @@ func conflictLine(c conflictShape, kept ResolutionSide, strategy ConflictStrateg
 }
 
 // factMergeResolutions settles every path the merge of src into dst conflicts
-// on, for a merge-facts strategy, as the per-path resolutions the REFUSING
-// walk applies (a Body can only set a path, so a deletion is a Side):
+// on, for a `conflicts` policy, as the per-path resolutions the REFUSING walk
+// applies (a Body can only set a path, so a deletion is a Side):
 //
 //   - src and dst hold the same bytes: dst, silently — nothing was lost.
-//   - a fact path one side deleted and the other edited: the deletion wins
-//     (ruling 2); the edit stays in the other parent.
-//   - a fact path both sides changed or both added: fact.MergeVersions.
-//   - anything else — not a fact path, or MergeVersions refused — gets the
-//     site's own fallback strategy: LocalWins keeps dst (a dual-add takes src,
-//     exactly as the LocalWins walk does), RemoteWins takes src, Refuse leaves
-//     the path unresolved so the merge is refused as it always was.
+//   - not a fact path: the STATE rule.
+//   - a fact path, `facts: off`: the site's own side-pick.
+//   - a fact path, `facts: consensus`: the consensus side's whole version —
+//     its edit, its deletion or its addition, unparsed.
+//   - a fact path one side deleted and the other edited, `facts: merge` or
+//     `merge:consensus`: the deletion wins (ruling 2); the edit stays in the
+//     other parent.
+//   - a fact path both sides changed or both added, `facts: merge` or
+//     `merge:consensus`: fact.MergeVersions; what it refuses (unparsable,
+//     kinds differ, lossy) gets the STATE rule, with MergeVersions' reason.
+//
+// The state rule: `state: consensus` takes the consensus side's version;
+// `state: off` is the site's own side-pick. The site's side-pick is its
+// fallback strategy: LocalWins keeps dst (a dual-add takes src, exactly as the
+// LocalWins walk does), RemoteWins takes src, Refuse leaves the path
+// unresolved so the merge is refused as it always was.
 //
 // It returns the trailer lines for every path it settled.
 func (rh *repoHandler) factMergeResolutions(
@@ -164,10 +203,15 @@ func (rh *repoHandler) factMergeResolutions(
 	}
 	sort.Strings(paths)
 
-	strategy := fact.MergeStrategy{Rule: fm.rule, Upstream: fm.upstream}
+	consensusSide := ResolveDst
+	if fm.consensus == fact.MergeSrc {
+		consensusSide = ResolveSrc
+	}
+	rule, fieldMerge := fact.ConflictsFactsRule(fm.policy.facts)
+	strategy := fact.MergeStrategy{Rule: rule, Consensus: fm.consensus}
 	res := make(map[string]Resolution, len(paths))
 	var lines []string
-	fallback := func(c conflictShape, reason string) {
+	sitePick := func(c conflictShape, reason string) {
 		var kept ResolutionSide
 		switch fm.fallback {
 		case StrategyLocalWins:
@@ -183,13 +227,28 @@ func (rh *repoHandler) factMergeResolutions(
 		res[c.path] = Resolution{Side: kept}
 		lines = append(lines, conflictLine(c, kept, fm.fallback, reason))
 	}
+	takeConsensus := func(c conflictShape, reason string) {
+		res[c.path] = Resolution{Side: consensusSide}
+		lines = append(lines, conflictLine(c, consensusSide, recordConsensus, reason))
+	}
+	stateRule := func(c conflictShape, reason string) {
+		if fm.policy.state == fact.ConflictsConsensus {
+			takeConsensus(c, reason)
+			return
+		}
+		sitePick(c, reason)
+	}
 	for _, p := range paths {
 		c := shapeOf(p, baseTree, srcTree, dstTree)
 		switch {
 		case c.src == c.dst:
 			res[p] = Resolution{Side: ResolveDst}
 		case !rh.isFactPath(p):
-			fallback(c, "not-a-fact")
+			stateRule(c, "not-a-fact")
+		case fm.policy.facts == fact.ConflictsConsensus:
+			takeConsensus(c, "")
+		case !fieldMerge:
+			sitePick(c, "") // facts: off
 		case c.src.IsZero() || c.dst.IsZero():
 			// Modify/delete: the retraction wins. The walk's delete arm (src
 			// deleted) applies ResolveSrc as a delete; its modify arm (dst
@@ -218,7 +277,7 @@ func (rh *repoHandler) factMergeResolutions(
 			}
 			out, rec, ok := fact.MergeVersions(p, base, src, dst, strategy)
 			if !ok {
-				fallback(c, rec.Reason)
+				stateRule(c, rec.Reason)
 				continue
 			}
 			res[p] = Resolution{Body: out}
@@ -272,11 +331,12 @@ func (rh *repoHandler) blobBytes(h plumbing.Hash) ([]byte, error) {
 // `conflicts` value this build cannot use.
 var conflictsLogged sync.Map
 
-// conflictsStrategy is the merge-facts strategy the ontology at branch's tip
-// names, or ok=false when conflicts are not merged there: absent, off, a value
-// this build does not know, no ontology, no such branch. The repo's owner
-// decides it where every instance reads it — the tip of the CONSENSUS branch —
-// so the caller passes that branch, never a hardcoded name.
+// conflictsStrategy is the `conflicts` strategy the ontology at branch's tip
+// names (conflictsPolicy.strategy), or ok=false when both keys read off there:
+// absent without `consensus: auto`, explicit off, a value this build does not
+// know, no ontology, no such branch. The repo's owner decides it where every
+// instance reads it — the tip of the CONSENSUS branch — so the caller passes
+// that branch, never a hardcoded name.
 func (rh *repoHandler) conflictsStrategy(ctx context.Context, branch string) (ConflictStrategy, bool) {
 	h, err := rh.resolveRef(ctx, branch)
 	if err != nil {
@@ -299,15 +359,14 @@ func (rh *repoHandler) conflictsStrategy(ctx context.Context, branch string) (Co
 		key := fact.GitBlobHash(data)
 		if _, seen := conflictsLogged.LoadOrStore(key, true); !seen {
 			log.Warn().Err(err).Interface("value", cs.Raw).Str("branch", branch).
-				Msg(`conflicts: the ontology's value is unreadable or unknown (this knomit knows "off", "merge" and "merge:upstream"); read as off`)
+				Msg(`conflicts: the ontology's value is unreadable or unknown (this knomit knows an object with facts: off|merge|merge:consensus|consensus and state: off|consensus); read as off`)
 		}
 		return "", false
 	}
-	rule, on := cs.Rule()
-	if !on {
+	if !cs.On() {
 		return "", false
 	}
-	return mergeFactsStrategy(rule), true
+	return conflictsPolicy{facts: cs.Facts, state: cs.State}.strategy(), true
 }
 
 // appendTrailerLines adds lines to message's trailer paragraph: the last

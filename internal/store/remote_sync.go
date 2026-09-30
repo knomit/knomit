@@ -232,8 +232,9 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 	//
 	// The strategy is the repo's `conflicts` setting, read at the tip of the
 	// consensus branch just reconciled to origin's (the host reads the same
-	// value at its own): merge → the fact-level merge, whose unmergeable paths
-	// still go LocalWins; absent/off → LocalWins, as always.
+	// value at its own): set → each key as it says, the incoming consensus
+	// branch (src) being the consensus side and a key set to off still going
+	// LocalWins; both keys off → LocalWins, as always.
 	strategy := StrategyLocalWins
 	if s, on := ri.rh.conflictsStrategy(ctx, upstreamMain); on {
 		strategy = s

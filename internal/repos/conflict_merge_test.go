@@ -77,7 +77,7 @@ func parseShared(t *testing.T, content string) fact.Fact {
 // SABOTAGE: keep StrategyLocalWins at the peer's reconcile call site (S12a) →
 // the peer keeps its own F, no Knomit-Merge → red.
 func TestConflictMerge_PeerSyncsFirst(t *testing.T) {
-	h := newConsensusHost(t, triggerOntology("attributes:\n  conflicts: merge\n"), hostOpts{})
+	h := newConsensusHost(t, triggerOntology("attributes:\n  conflicts:\n    facts: merge\n"), hostOpts{})
 	cmWrite(t, h.ri, cHostAgent, cmBody(t, "base", 0.7))
 	h.advance(t)
 	p := newConsensusPeer(t, h.url)
@@ -91,7 +91,7 @@ func TestConflictMerge_PeerSyncsFirst(t *testing.T) {
 	require.Len(t, peerTip.Parents, 2, "the peer's sync wrote a merge commit")
 	merges := store.TrailerValues(peerTip.Message, store.TrailerMerge)
 	require.Len(t, merges, 1, peerTip.Message)
-	require.True(t, strings.HasPrefix(merges[0], sharedPath+" strategy=confidence "), merges[0])
+	require.True(t, strings.HasPrefix(merges[0], sharedPath+" strategy=merge "), merges[0])
 	merged := parseShared(t, peerContent(t, p))
 	require.Equal(t, "peer body", merged.Body)
 	require.Equal(t, []string{"HostAdded"}, merged.Entities)
@@ -120,7 +120,7 @@ func peerContent(t *testing.T, p *cPeer) string {
 // Refused=1 → red; an asymmetric winner rule (S5) → the peer computes other
 // bytes or keeps ping-ponging → red.
 func TestConflictMerge_HostMergesFirst_Converges(t *testing.T) {
-	h := newConsensusHost(t, triggerOntology("attributes:\n  consensus: auto\n  conflicts: merge\n"), hostOpts{})
+	h := newConsensusHost(t, triggerOntology("attributes:\n  consensus: auto\n  conflicts:\n    facts: merge\n"), hostOpts{})
 	cmWrite(t, h.ri, cHostAgent, cmBody(t, "base", 0.7))
 	h.advance(t)
 	p := newConsensusPeer(t, h.url)
@@ -134,7 +134,7 @@ func TestConflictMerge_HostMergesFirst_Converges(t *testing.T) {
 	require.Zero(t, s.Refused, "merged, not refused: %v", s.Warnings)
 	require.Equal(t, 1, s.Merges)
 	mc := headCommit(t, h.ri, cHostAgent)
-	require.Contains(t, mc.Message, "(merge_facts)")
+	require.Contains(t, mc.Message, "(conflicts:merge/consensus)", "facts set; state absent under auto → consensus")
 	require.Len(t, store.TrailerValues(mc.Message, store.TrailerMerge), 1, mc.Message)
 	hostF := h.content(t, cHostAgent, sharedPath)
 	merged := parseShared(t, hostF)
@@ -168,7 +168,7 @@ func TestConflictMerge_HostMergesFirst_Converges(t *testing.T) {
 func TestConflictMerge_RetractionWins(t *testing.T) {
 	for _, shape := range []string{"host retracts", "peer retracts"} {
 		t.Run(shape, func(t *testing.T) {
-			h := newConsensusHost(t, triggerOntology("attributes:\n  consensus: auto\n  conflicts: merge\n"), hostOpts{})
+			h := newConsensusHost(t, triggerOntology("attributes:\n  consensus: auto\n  conflicts:\n    facts: merge\n"), hostOpts{})
 			cmWrite(t, h.ri, cHostAgent, cmBody(t, "base", 0.7))
 			h.advance(t)
 			p := newConsensusPeer(t, h.url)
@@ -212,15 +212,18 @@ func TestConflictMerge_RetractionWins(t *testing.T) {
 	}
 }
 
-// T9: with no `conflicts` setting everything behaves as before rev 2 (probe
-// shape A: the host refuses; the peer's LocalWins sync keeps its own version;
-// the retry is clean and the peer's version lands) — and the peer's merge
-// commit now RECORDS the host edit it dropped.
+// T9: with `conflicts` explicitly off everything behaves as before rev 2
+// (probe shape A: the host refuses; the peer's LocalWins sync keeps its own
+// version; the retry is clean and the peer's version lands) — and the peer's
+// merge commit now RECORDS the host edit it dropped. Under `consensus: auto`
+// an ABSENT `conflicts` no longer means this (it defaults to merge/consensus,
+// PR 2); an explicit off does.
 //
-// SABOTAGE: an absent setting read as merge (S7) → the host merges instead of
-// refusing → red; the walk's Knomit-Conflict line dropped (S10b) → red.
-func TestConflictMerge_Absent_IsToday_Recorded(t *testing.T) {
-	h := newConsensusHost(t, triggerOntology(autoAttrs), hostOpts{})
+// SABOTAGE: an explicit off read as the auto default → the host merges
+// instead of refusing → red; the walk's Knomit-Conflict line dropped (S10b)
+// → red.
+func TestConflictMerge_ExplicitOff_IsToday_Recorded(t *testing.T) {
+	h := newConsensusHost(t, triggerOntology(autoOffAttrs), hostOpts{})
 	cmWrite(t, h.ri, cHostAgent, cmBody(t, "base", 0.7))
 	h.advance(t)
 	p := newConsensusPeer(t, h.url)
@@ -229,7 +232,7 @@ func TestConflictMerge_Absent_IsToday_Recorded(t *testing.T) {
 	cmWrite(t, h.ri, cHostAgent, cmBody(t, "host body", 0.9))
 	p.round(t)
 	h.settle(t)
-	require.Equal(t, 1, h.stats().Refused, "absent: the host refuses as before")
+	require.Equal(t, 1, h.stats().Refused, "off: the host refuses as before")
 
 	writeOn(t, h.ri, cHostAgent, "kb/tasks/other.md")
 	h.advance(t)
@@ -244,5 +247,5 @@ func TestConflictMerge_Absent_IsToday_Recorded(t *testing.T) {
 	h.settle(t)
 	require.Equal(t, 1, h.stats().Merges)
 	require.Equal(t, "peer body", parseShared(t, h.content(t, cHostAgent, sharedPath)).Body,
-		"F1 unchanged when the setting is absent: the peer's version lands")
+		"F1 unchanged when the setting is off: the peer's version lands")
 }

@@ -204,35 +204,35 @@ func TestMergeVersions_Symmetric(t *testing.T) {
 		if ok1 != ok2 || string(o1) != string(o2) {
 			t.Fatalf("triple %d: Merge(b,x,y) != Merge(b,y,x)\nok %v/%v (%q/%q)\n--- x,y\n%s\n--- y,x\n%s", i, ok1, ok2, r1.Reason, r2.Reason, o1, o2)
 		}
-		// upstream: the same version is upstream in both calls.
-		u1, _, _ := MergeVersions(mvPath, base, xb, yb, MergeStrategy{Rule: MergeUpstream, Upstream: MergeSrc})
-		u2, _, _ := MergeVersions(mvPath, base, yb, xb, MergeStrategy{Rule: MergeUpstream, Upstream: MergeDst})
+		// merge:consensus: the same version is the consensus side in both calls.
+		u1, _, _ := MergeVersions(mvPath, base, xb, yb, MergeStrategy{Rule: MergeTakeConsensus, Consensus: MergeSrc})
+		u2, _, _ := MergeVersions(mvPath, base, yb, xb, MergeStrategy{Rule: MergeTakeConsensus, Consensus: MergeDst})
 		if string(u1) != string(u2) {
-			t.Fatalf("triple %d: upstream merge depends on the argument order\n%s\n---\n%s", i, u1, u2)
+			t.Fatalf("triple %d: consensus merge depends on the argument order\n%s\n---\n%s", i, u1, u2)
 		}
 	}
 }
 
-// The upstream rule takes the consensus side's version of a field both
+// The merge:consensus rule takes the consensus side's version of a field both
 // changed, whatever the confidences say, and nothing else.
-func TestMergeVersions_Upstream(t *testing.T) {
+func TestMergeVersions_TakeConsensus(t *testing.T) {
 	b := baseVersion()
 	s, d := b, b
 	s.body, s.conf = "consensus body", 0.3
 	d.body, d.conf = "own body", 0.95
 	d.entities = []string{"A", "Z"}
-	f, rec, _ := mustMerge(t, b.bytes(t), s.bytes(t), d.bytes(t), MergeStrategy{Rule: MergeUpstream, Upstream: MergeSrc})
+	f, rec, _ := mustMerge(t, b.bytes(t), s.bytes(t), d.bytes(t), MergeStrategy{Rule: MergeTakeConsensus, Consensus: MergeSrc})
 	if f.Body != "consensus body" || f.Confidence != 0.3 {
-		t.Fatalf("upstream=src: got body %q conf %v, want the consensus side's", f.Body, f.Confidence)
+		t.Fatalf("consensus=src: got body %q conf %v, want the consensus side's", f.Body, f.Confidence)
 	}
 	if strings.Join(f.Entities, ",") != "A,Z" {
 		t.Fatalf("a list only dst changed survives: %v", f.Entities)
 	}
-	if rec.Strategy != "upstream" || rec.Winner != MergeSrc {
+	if rec.Strategy != "merge_consensus" || rec.Winner != MergeSrc {
 		t.Fatalf("record = %+v", rec)
 	}
-	if _, rec, ok := MergeVersions(mvPath, b.bytes(t), s.bytes(t), d.bytes(t), MergeStrategy{Rule: MergeUpstream}); ok || rec.Reason != "bad-strategy" {
-		t.Fatalf("upstream without a side must refuse, got ok=%v %q", ok, rec.Reason)
+	if _, rec, ok := MergeVersions(mvPath, b.bytes(t), s.bytes(t), d.bytes(t), MergeStrategy{Rule: MergeTakeConsensus}); ok || rec.Reason != "bad-strategy" {
+		t.Fatalf("merge:consensus without a side must refuse, got ok=%v %q", ok, rec.Reason)
 	}
 }
 
@@ -349,7 +349,6 @@ func TestMergeVersions_Lossless(t *testing.T) {
 		"bad expires":   inject("expires: tomorrow"),
 		"dropped motif": inject("motifs: [NotKebab]"),
 		"bad ref shape": []byte(strings.Replace(src, "refs: [kb/notes/r.md]", "refs: [kb/notes/r.md, 'src://nope']", 1)),
-		"yaml comment":  []byte(strings.Replace(src, "confidence: 0.7", "confidence: 0.7 # checked by alice", 1)),
 	}
 	for name, s := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -364,6 +363,25 @@ func TestMergeVersions_Lossless(t *testing.T) {
 				t.Fatalf("Reason = %q, want src-lossy", rec.Reason)
 			}
 		})
+	}
+	// A YAML comment in the frontmatter is not a loss either (ruling
+	// 2026-09-30): the merge proceeds, the comment is dropped from the output,
+	// and the version that carried it stays readable at its own commit.
+	//
+	// SABOTAGE: treating a comment as lossy again → ok=false → red.
+	commented := []byte(strings.Replace(src, "confidence: 0.7", "confidence: 0.7 # checked by alice", 1))
+	if !strings.Contains(string(commented), "# checked by alice") {
+		t.Fatal("fixture: the comment was not injected")
+	}
+	out, rec, ok := MergeVersions(mvPath, b.bytes(t), commented, d.bytes(t), MergeStrategy{})
+	if !ok {
+		t.Fatalf("a header comment must not stop the merge: %q", rec.Reason)
+	}
+	if strings.Contains(string(out), "checked by alice") {
+		t.Fatalf("the comment is dropped from the merged output:\n%s", out)
+	}
+	if f, err := ParseFact(mvPath, string(out)); err != nil || f.Body != d.body {
+		t.Fatalf("the merge still took dst's body edit: %v %+v", err, f)
 	}
 	// An expiry written with an offset is the same instant in Z: not a loss.
 	z := b
