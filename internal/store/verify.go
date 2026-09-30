@@ -761,7 +761,7 @@ func (s *Service) checkCommitLogParity(ctx context.Context, branch string) []Int
 	// which produced false parity gaps for legitimate no-op commits (a
 	// write whose new blob equals the parent's blob at the same path has
 	// zero tree changes, so changedFilesInCommit returns an empty slice
-	// and CommitLogSync records only the branch_commits visibility row
+	// and CommitLogApply records only the branch_commits visibility row
 	// without any commit_log path entries). Branch visibility is the
 	// authoritative invariant — every reachable commit must have a
 	// branch_commits row — and commit_log is a path-indexed projection

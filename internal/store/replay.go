@@ -99,11 +99,17 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 	}
 
 	// Register the agent branch in target's branches table so the WriteFact →
-	// notifyCommit → CommitLogSync path can find it. The cloned target store
+	// notifyCommit → CommitLogApply path can find it. The cloned target store
 	// has only git refs at this point; CloneFrom does not populate the branches
 	// table.
 	if _, err := target.rh.EnsureBranch(ctx, cfg.AgentBranch, "refs/heads/"+cfg.AgentBranch); err != nil {
 		return nil, fmt.Errorf("Replay: ensure agent branch in target: %w", err)
+	}
+
+	// The target is a raw clone: its history is derived here, as it would be
+	// at open (openHistory), before the first write.
+	if err := target.rh.openHistory(ctx); err != nil {
+		return nil, fmt.Errorf("Replay: history: %w", err)
 	}
 
 	// Optionally suspend the target's per-commit index sync for the bulk write

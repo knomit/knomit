@@ -19,12 +19,14 @@ type expRev struct {
 	Commit  string          `json:"commit"`
 	Date    string          `json:"date"`
 	Message string          `json:"message"`
+	Action  string          `json:"action"`
 	Diff    json.RawMessage `json:"diff"`
 }
 
 type expHistory struct {
 	Revisions     []expRev `json:"revisions"`
 	MoreAvailable bool     `json:"more_available"`
+	HistoryCursor string   `json:"history_cursor"`
 }
 
 type expRefs struct {

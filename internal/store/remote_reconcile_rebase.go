@@ -356,6 +356,9 @@ func (rh *repoHandler) replayOntoUpstream(
 			// Caller's force-push will advance origin to local.
 			return AgentReconcileResult{Mode: ModeNoop, NewTip: localTip.String()}, nil
 		}
+		if err := rh.deriveBeforeAdvance(ctx, upstreamTip); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+		}
 		newRef := plumbing.NewHashReference(localRefName, upstreamTip)
 		if err := rh.gits.SetReference(newRef); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
@@ -418,18 +421,19 @@ func (rh *repoHandler) replayOntoUpstream(
 
 	// Atomic move: agent ref → new tip. Temp ref is cleaned up by the
 	// deferred removal above.
+	if err := rh.deriveBeforeAdvance(ctx, current); err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: %w", err)
+	}
 	if err := rh.gits.SetReference(plumbing.NewHashReference(localRefName, current)); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: atomic move: %w", err)
 	}
 
 	// The pre-replay chain is no longer reachable from localBranch. Purge
-	// stale branch_commits rows so populateCommitLog can rebuild parity from
-	// the new tip without Verify complaining about unreachable rows.
-	if err := rh.purgeBranchCommits(ctx, localBranch); err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: purge branch_commits: %w", err)
-	}
-	if err := rh.populateCommitLog(ctx, localBranch); err != nil {
-		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: populate: %w", err)
+	// stale branch_commits rows and rebuild parity from the new tip — in one
+	// transaction, so no reader sees the branch empty in between — without
+	// Verify complaining about unreachable rows.
+	if err := rh.repopulateBranch(ctx, localBranch); err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: repopulate: %w", err)
 	}
 	if err := rh.notifyCommit(ctx, localBranch, current); err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: notify: %w", err)
