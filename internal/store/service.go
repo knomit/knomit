@@ -305,7 +305,16 @@ func (s *Service) ReapIdleSessions(ctx context.Context, toolTTL, pipelineTTL tim
 // repo's origin while the background reconcile loop concurrently calls
 // GetRemote, so the write goes through remoteIndex's originMu rather than a
 // bare field assignment (see remoteIndex.setOrigin).
-func (s *Service) SetOrigin(o *Origin) { s.ri.setOrigin(o) }
+//
+// A non-nil origin with a branch also RECORDS that branch as the repo's
+// consensus branch (consensus_branch.go), so removing the origin later
+// (SetOrigin(nil)) leaves the repo on the branch it had, never on a default.
+func (s *Service) SetOrigin(o *Origin) {
+	s.ri.setOrigin(o)
+	if o != nil && o.Branch != "" {
+		s.recordConsensusBranch(o.Branch)
+	}
+}
 
 // ConfigureRemote wires the git remote named "origin" so go-git can fetch and
 // push by name, with refspecs tracking both upstreamMain and agentBranch. The

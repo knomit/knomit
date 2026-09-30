@@ -23,6 +23,23 @@ type remoteIndex struct {
 	// without a lock those are a bare read/write race on the same field.
 	originMu sync.RWMutex
 	origin   *Origin // injected from control.db; nil = this repo has no origin
+	// consensus caches the recorded consensus branch (consensus_branch.go),
+	// under originMu.
+	consensus string
+	// warnAmbiguousOnce: an unrecorded repo with several candidate branches.
+	warnAmbiguousOnce sync.Once
+}
+
+func (ri *remoteIndex) setConsensus(b string) {
+	ri.originMu.Lock()
+	ri.consensus = b
+	ri.originMu.Unlock()
+}
+
+func (ri *remoteIndex) getConsensus() string {
+	ri.originMu.RLock()
+	defer ri.originMu.RUnlock()
+	return ri.consensus
 }
 
 // setOrigin stores the injected origin under a write lock. See originMu.

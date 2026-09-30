@@ -98,7 +98,7 @@ topics:
         recipe: work-task
 
   acks:
-    description: Completion notices, acks/<poster-agent-id>/. Refs point at the results in the knowledge base.
+    description: Completion notices, acks/<task-id>/. Refs point at the results in the knowledge base.
     attributes:
       learn_dedup: off
     validations:

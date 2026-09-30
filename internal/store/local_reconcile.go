@@ -19,16 +19,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// UpstreamBranch is the repo's consensus branch name: the configurable
-// Remote.Branch when an origin row exists, else "main" (what local init
-// creates). Served HEAD and the local reconcile both key off this.
-func (s *Service) UpstreamBranch() string {
-	if r, err := s.Remote().GetRemote("origin"); err == nil && r != nil && r.Branch != "" {
-		return r.Branch
-	}
-	return "main"
-}
-
 // EnsureLocalUpstream creates refs/heads/<upstream> from
 // refs/remotes/origin/<upstream> when the local ref is missing — a store moved
 // between machines, or one written before local init bootstrapped it. This is
