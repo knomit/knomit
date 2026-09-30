@@ -9,6 +9,7 @@ func TestIsFactFilePath(t *testing.T) {
 		".github/notes.md":            false,
 		".knomit/loose.md":            false,
 		"kb/.hidden/x.md":             false,
+		"kb/a/.x.md":                  false,
 		"README.md":                   false,
 		"kb/decisions/x/abc":          false,
 		"other/decisions/x/abc.md":    false,

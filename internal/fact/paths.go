@@ -51,7 +51,10 @@ func BuildFactPath(ontologyRoot, topic, category string) string {
 // IsFactFilePath reports whether a normalized path can hold a fact a reader
 // may open: a .md file under the ontology root with no dot-prefixed segment,
 // or a job slot under PrivateRoot (IsWritablePrivatePath). Anything else —
-// .github/notes.md, README.md, a directory — is not a fact file.
+// .github/notes.md, README.md, kb/.hidden/x.md, a directory — is not a fact
+// file. A dot-prefixed segment ANYWHERE makes the path private
+// (IsPrivatePath), and a private path is a fact file only as a job slot, so
+// kb/.hidden/x.md is refused by the IsPrivatePath branch, not the prefix test.
 func IsFactFilePath(ontologyRoot, path string) bool {
 	if !IsMarkdownPath(path) {
 		return false

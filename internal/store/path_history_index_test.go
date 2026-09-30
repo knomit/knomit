@@ -183,7 +183,7 @@ func TestPathHistory_ReadErrorRecordsNothing(t *testing.T) {
 // transaction, after it cleared the branch and before it re-records it.
 func pauseSwap(t *testing.T, check func()) {
 	t.Helper()
-	swapHook = check
+	swapHook = func() error { check(); return nil }
 	t.Cleanup(func() { swapHook = nil })
 }
 
@@ -465,7 +465,7 @@ func BenchmarkPathHistoryDeep(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			items, err := svc.rh.indexItems(ctx, []*object.Commit{c}, false)
+			items, err := svc.rh.indexItems(ctx, newDeriver(svc.rh, activeTables), []*object.Commit{c}, false)
 			if err != nil {
 				b.Fatal(err)
 			}

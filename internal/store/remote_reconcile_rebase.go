@@ -341,6 +341,9 @@ func (rh *repoHandler) replayOntoUpstream(
 			// Caller's force-push will advance origin to local.
 			return AgentReconcileResult{Mode: ModeNoop, NewTip: localTip.String()}, nil
 		}
+		if err := rh.deriveBeforeAdvance(ctx, upstreamTip); err != nil {
+			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)
+		}
 		newRef := plumbing.NewHashReference(localRefName, upstreamTip)
 		if err := rh.gits.SetReference(newRef); err != nil {
 			return AgentReconcileResult{}, fmt.Errorf("replayOntoUpstream: fast-forward: %w", err)

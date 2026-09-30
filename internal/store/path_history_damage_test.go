@@ -14,7 +14,7 @@ import (
 
 // Round-5 tests: derivation from git alone, missing objects as boundaries or
 // content_unavailable (never a failed write), re-derivation once objects are
-// back, and the shadow-table version pass.
+// back.
 
 func writeVersionsStore(t *testing.T, svc *Service, n int) []string {
 	t.Helper()
@@ -55,7 +55,7 @@ func TestPathHistory_TamperedCommitLogIsIgnored(t *testing.T) {
 	_, err := svc.rh.db.Exec(`UPDATE commit_log SET action = 'deleted' WHERE commit_hash = ? AND path = 'kb/t.md'`, c[1])
 	require.NoError(t, err)
 	staleVersion(t, svc)
-	require.NoError(t, svc.rh.ensureAllDerived(ctx))
+	require.NoError(t, svc.rh.openHistory(ctx))
 	require.Equal(t, reversed(c), historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[2])))
 	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
 	require.Equal(t, reversed(c), historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[2])))
@@ -102,7 +102,7 @@ func TestPathHistory_RestoredObjectsAreRederived(t *testing.T) {
 		c := writeVersionsStore(t, svc, 3)
 		restore := removeObject(t, svc, plumbing.NewHash(blobOf(t, svc, c[0], "kb/t.md")))
 		staleVersion(t, svc)
-		require.NoError(t, svc.rh.ensureAllDerived(ctx))
+		require.NoError(t, svc.rh.openHistory(ctx))
 		require.True(t, fullHistory(t, svc, "main", "kb/t.md", c[2])[2].ContentUnavailable)
 
 		restore()
@@ -118,7 +118,7 @@ func TestPathHistory_RestoredObjectsAreRederived(t *testing.T) {
 		c := writeVersionsStore(t, svc, 5)
 		restore := removeObject(t, svc, plumbing.NewHash(c[1]))
 		staleVersion(t, svc)
-		require.NoError(t, svc.rh.ensureAllDerived(ctx))
+		require.NoError(t, svc.rh.openHistory(ctx))
 		revs := fullHistory(t, svc, "main", "kb/t.md", c[4])
 		require.Equal(t, []string{c[4], c[3], c[2]}, historyCommits(revs), "history starts at the boundary")
 		require.Equal(t, "added", revs[2].Action)
@@ -127,37 +127,6 @@ func TestPathHistory_RestoredObjectsAreRederived(t *testing.T) {
 		require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
 		require.Equal(t, reversed(c), historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[4])))
 	})
-}
-
-// TestPathHistory_FailedVersionPassKeepsServing covers review A3: a version
-// pass derives into shadow tables; a failure mid-pass leaves the served
-// history untouched, and the next pass flips the new one in.
-func TestPathHistory_FailedVersionPassKeepsServing(t *testing.T) {
-	svc, ctx := openPathHistoryStore(t)
-	c := writeVersionsStore(t, svc, 4)
-	want := historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[3]))
-	staleVersion(t, svc)
-
-	injected := errors.New("injected transient read error")
-	deriveObjectHook = func(kind string, h plumbing.Hash) error {
-		if kind == "commit" && h.String() == c[1] {
-			return injected
-		}
-		return nil
-	}
-	err := svc.rh.ensureAllDerived(ctx)
-	deriveObjectHook = nil
-	require.ErrorIs(t, err, injected)
-	require.Equal(t, want, historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[3])), "the old history is still served")
-	v, err := metaGet(ctx, svc.rh.db, pathChangesVersionKey)
-	require.NoError(t, err)
-	require.Equal(t, "0", v, "not flipped")
-
-	require.NoError(t, svc.rh.ensureAllDerived(ctx))
-	v, err = metaGet(ctx, svc.rh.db, pathChangesVersionKey)
-	require.NoError(t, err)
-	require.Equal(t, pathChangesVersion, v)
-	require.Equal(t, want, historyCommits(fullHistory(t, svc, "main", "kb/t.md", c[3])))
 }
 
 // TestPathHistory_TreeAndParentReadErrorsFail covers review R3 for the tree
@@ -252,7 +221,7 @@ func TestLiveRevision_EqualsRevisionsBeforeEdgeCases(t *testing.T) {
 		c := writeVersionsStore(t, svc, 5)
 		removeObject(t, svc, plumbing.NewHash(c[1]))
 		staleVersion(t, svc)
-		require.NoError(t, svc.rh.ensureAllDerived(ctx))
+		require.NoError(t, svc.rh.openHistory(ctx))
 		check(t, svc, "kb/t.md", c[2:]) // versions above the boundary
 		got, err := svc.Search().LiveRevision(ctx, "main", "kb/t.md", c[0])
 		require.NoError(t, err)

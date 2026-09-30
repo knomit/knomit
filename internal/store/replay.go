@@ -106,6 +106,12 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		return nil, fmt.Errorf("Replay: ensure agent branch in target: %w", err)
 	}
 
+	// The target is a raw clone: its history is derived here, as it would be
+	// at open (openHistory), before the first write.
+	if err := target.rh.openHistory(ctx); err != nil {
+		return nil, fmt.Errorf("Replay: history: %w", err)
+	}
+
 	// Optionally suspend the target's per-commit index sync for the bulk write
 	// below. Scoped to THIS target instance and restored on return — callers that
 	// set SkipIndexSync own the follow-up Rebuild. See ReplayConfig.SkipIndexSync.

@@ -72,6 +72,10 @@ type repoHandler struct {
 	repo   *gogit.Repository // nil until OpenRepo/InitRepo/Clone called
 	signer ssh.Signer        // SSH signer for commit signing (shared)
 
+	// changes holds each derived commit's tree diff until its commit_log rows
+	// are built from it: one diff per commit (changeLists).
+	changes changeLists
+
 	onCommit func(branch, hash string) // external observer (e.g. SSE broadcast)
 
 	// acceptList is the operator's accept list (control.db), bound to this

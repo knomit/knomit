@@ -10,6 +10,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -33,9 +35,9 @@ import (
 // rows of its ancestors, never from branch_commits or commit_log. Deriving a
 // commit first derives its underived ancestors, walking git parents first
 // (deriveClosure). Rows are IMMUTABLE per hash: nothing deletes them on a
-// rewind or a rebuild. A pathChangesVersion bump re-derives into shadow tables
-// and flips; a DEGRADED row (derived around a missing object) is re-derived
-// by :rebuild.
+// rewind or a rebuild. An upgrade or a pathChangesVersion change re-derives
+// them in place, once, while the repo opens (openHistory); a DEGRADED row
+// (derived around a missing object) is re-derived by :rebuild.
 //
 // WHEN: a commit's rows are derived before the ref that makes it visible
 // advances (deriveBeforeAdvance), and the transaction that records it in
@@ -58,17 +60,18 @@ import (
 // is recorded, and a later attempt retries — before the ref moves.
 
 // pathChangesVersion is the version of the derivation below. A stored value
-// that differs (or none) makes the next populate re-derive into shadow
-// tables and flip them in.
+// that differs (or none) makes the next OPEN re-derive every branch's history
+// in place (openHistory), before the repo serves anything.
 const pathChangesVersion = "1"
 
 const pathChangesVersionKey = "path_changes_version"
-const pathChangesShadowKey = "path_changes_shadow_version"
 
-// pathChangeBatch is how many commits one short transaction derives: one
-// commit per transaction would cost one WAL commit each; more per batch holds
-// the write lock longer for concurrent writers (a 1000-commit batch held it
-// ~1 s).
+// pathChangeBatch is how many commits one transaction derives or records
+// where live writers can contend for the write lock (a write's derivation, a
+// populate, a rewind's or a rebuild's derive-before-swap): one commit per
+// transaction would cost one WAL commit each; more per batch holds the lock
+// longer (a 1000-commit batch held it ~1 s). The open-time pass is NOT
+// batched: nothing else writes while a repo opens.
 const pathChangeBatch = 250
 
 // Degradation marks on commit_fp.degraded.
@@ -100,51 +103,14 @@ var errReadInApply = errors.New("git object read inside apply")
 // of the derivation; a non-nil error is returned as that read's error.
 var deriveObjectHook func(kind string, h plumbing.Hash) error
 
-// pcTables names one set of derived tables: the served set, or the shadow set
-// a version bump derives into before flipping.
+// branchTipHook, when set (tests only), runs before the open-time pass
+// resolves a branch's ref; a non-nil error is that resolve's error.
+var branchTipHook func(branch string) error
+
+// pcTables names the derived tables.
 type pcTables struct{ changes, links, fp string }
 
-var (
-	activeTables = pcTables{"path_changes", "path_change_links", "commit_fp"}
-	shadowTables = pcTables{"path_changes_next", "path_change_links_next", "commit_fp_next"}
-)
-
-// createTablesSQL is the DDL of a table set (migration 000032 creates the
-// active one with the same columns). indexSuffix keeps index names unique
-// across flips.
-func createTablesSQL(t pcTables, indexSuffix string) []string {
-	return []string{
-		`CREATE TABLE IF NOT EXISTS ` + t.changes + ` (
-		    path        TEXT    NOT NULL,
-		    commit_hash TEXT    NOT NULL,
-		    entry       INTEGER NOT NULL,
-		    resolves_to TEXT    NOT NULL,
-		    blob        TEXT    NOT NULL,
-		    action      TEXT    NOT NULL DEFAULT '',
-		    author_at   INTEGER NOT NULL DEFAULT 0,
-		    order_at    INTEGER NOT NULL DEFAULT 0,
-		    gen         INTEGER NOT NULL DEFAULT 0,
-		    message     TEXT    NOT NULL DEFAULT '',
-		    diff        TEXT    NOT NULL DEFAULT '',
-		    fp_depth    INTEGER NOT NULL DEFAULT 0,
-		    content_unavailable INTEGER NOT NULL DEFAULT 0,
-		    PRIMARY KEY (path, commit_hash))`,
-		`CREATE INDEX IF NOT EXISTS ` + t.changes + `_depth_` + indexSuffix + ` ON ` + t.changes + ` (path, fp_depth)`,
-		`CREATE TABLE IF NOT EXISTS ` + t.links + ` (
-		    path         TEXT    NOT NULL,
-		    commit_hash  TEXT    NOT NULL,
-		    parent_order INTEGER NOT NULL,
-		    from_commit  TEXT    NOT NULL,
-		    from_blob    TEXT    NOT NULL,
-		    PRIMARY KEY (path, commit_hash, parent_order))`,
-		`CREATE TABLE IF NOT EXISTS ` + t.fp + ` (
-		    commit_hash TEXT    PRIMARY KEY,
-		    depth       INTEGER NOT NULL,
-		    ups         BLOB    NOT NULL,
-		    degraded    INTEGER NOT NULL DEFAULT 0)`,
-		`CREATE INDEX IF NOT EXISTS ` + t.fp + `_degraded_` + indexSuffix + ` ON ` + t.fp + ` (degraded) WHERE degraded > 0`,
-	}
-}
+var activeTables = pcTables{"path_changes", "path_change_links", "commit_fp"}
 
 func metaGet(ctx context.Context, q storegit.CtxExecer, key string) (string, error) {
 	var v string
@@ -155,128 +121,161 @@ func metaGet(ctx context.Context, q storegit.CtxExecer, key string) (string, err
 	return v, err
 }
 
-// ensureAllDerived brings the served tables to the current derivation
-// version for every commit reachable from any branch tip. With the version
-// current it is one lookup. Otherwise — an upgraded database, or a bump — it
-// derives every tip's history into the SHADOW tables (resumable: an
-// interrupted pass continues where it stopped), then flips them in with the
-// version in one short transaction. Until the flip the old tables keep being
-// served; a failed pass leaves them untouched. A branch whose ref cannot be
-// resolved (other than "no such ref") blocks the flip and is logged.
-func (rh *repoHandler) ensureAllDerived(ctx context.Context) error {
-	if rh.repo == nil {
+// openHistory is the OPEN-TIME pass: it runs while a repo opens or is
+// bootstrapped, before it serves a request or accepts a write, so no writer
+// races it. (A second PROCESS writing the same database meanwhile is out of
+// scope: migrate a copy and move it back.)
+//
+// With the version current it derives only what a branch tip is missing —
+// normally nothing, one lookup per branch. Otherwise (an upgraded database,
+// or a pathChangesVersion change) it re-derives every branch's history IN
+// PLACE. Either way every git read and diff is prepared first; then ONE
+// transaction, SQL only, writes the rows and the version key. A failure rolls
+// it back and is returned: the repo must not open, and the next open retries.
+// Nothing half-derived or underived is ever served.
+//
+// A branch whose ref cannot be resolved (other than "no such ref") is skipped
+// and logged; nothing is derived for it. The pass also clears
+// commit_log_stage: rows left there belong to a rebuild that died before its
+// swap.
+func (rh *repoHandler) openHistory(ctx context.Context) error {
+	if rh.repo == nil || !rh.gits.CommitLogAvailable() {
 		return nil
 	}
+	start := time.Now()
 	q := conn(ctx, rh.db)
 	v, err := metaGet(ctx, q, pathChangesVersionKey)
 	if err != nil {
 		return fmt.Errorf("path changes: version: %w", err)
 	}
-	if v == pathChangesVersion {
-		return nil
-	}
-	start := time.Now()
-	sv, err := metaGet(ctx, q, pathChangesShadowKey)
+	reset := v != pathChangesVersion
+	tips, err := rh.branchTips(ctx)
 	if err != nil {
-		return fmt.Errorf("path changes: shadow version: %w", err)
+		return err
 	}
-	if sv != pathChangesVersion {
-		for _, stmt := range []string{`DROP TABLE IF EXISTS ` + shadowTables.changes, `DROP TABLE IF EXISTS ` + shadowTables.links, `DROP TABLE IF EXISTS ` + shadowTables.fp} {
-			if _, err := q.ExecContext(ctx, stmt); err != nil {
-				return fmt.Errorf("path changes: shadow reset: %w", err)
+	d := newDeriver(rh, activeTables)
+	var pending []*object.Commit
+	seen := map[plumbing.Hash]bool{}
+	stack := tips
+	for len(stack) > 0 {
+		h := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		if !reset {
+			marked, err := d.isDerived(ctx, q, h.String())
+			if err != nil {
+				return err
+			}
+			if marked {
+				continue
 			}
 		}
+		c, err := d.commit(h)
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			continue // a boundary: no history below
+		}
+		if err != nil {
+			return err
+		}
+		pending = append(pending, c)
+		stack = append(stack, c.ParentHashes...)
 	}
-	for _, stmt := range createTablesSQL(shadowTables, "v"+pathChangesVersion) {
-		if _, err := q.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("path changes: shadow tables: %w", err)
+	order := parentsFirst(pending)
+	prepared := make([]*preparedCommit, len(order))
+	for i, c := range order {
+		if prepared[i], err = d.prepare(ctx, c); err != nil {
+			return err
 		}
 	}
-	if _, err := q.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, pathChangesShadowKey, pathChangesVersion); err != nil {
-		return fmt.Errorf("path changes: shadow version: %w", err)
-	}
 
-	tips, ok, err := rh.branchTips(ctx)
-	if err != nil {
-		return err
-	}
-	n, err := rh.deriveClosure(ctx, newDeriver(rh, shadowTables), tips)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		log.Warn().Msg("path changes: a branch ref could not be resolved; the new derivation is NOT flipped in (old history stays served)")
-		return nil
-	}
-
-	// Flip: one short transaction.
 	ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
 	if err != nil {
-		return fmt.Errorf("path changes: flip: %w", err)
+		return fmt.Errorf("path changes: open: %w", err)
 	}
 	if own {
 		defer tx.Rollback() //nolint:errcheck
 	}
-	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS ` + activeTables.changes,
-		`DROP TABLE IF EXISTS ` + activeTables.links,
-		`DROP TABLE IF EXISTS ` + activeTables.fp,
-		`ALTER TABLE ` + shadowTables.changes + ` RENAME TO ` + activeTables.changes,
-		`ALTER TABLE ` + shadowTables.links + ` RENAME TO ` + activeTables.links,
-		`ALTER TABLE ` + shadowTables.fp + ` RENAME TO ` + activeTables.fp,
-		`DELETE FROM meta WHERE key = '` + pathChangesShadowKey + `'`,
-	} {
+	stmts := []string{`DELETE FROM commit_log_stage`}
+	if reset {
+		stmts = append(stmts, `DELETE FROM `+activeTables.changes, `DELETE FROM `+activeTables.links, `DELETE FROM `+activeTables.fp)
+	}
+	for _, stmt := range stmts {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("path changes: flip: %w", err)
+			return fmt.Errorf("path changes: open: %w", err)
+		}
+	}
+	for _, p := range prepared {
+		if err := d.apply(ctx, tx, p); err != nil {
+			return err
+		}
+	}
+	if openHistoryHook != nil {
+		if err := openHistoryHook(); err != nil {
+			return err
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)`, pathChangesVersionKey, pathChangesVersion); err != nil {
-		return fmt.Errorf("path changes: flip: %w", err)
+		return fmt.Errorf("path changes: open: %w", err)
 	}
 	if own {
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("path changes: flip: %w", err)
+			return fmt.Errorf("path changes: open: %w", err)
 		}
 	}
-	log.Info().Int("commits", n).Dur("elapsed", time.Since(start)).Msg("path changes: derived and flipped in")
+	if len(order) > 0 || reset {
+		log.Info().Int("commits", len(order)).Bool("rederived", reset).Dur("elapsed", time.Since(start)).Msg("path changes: history derived at open")
+	}
 	return nil
 }
 
-// branchTips resolves every registered branch's tip. ok is false when a ref
-// failed to resolve for a reason other than not existing (logged): a branch
-// with no ref has no history to derive.
-func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, bool, error) {
+// openHistoryHook, when set (tests only), runs inside the open-time pass's
+// transaction after every row is applied and before the version key is
+// written; a non-nil error fails the pass there.
+var openHistoryHook func() error
+
+// branchTips resolves every registered branch's tip. A branch with no ref has
+// no history to derive; one whose ref fails to resolve for another reason is
+// skipped and logged.
+func (rh *repoHandler) branchTips(ctx context.Context) ([]plumbing.Hash, error) {
 	rows, err := conn(ctx, rh.db).QueryContext(ctx, `SELECT name FROM branches`)
 	if err != nil {
-		return nil, false, fmt.Errorf("path changes: branches: %w", err)
+		return nil, fmt.Errorf("path changes: branches: %w", err)
 	}
 	var names []string
 	for rows.Next() {
 		var n string
 		if err := rows.Scan(&n); err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, err
 		}
 		names = append(names, n)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	ok := true
 	var tips []plumbing.Hash
 	for _, n := range names {
-		h, err := rh.resolveRef(ctx, n)
+		var h plumbing.Hash
+		err := error(nil)
+		if branchTipHook != nil {
+			err = branchTipHook(n)
+		}
+		if err == nil {
+			h, err = rh.resolveRef(ctx, n)
+		}
 		if err != nil {
 			if !errors.Is(err, plumbing.ErrReferenceNotFound) {
-				log.Warn().Err(err).Str("branch", n).Msg("path changes: branch ref unresolved")
-				ok = false
+				log.Warn().Err(err).Str("branch", n).Msg("path changes: branch ref unresolved; its history is not derived")
 			}
 			continue
 		}
 		tips = append(tips, h)
 	}
-	return tips, ok, nil
+	return tips, nil
 }
 
 // deriveBeforeAdvance derives hash (and any underived ancestors) into the
@@ -713,6 +712,73 @@ func (d *deriver) diffTrees(from, to plumbing.Hash, prefix string, out *[]storeg
 	return incomplete, nil
 }
 
+// commitDiffs counts tree diffs of a commit against its first parent, by
+// derivation or for commit_log (tests: a write diffs its commit once).
+var commitDiffs atomic.Int64
+
+// changeListsMax bounds the entries changeLists holds; past it the lists are
+// dropped (a later index diffs again).
+const changeListsMax = 200000
+
+// changeLists holds derivation's tree diff of each commit (every path it
+// changed against parent 0, the commit_log payload) until indexing takes it.
+type changeLists struct {
+	mu sync.Mutex
+	m  map[plumbing.Hash][]storegit.CommitLogEntry
+	n  int
+}
+
+func (l *changeLists) put(h plumbing.Hash, entries []storegit.CommitLogEntry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.m == nil || l.n+len(entries) > changeListsMax {
+		l.m, l.n = map[plumbing.Hash][]storegit.CommitLogEntry{}, 0
+	}
+	if _, ok := l.m[h]; !ok {
+		l.m[h] = entries
+		l.n += len(entries)
+	}
+}
+
+func (l *changeLists) take(h plumbing.Hash) ([]storegit.CommitLogEntry, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.m[h]
+	if ok {
+		delete(l.m, h)
+		l.n -= len(e)
+	}
+	return e, ok
+}
+
+// commitChanges returns every path c changed against its first parent, as
+// commit_log records them: derivation's list when it has one, else the same
+// tree diff. A tree missing from the store fails it (git cannot list the
+// changes).
+func (d *deriver) commitChanges(c *object.Commit) ([]storegit.CommitLogEntry, error) {
+	if e, ok := d.rh.changes.take(c.Hash); ok {
+		return e, nil
+	}
+	var from plumbing.Hash
+	if len(c.ParentHashes) > 0 {
+		p, err := d.commit(c.ParentHashes[0])
+		if err != nil {
+			return nil, err
+		}
+		from = p.TreeHash
+	}
+	commitDiffs.Add(1)
+	var entries []storegit.CommitLogEntry
+	incomplete, err := d.diffTrees(from, c.TreeHash, "", &entries)
+	if err != nil {
+		return nil, err
+	}
+	if incomplete {
+		return nil, fmt.Errorf("path changes: diff %s: a tree is missing: %w", c.Hash, plumbing.ErrObjectNotFound)
+	}
+	return entries, nil
+}
+
 // preparedCommit is everything deriving a commit needs from git objects —
 // read before any transaction opens. apply turns it into rows with SQL only.
 type preparedCommit struct {
@@ -760,9 +826,15 @@ func (d *deriver) prepare(ctx context.Context, c *object.Commit) (*preparedCommi
 		if len(parentTrees) > 0 {
 			from = parentTrees[0]
 		}
+		commitDiffs.Add(1)
 		incomplete, err := d.diffTrees(from, c.TreeHash, "", &entries)
 		if err != nil {
 			return nil, err
+		}
+		if !incomplete && (len(pc.parentAbsent) == 0 || !pc.parentAbsent[0]) {
+			// The whole diff against parent 0: exactly the commit's
+			// commit_log rows, so indexing does not diff it again.
+			d.rh.changes.put(c.Hash, entries)
 		}
 		if incomplete {
 			// A tree needed for the diff is missing: take the changed paths

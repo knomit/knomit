@@ -445,6 +445,6 @@ func TestPathHistory_RebuildAndVersionResetAreConsistent(t *testing.T) {
 
 	_, err = svc.rh.db.ExecContext(ctx, `UPDATE meta SET value = 'stale' WHERE key = ?`, pathChangesVersionKey)
 	require.NoError(t, err)
-	require.NoError(t, svc.rh.ensureAllDerived(ctx))
+	require.NoError(t, svc.rh.openHistory(ctx))
 	require.Equal(t, before, historyCommits(fullHistory(t, svc, "main", "kb/t.md", tip)))
 }

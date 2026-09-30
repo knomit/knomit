@@ -35,11 +35,6 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 	if !rh.gits.CommitLogAvailable() {
 		return nil
 	}
-	// A database that predates path_changes, or a version bump: derive the
-	// history of every branch tip first (one lookup when current).
-	if err := rh.ensureAllDerived(ctx); err != nil {
-		return fmt.Errorf("populateCommitLog: %w", err)
-	}
 	branchID, err := rh.branchID(ctx, branch)
 	if err != nil {
 		return fmt.Errorf("populateCommitLog: branch %q: %w", branch, err)
@@ -81,10 +76,6 @@ func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order [
 	q := conn(ctx, rh.db)
 	for i := 0; i < len(order); i += pathChangeBatch {
 		chunk := order[i:min(i+pathChangeBatch, len(order))]
-		items, err := rh.indexItems(ctx, chunk, false)
-		if err != nil {
-			return err
-		}
 		hashes := make([]string, len(chunk))
 		prepared := make([]*preparedCommit, len(chunk))
 		for j, c := range chunk {
@@ -98,6 +89,11 @@ func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order [
 					return err
 				}
 			}
+		}
+		// After prepare: the payloads reuse its diffs.
+		items, err := rh.indexItems(ctx, d, chunk, false)
+		if err != nil {
+			return err
 		}
 		if err := rh.gits.CommitLogApply(ctx, branch, items, storegit.CommitLogApplyOptions{Derive: d.hook(hashes, prepared)}); err != nil {
 			return err
@@ -149,10 +145,11 @@ func (rh *repoHandler) reachableCommits(ctx context.Context, branch string, bran
 var payloadsComputed atomic.Int64
 
 // indexItems builds CommitLogApply items for commits — OUTSIDE any
-// transaction, since the commit_log payload is a git diff. A commit already
-// recorded on some branch has its commit_log rows, so it gets no payload,
-// unless all is set (rebuildCommitLog rewrites commit_log).
-func (rh *repoHandler) indexItems(ctx context.Context, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, error) {
+// transaction, since the commit_log payload is a git diff: derivation's own,
+// when d prepared the commit (commitChanges). A commit already recorded on
+// some branch has its commit_log rows, so it gets no payload, unless all is
+// set (rebuildCommitLog rewrites commit_log).
+func (rh *repoHandler) indexItems(ctx context.Context, d *deriver, commits []*object.Commit, all bool) ([]storegit.CommitLogItem, error) {
 	q := conn(ctx, rh.db)
 	items := make([]storegit.CommitLogItem, len(commits))
 	for i, c := range commits {
@@ -167,9 +164,13 @@ func (rh *repoHandler) indexItems(ctx context.Context, commits []*object.Commit,
 			}
 		}
 		payloadsComputed.Add(1)
-		files, err := changedFilesInCommit(c)
+		changes, err := d.commitChanges(c)
 		if err != nil {
 			return nil, fmt.Errorf("changed files %s: %w", c.Hash, err)
+		}
+		files := make([]changedFileEntry, len(changes))
+		for j, e := range changes {
+			files[j] = changedFileEntry{path: e.Path, action: e.Action}
 		}
 		items[i].Entries = commitEntries(c, files)
 	}
@@ -177,8 +178,9 @@ func (rh *repoHandler) indexItems(ctx context.Context, commits []*object.Commit,
 }
 
 // swapHook, when set (tests only), runs inside a rewind's or a rebuild's
-// swap transaction after its deletions and before it records new commits.
-var swapHook func()
+// swap transaction after its deletions and before it records new commits; a
+// non-nil error fails the swap there.
+var swapHook func() error
 
 // lastSwapDuration is how long the last swap transaction held the write lock
 // (tests assert it stays short).
@@ -237,7 +239,7 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 		return err
 	}
 	order := parentsFirst(added)
-	items, err := rh.indexItems(ctx, order, false)
+	items, err := rh.indexItems(ctx, d, order, false)
 	if err != nil {
 		return err
 	}
@@ -266,7 +268,9 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 				}
 			}
 			if swapHook != nil {
-				swapHook()
+				if err := swapHook(); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -280,9 +284,6 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) error {
 	if !rh.gits.CommitLogAvailable() {
 		return nil
-	}
-	if err := rh.ensureAllDerived(ctx); err != nil {
-		return fmt.Errorf("repopulateBranch: %w", err)
 	}
 	branchID, err := rh.branchID(ctx, branch)
 	if err != nil {
@@ -306,14 +307,15 @@ func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) erro
 // objects are back; and swaps the branch's visibility.
 //
 // The rewrite is STAGED outside the write lock (commit_log_stage, short
-// batches) and swapped in by bulk statements in one short transaction.
+// batches) and swapped in by bulk statements in one short transaction. Like
+// dev's rebuild, it replaces EVERY commit_log row of the branch's commits: a
+// reachable commit keeps exactly its staged rows (none, if it changed
+// nothing), and a dropped commit on no other branch loses its rows. A dropped
+// commit still on another branch keeps them: they are that branch's.
 // Derived rows are immutable per hash and never deleted here.
-func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) error {
+func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) (err error) {
 	if !rh.gits.CommitLogAvailable() {
 		return nil
-	}
-	if err := rh.ensureAllDerived(ctx); err != nil {
-		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
 	if _, err := rh.rederiveDegraded(ctx); err != nil {
 		return fmt.Errorf("rebuildCommitLog: %w", err)
@@ -335,15 +337,30 @@ func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) erro
 	if _, err := rh.deriveClosure(ctx, newDeriver(rh, activeTables), tips); err != nil {
 		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
+	// A rebuild that fails after staging leaves nothing staged (the swap
+	// deletes the stage only when it commits). A crash in between is cleared
+	// by the next open (openHistory).
+	defer func() {
+		if err == nil {
+			return
+		}
+		if _, cerr := conn(ctx, rh.db).ExecContext(context.WithoutCancel(ctx), `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); cerr != nil {
+			log.Warn().Err(cerr).Str("branch", branch).Msg("rebuildCommitLog: stage cleanup failed")
+		}
+	}()
 	if err := rh.stageCommitLog(ctx, branchID, all); err != nil {
 		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
 	return rh.swapBranch(ctx, branch, branchID, all, func(ctx context.Context, tx *sql.Tx) error {
 		for _, stmt := range []string{
-			`DELETE FROM commit_log WHERE commit_hash IN (SELECT DISTINCT commit_hash FROM commit_log_stage WHERE branch_id = ?)`,
+			// Before branch_commits changes: the old visibility names the
+			// dropped commits.
+			`DELETE FROM commit_log WHERE commit_hash IN (SELECT commit_hash FROM commit_log_stage WHERE branch_id = ?1)
+			    OR commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?1
+			        AND commit_hash NOT IN (SELECT commit_hash FROM branch_commits WHERE branch_id != ?1))`,
 			`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_name, author_email, action, committed_at)
-			 SELECT commit_hash, path, message, operation, author_name, author_email, action, committed_at FROM commit_log_stage WHERE branch_id = ?`,
-			`DELETE FROM commit_log_stage WHERE branch_id = ?`,
+			 SELECT commit_hash, path, message, operation, author_name, author_email, action, committed_at FROM commit_log_stage WHERE branch_id = ?1 AND path != ''`,
+			`DELETE FROM commit_log_stage WHERE branch_id = ?1`,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt, branchID); err != nil {
 				return fmt.Errorf("rebuildCommitLog: swap commit_log: %w", err)
@@ -355,30 +372,37 @@ func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) erro
 
 // stageCommitLog writes the git-derived commit_log rows of commits into
 // commit_log_stage for branchID, in short transactions, outside any lock the
-// swap will hold.
+// swap will hold. Every commit also gets a row with an empty path, so the swap
+// knows the whole reachable set, including commits that changed nothing.
 func (rh *repoHandler) stageCommitLog(ctx context.Context, branchID int64, commits []*object.Commit) error {
+	d := newDeriver(rh, activeTables)
 	if _, err := conn(ctx, rh.db).ExecContext(ctx, `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); err != nil {
 		return fmt.Errorf("stage: %w", err)
 	}
+	const insert = `INSERT OR IGNORE INTO commit_log_stage (branch_id, commit_hash, path, message, operation, author_name, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	for i := 0; i < len(commits); i += pathChangeBatch {
 		chunk := commits[i:min(i+pathChangeBatch, len(commits))]
-		items, err := rh.indexItems(ctx, chunk, true)
+		items, err := rh.indexItems(ctx, d, chunk, true)
 		if err != nil {
 			return err
 		}
-		ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
+		tctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
 		if err != nil {
 			return fmt.Errorf("stage: %w", err)
 		}
 		for _, it := range items {
+			_, err := tx.ExecContext(tctx, insert, branchID, it.Hash, "", "", "", "", "", "", 0)
 			for _, e := range it.Entries {
-				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO commit_log_stage (branch_id, commit_hash, path, message, operation, author_name, author_email, action, committed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					branchID, e.Hash, e.Path, e.Message, e.Operation, e.AuthorName, e.AuthorEmail, e.Action, e.CommittedAt); err != nil {
-					if own {
-						tx.Rollback() //nolint:errcheck
-					}
-					return fmt.Errorf("stage: %w", err)
+				if err != nil {
+					break
 				}
+				_, err = tx.ExecContext(tctx, insert, branchID, e.Hash, e.Path, e.Message, e.Operation, e.AuthorName, e.AuthorEmail, e.Action, e.CommittedAt)
+			}
+			if err != nil {
+				if own {
+					tx.Rollback() //nolint:errcheck
+				}
+				return fmt.Errorf("stage: %w", err)
 			}
 		}
 		if own {

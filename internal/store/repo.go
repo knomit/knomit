@@ -117,6 +117,11 @@ func (s *Service) OpenRepo() error {
 	if err := backfillCommitParents(context.Background(), s.rh); err != nil {
 		log.Warn().Err(err).Msg("commit_parents: backfill failed")
 	}
+	// History is derived before the repo serves anything (openHistory); a
+	// failure keeps it closed, and the next open retries.
+	if err := s.rh.openHistory(context.Background()); err != nil {
+		return fmt.Errorf("OpenRepo: history: %w", err)
+	}
 	if err := s.rh.populateCommitLog(context.Background(), branch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: open populate failed")
 	}
@@ -209,6 +214,11 @@ func (s *Service) InitRepoWithUpstream(initFiles map[string]string, upstreamMain
 	}
 	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return fmt.Errorf("InitRepo: ensure upstream branch %q: %w", upstreamMain, err)
+	}
+	// History is derived before the repo serves anything (openHistory); a
+	// failure keeps it closed, and the next open retries.
+	if err := s.rh.openHistory(context.Background()); err != nil {
+		return fmt.Errorf("InitRepo: history: %w", err)
 	}
 	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: initial populate failed")
@@ -512,6 +522,11 @@ func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, up
 	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: ensure upstream branch %q: %w", upstreamMain, err)
 	}
+	// History is derived before the repo serves anything (openHistory); a
+	// failure keeps it closed, and the next open retries.
+	if err := s.rh.openHistory(context.Background()); err != nil {
+		return "", false, fmt.Errorf("InitFromRemote: history: %w", err)
+	}
 	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: remote populate failed")
 	}
@@ -611,6 +626,11 @@ func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, 
 	s.fi.auth = auth
 	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", fmt.Errorf("InitSubscription: ensure upstream branch %q: %w", upstreamMain, err)
+	}
+	// History is derived before the repo serves anything (openHistory); a
+	// failure keeps it closed, and the next open retries.
+	if err := s.rh.openHistory(context.Background()); err != nil {
+		return "", fmt.Errorf("InitSubscription: history: %w", err)
 	}
 	if err := s.rh.populateCommitLog(context.Background(), upstreamMain); err != nil {
 		log.Warn().Err(err).Str("branch", upstreamMain).Msg("commit_log: subscription populate failed")
@@ -734,6 +754,11 @@ func (s *Service) initFromEmptyRemote(repo *gogit.Repository, originURL string, 
 	}
 	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
 		return "", fmt.Errorf("InitFromRemote: empty remote ensure upstream branch %q: %w", upstreamMain, err)
+	}
+	// History is derived before the repo serves anything (openHistory); a
+	// failure keeps it closed, and the next open retries.
+	if err := s.rh.openHistory(context.Background()); err != nil {
+		return "", fmt.Errorf("InitFromRemote: empty remote history: %w", err)
 	}
 	if err := s.rh.populateCommitLog(context.Background(), agentBranch); err != nil {
 		log.Warn().Err(err).Msg("commit_log: empty-remote populate failed")
