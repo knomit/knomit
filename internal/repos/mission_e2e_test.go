@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -130,10 +131,18 @@ func fakeClaude(t *testing.T) string {
 		name += ".exe"
 	}
 	dst := filepath.Join(bin, name)
-	if os.Link(self, dst) != nil {
-		b, err := os.ReadFile(self)
+	// A hard link is cheap, but on Windows it names the RUNNING test binary,
+	// which cannot be deleted, and t.TempDir's cleanup then fails the test.
+	// There, and wherever linking fails, copy.
+	if runtime.GOOS == "windows" || os.Link(self, dst) != nil {
+		src, err := os.Open(self)
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(dst, b, 0o755))
+		defer src.Close()
+		out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		require.NoError(t, err)
+		_, err = io.Copy(out, src)
+		require.NoError(t, err)
+		require.NoError(t, out.Close())
 	}
 	reports := t.TempDir()
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
