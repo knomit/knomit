@@ -349,6 +349,7 @@ func TestMergeVersions_Lossless(t *testing.T) {
 		"bad expires":   inject("expires: tomorrow"),
 		"dropped motif": inject("motifs: [NotKebab]"),
 		"bad ref shape": []byte(strings.Replace(src, "refs: [kb/notes/r.md]", "refs: [kb/notes/r.md, 'src://nope']", 1)),
+		"yaml comment":  []byte(strings.Replace(src, "confidence: 0.7", "confidence: 0.7 # checked by alice", 1)),
 	}
 	for name, s := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -387,5 +388,27 @@ func TestMergeVersions_MotifCap(t *testing.T) {
 	}
 	if fmt.Sprint(rec.Decided) != "[motifs]" {
 		t.Fatalf("Decided = %v, want [motifs]", rec.Decided)
+	}
+}
+
+// The output check: a merge of two lossless versions can still produce a fact
+// SerializeFact would not write back as merged. src adds the motif
+// "retry-storm"; dst adds the entity "retry storm", which makes that motif a
+// subject motif SerializeFact strips. The merge falls back rather than drop
+// src's motif.
+//
+// SABOTAGE: deleting the post-merge round-trip check → ok=true and the motif
+// silently vanishes → red.
+func TestMergeVersions_OutputMustRoundTrip(t *testing.T) {
+	b := baseVersion()
+	s, d := b, b
+	s.motifs = []string{"retry-storm"}
+	d.entities = []string{"A", "retry storm"}
+	out, rec, ok := MergeVersions(mvPath, b.bytes(t), s.bytes(t), d.bytes(t), MergeStrategy{})
+	if ok {
+		t.Fatalf("merged although the motif would be stripped:\n%s", out)
+	}
+	if rec.Reason != "not-serializable" {
+		t.Fatalf("Reason = %q, want not-serializable", rec.Reason)
 	}
 }

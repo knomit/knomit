@@ -395,6 +395,88 @@ func TestReplay_MergeFacts(t *testing.T) {
 	require.Equal(t, "t-123", TrailerValue(tip.Message, TrailerTrace), "the trace trailer still reads")
 }
 
+// replayFork is the rebase-fallback shape: the agent and the rewound
+// consensus branch (main) both changed F from the watermark, the agent to a
+// more confident body. Returns the repo, the agent branch and onto.
+func replayFork(t *testing.T) (*cmRepo, string, plumbing.Hash) {
+	r := newCMRepo(t)
+	const agent = "agent/replay-abcd1234"
+	r.branch(agent, "main")
+	r.write(agent, "notes.txt", "base\n")
+	seed := r.write(agent, "kb/notes/f.md", cmFact(t, "base", 0.7))
+	require.NoError(t, r.svc.rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName("main"), seed)))
+	require.NoError(t, r.svc.rh.writeAgentBase(agent, seed))
+	_, err := r.svc.Facts().WriteFact(context.Background(), agent, "kb/notes/f.md", cmFact(t, "agent body", 0.9), "learn: f", "learn")
+	require.NoError(t, err)
+	r.write("main", "kb/notes/f.md", cmFact(t, "main body", 0.5))
+	return r, agent, r.tip("main").Hash
+}
+
+// B1 (a): merge:upstream on the replay takes ONTO's version of a field both
+// changed — onto is the consensus side here, although it is dst.
+//
+// SABOTAGE: replayCommit's factMerge with upstream: fact.MergeSrc (S18a) →
+// the agent's body → red.
+func TestReplay_MergeFactsUpstream_OntoIsUpstream(t *testing.T) {
+	r, agent, _ := replayFork(t)
+	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", StrategyMergeFactsUpstream, true)
+	require.NoError(t, err)
+	tip := r.tip(agent)
+	_, out := r.blob(tip, "kb/notes/f.md")
+	require.Equal(t, "main body", r.parse(out).Body, "upstream = onto (the rewound consensus branch)")
+	lines := TrailerValues(tip.Message, TrailerMerge)
+	require.Len(t, lines, 1, tip.Message)
+	require.Contains(t, lines[0], "strategy=upstream ")
+}
+
+// B1 (b): what the replay cannot merge keeps today's replay rule — the
+// agent's commit wins — and says so.
+//
+// SABOTAGE: replayCommit's factMerge with fallback: StrategyLocalWins (S18b)
+// → onto's notes.txt, kept=dst → red.
+func TestReplay_MergeFacts_FallbackAgentWins(t *testing.T) {
+	r, agent, _ := replayFork(t)
+	r.write("main", "notes.txt", "main\n")
+	r.write(agent, "notes.txt", "agent\n")
+	_, err := r.svc.rh.reconcileAgent(context.Background(), agent, "main", StrategyMergeFacts, true)
+	require.NoError(t, err)
+	tip := r.tip(agent)
+	_, notes := r.blob(tip, "notes.txt")
+	require.Equal(t, "agent\n", notes, "not a fact: the agent's commit wins, as the replay always did")
+	conflicts := strings.Join(TrailerValues(tip.Message, TrailerConflict), "\n")
+	require.Regexp(t, `notes\.txt kept=src dropped=dst-modify strategy=remote_wins .* reason=not-a-fact`, conflicts, tip.Message)
+}
+
+// N3: with the setting absent, every side-pick the LocalWins walk makes is
+// recorded — one line per path, each naming what was dropped.
+//
+// SABOTAGE: record only the first side-pick → red.
+func TestPeerSync_Off_RecordsEverySidePick(t *testing.T) {
+	r := newCMRepo(t)
+	const consensus, agent = "master", "agent/peer-abcd1234"
+	r.write("main", "kb/notes/f.md", cmFact(t, "base", 0.7))
+	r.write("main", "kb/notes/d.md", cmFact(t, "base", 0.7))
+	r.branch(consensus, "main")
+	r.branch(agent, "main")
+	r.write(consensus, "kb/notes/f.md", cmFact(t, "consensus", 0.9))
+	r.write(agent, "kb/notes/f.md", cmFact(t, "agent", 0.5))
+	r.del(consensus, "kb/notes/d.md")
+	r.write(agent, "kb/notes/d.md", cmFact(t, "agent edit", 0.7))
+	r.write(consensus, "x.txt", "consensus\n")
+	r.write(agent, "x.txt", "agent\n")
+	r.setOriginTip(consensus)
+
+	_, err := r.svc.Remote().(*remoteIndex).reconcileNow(context.Background(), agent, consensus)
+	require.NoError(t, err)
+	tip := r.tip(agent)
+	lines := TrailerValues(tip.Message, TrailerConflict)
+	require.Len(t, lines, 3, tip.Message)
+	require.Regexp(t, `^kb/notes/d\.md kept=dst dropped=src-delete strategy=local_wins base=[0-9a-f]{40} src=none dst=[0-9a-f]{40}$`, lines[0])
+	require.Regexp(t, `^kb/notes/f\.md kept=dst dropped=src-modify strategy=local_wins `, lines[1])
+	require.Regexp(t, `^x\.txt kept=src dropped=dst-add strategy=local_wins base=none `, lines[2])
+	require.Empty(t, TrailerValues(tip.Message, TrailerMerge))
+}
+
 // The trailer paragraph: appended to an existing trailer block, else a new
 // last paragraph; sorted by path.
 func TestAppendTrailerLines(t *testing.T) {

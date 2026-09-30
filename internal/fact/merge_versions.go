@@ -99,7 +99,7 @@ type MergeRecord struct {
 // ok is false — and the caller keeps its site's side-picking behaviour — when
 // a version does not parse, the two kinds differ, a version would lose
 // something on the way through ParseFact and SerializeFact (a frontmatter key
-// this build does not know, a ref/motif/expires ParseFact drops, a subject
+// this build does not know, a YAML comment in the frontmatter, a ref/motif/expires ParseFact drops, a subject
 // motif SerializeFact strips), or the merged fact would not write back exactly.
 // Merging must never drop what a side wrote.
 //
@@ -390,8 +390,10 @@ func parseLossless(path string, data []byte) (Fact, string) {
 	return f, ""
 }
 
-// knownKeysOnly reports whether every frontmatter key is one ParseFact reads.
-// The block is located exactly as ParseFact locates it.
+// knownKeysOnly reports whether every frontmatter key is one ParseFact reads
+// and the block carries no YAML comment — SerializeFact writes neither back,
+// so a version holding either would lose it in a merge. The block is located
+// exactly as ParseFact locates it.
 func knownKeysOnly(content string) bool {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	rest := strings.TrimPrefix(content, "---\n")
@@ -399,8 +401,15 @@ func knownKeysOnly(content string) bool {
 	if end < 0 {
 		return false
 	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(rest[:end]), &doc); err != nil {
+		return false
+	}
+	if hasComment(&doc) {
+		return false
+	}
 	var keys map[string]yaml.Node
-	if err := yaml.Unmarshal([]byte(rest[:end]), &keys); err != nil {
+	if err := doc.Decode(&keys); err != nil {
 		return false
 	}
 	for k := range keys {
@@ -409,4 +418,16 @@ func knownKeysOnly(content string) bool {
 		}
 	}
 	return true
+}
+
+func hasComment(n *yaml.Node) bool {
+	if n.HeadComment != "" || n.LineComment != "" || n.FootComment != "" {
+		return true
+	}
+	for _, c := range n.Content {
+		if hasComment(c) {
+			return true
+		}
+	}
+	return false
 }
