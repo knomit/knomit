@@ -57,7 +57,7 @@ func (rh *repoHandler) populateCommitLog(ctx context.Context, branch string) err
 // ancestors outside the set first, then the commits themselves in batches,
 // each derived in the transaction that records it.
 func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order []*object.Commit) error {
-	d := newDeriver(rh, activeTables)
+	d := newIndexingDeriver(rh)
 	in := make(map[plumbing.Hash]bool, len(order))
 	for _, c := range order {
 		in[c.Hash] = true
@@ -85,7 +85,7 @@ func (rh *repoHandler) recordCommits(ctx context.Context, branch string, order [
 				return err
 			}
 			if !derived {
-				if prepared[j], err = d.prepare(ctx, c); err != nil {
+				if prepared[j], err = d.prepare(ctx, metaOf(c)); err != nil {
 					return err
 				}
 			}
@@ -230,7 +230,7 @@ func (rh *repoHandler) swapBranch(ctx context.Context, branch string, branchID i
 			dropped = append(dropped, h)
 		}
 	}
-	d := newDeriver(rh, activeTables)
+	d := newIndexingDeriver(rh)
 	tips := make([]plumbing.Hash, len(added))
 	for i, c := range added {
 		tips[i] = c.Hash
@@ -308,10 +308,11 @@ func (rh *repoHandler) repopulateBranch(ctx context.Context, branch string) erro
 //
 // The rewrite is STAGED outside the write lock (commit_log_stage, short
 // batches) and swapped in by bulk statements in one short transaction. Like
-// dev's rebuild, it replaces EVERY commit_log row of the branch's commits: a
-// reachable commit keeps exactly its staged rows (none, if it changed
+// dev's rebuild, every commit_log row of the branch's commits ends up as git
+// says: a reachable commit keeps exactly its staged rows (none, if it changed
 // nothing), and a dropped commit on no other branch loses its rows. A dropped
-// commit still on another branch keeps them: they are that branch's.
+// commit still on another branch keeps them: they are that branch's. Only rows
+// that differ are written, so an unchanged branch's swap writes nothing.
 // Derived rows are immutable per hash and never deleted here.
 func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) (err error) {
 	if !rh.gits.CommitLogAvailable() {
@@ -334,16 +335,13 @@ func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) (err
 	for i, c := range all {
 		tips[i] = c.Hash
 	}
-	if _, err := rh.deriveClosure(ctx, newDeriver(rh, activeTables), tips); err != nil {
+	if _, err := rh.deriveClosure(ctx, newIndexingDeriver(rh), tips); err != nil {
 		return fmt.Errorf("rebuildCommitLog: %w", err)
 	}
-	// A rebuild that fails after staging leaves nothing staged (the swap
-	// deletes the stage only when it commits). A crash in between is cleared
-	// by the next open (openHistory).
+	// The stage is deleted when the rebuild returns, after the swap and
+	// outside its lock, whether it succeeded or not. A crash in between is
+	// cleared by the next open (openHistory).
 	defer func() {
-		if err == nil {
-			return
-		}
 		if _, cerr := conn(ctx, rh.db).ExecContext(context.WithoutCancel(ctx), `DELETE FROM commit_log_stage WHERE branch_id = ?`, branchID); cerr != nil {
 			log.Warn().Err(cerr).Str("branch", branch).Msg("rebuildCommitLog: stage cleanup failed")
 		}
@@ -354,13 +352,20 @@ func (rh *repoHandler) rebuildCommitLog(ctx context.Context, branch string) (err
 	return rh.swapBranch(ctx, branch, branchID, all, func(ctx context.Context, tx *sql.Tx) error {
 		for _, stmt := range []string{
 			// Before branch_commits changes: the old visibility names the
-			// dropped commits.
-			`DELETE FROM commit_log WHERE commit_hash IN (SELECT commit_hash FROM commit_log_stage WHERE branch_id = ?1)
+			// dropped commits. Only rows that DIFFER from the stage are
+			// deleted (an identical staged row keeps its row: IS matches
+			// NULLs), so an unchanged branch writes nothing here; the
+			// INSERT OR IGNORE then fills in what was deleted or missing.
+			`DELETE FROM commit_log WHERE (commit_hash IN (SELECT commit_hash FROM commit_log_stage WHERE branch_id = ?1)
 			    OR commit_hash IN (SELECT commit_hash FROM branch_commits WHERE branch_id = ?1
-			        AND commit_hash NOT IN (SELECT commit_hash FROM branch_commits WHERE branch_id != ?1))`,
+			        AND commit_hash NOT IN (SELECT commit_hash FROM branch_commits WHERE branch_id != ?1)))
+			  AND NOT EXISTS (SELECT 1 FROM commit_log_stage s WHERE s.branch_id = ?1
+			        AND s.commit_hash = commit_log.commit_hash AND s.path = commit_log.path
+			        AND s.message IS commit_log.message AND s.operation IS commit_log.operation
+			        AND s.author_name IS commit_log.author_name AND s.author_email IS commit_log.author_email
+			        AND s.action IS commit_log.action AND s.committed_at IS commit_log.committed_at)`,
 			`INSERT OR IGNORE INTO commit_log (commit_hash, path, message, operation, author_name, author_email, action, committed_at)
 			 SELECT commit_hash, path, message, operation, author_name, author_email, action, committed_at FROM commit_log_stage WHERE branch_id = ?1 AND path != ''`,
-			`DELETE FROM commit_log_stage WHERE branch_id = ?1`,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt, branchID); err != nil {
 				return fmt.Errorf("rebuildCommitLog: swap commit_log: %w", err)

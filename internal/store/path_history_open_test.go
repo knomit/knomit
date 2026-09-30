@@ -451,3 +451,57 @@ func treeFiles(t *testing.T, svc *Service, commit string) map[string]string {
 	}))
 	return out
 }
+
+// TestOpenHistory_KeepsNoChangeLists covers C1: the open-time pass never
+// indexes what it derives, so it must not park their tree diffs in
+// rh.changes (they would pile up per repo, and dropping them wholesale at the
+// cap would cost a concurrent write its one diff).
+func TestOpenHistory_KeepsNoChangeLists(t *testing.T) {
+	svc, dbPath := openPathHistoryStoreAt(t)
+	writeVersionsStore(t, svc, 5)
+	clearDerived(t, svc, "") // an upgraded database
+	svc = reopen(t, svc, dbPath)
+	svc.rh.changes.mu.Lock()
+	defer svc.rh.changes.mu.Unlock()
+	require.Empty(t, svc.rh.changes.m, "the open-time pass keeps no change lists")
+	require.Zero(t, svc.rh.changes.n)
+}
+
+// TestRebuild_UnchangedBranchWritesNoCommitLogRow covers C3: a rebuild of a
+// branch whose commit_log already matches git rewrites no commit_log row in
+// its swap, and leaves nothing staged — while a row that differs is still
+// replaced (B8).
+func TestRebuild_UnchangedBranchWritesNoCommitLogRow(t *testing.T) {
+	svc, ctx := openPathHistoryStore(t)
+	c := writeVersionsStore(t, svc, 5)
+	for _, stmt := range []string{
+		`CREATE TABLE test_cl_writes (n INTEGER NOT NULL)`,
+		`INSERT INTO test_cl_writes VALUES (0)`,
+		`CREATE TRIGGER test_cl_ins AFTER INSERT ON commit_log BEGIN UPDATE test_cl_writes SET n = n + 1; END`,
+		`CREATE TRIGGER test_cl_del AFTER DELETE ON commit_log BEGIN UPDATE test_cl_writes SET n = n + 1; END`,
+	} {
+		_, err := svc.rh.db.Exec(stmt)
+		require.NoError(t, err)
+	}
+	writes := func() int {
+		var n int
+		require.NoError(t, svc.rh.db.QueryRow(`SELECT n FROM test_cl_writes`).Scan(&n))
+		_, err := svc.rh.db.Exec(`UPDATE test_cl_writes SET n = 0`)
+		require.NoError(t, err)
+		return n
+	}
+	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+	require.Equal(t, 0, writes(), "an unchanged rebuild writes no commit_log row")
+	var staged int
+	require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM commit_log_stage`).Scan(&staged))
+	require.Zero(t, staged, "nothing is left staged")
+
+	_, err := svc.rh.db.Exec(`UPDATE commit_log SET message = 'tampered' WHERE commit_hash = ?`, c[2])
+	require.NoError(t, err)
+	writes()
+	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+	require.Equal(t, 2*len(commitLogRows(t, svc, c[2])), writes(), "only the differing rows are replaced")
+	var msg string
+	require.NoError(t, svc.rh.db.QueryRow(`SELECT message FROM commit_log WHERE commit_hash = ? LIMIT 1`, c[2]).Scan(&msg))
+	require.NotEqual(t, "tampered", msg)
+}

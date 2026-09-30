@@ -154,7 +154,7 @@ func (rh *repoHandler) openHistory(ctx context.Context) error {
 		return err
 	}
 	d := newDeriver(rh, activeTables)
-	var pending []*object.Commit
+	var pending []*commitMeta
 	seen := map[plumbing.Hash]bool{}
 	stack := tips
 	for len(stack) > 0 {
@@ -181,15 +181,21 @@ func (rh *repoHandler) openHistory(ctx context.Context) error {
 			return err
 		}
 		pending = append(pending, c)
-		stack = append(stack, c.ParentHashes...)
+		stack = append(stack, c.Parents...)
 	}
 	order := parentsFirst(pending)
+	pending = nil
 	prepared := make([]*preparedCommit, len(order))
 	for i, c := range order {
 		if prepared[i], err = d.prepare(ctx, c); err != nil {
 			return err
 		}
 	}
+	// Everything prepared is all the transaction needs: drop the walk and
+	// the object caches before it, so the pass holds one set, not two.
+	n := len(order)
+	order = nil
+	d.dropCaches()
 
 	ctx, tx, own, err := beginTxIfNeeded(ctx, rh.db)
 	if err != nil {
@@ -225,8 +231,8 @@ func (rh *repoHandler) openHistory(ctx context.Context) error {
 			return fmt.Errorf("path changes: open: %w", err)
 		}
 	}
-	if len(order) > 0 || reset {
-		log.Info().Int("commits", len(order)).Bool("rederived", reset).Dur("elapsed", time.Since(start)).Msg("path changes: history derived at open")
+	if n > 0 || reset {
+		log.Info().Int("commits", n).Bool("rederived", reset).Dur("elapsed", time.Since(start)).Msg("path changes: history derived at open")
 	}
 	return nil
 }
@@ -291,7 +297,7 @@ func (rh *repoHandler) deriveBeforeAdvance(ctx context.Context, hash plumbing.Ha
 		return nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	_, err := rh.deriveClosure(ctx, newDeriver(rh, activeTables), []plumbing.Hash{hash})
+	_, err := rh.deriveClosure(ctx, newIndexingDeriver(rh), []plumbing.Hash{hash})
 	return err
 }
 
@@ -303,7 +309,7 @@ func (rh *repoHandler) deriveBeforeAdvance(ctx context.Context, hash plumbing.Ha
 // Returns how many commits it derived.
 func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []plumbing.Hash) (int, error) {
 	q := conn(ctx, rh.db)
-	var pending []*object.Commit
+	var pending []*commitMeta
 	seen := map[plumbing.Hash]bool{}
 	stack := append([]plumbing.Hash(nil), starts...)
 	for len(stack) > 0 {
@@ -328,7 +334,7 @@ func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []p
 			return 0, err
 		}
 		pending = append(pending, c)
-		stack = append(stack, c.ParentHashes...)
+		stack = append(stack, c.Parents...)
 	}
 	return len(pending), rh.deriveCommits(ctx, d, parentsFirst(pending), false)
 }
@@ -336,7 +342,7 @@ func (rh *repoHandler) deriveClosure(ctx context.Context, d *deriver, starts []p
 // deriveCommits prepares and applies commits (parents first) in batched
 // transactions. With replace, existing rows of each commit are replaced (the
 // re-derivation of degraded commits); otherwise a derived commit is left as is.
-func (rh *repoHandler) deriveCommits(ctx context.Context, d *deriver, order []*object.Commit, replace bool) error {
+func (rh *repoHandler) deriveCommits(ctx context.Context, d *deriver, order []*commitMeta, replace bool) error {
 	for i := 0; i < len(order); i += pathChangeBatch {
 		chunk := order[i:min(i+pathChangeBatch, len(order))]
 		prepared := make([]*preparedCommit, len(chunk))
@@ -396,7 +402,7 @@ func (rh *repoHandler) rederiveDegraded(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	d := newDeriver(rh, activeTables)
-	var commits []*object.Commit
+	var commits []*commitMeta
 	for _, h := range hashes {
 		c, err := d.commit(plumbing.NewHash(h))
 		if errors.Is(err, plumbing.ErrObjectNotFound) {
@@ -411,7 +417,7 @@ func (rh *repoHandler) rederiveDegraded(ctx context.Context) (int, error) {
 	// before): derive them first, then replace the degraded commits.
 	var parents []plumbing.Hash
 	for _, c := range commits {
-		parents = append(parents, c.ParentHashes...)
+		parents = append(parents, c.Parents...)
 	}
 	if _, err := rh.deriveClosure(ctx, d, parents); err != nil {
 		return 0, err
@@ -440,30 +446,46 @@ func markdownChanges(entries []storegit.CommitLogEntry) []string {
 
 // parentsFirst orders commits so every commit follows those of its parents
 // that are in the set (Kahn; ties in input order).
-func parentsFirst(commits []*object.Commit) []*object.Commit {
+func parentsFirst[C interface{ *object.Commit | *commitMeta }](commits []C) []C {
+	hash := func(c C) plumbing.Hash {
+		switch c := any(c).(type) {
+		case *object.Commit:
+			return c.Hash
+		default:
+			return c.(*commitMeta).Hash
+		}
+	}
+	parents := func(c C) []plumbing.Hash {
+		switch c := any(c).(type) {
+		case *object.Commit:
+			return c.ParentHashes
+		default:
+			return c.(*commitMeta).Parents
+		}
+	}
 	in := make(map[plumbing.Hash]bool, len(commits))
 	for _, c := range commits {
-		in[c.Hash] = true
+		in[hash(c)] = true
 	}
 	indeg := map[plumbing.Hash]int{}
-	children := map[plumbing.Hash][]*object.Commit{}
+	children := map[plumbing.Hash][]C{}
 	for _, c := range commits {
-		for _, p := range c.ParentHashes {
+		for _, p := range parents(c) {
 			if in[p] {
-				indeg[c.Hash]++
+				indeg[hash(c)]++
 				children[p] = append(children[p], c)
 			}
 		}
 	}
-	order := make([]*object.Commit, 0, len(commits))
+	order := make([]C, 0, len(commits))
 	for _, c := range commits {
-		if indeg[c.Hash] == 0 {
+		if indeg[hash(c)] == 0 {
 			order = append(order, c)
 		}
 	}
 	for i := 0; i < len(order); i++ {
-		for _, ch := range children[order[i].Hash] {
-			if indeg[ch.Hash]--; indeg[ch.Hash] == 0 {
+		for _, ch := range children[hash(order[i])] {
+			if indeg[hash(ch)]--; indeg[hash(ch)] == 0 {
 				order = append(order, ch)
 			}
 		}
@@ -478,13 +500,48 @@ type deriver struct {
 	rh       *repoHandler
 	t        pcTables
 	applying bool
-	trees    map[plumbing.Hash]*object.Tree
-	commits  map[plumbing.Hash]*object.Commit
-	facts    map[plumbing.Hash]*fact.Fact // parsed blobs; nil when not a fact
+	// keepChanges hands each prepared commit's tree diff to indexing
+	// (rh.changes). Only a deriver whose commits are indexed next sets it:
+	// the open-time pass and rederiveDegraded never index, and their lists
+	// would only pile up.
+	keepChanges bool
+	trees       map[plumbing.Hash]*object.Tree
+	commits     map[plumbing.Hash]*commitMeta
+	facts       map[plumbing.Hash]*fact.Fact // parsed blobs; nil when not a fact
+}
+
+// commitMeta is what derivation keeps of a commit object: apply needs no
+// more, and holding whole commits (signatures, full messages) for every
+// commit of an open-time pass dominated its heap.
+type commitMeta struct {
+	Hash, Tree plumbing.Hash
+	Parents    []plumbing.Hash
+	AuthorAt   int64  // author date, Unix seconds
+	Msg        string // first line of the message
+}
+
+func metaOf(c *object.Commit) *commitMeta {
+	return &commitMeta{Hash: c.Hash, Tree: c.TreeHash, Parents: c.ParentHashes, AuthorAt: c.Author.When.Unix(), Msg: firstLine(c.Message)}
 }
 
 func newDeriver(rh *repoHandler, t pcTables) *deriver {
-	return &deriver{rh: rh, t: t, trees: map[plumbing.Hash]*object.Tree{}, commits: map[plumbing.Hash]*object.Commit{}, facts: map[plumbing.Hash]*fact.Fact{}}
+	d := &deriver{rh: rh, t: t}
+	d.dropCaches()
+	return d
+}
+
+// newIndexingDeriver is a deriver whose commits are recorded next: it keeps
+// their tree diffs for commit_log (keepChanges).
+func newIndexingDeriver(rh *repoHandler) *deriver {
+	d := newDeriver(rh, activeTables)
+	d.keepChanges = true
+	return d
+}
+
+func (d *deriver) dropCaches() {
+	d.trees = map[plumbing.Hash]*object.Tree{}
+	d.commits = map[plumbing.Hash]*commitMeta{}
+	d.facts = map[plumbing.Hash]*fact.Fact{}
 }
 
 func (d *deriver) readGuard(kind string, h plumbing.Hash) error {
@@ -507,7 +564,7 @@ func (d *deriver) isDerived(ctx context.Context, q storegit.CtxExecer, hash stri
 
 // commit loads a commit; an absent one is an error wrapping
 // plumbing.ErrObjectNotFound.
-func (d *deriver) commit(h plumbing.Hash) (*object.Commit, error) {
+func (d *deriver) commit(h plumbing.Hash) (*commitMeta, error) {
 	if d.applying {
 		return nil, fmt.Errorf("%w: commit %s", errReadInApply, h)
 	}
@@ -517,13 +574,14 @@ func (d *deriver) commit(h plumbing.Hash) (*object.Commit, error) {
 	if err := d.readGuard("commit", h); err != nil {
 		return nil, err
 	}
-	c, err := d.rh.repo.CommitObject(h)
+	co, err := d.rh.repo.CommitObject(h)
 	if err != nil {
 		return nil, fmt.Errorf("path changes: commit %s: %w", h, err)
 	}
-	if len(d.commits) > 4096 {
+	if len(d.commits) > 65536 {
 		clear(d.commits)
 	}
+	c := metaOf(co)
 	d.commits[h] = c
 	return c, nil
 }
@@ -765,7 +823,7 @@ func (d *deriver) commitChanges(c *object.Commit) ([]storegit.CommitLogEntry, er
 		if err != nil {
 			return nil, err
 		}
-		from = p.TreeHash
+		from = p.Tree
 	}
 	commitDiffs.Add(1)
 	var entries []storegit.CommitLogEntry
@@ -782,7 +840,7 @@ func (d *deriver) commitChanges(c *object.Commit) ([]storegit.CommitLogEntry, er
 // preparedCommit is everything deriving a commit needs from git objects —
 // read before any transaction opens. apply turns it into rows with SQL only.
 type preparedCommit struct {
-	c            *object.Commit
+	c            *commitMeta
 	parentAbsent []bool // parent i is not in the object store (a boundary)
 	degraded     int
 	paths        []preparedPath
@@ -805,10 +863,10 @@ type preparedPath struct {
 // as boundaries or content_unavailable; other read errors fail. commit_log is
 // consulted only for a commit whose trees are missing — the one case git
 // cannot list the changed paths — and the commit is then degraded.
-func (d *deriver) prepare(ctx context.Context, c *object.Commit) (*preparedCommit, error) {
-	pc := &preparedCommit{c: c, parentAbsent: make([]bool, len(c.ParentHashes))}
-	parentTrees := make([]plumbing.Hash, len(c.ParentHashes))
-	for i, p := range c.ParentHashes {
+func (d *deriver) prepare(ctx context.Context, c *commitMeta) (*preparedCommit, error) {
+	pc := &preparedCommit{c: c, parentAbsent: make([]bool, len(c.Parents))}
+	parentTrees := make([]plumbing.Hash, len(c.Parents))
+	for i, p := range c.Parents {
 		pcm, err := d.commit(p)
 		if errors.Is(err, plumbing.ErrObjectNotFound) {
 			pc.parentAbsent[i] = true
@@ -818,7 +876,7 @@ func (d *deriver) prepare(ctx context.Context, c *object.Commit) (*preparedCommi
 		if err != nil {
 			return nil, err
 		}
-		parentTrees[i] = pcm.TreeHash
+		parentTrees[i] = pcm.Tree
 	}
 	var entries []storegit.CommitLogEntry
 	{
@@ -827,11 +885,11 @@ func (d *deriver) prepare(ctx context.Context, c *object.Commit) (*preparedCommi
 			from = parentTrees[0]
 		}
 		commitDiffs.Add(1)
-		incomplete, err := d.diffTrees(from, c.TreeHash, "", &entries)
+		incomplete, err := d.diffTrees(from, c.Tree, "", &entries)
 		if err != nil {
 			return nil, err
 		}
-		if !incomplete && (len(pc.parentAbsent) == 0 || !pc.parentAbsent[0]) {
+		if d.keepChanges && !incomplete && (len(pc.parentAbsent) == 0 || !pc.parentAbsent[0]) {
 			// The whole diff against parent 0: exactly the commit's
 			// commit_log rows, so indexing does not diff it again.
 			d.rh.changes.put(c.Hash, entries)
@@ -859,20 +917,20 @@ func (d *deriver) prepare(ctx context.Context, c *object.Commit) (*preparedCommi
 		}
 	}
 	for _, path := range markdownChanges(entries) {
-		to, st, err := d.blobAt(c.TreeHash, path)
+		to, st, err := d.blobAt(c.Tree, path)
 		if err != nil {
 			return nil, err
 		}
 		if st == blobAbsent {
 			continue
 		}
-		pp := preparedPath{path: path, blobs: make([]plumbing.Hash, len(c.ParentHashes)), parentHas: make([]bool, len(c.ParentHashes)), sameAs: -1}
+		pp := preparedPath{path: path, blobs: make([]plumbing.Hash, len(c.Parents)), parentHas: make([]bool, len(c.Parents)), sameAs: -1}
 		if st == blobPresent {
 			pp.to = to
 		} else {
 			pp.unavailable = true
 		}
-		for i := range c.ParentHashes {
+		for i := range c.Parents {
 			if pc.parentAbsent[i] {
 				continue
 			}
@@ -969,8 +1027,8 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 		return err
 	}
 	degraded := pc.degraded
-	depths := make([]int, len(c.ParentHashes))
-	for i, p := range c.ParentHashes {
+	depths := make([]int, len(c.Parents))
+	for i, p := range c.Parents {
 		if pc.parentAbsent[i] {
 			depths[i] = -1
 			continue
@@ -992,9 +1050,9 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 	// up[k] = up[k-1] of up[k-1].
 	depth := 0
 	ups := []byte{} // a root (or a boundary) has none; the column is NOT NULL
-	if len(c.ParentHashes) > 0 && depths[0] >= 0 {
+	if len(c.Parents) > 0 && depths[0] >= 0 {
 		depth = depths[0] + 1
-		anc := c.ParentHashes[0]
+		anc := c.Parents[0]
 		for level := 0; ; level++ {
 			ups = append(ups, anc[:]...)
 			next, ok, err := jumpFrom(ctx, tx, d.t, anc.String(), level)
@@ -1010,7 +1068,7 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO `+d.t.fp+` (commit_hash, depth, ups, degraded) VALUES (?, ?, ?, ?)`, hash, depth, ups, degraded); err != nil {
 		return fmt.Errorf("path changes: mark: %w", err)
 	}
-	msg := firstLine(c.Message)
+	msg := c.Msg
 	for _, pp := range pc.paths {
 		if err := d.applyPath(ctx, tx, c, hash, depth, depths, msg, pp); err != nil {
 			return err
@@ -1019,11 +1077,11 @@ func (d *deriver) apply(ctx context.Context, tx *sql.Tx, pc *preparedCommit) err
 	return nil
 }
 
-func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *object.Commit, hash string, depth int, parentDepths []int, msg string, pp preparedPath) error {
+func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *commitMeta, hash string, depth int, parentDepths []int, msg string, pp preparedPath) error {
 	path := pp.path
 	if pp.sameAs >= 0 {
 		// A carry: the commit took this content from parent sameAs.
-		from, _, err := liveChange(ctx, tx, d.t, path, c.ParentHashes[pp.sameAs].String(), 0)
+		from, _, err := liveChange(ctx, tx, d.t, path, c.Parents[pp.sameAs].String(), 0)
 		if err != nil {
 			return err
 		}
@@ -1033,14 +1091,14 @@ func (d *deriver) applyPath(ctx context.Context, tx *sql.Tx, c *object.Commit, h
 		return err
 	}
 
-	author := c.Author.When.Unix()
+	author := c.AuthorAt
 	orderAt, gen, action := author, 0, "added"
-	for i := range c.ParentHashes {
+	for i := range c.Parents {
 		if !pp.parentHas[i] || parentDepths[i] < 0 {
 			continue
 		}
 		action = "modified"
-		from, _, err := liveChange(ctx, tx, d.t, path, c.ParentHashes[i].String(), 0)
+		from, _, err := liveChange(ctx, tx, d.t, path, c.Parents[i].String(), 0)
 		if err != nil {
 			return err
 		}
