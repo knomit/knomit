@@ -1,0 +1,184 @@
+# A mission repo: coordination signals for one mission, separate from any
+# knowledge base. Everything here is a signal (kind pragmatic, type signal):
+# consumed once, never believed. Read README.md before editing.
+id: mission
+name: Mission
+description: Coordination signals for one mission (tasks, claims, working copies, acknowledgements). Consumed, not believed.
+
+# Set these ONCE, when the mission repo is created, and do not change them
+# mid-mission (README: "Set it once and forget").
+#   consensus: auto  - on the knomit instance that hosts this repo (no origin),
+#                      every branch a peer pushes is merged automatically.
+#                      A GitHub-hosted mission repo drops this line.
+#   conflicts        - how a path both sides changed is settled, and recorded.
+attributes:
+  consensus: auto
+  conflicts:
+    facts: merge
+    state: consensus
+
+topics:
+  # --- Pattern 1: claim / wait / take (a heuristic; README "Two ways to take") ---
+  tasks:
+    description: Generally available work, claimed with the claim protocol. The category is the lane (tasks/<lane>/). One entity, the task id.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: signal
+        message: a task is a signal (kind pragmatic, type signal)
+        rule: "fact.type === 'signal'"
+      - name: one-id
+        message: a task carries exactly one entity, its task id
+        rule: "fact.entities.length === 1"
+      - name: expires
+        message: a task must carry expires
+        rule: "typeof fact.expires === 'string' && fact.expires !== ''"
+    triggers:
+      # Expiry is a script (ruling R2), inline because it is one line.
+      - name: expire
+        on: due
+        match: "tasks/**"
+        do: script
+        js: "knomit.retract(change.path)"
+      # Every machine that wants work claims a new task.
+      - name: offer
+        on: learn
+        match: "tasks/**"
+        do: script
+        script: claims
+
+  claims:
+    description: Intentions to take a task, claims/<task-id>/<agent-id>/. A claim's expires is its decision timer.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: signal
+        message: a claim is a signal
+        rule: "fact.type === 'signal'"
+      - name: expires
+        message: a claim must carry expires (it is the claim's timer)
+        rule: "typeof fact.expires === 'string' && fact.expires !== ''"
+    triggers:
+      # Send my claim out now instead of at the next sync interval.
+      - name: push-claim
+        on: learn
+        match: "claims/*/{agent}/**"
+        do: push
+      # My claim's window is over: decide (take, wait, or withdraw).
+      - name: decide
+        on: due
+        match: "claims/*/{agent}/**"
+        do: script
+        script: claims
+
+  inbox:
+    description: Per-agent queues. inbox/<agent-id>/working/ holds the tasks an agent took or was assigned.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: signal
+        message: the inbox holds signals only
+        rule: "fact.type === 'signal'"
+    triggers:
+      - name: push-take
+        on: [learn, retract]
+        match: "inbox/**"
+        do: push
+      # The backstop: two working copies of one task -> the lower-ranked one backs off.
+      - name: dup-check
+        on: learn
+        match: "inbox/*/working/**"
+        do: script
+        script: claims
+      # Wake a session for my new work (taken or assigned).
+      - name: wake
+        on: learn
+        match: "inbox/{agent}/working/**"
+        do: run
+        recipe: work-task
+
+  acks:
+    description: Completion notices, acks/<poster-agent-id>/. Refs point at the results in the knowledge base.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: signal
+        message: an ack is a signal
+        rule: "fact.type === 'signal'"
+
+  # --- Pattern 2: host-awarded, exactly once (README "Two ways to take") ---
+  offers:
+    description: Work one instance awards, offers/<awarder-agent-id>/<lane>/. Normally the awarder is the hosting instance. One entity, the task id.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: signal
+        message: an offer is a signal
+        rule: "fact.type === 'signal'"
+      - name: one-id
+        message: an offer carries exactly one entity, its task id
+        rule: "fact.entities.length === 1"
+      - name: expires
+        message: an offer must carry expires
+        rule: "typeof fact.expires === 'string' && fact.expires !== ''"
+    triggers:
+      - name: expire-offer
+        on: due
+        match: "offers/**"
+        do: script
+        js: "knomit.retract(change.path)"
+      - name: bid
+        on: learn
+        match: "offers/**"
+        do: script
+        script: awards
+
+  bids:
+    description: Requests for an offer, bids/<awarder-agent-id>/<task-id>/<bidder-agent-id>/.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: signal
+        message: a bid is a signal
+        rule: "fact.type === 'signal'"
+    triggers:
+      - name: push-bid
+        on: learn
+        match: "bids/**"
+        do: push
+      # Runs on the awarder only: {agent} is this instance.
+      - name: award
+        on: learn
+        match: "bids/{agent}/**"
+        do: script
+        script: awards
+      # A bid nobody awarded: its owner withdraws it when it expires.
+      - name: withdraw-bid
+        on: due
+        match: "bids/*/*/{agent}/**"
+        do: script
+        js: |
+          try {
+            knomit.retract(change.path);
+          } catch (e) {
+            knomit.emit({withdrawn: change.path, error: String(e)});
+          }
+
+  awards:
+    description: The awarder's decision, awards/<winner-agent-id>/. Written by the awarder only, once per offer.
+    attributes:
+      learn_dedup: off
+    validations:
+      - name: signal
+        message: an award is a signal
+        rule: "fact.type === 'signal'"
+    triggers:
+      - name: push-award
+        on: learn
+        match: "awards/**"
+        do: push
+      - name: take-award
+        on: learn
+        match: "awards/{agent}/**"
+        do: script
+        script: awards
