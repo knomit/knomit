@@ -55,10 +55,11 @@ func (e *BranchMovedError) Is(target error) bool { return target == ErrBranchMov
 // the host's version, ResolveSrc takes the peer's. The conflict set is
 // detected under the dst lock, so it is the set as of the merge itself.
 //
-// With no side and `conflicts: merge` at the consensus branch's tip, a
-// conflicting fact is merged (StrategyMergeFacts; the host's version is the
-// upstream one) and only what cannot be merged is refused. An explicit side is
-// a human's whole-set choice and is never overridden by the setting.
+// With no side and a `conflicts` setting at the consensus branch's tip (or
+// its `consensus: auto` default), each conflicting path is settled as the
+// setting says — the host's own branch is the consensus side — and only what a
+// key set to off leaves is refused. An explicit side is a human's whole-set
+// choice and is never overridden by the setting.
 func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumbing.Hash, side ResolutionSide) (AgentReconcileResult, error) {
 	if srcTip.IsZero() {
 		return AgentReconcileResult{}, fmt.Errorf("MergePushed: the reviewed tip of %s is required", src)
@@ -81,15 +82,16 @@ func (s *Service) MergePushed(ctx context.Context, src, dst string, srcTip plumb
 
 // hostConflictStrategy is the strategy a host merge of a peer's branch runs
 // with: StrategyRefuse, or — when the ontology at the tip of this repo's
-// consensus branch (UpstreamBranch, never a hardcoded name) says
-// `conflicts: merge` — the fact-level merge, with the host's own branch as
-// the upstream side and Refuse for whatever it cannot merge.
+// consensus branch (UpstreamBranch, never a hardcoded name) sets `conflicts`
+// — that setting, with the host's own branch (dst, which the consensus branch
+// follows) as the consensus side and Refuse for whatever a key set to off
+// leaves.
 func (s *Service) hostConflictStrategy(ctx context.Context, o *mergeOpts) ConflictStrategy {
 	strategy, on := s.rh.conflictsStrategy(ctx, s.UpstreamBranch())
 	if !on {
 		return StrategyRefuse
 	}
-	o.factUpstream, o.factFallback = fact.MergeDst, StrategyRefuse
+	o.factConsensus, o.factFallback = fact.MergeDst, StrategyRefuse
 	return strategy
 }
 
@@ -105,9 +107,10 @@ func (s *Service) hostConflictStrategy(ctx context.Context, o *mergeOpts) Confli
 // A peer's authored commit is never skipped this way, even when its content
 // is already here: it is recorded like MergePushed records it.
 //
-// `conflicts: merge` at the consensus branch's tip turns a conflicting fact
-// into a merged one, exactly as for MergePushed with no side; a conflict it
-// cannot merge is still refused and left for a human.
+// A `conflicts` setting at the consensus branch's tip — under `consensus:
+// auto` it defaults to facts: merge / state: consensus — settles a conflict
+// exactly as for MergePushed with no side; what a key set to off leaves is
+// still refused and left for a human.
 func (s *Service) MergeConsensus(ctx context.Context, src, dst string, srcTip plumbing.Hash) (AgentReconcileResult, error) {
 	if srcTip.IsZero() {
 		return AgentReconcileResult{}, fmt.Errorf("MergeConsensus: the tip of %s is required", src)

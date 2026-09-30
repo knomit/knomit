@@ -16,13 +16,14 @@ type MergeRule string
 const (
 	// MergeConfidence is dedup's winner rule made symmetric: the version with
 	// the higher confidence, then more sources, then the one that is not a
-	// hypothesis, then the smaller git blob hash of the version's bytes. The
+	// hypothesis, then the smaller blob hash of the version's bytes. The
 	// last step means nothing and is fixed, which is all determinism needs.
-	MergeConfidence MergeRule = "confidence"
-	// MergeUpstream takes the consensus branch's version (MergeStrategy.Upstream
-	// names which argument that is): "remote wins", limited to fields both
-	// sides changed.
-	MergeUpstream MergeRule = "upstream"
+	// Its name is the `conflicts` value that selects it (`facts: merge`).
+	MergeConfidence MergeRule = "merge"
+	// MergeTakeConsensus takes the consensus side's version
+	// (MergeStrategy.Consensus names which argument that is), limited to
+	// fields both sides changed (`facts: merge:consensus`).
+	MergeTakeConsensus MergeRule = "merge_consensus"
 )
 
 // MergeSide names one of MergeVersions' two versions by its argument.
@@ -33,12 +34,12 @@ const (
 	MergeDst MergeSide = "dst"
 )
 
-// MergeStrategy is the both-changed rule plus, for MergeUpstream, which
+// MergeStrategy is the both-changed rule plus, for MergeTakeConsensus, which
 // argument is the consensus side (src on a peer merging the consensus branch
 // in, dst on the host merging a peer's branch into its own).
 type MergeStrategy struct {
-	Rule     MergeRule // empty reads as MergeConfidence
-	Upstream MergeSide // required by MergeUpstream
+	Rule      MergeRule // empty reads as MergeConfidence
+	Consensus MergeSide // required by MergeTakeConsensus
 }
 
 // Name is the rule as the Knomit-Merge trailer records it.
@@ -99,9 +100,13 @@ type MergeRecord struct {
 // ok is false — and the caller keeps its site's side-picking behaviour — when
 // a version does not parse, the two kinds differ, a version would lose
 // something on the way through ParseFact and SerializeFact (a frontmatter key
-// this build does not know, a YAML comment in the frontmatter, a ref/motif/expires ParseFact drops, a subject
+// this build does not know, a ref/motif/expires ParseFact drops, a subject
 // motif SerializeFact strips), or the merged fact would not write back exactly.
-// Merging must never drop what a side wrote.
+// Merging must never drop what a side wrote — with one exception: a YAML
+// comment in a version's frontmatter is NOT lossy. The merge proceeds and the
+// comment is dropped, as every knomit_update rewrite drops it; the version
+// that carried it stays readable at its own commit (knomit_explain at that
+// commit), which is one parent away from the merge.
 //
 // Pure: a function of the three blobs and the strategy only (no clock, no
 // embedding, no local state), so the two instances of a conflict compute the
@@ -110,8 +115,8 @@ func MergeVersions(path string, base, src, dst []byte, strategy MergeStrategy) (
 	rec.Strategy = strategy.Name()
 	switch strategy.Rule {
 	case "", MergeConfidence:
-	case MergeUpstream:
-		if strategy.Upstream != MergeSrc && strategy.Upstream != MergeDst {
+	case MergeTakeConsensus:
+		if strategy.Consensus != MergeSrc && strategy.Consensus != MergeDst {
 			rec.Reason = "bad-strategy"
 			return nil, rec, false
 		}
@@ -224,8 +229,8 @@ func chooseSide(hasBase, baseEqSrc, baseEqDst, srcEqDst bool, winner MergeSide) 
 // a total order on (fact, bytes), independent of which argument a version
 // arrived in, so both instances of a conflict name the same version.
 func mergeWinner(s, d Fact, sb, db []byte, st MergeStrategy) MergeSide {
-	if st.Rule == MergeUpstream {
-		return st.Upstream
+	if st.Rule == MergeTakeConsensus {
+		return st.Consensus
 	}
 	switch {
 	case s.Confidence != d.Confidence:
@@ -390,10 +395,11 @@ func parseLossless(path string, data []byte) (Fact, string) {
 	return f, ""
 }
 
-// knownKeysOnly reports whether every frontmatter key is one ParseFact reads
-// and the block carries no YAML comment — SerializeFact writes neither back,
-// so a version holding either would lose it in a merge. The block is located
-// exactly as ParseFact locates it.
+// knownKeysOnly reports whether every frontmatter key is one ParseFact reads —
+// SerializeFact does not write an unknown key back, so a version holding one
+// would lose it in a merge. A YAML comment is deliberately NOT checked: it is
+// dropped, not lost (see MergeVersions). The block is located exactly as
+// ParseFact locates it.
 func knownKeysOnly(content string) bool {
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	rest := strings.TrimPrefix(content, "---\n")
@@ -403,9 +409,6 @@ func knownKeysOnly(content string) bool {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(rest[:end]), &doc); err != nil {
-		return false
-	}
-	if hasComment(&doc) {
 		return false
 	}
 	var keys map[string]yaml.Node
@@ -418,16 +421,4 @@ func knownKeysOnly(content string) bool {
 		}
 	}
 	return true
-}
-
-func hasComment(n *yaml.Node) bool {
-	if n.HeadComment != "" || n.LineComment != "" || n.FootComment != "" {
-		return true
-	}
-	for _, c := range n.Content {
-		if hasComment(c) {
-			return true
-		}
-	}
-	return false
 }
