@@ -505,3 +505,80 @@ func TestRebuild_UnchangedBranchWritesNoCommitLogRow(t *testing.T) {
 	require.NoError(t, svc.rh.db.QueryRow(`SELECT message FROM commit_log WHERE commit_hash = ? LIMIT 1`, c[2]).Scan(&msg))
 	require.NotEqual(t, "tampered", msg)
 }
+
+// TestRederiveDegraded_KeepsNoChangeLists covers the other half of C1:
+// :rebuild's re-derivation of degraded commits indexes nothing, so it keeps
+// no change lists either.
+func TestRederiveDegraded_KeepsNoChangeLists(t *testing.T) {
+	svc, ctx := openPathHistoryStore(t)
+	c := writeVersionsStore(t, svc, 3)
+	restore := removeObject(t, svc, plumbing.NewHash(blobOf(t, svc, c[0], "kb/t.md")))
+	staleVersion(t, svc)
+	require.NoError(t, svc.rh.openHistory(ctx))
+	restore()
+	svc.rh.changes.mu.Lock()
+	svc.rh.changes.m, svc.rh.changes.n = nil, 0
+	svc.rh.changes.mu.Unlock()
+
+	n, err := svc.rh.rederiveDegraded(ctx)
+	require.NoError(t, err)
+	require.Positive(t, n, "degraded commits were re-derived")
+	svc.rh.changes.mu.Lock()
+	defer svc.rh.changes.mu.Unlock()
+	require.Empty(t, svc.rh.changes.m, "rederiveDegraded keeps no change lists")
+}
+
+// TestRebuild_RepairsEveryCommitLogColumn covers C3's comparison column by
+// column: a row differing from git in ANY one of commit_log's 8 columns is
+// replaced by :rebuild, so dropping any column from the swap's NOT EXISTS
+// comparison fails a case.
+func TestRebuild_RepairsEveryCommitLogColumn(t *testing.T) {
+	const cols = `commit_hash, path, message, operation, author_name, author_email, action, committed_at`
+	snapshot := func(t *testing.T, svc *Service) []string {
+		rows, err := svc.rh.db.Query(`SELECT ` + cols + ` FROM commit_log ORDER BY commit_hash, path`)
+		require.NoError(t, err)
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			v := make([]any, 8)
+			p := make([]any, 8)
+			for i := range v {
+				p[i] = &v[i]
+			}
+			require.NoError(t, rows.Scan(p...))
+			out = append(out, fmt.Sprint(v...))
+		}
+		return out
+	}
+	for _, tc := range []struct{ column, tamper string }{
+		// A copy of c[3]'s kb/o.md row under c[1], which never touched it:
+		// identical to a staged row in every column but commit_hash.
+		{"commit_hash", `INSERT INTO commit_log (` + cols + `) SELECT ?1, path, message, operation, author_name, author_email, action, committed_at FROM commit_log WHERE commit_hash = ?2 AND path = 'kb/o.md'`},
+		// A copy of c[1]'s kb/t.md row under a path it never had.
+		{"path", `INSERT INTO commit_log (` + cols + `) SELECT commit_hash, 'kb/bogus.md', message, operation, author_name, author_email, action, committed_at FROM commit_log WHERE commit_hash = ?1 AND path = 'kb/t.md'`},
+		{"message", `UPDATE commit_log SET message = 'tampered' WHERE commit_hash = ?1`},
+		{"operation", `UPDATE commit_log SET operation = 'tampered' WHERE commit_hash = ?1`},
+		{"author_name", `UPDATE commit_log SET author_name = 'tampered' WHERE commit_hash = ?1`},
+		{"author_email", `UPDATE commit_log SET author_email = 'tampered' WHERE commit_hash = ?1`},
+		{"action", `UPDATE commit_log SET action = 'deleted' WHERE commit_hash = ?1`},
+		{"committed_at", `UPDATE commit_log SET committed_at = 1 WHERE commit_hash = ?1`},
+	} {
+		t.Run(tc.column, func(t *testing.T) {
+			svc, ctx := openPathHistoryStore(t)
+			c := writeVersionsStore(t, svc, 3)
+			o, err := svc.Facts().WriteFact(ctx, "main", "kb/o.md", testFactBody("o", 0.5, nil), "o", "")
+			require.NoError(t, err)
+			c = append(c, o.CommitHash)
+			want := snapshot(t, svc)
+			res, err := svc.rh.db.Exec(tc.tamper, c[1], c[3])
+			require.NoError(t, err)
+			n, err := res.RowsAffected()
+			require.NoError(t, err)
+			require.Positive(t, n, "the tamper hit a row")
+			require.NotEqual(t, want, snapshot(t, svc))
+
+			require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
+			require.Equal(t, want, snapshot(t, svc), "rebuild repairs a row differing in %s", tc.column)
+		})
+	}
+}
