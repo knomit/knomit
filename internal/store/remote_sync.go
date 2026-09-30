@@ -229,7 +229,16 @@ func (ri *remoteIndex) reconcileNow(ctx context.Context, agentBranch, upstreamMa
 	//   - !ModeRewound → merge local upstream into agent (steady state, one merge commit at most).
 	//   - ModeRewound  → rebase fallback: replay agent's local-only commits onto the
 	//                    disjoint new upstream, dropping any files scrubbed by the rewind.
-	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, upstreamMain, StrategyLocalWins, mainRes.Mode == ModeRewound)
+	//
+	// The strategy is the repo's `conflicts` setting, read at the tip of the
+	// consensus branch just reconciled to origin's (the host reads the same
+	// value at its own): merge → the fact-level merge, whose unmergeable paths
+	// still go LocalWins; absent/off → LocalWins, as always.
+	strategy := StrategyLocalWins
+	if s, on := ri.rh.conflictsStrategy(ctx, upstreamMain); on {
+		strategy = s
+	}
+	agentRes, err := ri.rh.reconcileAgent(ctx, agentBranch, upstreamMain, strategy, mainRes.Mode == ModeRewound)
 	if err != nil {
 		return SyncResult{Main: mainRes, Agent: agentRes}, fmt.Errorf("Sync: reconcileAgent: %w", err)
 	}
