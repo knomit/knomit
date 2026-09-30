@@ -199,6 +199,9 @@ func (s *Service) InitRepoWithUpstream(initFiles map[string]string, upstreamMain
 	if err := s.rh.gits.SetReference(mainRef); err != nil {
 		return fmt.Errorf("InitRepo: set %s ref: %w", upstreamMain, err)
 	}
+	// Local init records the consensus branch it created: with no origin,
+	// UpstreamBranch answers this name (consensus_branch.go).
+	s.recordConsensusBranch(upstreamMain)
 
 	// Seed the per-agent watermark to the initial commit (which is exactly
 	// the local-upstream hash at this point). On the next reconcileAgent the
@@ -353,6 +356,13 @@ func BranchACreateReads(remoteHasAgentBranch bool, agentBranch, consensusBranch 
 }
 
 func (s *Service) InitFromRemote(originURL string, auth transport.AuthMethod, upstreamMain, agentBranch string, initFiles map[string]string, progress func(string)) (upstream string, remoteWasEmpty bool, err error) {
+	// Record the RESOLVED consensus branch (consensus_branch.go): it outlives
+	// the origin row if the origin is later removed.
+	defer func() {
+		if err == nil {
+			s.recordConsensusBranch(upstream)
+		}
+	}()
 	repo, err := gogit.Init(s.rh.gits, memfs.New())
 	if err != nil {
 		return "", false, fmt.Errorf("InitFromRemote: git init: %w", err)
@@ -622,6 +632,7 @@ func (s *Service) InitSubscription(originURL string, auth transport.AuthMethod, 
 	if err := s.rh.gits.SetReference(plumbing.NewSymbolicReference(plumbing.HEAD, localName)); err != nil {
 		return "", fmt.Errorf("InitSubscription: set HEAD: %w", err)
 	}
+	s.recordConsensusBranch(upstreamMain)
 
 	s.fi.auth = auth
 	if _, err := s.rh.EnsureBranch(context.Background(), upstreamMain, "refs/heads/"+upstreamMain); err != nil {
