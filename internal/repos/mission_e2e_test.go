@@ -533,8 +533,11 @@ func postTask(t *testing.T, n *missionNode, clock *missionClock, id, body string
 // the same single working copy is on H's agent and consensus branches and on
 // P; H's merger merged and refused nothing.
 //
-// SABOTAGE: rank "self first" in claims.js (firstOf returns agent.id when it
-// is among the ids) -> both take -> "only one working copy ever created" red.
+// SABOTAGE: decide picks itself (`var winner = agent.id;`), dup-check left
+// intact → both take, the backstop cleans up so ONE copy remains, and "only
+// ONE working copy was ever created" goes red. The take split into a learn
+// and a separate retract → "the take deletes the task in the same commit"
+// red. The take without its retract → "the task is gone" red.
 func TestMission_OneTaskTwoClaimersOneTakes(t *testing.T) {
 	for _, c := range []struct {
 		name, winner string

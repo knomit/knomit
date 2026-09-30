@@ -58,9 +58,10 @@ func taskIDWonBy(t *testing.T, winner string) string {
 // antisymmetric, irreflexive and independent of the order the claims were
 // listed in, so every machine picks the same first claimer.
 //
-// SABOTAGE: drop the id tie-break in ranksBefore (`return ha < hb;` only) →
-// with colliding hashes neither id ranks before the other, and firstOf keeps
-// whichever it saw first → the listing-order assertion goes red.
+// SABOTAGE: drop the id tie-break in ranksBefore (`return a < b;` →
+// `return false;`) → with colliding hashes neither id ranks before the other
+// → the first ranksBefore assertion goes red (and firstOf would keep
+// whichever id it saw first).
 func TestMissionTemplate_RankIsTotal(t *testing.T) {
 	vm := shippedClaims(t)
 	require.Equal(t, "2166136261", jsString(t, vm, `String(fnv1a(""))`), "FNV-1a 32-bit offset basis")

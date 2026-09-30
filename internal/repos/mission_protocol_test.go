@@ -106,8 +106,9 @@ func TestMissionTemplate_LoadsAsIs(t *testing.T) {
 // expires is retracted by the inline `expire` script on both instances, and
 // the claims made for it are withdrawn at their decide (the task is gone).
 //
-// SABOTAGE: `expire` matching claims/** instead of tasks/** → the task
-// survives → red.
+// SABOTAGE: `expire` matching a lane nothing is posted in (tasks/nothing/**)
+// → the task survives its expires → "the task expired" red. (A match outside
+// the topic, claims/**, makes the trigger invalid, which is the same red.)
 func TestMission_ExpiryScriptRetracts(t *testing.T) {
 	clock := newMissionClock(t)
 	h, _ := newMissionHost(t, nil)
@@ -117,16 +118,20 @@ func TestMission_ExpiryScriptRetracts(t *testing.T) {
 	h.ri.QuiesceTriggersForTest(t)
 	exchange(t, h, p)
 
+	// Past the task's expires, before any claim is due: only `expire` acts.
 	clock.add(11 * time.Second)
 	tick(t, h, p)
 	exchange(t, h, p)
+	exchange(t, h, p)
+	for _, at := range branchesOf(t, h, p) {
+		require.Empty(t, at.n.paths(t, at.branch, "kb/tasks/"), "%s: the task expired", at.where)
+	}
+
 	clock.add(window)
 	tick(t, h, p)
 	exchange(t, h, p)
 	exchange(t, h, p)
-
 	for _, at := range branchesOf(t, h, p) {
-		require.Empty(t, at.n.paths(t, at.branch, "kb/tasks/"), "%s: the task expired", at.where)
 		require.Empty(t, at.n.paths(t, at.branch, "kb/claims/"), "%s: its claims were withdrawn", at.where)
 		require.Empty(t, workingCopies(at.n.paths(t, at.branch, "kb/")), "%s: nobody took it", at.where)
 	}
@@ -149,7 +154,8 @@ func TestMission_ExpiryScriptRetracts(t *testing.T) {
 // the dead winner's claim.
 //
 // SABOTAGE: the loser does not re-arm (the knomit.update in decide replaced
-// by a no-op) → P never decides again → nobody takes → red.
+// by a no-op), or retracts its claim on losing → P never decides again →
+// nobody takes → "the loser took the re-offered task" red.
 func TestMission_WinnerCrashReoffered(t *testing.T) {
 	clock := newMissionClock(t)
 	h, _ := newMissionHost(t, nil)
