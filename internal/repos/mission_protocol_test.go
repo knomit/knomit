@@ -430,7 +430,8 @@ func (n *missionNode) agentTip(t *testing.T) string {
 // queue; the losing bid is withdrawn at its expiry by the inline script.
 //
 // SABOTAGE: the award without {retract: [offerPath]} → the second bid gets a
-// second award → red.
+// second award → "exactly one award" red; `award` matching bids/** (not only
+// on the awarder) → P awards too → the same red.
 func TestMission_HostAwardedExactlyOnce(t *testing.T) {
 	clock := newMissionClock(t)
 	h, _ := newMissionHost(t, nil)
@@ -445,15 +446,17 @@ func TestMission_HostAwardedExactlyOnce(t *testing.T) {
 
 	ccs := singleParentChanges(t, historyOf(t, h.url))
 	var awards []string
+	var awardCommit commitChange
 	for _, cc := range ccs {
 		for path, ch := range cc.changes {
 			if ch == "A" && strings.HasPrefix(path, "kb/awards/") {
 				awards = append(awards, path)
-				require.Equal(t, "D", cc.changes[offer], "the award deletes the offer in the same commit")
+				awardCommit = cc
 			}
 		}
 	}
 	require.Len(t, awards, 1, "exactly one award was ever written")
+	require.Equal(t, "D", awardCommit.changes[offer], "the award deletes the offer in the same commit")
 	require.Len(t, createdWorkingCopies(ccs), 1, "exactly one working copy was ever written")
 	winner := strings.Split(awards[0], "/")[2]
 	for _, at := range branchesOf(t, h, p) {
