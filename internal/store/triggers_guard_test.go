@@ -46,6 +46,10 @@ var triggersAllowedCalls = map[string][]string{
 		// read by the three fact builders in fact_write.go, never here)
 		"strings.TrimRight", "strings.LastIndex", "strings.Split", "strings.Cut", "strings.EqualFold", "strings.TrimSpace",
 		"context.WithValue", "ctx.Value", "t.IsZero",
+		// #349: WithAgentTrace's refusals and its ctx attach (WithTrailers, the
+		// same transport), and appendTrailers sorting a COPY of the agent's
+		// own entries — pure helpers, no write
+		"errors.New", "WithTrailers", "len", "append", "sort.SliceStable",
 	},
 }
 

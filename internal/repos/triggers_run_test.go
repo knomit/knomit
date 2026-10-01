@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -615,6 +616,49 @@ func TestSampleRecipe_ArgvHasPathNotBody(t *testing.T) {
 	}
 	rows := waitRows(t, ri, "w", 2)
 	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
+
+	// #349: the prompt hands the session its trace as a JSON literal — the
+	// fire's trace (a plain id here: the firing commit), the firing commit and
+	// the run id — to pass on every write.
+	require.Equal(t, map[string]string{"Knomit-Trace": rows[0].Trace, "Knomit-Cause": rows[0].Trace, "Knomit-Run": rows[0].RunID},
+		promptTrace(t, rep.Args[8]))
+
+	// A trace that is not a plain id (a toucher's Knomit-Trace is copied
+	// forward verbatim, and a task's entity is author text) stays OUT of the
+	// prompt; the cause and the run still tie the session's writes to the fire.
+	weird := writeMsg(t, ri, trigAgent, "kb/tasks/in/other.md", "learn: other\n\nKnomit-Trace: a story <with> spaces\n")
+	// Match the second fire by its path and the child by its run id: neither
+	// the report files nor the rows are guaranteed to come back in start order.
+	reports := waitHelperReports(t, dir, "child", 2)
+	waitRows(t, ri, "w", 4)
+	var second store.TriggerFire
+	for _, r := range rowsOf(t, ri, "w") {
+		if r.Path == "kb/tasks/in/other.md" && r.Outcome == store.TriggerOutcomeStarted {
+			second = r
+		}
+	}
+	require.NotEmpty(t, second.RunID, "fixture: the second fire started")
+	require.Equal(t, "a story <with> spaces", second.Trace, "fixture: the fire's trace is the copied-forward value")
+	var prompt2 string
+	for _, r := range reports {
+		if strings.Contains(r.Args[8], second.RunID) {
+			prompt2 = r.Args[8]
+		}
+	}
+	require.NotEmpty(t, prompt2, "no child was started with run %s", second.RunID)
+	require.Equal(t, map[string]string{"Knomit-Cause": weird, "Knomit-Run": second.RunID}, promptTrace(t, prompt2))
+	require.NotContains(t, prompt2, "a story")
+}
+
+// promptTrace extracts the JSON trace object a sample recipe put in its
+// prompt (the last {...} in it).
+func promptTrace(t *testing.T, prompt string) map[string]string {
+	t.Helper()
+	i, j := strings.LastIndex(prompt, "{"), strings.LastIndex(prompt, "}")
+	require.True(t, i >= 0 && j > i, "no trace object in the prompt: %q", prompt)
+	var out map[string]string
+	require.NoError(t, json.Unmarshal([]byte(prompt[i:j+1]), &out), prompt)
+	return out
 }
 
 // ---- T13: the recipe name
@@ -719,9 +763,10 @@ func TestRun_EnvMergedWithTrace(t *testing.T) {
 // ---- T18: a recipe's writes
 
 // RecipeWritesStampedAndGuarded: knomit.learn from a recipe commits with the
-// fire's trailers (trace, cause, trigger) and does not re-fire its own
-// trigger on that path (`self-caused`). Sabotage: build the recipe host
-// without WithTrailers (red: no trailers, a second start).
+// fire's trailers (trace, cause, trigger) plus Knomit-Run = the `started`
+// row's run id (#349, T11), and does not re-fire its own trigger on that path
+// (`self-caused`). Sabotage: build the recipe host without WithTrailers (red:
+// no trailers, a second start); drop `Run: j.id` (red: no Knomit-Run).
 func TestRun_RecipeWritesStampedAndGuarded(t *testing.T) {
 	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
 	putLocalRecipe(t, home, "worker", `knomit.learn({topic: "tasks", category: "in", title: "From recipe"}); ({status: "done"});`)
@@ -732,9 +777,30 @@ func TestRun_RecipeWritesStampedAndGuarded(t *testing.T) {
 	commits := commitsAfter(t, ri, fired)
 	require.Len(t, commits, 1, "the recipe made one commit")
 	tr := trailersOf(t, ri, commits[0])
-	require.Equal(t, store.Trailers{Trace: rows[0].Trace, Cause: fired, Trigger: "w"}, tr)
+	require.Regexp(t, `^run-[0-9a-f]{32}$`, rows[0].RunID)
+	require.Equal(t, store.Trailers{Trace: rows[0].Trace, Cause: fired, Trigger: "w", Run: rows[0].RunID}, tr)
+	require.True(t, strings.HasSuffix(commitMessage(t, ri, commits[0]), "\nKnomit-Trigger: w\nKnomit-Run: "+rows[0].RunID+"\n"),
+		"Knomit-Run is the last line, after Knomit-Trigger")
 	require.Equal(t, int64(1), ri.triggers.stats.view("w").SelfCaused, "its own write does not re-fire it")
 	require.Len(t, rowsOf(t, ri, "w"), 2, "no second start")
+}
+
+// RecipeLearnTraceRefused [#349 T6, N1, recipe tier]: a recipe's
+// knomit.learn with `trace` in its options throws (the recipe host shares the
+// script host's learn) and nothing is committed; the recipe sees the reason.
+// Sabotage: remove the host's opts.trace check (red: a commit lands, the
+// message is empty).
+func TestRun_RecipeLearnTraceRefused(t *testing.T) {
+	ri, home := newRunRepo(t, runTrig("w", "learn", "tasks/in/**", "worker"))
+	putLocalRecipe(t, home, "worker", `var m = "";
+try { knomit.learn({topic: "tasks", category: "out", title: "From recipe"}, {trace: {"Knomit-Trace": "mine"}}); } catch (e) { m = e.message; }
+({status: "done", message: m});`)
+	fired := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	rows := waitRows(t, ri, "w", 2)
+	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome)
+	require.Contains(t, rows[1].Error, "opts.trace is refused")
+	settle(t, ri)
+	require.Empty(t, commitsAfter(t, ri, fired), "nothing was committed")
 }
 
 // ---- T19: output cap

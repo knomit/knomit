@@ -199,7 +199,7 @@ func trailersOf(t *testing.T, ri *RepoInstance, h string) store.Trailers {
 	msg := commitMessage(t, ri, h)
 	return store.Trailers{
 		Trace: store.TrailerValue(msg, store.TrailerTrace), Cause: store.TrailerValue(msg, store.TrailerCause),
-		Trigger: store.TrailerValue(msg, store.TrailerTrigger),
+		Trigger: store.TrailerValue(msg, store.TrailerTrigger), Run: store.TrailerValue(msg, store.TrailerRun),
 	}
 }
 
@@ -1044,4 +1044,63 @@ knomit.emit(out);`)
 	require.Contains(t, p["notString"], "non-empty string")
 	require.Empty(t, tools.recorded(), "refused before any tool ran")
 	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
+}
+
+// ---- #349: the agent's trace
+
+// LearnTraceRefused [T6, N1]: a script's knomit.learn with `trace` in its
+// options throws in the HOST, before any tool runs — learn builds a fresh
+// call, so without the refusal the trace would be DROPPED silently, while
+// update/retract pass it through to a handler that refuses it. Sabotage:
+// remove the host's opts.trace check (red: the tool is called, a commit lands).
+func TestScript_LearnTraceRefused(t *testing.T) {
+	_, ri, tools := newScriptRepo(t, 0, scriptTrig("t", "learn", "tasks/in/**", "traced"))
+	putScript(t, ri, "traced", `
+var out = {};
+try { knomit.learn({topic: "tasks", category: "w", title: "x"}, {trace: {"Knomit-Trace": "mine"}}); } catch (e) { out.learn = e.message; }
+try { knomit.learn([], {retract: [change.path], trace: {}}); } catch (e) { out.empty = e.message; }
+knomit.emit(out);`)
+	sink := subscribePayloads(t, ri, "t")
+	before := settle(t, ri)
+	c0 := writeOn(t, ri, trigAgent, "kb/tasks/in/a.md")
+	settle(t, ri)
+	p := sink.wait(t, 1)[0]
+	require.Contains(t, p["learn"], "opts.trace is refused")
+	require.Contains(t, p["empty"], "opts.trace is refused", "refused even when empty: refuse, never drop")
+	require.Empty(t, tools.recorded(), "refused before any tool ran")
+	require.Equal(t, []string{c0}, commitsAfter(t, ri, before), "nothing was committed")
+}
+
+// AgentTraceJoinsTheStory [T10, Reading A]: a session's write that carries an
+// agent trace (Knomit-Trace, -Cause, -Run and an own key, as the MCP `trace`
+// argument stamps it through store.WithAgentTrace) fires a `do: script`
+// trigger; the fire's change.trace is the agent's Knomit-Trace, and the
+// script's write carries Trace = that trace, Cause = the session's commit,
+// Trigger = the rule — knomit's own set, with none of the agent's Run or own
+// keys merged in. Sabotage: deriveTrace ignores the toucher's Knomit-Trace
+// (red: the trace is the commit hash).
+func TestScript_AgentTraceJoinsTheStory(t *testing.T) {
+	_, ri, _ := newScriptRepo(t, 0, scriptTrig("t1", "learn", "tasks/in/**", "learn"))
+	putScript(t, ri, "learn", `knomit.learn({topic: "tasks", category: "out", title: "for " + change.path + " in " + change.trace});`)
+	before := settle(t, ri)
+	agentCtx, err := store.WithAgentTrace(context.Background(), store.Trailers{
+		Trace: "task-7f3a", Cause: strings.Repeat("a", 40), Run: "run-" + strings.Repeat("b", 32),
+		Extra: []store.TrailerEntry{{Key: "Ticket", Value: "ABC-12"}},
+	})
+	require.NoError(t, err)
+	r, err := testService(t, ri).Facts().WriteFact(agentCtx, trigAgent, "kb/tasks/in/session.md", factBody("session"), "learn: session work", "learn")
+	require.NoError(t, err)
+	session := r.CommitHash
+	settle(t, ri)
+
+	commits := commitsAfter(t, ri, before)
+	require.Equal(t, []string{session}, commits[:1])
+	require.Len(t, commits, 2, "the session's write and the script's")
+	require.Equal(t, store.Trailers{Trace: "task-7f3a", Cause: session, Trigger: "t1"}, trailersOf(t, ri, commits[1]))
+	msg := commitMessage(t, ri, commits[1])
+	require.NotContains(t, msg, "Knomit-Run", "knomit's set is its own; the agent's entries are not carried")
+	require.NotContains(t, msg, "Ticket")
+	fires := firesOf(t, ri, "t1")
+	require.Len(t, fires, 1)
+	require.Equal(t, "task-7f3a", fires[0].Trace, "change.trace is the agent's Knomit-Trace")
 }

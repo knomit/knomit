@@ -615,6 +615,18 @@ func TestMission_OneTaskTwoClaimersOneTakes(t *testing.T) {
 			// The winner's wake started one session, for its working copy.
 			require.Eventually(t, func() bool { return len(claudeRuns(t)) == 1 }, 20*time.Second, 20*time.Millisecond)
 			require.Contains(t, strings.Join(claudeRuns(t)[0], " "), working)
+			// #349: the prompt hands the session the task's trace — the task
+			// id, which the claims script's take carried forward — to pass on
+			// every write, as a JSON literal.
+			argv := claudeRuns(t)[0]
+			prompt := argv[len(argv)-1]
+			i, j := strings.LastIndex(prompt, "{"), strings.LastIndex(prompt, "}")
+			require.True(t, i >= 0 && j > i, "no trace in the prompt: %q", prompt)
+			var trace map[string]string
+			require.NoError(t, json.Unmarshal([]byte(prompt[i:j+1]), &trace), prompt)
+			require.Equal(t, id, trace["Knomit-Trace"], "the session's trace is the task id")
+			require.Regexp(t, `^run-[0-9a-f]{32}$`, trace["Knomit-Run"])
+			require.Regexp(t, `^[0-9a-f]{40}$`, trace["Knomit-Cause"])
 		})
 	}
 }

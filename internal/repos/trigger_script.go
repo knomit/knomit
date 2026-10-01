@@ -411,6 +411,13 @@ func (h *scriptHost) learn(args []any) (any, error) {
 		}
 	}
 	opts := objectArg(args, 1)
+	// #349 [N1]: a script's or recipe's writes carry knomit's own trace
+	// entries, which an agent trace may not join. update/retract pass opts
+	// through, so the handler refuses a `trace` there; learn builds a fresh
+	// call below and would DROP it silently — so it is refused here instead.
+	if _, has := opts["trace"]; has {
+		return nil, errors.New("knomit.learn: opts.trace is refused: a script's or recipe's writes carry knomit's own trace entries")
+	}
 	call := map[string]any{"facts": facts, "moment_name": h.momentName(opts)}
 	// F04 (F08 PR A): opts.retract makes the call a move — the facts and the
 	// deletions in one commit, all-or-nothing under the branch lock. Each path
