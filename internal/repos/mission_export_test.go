@@ -15,6 +15,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// PushWakeWindowForTest is the push countdown (pushWakeWindow): the delay
+// between a commit and the round that sends it under `sync: {push:
+// realtime}`, and between the host's merge of a pushed branch and the round
+// that fast-forwards its consensus branch. The template's timing-rule test
+// derives the claim window's floor from it.
+const PushWakeWindowForTest = pushWakeWindow
+
 // SetTriggerClockForTest installs now as every dispatcher's run clock (and so
 // the sandbox's Date) for the rest of the test.
 func SetTriggerClockForTest(t *testing.T, now func() time.Time) {

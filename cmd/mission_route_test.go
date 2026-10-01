@@ -12,8 +12,8 @@ package cmd
 //
 // Run on branches named trunk and master (stock `git init` makes master):
 // neither may turn into a hardcoded "main" when the origin goes. The host
-// (also after a restart) and the peer must each load all 14 triggers, both
-// skills and the consensus / conflicts settings at the tip of the repo's
+// (also after a restart) and the peer must each load all 10 triggers, both
+// skills and the consensus / conflicts / sync settings at the tip of the repo's
 // consensus branch.
 //
 // SABOTAGE: store.localConsensusBranch returning the old literal "main" →
@@ -78,6 +78,10 @@ func copyTree(t *testing.T, src, dst string) {
 	}
 }
 
+// missionTriggers is how many triggers the shipped template declares. It
+// has no `do: push` trigger: `sync: {push: realtime}` sends every commit.
+const missionTriggers = 10
+
 // requireMissionLoaded asserts ri serves the template from the tip of its
 // consensus branch, which must be wantBranch.
 func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, wantBranch string) {
@@ -94,7 +98,7 @@ func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, want
 		if err != nil {
 			t.Fatalf("%s: trigger report: %v", who, err)
 		}
-		if len(rep.Triggers) >= 14 || time.Now().After(deadline) {
+		if len(rep.Triggers) >= missionTriggers || time.Now().After(deadline) {
 			break
 		}
 	}
@@ -106,8 +110,8 @@ func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, want
 			t.Errorf("%s: trigger %s is %s: %s", who, tr.Name, tr.State, tr.Error)
 		}
 	}
-	if active != 14 {
-		t.Errorf("%s: %d/14 triggers active", who, active)
+	if active != missionTriggers {
+		t.Errorf("%s: %d/%d triggers active", who, active, missionTriggers)
 	}
 	err := ri.WithRead(func(s *store.Service) {
 		ub := s.UpstreamBranch()
@@ -132,6 +136,13 @@ func requireMissionLoaded(t *testing.T, who string, ri *repos.RepoInstance, want
 		cf, _ := fact.ReadConflicts(onto)
 		if cs.Mode != fact.ConsensusAuto || cf.Facts != fact.ConflictsMerge || cf.State != fact.ConflictsConsensus {
 			t.Errorf("%s: settings at %s: consensus=%q conflicts=%q/%q", who, ub, cs.Mode, cf.Facts, cf.State)
+		}
+		// The sync loops read `sync` at this same tip (F21 S2): the claim
+		// window is only as short as WINDOW_SECONDS while both keys are
+		// realtime there.
+		sy, _ := fact.ReadSync(onto)
+		if !sy.Valid || !sy.RealtimePush() || !sy.RealtimePull() {
+			t.Errorf("%s: sync at %s: push=%q pull=%q valid=%v, want realtime/realtime", who, ub, sy.Push, sy.Pull, sy.Valid)
 		}
 	})
 	if err != nil {

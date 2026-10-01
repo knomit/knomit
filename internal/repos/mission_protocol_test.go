@@ -38,8 +38,12 @@ import (
 // one. No template file names a branch: the consensus branch is whatever the
 // repo's is.
 //
+// The `sync` object is written out with both keys realtime (F21 S2), and no
+// trigger is `do: push`: realtime push already sends every commit.
+//
 // SABOTAGE: delete the `conflicts:` block → red on the explicit keys; delete
-// `learn_dedup: off` under claims → red.
+// `learn_dedup: off` under claims → red; delete the `sync:` block, or set
+// push or pull to interval → red; re-add a `do: push` trigger → red.
 func TestMissionTemplate_Settings(t *testing.T) {
 	files := templateFiles(t)
 	raw := []byte(files[".knomit/ontology.yaml"])
@@ -66,9 +70,41 @@ func TestMissionTemplate_Settings(t *testing.T) {
 	require.Equal(t, fact.ConflictsMerge, cf.Facts)
 	require.Equal(t, fact.ConflictsConsensus, cf.State)
 
+	// `sync` is written out, both keys realtime: the claim window below is
+	// derived from it (TestMissionTemplate_TimingRule), and an absent or
+	// interval key would put a claim's travel back at the 300 s round.
+	syncObj, ok := doc.Attributes["sync"].(map[string]any)
+	require.True(t, ok, "the template writes the sync object out: %v", doc.Attributes)
+	require.Equal(t, map[string]any{"push": "realtime", "pull": "realtime"}, syncObj)
+	sy, err := fact.ReadSync(raw)
+	require.NoError(t, err)
+	require.True(t, sy.Valid)
+	require.True(t, sy.RealtimePush(), "sync.push is realtime")
+	require.True(t, sy.RealtimePull(), "sync.pull is realtime")
+
 	for _, topic := range []string{"tasks", "claims", "inbox", "acks", "offers", "bids", "awards"} {
 		require.True(t, o.LearnDedupOff(topic), "%s must be learn_dedup: off", topic)
 	}
+
+	// Realtime push replaces every `do: push` trigger; one re-added would be
+	// redundant, and the count the load tests expect would no longer hold.
+	var trig struct {
+		Topics map[string]struct {
+			Triggers []struct {
+				Name string `yaml:"name"`
+				Do   string `yaml:"do"`
+			} `yaml:"triggers"`
+		} `yaml:"topics"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &trig))
+	triggers := 0
+	for topic, tp := range trig.Topics {
+		for _, tr := range tp.Triggers {
+			triggers++
+			require.NotEqual(t, "push", tr.Do, "%s/%s is a do: push trigger; sync: {push: realtime} already sends every commit", topic, tr.Name)
+		}
+	}
+	require.Equal(t, missionTriggers, triggers, "the template declares %d triggers", missionTriggers)
 
 	m := regexp.MustCompile(`(?m)^var WINDOW_SECONDS = (\d+);`).FindStringSubmatch(files[".knomit/triggers/claims.js"])
 	require.NotNil(t, m, "claims.js declares WINDOW_SECONDS")
@@ -80,6 +116,41 @@ func TestMissionTemplate_Settings(t *testing.T) {
 	}
 }
 
+// TestMissionTemplate_TimingRule enforces README "The timing rule" on the
+// shipped WINDOW_SECONDS, from knomit's own constants rather than from the
+// README's numbers:
+//
+//	floor = N (the default [git].realtime_pull_interval: a claimer sees the
+//	          task up to one pull round after another)
+//	      + the push countdown (the claim goes out)
+//	      + the push countdown again (the host's merge wakes its own round,
+//	          which fast-forwards the consensus branch)
+//	      + N (one due tick: the decide rides a round, which fetches first)
+//
+// X must be at least 1.5 × floor (the round times themselves, tens of ms on a
+// healthy origin, are the margin's to absorb), and 2X must exceed the
+// winner's own due latency, 2N (one round after its expires, plus one retry
+// if the script rate cap dropped its decide).
+//
+// SABOTAGE: WINDOW_SECONDS = 5 (and the e2e's window with it) → red on the
+// floor.
+func TestMissionTemplate_TimingRule(t *testing.T) {
+	m := regexp.MustCompile(`(?m)^var WINDOW_SECONDS = (\d+);`).FindStringSubmatch(templateFiles(t)[".knomit/triggers/claims.js"])
+	require.NotNil(t, m, "claims.js declares WINDOW_SECONDS")
+	var secs int
+	_, err := fmt.Sscan(m[1], &secs)
+	require.NoError(t, err)
+	x := time.Duration(secs) * time.Second
+
+	n := config.DefaultRealtimePullInterval
+	countdown := repos.PushWakeWindowForTest
+	floor := n + countdown + countdown + n
+	require.Equal(t, 8*time.Second, floor, "the README's arithmetic (3 + 1 + 1 + 3 s) follows knomit's constants")
+	require.GreaterOrEqual(t, x, floor*3/2,
+		"X = %s is below 1.5 × (pull %s + push countdown %s + host fast-forward %s + due tick %s)", x, n, countdown, countdown, n)
+	require.Greater(t, 2*x, 2*n, "the dead-winner threshold 2X must exceed the winner's due latency")
+}
+
 // TestMissionTemplate_LoadsAsIs: on a real host, every trigger of the shipped
 // template is active (every `script:` resolves, every `js:` compiles), and a
 // fact that is not a signal is refused by rule name.
@@ -89,7 +160,7 @@ func TestMissionTemplate_LoadsAsIs(t *testing.T) {
 	rep, err := h.ri.TriggerReport(context.Background(), 0)
 	require.NoError(t, err)
 	require.True(t, rep.Enabled, rep.Reason)
-	require.Len(t, rep.Triggers, 14)
+	require.Len(t, rep.Triggers, missionTriggers)
 	for _, tr := range rep.Triggers {
 		require.Equal(t, fact.TriggerActive, tr.State, "%s: %s", tr.Name, tr.Error)
 	}

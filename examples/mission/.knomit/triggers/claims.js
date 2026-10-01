@@ -16,11 +16,14 @@
 // atomic move (knomit.learn with retract): the working copy is written and the
 // task and the winner's claims are deleted in ONE commit, or nothing is.
 
-// X, the claim window, in seconds. It must cover the slowest participant's
-// sync interval plus a few seconds (README "The timing rule"). A peer syncs
-// with its origin every 300 s (not configurable today), so X is 6 minutes;
-// the dead-winner threshold is 2X.
-var WINDOW_SECONDS = 360;
+// X, the claim window, in seconds (README "The timing rule"). With the
+// ontology's `sync: {push: realtime, pull: realtime}` a claim reaches every
+// decider within about 8 s: 3 s pull interval + 1 s push countdown + ~1 s for
+// the host's merge and fast-forward + up to 3 s for one due tick. X = 15 s is
+// almost 2x that. It holds only while every participant's origin is healthy;
+// the re-arm and the dup-check cover a slow one. Without `sync` (or on a
+// forge) X must be raised (README). The dead-winner threshold is 2X.
+var WINDOW_SECONDS = 15;
 
 // How many working copies this machine holds before it stops claiming.
 var CAPACITY = 2;
