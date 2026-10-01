@@ -55,6 +55,11 @@ type syncHooks struct {
 	// attempt observes each network step a round ATTEMPTS ("fetch" or
 	// "push"), after the breaker allowed it; a skipped step is not reported.
 	attempt func(repo, step string)
+	// wait replaces time.After for each loop's between-rounds wait (both
+	// loops), so a test records the wait the loop CHOSE — the origin's
+	// interval, the local interval or the realtime pull interval — and
+	// decides when it ends.
+	wait func(d time.Duration) <-chan time.Time
 }
 
 var (
@@ -238,8 +243,16 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // breakers for the origin view (F21 S1, see breaker.go). Every round — the
 // first, a timer round and a woken round alike — consults them inside doTick,
 // so a wake cannot bypass an open breaker.
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers) {
+//
+// mode (nil-safe: today's behaviour) follows the `sync` root attribute (F21
+// S2, sync_mode.go). It is refreshed before the first round and at the top of
+// every iteration: `pull: realtime` makes the wait — and the breakers' base —
+// [git].realtime_pull_interval, and `push: realtime` is published for
+// ri.onCommit, whose wakes arrive on the same wake arm as a `do: push`. A
+// realtime round is an ordinary doTick, so it passes the same breakers.
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers, mode *syncMode) {
 	defer wg.Done()
+	defer mode.clear()
 
 	// Initial config read for logging context.
 	remote, err := svc.Remote().GetRemote("origin")
@@ -330,8 +343,10 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		wasPushFailing := remoteStatusIsError(fresh.LastPushStatus)
 
 		// The breakers. A step whose breaker is open is skipped outright: no
-		// request, no timeout, no status row, no SSE event.
-		base := loopInterval(fresh)
+		// request, no timeout, no status row, no SSE event. Their base is the
+		// round's normal wait: the realtime pull interval under `pull:
+		// realtime`, the origin's interval otherwise.
+		base := mode.wait(loopInterval(fresh))
 		now := syncNow()
 		defer func() { breakers.publish(fetchBrk, pushBrk) }()
 		fetchDue := fetchBrk.allow(now)
@@ -474,6 +489,9 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 
 	// Immediate first tick. It covers every commit made so far, so a wake
 	// already in the slot is drained first rather than causing a second one.
+	// The setting is read first, so the first round's breakers already use
+	// the realtime base.
+	mode.refresh(ctx)
 	drainWake(wake)
 	doTick(ctx)
 
@@ -495,12 +513,17 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			lg.Info().Msg("reconcile loop stopped: remote disappeared")
 			return
 		}
+		// The `sync` setting, at the consensus branch's tip as the round that
+		// just ended left it. The wait is recomputed only here, after a round
+		// returns, so a round longer than the realtime interval delays the
+		// next one; rounds never overlap or queue.
+		mode.refresh(ctx)
 
 		select {
 		case <-ctx.Done():
 			lg.Info().Msg("reconcile loop stopped")
 			return
-		case <-time.After(loopInterval(fresh)):
+		case <-loopWait(mode.wait(loopInterval(fresh))):
 			doTick(ctx)
 		case <-wake:
 			if !awaitPushWindow(ctx, wake) {
@@ -532,9 +555,9 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 // moves main up to this machine's own branch after the countdown instead of
 // within the interval (D-local, user, 2026-09-28). It never publishes other
 // agents' branches: main follows only this machine's agent branch.
-func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}) {
+func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, repo, agentBranch string, interval time.Duration, kick func(), wake <-chan struct{}, mode *syncMode) {
 	defer wg.Done()
-	runLocalReconcile(ctx, repo, agentBranch, interval,
+	runLocalReconcile(ctx, repo, agentBranch, interval, mode,
 		func() (bool, error) {
 			r, err := svc.Remote().GetRemote("origin")
 			return r != nil, err
@@ -568,12 +591,21 @@ func runLocalReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.S
 // sweep needs neither — so a failing advance never silences the sweep.
 //
 // wake (nil-safe) is the push wake: after the countdown and the drain it runs
-// exactly the ticker's body — kickTriggers, then ownsMain with its exit on a
+// exactly the timer's body — kickTriggers, then ownsMain with its exit on a
 // definite origin, then advance only when this loop owns main.
+//
+// mode (nil-safe: today's behaviour) is the `sync` root attribute (F21 S2),
+// refreshed at start and before every wait. On a host, `pull: realtime` is
+// the round's cadence (the realtime pull interval instead of interval): it
+// fetches nothing, it advances the consensus branch and carries the `on: due`
+// sweep. `push: realtime` is published for ri.onCommit, whose wakes run the
+// wake arm. interval <= 0 still disables the loop entirely, BEFORE the
+// setting is read: then neither key does anything and the flag stays false.
 func runLocalReconcile(
 	ctx context.Context,
 	repo, agentBranch string,
 	interval time.Duration,
+	mode *syncMode,
 	hasOrigin func() (bool, error),
 	advance func() error,
 	kick func(),
@@ -582,6 +614,7 @@ func runLocalReconcile(
 	if interval <= 0 || agentBranch == "" {
 		return
 	}
+	defer mode.clear()
 	lg := log.With().Str("repo", repo).Logger()
 	kickTriggers := func() {
 		if kick != nil {
@@ -628,6 +661,7 @@ func runLocalReconcile(
 	}
 
 	// The first tick below covers every commit so far: drain a leftover wake.
+	mode.refresh(ctx)
 	drainWake(wake)
 
 	// Exit at start only on a definite "this repo has an origin" — then
@@ -642,14 +676,15 @@ func runLocalReconcile(
 	}
 	kickTriggers()
 
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	// A per-round timer rather than a ticker, so the wait can follow the
+	// setting: it is recomputed after each round returns.
 	for {
+		mode.refresh(ctx)
 		select {
 		case <-ctx.Done():
 			lg.Info().Msg("local reconcile loop stopped")
 			return
-		case <-t.C:
+		case <-loopWait(mode.wait(interval)):
 			if !round() {
 				return
 			}

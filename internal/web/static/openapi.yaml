@@ -4542,7 +4542,19 @@ components:
         name:             { type: string }
         url:              { type: string }
         branch:           { type: string, description: "The upstream consensus branch this repo tracks." }
-        interval:         { type: integer, description: "Fetch/reconcile interval in seconds." }
+        interval:
+          type: integer
+          description: >-
+            Fetch/reconcile interval in seconds. Not used while the ontology at
+            the consensus branch's tip sets the root attribute
+            `sync: {pull: realtime}`: the full round (fetch, merge, push when
+            ahead) then runs every `[git].realtime_pull_interval` from
+            knomit.toml (3 s by default, at least 1 s). `sync: {push: realtime}`
+            makes every commit on this instance's own agent branch open the
+            1 s push countdown. A subscription ignores `sync`. Against GitHub,
+            real-time push during steady writing exceeds GitHub's documented
+            recommendation of 6 pushes a minute per repository from one
+            instance; it is meant for knomit-hosted fleets.
         last_sync_at:     { type: string, nullable: true, description: "RFC3339; null before the first sync." }
         last_status:      { type: string, nullable: true }
         last_error:       { type: string, nullable: true }
@@ -4558,7 +4570,8 @@ components:
     # The origin loop's circuit breaker for one network step (fetch or push).
     # In memory and read-only; every origin repo has both, closed before the
     # loop's first round and after a restart. After 3 consecutive failures the
-    # step is skipped for 2x the normal interval, doubling after each failed
+    # step is skipped for 2x the normal interval (the realtime pull interval
+    # under `sync: {pull: realtime}`), doubling after each failed
     # probe up to 30 minutes; one success closes it. A skipped step writes no
     # status, so last_status/last_push_status keep the last real attempt.
     SyncBreaker:

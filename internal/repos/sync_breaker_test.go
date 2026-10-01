@@ -124,16 +124,21 @@ type brkLoop struct {
 	refused  atomic.Int64 // refusePush calls that refused
 	refuse   atomic.Bool
 	authFail atomic.Bool
+	mode     *syncMode // the `sync` mode the loop follows (nil: today)
+	// waits holds every between-rounds wait (F21 S2's seam), so a timer round
+	// never fires on its own: every round is one the test woke.
+	waits *waitSeam
 }
 
 func startBreakerLoop(t *testing.T, ri *RepoInstance, originRoot string, pre func(*brkLoop)) *brkLoop {
 	t.Helper()
-	l := &brkLoop{clock: &brkClock{t: brkT0}, window: &windowSeam{auto: true}}
+	l := &brkLoop{clock: &brkClock{t: brkT0}, window: &windowSeam{auto: true}, waits: &waitSeam{}}
 	if pre != nil {
 		pre(l)
 	}
 	setSyncHooks(t, syncHooks{
 		window: l.window.open,
+		wait:   l.waits.open,
 		now:    l.clock.now,
 		attempt: func(_, step string) {
 			switch step {
@@ -164,7 +169,7 @@ func startBreakerLoop(t *testing.T, ri *RepoInstance, originRoot string, pre fun
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers)
+	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, kick, ri.syncWake, ri.breakers, l.mode)
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	l.waitRounds(t, 1)
 	return l

@@ -148,7 +148,8 @@ func waitOpens(t *testing.T, w *windowSeam, n int) {
 // failing resolveAuth, the instance's own dispatcher kick and its push wake.
 type countingLoop struct {
 	ticks atomic.Int64
-	gates sync.Map // tick number → chan struct{} it parks on
+	gates sync.Map  // tick number → chan struct{} it parks on
+	mode  *syncMode // the `sync` mode the loop follows (nil: today)
 }
 
 func (l *countingLoop) parkTick(n int64) (release func()) {
@@ -176,7 +177,7 @@ func startCountingLoop(t *testing.T, ri *RepoInstance, pre func(*countingLoop)) 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers)
+	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers, l.mode)
 	t.Cleanup(func() {
 		cancel()
 		l.gates.Range(func(_, g any) bool {
@@ -343,7 +344,7 @@ func TestPush_NoOriginWakesLocalLoop(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runLocalReconcile(ctx, "repo", trigAgent, time.Hour,
+		runLocalReconcile(ctx, "repo", trigAgent, time.Hour, nil,
 			func() (bool, error) { return origin.Load(), nil },
 			func() error { advances.Add(1); return nil },
 			func() { kicks.Add(1) },
@@ -519,7 +520,7 @@ func startOriginLoop(t *testing.T, ri *RepoInstance, originRoot string) *atomic.
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers)
+	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers, nil)
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks
 }
