@@ -77,11 +77,10 @@ func TestApplyPruneMerge_WriteAndSourceDeletesShareOneCommit(t *testing.T) {
 // Renamed from "…AlreadyMissingSourceDoesNotAbortTheMerge", which claimed more
 // than it pinned. The cold review showed the merge does NOT abort on a missing
 // source even with the filter removed — only the Retired list changes — and
-// measuring it settled why: batchWrite refuses a delete only when the path's
-// parent SUBTREE is absent entirely; a missing leaf inside an existing
-// directory is a silent no-op, and go-git keeps a subtree whose last file was
-// removed. A merge source always lived at a real path, so the erroring case is
-// unreachable from here and there is nothing to test about it.
+// measuring it settled why: batchWrite never refuses a delete of an absent
+// path — a missing leaf and, since #375, a missing folder are both silent
+// no-ops. There is no erroring case to reach from here, so there is nothing to
+// test about it.
 //
 // What the filter actually buys is the thing this test now names: Retired must
 // list only what this call removed, because #127's in-flight refresh uses it to

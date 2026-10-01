@@ -335,14 +335,12 @@ func ApplyPruneDecisions(ctx context.Context,
 			// as the retract branch's delete-then-record ordering above.
 			//
 			// It is NOT an abort guard, though an earlier version of this
-			// comment said so. Measured: batchWrite refuses a delete only when
-			// the path's parent SUBTREE is absent from the tree entirely
-			// ("subtree not found"); a missing leaf inside an existing
-			// directory is a silent no-op, and go-git keeps a subtree that has
-			// had its last file removed. A merge source is by construction a
-			// fact that existed at a real path, so it can never reach the
-			// erroring case — guarding against it would be a handled failure
-			// mode that does not exist (the L7 call again).
+			// comment said so. batchWrite never refuses a delete of an absent
+			// path: a missing leaf and a missing folder are both silent no-ops
+			// (#375 — knomit drops an emptied folder as git does, and deleting
+			// inside a missing folder removes nothing). Guarding against an
+			// abort here would be a handled failure mode that does not exist
+			// (the L7 call again).
 			exists, eerr := gs.FactExists(ctx, agentBranch, src)
 			if eerr != nil {
 				onProgress(ProgressEvent{Phase: "warn", Message: fmt.Sprintf("merge source %s: %v", src, eerr)})

@@ -210,14 +210,44 @@ func deleteFileFromStore(s *storegit.Storer, signer ssh.Signer, parentCommitHash
 }
 
 // deleteFromTree removes path from the tree rooted at existing, recursing
-// through directory segments as needed.
+// through directory segments as needed, and returns the new root's hash. It
+// writes trees the way git does (#375):
+//
+//   - A folder left with no entries is dropped from its parent, never kept as
+//     an empty tree. This cascades: emptying kb/x/y also drops kb/x when y was
+//     its only entry. The root itself is never dropped; an empty root tree is
+//     legal git.
+//   - A path whose folder does not exist is a no-op, exactly like a missing
+//     leaf in an existing folder: nothing is there, so there is nothing to
+//     delete, and the returned hash is existing's own.
+//
+// Callers that need "the path must exist" check it themselves (DeleteFact's
+// existence check, BatchWriteFactsMustExist); a storage failure reading a
+// subtree is still an error.
+//
+// A dropped folder's empty tree is never stored: it would be unreachable the
+// moment the parent drops its entry, and Verify reports such orphans.
 func deleteFromTree(s *storegit.Storer, existing *object.Tree, path string) (plumbing.Hash, error) {
+	hash, empty, err := deletePath(s, existing, path)
+	if err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if empty {
+		return storeTree(s, nil)
+	}
+	return hash, nil
+}
+
+// deletePath is deleteFromTree's recursion. empty reports that the tree at
+// this level would have no entries left; it is then NOT stored (hash is zero),
+// so the caller can drop the entry without leaving an orphan behind.
+func deletePath(s *storegit.Storer, existing *object.Tree, path string) (hash plumbing.Hash, empty bool, err error) {
 	parts := strings.SplitN(path, "/", 2)
 	name := parts[0]
 
 	if len(parts) == 1 {
 		// Leaf: remove the entry from this tree.
-		return removeEntry(s, existing, name)
+		return storeUnlessEmpty(s, removeEntry(existing, name))
 	}
 
 	// Recurse into subtree.
@@ -225,33 +255,34 @@ func deleteFromTree(s *storegit.Storer, existing *object.Tree, path string) (plu
 	var subtree *object.Tree
 	for _, e := range existing.Entries {
 		if e.Name == name && e.Mode == filemode.Dir {
-			var err error
 			subtree, err = object.GetTree(s, e.Hash)
 			if err != nil {
-				return plumbing.ZeroHash, fmt.Errorf("deleteFromTree: get subtree %q: %w", name, err)
+				return plumbing.ZeroHash, false, fmt.Errorf("deleteFromTree: get subtree %q: %w", name, err)
 			}
 			break
 		}
 	}
 	if subtree == nil {
-		return plumbing.ZeroHash, fmt.Errorf("deleteFromTree: subtree %q not found", name)
+		return existing.Hash, len(existing.Entries) == 0, nil
 	}
 
-	subHash, err := deleteFromTree(s, subtree, rest)
+	subHash, subEmpty, err := deletePath(s, subtree, rest)
 	if err != nil {
-		return plumbing.ZeroHash, err
+		return plumbing.ZeroHash, false, err
 	}
-
-	return upsertEntry(s, existing, object.TreeEntry{
+	if subEmpty {
+		return storeUnlessEmpty(s, removeEntry(existing, name))
+	}
+	hash, err = upsertEntry(s, existing, object.TreeEntry{
 		Name: name,
 		Mode: filemode.Dir,
 		Hash: subHash,
 	})
+	return hash, false, err
 }
 
-// removeEntry removes the entry with name from a copy of existing tree,
-// encodes, stores and returns the new tree hash.
-func removeEntry(s *storegit.Storer, existing *object.Tree, name string) (plumbing.Hash, error) {
+// removeEntry returns a copy of existing's entries minus the one named name.
+func removeEntry(existing *object.Tree, name string) []object.TreeEntry {
 	var entries []object.TreeEntry
 	if existing != nil {
 		for _, e := range existing.Entries {
@@ -260,16 +291,31 @@ func removeEntry(s *storegit.Storer, existing *object.Tree, name string) (plumbi
 			}
 		}
 	}
+	return entries
+}
 
+// storeUnlessEmpty stores entries as a tree, or reports empty without storing
+// anything when there are none.
+func storeUnlessEmpty(s *storegit.Storer, entries []object.TreeEntry) (plumbing.Hash, bool, error) {
+	if len(entries) == 0 {
+		return plumbing.ZeroHash, true, nil
+	}
+	h, err := storeTree(s, entries)
+	return h, false, err
+}
+
+// storeTree sorts entries, encodes them as a tree, stores it and returns its
+// hash. No entries stores the empty tree.
+func storeTree(s *storegit.Storer, entries []object.TreeEntry) (plumbing.Hash, error) {
 	sort.Sort(object.TreeEntrySorter(entries))
 	tree := &object.Tree{Entries: entries}
 	treeObj := s.NewEncodedObject()
 	if err := tree.Encode(treeObj); err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("removeEntry: encode tree: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("storeTree: encode tree: %w", err)
 	}
 	hash, err := s.SetEncodedObject(treeObj)
 	if err != nil {
-		return plumbing.ZeroHash, fmt.Errorf("removeEntry: store tree: %w", err)
+		return plumbing.ZeroHash, fmt.Errorf("storeTree: store tree: %w", err)
 	}
 	return hash, nil
 }
