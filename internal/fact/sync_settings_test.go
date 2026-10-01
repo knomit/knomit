@@ -94,7 +94,7 @@ func TestSyncAttribute_Registry(t *testing.T) {
 		"  sync: realtime\n",
 		"  sync:\n    push: always\n",
 		"  sync:\n    pull: off\n",
-		"  sync:\n    push: realtime\n    extra: x\n",
+		"  sync:\n    push: realtime\n    fetch: realtime\n", // an unknown KEY with a valid value
 	} {
 		bad := conflictsOnt(body)
 		o, diags := ValidateOntologyYAML([]byte(bad))

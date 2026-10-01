@@ -637,18 +637,21 @@ func TestSyncMode_BuilderWiresOriginLoop(t *testing.T) {
 	})
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
-	_, err = m.Create(context.Background(), CreateSpec{Name: testRepoName, Mode: "clone",
-		Origin: &OriginSpec{URL: fileuri.New(bare), Branch: "main"}}, nil)
+	url := fileuri.New(bare)
+	ri, err := m.Create(context.Background(), CreateSpec{Name: testRepoName, Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main"}}, nil)
 	require.NoError(t, err)
+	// Let the loops the create started settle, then restart through
+	// ActivateSync alone: the wait chosen after it is that loop's.
+	var settled int
 	require.Eventually(t, func() bool {
-		for _, d := range ws.waits() {
-			if d == 7*time.Second {
-				return true
-			}
-		}
-		return false
-	}, 20*time.Second, 10*time.Millisecond, "the origin loop ActivateSync starts must follow pull: realtime")
-	for _, d := range ws.waits() {
-		require.NotEqual(t, 300*time.Second, d, "no loop the create started chose the origin's interval")
-	}
+		n := ws.count()
+		time.Sleep(pushQuiet)
+		settled = ws.count()
+		return n >= 1 && n == settled
+	}, 20*time.Second, 10*time.Millisecond)
+	require.NoError(t, ri.ActivateSync(url))
+	require.Eventually(t, func() bool { return ws.count() > settled }, 20*time.Second, 10*time.Millisecond,
+		"the loop ActivateSync started chose a wait")
+	require.Equal(t, 7*time.Second, ws.waits()[settled], "the origin loop ActivateSync starts must follow pull: realtime")
 }
