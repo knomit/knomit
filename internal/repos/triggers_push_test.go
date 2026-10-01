@@ -176,7 +176,7 @@ func startCountingLoop(t *testing.T, ri *RepoInstance, pre func(*countingLoop)) 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake)
+	go runReconcileLoop(ctx, &wg, svc, ri.hub, ri.Name(), trigAgent, auth, "", false, nil, ri.triggerKick, ri.syncWake, ri.breakers)
 	t.Cleanup(func() {
 		cancel()
 		l.gates.Range(func(_, g any) bool {
@@ -519,7 +519,7 @@ func startOriginLoop(t *testing.T, ri *RepoInstance, originRoot string) *atomic.
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake)
+	go runReconcileLoop(ctx, &wg, testService(t, ri), ri.hub, ri.Name(), trigAgent, auth, originRoot, false, nil, ri.triggerKick, ri.syncWake, ri.breakers)
 	t.Cleanup(func() { cancel(); wg.Wait() })
 	return &ticks
 }

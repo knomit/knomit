@@ -625,6 +625,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		handle:                        newStoreHandle(b.svc),
 		hub:                           hub,
 		syncWake:                      make(chan struct{}, 1),
+		breakers:                      &syncBreakers{},
 		repoEventHub:                  b.repoEventHub,
 	}
 	ri.setName(b.name)
@@ -822,6 +823,9 @@ func (b *repoBuilder) build() *RepoInstance {
 			}
 			return fmt.Errorf("ActivateSync: auth resolution failed: %w", authErr)
 		}
+		// A one-shot sync: the caller's explicit request. It neither consults
+		// nor changes the loop's circuit breakers (breaker.go); the loop started
+		// below begins with both closed.
 		if _, err := currentSvc.Remote().Sync(newCtx, agentBranch, auth); err != nil {
 			return fmt.Errorf("ActivateSync: initial reconcile failed: %w", err)
 		}
@@ -838,7 +842,7 @@ func (b *repoBuilder) build() *RepoInstance {
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush, ri.triggerKick, ri.syncWake)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush, ri.triggerKick, ri.syncWake, ri.breakers)
 		return nil
 	}
 
@@ -1028,6 +1032,8 @@ func (b *repoBuilder) recoverFromOrigin() {
 	}
 	ctx, cancel := context.WithTimeout(b.ctx, recoverFromOriginTimeout)
 	defer cancel()
+	// One startup attempt: it neither consults nor changes the loop's circuit
+	// breakers (breaker.go), which start closed with the loop.
 	if _, err := b.svc.Remote().Sync(ctx, b.agentBranch, auth); err != nil {
 		log.Warn().Err(err).Str("repo", b.name).Msg("recoverFromOrigin: initial sync failed (will retry in loop)")
 	}
@@ -1058,9 +1064,11 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	// nil here too without an instance, and a nil channel is never ready.
 	var kick func()
 	var wake chan struct{}
+	var brk *syncBreakers
 	if b.ri != nil {
 		kick = b.ri.triggerKick
 		wake = b.ri.syncWake
+		brk = b.ri.breakers
 	}
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
@@ -1083,7 +1091,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	b.syncLoopMu.Lock()
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick, wake)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick, wake, brk)
 }
 
 // startExperimentSweep launches the expiry sweeper for this repo.

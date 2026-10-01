@@ -46,6 +46,15 @@ type syncHooks struct {
 	// ticks of a loop it did not start (ActivateSync's, startSyncLoops') and
 	// can park one on its ctx.
 	tick func(ctx context.Context, repo string)
+	// now replaces time.Now for the circuit breakers (a fake clock).
+	now func() time.Time
+	// refusePush, when it returns an error, is the push step's result and
+	// Push is not called: a refused push while the fetch works. go-git runs
+	// no server hooks on a local origin, so this is the named mechanism.
+	refusePush func(repo string) error
+	// attempt observes each network step a round ATTEMPTS ("fetch" or
+	// "push"), after the breaker allowed it; a skipped step is not reported.
+	attempt func(repo, step string)
 }
 
 var (
@@ -57,6 +66,28 @@ func currentSyncHooks() syncHooks {
 	syncHooksMu.Lock()
 	defer syncHooksMu.Unlock()
 	return syncTestHooks
+}
+
+// syncNow is the breakers' clock: time.Now, or the test's fake clock.
+func syncNow() time.Time {
+	if h := currentSyncHooks().now; h != nil {
+		return h()
+	}
+	return time.Now()
+}
+
+// loopInterval is the origin loop's normal wait: min(interval, push_interval)
+// from the remote record, 300 s when that is not positive. It is also the
+// breakers' base: an open breaker skips its step for 2× this, doubling.
+func loopInterval(r *store.Remote) time.Duration {
+	interval := r.Interval
+	if r.PushInterval > 0 && r.PushInterval < interval {
+		interval = r.PushInterval
+	}
+	if interval <= 0 {
+		interval = 300
+	}
+	return time.Duration(interval) * time.Second
 }
 
 // drainWake empties the 1-slot wake channel without blocking (nil-safe: a
@@ -202,7 +233,12 @@ func shouldBroadcastPushOK(pushed, wasFailing bool) bool { return pushed || wasF
 // opens the push countdown (awaitPushWindow) and then runs one ordinary
 // tick. The slot is drained once before the first tick, which covers any
 // wake left over from before this loop existed.
-func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}) {
+//
+// breakers (nil-safe) is where the loop publishes its fetch and push circuit
+// breakers for the origin view (F21 S1, see breaker.go). Every round — the
+// first, a timer round and a woken round alike — consults them inside doTick,
+// so a wake cannot bypass an open breaker.
+func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Service, hub *TaskHub, repo, agentBranch string, resolveAuth remoteAuthFn, localOriginRoot string, readOnly bool, onPush func(repo string, err error), kick func(), wake <-chan struct{}, breakers *syncBreakers) {
 	defer wg.Done()
 
 	// Initial config read for logging context.
@@ -218,6 +254,11 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 	lg.Info().Msg("reconcile loop started")
 
 	var syncFails, pushFails int
+	// The two circuit breakers. They live here, on the loop goroutine, and
+	// start closed: a restarted loop (ActivateSync, a server restart) makes a
+	// fresh attempt at once, which a changed origin or credential deserves.
+	var fetchBrk, pushBrk breaker
+	breakers.publish(fetchBrk, pushBrk)
 
 	logFailure := func(count int) *zerolog.Event {
 		if count >= reconcileFailureEscalateThreshold {
@@ -226,9 +267,32 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		return lg.Warn().Int("consecutive_failures", count)
 	}
 
+	// recordStep applies one ATTEMPT's outcome to a breaker and logs its
+	// transitions: WARN when it opens and on each failed probe, INFO when a
+	// probe closes it. Failures 1–2 of a closed breaker log nothing here; the
+	// step's own failure line (logFailure) covers them.
+	recordStep := func(step string, b *breaker, ok bool, base time.Duration) {
+		prev := *b
+		now := syncNow()
+		*b = b.record(ok, now, base)
+		switch {
+		case ok && prev.opens > 0:
+			lg.Info().Int("after_failures", prev.fails).Msgf("reconcile: %s breaker closed", step)
+		case !ok && prev.opens == 0 && b.opens > 0:
+			lg.Warn().Int("consecutive_failures", b.fails).
+				Dur("open_for", b.openUntil.Sub(now)).Time("open_until", b.openUntil).
+				Msgf("reconcile: %s breaker open", step)
+		case !ok && prev.opens > 0:
+			lg.Warn().Int("consecutive_failures", b.fails).
+				Dur("open_for", b.openUntil.Sub(now)).Time("open_until", b.openUntil).
+				Msgf("reconcile: %s breaker probe failed; open again", step)
+		}
+	}
+
 	doTick := func(ctx context.Context) {
 		// The dispatcher's kick, whatever this tick does or fails to do below
-		// (see the function comment). FIRST, so no early return skips it.
+		// (see the function comment). FIRST, so no early return skips it —
+		// including a round whose steps are all skipped by open breakers.
 		if kick != nil {
 			defer kick()
 		}
@@ -259,62 +323,120 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 		}
 		// Snapshot the PRE-tick persisted status: Sync/Push overwrite it before
 		// they return, so the error→ok recovery edge is only visible from here.
+		// A step skipped by an open breaker writes nothing, so after an open
+		// period this still reads the last REAL failure, and the probe's
+		// success is the recovery edge.
 		wasSyncFailing := remoteStatusIsError(fresh.LastStatus)
 		wasPushFailing := remoteStatusIsError(fresh.LastPushStatus)
+
+		// The breakers. A step whose breaker is open is skipped outright: no
+		// request, no timeout, no status row, no SSE event.
+		base := loopInterval(fresh)
+		now := syncNow()
+		defer func() { breakers.publish(fetchBrk, pushBrk) }()
+		fetchDue := fetchBrk.allow(now)
+		canPush := pushAllowed(readOnly, agentBranch)
+		pushDue := canPush && pushBrk.allow(now)
+		if !fetchDue {
+			lg.Debug().Time("open_until", fetchBrk.openUntil).Msg("reconcile: fetch breaker open; fetch skipped")
+		}
+		if canPush && !pushDue {
+			lg.Debug().Time("open_until", pushBrk.openUntil).Msg("reconcile: push breaker open; push skipped")
+		}
+		if !fetchDue && !pushDue {
+			return
+		}
+		attempt := func(step string) {
+			if h := currentSyncHooks().attempt; h != nil {
+				h(repo, step)
+			}
+		}
 
 		auth, authErr := resolveAuth(fresh)
 		if authErr != nil {
 			// Auth RESOLUTION failed (unreadable key, malformed credential).
-			// Treat this exactly like a Sync failure: persist the error on the
-			// remote record, broadcast it, and count it toward escalation.
 			// Fetching anonymously here would mask a broken credential against
 			// a remote that permits anonymous access. We do NOT call Sync/Push
 			// with nil auth on this tick.
-			syncFails++
-			if serr := svc.Remote().RecordSyncError("origin", authErr.Error()); serr != nil {
-				lg.Warn().Err(serr).Msg("reconcile: failed to persist auth-resolution error")
+			//
+			// It is charged to the FETCH breaker only, exactly as before the
+			// breaker: the error is persisted on the remote record, broadcast,
+			// and counted toward escalation and the fetch breaker. The push is
+			// not attempted and is NOT a push failure.
+			//
+			// While the fetch breaker is open (only the push is due), an auth
+			// failure is charged to nothing: the push is skipped with a Debug
+			// line, with no broadcast and no push-breaker charge. Resolution is
+			// local, so there is no network retry to bound; and a push_error
+			// broadcast here would raise a banner no push_ok ever lowers, since
+			// no push status row records it (the recovery edge reads that row).
+			if fetchDue {
+				syncFails++
+				if serr := svc.Remote().RecordSyncError("origin", authErr.Error()); serr != nil {
+					lg.Warn().Err(serr).Msg("reconcile: failed to persist auth-resolution error")
+				}
+				hub.broadcastSyncError("origin", authErr.Error())
+				logFailure(syncFails).Err(authErr).Msg("reconcile: auth resolution failed")
+				recordStep("fetch", &fetchBrk, false, base)
+				return
 			}
-			hub.broadcastSyncError("origin", authErr.Error())
-			logFailure(syncFails).Err(authErr).Msg("reconcile: auth resolution failed")
+			lg.Debug().Err(authErr).Msg("reconcile: auth resolution failed while the fetch breaker is open; push skipped")
 			return
 		}
 
-		// Sync first.
-		syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
-		if tickAbandoned(ctx, err) {
-			// Our own cancellation, not the remote's verdict. Say nothing, count
-			// nothing, and do not go on to push — that would fail identically.
-			lg.Debug().Err(err).Msg("reconcile: tick abandoned; loop is stopping")
-			return
-		}
-		if err != nil {
-			syncFails++
-			hub.broadcastSyncError("origin", err.Error())
-			logFailure(syncFails).Err(err).Msg("reconcile: sync failed")
-		} else {
-			if syncFails > 0 {
-				lg.Info().Int("after_failures", syncFails).Msg("reconcile: sync recovered")
-				syncFails = 0
+		// Sync first. A failed fetch does not skip the push: pushing this
+		// instance's own branch without a fresh fetch is still a correct
+		// force-push, and the next working fetch merges what it missed.
+		if fetchDue {
+			attempt("fetch")
+			syncResult, err := svc.Remote().Sync(ctx, agentBranch, auth)
+			if tickAbandoned(ctx, err) {
+				// Our own cancellation, not the remote's verdict. Say nothing, count
+				// nothing (the breaker included), and do not go on to push — that
+				// would fail identically.
+				lg.Debug().Err(err).Msg("reconcile: tick abandoned; loop is stopping")
+				return
 			}
-			if shouldBroadcastSyncOK(syncResult, wasSyncFailing) {
-				hub.broadcastSyncOK("origin", syncResult)
-			}
-			if syncChanged(syncResult) {
-				lg.Info().
-					Str("main_mode", string(syncResult.Main.Mode)).
-					Str("agent_mode", string(syncResult.Agent.Mode)).
-					Int("agent_replayed_count", syncResult.Agent.NumReplayed).
-					Str("agent_new_tip", syncResult.Agent.NewTip).
-					Msg("reconcile: pulled changes")
+			if err != nil {
+				syncFails++
+				hub.broadcastSyncError("origin", err.Error())
+				logFailure(syncFails).Err(err).Msg("reconcile: sync failed")
+				recordStep("fetch", &fetchBrk, false, base)
 			} else {
-				lg.Debug().Msg("reconcile: sync up to date")
+				if syncFails > 0 {
+					lg.Info().Int("after_failures", syncFails).Msg("reconcile: sync recovered")
+					syncFails = 0
+				}
+				recordStep("fetch", &fetchBrk, true, base)
+				if shouldBroadcastSyncOK(syncResult, wasSyncFailing) {
+					hub.broadcastSyncOK("origin", syncResult)
+				}
+				if syncChanged(syncResult) {
+					lg.Info().
+						Str("main_mode", string(syncResult.Main.Mode)).
+						Str("agent_mode", string(syncResult.Agent.Mode)).
+						Int("agent_replayed_count", syncResult.Agent.NumReplayed).
+						Str("agent_new_tip", syncResult.Agent.NewTip).
+						Msg("reconcile: pulled changes")
+				} else {
+					lg.Debug().Msg("reconcile: sync up to date")
+				}
 			}
 		}
 
 		// Then push (skipped in read-only / pull-only mode, and for a
-		// subscription, which has no agent branch to push).
-		if pushAllowed(readOnly, agentBranch) {
-			pushResult, err := svc.Remote().Push(ctx, agentBranch, auth)
+		// subscription, which has no agent branch to push, and while the push
+		// breaker is open).
+		if pushDue {
+			attempt("push")
+			var pushResult store.PushResult
+			var err error
+			if h := currentSyncHooks().refusePush; h != nil {
+				err = h(repo)
+			}
+			if err == nil {
+				pushResult, err = svc.Remote().Push(ctx, agentBranch, auth)
+			}
 			if tickAbandoned(ctx, err) {
 				lg.Debug().Err(err).Msg("reconcile: push abandoned; loop is stopping")
 				return
@@ -323,18 +445,22 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 				// The fleet state machine retries its pending push HERE: a
 				// registration or unregistration completes on the first
 				// successful push of the fleet repository (Manager.fleetPushed).
+				// So while the push breaker is open, that retry waits for the
+				// breaker's probe — up to breakerMaxOpen.
 				onPush(repo, err)
 			}
 			if err != nil {
 				pushFails++
 				hub.broadcastPushError("origin", err.Error())
 				logFailure(pushFails).Err(err).Msg("reconcile: push failed")
+				recordStep("push", &pushBrk, false, base)
 				return
 			}
 			if pushFails > 0 {
 				lg.Info().Int("after_failures", pushFails).Msg("reconcile: push recovered")
 				pushFails = 0
 			}
+			recordStep("push", &pushBrk, true, base)
 			if shouldBroadcastPushOK(pushResult.Pushed, wasPushFailing) {
 				hub.broadcastPushOK("origin")
 			}
@@ -369,19 +495,12 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			lg.Info().Msg("reconcile loop stopped: remote disappeared")
 			return
 		}
-		interval := fresh.Interval
-		if fresh.PushInterval > 0 && fresh.PushInterval < interval {
-			interval = fresh.PushInterval
-		}
-		if interval <= 0 {
-			interval = 300
-		}
 
 		select {
 		case <-ctx.Done():
 			lg.Info().Msg("reconcile loop stopped")
 			return
-		case <-time.After(time.Duration(interval) * time.Second):
+		case <-time.After(loopInterval(fresh)):
 			doTick(ctx)
 		case <-wake:
 			if !awaitPushWindow(ctx, wake) {

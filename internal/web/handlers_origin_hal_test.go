@@ -97,6 +97,41 @@ func TestHandleHALGetOrigin_ReturnsOriginData(t *testing.T) {
 	}
 }
 
+// The origin view carries both circuit breakers (F21 S1), always present:
+// closed with no failures and a null open_until before the loop's first
+// round. Sabotage: drop either field from originView → red.
+func TestHandleHALGetOrigin_CarriesBreakers(t *testing.T) {
+	s := &Server{
+		Manager:   newTestManagerWithRepos(t, "alpha"),
+		providers: storeProviders{origin: &stubOriginProvider{remote: &store.Remote{Name: "origin", URL: "https://x.test/kb.git", Branch: "main"}}},
+	}
+	rec := httptest.NewRecorder()
+	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/origin", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, k := range []string{"fetch_breaker", "push_breaker"} {
+		raw, ok := body[k]
+		if !ok {
+			t.Fatalf("missing %s in %s", k, rec.Body.String())
+		}
+		var b map[string]any
+		if err := json.Unmarshal(raw, &b); err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+		if b["state"] != "closed" || b["consecutive_failures"] != float64(0) {
+			t.Errorf("%s: got %v, want closed with 0 failures", k, b)
+		}
+		if v, ok := b["open_until"]; !ok || v != nil {
+			t.Errorf("%s: open_until must be present and null while closed, got %v", k, b)
+		}
+	}
+}
+
 func TestHandleHALGetOrigin_NoOrigin_Returns204(t *testing.T) {
 	op := &stubOriginProvider{remote: nil}
 	s := &Server{

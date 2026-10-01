@@ -4536,7 +4536,8 @@ components:
       type: object
       required:
         [name, url, branch, interval, last_sync_at, last_status, last_error,
-         push_interval, last_push_at, last_push_status, last_push_error, _links]
+         push_interval, last_push_at, last_push_status, last_push_error,
+         fetch_breaker, push_breaker, _links]
       properties:
         name:             { type: string }
         url:              { type: string }
@@ -4550,7 +4551,26 @@ components:
         last_push_status: { type: string, nullable: true }
         last_push_error:  { type: string, nullable: true }
         auth_method:      { type: string, enum: [token, basic, ssh] }
+        fetch_breaker:    { $ref: "#/components/schemas/SyncBreaker" }
+        push_breaker:     { $ref: "#/components/schemas/SyncBreaker" }
         _links:           { $ref: "#/components/schemas/LinkMap" }
+
+    # The origin loop's circuit breaker for one network step (fetch or push).
+    # In memory and read-only; every origin repo has both, closed before the
+    # loop's first round and after a restart. After 3 consecutive failures the
+    # step is skipped for 2x the normal interval, doubling after each failed
+    # probe up to 30 minutes; one success closes it. A skipped step writes no
+    # status, so last_status/last_push_status keep the last real attempt.
+    SyncBreaker:
+      type: object
+      required: [state, consecutive_failures, open_until]
+      properties:
+        state:
+          type: string
+          enum: [closed, open, half_open]
+          description: "half_open: the open period has passed and the next round makes one attempt."
+        consecutive_failures: { type: integer, description: "Consecutive failed attempts; reset by a success." }
+        open_until:           { type: string, format: date-time, nullable: true, description: "RFC3339; null while closed." }
 
     OriginConfigRequest:
       type: object

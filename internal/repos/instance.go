@@ -138,6 +138,10 @@ type RepoInstance struct {
 	// receives. It lives HERE, not in a loop, so a wake sent while
 	// ActivateSync restarts the loop is not lost. Set once in build().
 	syncWake chan struct{}
+	// breakers is the origin loop's published fetch/push circuit-breaker
+	// state, read by the origin view (SyncBreakers). Set once in build();
+	// nil-safe (reads as closed).
+	breakers *syncBreakers
 	// handle is the current store generation; nil while no store is attached
 	// (mid-SwapStore, or a test instance without a service). closed marks the
 	// beginning of permanent teardown. Both are guarded by mu; all store access
