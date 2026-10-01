@@ -284,7 +284,10 @@ func (m *Manager) UnregisterFleet(ctx context.Context) (FleetStatus, error) {
 
 // pushFleet pushes the fleet repository's agent branch now and applies the
 // outcome. The sync loop calls fleetPushed with its own pushes, which is the
-// retry.
+// retry. This push is one-shot: it neither consults nor changes the loop's
+// circuit breakers. The retry DOES ride them: while the loop's push breaker is
+// open the loop does not push, so a pending register or unregister completes
+// only at the breaker's next probe — up to 30 minutes later (breakerMaxOpen).
 func (m *Manager) pushFleet(ctx context.Context, ri *RepoInstance) {
 	var perr error
 	werr := ri.WithRead(func(svc *store.Service) {

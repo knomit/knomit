@@ -391,19 +391,25 @@ func (defaultOriginProvider) DeleteOrigin(_ context.Context, m *repos.Manager, r
 // the persisted remote record including sync/push status so the UI can show
 // real last-sync state instead of guessing.
 type originView struct {
-	Name           string      `json:"name"`
-	URL            string      `json:"url"`
-	Branch         string      `json:"branch"`
-	Interval       int         `json:"interval"`
-	LastSyncAt     *string     `json:"last_sync_at"`
-	LastStatus     *string     `json:"last_status"`
-	LastError      *string     `json:"last_error"`
-	PushInterval   int         `json:"push_interval"`
-	LastPushAt     *string     `json:"last_push_at"`
-	LastPushStatus *string     `json:"last_push_status"`
-	LastPushError  *string     `json:"last_push_error"`
-	AuthMethod     string      `json:"auth_method,omitempty"`
-	Links          hal.LinkMap `json:"_links"`
+	Name           string  `json:"name"`
+	URL            string  `json:"url"`
+	Branch         string  `json:"branch"`
+	Interval       int     `json:"interval"`
+	LastSyncAt     *string `json:"last_sync_at"`
+	LastStatus     *string `json:"last_status"`
+	LastError      *string `json:"last_error"`
+	PushInterval   int     `json:"push_interval"`
+	LastPushAt     *string `json:"last_push_at"`
+	LastPushStatus *string `json:"last_push_status"`
+	LastPushError  *string `json:"last_push_error"`
+	AuthMethod     string  `json:"auth_method,omitempty"`
+	// FetchBreaker and PushBreaker are the origin loop's circuit breakers
+	// (F21 S1), in memory and read-only: closed before the loop's first
+	// round. While one is open its step is skipped and writes no status, so
+	// the last_* fields above keep the last REAL attempt.
+	FetchBreaker repos.BreakerView `json:"fetch_breaker"`
+	PushBreaker  repos.BreakerView `json:"push_breaker"`
+	Links        hal.LinkMap       `json:"_links"`
 }
 
 func originSelfURL(b hal.URLBuilder, repo string) string {
@@ -428,6 +434,7 @@ func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 			return
 		}
 
+		fetchBrk, pushBrk := ri.SyncBreakers()
 		view := originView{
 			Name:           remote.Name,
 			URL:            remote.URL,
@@ -441,6 +448,8 @@ func handleHALGetOrigin(b hal.URLBuilder, op originProvider) http.HandlerFunc {
 			LastPushStatus: remote.LastPushStatus,
 			LastPushError:  remote.LastPushError,
 			AuthMethod:     remote.AuthMethod,
+			FetchBreaker:   fetchBrk,
+			PushBreaker:    pushBrk,
 			Links: hal.LinkMap{
 				"self": {Href: originSelfURL(b, repoName)},
 				"repo": {Href: b.Repo(repoName)},

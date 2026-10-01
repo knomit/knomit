@@ -559,6 +559,16 @@ export interface OriginResponse {
   last_push_status: string | null;
   last_push_error: string | null;
   auth_method: string;
+  // The origin loop's circuit breakers (F21 S1). Optional so fixtures and
+  // older servers without them still type-check.
+  fetch_breaker?: SyncBreaker;
+  push_breaker?: SyncBreaker;
+}
+
+export interface SyncBreaker {
+  state: 'closed' | 'open' | 'half_open';
+  consecutive_failures: number;
+  open_until: string | null;
 }
 
 export interface RefVersion { commit: string; committed_at?: number; deleted?: boolean; kind?: string; type?: string }

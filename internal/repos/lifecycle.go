@@ -1254,6 +1254,8 @@ func (m *Manager) initInitialize(ctx context.Context, spec CreateSpec, uid, dbPa
 	// function just made is a silent no-op, not a success. Left unchecked it is
 	// indistinguishable from a real push, and Create would go on to report a
 	// knowledge base the remote has never seen.
+	// A one-shot push: it neither consults nor changes the sync loop's circuit
+	// breakers.
 	agentPush, perr := svc.Remote().Push(ctx, m.deps.AgentBranch, auth)
 	if perr != nil {
 		// The remote is UNCHANGED — nothing was pushed — so this is the one
