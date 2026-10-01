@@ -140,9 +140,9 @@ func TestTrace_RefusedNamesTheEntryAndWritesNothing(t *testing.T) {
 		// One bad entry among good ones refuses the whole call.
 		{"good entries plus one bad", map[string]any{"Knomit-Trace": "t", "Knomit-Run": traceRun, "Ticket": "ok", "Knomit-Trigger": "wake"}, "Knomit-Trigger is reserved"},
 	}
-	head := headOf(t, ri, "agent/test")
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			head := headOf(t, ri, "agent/test")
 			text, isErr := callHandler(t, LearnHandler(), ctx, learnWithTrace("m", tc.trace))
 			require.True(t, isErr, "must be refused, got: %s", text)
 			require.Contains(t, text, tc.want)
@@ -154,7 +154,7 @@ func TestTrace_RefusedNamesTheEntryAndWritesNothing(t *testing.T) {
 	text, isErr := callHandler(t, LearnHandler(), ctx, learnWithTrace("m", nil))
 	require.False(t, isErr, text)
 	file, _ := learnedCommit(t, text)
-	head = headOf(t, ri, "agent/test")
+	head := headOf(t, ri, "agent/test")
 	text, isErr = callHandler(t, UpdateHandler(), ctx, map[string]any{"file": file, "moment_name": "m",
 		"updates": map[string]any{"confidence": 0.9}, "trace": map[string]any{"knomit-trigger": "wake"}})
 	require.True(t, isErr, text)
