@@ -64,6 +64,7 @@ func hypothesizeTool() mcpgo.Tool {
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default), 'medium', or 'high'. Medium/high engage the structural-bridge engine for emergent keystone-hypothesis discovery (backward direction).")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to these domains. Empty = whole corpus.")),
 		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the synthesis-fact seed pool to facts tagged with these entities. Empty = whole corpus.")),
+		traceArg(),
 		mcpgo.WithTaskSupport(mcpgo.TaskSupportOptional),
 	)
 }
@@ -96,6 +97,12 @@ func HypothesizeHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.C
 		// shares parseEffortAndScope and therefore the same silent-drop
 		// exposure: an unrecognised scope key runs the pass whole-corpus.
 		if err := rejectUnknownArguments(req, hypothesizeTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349: see ReviewHandler — the trace reaches every commit this call
+		// makes, and a bad entry is refused before anything runs.
+		ctx, err := applyTrace(ctx, req)
+		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		b, err := repos.RequireBinding(ctx)

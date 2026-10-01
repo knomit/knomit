@@ -1507,7 +1507,13 @@ paths:
         invalid result or a knomit stop, or `recipe-timeout`. Both rows carry
         `recipe_source` (`repo` or `local`), `recipe_rev` (the file's blob at
         main, or the first 12 hex of the local file's sha256) and the fire's
-        `trace`; `?run=<id>` returns exactly them. `knomit.run(name,
+        `trace`; `?run=<id>` returns exactly them. A recipe's own writes
+        (its `knomit.learn`/`update`/`retract`) carry the script trailers
+        plus `Knomit-Run: <run id>`, so `--grep='^Knomit-Run: <id>'` finds
+        what one run wrote; a `trace` option on any of them is refused
+        (knomit's set is never joined). The session a recipe starts adds
+        its own lines only by passing the MCP tools' `trace` argument on
+        each write. `knomit.run(name,
         payload?)` from a script answers at once
         `{ok: true, status: "started", id, source}`, `{bound: false}`,
         `{ok: false, status: "busy"}` or

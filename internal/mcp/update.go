@@ -61,6 +61,7 @@ func updateTool() mcpgo.Tool {
 		mcpgo.WithString("if_commit",
 			mcpgo.Description(ifCommitDescription),
 		),
+		traceArg(),
 	)
 }
 
@@ -180,6 +181,13 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil
+		}
+		if err := checkMomentName(momentName); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349: the agent's trace entries, refused before anything is written.
+		if ctx, err = applyTrace(ctx, req); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
 		// 2b. Parse updates and ops — with the other argument checks, before

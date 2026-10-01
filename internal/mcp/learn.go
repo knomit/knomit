@@ -82,6 +82,7 @@ func learnTool() mcpgo.Tool {
 			mcpgo.Description(retractArgDescription),
 			mcpgo.Items(map[string]any{"type": "string"}),
 		),
+		traceArg(),
 	)
 }
 
@@ -896,6 +897,14 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil
+		}
+		if err := checkMomentName(momentName); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349: the agent's trace entries, on every commit this call makes.
+		// Before anything is read for the write, so a bad entry writes nothing.
+		if ctx, err = applyTrace(ctx, req); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
 		// Parse facts from the arguments.

@@ -26,6 +26,7 @@ func retractTool() mcpgo.Tool {
 			mcpgo.Required(),
 			mcpgo.Description("A short label for this retraction moment."),
 		),
+		traceArg(),
 	)
 }
 
@@ -77,6 +78,13 @@ func RetractHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		momentName := req.GetString("moment_name", "")
 		if momentName == "" {
 			return mcpgo.NewToolResultError("moment_name is required"), nil
+		}
+		if err := checkMomentName(momentName); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349: the agent's trace entries, refused before anything is written.
+		if ctx, err = applyTrace(ctx, req); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 
 		// 3. Check file exists.

@@ -184,3 +184,38 @@ func TestScriptTools_TrailersThroughUnchangedHandlers(t *testing.T) {
 	require.False(t, isErr)
 	require.Equal(t, "learn: plain", messageOf(t, ri, plain["commits"].([]any)[0].(map[string]any)["hash"].(string)))
 }
+
+// T6 [#349]: knomit's set wins. On a script's (or recipe's) ctx, which carries
+// knomit's own trace entries, a `trace` passed to update or retract — the
+// host passes those options through unchanged — is REFUSED, even an empty one,
+// and nothing is written; the same for learn reached with a trace. Sabotage:
+// let WithAgentTrace overwrite (or merge into) the existing set.
+func TestScriptTools_AgentTraceRefusedOnKnomitsSet(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	tools := NewScriptTools(nil)
+	ctx := scriptCtx(t, ri, store.Trailers{Trace: "story-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"})
+	learned, _, isErr := callScript(t, tools, ctx, "learn", map[string]any{
+		"moment_name": "trigger:inbox",
+		"facts": []any{map[string]any{"topic": "architecture", "category": "scripts/host", "title": "Stamped by knomit",
+			"body": "body", "confidence": 0.8, "sources": 1}},
+	})
+	require.False(t, isErr)
+	file := learned["commits"].([]any)[0].(map[string]any)["file"].(string)
+	head := headOf(t, ri, "agent/test")
+
+	agent := map[string]any{"Knomit-Trace": "other-story", "Ticket": "ABC-12"}
+	for _, trace := range []map[string]any{agent, {}} {
+		_, text, isErr := callScript(t, tools, ctx, "update", map[string]any{"file": file, "moment_name": "trigger:inbox",
+			"updates": map[string]any{"title": "Overridden"}, "trace": trace})
+		require.True(t, isErr, "update: %s", text)
+		require.Contains(t, text, "already carries knomit's own trace entries")
+		_, text, isErr = callScript(t, tools, ctx, "retract", map[string]any{"file": file, "moment_name": "trigger:inbox", "trace": trace})
+		require.True(t, isErr, "retract: %s", text)
+		require.Contains(t, text, "already carries knomit's own trace entries")
+		_, text, isErr = callScript(t, tools, ctx, "learn", map[string]any{"moment_name": "trigger:inbox", "trace": trace,
+			"facts": []any{map[string]any{"topic": "architecture", "category": "scripts/host", "title": "Another", "body": "b"}}})
+		require.True(t, isErr, "learn: %s", text)
+		require.Contains(t, text, "already carries knomit's own trace entries")
+	}
+	require.Equal(t, head, headOf(t, ri, "agent/test"), "nothing was written")
+}

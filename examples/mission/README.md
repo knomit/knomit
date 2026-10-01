@@ -299,6 +299,15 @@ name `work-task` and follow it. The task's text never enters argv or the
 prompt; the session reads it through knomit. Change the argv for another
 harness, and keep the task out of it.
 
+The prompt also hands the session a `trace`: `Knomit-Cause` (the commit that
+fired), `Knomit-Run` (this run's id) and `Knomit-Trace` (the task id, included
+only when it is a plain id), as a JSON literal. The `work-task` skill tells the
+session to pass it as the `trace` argument on every knomit write for that
+working copy, so a task's story (the trigger scripts' writes, the session's
+results and the ack) reads back with `git log --all --grep='^Knomit-Trace: <task id>'`
+(or `--grep='^Knomit-Run: <run id>'` for one run). A write the session makes
+without it is simply untraced.
+
 ## Skills
 
 `.knomit/skills/<name>/SKILL.md` are served by knomit's MCP server from the

@@ -348,7 +348,9 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 	budget, cancel := context.WithTimeout(ctx, j.cr.limits.Timeout)
 	defer cancel()
 	hostCtx := WithBinding(budget, NewBindingOfRepo(d.ri, d.branch))
-	hostCtx = store.WithTrailers(hostCtx, store.Trailers{Trace: j.p.trace, Cause: j.p.commit, Trigger: j.p.trig.Name})
+	// The recipe's own writes also carry its run id (#349, decision 4), so
+	// one `--grep='^Knomit-Run: <id>'` finds everything a run did.
+	hostCtx = store.WithTrailers(hostCtx, store.Trailers{Trace: j.p.trace, Cause: j.p.commit, Trigger: j.p.trig.Name, Run: j.id})
 	h := &scriptHost{d: d, p: j.p, cs: &compiledScript{script: "recipe " + j.cr.name, blob: j.cr.rev}, ctx: hostCtx,
 		globals: j.globals, rangeFrom: j.row.RangeFrom, rangeTo: j.row.RangeTo, onRow: d.addLate}
 	x := &recipeExec{ctx: hostCtx, env: d.recipeEnv(j)}

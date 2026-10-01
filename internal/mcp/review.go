@@ -32,6 +32,7 @@ func reviewTool() mcpgo.Tool {
 		mcpgo.WithString("effort", mcpgo.Description("Discovery effort dial: 'normal' (default — pre-discovery behaviour), 'medium', or 'high'. Medium/high engage the structural-bridge engine to surface emergent synthesis facts from cross-cluster bridges.")),
 		mcpgo.WithArray("domain", mcpgo.Description("Optional scope filter: restrict the seed pool to facts in these domains. Empty = whole corpus.")),
 		mcpgo.WithArray("entities", mcpgo.Description("Optional scope filter: restrict the seed pool to facts tagged with these entities. Empty = whole corpus.")),
+		traceArg(),
 		mcpgo.WithTaskSupport(mcpgo.TaskSupportOptional),
 	)
 }
@@ -62,6 +63,14 @@ func ReviewHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		// completion advances the watermark. Rejecting after StartSession
 		// would be too late by exactly the write that matters.
 		if err := rejectUnknownArguments(req, reviewTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349: the agent's trace entries reach every commit THIS call makes —
+		// an answer's applied decisions, and on a start the planning pass's
+		// dedup merges and removals, which run on this ctx. Before anything
+		// runs, so a bad entry writes nothing.
+		ctx, err := applyTrace(ctx, req)
+		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		b, err := repos.RequireBinding(ctx)
