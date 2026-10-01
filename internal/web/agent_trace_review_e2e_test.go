@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"math"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -223,14 +224,18 @@ func itemPaths(t *testing.T, e *reviewE2E, turn reviewTurn) []string {
 		}
 	}
 	require.NotNil(t, item, "item %d is not pending", turn.Item.ID)
+	// The item's payload names its members as quoted repo paths; this is a
+	// test reading a fixture's JSON, not ref classification.
 	var paths []string
-	for _, p := range strings.Split(item.FactsJSON, `"`) {
-		if strings.HasPrefix(p, "kb/") && strings.HasSuffix(p, ".md") && !contains(paths, p) {
-			paths = append(paths, p)
+	for _, m := range itemPathRE.FindAllStringSubmatch(item.FactsJSON, -1) {
+		if !contains(paths, m[1]) {
+			paths = append(paths, m[1])
 		}
 	}
 	return paths
 }
+
+var itemPathRE = regexp.MustCompile(`"(kb/architecture/test/[^"]+)"`)
 
 func contains(list []string, s string) bool {
 	for _, x := range list {
