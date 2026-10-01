@@ -627,11 +627,27 @@ func TestSampleRecipe_ArgvHasPathNotBody(t *testing.T) {
 	// forward verbatim, and a task's entity is author text) stays OUT of the
 	// prompt; the cause and the run still tie the session's writes to the fire.
 	weird := writeMsg(t, ri, trigAgent, "kb/tasks/in/other.md", "learn: other\n\nKnomit-Trace: a story <with> spaces\n")
-	rep2 := waitHelperReports(t, dir, "child", 2)[1]
-	rows = waitRows(t, ri, "w", 4)
-	require.Equal(t, "a story <with> spaces", rows[2].Trace, "fixture: the fire's trace is the copied-forward value")
-	require.Equal(t, map[string]string{"Knomit-Cause": weird, "Knomit-Run": rows[2].RunID}, promptTrace(t, rep2.Args[8]))
-	require.NotContains(t, rep2.Args[8], "a story")
+	// Match the second fire by its path and the child by its run id: neither
+	// the report files nor the rows are guaranteed to come back in start order.
+	reports := waitHelperReports(t, dir, "child", 2)
+	waitRows(t, ri, "w", 4)
+	var second store.TriggerFire
+	for _, r := range rowsOf(t, ri, "w") {
+		if r.Path == "kb/tasks/in/other.md" && r.Outcome == store.TriggerOutcomeStarted {
+			second = r
+		}
+	}
+	require.NotEmpty(t, second.RunID, "fixture: the second fire started")
+	require.Equal(t, "a story <with> spaces", second.Trace, "fixture: the fire's trace is the copied-forward value")
+	var prompt2 string
+	for _, r := range reports {
+		if strings.Contains(r.Args[8], second.RunID) {
+			prompt2 = r.Args[8]
+		}
+	}
+	require.NotEmpty(t, prompt2, "no child was started with run %s", second.RunID)
+	require.Equal(t, map[string]string{"Knomit-Cause": weird, "Knomit-Run": second.RunID}, promptTrace(t, prompt2))
+	require.NotContains(t, prompt2, "a story")
 }
 
 // promptTrace extracts the JSON trace object a sample recipe put in its
