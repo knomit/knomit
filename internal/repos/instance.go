@@ -138,6 +138,13 @@ type RepoInstance struct {
 	// receives. It lives HERE, not in a loop, so a wake sent while
 	// ActivateSync restarts the loop is not lost. Set once in build().
 	syncWake chan struct{}
+	// realtimePush is the cached `sync: {push: realtime}` setting (F21 S2).
+	// The running sync loop reads the ontology at the consensus branch's tip
+	// and stores it here (syncMode.refresh); ri.onCommit, which runs under the
+	// writer's branch lock and must never read the store, only Loads it. The
+	// loop clears it when it exits, so with no loop (local_reconcile_interval
+	// = 0, a subscription) it stays false.
+	realtimePush atomic.Bool
 	// breakers is the origin loop's published fetch/push circuit-breaker
 	// state, read by the origin view (SyncBreakers). Set once in build();
 	// nil-safe (reads as closed).

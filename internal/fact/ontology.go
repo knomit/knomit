@@ -469,6 +469,51 @@ const AttrConsensus = "consensus"
 // value never merges anything.
 const AttrConflicts = "conflicts"
 
+// AttrSync is the repository-level attribute (F21) that says how this
+// instance's sync loop pushes and pulls. It is an object with two keys, each
+// set independently:
+//
+//	sync:
+//	  push: realtime    # realtime | interval
+//	  pull: realtime    # realtime | interval
+//
+// `push: realtime`: every commit on this instance's OWN agent branch opens
+// the 1 s push countdown, exactly as a `do: push` trigger does for the
+// commits it matches, and one round then carries everything on the branch.
+// Commits on exp/* branches, on peers' pushed branches and on the consensus
+// branch never count, and nothing but this instance's agent branch is ever
+// pushed. A round that pulls in new work writes a merge commit on the agent
+// branch, which opens one more countdown; the round after it finds nothing
+// and writes nothing, so that is one idle round per consensus advance and
+// never a loop.
+//
+// `pull: realtime`: the loop runs its full round (fetch, merge, push when
+// ahead) every [git].realtime_pull_interval (knomit.toml; 3 s by default, at
+// least 1 s) instead of at the origin's interval. On an instance with no
+// origin (a knomit host), it is the local round's cadence instead of
+// [git].local_reconcile_interval; with local_reconcile_interval = 0 there is
+// no local loop and neither key does anything. Every round still passes the
+// fetch and push circuit breakers, whose base is then the realtime interval.
+//
+// `interval`, and an absent key, is today's behaviour. A SUBSCRIPTION (no
+// agent branch) ignores both keys: it has nothing to push, and a public repo
+// that turns realtime on must not make every subscriber poll it.
+//
+// Costs: against GitHub, realtime push during steady writing exceeds GitHub's
+// documented recommendation of 6 pushes a minute per repository from ONE busy
+// instance, and realtime pull at 3 s is 0.33 fetches a second per instance
+// (about 45 instances reach the documented 15 reads a second). It is meant
+// for knomit-hosted fleets; on GitHub use `pull: realtime` for small fleets
+// only. Nothing guesses the host from the origin's URL.
+//
+// SET IT ONCE AND FORGET IT. The loop reads it at the tip of the CONSENSUS
+// branch, at loop start and before every wait; an instance whose consensus
+// branch lags reads the older value for that round. A bad value is handled
+// exactly as for `consensus`: a WARNING when an existing repository opens,
+// fatal only for a NEW ontology (ParseNewOntology), and its reader (ReadSync)
+// reads it as absent for both keys and the loop warns once.
+const AttrSync = "sync"
+
 // attributeRegistry is the ONLY place an attribute key is declared.
 //
 // A key missing from this map is NOT an error: it may have been written by a
@@ -526,6 +571,14 @@ var attributeRegistry = map[string]attributeSpec{
 	AttrConflicts: {
 		accepts: `a mapping with "facts" ("off", "merge", "merge:consensus" or "consensus") and/or "state" ("off" or "consensus")`,
 		valid:   validConflicts,
+		scope:   scopeRoot,
+	},
+	// A mapping with only the keys "push" and "pull", each "realtime" or
+	// "interval". No value behaves as absent, like conflicts: its two keys
+	// are independent.
+	AttrSync: {
+		accepts: `a mapping with "push" and/or "pull", each "realtime" or "interval"`,
+		valid:   validSync,
 		scope:   scopeRoot,
 	},
 }

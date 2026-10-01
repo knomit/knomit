@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -674,11 +675,20 @@ func (b *repoBuilder) build() *RepoInstance {
 	// branch, the consensus merger's for every other branch except exp/* (a
 	// peer's pushed branch, or the consensus branch advancing). Nothing else
 	// may happen here; neither ever reads the store.
+	//
+	// Under `sync: {push: realtime}` (F21 S2) the agent-branch arm also wakes
+	// the sync loop, as a `do: push` fire does: every commit on THIS
+	// instance's own branch opens the 1 s countdown. The setting is the
+	// cached atomic the loop publishes, never an ontology read here. exp/*,
+	// peer and consensus-branch commits are the other arms and never wake.
 	agentBranchForKick := b.agentBranch
 	ri.onCommit = func(branch, hash string) {
 		obs.Notify(hash)
 		if branch == agentBranchForKick {
 			ri.triggerKick()
+			if ri.realtimePush.Load() {
+				ri.wakeSync()
+			}
 		} else if consensusKicks(branch, agentBranchForKick) {
 			ri.consensusKick()
 		}
@@ -842,7 +852,8 @@ func (b *repoBuilder) build() *RepoInstance {
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush, ri.triggerKick, ri.syncWake, ri.breakers)
+		go runReconcileLoop(newCtx, &syncWg, currentSvc, hub, name, agentBranch, authFn, cfg.LocalOriginRoot, cfg.ReadOnly, b.onPush, ri.triggerKick, ri.syncWake, ri.breakers,
+			newSyncMode(currentSvc, name, agentBranch, cfg.ReadOnly, cfg.Git.RealtimePullInterval, &ri.realtimePush))
 		return nil
 	}
 
@@ -892,7 +903,8 @@ func (b *repoBuilder) build() *RepoInstance {
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runLocalReconcileLoop(newCtx, &syncWg, currentSvc, name, agentBranch, cfg.Git.LocalReconcileInterval, ri.triggerKick, ri.syncWake)
+		go runLocalReconcileLoop(newCtx, &syncWg, currentSvc, name, agentBranch, cfg.Git.LocalReconcileInterval, ri.triggerKick, ri.syncWake,
+			newSyncMode(currentSvc, name, agentBranch, cfg.ReadOnly, cfg.Git.RealtimePullInterval, &ri.realtimePush))
 		return nil
 	}
 
@@ -1065,11 +1077,16 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	var kick func()
 	var wake chan struct{}
 	var brk *syncBreakers
+	// F21 S2: the `sync` setting's cached push flag lives on the instance;
+	// without one the mode still reads the setting and has no flag to set.
+	var pushFlag *atomic.Bool
 	if b.ri != nil {
 		kick = b.ri.triggerKick
 		wake = b.ri.syncWake
 		brk = b.ri.breakers
+		pushFlag = &b.ri.realtimePush
 	}
+	mode := newSyncMode(b.svc, b.name, b.agentBranch, b.cfg.ReadOnly, b.cfg.Git.RealtimePullInterval, pushFlag)
 	remote, err := b.svc.Remote().GetRemote("origin")
 	if err != nil {
 		log.Warn().Err(err).Str("repo", b.name).
@@ -1080,7 +1097,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 		b.syncLoopMu.Lock()
 		wg.Add(1)
 		b.syncLoopMu.Unlock()
-		go runLocalReconcileLoop(ctx, wg, b.svc, b.name, b.agentBranch, b.cfg.Git.LocalReconcileInterval, kick, wake)
+		go runLocalReconcileLoop(ctx, wg, b.svc, b.name, b.agentBranch, b.cfg.Git.LocalReconcileInterval, kick, wake, mode)
 		return
 	}
 
@@ -1091,7 +1108,7 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	b.syncLoopMu.Lock()
 	wg.Add(1)
 	b.syncLoopMu.Unlock()
-	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick, wake, brk)
+	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick, wake, brk, mode)
 }
 
 // startExperimentSweep launches the expiry sweeper for this repo.

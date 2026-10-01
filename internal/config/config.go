@@ -55,7 +55,26 @@ type GitConfig struct {
 	// two ref reads; a burst of writes costs one advance. Default 30s (set in
 	// Defaults). 0 disables the local reconcile entirely.
 	LocalReconcileInterval time.Duration `toml:"local_reconcile_interval"`
+	// RealtimePullInterval is the sync round's cadence for a repo whose
+	// ontology sets `sync: {pull: realtime}` (fact.AttrSync): the origin loop
+	// runs its full round (fetch, merge, push when ahead) this often instead
+	// of at the origin's interval, and a repo with no origin runs its local
+	// round this often instead of LocalReconcileInterval (still none when that
+	// is 0). A repo that does not set it never reads this key. Default 3s (set
+	// in Defaults); below 1s is a boot error, so a typo such as "3ms" cannot
+	// become a fetch storm.
+	//
+	// Against GitHub, 3 s is 0.33 fetches a second per instance; GitHub's
+	// documented recommendation is 15 reads a second per repository.
+	RealtimePullInterval time.Duration `toml:"realtime_pull_interval"`
 }
+
+// DefaultRealtimePullInterval is [git].realtime_pull_interval's default.
+const DefaultRealtimePullInterval = 3 * time.Second
+
+// MinRealtimePullInterval is [git].realtime_pull_interval's floor, the push
+// countdown's length: Validate rejects anything shorter.
+const MinRealtimePullInterval = time.Second
 
 // RemoteAuthConfig holds git remote authentication settings.
 type RemoteAuthConfig struct {
@@ -572,6 +591,7 @@ func Defaults() Config {
 			NetworkTimeout:         120 * time.Second,
 			MaxProbeBytes:          64 << 20,
 			LocalReconcileInterval: 30 * time.Second,
+			RealtimePullInterval:   DefaultRealtimePullInterval,
 		},
 		Log: LogConfig{
 			Format:        "console",
@@ -647,6 +667,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if err := envDurationOr("KNOMIT_GIT_LOCAL_RECONCILE_INTERVAL", &cfg.Git.LocalReconcileInterval); err != nil {
+		return Config{}, err
+	}
+	if err := envDurationOr("KNOMIT_GIT_REALTIME_PULL_INTERVAL", &cfg.Git.RealtimePullInterval); err != nil {
 		return Config{}, err
 	}
 	if err := envIntOr("KNOMIT_EXPERIMENTS_EXPIRY_DAYS", &cfg.Experiments.ExpiryDays); err != nil {
@@ -803,6 +826,13 @@ func (c Config) Validate() error {
 	// at boot instead; there is no unlimited setting.
 	if c.Triggers.ScriptRatePerMinute < 1 {
 		return fmt.Errorf("config: triggers.script_rate_per_minute must be >= 1, got %d", c.Triggers.ScriptRatePerMinute)
+	}
+	// git.realtime_pull_interval is how often a `sync: {pull: realtime}` repo
+	// runs a sync round. Below the 1 s floor (the push countdown) a typo such
+	// as "3ms" would become a fetch storm against the origin; there is no
+	// "off" value — a repo that does not want realtime pull does not set it.
+	if c.Git.RealtimePullInterval < MinRealtimePullInterval {
+		return fmt.Errorf("config: git.realtime_pull_interval must be at least %s, got %s", MinRealtimePullInterval, c.Git.RealtimePullInterval)
 	}
 	// discovery.effort_default is consumed raw by the MCP review/hypothesize
 	// handlers (it is NOT coerced like discovery.bridge), so an unknown value
