@@ -172,7 +172,7 @@ func TestAgentTrace_E2E_ParallelTasksOnOneSession(t *testing.T) {
 		msg := commitMessageIn(t, m, "jobA-repo", w.hash)
 		require.Equal(t, w.task, store.TrailerValue(msg, store.TrailerTrace), "%q", msg)
 		if w.task == "" {
-			require.NotContains(t, msg, "Step:", "%q", msg)
+			require.NotContains(t, msg, "\n\n", "an untraced write carries no paragraph of any kind: %q", msg)
 		} else {
 			require.True(t, strings.HasPrefix(store.TrailerValue(msg, "Step"), w.task+"-"), "%q", msg)
 		}
