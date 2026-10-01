@@ -124,6 +124,9 @@ type repoHandler struct {
 	embedMu  sync.RWMutex // guards embedder
 	embedder Embedder
 	branchMu sync.Map // per-branch write serialization
+	// pushMu serializes PUSHES of a branch (remoteIndex.Push), and only
+	// pushes: it is not the write lock, so a fact write never waits on it.
+	pushMu sync.Map
 
 	// gitTreeReads counts calls to readFileAtCommit + readBlobHashAtCommit —
 	// the two commit-tree lookups that dominate rebuildGraph's I/O. It is
@@ -147,6 +150,16 @@ func (rh *repoHandler) gitTreeReadCount() int64 { return rh.gitTreeReads.Load() 
 func (rh *repoHandler) lockBranch(branch string) func() {
 	v, _ := rh.branchMu.LoadOrStore(branch, &sync.RWMutex{})
 	mu := v.(*sync.RWMutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// lockPush acquires the per-branch push mutex (see remoteIndex.Push) and
+// returns its unlock. It is held for a whole push, network included, which is
+// why it must never be the write lock.
+func (rh *repoHandler) lockPush(branch string) func() {
+	v, _ := rh.pushMu.LoadOrStore(branch, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
 }
