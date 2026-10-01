@@ -1,8 +1,10 @@
 # F09 acceptance gate for a knomit knowledge base repository.
 #
 # Add the `verify` steps below to the repository's merge-agent-branches
-# workflow, BEFORE the step that merges the agent branch into main. They run
-# `knomit verify ci`, which reads verify_signatures at main's tip FIRST:
+# workflow, BEFORE the step that merges the agent branch into the consensus
+# branch. The consensus branch is the one the repository's default branch
+# (origin's HEAD) names; nothing below assumes its name. They run
+# `knomit verify ci`, which reads verify_signatures at that branch's tip FIRST:
 #
 #   - off or absent (the default): it exits 0 at once and checks nothing. The
 #     fleet repository is not needed, and the job behaves exactly as without
@@ -49,11 +51,14 @@
           KNOMIT_VERSION: "SET-ME" # the first knomit release with `knomit verify ci --fleet`; the download fails loudly until set
         run: |
           set -euo pipefail
-          git fetch --no-tags origin main
+          # origin/HEAD names the consensus branch; `verify ci` reads it when
+          # --upstream is not given. actions/checkout does not set it.
+          git remote set-head origin --auto
+          git fetch --no-tags origin
           curl -fsSL -o knomit.tar.gz \
             "https://github.com/knomit/knomit/releases/download/v${KNOMIT_VERSION}/knomit-${KNOMIT_VERSION}-linux-amd64.tar.gz"
           mkdir -p .knomit-bin && tar -xzf knomit.tar.gz -C .knomit-bin
           KNOMIT=$(find .knomit-bin -type f -name knomit -perm -u+x | head -1)
           fleet=()
           if [ -d "$RUNNER_TEMP/fleet" ]; then fleet=(--fleet "$RUNNER_TEMP/fleet"); fi
-          "$KNOMIT" verify ci --dir . --upstream origin/main --candidate "origin/$BRANCH" "${fleet[@]}"
+          "$KNOMIT" verify ci --dir . --candidate "origin/$BRANCH" "${fleet[@]}"

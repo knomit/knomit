@@ -145,3 +145,67 @@ func TestVerifyCI_ExitCodes(t *testing.T) {
 	_, err = run("--dir", t.TempDir())
 	require.Equal(t, 2, code(err), "not a git repository: could not run")
 }
+
+// With no --upstream, `verify ci` checks against the branch origin's HEAD names
+// (here trunk), never a branch assumed by name; with no origin/HEAD it cannot
+// run (exit 2) and says how to set it.
+//
+// SABOTAGE: restore the flag default "origin/main" → the checkout has no
+// origin/main, CheckRange cannot resolve it → exit 2, not 0 → red.
+func TestVerifyCI_UpstreamDefaultsToOriginHead(t *testing.T) {
+	dir := ciRepo(t, "")
+	repo, err := gogit.PlainOpen(dir)
+	require.NoError(t, err)
+	up, err := repo.Reference(plumbing.NewBranchReferenceName("upstream"), true)
+	require.NoError(t, err)
+
+	run := func() (string, error) {
+		c := verifyCICmd()
+		var out bytes.Buffer
+		c.SetOut(&out)
+		c.SetArgs([]string{"--dir", dir, "--candidate", "candidate"})
+		err := c.Execute()
+		return out.String(), err
+	}
+
+	_, err = run()
+	var coded *ExitCodeError
+	require.ErrorAs(t, err, &coded, "no origin/HEAD: the gate cannot run")
+	require.Equal(t, 2, coded.ExitCode())
+	require.ErrorContains(t, err, "set-head")
+
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "trunk"), up.Hash())))
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.NewRemoteHEADReferenceName("origin"), plumbing.NewRemoteReferenceName("origin", "trunk"))))
+	out, err := run()
+	require.NoError(t, err, out)
+	require.Contains(t, out, "verification is off in origin/trunk")
+
+	// An origin/HEAD naming an agent branch is not a consensus branch.
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewRemoteReferenceName("origin", "agent/x"), up.Hash())))
+	require.NoError(t, repo.Storer.SetReference(plumbing.NewSymbolicReference(plumbing.NewRemoteHEADReferenceName("origin"), plumbing.NewRemoteReferenceName("origin", "agent/x"))))
+	_, err = run()
+	require.ErrorAs(t, err, &coded)
+	require.Equal(t, 2, coded.ExitCode())
+}
+
+// The shipped CI template names no branch: it sets origin/HEAD from the forge
+// and lets `verify ci` read it. Comment lines are prose and do not count.
+//
+// SABOTAGE: restore `git fetch --no-tags origin main` or
+// `--upstream origin/main` → red.
+func TestVerifyCITemplate_NamesNoBranch(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "tools", "ci", "verify-signatures.yml"))
+	require.NoError(t, err)
+	for i, line := range strings.Split(string(b), "\n") {
+		code := strings.TrimSpace(line)
+		if strings.HasPrefix(code, "#") {
+			continue
+		}
+		for _, w := range strings.FieldsFunc(code, func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+		}) {
+			require.NotContains(t, []string{"main", "master"}, w, "line %d names a branch: %s", i+1, line)
+		}
+	}
+	require.Contains(t, string(b), "git remote set-head origin --auto")
+}

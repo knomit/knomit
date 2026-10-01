@@ -57,7 +57,9 @@ export function RemoteCard({ repo, agentBranch, readOnly, lockOrigin = false, st
 
   const openUpstreamEditor = async () => {
     setErr('');
-    setNewUpstream('main');
+    // Start from the branch the origin tracks now (empty when that is this
+    // machine's own agent branch, the case being fixed), never a made-up name.
+    setNewUpstream(upstreamIsAgent ? '' : (origin?.branch ?? ''));
     setEditingUpstream(true);
     try {
       const names = await api.listBranchNames(repo);
@@ -107,7 +109,7 @@ export function RemoteCard({ repo, agentBranch, readOnly, lockOrigin = false, st
           <div style={{ fontSize: 13, color: '#ddd', wordBreak: 'break-all' }}>{origin.url}</div>
           <div style={{ fontSize: 12, color: upstreamIsAgent ? '#e0a23a' : '#888', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
             {upstreamIsAgent && <span data-testid="upstream-warning-icon" title="Upstream is this agent branch" aria-label="warning">⚠</span>}
-            <span>upstream branch: {origin.branch || 'main'}</span>
+            <span>upstream branch: {origin.branch || '(unknown)'}</span>
             {!readOnly && !editingUpstream && (
               <button type="button" data-testid="upstream-change" style={linkBtn} onClick={openUpstreamEditor}>change…</button>
             )}
@@ -120,7 +122,7 @@ export function RemoteCard({ repo, agentBranch, readOnly, lockOrigin = false, st
             <div data-testid="upstream-warning" style={warnBox}>
               ⚠ The consensus (“main”) branch is set to this machine’s agent branch, so remote
               changes are <strong>not pulled</strong> — the repo is push-only to protect unpushed
-              facts. Set a real consensus branch (e.g. <code>main</code>) to re-enable pulls.
+              facts. Set a real consensus branch to re-enable pulls.
             </div>
           )}
 
@@ -133,7 +135,7 @@ export function RemoteCard({ repo, agentBranch, readOnly, lockOrigin = false, st
                   list="upstream-branch-options"
                   value={newUpstream}
                   onChange={e => setNewUpstream(e.target.value)}
-                  placeholder="main"
+                  placeholder="branch name"
                   style={{ background: '#111', color: '#eee', border: '1px solid #333', borderRadius: 4, padding: '6px 8px', fontSize: 13, minWidth: 160 }}
                 />
                 <datalist id="upstream-branch-options">

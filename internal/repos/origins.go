@@ -111,8 +111,12 @@ func (o *Origins) Set(uid string, org Origin) error {
 	if uid == "" {
 		return fmt.Errorf("origins set: uid required")
 	}
+	// The branch is the repo's consensus branch, which the caller resolved (a
+	// clone's adopted branch, a request, the repo's recorded branch). A row
+	// without one would make every later sync reconcile against a name nobody
+	// chose, so it is refused rather than filled in.
 	if org.Branch == "" {
-		org.Branch = "main"
+		return fmt.Errorf("origins set: %w", store.ErrNoConsensusBranch)
 	}
 	stored := org.AuthToken
 	if org.AuthToken != "" {
@@ -169,7 +173,7 @@ func (o *Origins) Set(uid string, org Origin) error {
 // permanently inconsistent.
 func (o *Origins) SetBranch(uid, branch string) error {
 	if branch == "" {
-		branch = "main"
+		return fmt.Errorf("origins set branch: %w", store.ErrNoConsensusBranch)
 	}
 	res, err := o.db.Exec(`UPDATE repo_origins SET branch = ? WHERE repo_uid = ?`, branch, uid)
 	if err != nil {

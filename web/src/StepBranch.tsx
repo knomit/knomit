@@ -42,7 +42,9 @@ export function StepBranch({ state, dispatch }: {
 }) {
   const probe = state.probe;
   const branches = probe?.branches ?? [];
-  const selected = state.branch || probe?.upstream_branch || 'main';
+  // No fallback name: when neither the user nor the probe named a branch,
+  // nothing is selected and the user picks one. The create refuses to guess.
+  const selected = state.branch || probe?.upstream_branch || '';
   const host = hostOf(state.url) || 'the remote';
   const blocked = branchCheckBlocked(state);
   // Which branch the established answer is ABOUT. Falls back to the selection
@@ -97,7 +99,7 @@ export function StepBranch({ state, dispatch }: {
           <>
             <div style={caption}>branch name</div>
             <input data-testid="branch-input" style={input} value={state.branch}
-              placeholder="main" autoCapitalize="off" autoCorrect="off" spellCheck={false}
+              placeholder="branch name" autoCapitalize="off" autoCorrect="off" spellCheck={false}
               onChange={e => dispatch({ type: 'SET_BRANCH', branch: e.target.value })} />
           </>
         )}

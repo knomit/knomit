@@ -128,10 +128,36 @@ describe('RemoteCard', () => {
 
     fireEvent.click(await screen.findByTestId('upstream-change'));
     const input = await screen.findByTestId('upstream-input') as HTMLInputElement;
-    expect(input.value).toBe('main'); // defaults to main
+    // The current upstream is this machine's own agent branch (the case being
+    // fixed), so the editor starts EMPTY: no name is suggested for the user.
+    expect(input.value).toBe('');
+    fireEvent.change(input, { target: { value: 'main' } });
     fireEvent.click(screen.getByTestId('upstream-save'));
 
     await waitFor(() => expect(api.setOriginUpstream).toHaveBeenCalledWith('work', 'main'));
     await waitFor(() => expect(onChanged).toHaveBeenCalled());
+  });
+
+  // SABOTAGE: restore setNewUpstream('main') → the editor opens on main → red.
+  it('opens the upstream editor on the branch the origin tracks, never a made-up one', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
+      name: 'origin', url: 'https://github.com/knomit/knomit-kb.git', branch: 'trunk', auth_method: 'token',
+      last_sync_at: null, last_status: null, last_error: null,
+    });
+    (api.listBranchNames as unknown as Fn).mockResolvedValueOnce(['trunk', 'main']);
+    render(<Harness repo="work" agentBranch="agent/host-1" readOnly={false} onConnect={() => {}} onChanged={() => {}} />);
+    fireEvent.click(await screen.findByTestId('upstream-change'));
+    expect((await screen.findByTestId('upstream-input') as HTMLInputElement).value).toBe('trunk');
+  });
+
+  // SABOTAGE: restore `origin.branch || 'main'` → "upstream branch: main" → red.
+  it('shows an origin with no branch as unknown, not as main', async () => {
+    (api.getOrigin as unknown as Fn).mockResolvedValueOnce({
+      name: 'origin', url: 'https://github.com/knomit/knomit-kb.git', branch: '', auth_method: 'token',
+      last_sync_at: null, last_status: null, last_error: null,
+    });
+    render(<Harness repo="work" agentBranch="agent/host-1" readOnly={false} onConnect={() => {}} onChanged={() => {}} />);
+    expect(await screen.findByText(/upstream branch:/)).toHaveTextContent('upstream branch: (unknown)');
+    expect(screen.queryByText(/upstream branch: main/)).not.toBeInTheDocument();
   });
 });

@@ -43,8 +43,8 @@ One instance hosts the repo; the others are its peers.
    just made, then remove its origin (repo settings, or
    `DELETE /api/v1/repos/<repo>/origin`). With no origin, this instance owns
    the repo's consensus branch. The repo keeps the branch it was cloned on,
-   whatever its name. Then restart the hosting instance: the loop that moves
-   an origin-less repo's consensus branch forward starts when the repo opens.
+   whatever its name, and the loop that moves an origin-less repo's consensus
+   branch forward starts as soon as the origin is removed.
 2. Enroll the other instances (fleet certificates, `push:own`) and let each
    clone the repo from the host. A peer pushes only its own agent branch.
 3. `consensus: auto` (already in the ontology) makes the host merge every

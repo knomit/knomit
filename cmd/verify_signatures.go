@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
+	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/spf13/cobra"
 
@@ -132,6 +134,33 @@ func runVerifyAccept(cmd *cobra.Command, args []string, repoName, note string, l
 	return nil
 }
 
+// originHeadUpstream is `verify ci`'s default --upstream: the branch the
+// checkout's origin names as its default (refs/remotes/origin/HEAD, which
+// `git clone` sets and `git remote set-head origin --auto` sets in a CI
+// checkout), as origin/<branch>. It is refused when origin/HEAD is not set or
+// names an agent, experiment or generated branch (store.IsRoleBranch): the
+// gate must never check a candidate against a guessed upstream.
+func originHeadUpstream(dir string) (string, error) {
+	repo, err := gogit.PlainOpenWithOptions(dir, &gogit.PlainOpenOptions{DetectDotGit: true})
+	if err != nil {
+		return "", fmt.Errorf("open %s: %w", dir, err)
+	}
+	ref, err := repo.Reference(plumbing.NewRemoteHEADReferenceName("origin"), false)
+	if err != nil || ref.Type() != plumbing.SymbolicReference {
+		return "", fmt.Errorf("--upstream not given and origin/HEAD is not set in %s: pass --upstream, or run `git remote set-head origin --auto` first", dir)
+	}
+	const prefix = "refs/remotes/origin/"
+	target := ref.Target().String()
+	if !strings.HasPrefix(target, prefix) {
+		return "", fmt.Errorf("--upstream not given and origin/HEAD points outside origin (%s): pass --upstream", target)
+	}
+	branch := strings.TrimPrefix(target, prefix)
+	if store.IsRoleBranch(branch) {
+		return "", fmt.Errorf("--upstream not given and origin/HEAD names %q, which is not a consensus branch: pass --upstream", branch)
+	}
+	return "origin/" + branch, nil
+}
+
 // verifyCICmd builds `knomit verify ci`: F09's acceptance gate for a knowledge
 // base's repository, run by the job that advances its main (the GitHub
 // workflow that merges agent branches). It is store.CheckRange over plain git
@@ -152,7 +181,11 @@ exactly one member record; the signing key is that record's current key and no
 other record's; the agent is active. An unsigned merge passes only if it adds
 nothing beyond its parents.
 
-  knomit verify ci --upstream origin/main --candidate "$TIP" --fleet ../fleet
+  knomit verify ci --candidate "$TIP" --fleet ../fleet
+
+--upstream defaults to the branch origin's HEAD names (refs/remotes/origin/HEAD;
+set it in a CI checkout with ` + "`git remote set-head origin --auto`" + `). Without
+it, and without --upstream, the gate cannot run (exit 2).
 
 Exit codes: 0 mergeable (verification off, a clean range, or failures in log
 mode, which are reported only), 1 blocked (failures in enforce), 2 could not
@@ -161,6 +194,13 @@ ontology is not the fleet preset, an unknown verify_signatures value).`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if upstream == "" {
+				u, err := originHeadUpstream(dir)
+				if err != nil {
+					return &ExitCodeError{Code: exitFailed, Err: err}
+				}
+				upstream = u
+			}
 			v, err := store.CheckRange(store.RangeInput{
 				KBDir: dir, Main: upstream, Candidate: candidate,
 				FleetDir: fleet, FleetRev: fleetRev, FleetRoot: fleetRoot,
@@ -194,7 +234,7 @@ ontology is not the fleet preset, an unknown verify_signatures value).`,
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", ".", "the knowledge base checkout")
-	cmd.Flags().StringVar(&upstream, "upstream", "origin/main", "the upstream revision the candidate would merge into")
+	cmd.Flags().StringVar(&upstream, "upstream", "", "the upstream revision the candidate would merge into (default: the branch origin's HEAD names, origin/<branch>)")
 	cmd.Flags().StringVar(&candidate, "candidate", "HEAD", "the candidate revision (the agent branch tip)")
 	cmd.Flags().StringVar(&fleet, "fleet", "", "the fleet repository checkout (needed only when verification is on)")
 	cmd.Flags().StringVar(&fleetRev, "fleet-rev", "HEAD", "the fleet revision holding the accepted member records")

@@ -1003,8 +1003,11 @@ async function getAgentBranch(repo: string): Promise<string> {
   const branches: Array<{ name: string }> =
     (data._embedded?.branches as Array<{ name: string }>) || [];
   const agent = branches.find(b => b.name.startsWith('agent/'));
-  const main = branches.find(b => b.name === 'main');
-  return (agent || main || branches[0])?.name || 'main';
+  if (agent) return agent.name;
+  // No agent branch: the only branch there is, if there is exactly one. Never
+  // a branch picked for its name, and never a name that may not exist.
+  if (branches.length === 1) return branches[0].name;
+  throw new Error(`cannot tell which branch of ${repo} to use: the server did not say and it has ${branches.length} branches`);
 }
 
 // RepoCreateStatus is the state of one detached repo-create job — the body of

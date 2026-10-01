@@ -455,11 +455,12 @@ func (rh *repoHandler) SetAgentBranchOwner(ctx context.Context, branch string) e
 }
 
 // configureRemote ensures origin is registered with a fetch refspec for the
-// upstream consensus branch (typically "main", configurable to "master" or any
-// other name via upstreamMain) and, when this machine has one, a second for its
-// agent branch. Idempotent. Both branch names are part of their respective
-// refspecs, so callers must pass the same upstreamMain and agentBranch on
-// every call for a given repo. Empty upstreamMain defaults to "main".
+// upstream consensus branch (upstreamMain, whatever the origin names) and, when
+// this machine has one, a second for its agent branch. Idempotent. Both branch
+// names are part of their respective refspecs, so callers must pass the same
+// upstreamMain and agentBranch on every call for a given repo. upstreamMain is
+// never empty here: Service.ConfigureRemote refuses it, and the init paths
+// resolve it first.
 //
 // An EMPTY agentBranch means a subscription: the repo follows the upstream
 // read-only and has no branch of its own, so exactly one refspec is written.
@@ -469,10 +470,6 @@ func (rh *repoHandler) SetAgentBranchOwner(ctx context.Context, branch string) e
 func (rh *repoHandler) configureRemote(url, upstreamMain, agentBranch string) error {
 	rh.configMu.Lock()
 	defer rh.configMu.Unlock()
-
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
 
 	cfg, err := rh.repo.Config()
 	if err != nil {

@@ -89,6 +89,9 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 				return fmt.Errorf("open index %q: %w", dbPath, err)
 			}
 			defer svc.Close()
+			if branch, err = branchOrConsensus(svc, branch); err != nil {
+				return err
+			}
 
 			idx := svc.Search()
 			ctx := context.Background()
@@ -167,7 +170,7 @@ creates the file if it is missing. Point --db at a copy of a live index.`,
 
 	f := cmd.Flags()
 	f.String("db", "", "path to knomit index DB (required)")
-	f.String("branch", "main", "branch name to query")
+	f.String("branch", "", "branch name to query (default: the index's consensus branch)")
 	f.String("effort", "medium", "discovery effort level (normal/medium/high)")
 	f.String("kind", "both", "bridge kind to enumerate (domain/entity/both/motif)")
 	f.Float64("resolution", 2.0, "Louvain resolution for clustering")
@@ -260,6 +263,9 @@ func runMotifReport(cmd *cobra.Command, dbPath, branch, effortStr string,
 		return fmt.Errorf("open index %q: %w", dbPath, err)
 	}
 	defer svc.Close()
+	if branch, err = branchOrConsensus(svc, branch); err != nil {
+		return err
+	}
 
 	// M-5: resolve the CORPUS's own model thresholds. This command opens the
 	// store without an embedder — correct, the scoring path needs none — but
@@ -386,6 +392,19 @@ func corpusDedupThreshold(dbPath string) (float64, bool) {
 // would silently score a LARGER candidate population than production serves.
 // A calibration number computed over the wrong population is exactly the class
 // of mistake the POPULATION-first headers in this file exist to prevent.
+// branchOrConsensus is the --branch value, or when it is not given the store's
+// own consensus branch (the origin's, else the one recorded with the repo).
+// The index has no branch named by convention, so none is assumed.
+func branchOrConsensus(svc *store.Service, flag string) (string, error) {
+	if flag != "" {
+		return flag, nil
+	}
+	if b := svc.UpstreamBranch(); b != "" {
+		return b, nil
+	}
+	return "", fmt.Errorf("--branch not given and the index records no consensus branch: pass --branch")
+}
+
 func localRepoIDFor(ctx context.Context, svc *store.Service, branch string) (string, error) {
 	root, err := svc.RootCommit(ctx, branch)
 	if err != nil {

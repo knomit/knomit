@@ -56,6 +56,16 @@ describe('StepBranch choosing the consensus branch', () => {
     renderStep(state());
     expect(screen.getByText(/never writes to it/i)).toBeInTheDocument();
   });
+
+  // The probe could not tell which branch is the consensus branch (several
+  // candidates, HEAD on an agent branch): nothing is pre-selected, least of
+  // all a branch because it is called main. The user picks.
+  // SABOTAGE: restore the `|| 'main'` fallback → main is marked selected → red.
+  it('selects nothing when neither the user nor the probe named a branch', () => {
+    renderStep(state({ branch: '' }, { upstream_branch: '', branches: ['main', 'trunk'] }));
+    expect(screen.getByTestId('branch-option-main')).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByTestId('branch-option-trunk')).toHaveAttribute('aria-pressed', 'false');
+  });
 });
 
 describe('StepBranch reporting the check', () => {

@@ -1011,13 +1011,13 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			// branch. Prefer the branch the user chose at /apply time (which
 			// may differ from the remote's default — e.g. a master-default
 			// repo where the user explicitly chose to track a release
-			// branch). Fall back to the test result's default, then "main".
+			// branch). Fall back to the test result's default: the remote
+			// clone's own HEAD branch. With neither there is no branch to
+			// record, and persistSessionOrigin refuses rather than inventing
+			// one (surfaced as the config warning below).
 			upstreamMain := appliedRemoteBranch
 			if upstreamMain == "" {
 				upstreamMain = testResult.DefaultBranch
-			}
-			if upstreamMain == "" {
-				upstreamMain = "main"
 			}
 			if err := persistSessionOrigin(rm, ri, svc, remoteURL, upstreamMain, agentBranch, authMethod, authToken); err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: save remote config failed (continuing — swap already applied)")
@@ -1145,12 +1145,12 @@ func (s *Server) commitSharedHistory(
 	}
 	defer release()
 
+	// The branch the user chose, else the remote's own default (the test
+	// clone's HEAD). With neither, persistSessionOrigin refuses and the
+	// config warning says so; no name is invented for it.
 	upstreamMain := appliedRemoteBranch
 	if upstreamMain == "" {
 		upstreamMain = defaultBranch
-	}
-	if upstreamMain == "" {
-		upstreamMain = "main"
 	}
 
 	authMethod := authCfg.Method

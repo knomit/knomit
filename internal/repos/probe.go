@@ -15,6 +15,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	transportclient "github.com/go-git/go-git/v5/plumbing/transport/client"
 	"github.com/go-git/go-git/v5/storage/memory"
+
+	"knomit/internal/store"
 )
 
 // ProbeResult is what a pre-create look at a remote can establish.
@@ -431,24 +433,22 @@ func classifyProbeError(err error) (empty bool, authRequired bool) {
 	return false, false
 }
 
-// resolveUpstream mirrors InitFromRemote's preference order so the wizard shows
-// the branch the clone would actually adopt: an explicit request wins, then
-// "main", then the remote's symbolic HEAD, then "main" as the last resort.
+// resolveUpstream is InitFromRemote's rule applied to a ref listing, so the
+// wizard shows the branch the create would actually adopt. It IS the store's
+// rule (store.ChooseConsensusBranch), not a copy of it: an explicit request
+// wins, then the remote's symbolic HEAD unless that is an agent branch, then
+// the one branch with no other role. "" means the create would refuse
+// (store.ErrNoConsensusBranch) until a branch is named.
 //
-// Also covers the empty-remote case (head="", branches=nil): with no refs to
-// consider it collapses to "the requested branch, else main", which is why
-// ProbeOrigin no longer needs a separate helper for that case.
+// The empty-remote case (branches empty) is the seed path, which CREATES the
+// consensus branch: the requested name, else store.DefaultConsensusBranch,
+// exactly as initFromEmptyRemote does.
 func resolveUpstream(requested, head string, branches []string) string {
-	if requested != "" {
-		return requested
-	}
-	for _, b := range branches {
-		if b == "main" {
-			return "main"
+	if len(branches) == 0 {
+		if requested != "" {
+			return requested
 		}
+		return store.DefaultConsensusBranch
 	}
-	if head != "" {
-		return head
-	}
-	return "main"
+	return store.ChooseConsensusBranch(requested, head, branches)
 }

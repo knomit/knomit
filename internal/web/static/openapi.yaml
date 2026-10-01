@@ -4557,7 +4557,7 @@ components:
       required: [url]
       properties:
         url:         { type: string }
-        branch:      { type: string, description: "Upstream consensus branch. Defaults to the stored branch, then \"main\"." }
+        branch:      { type: string, description: "Upstream consensus branch. Defaults to the stored branch, then the repo's recorded consensus branch; never a fixed name." }
         auth_method: { type: string, enum: [token, basic, ssh] }
         token:       { type: string }
         user:        { type: string }

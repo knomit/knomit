@@ -22,7 +22,9 @@ export function StepReview({ state, dispatch }: { state: WizardState; dispatch: 
   // cleared state.preset here would make the review page confidently wrong
   // about the one choice that cannot be changed after creation.
   const presetLabel = state.yaml ? 'a custom' : `the "${state.preset || state.seedPreset}"`;
-  const branch = state.branch || state.probe?.upstream_branch || 'main';
+  // The branch the create will use, or '(unknown)' when neither the user nor
+  // the probe named one. Never a name made up for it.
+  const branch = state.branch || state.probe?.upstream_branch || '(unknown)';
   // The branch already holds a knowledge base, so there is a way to attach to
   // it that never writes — and asking which one is what makes this case the
   // only one on this step with a question on it rather than a summary alone.

@@ -67,7 +67,14 @@ func Replay(ctx context.Context, local *Service, localBranch string, iter FactIt
 		return nil, fmt.Errorf("Replay: AgentBranch must be set")
 	}
 	if cfg.DefaultBranch == "" {
-		cfg.DefaultBranch = "main"
+		// The target is a clone of the remote, so its HEAD is the branch the
+		// remote named as its default. Take the name from there, never from a
+		// guess.
+		b, err := target.Branches().DefaultBranch(ctx)
+		if err != nil || b == "" {
+			return nil, fmt.Errorf("Replay: DefaultBranch not set and the target has no HEAD branch: %w", ErrNoConsensusBranch)
+		}
+		cfg.DefaultBranch = b
 	}
 	if cfg.Strategy == "" {
 		cfg.Strategy = StrategyLocalWins

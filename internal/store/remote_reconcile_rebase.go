@@ -470,9 +470,6 @@ func (rh *repoHandler) replayOntoUpstream(
 // On a successful reconcile, the watermark is advanced to current local
 // main. Holds rh.lockBranch(agentBranch) for the duration.
 func (rh *repoHandler) reconcileAgentRebase(ctx context.Context, agentBranch, upstreamMain string, strategy ConflictStrategy) (AgentReconcileResult, error) {
-	if upstreamMain == "" {
-		upstreamMain = "main"
-	}
 	unlock := rh.lockBranch(agentBranch)
 	defer unlock()
 

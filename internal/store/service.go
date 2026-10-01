@@ -324,9 +324,16 @@ func (s *Service) SetOrigin(o *Origin) {
 // Errors, rather than panicking, when the repo is not initialised (rh.repo is
 // nil until InitRepo/OpenRepo) — DB-only mode is plausible at the point Task 4
 // wires this in at open time.
+//
+// An empty upstreamMain is refused (ErrNoConsensusBranch): this is the one
+// public way in, so the fetch and reconcile paths below it never see an empty
+// branch name and carry no default of their own.
 func (s *Service) ConfigureRemote(url, upstreamMain, agentBranch string) error {
 	if s.rh.repo == nil {
 		return fmt.Errorf("ConfigureRemote: repository not initialised")
+	}
+	if upstreamMain == "" {
+		return fmt.Errorf("ConfigureRemote: %w", ErrNoConsensusBranch)
 	}
 	return s.rh.configureRemote(url, upstreamMain, agentBranch)
 }

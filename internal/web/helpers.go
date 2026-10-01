@@ -97,10 +97,11 @@ func assembleAuthToken(authMethod, token, user, password string) string {
 
 // setOriginRequest is the expected JSON body for PUT /repos/{repo}/origin.
 //
-// Branch is the upstream consensus branch on the remote (e.g. "main",
-// "master"). When omitted, the handler keeps the existing remote's value or
-// falls back to "main". Callers that have already discovered the right name
-// (via the connectivity-test flow) should send it explicitly.
+// Branch is the upstream consensus branch on the remote. When omitted, the
+// handler keeps the existing remote's value, else the repo's own recorded
+// consensus branch (store.UpstreamBranch); it never supplies a name of its
+// own. Callers that have already discovered the right name (via the
+// connectivity-test flow) should send it explicitly.
 type setOriginRequest struct {
 	URL        string `json:"url"`
 	Branch     string `json:"branch,omitempty"`
