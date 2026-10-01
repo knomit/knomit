@@ -117,6 +117,12 @@ func (fi *factIndex) readFileLastCommit(ctx context.Context, branch, path, befor
 // fix for external ones (knomit_update, knomit_retract).
 func (fi *factIndex) fileExists(ctx context.Context, branch, path string) (bool, error) {
 	path = strings.ToLower(path)
+	// The write doors' path rule, so an exists check on a path no write would
+	// accept answers in the writers' words rather than go-git's FindEntry
+	// error. No behaviour change otherwise: FindEntry refuses these paths too.
+	if err := validatePathChars(path); err != nil {
+		return false, err
+	}
 	headHash, err := fi.rh.resolveRef(ctx, branch)
 	if err != nil {
 		return false, fmt.Errorf("fileExists: ref: %w", err)

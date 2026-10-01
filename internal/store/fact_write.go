@@ -13,14 +13,39 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// validatePath returns an error if path is empty or contains "..".
-// It does not normalise case; callers must lower-case before calling.
+// validatePath returns an error if path is empty, contains "..", or contains
+// a control character. It does not normalise case; callers must lower-case
+// before calling.
+//
+// Every write door (writeFileExact, deleteFile, batchWrite) runs it BEFORE the
+// branch lock and before the ref moves, so a refused path leaves nothing
+// behind. That ordering is the point: go-git checks tree paths only on READ
+// (FindEntry, the tree walker, DiffTree), and those reads run in notifyCommit's
+// im.Sync, AFTER SetReference. A path git cannot read back, refused there,
+// leaves a commit on the branch that every later sync trips over (#384).
 func validatePath(path string) error {
 	if path == "" {
 		return fmt.Errorf("path must not be empty")
 	}
 	if strings.Contains(path, "..") {
 		return fmt.Errorf("path must not contain '..'")
+	}
+	return validatePathChars(path)
+}
+
+// validatePathChars refuses any byte below 0x20 and 0x7f (DEL): the
+// control-character clause of go-git's ValidTreePath
+// (internal/pathutil/tree.go), which go-git applies to every tree path it
+// reads. It must stay a strict SUBSET of that rule: refusing something git
+// accepts would lock a writable path out of knomit for no reason.
+//
+// %q quotes the path so the offending character is visible in the error
+// rather than breaking the line it is printed on.
+func validatePathChars(path string) error {
+	for i := 0; i < len(path); i++ {
+		if c := path[i]; c < 0x20 || c == 0x7f {
+			return fmt.Errorf("%w %q: contains a control character", ErrInvalidPath, path)
+		}
 	}
 	return nil
 }
