@@ -407,3 +407,52 @@ func TestSyncBreaker_SkippedStepWritesNothing(t *testing.T) {
 	require.Equal(t, 0, s, "a skipped fetch broadcast")
 	require.Equal(t, 0, p, "a skipped push broadcast")
 }
+
+// B8 AuthFailureWhileFetchOpenIsNotAPushFailure (review F1): after a healthy
+// round, auth fails until the fetch breaker opens; further rounds with the
+// fetch breaker open and the push due fail auth again. Those failures are
+// charged to NOTHING: no push_error is broadcast (a banner no push_ok would
+// ever lower, since no push status row records it), the push breaker stays
+// closed with no failures, and no push is attempted. After the heal both
+// breakers are closed and the push banner was never raised. Sabotage: charge
+// the push breaker, or broadcast push_error, on that auth failure → red.
+func TestSyncBreaker_AuthFailureWhileFetchOpenIsNotAPushFailure(t *testing.T) {
+	ri, _, root := newOriginTriggerRepo(t)
+	l := startBreakerLoop(t, ri, root, nil)
+	require.Equal(t, int64(1), l.pushes.Load(), "the healthy first round pushed")
+
+	l.authFail.Store(true)
+	l.round(t, ri)
+	l.round(t, ri)
+	l.round(t, ri)
+	fetch, _ := ri.SyncBreakers()
+	require.Equal(t, breakerOpen, fetch.State)
+
+	ev := subscribeSyncEvents(t, ri)
+	for i := 1; i <= 3; i++ {
+		l.clock.set(time.Duration(i) * 100 * time.Second) // the fetch breaker stays open
+		l.round(t, ri)
+	}
+	_, push := ri.SyncBreakers()
+	require.Equal(t, breakerClosed, push.State, "an auth failure is not a push failure")
+	require.Equal(t, 0, push.ConsecutiveFailures)
+	require.Equal(t, int64(1), l.pushes.Load(), "no push attempted without auth")
+
+	l.authFail.Store(false)
+	l.clock.set(600 * time.Second)
+	l.round(t, ri)
+	fetch, push = ri.SyncBreakers()
+	require.Equal(t, breakerClosed, fetch.State)
+	require.Equal(t, breakerClosed, push.State)
+	time.Sleep(pushQuiet)
+	ev.mu.Lock()
+	pushEvents := append([]PushEvent(nil), ev.push...)
+	ev.mu.Unlock()
+	for _, e := range pushEvents {
+		require.NotEqual(t, "push_error", e.Status, "a push banner was raised by an auth failure: %+v", pushEvents)
+	}
+	rem, err := testService(t, ri).Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, rem.LastPushStatus)
+	require.Equal(t, "ok", *rem.LastPushStatus)
+}

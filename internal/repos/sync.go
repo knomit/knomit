@@ -359,14 +359,17 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 			// a remote that permits anonymous access. We do NOT call Sync/Push
 			// with nil auth on this tick.
 			//
-			// It is charged to the first step that needed it. When the fetch
-			// is due, that is the fetch, exactly as before the breaker: the
-			// error is persisted on the remote record, broadcast, and counted
-			// toward escalation and the fetch breaker; the push is not
-			// attempted and is NOT a push failure. When only the push is due
-			// (the fetch breaker is open), it is the push's failure: broadcast
-			// and counted toward the push breaker, but no row is written — the
-			// push status is written by Push alone, and Push did not run.
+			// It is charged to the FETCH breaker only, exactly as before the
+			// breaker: the error is persisted on the remote record, broadcast,
+			// and counted toward escalation and the fetch breaker. The push is
+			// not attempted and is NOT a push failure.
+			//
+			// While the fetch breaker is open (only the push is due), an auth
+			// failure is charged to nothing: the push is skipped with a Debug
+			// line, with no broadcast and no push-breaker charge. Resolution is
+			// local, so there is no network retry to bound; and a push_error
+			// broadcast here would raise a banner no push_ok ever lowers, since
+			// no push status row records it (the recovery edge reads that row).
 			if fetchDue {
 				syncFails++
 				if serr := svc.Remote().RecordSyncError("origin", authErr.Error()); serr != nil {
@@ -377,10 +380,7 @@ func runReconcileLoop(ctx context.Context, wg *sync.WaitGroup, svc *store.Servic
 				recordStep("fetch", &fetchBrk, false, base)
 				return
 			}
-			pushFails++
-			hub.broadcastPushError("origin", authErr.Error())
-			logFailure(pushFails).Err(authErr).Msg("reconcile: auth resolution failed; push not attempted")
-			recordStep("push", &pushBrk, false, base)
+			lg.Debug().Err(authErr).Msg("reconcile: auth resolution failed while the fetch breaker is open; push skipped")
 			return
 		}
 
