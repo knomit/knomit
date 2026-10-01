@@ -540,3 +540,141 @@ func TestMission_DecideRechecksCapacity(t *testing.T) {
 	requireNoFailedFires(t, h, p)
 	requireNoRefusal(t, h)
 }
+
+// ---- review follow-ups (N1, N2, N3)
+
+// TestMission_DupCheckSeesActiveCopy is the case dup-check was widened to
+// `inbox/**` for: a double take where the higher-ranked taker (P) moves its
+// copy into active/ BEFORE the other machine (H) ever sees its working/ copy.
+// H then only ever sees a learn under active/, and only H's own dup-check can
+// make H back off. After the exchanges one copy remains everywhere: P's
+// active one.
+//
+// SABOTAGE: dup-check matching `inbox/*/working/**` again → H never fires on
+// P's active copy and keeps its working copy → red.
+func TestMission_DupCheckSeesActiveCopy(t *testing.T) {
+	clock := newMissionClock(t)
+	h, url := newMissionHost(t, nil)
+	p := newMissionPeer(t, url)
+	id := taskIDWonBy(t, mPeerID)
+	postTask(t, h, clock, id, "Sweep the stale branches.")
+	h.ri.QuiesceTriggersForTest(t)
+	h.advance(t)
+	p.sync(t) // P claims, but does not push: H decides on its own claim alone
+	clock.add(window + time.Second)
+	tick(t, h, p)
+	hWC := workingCopies(h.paths(t, h.branch, "kb/"))
+	pWC := workingCopies(p.paths(t, p.branch, "kb/"))
+	require.Len(t, hWC, 1, "H took")
+	require.Len(t, pWC, 1, "P took")
+	require.Equal(t, mPeerID, strings.Split(pWC[0], "/")[2])
+
+	// P's session takes its copy before anything reaches H.
+	waitRecipeDone(t, p, "wake", pWC[0])
+	active, isErr, text := p.take(t, pWC[0], mPeerID, clock.now().Add(time.Hour))
+	require.False(t, isErr, text)
+	p.ri.QuiesceTriggersForTest(t)
+
+	for i := 0; i < 3; i++ {
+		exchange(t, h, p)
+	}
+	for _, at := range branchesOf(t, h, p) {
+		require.Equal(t, []string{active}, at.n.paths(t, at.branch, "kb/inbox/"),
+			"%s: the lower-ranked holder backed off; P's active copy stays", at.where)
+	}
+	require.Positive(t, firesOf(t, h, "dup-check", active, store.TriggerOutcomeRan),
+		"H's dup-check ran on P's active copy, the only copy of P's it ever saw")
+	for _, f := range h.fires(t) {
+		require.NotEqual(t, pWC[0], f.Path, "H never saw P's working copy: %+v", f)
+	}
+	requireNoFailedFires(t, h, p)
+	requireNoRefusal(t, h)
+}
+
+// runRecipeStub runs the SHIPPED recipe in a plain goja runtime with stub
+// globals: the woken copy is live or not, the queue holds a copy or not. It
+// returns the recipe's result and the programs it touched, in order
+// ("update" for the lease re-arm, then argv[0] of each exec).
+func runRecipeStub(t *testing.T, live, queued bool) (map[string]any, []string) {
+	t.Helper()
+	vm := goja.New()
+	_, err := vm.RunString(fmt.Sprintf(`
+var calls = [];
+var task_path = "kb/inbox/a-1/working/x.md";
+var agent = {id: "a-1"};
+var change = {commit: "0123456789abcdef0123456789abcdef01234567", trace: "task-x"};
+var run = {id: "run-0123456789abcdef0123456789abcdef"};
+var fact = {entities: ["task-x"]};
+var mcp = {server: "knomit-repo-m", config: JSON.stringify({mcpServers: {"knomit-repo-m": {command: "kb", args: ["--repo", "m"]}}})};
+var LIVE = %v, QUEUED = %v;
+var knomit = {
+  query: function (a) {
+    if (a.path === task_path) { return {facts: LIVE ? [{file: task_path}] : []}; }
+    if (a.path === "kb/inbox/a-1/working/") { return {facts: QUEUED ? [{file: "kb/inbox/a-1/working/y.md"}] : []}; }
+    return {facts: []};
+  },
+  update: function (p, u) { calls.push("update"); if (!LIVE) { throw new Error("gone"); } },
+  exec: function (argv, o) {
+    calls.push(argv[0]);
+    if (argv[0] === "mktemp") { return {exit: 0, stdout: "/tmp/session\n", stderr: ""}; }
+    return {exit: 0, stdout: "", stderr: ""};
+  }
+};`, live, queued))
+	require.NoError(t, err)
+	v, err := vm.RunString(templateFiles(t)[".knomit/recipes/work-task.js"])
+	require.NoError(t, err)
+	res, ok := v.Export().(map[string]any)
+	require.True(t, ok, "the recipe ends with its result object: %v", v)
+	var calls []string
+	require.NoError(t, vm.ExportTo(vm.Get("calls"), &calls))
+	return res, calls
+}
+
+// TestMissionTemplate_RecipeStartsOnlyWhenQueued pins the recipe's one
+// branch, both ways: no session when the woken copy is gone AND the queue is
+// empty; a session whenever either holds work — including a gone copy with a
+// queue behind it (a session still draining took the copy, but more work
+// waits).
+//
+// SABOTAGE: skip claude whenever the woken copy is gone, queue or not → red;
+// start claude even with nothing queued → red.
+func TestMissionTemplate_RecipeStartsOnlyWhenQueued(t *testing.T) {
+	res, calls := runRecipeStub(t, false, false)
+	require.Equal(t, "nothing queued", res["message"])
+	require.Empty(t, calls, "no update, no mktemp, no claude")
+
+	for _, c := range []struct{ live, queued bool }{{false, true}, {true, false}, {true, true}} {
+		res, calls := runRecipeStub(t, c.live, c.queued)
+		require.Equal(t, "done", res["status"], "%+v", c)
+		require.Equal(t, []string{"update", "mktemp", "claude", "rm"}, calls, "%+v: re-arm, folder, session, cleanup", c)
+	}
+}
+
+// TestMission_BacklogCountsActiveCopies: a machine whose backlog is full of
+// copies its sessions already took (all in active/, none in working/) neither
+// bids for an offer nor claims a task.
+//
+// SABOTAGE: bid (or offer) counting working/ only → P bids (or claims) → red.
+func TestMission_BacklogCountsActiveCopies(t *testing.T) {
+	clock := newMissionClock(t)
+	h, _ := newMissionHost(t, nil)
+	p := newMissionPeer(t, h.url)
+	capacity, err := strconv.Atoi(jsVar(t, templateFiles(t)[".knomit/triggers/awards.js"], "CAPACITY"))
+	require.NoError(t, err)
+	for i := 0; i < capacity; i++ {
+		w := p.post(t, signal("inbox", mPeerID+"/working", "Busy", "x", fmt.Sprintf("task-busy-%d", i), clock.now().Add(lease)))
+		p.ri.QuiesceTriggersForTest(t)
+		waitRecipeDone(t, p, "wake", w)
+		_, isErr, text := p.take(t, w, mPeerID, clock.now().Add(time.Hour))
+		require.False(t, isErr, text)
+	}
+	require.Empty(t, p.paths(t, p.branch, "kb/inbox/"+mPeerID+"/working/"), "the queue is empty")
+	require.Len(t, p.paths(t, p.branch, "kb/inbox/"+mPeerID+"/active/"), capacity, "the backlog is all active")
+
+	p.post(t, signal("offers", mHostID+"/lane-a", "Offer", "Review it.", "task-offer-full", clock.now().Add(time.Hour)))
+	postTask(t, p, clock, "task-claim-full", "Claim it.")
+	p.ri.QuiesceTriggersForTest(t)
+	require.Empty(t, p.paths(t, p.branch, "kb/bids/"), "a full backlog does not bid")
+	require.Empty(t, p.paths(t, p.branch, "kb/claims/"), "a full backlog does not claim")
+	requireNoFailedFires(t, p)
+}
