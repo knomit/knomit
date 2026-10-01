@@ -153,7 +153,7 @@ func TestAgentTrace_E2E_ReviewStartAndAnswerStampTheirWrites(t *testing.T) {
 		if traced {
 			require.True(t, strings.HasSuffix(msg, want), "%q", msg)
 		} else {
-			require.NotContains(t, msg, "Knomit-", "%q", msg)
+			require.NotContains(t, msg, "\n\n", "no trace passed: no paragraph of any kind after the message (D-mint): %q", msg)
 		}
 	}
 

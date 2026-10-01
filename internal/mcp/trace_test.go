@@ -301,5 +301,5 @@ func TestTrace_HypothesizeAnswerStampsItsWrite(t *testing.T) {
 	require.False(t, isErr, text)
 	h2, msg := headMsg()
 	require.NotEqual(t, h, h2, "fixture: the second answer writes too")
-	require.NotContains(t, msg, "Knomit-", "no trace passed, nothing stamped")
+	require.NotContains(t, msg, "\n\n", "no trace passed: no paragraph of any kind (D-mint): %q", msg)
 }

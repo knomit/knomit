@@ -107,18 +107,22 @@ func TestAgentTrace_E2E_StampsEachWriteAndNothingWithout(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(text), &rt), text)
 		retractMsg := commitMessageIn(t, m, "jobA-repo", rt.Commit)
 
+		// The EXACT message each tool writes on its own. Untraced, that is the
+		// whole message — no paragraph of any key, Knomit- or not (D-mint);
+		// traced, it is followed by exactly the trace paragraph.
+		bare := map[string]string{
+			"learn":   "learn: session work",
+			"update":  "update: Fact one " + suffix,
+			"move":    "move: session work",
+			"retract": "retract(session work): " + file2,
+		}
 		for name, msg := range map[string]string{"learn": learnMsg, "update": updateMsg, "move": moveMsg, "retract": retractMsg} {
 			if traced {
-				require.True(t, strings.HasSuffix(msg, want), "%s: %q", name, msg)
-				require.Equal(t, 1, strings.Count(msg, "Knomit-Trace:"), "%s: one paragraph", name)
+				require.Equal(t, bare[name]+want, msg, "%s: the tool's message plus exactly the trace paragraph", name)
 				require.Equal(t, "task-7f3a", store.TrailerValue(msg, store.TrailerTrace), name)
 				require.Equal(t, e2eRun, store.TrailerValue(msg, store.TrailerRun), name)
 			} else {
-				require.NotContains(t, msg, "Knomit-", "%s: D-mint — no trace passed, nothing stamped", name)
-				require.NotContains(t, msg, "Ticket", name)
-				for _, k := range []string{store.TrailerTrace, store.TrailerCause, store.TrailerTrigger, store.TrailerRun} {
-					require.Equal(t, "", store.TrailerValue(msg, k), "%s: %s", name, k)
-				}
+				require.Equal(t, bare[name], msg, "%s: D-mint — no trace passed, no paragraph of any kind", name)
 			}
 		}
 	}
