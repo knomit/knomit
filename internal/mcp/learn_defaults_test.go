@@ -95,9 +95,30 @@ func TestMergeFacts_TransfersLoserSources(t *testing.T) {
 	incoming.Title, incoming.Body, incoming.Type = "N", "nb", fact.Observation
 	incoming.Confidence, incoming.Sources = 0.5, 3
 
+	// Distinct refs: the incoming fact brings evidence the existing one lacks,
+	// so it counts (#361).
+	existing.Refs = []string{"https://example.org/a"}
+	incoming.Refs = []string{"https://example.org/b"}
+
 	merged := mergeFacts(incoming, existing, testLocalID)
 	require.Equal(t, 5, merged.Sources,
 		"a dedup merge leaves one file, so both facts' corroborations must pool into it")
+}
+
+// TestMergeFacts_RefLessMergeDoesNotTransfer is the counterpart: with no refs
+// the code cannot tell two independent agents from one agent repeating itself,
+// so the incoming count is NOT pooled (#361).
+func TestMergeFacts_RefLessMergeDoesNotTransfer(t *testing.T) {
+	existing := fact.NewFact("kb/tech/foo.md")
+	existing.Title, existing.Body, existing.Type = "E", "eb", fact.Observation
+	existing.Confidence, existing.Sources = 0.9, 2
+
+	incoming := fact.NewFact("kb/tech/new.md")
+	incoming.Title, incoming.Body, incoming.Type = "N", "nb", fact.Observation
+	incoming.Confidence, incoming.Sources = 0.5, 3
+
+	merged := mergeFacts(incoming, existing, testLocalID)
+	require.Equal(t, 2, merged.Sources)
 }
 
 // TestSubsumeHypothesis_DoesNotPoolHypothesisSources pins the asymmetry that

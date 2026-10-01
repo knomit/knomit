@@ -174,18 +174,22 @@ func applyReinforcements(
 		// canonical form so a bare-path existing ref and its canonical seed do
 		// not both land.
 		canonSeeds, _ := gate.Canonicalize(seeds)
-		canonPrior, _ := gate.Canonicalize(prior)
-		have := make(map[string]struct{}, len(canonPrior))
-		for _, ref := range canonPrior {
-			have[ref] = struct{}{}
+		// Membership is by shared ref identity (fact.RefIdentity), the same
+		// key the learn dedup merge uses (#361). Seeds are local fact refs, for
+		// which it is the canonical path — what the canonical-string test
+		// compared before.
+		have := make(map[string]struct{}, len(prior))
+		for _, ref := range prior {
+			have[fact.RefIdentity(ref, localRepoID)] = struct{}{}
 		}
 		newRefs := append([]string(nil), f.Refs...)
 		added := 0
 		for _, ref := range canonSeeds {
-			if _, dup := have[ref]; dup {
+			key := fact.RefIdentity(ref, localRepoID)
+			if _, dup := have[key]; dup {
 				continue // already a derivation path of this fact, in some form
 			}
-			have[ref] = struct{}{}
+			have[key] = struct{}{}
 			newRefs = append(newRefs, ref)
 			added++
 		}

@@ -195,7 +195,7 @@ func TestLearnHandler_MotifsSurviveDedupMergeAcrossSessions(t *testing.T) {
 	// the test would pass while proving nothing about the merge at all.
 	require.Equal(t, seedPath, mergedPath,
 		"session N+1 must have merged INTO the seed, not landed at its own path")
-	require.Equal(t, 2, merged.Sources, "a merge sums sources")
+	require.Equal(t, 1, merged.Sources, "a ref-less merge does not count (#361): sources stay at the existing 1")
 	require.Equal(t, 0.9, merged.Confidence, "the new fact must have won the merge")
 
 	require.Equal(t,
@@ -224,7 +224,7 @@ func TestLearnHandler_MotifsMergeWinnerFirstOnDisk(t *testing.T) {
 	mergedPath := mergedFactPath(t, r2)
 	require.Equal(t, mergedFactPath(t, r1), mergedPath, "the two writes must have merged")
 	merged := readFactAt(t, riFrom(t, ctx), mergedPath)
-	require.Equal(t, 2, merged.Sources, "a merge sums sources")
+	require.Equal(t, 1, merged.Sources, "a ref-less merge does not count (#361): sources stay at the existing 1")
 	require.Equal(t, []string{"silent-fallback", "config-drift"}, merged.Motifs,
 		"winner first, then the loser's — on disk, not just in memory")
 }
