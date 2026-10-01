@@ -77,24 +77,39 @@ topics:
         script: claims
 
   inbox:
-    description: Per-agent queues. inbox/<agent-id>/working/ holds the tasks an agent took or was assigned.
+    description: Per-agent queues. inbox/<agent-id>/working/ is the queue (tasks an agent took or was assigned); inbox/<agent-id>/active/ holds the copies a session has taken from it. expires is a lease, never a deadline.
     attributes:
       learn_dedup: off
     validations:
       - name: signal
         message: the inbox holds signals only
         rule: "fact.type === 'signal'"
+      - name: expires
+        message: a working copy must carry expires (its lease; README "The queue")
+        rule: "typeof fact.expires === 'string' && fact.expires !== ''"
     triggers:
-      # The backstop: two working copies of one task -> the lower-ranked one backs off.
+      # The backstop: two copies (working or active) of one task -> the
+      # lower-ranked holder backs off.
       - name: dup-check
         on: learn
-        match: "inbox/*/working/**"
+        match: "inbox/**"
         do: script
         script: claims
-      # Wake a session for my new work (taken or assigned).
+      # Wake a session for my new work (taken or assigned). A session drains
+      # the whole queue, so a wake dropped as busy is covered by the session
+      # already running, or by `lease` below.
       - name: wake
         on: learn
         match: "inbox/{agent}/working/**"
+        do: run
+        recipe: work-task
+      # The safety net: a copy still here when its lease runs out (a wake
+      # that was dropped, a session that died) wakes a session again. A due
+      # fire dropped as busy is retried at every sweep. Never a retract: the
+      # copy stays until a session acknowledges it.
+      - name: lease
+        on: due
+        match: "inbox/{agent}/**"
         do: run
         recipe: work-task
 

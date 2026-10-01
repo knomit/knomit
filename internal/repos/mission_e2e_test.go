@@ -63,7 +63,13 @@ const (
 	// missionTriggers is how many triggers the shipped template declares.
 	// None is `do: push`: the template's `sync: {push: realtime}` sends every
 	// commit on the agent branch instead.
-	missionTriggers = 10
+	missionTriggers = 11
+
+	// lease is the template's LEASE_SECONDS (claims.js and awards.js): how
+	// long a working copy may wait before the `lease` trigger wakes a
+	// session for it. Read back from the shipped files by
+	// TestMissionTemplate_Lease.
+	lease = 300 * time.Second
 )
 
 // templateDir is the shipped template, relative to this package.
@@ -124,30 +130,33 @@ func newMissionClock(t *testing.T) *missionClock {
 	return c
 }
 
-// fakeClaude puts the test binary on PATH as `claude` and returns the
-// directory its reports land in.
+// fakeClaude puts the test binary on PATH as `claude`, and as the two other
+// tools the shipped recipe runs, `mktemp` and `rm` (the helper acts by the
+// name it was started under), and returns the directory their reports land
+// in. Every external program the recipe starts is then the test's own.
 func fakeClaude(t *testing.T) string {
 	t.Helper()
 	self, err := os.Executable()
 	require.NoError(t, err)
 	bin := t.TempDir()
-	name := "claude"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	dst := filepath.Join(bin, name)
-	// A hard link is cheap, but on Windows it names the RUNNING test binary,
-	// which cannot be deleted, and t.TempDir's cleanup then fails the test.
-	// There, and wherever linking fails, copy.
-	if runtime.GOOS == "windows" || os.Link(self, dst) != nil {
-		src, err := os.Open(self)
-		require.NoError(t, err)
-		defer src.Close()
-		out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-		require.NoError(t, err)
-		_, err = io.Copy(out, src)
-		require.NoError(t, err)
-		require.NoError(t, out.Close())
+	for _, name := range []string{"claude", "mktemp", "rm"} {
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		dst := filepath.Join(bin, name)
+		// A hard link is cheap, but on Windows it names the RUNNING test
+		// binary, which cannot be deleted, and t.TempDir's cleanup then fails
+		// the test. There, and wherever linking fails, copy.
+		if runtime.GOOS == "windows" || os.Link(self, dst) != nil {
+			src, err := os.Open(self)
+			require.NoError(t, err)
+			out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+			require.NoError(t, err)
+			_, err = io.Copy(out, src)
+			require.NoError(t, err)
+			require.NoError(t, out.Close())
+			require.NoError(t, src.Close())
+		}
 	}
 	reports := t.TempDir()
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -617,13 +626,8 @@ func TestMission_OneTaskTwoClaimersOneTakes(t *testing.T) {
 			require.Contains(t, strings.Join(claudeRuns(t)[0], " "), working)
 			// #349: the prompt hands the session the task's trace — the task
 			// id, which the claims script's take carried forward — to pass on
-			// every write, as a JSON literal.
-			argv := claudeRuns(t)[0]
-			prompt := argv[len(argv)-1]
-			i, j := strings.LastIndex(prompt, "{"), strings.LastIndex(prompt, "}")
-			require.True(t, i >= 0 && j > i, "no trace in the prompt: %q", prompt)
-			var trace map[string]string
-			require.NoError(t, json.Unmarshal([]byte(prompt[i:j+1]), &trace), prompt)
+			// every write, inside its JSON context literal.
+			trace := contextOf(t, claudeRuns(t)[0]).Trace
 			require.Equal(t, id, trace["Knomit-Trace"], "the session's trace is the task id")
 			require.Regexp(t, `^run-[0-9a-f]{32}$`, trace["Knomit-Run"])
 			require.Regexp(t, `^[0-9a-f]{40}$`, trace["Knomit-Cause"])

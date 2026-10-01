@@ -18,8 +18,8 @@ files on two instances, so they do not rot.
 | `.knomit/triggers/claims.js` | Pattern 1, claim / wait / take: `offer`, `decide`, `dup-check`. |
 | `.knomit/triggers/awards.js` | Pattern 2, host-awarded: `bid`, `award`, `take-award`. |
 | `.knomit/skills/post-task/SKILL.md` | How a session posts a task. |
-| `.knomit/skills/work-task/SKILL.md` | How a session works a task and acknowledges it. |
-| `.knomit/recipes/work-task.js` | The sample recipe the `wake` trigger runs: one headless Claude Code session per task. |
+| `.knomit/skills/work-task/SKILL.md` | How a session drains its queue: take each copy, work it in a knowledge-base experiment, acknowledge it. |
+| `.knomit/recipes/work-task.js` | The sample recipe the `wake` and `lease` triggers run: one headless Claude Code session that drains the queue. |
 
 ## Copy it
 
@@ -158,8 +158,8 @@ is harder to follow.
 ## Two ways to take a task
 
 A task that is assigned to one agent is posted straight into that agent's
-queue, `inbox/<agent-id>/working/`. It is never claimed, and it wakes that
-agent only. Generally available work needs a way to decide who takes it. The
+queue, `inbox/<agent-id>/working/`, with a lease in `expires` (see "The
+queue"). It is never claimed, and it wakes that agent only. Generally available work needs a way to decide who takes it. The
 template ships both patterns below; no knomit code picks one. Keep the topics
 of the one you use and delete the other's.
 
@@ -182,8 +182,11 @@ of the one you use and delete the other's.
    claim. Otherwise rank every live claim by FNV-1a of `task|agent-id`, with
    ties broken by the agent id. Every machine computes the same order.
 4. **Take.** The first-ranked claimer takes with ONE atomic move: it writes
-   its working copy, and deletes the task and its own claims, in one commit.
-   Either all of it lands or none of it does.
+   its working copy (with its lease), and deletes the task and its own
+   claims, in one commit. Either all of it lands or none of it does. Before
+   the move it counts its backlog again: if it filled up since the claim
+   (assigned work, another take), it withdraws its claim instead, and the
+   next claimer by rank takes at its next decide.
 5. **Lose.** Everyone else re-arms its claim for one more window. At the next
    decide it sees the take and withdraws. If the winner never takes (it
    crashed), its claim ages more than 2X past its `expires`, stops ranking,
@@ -210,9 +213,11 @@ the work may have started twice. Directly assigned tasks never race.
    offer". A second award for the same offer finds the offer gone and is
    refused as a whole, under the awarder's own branch lock. One writer and one
    precondition make it exactly once.
-4. **Take.** The winner moves the award into `inbox/<agent-id>/working/`,
-   deleting its bid in the same commit. A losing bid is withdrawn when it
-   expires (`withdraw-bid`, an inline script).
+4. **Take.** The winner moves the award into `inbox/<agent-id>/working/`
+   (with its lease), deleting its bid in the same commit. It takes it even
+   over capacity: the award already deleted the offer, so refusing it would
+   lose the task, and the extra copy just waits in the queue. A losing bid is
+   withdrawn when it expires (`withdraw-bid`, an inline script).
 
 ## The timing rule
 
@@ -285,28 +290,138 @@ There is no `do: push` trigger in the template: `push: realtime` already
 sends every commit on an instance's own agent branch, and only a round's
 fetch brings the others' claims in.
 
-## Waking a session
+## The queue
 
-`wake` runs the recipe `work-task` (`.knomit/recipes/work-task.js`) on the
-machine a working copy belongs to. That covers tasks it took and tasks
-assigned to it. Recipes are read from the tip of the repo's consensus branch
-(a `<home>/recipes/work-task.js` on that machine is the fallback), so a
-recipe change takes effect once it is merged there.
+`inbox/<agent-id>/` is a queue, and a session consumes it.
 
-The sample starts `claude -p` with this repo's MCP server and a prompt that
-names the working copy by PATH and says: call the `knomit_skill` tool with
-name `work-task` and follow it. The task's text never enters argv or the
-prompt; the session reads it through knomit. Change the argv for another
-harness, and keep the task out of it.
+- **`working/`** holds the copies this machine took or was assigned and no
+  session has started yet.
+- **`active/`** holds the copies a session has taken. A session takes a copy
+  with ONE move: it writes the copy into `active/` and deletes it from
+  `working/`, in one commit. A second session making the same move is
+  refused, because the copy it would delete is already gone, so two sessions
+  never work one copy.
+- **The ack** is the last move: write `acks/<task-id>/` and delete the
+  `active/` copy, in one commit. A failed task is acknowledged too ("Failed:
+  …"), so the queue always moves on.
 
-The prompt also hands the session a `trace`: `Knomit-Cause` (the commit that
-fired), `Knomit-Run` (this run's id) and `Knomit-Trace` (the task id, included
-only when it is a plain id), as a JSON literal. The `work-task` skill tells the
+**One session drains the queue.** `wake` starts a session when a copy lands
+in `working/`. The `work-task` skill then takes EVERY copy in `working/`, one
+at a time, and stops only when a query of `working/` comes back empty after
+its last ack. The copy that woke it is only where it starts. So a wake that
+is dropped because a session is already running (a recipe at its
+`concurrent` limit drops the fire with a `busy` row; there is no queue in
+knomit) loses nothing while that session runs.
+
+**The lease is the safety net.** Every copy in the inbox carries `expires`
+(the ontology refuses one without it). It is a LEASE, never a deadline:
+nothing retracts a copy because its lease ran out. The `lease` trigger (`on:
+due`, `match: inbox/{agent}/**`) runs the same recipe when a copy is still
+there at its lease:
+
+- A copy that landed after the running session's last look, and whose wake
+  was dropped as `busy`: its lease runs out, and a session starts for it. A
+  due fire dropped as `busy` is retried at every sweep until the slot is
+  free (a learn fire is not).
+- A copy whose session died (killed at its timeout, a crash): the copy's
+  lease runs out, and a session starts again for it.
+
+The leases:
+- **A copy in `working/`**: `LEASE_SECONDS` (300 s) from its take, in both
+  scripts. An assigned copy gets the lease its poster sets (the `post-task`
+  skill says about 5 minutes).
+- **When a session starts**, the recipe pushes the lease of the copy that
+  woke it out to the session's end (the recipe's `timeout_ms` plus a
+  minute), and a session writes that same lease on every copy it takes
+  into `active/`. A due fire that started a session counts as processed, so
+  this is what makes the copy fire again if that session dies.
+- **An acknowledged copy** is gone, so it never fires.
+
+The tradeoff is the length of the working lease. Shorter picks up a dropped
+copy sooner. But while a session runs, every copy waiting past its lease
+logs a `busy` row on every sweep (each tick and each write) until the
+session takes it, and the fire log keeps 10,000 rows per repo. 300 s is a
+few minutes' latency in the rare case, for little log churn in the common
+one.
+
+## Capacity and parallelism
+
+- **`CAPACITY`** (`claims.js`, `awards.js`) is the BACKLOG: how many copies,
+  `working/` and `active/` together, a machine holds before it stops
+  claiming and bidding. `decide` checks it again right before it takes.
+- **`concurrent`** (the recipe's header) is the PARALLELISM: how many
+  sessions run at once on a machine. Each session drains the same queue;
+  the take's move keeps them off each other's copies, so raising it above 1
+  is safe. The template runs 1.
+- The recipe's `timeout_ms` bounds ONE session, and a session drains the
+  whole queue: keep it above the time a full backlog takes, or let the lease
+  restart the rest.
+
+## The session
+
+`.knomit/recipes/work-task.js` starts one headless Claude Code session:
+
+- **In a fresh, empty temporary folder** (`mktemp -d`, the `cwd` of the
+  claude call), removed afterwards. Nothing of this machine's working tree
+  is in reach. `mktemp` and `rm` must be on the PATH knomit runs with; on
+  Windows, run knomit from a shell that has them (Git Bash), or edit the
+  recipe.
+- **With ONE MCP server, unbound**: knomit's bridge `kb` with no `--repo` and
+  no `--lens`, built by the recipe. `kb` reaches THIS knomit through the
+  `KNOMIT_HOME` in the recipe's environment. `--strict-mcp-config` keeps the
+  user's own MCP servers out.
+- **Allowed tools**: that server and `WebFetch`, `WebSearch`. Nothing else.
+- **A budget**: `--max-budget-usd` from `MAX_BUDGET_USD` in the recipe. Set
+  it for your mission before the first run.
+
+The prompt says: bind the mission repo, call the `knomit_skill` tool with
+name `work-task`, follow it. It carries one JSON literal of data: the mission
+repo's name (read from the args of knomit's own MCP entry for this repo, so
+a copy of the template under any name works), the copy's path, its
+experiment name, the session's lease and the trace. The task's text never
+enters argv or the prompt; the session reads it through knomit.
+
+**Two handles.** The session calls `knomit_bind` twice: once for the mission
+repo, once for the knowledge base the task names in its body (`knowledge
+base: repo <name>` or `knowledge base: lens <name>`). It passes the mission
+handle for copies and acks, and the knowledge-base handle for results.
+**The limit:** an unbound session can bind any repo or lens this knomit
+serves. The skill binds only what the task names; a hard limit is to serve
+only what the mission may touch from the knomit that runs the sessions.
+
+**One experiment per task.** The session opens a `knomit_experiment` on the
+knowledge-base handle, named after the task id in strict kebab-case
+(`Task_42.b` → `task-42-b`), does the work there, and commits it before the
+ack, or rolls it back and acknowledges the task as failed. A task's results
+land on the knowledge base whole or not at all. `open` on a name that
+already exists RESUMES it: a task retried after its session died continues
+that session's half-done experiment.
+
+## The trace
+
+The prompt hands the session a `trace`: `Knomit-Cause` (the commit that
+fired), `Knomit-Run` (this run's id) and `Knomit-Trace` (the task id,
+included only when it is a plain id). The `work-task` skill tells the
 session to pass it as the `trace` argument on every knomit write for that
-working copy, so a task's story (the trigger scripts' writes, the session's
-results and the ack) reads back with `git log --all --grep='^Knomit-Trace: <task id>'`
-(or `--grep='^Knomit-Run: <run id>'` for one run). A write the session makes
-without it is simply untraced.
+copy (the take, the results, the ack), so a task's story (the trigger
+scripts' writes, the session's results and the ack) reads back with
+`git log --all --grep='^Knomit-Trace: <task id>'` (or
+`--grep='^Knomit-Run: <run id>'` for one run). For every other copy it takes,
+the session builds the trace itself: `Knomit-Trace` = that copy's task id,
+the same `Knomit-Run`, and no `Knomit-Cause`.
+
+**Known gaps:** a write the session makes without the trace is untraced, and
+`knomit_experiment` takes no trace, so the merge commit that lands an
+experiment on the knowledge base carries none (the fact commits inside it
+keep theirs).
+
+## Re-offering
+
+knomit never re-offers a task. A task that expired with nobody taking it,
+or whose ack says "Failed:", is the coordinator's decision. To offer it
+again, the coordinator posts it again under a NEW task id, in one
+`knomit_learn` that also retracts the old task if it is still there. No
+script is needed.
 
 ## Skills
 
@@ -316,9 +431,10 @@ tip of the consensus branch: as MCP prompts (slash commands), and through the
 them. Nothing is installed into any harness.
 
 - `post-task`: how to post a task, an offer, or an assigned task.
-- `work-task`: read the working copy, check it is still yours, do the work,
-  write the results to the knowledge base, then acknowledge with one move
-  (write `acks/<task-id>/`, delete the working copy).
+- `work-task`: drain the queue. For each copy: take it (one move into
+  `active/`), do the work in a knowledge-base experiment, commit it, then
+  acknowledge with one move (write `acks/<task-id>/`, delete the `active/`
+  copy). Stop when `working/` is empty.
 
 ## Editing the template
 

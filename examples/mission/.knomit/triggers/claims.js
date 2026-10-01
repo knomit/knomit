@@ -4,12 +4,13 @@
 // One script, three triggers (.knomit/ontology.yaml):
 //   offer     on learn of tasks/**                  -> claim the task
 //   decide    on due   of claims/*/{agent}/**       -> my claim's window is over
-//   dup-check on learn of inbox/*/working/**        -> two working copies of one task
+//   dup-check on learn of inbox/**                   -> two copies of one task
 //
 // Paths (under the ontology root, usually kb/):
 //   tasks/<lane>/<id>.md                      one entity: the task id
 //   claims/<task-id>/<agent-id>/<id>.md       expires = the claim's timer
-//   inbox/<agent-id>/working/<id>.md          a task being worked on
+//   inbox/<agent-id>/working/<id>.md          the queue: taken, not started
+//   inbox/<agent-id>/active/<id>.md           taken by a session (work-task skill)
 //
 // Every machine ranks claimers the same way (rank below), so every machine
 // that holds the same claims picks the same winner. The winner takes with the
@@ -25,8 +26,15 @@
 // forge) X must be raised (README). The dead-winner threshold is 2X.
 var WINDOW_SECONDS = 15;
 
-// How many working copies this machine holds before it stops claiming.
+// The BACKLOG: how many copies (working + active) this machine holds before
+// it stops claiming, and before decide stops taking. How many sessions run
+// at once is the recipe's `concurrent` (README "Capacity and parallelism").
 var CAPACITY = 2;
+
+// A working copy's lease, in seconds (README "The queue"): if no session has
+// taken the copy by then, the `lease` trigger wakes one. It is never an
+// expiry: nothing retracts a copy because its lease ran out.
+var LEASE_SECONDS = 300;
 
 // ---- helpers
 
@@ -118,6 +126,19 @@ function unique(list) {
   });
 }
 
+// Every copy this machine holds: the queue and the copies sessions took.
+function held() {
+  return under(root() + "/inbox/" + agent.id + "/").length;
+}
+
+// Copies of one task anywhere in the inbox (working or active), any holder.
+function copiesOf(task) {
+  return under(root() + "/inbox/", [task]).filter(function (f) {
+    var s = seg(f.file, 3);
+    return s === "working" || s === "active";
+  });
+}
+
 // ---- offer: a new task appeared; claim it
 
 function offer() {
@@ -126,8 +147,7 @@ function offer() {
     return;
   }
   var r = root();
-  var working = under(r + "/inbox/" + agent.id + "/working/");
-  if (working.length >= CAPACITY) {
+  if (held() >= CAPACITY) {
     return;
   }
   if (under(r + "/claims/" + task + "/" + agent.id + "/").length > 0) {
@@ -158,9 +178,7 @@ function decide() {
 
   // 1. The task is gone (taken, expired) or somebody already works on it:
   //    withdraw my claim.
-  var holders = under(r + "/inbox/", [task]).filter(function (f) {
-    return seg(f.file, 3) === "working";
-  });
+  var holders = copiesOf(task);
   if (!exists(taskPath) || holders.length > 0) {
     knomit.retract(mine);
     return;
@@ -182,7 +200,7 @@ function decide() {
   // 3. The first live claimer, by rank.
   var winner = firstOf(task, unique(live.map(function (c) { return c.id; })));
 
-  // 5. Not first: wait one more window. Re-arming expires re-arms this
+  // 4. Not first: wait one more window. Re-arming expires re-arms this
   //    trigger. If the winner takes, step 1 withdraws my claim at my next
   //    decide; if it never does, its claim ages past 2X and I become first.
   if (winner !== agent.id) {
@@ -190,8 +208,17 @@ function decide() {
     return;
   }
 
-  // 4. First: take. One commit writes my working copy and deletes the task,
-  //    my own claims and any dead claims, or none of it happens.
+  // 5. First, but full: the backlog filled up since I claimed (assigned
+  //    work, another take). Withdraw; the next claimer by rank takes at its
+  //    next decide.
+  if (held() >= CAPACITY) {
+    knomit.retract(mine);
+    return;
+  }
+
+  // 6. First: take. One commit writes my working copy (with its lease) and
+  //    deletes the task, my own claims and any dead claims, or none of it
+  //    happens.
   var retract = [taskPath];
   claims.forEach(function (c) {
     if (c.id === agent.id || dead.indexOf(c) >= 0) {
@@ -208,6 +235,7 @@ function decide() {
       title: src.title,
       body: src.body + "\n\ntask: " + taskPath + "\ntaker: " + agent.id + "\n",
       entities: [task],
+      expires: iso(now + LEASE_SECONDS * 1000),
       confidence: 1,
       sources: 1
     }, {retract: unique(retract)});
@@ -223,14 +251,11 @@ function decide() {
   }
 }
 
-// ---- dup-check: two working copies of one task (the backstop)
+// ---- dup-check: two copies of one task (the backstop)
 
 function dupCheck() {
-  var r = root();
   var task = fact.entities[0];
-  var copies = under(r + "/inbox/", [task]).filter(function (f) {
-    return seg(f.file, 3) === "working";
-  });
+  var copies = copiesOf(task);
   var mine = copies.filter(function (f) { return seg(f.file, 2) === agent.id; });
   if (copies.length < 2 || mine.length === 0) {
     return;
