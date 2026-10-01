@@ -14,7 +14,7 @@ files on two instances, so they do not rot.
 
 | File | What it does |
 |---|---|
-| `.knomit/ontology.yaml` | Topics, validations (signals only), the repo settings (`consensus`, `conflicts`) and every trigger. |
+| `.knomit/ontology.yaml` | Topics, validations (signals only), the repo settings (`consensus`, `conflicts`, `sync`) and every trigger. |
 | `.knomit/triggers/claims.js` | Pattern 1, claim / wait / take: `offer`, `decide`, `dup-check`. |
 | `.knomit/triggers/awards.js` | Pattern 2, host-awarded: `bid`, `award`, `take-award`. |
 | `.knomit/skills/post-task/SKILL.md` | How a session posts a task. |
@@ -50,7 +50,16 @@ One instance hosts the repo; the others are its peers.
 3. `consensus: auto` (already in the ontology) makes the host merge every
    branch a peer pushes, as soon as the push lands, into its own agent branch;
    its consensus branch follows within about a second. Peers pick it up at
-   their next sync.
+   their next sync round.
+4. `sync: {push: realtime, pull: realtime}` (also in the ontology) makes
+   that round frequent. Every commit on an instance's own agent branch goes
+   out about 1 s after it lands, and every instance runs a sync round every
+   `[git].realtime_pull_interval` (`knomit.toml`, 3 s by default) instead of
+   every 300 s. On the host, which has no origin, that round is its local
+   round: it fast-forwards the consensus branch and runs the `on: due` sweep.
+   A host with `[git].local_reconcile_interval = 0` runs no local rounds at
+   all, so nothing there fires a decide or moves the consensus branch on a
+   timer; keep it above 0.
 
 ### GitHub-hosted (or GitLab, or any forge)
 
@@ -65,7 +74,33 @@ attributes:
   conflicts:
     facts: merge
     state: consensus
+  sync:
+    push: realtime
+    pull: realtime
 ```
+
+**`sync` against GitHub costs requests.** GitHub's documented recommendations
+(docs.github.com, "Repository limits") are at most **15 git reads per second
+per repository** and at most **6 pushes per minute per repository**. GitHub
+publishes no hard limit or abuse threshold for git over HTTPS or SSH, and
+knomit has not tested where one lies.
+
+- `pull: realtime` at the 3 s default is one fetch every 3 s per
+  participant: about **1,200 fetches an hour** each, idle or not. About 45
+  participants on one repository reach the read recommendation on their own.
+- `push: realtime` pushes about 1 s after each commit. A participant that
+  writes steadily can push up to about 30 times a minute, five times the
+  push recommendation from one machine. A mission's writes come in bursts
+  (a claim, a take, an ack), but a busy fleet adds them up.
+- knomit does not detect a GitHub origin and does not refuse it. Real-time
+  sync is meant for knomit-hosted missions. On GitHub, keep it to a small
+  fleet; dropping `sync` puts every write back on the 300 s round, and X
+  must then follow the rule below with that interval.
+
+On a forge, the forge's own merge of an agent branch into the consensus
+branch is part of a claim's travel, and real-time pull does not shorten it.
+Add the time that merge takes (a workflow run is often a minute or more) to
+X; the 15 s in the template is for a knomit-hosted mission.
 
 ## Set it once and forget
 
@@ -75,6 +110,9 @@ attributes:
   conflicts:
     facts: merge
     state: consensus
+  sync:
+    push: realtime
+    pull: realtime
 ```
 
 Set these when the mission repo is created, and do not change them
@@ -84,6 +122,11 @@ round. Nothing reconciles a change made mid-flight.
 
 Under `consensus: auto`, these `conflicts` values are also what an absent
 `conflicts` means. The template writes them out so that the rule is visible.
+
+`sync` needs every participant to run a knomit that knows it (F21, 2026-10).
+An older knomit warns once about the unknown key and keeps syncing every
+300 s, so its claims arrive minutes late and the 15 s window does not hold
+for it: see "The timing rule".
 
 ## Conflicts: merged and recorded, never stalled
 
@@ -131,8 +174,8 @@ of the one you use and delete the other's.
 ### Pattern 1: claim / wait / take
 
 1. **Claim.** When a task arrives, every machine with capacity writes
-   `claims/<task-id>/<agent-id>/` with `expires` = now + X, and pushes it
-   (`push-claim`).
+   `claims/<task-id>/<agent-id>/` with `expires` = now + X. Realtime push
+   sends it out about 1 s later.
 2. **Wait.** The claim's own `expires` is the timer: at it, `decide` runs on
    the claimer's machine only (`{agent}` in its `match`).
 3. **Decide.** If the task is gone or already being worked, withdraw the
@@ -173,36 +216,74 @@ the work may have started twice. Directly assigned tasks never race.
 
 ## The timing rule
 
-**X ≥ the longest sync interval of any participant + the push countdown
-(1 s) + the host's consensus-branch fast-forward (≈1 s after a merge) + one
-due tick.**
+**X ≥ the LARGEST sync round interval of any participant + the push
+countdown (1 s) + the host's merge and consensus-branch fast-forward (≈1 s) +
+one due tick, plus a margin.**
 
-- **Why the interval:** participants see a new task at their own fetch, so
+- **Why the interval:** participants see a new task at their own round, so
   their claims start up to one interval apart. A claim made one interval after
-  mine must reach the consensus branch before my decide.
-- **Why the due tick costs seconds, not an interval:** the due sweep rides the
-  claimer's own sync tick, and that tick fetches and merges BEFORE it sweeps.
-  A decide therefore sees everything the consensus branch held when its tick
-  fetched.
+  mine must reach the consensus branch before my decide. It is the largest
+  interval of ANY participant that counts: one slow peer sets X for everyone.
+- **Why the push countdown and the fast-forward:** under `push: realtime` a
+  claim goes out about 1 s after it is written. The host merges a pushed
+  branch as soon as the push lands, and that merge wakes the host's own round
+  with the same 1 s countdown, which fast-forwards the consensus branch.
+- **Why the due tick costs one interval:** the due sweep rides the claimer's
+  own sync round, and that round fetches and merges BEFORE it sweeps. A
+  decide therefore sees everything the consensus branch held when its round
+  fetched, and runs at most one round after the claim's `expires`.
 - **The dead-winner threshold (2X) must exceed the winner's own due latency.**
-  That latency is up to one sync interval after its claim's `expires`, plus one
+  That latency is up to one interval after its claim's `expires`, plus one
   more interval if its decide was dropped by the script rate cap and retried.
-  With the rule above, X is more than one interval, so 2X is more than two
-  intervals and the constraint holds. A participant with a longer interval
-  must raise X for everyone. Otherwise a live but slow winner is presumed dead,
-  and the re-offer itself causes the double take.
-- **Worked numbers.** A knomit peer syncs with its origin every 300 s (the
-  interval is not configurable today). So X ≥ 300 + 1 + 1 + a few seconds;
-  the template sets **X = 360 s** (`WINDOW_SECONDS` in `claims.js`), and 2X =
-  720 s covers a winner that is up to two intervals late. The hosting
-  instance's own ticks follow its local reconcile interval (30 s by default).
-  On a forge, add the time its merge of an agent branch takes.
-- The losers' re-arm also tolerates an X that was too short: a claim seen late
-  is ranked at the next decide.
+  A participant with a longer interval must raise X for everyone. Otherwise a
+  live but slow winner is presumed dead, and the re-offer itself causes the
+  double take.
 
-The `push-*` triggers shorten the common case (each write goes out within about
-a second), but only a fetch brings the others' claims in. X must still follow
-the rule.
+**Worked numbers** (knomit-hosted, `sync: {push: realtime, pull: realtime}`,
+the default `[git].realtime_pull_interval` of 3 s on every participant):
+
+| Term | Time |
+|---|---|
+| the largest pull interval (N) | 3 s |
+| the push countdown | 1 s |
+| the host's merge, then its fast-forward after the same countdown | ≈1 s |
+| one due tick (one round, every N) | ≤ 3 s |
+| round times on a healthy origin | tens of ms |
+| **floor** | **≈ 8 s** |
+
+The template sets **X = 15 s** (`WINDOW_SECONDS` in `claims.js`), almost 2× the
+floor. 2X = 30 s against a winner's due latency of 2N = 6 s. A test
+(`TestMissionTemplate_TimingRule`) computes the floor from knomit's own
+constants and fails if X drops below 1.5× it.
+
+When the inputs change, X must change with them:
+- **A participant with a longer `realtime_pull_interval`** raises N for
+  everyone: X ≥ 1.5 × (2N + 2 s).
+- **A peer running a knomit older than F21** ignores `sync` and syncs every
+  300 s. Either upgrade it or raise X to the rule with N = 300 s (X ≥ about
+  360 s, the template's old value).
+- **A host with `[git].local_reconcile_interval = 0`** runs no local rounds:
+  no due sweep on a timer and no consensus fast-forward after its own writes.
+  The rule does not hold there; keep the interval above 0.
+- **On a forge**, add the time its merge of an agent branch takes (see
+  "GitHub-hosted").
+
+**This holds only while every participant's origin is healthy.** Against a
+failing origin, one round can take up to 240 s (2 × the 120 s network
+timeout), and after three failures in a row the circuit breaker stops that
+origin from being hammered: it skips the step for 2N (6 s), then doubles on
+every failed probe, up to 30 minutes. Both are far above 2X. A participant
+whose origin is failing sees claims late and sends its own late, so a slow
+winner can be presumed dead and two peers can take the same task. The
+template's backstops cover that case, not the timing rule:
+- **the losers' re-arm:** a loser re-arms its claim each window, so a claim
+  seen late is ranked at the next decide;
+- **the dup-check:** when two working copies of one task meet, the
+  lower-ranked holder deletes its copy. The work may have started twice.
+
+There is no `do: push` trigger in the template: `push: realtime` already
+sends every commit on an instance's own agent branch, and only a round's
+fetch brings the others' claims in.
 
 ## Waking a session
 

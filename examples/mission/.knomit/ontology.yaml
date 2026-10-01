@@ -11,11 +11,21 @@ description: Coordination signals for one mission (tasks, claims, working copies
 #                      every branch a peer pushes is merged automatically.
 #                      A GitHub-hosted mission repo drops this line.
 #   conflicts        - how a path both sides changed is settled, and recorded.
+#   sync             - push: realtime sends every commit on this instance's own
+#                      agent branch out about 1 s after it lands; pull: realtime
+#                      runs a sync round every [git].realtime_pull_interval
+#                      (3 s by default) instead of every 300 s. The claim window
+#                      (WINDOW_SECONDS in claims.js) is derived from these
+#                      (README "The timing rule"). On a forge, read README
+#                      "GitHub-hosted" first: it costs requests.
 attributes:
   consensus: auto
   conflicts:
     facts: merge
     state: consensus
+  sync:
+    push: realtime
+    pull: realtime
 
 topics:
   # --- Pattern 1: claim / wait / take (a heuristic; README "Two ways to take") ---
@@ -59,11 +69,6 @@ topics:
         message: a claim must carry expires (it is the claim's timer)
         rule: "typeof fact.expires === 'string' && fact.expires !== ''"
     triggers:
-      # Send my claim out now instead of at the next sync interval.
-      - name: push-claim
-        on: learn
-        match: "claims/*/{agent}/**"
-        do: push
       # My claim's window is over: decide (take, wait, or withdraw).
       - name: decide
         on: due
@@ -80,10 +85,6 @@ topics:
         message: the inbox holds signals only
         rule: "fact.type === 'signal'"
     triggers:
-      - name: push-take
-        on: [learn, retract]
-        match: "inbox/**"
-        do: push
       # The backstop: two working copies of one task -> the lower-ranked one backs off.
       - name: dup-check
         on: learn
@@ -142,10 +143,6 @@ topics:
         message: a bid is a signal
         rule: "fact.type === 'signal'"
     triggers:
-      - name: push-bid
-        on: learn
-        match: "bids/**"
-        do: push
       # Runs on the awarder only: {agent} is this instance.
       - name: award
         on: learn
@@ -173,10 +170,6 @@ topics:
         message: an award is a signal
         rule: "fact.type === 'signal'"
     triggers:
-      - name: push-award
-        on: learn
-        match: "awards/**"
-        do: push
       - name: take-award
         on: learn
         match: "awards/{agent}/**"

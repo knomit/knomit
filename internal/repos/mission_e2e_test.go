@@ -58,7 +58,12 @@ const (
 
 	// window is the template's WINDOW_SECONDS (claims.js), read back from the
 	// shipped file by TestMissionTemplate_Settings.
-	window = 360 * time.Second
+	window = 15 * time.Second
+
+	// missionTriggers is how many triggers the shipped template declares.
+	// None is `do: push`: the template's `sync: {push: realtime}` sends every
+	// commit on the agent branch instead.
+	missionTriggers = 10
 )
 
 // templateDir is the shipped template, relative to this package.
