@@ -61,6 +61,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"knomit/internal/serveraddr"
 	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
@@ -205,7 +206,7 @@ func main() {
 	repo := flag.String("repo", "", "repository name (omit both --repo and --lens to let the agent bind via knomit_bind)")
 	lens := flag.String("lens", "", "lens name; connects to /api/v1/lenses/<lens>/mcp (mutually exclusive with --repo)")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: kb [<command> [<subcommand>]] [flags] [base-url]\n\n")
+		fmt.Fprintf(os.Stderr, "usage: kb [<command> [<subcommand>]] [flags] [server]\n\n")
 		fmt.Fprintf(os.Stderr, "commands:\n")
 		fmt.Fprintf(os.Stderr, "  claude init             Scaffold CC integration files in the current directory\n")
 		fmt.Fprintf(os.Stderr, "                          kb claude init [-repo <name>|-lens <name>]\n")
@@ -223,6 +224,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  logout <base-url>       Revoke and forget the credentials kb login saved for that host\n\n")
 		fmt.Fprintf(os.Stderr, "  version                 Print the build version and exit\n\n")
 		fmt.Fprintf(os.Stderr, "without a command, runs as an MCP stdio↔HTTP proxy.\n\n")
+		fmt.Fprintf(os.Stderr, "the server (every call: proxy, discovery and hooks), first match wins:\n")
+		fmt.Fprintf(os.Stderr, "  the [server] argument (proxy only) > %s > the desktop lockfile > %s\n", serveraddr.EnvVar, knomitapi.DefaultServer)
+		fmt.Fprintf(os.Stderr, "  forms: http://host:port, https://host:port, %s\n", localServerForm)
+		fmt.Fprintf(os.Stderr, "  a named server is used exactly as given: a named socket never falls back to TCP.\n")
+		fmt.Fprintf(os.Stderr, "  KNOMIT_HOME does not choose the server; to reach one instance among several, set\n")
+		fmt.Fprintf(os.Stderr, "  %s to the address that instance logs at startup.\n\n", serveraddr.EnvVar)
 		fmt.Fprintf(os.Stderr, "global flags (accepted before any subcommand):\n")
 		fmt.Fprintf(os.Stderr, "  --log <path>            log file path (default %s, lumberjack 4MB rotation)\n\n", bridgelog.DefaultPath())
 		fmt.Fprintf(os.Stderr, "examples:\n")
@@ -230,6 +237,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  kb -lens eng\n")
 		fmt.Fprintf(os.Stderr, "  kb                                       (unscoped: the agent calls knomit_bind)\n")
 		fmt.Fprintf(os.Stderr, "  kb -repo work http://myhost:8080\n")
+		fmt.Fprintf(os.Stderr, "  KNOMIT_SERVER=%s kb -repo work\n", localServerExample)
 		fmt.Fprintf(os.Stderr, "  kb --log /tmp/bridge.log claude hook post-edit\n")
 		fmt.Fprintf(os.Stderr, "  kb claude init -repo myproject\n")
 		fmt.Fprintf(os.Stderr, "  kb claude hook session-start             (typically run by CC, not interactively)\n")

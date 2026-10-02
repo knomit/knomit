@@ -63,10 +63,11 @@ func currentAfterStart() func(pid int) {
 }
 
 // recipeExec is one recipe run's exec: its ctx (the budget, knomit's stop)
-// and its base environment.
+// and its base environment, built per call because it waits for the server's
+// own address (recipeEnv) and an error there means the child is not started.
 type recipeExec struct {
 	ctx context.Context
-	env []string
+	env func(ctx context.Context) ([]string, error)
 }
 
 // capWriter keeps the first max bytes and discards the rest, never failing a
@@ -122,7 +123,11 @@ func (x *recipeExec) call(args []any) (any, error) {
 	} else if opts["env"] != nil {
 		return nil, errors.New("exec: env must be an object of strings")
 	}
-	env := mergeEnv(x.env, over)
+	base, err := x.env(x.ctx)
+	if err != nil {
+		return nil, err
+	}
+	env := mergeEnv(base, over)
 	ctx := x.ctx
 	var timeout time.Duration
 	if v, ok := opts["timeout_ms"]; ok && v != nil {

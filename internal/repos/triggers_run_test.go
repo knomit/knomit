@@ -762,13 +762,11 @@ func TestRun_EnvMergedWithTrace(t *testing.T) {
 
 // runEnvChild fires one recipe that execs the helper with the recipe env
 // extra (key/value pairs), on a repo whose Manager knows addr as its own
-// address ("" leaves it unset), and returns the child's environment.
+// address, and returns the child's environment.
 func runEnvChild(t *testing.T, addr string, extra ...string) []string {
 	t.Helper()
 	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
-	if addr != "" {
-		m.SetServerAddress(addr)
-	}
+	m.SetServerAddress(addr)
 	dir := t.TempDir()
 	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
 		jsString(helperExe(t)), helperEnv(dir, extra...)))
@@ -799,14 +797,55 @@ func TestRun_EnvRecipeOverridesKnomitServer(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:19310", got, "the recipe's env wins")
 }
 
-// Before the server knows its address the child gets NO KNOMIT_SERVER: an
-// inherited one names whatever server knomit's own launcher pointed at, and
-// passing it on would send the recipe's `kb` there. Sabotage: skip
-// withoutEnv (red: the inherited value reaches the child).
-func TestRun_EnvNoAddressDropsAnInheritedKnomitServer(t *testing.T) {
+// testServerAddr is the address newScriptRepo records for its Manager, as a
+// booted server does once its listeners are bound. Nothing listens there.
+const testServerAddr = "http://127.0.0.1:1"
+
+// F1 (review of #393): the dispatcher starts while the server is still
+// booting, before the listeners are bound and the address recorded. A recipe
+// that fires in that window must NOT start its program without
+// KNOMIT_SERVER — the program's `kb` would reach whichever server the desktop
+// lockfile names. With no address within the bound, exec throws, the program
+// is never started, and the run ends recipe-error naming the cause. An
+// inherited KNOMIT_SERVER (here: what a launcher pointed knomit at) is not a
+// substitute. Sabotage: start the child anyway when the address is missing
+// (red: a child report, outcome done).
+func TestRun_ExecBeforeTheAddressIsSetStartsNothing(t *testing.T) {
+	old := recipeServerAddrWait
+	recipeServerAddrWait = 300 * time.Millisecond
+	t.Cleanup(func() { recipeServerAddrWait = old })
 	t.Setenv("KNOMIT_SERVER", "http://inherited.invalid:1")
-	_, ok := envOf(runEnvChild(t, ""), "KNOMIT_SERVER")
-	require.False(t, ok, "an inherited KNOMIT_SERVER reached the child although this server has no address yet")
+	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
+	m.SetServerAddress("") // the boot window: not recorded yet
+	dir := t.TempDir()
+	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+		jsString(helperExe(t)), helperEnv(dir)))
+	write(t, ri, "kb/tasks/in/a.md")
+	rows := waitRows(t, ri, "w", 2)
+	require.Equal(t, store.TriggerOutcomeRecipeError, rows[1].Outcome, rows[1].Error)
+	require.Contains(t, rows[1].Error, "server address not ready")
+	require.Empty(t, helperReports(t, dir, "child"), "a program was started without this server's address")
+}
+
+// The other half: an exec that fires in the boot window WAITS, and once the
+// server records its address the program starts with it.
+func TestRun_ExecWaitsForTheAddress(t *testing.T) {
+	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
+	m.SetServerAddress("")
+	dir := t.TempDir()
+	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+		jsString(helperExe(t)), helperEnv(dir)))
+	write(t, ri, "kb/tasks/in/a.md")
+	_ = waitRows(t, ri, "w", 1) // started, now waiting in exec
+	time.Sleep(200 * time.Millisecond)
+	require.Empty(t, helperReports(t, dir, "child"), "the program started before the address was set")
+	const own = "unix:///srv/knomit/late.sock"
+	m.SetServerAddress(own)
+	got, ok := envOf(waitHelperReports(t, dir, "child", 1)[0].Env, "KNOMIT_SERVER")
+	require.True(t, ok)
+	require.Equal(t, own, got)
+	rows := waitRows(t, ri, "w", 2)
+	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
 }
 
 // ---- T18: a recipe's writes

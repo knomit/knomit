@@ -52,7 +52,6 @@ import (
 	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -355,7 +354,7 @@ func (d *triggerDispatcher) execRecipe(ctx context.Context, j recipeJob) (outcom
 	hostCtx = store.WithTrailers(hostCtx, store.Trailers{Trace: j.p.trace, Cause: j.p.commit, Trigger: j.p.trig.Name, Run: j.id})
 	h := &scriptHost{d: d, p: j.p, cs: &compiledScript{script: "recipe " + j.cr.name, blob: j.cr.rev}, ctx: hostCtx,
 		globals: j.globals, rangeFrom: j.row.RangeFrom, rangeTo: j.row.RangeTo, onRow: d.addLate}
-	x := &recipeExec{ctx: hostCtx, env: d.recipeEnv(j)}
+	x := &recipeExec{ctx: hostCtx, env: func(ctx context.Context) ([]string, error) { return d.recipeEnv(ctx, j) }}
 	res, err := fact.RunRecipe(hostCtx, j.cr.prog, j.cr.name, d.recipeGlobals(j), recipeHostFunctions(h, x), time.Now().UTC())
 	var interrupted *goja.InterruptedError
 	switch {
@@ -421,34 +420,63 @@ func recipeMCP(repo string) map[string]any {
 // id). exec merges the recipe's own `env` over it, so a recipe may name a
 // different server; it never replaces it, so PATH and HOME survive.
 //
-// Before the server knows its address (its listeners not bound yet) the child
-// gets NO KNOMIT_SERVER — an inherited one is removed, since it names
-// whatever server knomit's own launcher pointed at, not this one — and its
-// `kb` falls back to its default.
-func (d *triggerDispatcher) recipeEnv(j recipeJob) []string {
-	over := map[string]string{"KNOMIT_TRACE": j.p.trace, "KNOMIT_CAUSE": j.p.commit, "KNOMIT_RUN": j.id}
+// A child is NEVER started without the address. The dispatcher starts while
+// the server is still booting (Manager.Start, inside app.New), before
+// cmd/serve.go and the desktop have bound their listeners and called
+// Manager.SetServerAddress, so a recipe can fire in that window. A child
+// started then would get no KNOMIT_SERVER, and its `kb` would fall back to
+// the desktop lockfile's server — the wrong-instance bug this variable exists
+// to remove. So recipeEnv WAITS (polling, bounded by recipeServerAddrWait and
+// by ctx, the recipe's budget and knomit's stop) and, if the address is still
+// unknown, returns an error: exec throws it, the child is not started, and an
+// uncaught throw ends the run as recipe-error naming the cause.
+func (d *triggerDispatcher) recipeEnv(ctx context.Context, j recipeJob) ([]string, error) {
+	addr, err := d.waitServerAddr(ctx)
+	if err != nil {
+		return nil, err
+	}
+	over := map[string]string{"KNOMIT_TRACE": j.p.trace, "KNOMIT_CAUSE": j.p.commit, "KNOMIT_RUN": j.id,
+		serveraddr.EnvVar: addr}
 	if d.home != "" {
 		over["KNOMIT_HOME"] = d.home
 	}
-	base := os.Environ()
-	if addr := d.serverAddr(); addr != "" {
-		over[serveraddr.EnvVar] = addr
-	} else {
-		base = withoutEnv(base, serveraddr.EnvVar)
-	}
-	return mergeEnv(base, over)
+	return mergeEnv(os.Environ(), over), nil
 }
 
-// withoutEnv is env minus every entry named key (compared as the OS does).
-func withoutEnv(env []string, key string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if k, _, _ := strings.Cut(kv, "="); envKey(k) == envKey(key) {
-			continue
-		}
-		out = append(out, kv)
+// recipeServerAddrWait bounds how long an exec waits for the server to record
+// its own address. The boot window it covers is normally well under a second;
+// the bound is generous because the desktop's first launch can be slow, and a
+// run that exceeds it fails loudly rather than starting a misdirected child.
+// A var so tests can shorten it.
+var recipeServerAddrWait = 2 * time.Minute
+
+// recipeServerAddrPoll is the interval waitServerAddr re-reads the address at.
+const recipeServerAddrPoll = 50 * time.Millisecond
+
+// waitServerAddr returns this server's own address, waiting for it (see
+// recipeEnv) up to recipeServerAddrWait or until ctx ends.
+func (d *triggerDispatcher) waitServerAddr(ctx context.Context) (string, error) {
+	if addr := d.serverAddr(); addr != "" {
+		return addr, nil
 	}
-	return out
+	deadline := time.NewTimer(recipeServerAddrWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(recipeServerAddrPoll)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			if addr := d.serverAddr(); addr != "" {
+				return addr, nil
+			}
+		case <-deadline.C:
+			return "", fmt.Errorf("exec: server address not ready: this knomit has not recorded its own address "+
+				"(its listeners are not bound) after %s, so the program was not started — it would have reached "+
+				"whichever server the desktop lockfile names", recipeServerAddrWait)
+		case <-ctx.Done():
+			return "", fmt.Errorf("exec: server address not ready before the run ended: %w", ctx.Err())
+		}
+	}
 }
 
 // recipeHostFunctions is the TRUSTED host map: the script's eight functions

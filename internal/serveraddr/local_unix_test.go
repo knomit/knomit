@@ -2,7 +2,13 @@
 
 package serveraddr
 
-import "testing"
+import (
+	"strconv"
+	"strings"
+	"testing"
+
+	"knomit/internal/auth"
+)
 
 // exampleListeners are socket paths a server may really listen on: the
 // default under a data root (which may contain a space, as macOS's
@@ -37,5 +43,25 @@ func TestParse_UnixIsLiteral(t *testing.T) {
 	}
 	if got := ForLocal("/x/knomit.sock"); got != "unix:///x/knomit.sock" {
 		t.Errorf("ForLocal = %q", got)
+	}
+}
+
+// A named socket path too long for sun_path is refused at parse time, naming
+// its length and the limit — dialling it would fail with a bare "invalid
+// argument". The boundary is the one auth.ListenLocal uses (>= cap).
+func TestParse_UnixPathTooLongNamesTheLimit(t *testing.T) {
+	limit := auth.SunPathCap()
+	long := "/" + strings.Repeat("d", limit-1) // exactly limit bytes
+	_, err := Parse("unix://" + long)
+	if err == nil {
+		t.Fatalf("a %d-byte socket path was accepted", len(long))
+	}
+	for _, want := range []string{strconv.Itoa(len(long)), strconv.Itoa(limit)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+	if _, err := Parse("unix://" + long[:limit-1]); err != nil {
+		t.Errorf("a %d-byte path (under the cap) was refused: %v", limit-1, err)
 	}
 }

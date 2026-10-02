@@ -205,7 +205,10 @@ func serveCmd() *cobra.Command {
 			defer closeSocket()
 			// The address this server's own children (recipe `exec`) get as
 			// KNOMIT_SERVER: the local listener only if it bound.
-			a.Manager().SetServerAddress(serverAddress(cfg, ul, ln.Addr().String()))
+			ownAddr := serverAddress(cfg, ul, ln.Addr().String())
+			a.Manager().SetServerAddress(ownAddr)
+			// The one line to copy into KNOMIT_SERVER to reach THIS instance.
+			log.Info().Str("knomit_server", ownAddr).Msg("this server's address (KNOMIT_SERVER for kb)")
 
 			// mTLS listener for enrolled instances (F19 phase 2): its OWN
 			// http.Server over the same handler, off until [tls].addr is set

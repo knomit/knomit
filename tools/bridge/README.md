@@ -56,8 +56,18 @@ try this machine's local socket first (the one under `KNOMIT_HOME`, or
 `KNOMIT_SOCKET`) and fall back to the TCP port.
 
 `KNOMIT_HOME` does **not** choose the server. With several knomit instances on
-one machine, name the one you mean: `KNOMIT_SERVER=unix://<its home>/knomit.sock`
-(the socket carries your verified identity) or its `http://127.0.0.1:<port>`.
+one machine, name the one you mean. Each instance logs its own address at
+startup, already in this spelling — copy it:
+
+```
+INF this server's address (KNOMIT_SERVER for kb) knomit_server=unix:///Users/me/.knomit/knomit.sock
+```
+
+It is the local socket when that instance bound one (the socket carries your
+verified identity), else its `http://127.0.0.1:<port>`. Do not build the socket
+path from the home folder: `KNOMIT_SOCKET` or the toml `socket` key can move it,
+and a data root too long for a socket path puts it under
+`/tmp/knomit-<uid>/<hash>.sock` instead of `<home>/knomit.sock`.
 A recipe's `exec` child is started with `KNOMIT_SERVER` already set to the
 server that runs the recipe, and Claude Code passes its environment to the
 stdio MCP servers it starts, so a `kb` inside a recipe's session reaches that
