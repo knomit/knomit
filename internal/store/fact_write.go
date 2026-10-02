@@ -43,11 +43,23 @@ func validatePath(path string) error {
 // (internal/pathutil.ErrInvalidPath), which every refusal of ValidTreePath
 // wraps. The package is internal, so the sentinel is recovered by unwrapping
 // the error of a probe that is invalid under any version of the rule (a NUL
-// byte). TestGitErrInvalidPath_Recovered fails if a go-git upgrade stops
-// wrapping it, rather than letting gitReadablePath silently accept everything.
+// byte).
+//
+// It FAILS CLOSED: if a go-git upgrade stops wrapping a sentinel, the probe
+// unwraps to nil, and errors.Is(err, nil) would match nothing, so
+// gitReadablePath would silently accept every path and #384 would be back.
+// The package panics at init instead, so such an upgrade cannot ship: every
+// test binary and the server itself refuse to start.
+// TestGitErrInvalidPath_Recovered pins the same thing at test time.
 var gitErrInvalidPath = func() error {
 	_, err := (&object.Tree{}).FindEntry("\x00")
-	return errors.Unwrap(err)
+	sentinel := errors.Unwrap(err)
+	if sentinel == nil {
+		panic(fmt.Sprintf("store: cannot recover go-git's invalid-path sentinel (FindEntry(NUL) returned %v); "+
+			"validatePath would accept every path go-git refuses to read back (#384). "+
+			"Re-check gitReadablePath against this go-git version.", err))
+	}
+	return sentinel
 }()
 
 // gitReadablePath reports go-git's own refusal of path, or nil when go-git
@@ -59,10 +71,15 @@ var gitErrInvalidPath = func() error {
 //
 // Two gates, because go-git's readers apply the rule at two granularities:
 // FindEntry and TreeEntryFile validate the whole path, while the tree walker
-// (DiffTree, ListAllWithHash) validates each entry NAME. They differ only on
-// Windows, where a volume name ("c:") is refused as a component but not
-// mid-path. The lookups run on an empty in-memory tree, so they touch no
-// storage: a valid path simply is not found.
+// (DiffTree, ListAllWithHash) validates each entry NAME. Asking only one would
+// miss what only the other refuses:
+//   - A name made only of backslashes ("a/\/b"), on every platform: the
+//     whole-path rule splits on '\' as well as '/', so the name vanishes,
+//     while the name alone has no parts left and is refused.
+//   - On Windows, a volume name ("c:"), refused as a name but not mid-path.
+//
+// The lookups run on an empty in-memory tree, so they touch no storage: a
+// valid path simply is not found.
 func gitReadablePath(path string) error {
 	empty := &object.Tree{}
 	if _, err := empty.FindEntry(path); errors.Is(err, gitErrInvalidPath) {
@@ -70,9 +87,15 @@ func gitReadablePath(path string) error {
 	}
 	for _, name := range strings.Split(path, "/") {
 		if name == "" {
-			// An empty segment ("x//y") is not a read-back refusal: the
-			// whole-path gate splits it away. Asked alone, FindEntry("")
-			// would refuse it, so asking would widen the rule beyond git's.
+			// An empty segment ("kb//x.md", "/kb/x.md", "kb/x/") is out of
+			// scope for this check (#384), but go-git DOES refuse an empty
+			// entry name: when it decodes the tree ("malformed tree: empty
+			// filename"). deriveBeforeAdvance decodes the new trees before the
+			// ref moves (whenever commit_log is available), so such a write is
+			// refused before it can poison a branch. It is refused late,
+			// though, with a store error, so a REST client gets a 500 rather
+			// than a 400. Asking FindEntry("") here would refuse it earlier as
+			// a 400; that behaviour change has not been approved.
 			continue
 		}
 		if _, err := empty.FindEntry(name); errors.Is(err, gitErrInvalidPath) {

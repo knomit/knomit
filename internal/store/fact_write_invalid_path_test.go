@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -158,4 +160,50 @@ func TestWriteFact_KnomitDotPathsStillWrite(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.Facts().WriteRootFile(ctx, "main", "README.md", "# hi", "m", "update")
 	require.NoError(t, err)
+}
+
+// A name made only of backslashes is refused by the per-name gate alone: the
+// whole-path rule splits on '\' as well as '/', so the name vanishes there,
+// but the tree walker sees it as an entry name with no parts and refuses it.
+// Before the per-name gate it moved the ref and poisoned the branch.
+func TestWriteFact_RefusesBackslashOnlyName(t *testing.T) {
+	const path = `kb/architecture/\/x.md`
+	require.NoError(t, func() error { _, err := (&object.Tree{}).FindEntry(path); return ignoreNotFound(err) }(),
+		"the whole-path gate alone accepts it; only the per-name gate refuses")
+
+	svc := newInvalidPathTestStore(t)
+	ctx := context.Background()
+	before := headOfBranch(t, svc, "main")
+	_, err := svc.Facts().WriteFact(ctx, "main", path, "body", "learn: m", "learn")
+	require.ErrorIs(t, err, ErrInvalidPath)
+	require.Equal(t, before, headOfBranch(t, svc, "main"), "a refused write must not move the ref")
+
+	_, _, err = svc.Facts().BatchWriteFacts(ctx, "main", map[string]string{path: "body"}, nil, "learn: m", "learn")
+	require.ErrorIs(t, err, ErrInvalidPath)
+	require.Equal(t, before, headOfBranch(t, svc, "main"))
+}
+
+// Empty segments are out of scope for validatePath (#384) and pass it. They
+// are refused anyway, before the ref moves, by deriveBeforeAdvance's tree
+// decode ("malformed tree: empty filename"), so they cannot poison a branch.
+// This pins that claim in gitReadablePath's comment; it is not ErrInvalidPath.
+func TestWriteFact_EmptySegmentRefusedBeforeRefMoves(t *testing.T) {
+	for _, path := range []string{"kb//x.md", "/kb/x.md", "kb/x/"} {
+		t.Run(path, func(t *testing.T) {
+			require.NoError(t, validatePath(path))
+			svc := newInvalidPathTestStore(t)
+			before := headOfBranch(t, svc, "main")
+			_, err := svc.Facts().WriteFact(context.Background(), "main", path, "body", "m", "learn")
+			require.Error(t, err)
+			require.NotErrorIs(t, err, ErrInvalidPath)
+			require.Equal(t, before, headOfBranch(t, svc, "main"))
+		})
+	}
+}
+
+func ignoreNotFound(err error) error {
+	if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
+		return nil
+	}
+	return err
 }
