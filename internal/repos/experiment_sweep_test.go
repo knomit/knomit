@@ -143,18 +143,16 @@ func TestExperimentSweep_EndToEndDropsOldKeepsYoung(t *testing.T) {
 	backdateExperiment(t, ri, "ancient", time.Now().Add(-40*24*time.Hour))
 	backdateExperiment(t, ri, "current", time.Now().Add(-2*24*time.Hour))
 
-	// Acquire, not WithRead: the goroutine outlives the call, and WithRead
-	// releases the store generation as soon as its callback returns.
-	svc, release, err := ri.Acquire()
-	require.NoError(t, err)
-	defer release()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(1)
-	// The loop always ticks once at start, so one tick is all this needs.
-	go runExperimentSweepLoop(ctx, &wg, svc, "work", 30, time.Hour)
+	// The loop always ticks once at start, so one tick is all this needs. It
+	// reaches the store the way production does: ri.Acquire, per tick.
+	go func() {
+		defer wg.Done()
+		runExperimentSweepLoop(ctx, ri.Acquire, "work", 30, time.Hour)
+	}()
 
 	require.Eventually(t, func() bool {
 		return !experimentExists(t, ri, "ancient")
@@ -167,6 +165,61 @@ func TestExperimentSweep_EndToEndDropsOldKeepsYoung(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+// TestExperimentSweep_StoreUnavailableIsATickNotAnExit: the loop reaches the
+// store through acquire per tick, and an acquire that fails — ErrStoreUnavailable
+// while SwapStore has the handle detached, ErrRepoClosed once teardown began —
+// costs that tick only. A loop that exited here would stop expiring for the
+// life of the process, the very failure issue #377 was.
+func TestExperimentSweep_StoreUnavailableIsATickNotAnExit(t *testing.T) {
+	m := newLifecycleManager(t)
+	ri := createRepo(t, m, "work")
+	openExperimentOn(t, ri, "ancient", ri.AgentBranch())
+	backdateExperiment(t, ri, "ancient", time.Now().Add(-40*24*time.Hour))
+
+	var (
+		mu       sync.Mutex
+		calls    int
+		released int
+	)
+	acquire := func() (*store.Service, func(), error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n <= 2 {
+			return nil, nil, ErrStoreUnavailable
+		}
+		svc, release, err := ri.Acquire()
+		if err != nil {
+			return nil, nil, err
+		}
+		return svc, func() {
+			mu.Lock()
+			released++
+			mu.Unlock()
+			release()
+		}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runExperimentSweepLoop(ctx, acquire, "work", 30, time.Millisecond)
+	}()
+
+	require.Eventually(t, func() bool {
+		return !experimentExists(t, ri, "ancient")
+	}, 5*time.Second, 10*time.Millisecond, "two unavailable ticks must be followed by one that sweeps")
+	cancel()
+	wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, calls-2, released, "every successful acquire is released")
 }
 
 // TestExperimentSweep_CommitRefreshesActivity: the other direction of the same

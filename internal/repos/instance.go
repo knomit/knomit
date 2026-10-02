@@ -132,6 +132,12 @@ type RepoInstance struct {
 	// branch. Set once in build() and never reassigned, like triggers; its
 	// goroutine starts from activate() and stops in shutdown().
 	consensus *consensusMerger
+	// sweep is the experiment expiry sweeper, nil when this repo runs none (a
+	// subscription, experiments.expiry_days = 0, or DisableBackgroundSync).
+	// Set once in build() and never reassigned; its goroutine starts from
+	// activate() on its own context (never syncCtx, which ActivateSync
+	// restarts) and stops in shutdown() and Manager.Close.
+	sweep *experimentSweeper
 	// syncWake is the push wake (F07 PR 4): a 1-slot channel a `do: push`
 	// fire or knomit.push() sends on without blocking (wakeSync), and the
 	// sync loop — runReconcileLoop, or runLocalReconcile with no origin —
@@ -638,7 +644,7 @@ func (ri *RepoInstance) ActivateSync(url string) error {
 }
 
 // StartLocalSync replaces the running loops with the ones a repo WITHOUT an
-// origin runs (the local reconcile loop and the experiment sweep), at once,
+// origin runs (the local reconcile loop), at once,
 // with no reopen. Call it after the origin has been removed; the origin-backed
 // loop is cancelled and drained first. An instance built without the builder's
 // wiring (a unit test) only stops its loops, as DeactivateSync does.
@@ -706,6 +712,10 @@ func (ri *RepoInstance) shutdown() {
 	if ri.consensus != nil {
 		ri.consensus.stop()
 	}
+	// The experiment sweep has its own ctx too (issue #377) and Acquires per
+	// tick: stop it before closeFn, whose drain would otherwise wait on a tick
+	// in flight and whose closed tombstone would fail every later one.
+	ri.sweep.stop()
 	if ri.hub != nil {
 		ri.hub.Shutdown()
 	}
