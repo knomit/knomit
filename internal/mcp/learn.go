@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -383,13 +384,26 @@ func newFactWins(newFact, existing fact.Fact) bool {
 	return newFact.Sources >= existing.Sources
 }
 
+// mergeCorroborates reports whether folding newFact into existing counts as a
+// new corroboration, and when it does not, why (for the learn-response note).
+// It is the single decision behind mergeFacts' sources arithmetic.
+func mergeCorroborates(newFact, existing fact.Fact, localRepoID string) (bool, string) {
+	if newFact.Type == fact.Hypothesis {
+		return false, "incoming is a hypothesis"
+	}
+	if !fact.HasNovelRef(newFact.Refs, existing.Refs, existing.Path(), localRepoID) {
+		return false, "no new refs"
+	}
+	return true, ""
+}
+
 // mergeFacts folds an incoming near-duplicate into the existing fact it
 // matched, returning the fact to write at the EXISTING path.
 //
 // The merge is asymmetric by design: the winner (see newFactWins) contributes
 // the identity — title, body, kind, type, origin — while the metadata is
 // always pooled, because both facts are evidence of the same thing. Confidence
-// takes the max rather than the winner's, and sources add: two independent
+// takes the max rather than the winner's, and sources add WHEN the incoming fact brings a novel ref (#361): two independent
 // observations of one fact are worth more than either alone. Motifs are the
 // one field that unions WINNER-first, because they are capped and so their
 // order decides what survives — see the call site. Pure.
@@ -452,7 +466,15 @@ func mergeFacts(newFact, existing fact.Fact, localRepoID string) fact.Fact {
 	// so the two cannot drift.
 	merged.Motifs = fact.MergeMotifs(winner.Motifs, loser.Motifs)
 	merged.Confidence = max(newFact.Confidence, existing.Confidence)
-	merged.Sources = newFact.Sources + existing.Sources
+	// SOURCES COUNT CORROBORATION, NOT RE-READS (#361). The incoming count is
+	// added to the EXISTING count — whichever fact won the identity tiebreak —
+	// only when the incoming fact is not a hypothesis and cites a ref the
+	// existing fact does not already carry (compared by classified identity;
+	// see mergeCorroborates). Refs and confidence still merge either way.
+	merged.Sources = existing.Sources
+	if ok, _ := mergeCorroborates(newFact, existing, localRepoID); ok {
+		merged.Sources += newFact.Sources
+	}
 	// CARRY THE WEIGHT ACROSS (#94). Without this the merged fact starts at 0
 	// and stays there whenever computeEvidenceWeights declines to restamp it —
 	// which is the common case, because that gate reads the RAW Origin field
@@ -582,7 +604,7 @@ func applyDedupMerge(
 	files map[string]string,
 	localRepoID string,
 	retracting map[string]bool,
-) (map[string][]float32, []string, map[string][]string, map[int]bool, error) {
+) (map[string][]float32, []string, map[string][]string, map[int]bool, map[int]string, error) {
 	// The near-duplicate cosine floor is model-dependent (see internal/embeddings/params).
 	dedupThreshold := store.EmbedderThresholds(batchEmb).Dedup
 	// dedupVecs is computed by the CALLER now, because the same-subject stage
@@ -597,6 +619,9 @@ func applyDedupMerge(
 	// dedupVecs[i] — computed over the incoming title+body — no longer
 	// describes what will be written.
 	touched := make(map[int]bool)
+	// uncounted[i] is why the merge at index i did not add the incoming
+	// sources (#361); it feeds the learn response's notes.
+	uncounted := make(map[int]string)
 
 	// donatePaths[i] is the on-disk path that dedupVecs[i] corresponds to, or
 	// "" to suppress donation (used when the merge kept the EXISTING fact's
@@ -763,13 +788,16 @@ func applyDedupMerge(
 			f, retract = subsumeHypothesis(f, retract, match.Path)
 			facts[i] = f
 			if err := reserialize(files, paths[i], f); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
+				return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize subsumed: %v", i, err)
 			}
 			touched[i] = true
 			continue
 		}
 
 		merged := mergeFacts(f, existingFact, localRepoID)
+		if ok, why := mergeCorroborates(f, existingFact, localRepoID); !ok {
+			uncounted[i] = why
+		}
 		if newFactWins(f, existingFact) {
 			// dedup vector still describes the merged content (same title+body
 			// as the new fact); just retarget to the existing path it now lives at.
@@ -790,7 +818,7 @@ func applyDedupMerge(
 		// would surface later as an opaque serialize error.
 		if ontology != nil {
 			if err := fact.ValidateFact(ontology, topicCategories[i], merged); err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
+				return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: dedup-merge: %v", i, err)
 			}
 		}
 
@@ -804,7 +832,7 @@ func applyDedupMerge(
 		paths[i] = match.Path
 		priorRefs[match.Path] = existingFact.Refs
 		if err := reserialize(files, match.Path, merged); err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
+			return nil, nil, nil, nil, nil, fmt.Errorf("fact %d: serialize merged: %v", i, err)
 		}
 		facts[i] = merged
 		touched[i] = true
@@ -822,7 +850,7 @@ func applyDedupMerge(
 		}
 		embByPath[donatePaths[i]] = dedupVecs[i]
 	}
-	return embByPath, retract, priorRefs, touched, nil
+	return embByPath, retract, priorRefs, touched, uncounted, nil
 }
 
 // computeEvidenceWeights stamps an evidence weight on machine-origin derived
@@ -991,7 +1019,7 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		// Embedding happens HERE, once, because two stages need the same
 		// vectors: the dedup merge below and the same-subject gate after it.
 		dedupVecs := dedupEmbed(ctx, batchEmb, facts)
-		embByPath, retract, priorRefs, touched, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID(), retracting)
+		embByPath, retract, priorRefs, touched, uncounted, err := applyDedupMerge(ctx, s, writeBranch, ontology, ontologyRoot, batchEmb, dedupVecs, facts, topicCategories, paths, files, gate.LocalRepoID(), retracting)
 		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
@@ -1114,7 +1142,9 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 			result["retracted"] = retractPaths
 			result["commit"] = hash
 		}
-		if notes := expiresNotAppliedNotes(factInputs, facts); len(notes) > 0 {
+		notes := expiresNotAppliedNotes(factInputs, facts)
+		notes = append(notes, uncountedMergeNotes(uncounted, facts)...)
+		if len(notes) > 0 {
 			result["notes"] = notes
 			result["summary"] = result["summary"].(string) + " " + strings.Join(notes, " ")
 		}
@@ -1124,6 +1154,26 @@ func LearnHandler(embedders ...store.BatchEmbedder) func(context.Context, mcpgo.
 		}
 		return mcpgo.NewToolResultText(string(out)), nil
 	}
+}
+
+// uncountedMergeNotes names every dedup merge that did not add the incoming
+// sources (#361), so a caller re-reading one page is told its re-read was not
+// counted. Corroborating merges and plain learns add nothing.
+func uncountedMergeNotes(uncounted map[int]string, facts []fact.Fact) []string {
+	idx := make([]int, 0, len(uncounted))
+	for i := range uncounted {
+		idx = append(idx, i)
+	}
+	sort.Ints(idx)
+	var notes []string
+	for _, i := range idx {
+		if i >= len(facts) {
+			continue
+		}
+		notes = append(notes, fmt.Sprintf("fact %d: merged into existing fact %s; %s, sources unchanged.",
+			i, facts[i].Path(), uncounted[i]))
+	}
+	return notes
 }
 
 // expiresNotAppliedNotes names every incoming fact whose explicit expires did

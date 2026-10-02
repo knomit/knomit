@@ -247,7 +247,7 @@ func TestLearnHandler_DedupMergePreservesKind(t *testing.T) {
 		"re-authoring a principle must merge cleanly, not fail validation; got %s", resultText(t, r2))
 
 	// The merged fact on disk must retain kind=pragmatic/type=policy and
-	// reflect the merge (max confidence, summed sources).
+	// reflect the merge (max confidence, sources unchanged — ref-less).
 	path := mergedFactPath(t, r2)
 	res, err := svc.Facts().ReadFact(context.Background(), "agent/test", path, nil)
 	require.NoError(t, err)
@@ -256,7 +256,7 @@ func TestLearnHandler_DedupMergePreservesKind(t *testing.T) {
 	require.Equal(t, fact.Pragmatic, merged.Kind, "merge must preserve kind")
 	require.Equal(t, fact.Policy, merged.Type, "merge must preserve type")
 	require.Equal(t, 0.9, merged.Confidence, "merge keeps the higher confidence")
-	require.Equal(t, 2, merged.Sources, "merge sums sources")
+	require.Equal(t, 1, merged.Sources, "a ref-less merge does not count (#361)")
 }
 
 // TestLearnHandler_DedupMergeOneExistingFactAbsorbsOneIncoming regresses the
