@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -258,28 +261,127 @@ func TestPathHistory_RebuildIsAtomicAndKeepsOtherBranches(t *testing.T) {
 	require.Equal(t, wantOther, historyCommits(fullHistory(t, svc, "other", "kb/t.md", o.CommitHash)), "another branch's history survives")
 }
 
-// TestPathHistory_RebuildDoesNotBlockWriters covers review R2: a writer on
-// another branch during a rebuild never sees "database is locked" — the
-// derivation runs in short batches and the swap is one short transaction.
+// TestPathHistory_RebuildDoesNotBlockWriters covers review R2 and #366: a
+// writer on another branch during a rebuild never sees "database is locked",
+// because the derivation and the staging run in short batch transactions and
+// only the swap is one transaction.
+//
+// What it asserts is an OUTCOME, not a duration. Through deriveObjectHook the
+// rebuild (and only the rebuild: the hook matches main's objects AND a
+// rebuildCommitLog frame) is paused three times, each BETWEEN batch
+// transactions, where it holds none:
+//   - "derive": deriveCommits preparing batch 1 (batch 0 committed);
+//   - "derive-end": preparing the tip, the last commit of the last batch;
+//   - "stage": stageCommitLog building a chunk after one committed, before
+//     the swap.
+//
+// Both phases read git only before their batch's beginTxIfNeeded (prepare in
+// deriveCommits, indexItems in stageCommitLog; apply refuses reads with
+// errReadInApply), and the test's ctx carries no transaction. At each pause a
+// WriteFact on `writer` must succeed before the rebuild resumes. Were either
+// phase inside the swap transaction, or under any transaction spanning
+// batches, that write would wait out _busy_timeout (5 s) and fail with
+// "database is locked", every run.
+//
+// Staging normally reads nothing from git: it takes the tree diffs the
+// derivation kept (changeLists), so the hook could not reach it. At the
+// derive-end pause the test drops those kept diffs, as their size bound
+// (changeListsMax) does on a big rebuild, so staging diffs again through the
+// hook.
+//
+// A writer loop also runs for the whole rebuild, as the broad check of what
+// the pauses cannot reach (rederiveDegraded, the swap itself, any other
+// interleaving); it asserts only that no write fails.
+//
+// The test used to assert that the worst concurrent write took < 5 s. That
+// flaked (#366: 6.8 s on Windows CI against a 3 s rebuild) with no lock
+// contention at all: (1) `writer` shared main's 2000 commits, so after
+// clearDerived its first WriteFact re-derived the whole closure itself
+// (deriveBeforeAdvance), taking about as long as the rebuild; (2) the first
+// commit after the rebuild pays SQLite's WAL auto-checkpoint of the rebuild's
+// backlog, 6-11 s on a loaded disk
+// (kb/gotchas/store/sqlite/wal-checkpoint-after-bulk-write/78d0aceb.md). A
+// duration cannot tell either from the regression it guards.
+//
+// So `writer` is an ORPHAN branch, sharing no history with main: its writes
+// derive only its own commits. A warm-up write before clearDerived would not
+// do: clearDerived wipes that write's rows too, and the next write would
+// re-derive main's 2000 commits again.
 func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 	svc, ctx := openPathHistoryStore(t)
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	commits := make([]string, 2000)
 	var prev []string
-	var tip string
-	for i := range 2000 {
-		tip = writeRawCommit(t, svc, prev, map[string]string{"kb/t.md": testFactBody(fmt.Sprintf("v%d", i/50), 0.5, nil), "kb/n.md": testFactBody(fmt.Sprintf("n%d", i), 0.5, nil)}, t0.Add(time.Duration(i)*time.Minute), "c")
-		prev = []string{tip}
+	for i := range commits {
+		commits[i] = writeRawCommit(t, svc, prev, map[string]string{"kb/t.md": testFactBody(fmt.Sprintf("v%d", i/50), 0.5, nil), "kb/n.md": testFactBody(fmt.Sprintf("n%d", i), 0.5, nil)}, t0.Add(time.Duration(i)*time.Minute), "c")
+		prev = []string{commits[i]}
 	}
+	tip := commits[len(commits)-1]
 	moveBranch(t, svc, "main", tip)
 	require.NoError(t, svc.rh.populateCommitLog(ctx, "main"))
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "writer", "main"))
+	// The writer branch: an orphan (see above).
+	moveBranch(t, svc, "writer", writeRawCommit(t, svc, nil, map[string]string{"kb/w.md": testFactBody("w", 0.5, nil)}, t0, "writer root"))
+	require.NoError(t, svc.rh.populateCommitLog(ctx, "writer"))
 	// Force the rebuild to derive everything again, in batches.
 	clearDerived(t, svc, pathChangesVersion)
+	require.Greater(t, len(commits), 4*pathChangeBatch, "the fixture spans several batches")
+
+	treeOf := func(h string) plumbing.Hash {
+		c, err := svc.rh.repo.CommitObject(plumbing.NewHash(h))
+		require.NoError(t, err)
+		return c.TreeHash
+	}
+	// Pause triggers: the first read of an object that only that phase reads
+	// first. They match hashes, not database state, so they fire the same way
+	// whatever transaction the rebuild holds.
+	type trigger struct {
+		phase, fn, kind string
+		hash            plumbing.Hash
+	}
+	triggers := []trigger{
+		{"derive", "deriveCommits", "tree", treeOf(commits[pathChangeBatch])},
+		{"derive-end", "deriveCommits", "tree", treeOf(tip)},
+		// The parent read of commits[1000]: in no first chunk, whichever
+		// order staging takes.
+		{"stage", "stageCommitLog", "commit", plumbing.NewHash(commits[999])},
+	}
+	type pause struct {
+		phase  string
+		resume chan struct{}
+	}
+	paused := make(chan pause)
+	abort := make(chan struct{})
+	// Advanced only by the rebuild's goroutine, but read by the writers'.
+	var next atomic.Int32
+	deriveObjectHook = func(kind string, h plumbing.Hash) error {
+		i := int(next.Load())
+		if i == len(triggers) {
+			return nil
+		}
+		tr := triggers[i]
+		if kind != tr.kind || h != tr.hash || !callerIs("rebuildCommitLog") || !callerIs(tr.fn) {
+			return nil
+		}
+		next.Add(1)
+		p := pause{tr.phase, make(chan struct{})}
+		select {
+		case paused <- p:
+		case <-abort:
+			return nil
+		}
+		select {
+		case <-p.resume:
+		case <-abort:
+		}
+		return nil
+	}
+	var swapped atomic.Bool
+	swapHook = func() error { swapped.Store(true); return nil }
 
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
-	var worst time.Duration
 	var werr error
+	var worst time.Duration
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -291,28 +393,108 @@ func TestPathHistory_RebuildDoesNotBlockWriters(t *testing.T) {
 			}
 			s := time.Now()
 			_, err := svc.Facts().WriteFact(ctx, "writer", fmt.Sprintf("kb/w%d.md", i), testFactBody("w", 0.5, nil), "w", "")
-			if d := time.Since(s); d > worst {
-				worst = d
-			}
+			worst = max(worst, time.Since(s))
 			if err != nil {
 				werr = err
 				return
 			}
 		}
 	}()
+	rebuildErr := make(chan error, 1)
+	rebuildDone := make(chan struct{})
+	var once sync.Once
+	shutdown := func() {
+		once.Do(func() {
+			close(abort)
+			<-rebuildDone
+			close(stop)
+			wg.Wait()
+		})
+	}
+	// Registered after openPathHistoryStore's Close, so it runs first: on a
+	// failed assertion the rebuild is released and both goroutines end before
+	// the store closes.
+	t.Cleanup(func() {
+		shutdown()
+		deriveObjectHook, swapHook = nil, nil
+	})
+
 	start := time.Now()
-	require.NoError(t, svc.rh.rebuildCommitLog(ctx, "main"))
-	elapsed := time.Since(start)
-	close(stop)
-	wg.Wait()
+	go func() {
+		defer close(rebuildDone)
+		rebuildErr <- svc.rh.rebuildCommitLog(ctx, "main")
+	}()
+	derived := func(h string) bool {
+		var n int
+		require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM commit_fp WHERE commit_hash = ?`, h).Scan(&n))
+		return n > 0
+	}
+	var pausedFor time.Duration
+	for _, tr := range triggers {
+		var p pause
+		select {
+		case p = <-paused:
+		case err := <-rebuildErr:
+			t.Fatalf("the rebuild returned (err %v) before pausing at %q", err, tr.phase)
+		}
+		ps := time.Now()
+		require.Equal(t, tr.phase, p.phase)
+		_, err := svc.Facts().WriteFact(ctx, "writer", "kb/pause-"+p.phase+".md", testFactBody("p", 0.5, nil), "p", "")
+		require.NoError(t, err, "a write while the rebuild is paused at %q succeeds: the rebuild holds no transaction there", p.phase)
+		t.Logf("write at the %q pause: %v", p.phase, time.Since(ps))
+		// The pause is where it claims to be: the window is open.
+		require.False(t, swapped.Load(), "paused before the swap")
+		switch p.phase {
+		case "derive":
+			require.True(t, derived(commits[0]), "batch 0 is committed")
+			require.False(t, derived(commits[pathChangeBatch]), "batch 1 is not")
+		case "derive-end":
+			lastBatch := (len(commits) - 1) / pathChangeBatch * pathChangeBatch
+			require.True(t, derived(commits[lastBatch-1]), "every batch before the tip's is committed")
+			require.False(t, derived(commits[lastBatch]), "the tip's batch is not")
+			require.False(t, derived(tip), "the tip is not derived yet")
+			// Drop the diffs derivation kept for staging, so staging
+			// diffs again and the hook reaches it (see above).
+			svc.rh.changes.mu.Lock()
+			svc.rh.changes.m, svc.rh.changes.n = nil, 0
+			svc.rh.changes.mu.Unlock()
+		case "stage":
+			require.True(t, derived(tip), "the derivation is done")
+			var staged int
+			require.NoError(t, svc.rh.db.QueryRow(`SELECT COUNT(*) FROM commit_log_stage WHERE branch_id = (SELECT id FROM branches WHERE name = 'main')`).Scan(&staged))
+			require.NotZero(t, staged, "a stage chunk is committed")
+		}
+		close(p.resume)
+		pausedFor += time.Since(ps)
+	}
+	require.NoError(t, <-rebuildErr)
+	elapsed := time.Since(start) - pausedFor
+	shutdown()
+	require.True(t, swapped.Load(), "the rebuild swapped")
 	require.NoError(t, werr, "a concurrent writer never fails with a lock timeout")
 	swap := time.Duration(lastSwapDuration.Load())
-	t.Logf("rebuild %v (re-deriving 2000 commits); swap transaction %v; worst concurrent write %v", elapsed, swap, worst)
-	require.Less(t, worst, 5*time.Second)
+	t.Logf("rebuild %v unpaused (re-deriving 2000 commits); swap transaction %v; worst concurrent write %v (logged, not asserted)", elapsed, swap, worst)
 	// The lock is held only for the swap: re-deriving 2000 commits happens
 	// before it, in short batches. A rebuild that derived inside the swap
-	// would hold it for most of the run.
+	// would hold it for most of the run. elapsed excludes the pauses.
 	require.Less(t, swap, elapsed/4, "the swap transaction is a small part of the rebuild")
+}
+
+// callerIs reports whether a function of the store package whose bare name
+// (a method's name without its receiver) is name is on the calling
+// goroutine's stack.
+func callerIs(name string) bool {
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		f, more := frames.Next()
+		if strings.HasPrefix(f.Function, "knomit/internal/store.") && strings.HasSuffix(f.Function, "."+name) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
 }
 
 // TestPathHistory_IndexedButUnderivedIsAnError: indexing guarantees every
