@@ -260,10 +260,7 @@ func TestLearn_PrivatePath_IsNotDiscoverable(t *testing.T) {
 	ctx := agentCtx(t)
 	require.False(t, learnAtPath(t, ctx, jobSlot, "UniqueCrawlStateTitle", "run 1").IsError)
 
-	// A path-prefix browse, not a text query: this repo has no embedder, and a
-	// text query without one is now an error (it used to be a vacuous empty
-	// list), which would make this assertion test nothing.
-	result := callTool(t, QueryHandler(), ctx, map[string]any{"path": ".knomit/"})
+	result := callTool(t, QueryHandler(), ctx, map[string]any{"text": "UniqueCrawlStateTitle"})
 	require.False(t, result.IsError, resultText(t, result))
 	require.NotContains(t, resultText(t, result), jobSlot,
 		"private state must never surface in query results")

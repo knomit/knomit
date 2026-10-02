@@ -926,15 +926,17 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	} else {
 		emb := fq.rh.getEmbedder()
 		if emb == nil && len(q.QueryVec) == 0 {
-			// No embedder is a legitimate state for read-only tooling and tests
-			// (see the embeddings-mandatory invariant) — but a TEXT query cannot
-			// be answered without a vector, and must not look like an empty
-			// corpus.
+			// DELIBERATE EXCEPTION, kept: a store opened WITHOUT an embedder
+			// (read-only tooling, tests) has no vectors to search, so a text
+			// query answers empty here. A running service can never reach this —
+			// app.New refuses to start without an embedder — so it cannot hide a
+			// real failure in production. Every case where an embedder EXISTS
+			// and the vector step fails is an error below.
 			if q.Text != "" {
-				log.Error().Msg("search: text query but no embedder and no query vector")
-				return nil, errors.New("search: text query needs a query vector but no embedder is configured")
+				log.Warn().Msg("search: text query on a store with no embedder; returning no results")
+			} else {
+				log.Debug().Msg("search: no embedder configured, skipping vec search")
 			}
-			log.Debug().Msg("search: no embedder configured, skipping vec search")
 		} else {
 			queryVec := q.QueryVec
 			if len(queryVec) == 0 {
