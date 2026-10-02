@@ -75,7 +75,14 @@ func TestBridge_NamedMissingSocketFailsWithoutFallback(t *testing.T) {
 	lock := isolateServerEnv(t)
 	a, aSrv := newFakeTCP(t, "a")
 	writeLockfile(t, lock, aSrv.URL)
-	missing := filepath.Join(t.TempDir(), "gone.sock")
+	// Short, under /tmp: t.TempDir() on macOS exceeds sun_path, and a path
+	// that long is refused at parse time (a different test's subject).
+	dir, err := os.MkdirTemp("/tmp", "kbm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	missing := filepath.Join(dir, "gone.sock")
 	t.Setenv(serveraddr.EnvVar, serveraddr.ForLocal(missing))
 
 	s, err := resolveServer(nil)

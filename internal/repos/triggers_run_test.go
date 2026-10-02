@@ -486,6 +486,7 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: &stubTools{}}
 	m := New(context.Background(), deps)
+	m.SetServerAddress(testServerAddr) // as a booted server records it
 	ri := bootRepo(t, m)
 	setOntology(t, ri, triggerOntology("", runTrig("w", "learn", "tasks/in/**", "worker")))
 	dir := t.TempDir()
@@ -506,6 +507,7 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 	require.NoError(t, m.Close())
 
 	m2 := New(context.Background(), deps)
+	m2.SetServerAddress(testServerAddr)
 	require.NoError(t, m2.Start())
 	t.Cleanup(func() { _ = m2.Close() })
 	ri2 := m2.Get(testRepoName)
@@ -528,6 +530,7 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 			deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
 				KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: &stubTools{}}
 			m := New(context.Background(), deps)
+			m.SetServerAddress(testServerAddr) // as a booted server records it
 			ri := bootRepo(t, m)
 			setOntology(t, ri, triggerOntology("", runTrig("w", "learn", "tasks/in/**", "worker")))
 			dir := t.TempDir()
@@ -549,6 +552,7 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 			setHooks(t, triggerHooks{})
 
 			m2 := New(context.Background(), deps)
+			m2.SetServerAddress(testServerAddr)
 			require.NoError(t, m2.Start())
 			t.Cleanup(func() { _ = m2.Close() })
 			ri2 := m2.Get(testRepoName)
