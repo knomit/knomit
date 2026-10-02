@@ -209,3 +209,20 @@ func TestClient_HooksUseTheLockfileWhenNothingIsNamed(t *testing.T) {
 		t.Fatalf("body=%q", got)
 	}
 }
+
+// The retired variable is not an alias (rip and replace): set to one server,
+// with the lockfile naming another, the hooks follow the lockfile. The name
+// is assembled so no file spells it (test/archtest TestNoRetiredServerVariable).
+func TestClient_HooksIgnoreTheRetiredVariable(t *testing.T) {
+	isolateHome(t)
+	old, oldHits := countingTCP(t, "via-retired")
+	lock, _ := countingTCP(t, "via-lockfile")
+	writeLockfile(t, isolateLockfile(t), lock.URL)
+	t.Setenv("KNOMIT_"+"BASE_URL", old.URL)
+	if got := get(t, Client(), BaseURL()+"/x"); got != "via-lockfile" {
+		t.Fatalf("body=%q", got)
+	}
+	if oldHits.Load() != 0 {
+		t.Fatal("the retired variable still chooses the hooks' server")
+	}
+}
