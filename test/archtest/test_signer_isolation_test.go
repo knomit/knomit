@@ -39,12 +39,24 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 // The READ side, store.SyncDSNParam, is deliberately not a needle: production
 // opens of control.db call it, and outside a test binary it returns "".
 //
-// Allowed non-test file: the switch's own definition.
+// The needles are the setter and the atomic it writes (testFastDurability),
+// so production cannot bypass the setter within package store either.
+//
+// Allowed non-test file: the switch's own definition. Every needle must
+// appear THERE, or a rename would leave this test passing on nothing.
 func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
-	offenders := productionSourceNaming(t,
-		[]string{"SetTestFastDurability"},
-		filepath.Join("internal", "store", "test_durability.go"),
-	)
+	needles := []string{"SetTestFastDurability", "testFastDurability"}
+	def := filepath.Join("internal", "store", "test_durability.go")
+	src, err := os.ReadFile(filepath.Join("..", "..", def))
+	if err != nil {
+		t.Fatalf("read the switch's definition file: %v", err)
+	}
+	for _, n := range needles {
+		if !strings.Contains(string(src), n) {
+			t.Fatalf("%s no longer contains %q: the switch was renamed or moved, so this guard checks nothing — update its needles", def, n)
+		}
+	}
+	offenders := productionSourceNaming(t, needles, def)
 	if len(offenders) > 0 {
 		t.Fatalf("production source must not reference the test durability switch:\n  %s", strings.Join(offenders, "\n  "))
 	}
