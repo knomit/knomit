@@ -513,6 +513,7 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	// The elapsed time is only logged, and the 120s bound is a hang detector:
 	// a timing assertion is a machine-speed assertion (see the doc comment).
 	var sawSync bool
+	var final CreateStatus
 	for {
 		st := job.Status()
 		if st.Step == "sync" {
@@ -520,6 +521,7 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 		}
 		if st.State != CreateRunning && st.State != CreateCancelling {
 			require.Equal(t, CreateCancelled, st.State)
+			final = st
 			break
 		}
 		require.Less(t, time.Since(start), 120*time.Second, "the cancel never landed")
@@ -528,6 +530,12 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	elapsed := time.Since(start)
 	t.Logf("cancel during the index landed in %s", elapsed)
 
+	// ANTI-VACUITY, again. The index guard above ran BEFORE CancelCreate, so
+	// an index that finished in the gap would let the job reach the cancel
+	// with nothing left to wait on and this test would pass vacuously. IndexState
+	// is sticky and only leaves "indexing" if the mirror saw the heal finish.
+	require.Equal(t, IndexStateIndexing, final.IndexState,
+		"the index finished before the cancel landed; the fixture no longer discriminates")
 	require.False(t, sawSync,
 		"the cancelled job activated sync, so it waited on the branch lock the "+
 			"index heal holds — the whole reason a late cancel appeared to do nothing")
