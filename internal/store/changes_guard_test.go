@@ -26,8 +26,8 @@ var changesAllowedCalls = map[string][]string{
 		"?.CommitObject", "c.IsAncestor", "sinceCommit.IsAncestor", "c.Tree", "root.Tree", "object.DiffTree",
 		"rh.resolveRef", "rh.ontologyRoot", "plumbing.NewHash", "?.String",
 		// pure helpers
-		"NormalizeChangesPrefix", "diffSubtrees", "subtreeOrEmpty", "parseFullHash", "isFact",
-		"fact.IsPrivatePath", "strings.Contains", "strings.ToLower", "strings.Trim", "sort.Slice",
+		"NormalizeChangesPrefix", "diffSubtrees", "subtreeOrEmpty", "parseFullHash", "isFact", "isHex",
+		"fact.IsPrivatePath", "strings.Contains", "strings.ToLower", "strings.Trim", "strings.Cut", "sort.Slice",
 		"errors.Is", "errors.New", "fmt.Errorf",
 		"json.Marshal", "json.Unmarshal", "?.EncodeToString", "?.DecodeString",
 		"append", "len", "make",
@@ -35,11 +35,18 @@ var changesAllowedCalls = map[string][]string{
 	"../mcp/changes.go": {
 		"repos.RequireBinding", "b.Write", "?.Acquire", "release", "svc.UpstreamBranch", "svc.Facts", "?.ChangesUnder",
 		"store.DecodeChangesCursor", "store.EncodeChangesCursor",
-		"req.GetInt", "req.GetString", "context.WithTimeout", "cancel",
-		"mcpgo.NewTool", "mcpgo.WithDescription", "mcpgo.WithString", "mcpgo.WithNumber", "mcpgo.Description",
-		"mcpgo.NewToolResultError", "mcpgo.NewToolResultText", "bindingArg",
+		"req.GetInt", "req.GetString", "req.GetBool", "context.WithTimeout", "cancel",
+		"mcpgo.NewTool", "mcpgo.WithDescription", "mcpgo.WithString", "mcpgo.WithNumber", "mcpgo.WithBoolean",
+		"mcpgo.Description", "mcpgo.NewToolResultError", "mcpgo.NewToolResultText", "bindingArg",
 		"changesErrorText", "errStoreUnavailable.Error", "err.Error", "errors.Is", "fmt.Sprintf", "json.Marshal",
-		"len", "string",
+		"len", "string", "make", "append",
+		// routing to a mount: binding lookups and the repo's id. ?.ID is
+		// RepoInstance.ID, a first-parent walk to the root commit (a git read,
+		// cached in memory); ?.Name is the repo's display name.
+		"b.ByID", "b.WriteMountBranch", "?.ID", "?.Name", "federate.ID12", "wirePath",
+		"resolveChangesRepo", "describeChangesRepo", "kbPrefixRefusal", "isHexDigits",
+		"store.ParseChangesSince", "store.ChangesBookmark",
+		"strings.Cut", "strings.EqualFold", "strings.HasPrefix", "strings.ToLower",
 	},
 	"../web/handlers_changes.go": {
 		"repos.RepoFromContext", "BranchFromContext", "chi.URLParam", "ri.WithRead", "svc.Facts", "?.ChangesUnder",
@@ -47,6 +54,8 @@ var changesAllowedCalls = map[string][]string{
 		"?.Query", "qp.Get", "r.Context", "nq.Del", "nq.Set", "nq.Encode", "strconv.Atoi", "strconv.Itoa",
 		"b.Branch", "selfWithQuery", "hal.WriteHAL", "hal.WriteProblem", "writeChangesError", "writeStoreError",
 		"aerr.Error", "err.Error", "errors.Is", "len",
+		// the repo's id for cursor and bookmark scope (a git read, cached)
+		"ri.ID", "federate.ID12", "store.ParseChangesSince", "strconv.Quote",
 	},
 }
 

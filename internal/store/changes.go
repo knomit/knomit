@@ -324,44 +324,93 @@ func diffSubtrees(from, to *object.Tree, base string, isFact func(string) bool) 
 // silently maps garbage to a zero-padded hash, which would then surface as a
 // confusing "object not found" instead of a clear "unknown since".
 func parseFullHash(s string) (plumbing.Hash, bool) {
-	if len(s) != 40 {
+	if len(s) != 40 || !isHex(s) {
 		return plumbing.ZeroHash, false
-	}
-	for _, r := range s {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
-			return plumbing.ZeroHash, false
-		}
 	}
 	return plumbing.NewHash(strings.ToLower(s)), true
 }
 
+// isHex reports whether s is all hex digits, in either case.
+func isHex(s string) bool {
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+// ChangesScope is WHICH history a paged read compares: the repo (its 12-hex
+// wire id) and the branch name. A cursor records it so every page reads the
+// same repo and branch as the first. A cursor always carries both.
+type ChangesScope struct {
+	Repo   string
+	Branch string
+}
+
 // changesCursor is the whole state of one paged read. It is stateless on the
 // server by design — nothing is stored, nothing expires — because the answer
-// is a pure function of (since, head, prefix). The MCP tool and the REST route
-// share it, so a cursor minted by one is accepted by the other.
+// is a pure function of (repo, branch, since, head, prefix). The MCP tool and
+// the REST route share it, so a cursor minted by one is accepted by the other
+// when both read the same repo and branch.
 type changesCursor struct {
+	Repo   string `json:"r,omitempty"`
+	Branch string `json:"b,omitempty"`
 	Since  string `json:"s,omitempty"`
 	Head   string `json:"h"`
 	Prefix string `json:"p,omitempty"`
 	After  string `json:"a"`
 }
 
-// EncodeChangesCursor returns the opaque token for the page after `after`.
-func EncodeChangesCursor(since, head, prefix, after string) string {
-	b, _ := json.Marshal(changesCursor{Since: since, Head: head, Prefix: prefix, After: after})
+// EncodeChangesCursor returns the opaque token for the page after `after`,
+// which is the repo-relative path of the last row (never a kb:// wire path).
+func EncodeChangesCursor(scope ChangesScope, since, head, prefix, after string) string {
+	b, _ := json.Marshal(changesCursor{
+		Repo: scope.Repo, Branch: scope.Branch,
+		Since: since, Head: head, Prefix: prefix, After: after,
+	})
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // DecodeChangesCursor reverses EncodeChangesCursor. The returned query has no
-// Limit; the caller sets one.
-func DecodeChangesCursor(s string) (ChangesQuery, error) {
+// Limit; the caller sets one. A cursor must carry BOTH repo and branch; one
+// missing either was never minted and is refused.
+func DecodeChangesCursor(s string) (ChangesQuery, ChangesScope, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return ChangesQuery{}, ErrInvalidChangesCursor
+		return ChangesQuery{}, ChangesScope{}, ErrInvalidChangesCursor
 	}
 	var c changesCursor
-	if err := json.Unmarshal(raw, &c); err != nil || c.Head == "" || c.After == "" {
-		return ChangesQuery{}, ErrInvalidChangesCursor
+	if err := json.Unmarshal(raw, &c); err != nil || c.Head == "" || c.After == "" || c.Repo == "" || c.Branch == "" {
+		return ChangesQuery{}, ChangesScope{}, ErrInvalidChangesCursor
 	}
-	return ChangesQuery{Since: c.Since, Head: c.Head, Prefix: c.Prefix, After: c.After}, nil
+	return ChangesQuery{Since: c.Since, Head: c.Head, Prefix: c.Prefix, After: c.After},
+		ChangesScope{Repo: c.Repo, Branch: c.Branch}, nil
+}
+
+// ChangesBookmark is the bookmark a changes read hands back:
+// "<repo12>:<commit40>". It names the repo the commit belongs to, so a caller
+// replaying it against another repo is refused by name instead of being told
+// "not a commit in this repo". It deliberately carries no branch: a bookmark
+// taken on main and replayed on an experiment forked from it is a fair
+// question, and the ancestry check refuses the ones that are not.
+func ChangesBookmark(repo12, head string) string { return repo12 + ":" + head }
+
+// ParseChangesSince splits a caller's `since` into the repo it names and the
+// commit. A raw commit (no ":") names no repo — it means the repo being read —
+// and comes back with repo "". A bookmark's repo half must be 12-hex and its
+// commit half a full 40-hex hash, else ErrUnknownSince (an empty half must
+// never read as "omit since"). Whether the commit exists is ChangesUnder's check.
+func ParseChangesSince(since string) (repo, commit string, err error) {
+	r, c, found := strings.Cut(since, ":")
+	if !found {
+		return "", since, nil
+	}
+	if len(r) != 12 || !isHex(r) {
+		return "", "", fmt.Errorf("%w (since %q is neither a bookmark <repo12>:<commit40> nor a 40-hex commit)", ErrUnknownSince, since)
+	}
+	if _, ok := parseFullHash(c); !ok {
+		return "", "", fmt.Errorf("%w (since %q is neither a bookmark <repo12>:<commit40> nor a 40-hex commit)", ErrUnknownSince, since)
+	}
+	return strings.ToLower(r), c, nil
 }
