@@ -3628,6 +3628,13 @@ components:
                 results:
                   type: array
                   items: { $ref: "#/components/schemas/SearchHit" }
+            notice:
+              type: string
+              description: &searchNotice |
+                Present only when a caller-supplied `min_similarity` removed every candidate
+                a text query found (and no later filter did). States the cutoff applied and the
+                best cosine similarity seen; `min_similarity` is a raw cosine, not the displayed
+                score (cosine×100). Absent in every other response.
 
     # Stats / activity / completions / domains
     Activity:
@@ -4812,6 +4819,9 @@ components:
         total:
           type: integer
           description: Post-dedupe union size; `limit`/`offset` page within it.
+        notice:
+          type: string
+          description: *searchNotice
 
     LensFact:
       allOf:
@@ -4846,6 +4856,9 @@ components:
           type: array
           items: { $ref: "#/components/schemas/LensSearchItem" }
         total: { type: integer }
+        notice:
+          type: string
+          description: *searchNotice
 
     LensCompletions:
       type: object
