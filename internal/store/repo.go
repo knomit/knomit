@@ -49,10 +49,10 @@ var ErrRepoReadOnly = errors.New("repo is read-only")
 // in between, and committing would silently discard it.
 var ErrFactChanged = errors.New("fact changed since it was read")
 
-// ErrInvalidPath is wrapped by every write door (and the exists check) when
-// the path holds a byte git cannot read back: a control character. Nothing
-// was written. Callers use errors.Is to answer the client with a 400 rather
-// than a 500: the path is the caller's mistake, not a store failure (#384).
+// ErrInvalidPath is wrapped by every write door when it refuses the path
+// itself: empty, containing "..", or one go-git would refuse to read back
+// (#384). Nothing was written. Callers map it (IsInvalidPath) to a 400 rather
+// than a 500: the path is the caller's mistake, not a store failure.
 var ErrInvalidPath = errors.New("invalid path")
 
 // ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read

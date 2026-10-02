@@ -236,6 +236,14 @@ func handleFactUpdate(b hal.URLBuilder, writer FactWriter) http.HandlerFunc {
 		// written months ago.
 		prior, perr := writer.PriorRefs(r.Context(), ri, branch, path)
 		if perr != nil {
+			// The prior-version read is the first thing to touch the path, so
+			// go-git's refusal of a path it will not look up surfaces here,
+			// before the store's write-side refusal would. Same answer: the
+			// path is the client's mistake (#384).
+			if store.IsInvalidPath(perr) {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid path", perr.Error(), r.URL.Path)
+				return
+			}
 			writeStoreError(w, r, perr, "Failed to read fact", branch)
 			return
 		}
