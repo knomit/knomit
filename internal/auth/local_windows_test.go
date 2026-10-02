@@ -138,8 +138,9 @@ func narrowPipeOwners(t *testing.T, accept func(owner *windows.SID, self string)
 }
 
 // rawServerPipe creates a single-instance, overlapped, byte-mode server end at
-// path with ListenLocal's own SDDL, so DialLocal can open it and reads off it
-// exactly the owner it would read off a ListenLocal pipe. The handle is closed
+// path with the SDDL ListenLocal passes to winio (listen_windows.go). That
+// SDDL only has to let DialLocal open the pipe: the test narrows the accepted
+// owners to none, so the owner's value does not matter. The handle is closed
 // at cleanup; any I/O on it must be cancelled before then (overlappedIO does).
 func rawServerPipe(t *testing.T, path string) windows.Handle {
 	t.Helper()
@@ -172,10 +173,10 @@ func rawServerPipe(t *testing.T, path string) windows.Handle {
 
 // overlappedIO is ONE overlapped operation on h, signalled through its own
 // event. The kernel writes into ov (and into buf, for a read) until the
-// operation completes, so neither may go away while it is in flight: the
-// cleanup, registered after the handle's and so run before it, cancels a
-// still-pending operation and WAITS for the cancellation to land before it
-// closes the event. That is what makes a t.Fatal on a timed-out wait safe.
+// operation completes, so neither may go away while it is in flight: its
+// cleanup cancels a still-pending operation and WAITS for the cancellation to
+// land before it closes the event. That is what makes a t.Fatal on a
+// timed-out wait safe.
 type overlappedIO struct {
 	h       windows.Handle
 	ov      windows.Overlapped
@@ -183,6 +184,12 @@ type overlappedIO struct {
 	pending bool
 }
 
+// newOverlappedIO prepares one operation on h.
+//
+// PRECONDITION: call it AFTER whatever registered h's close (rawServerPipe).
+// Cleanups run last-registered-first, and this one has to cancel the I/O
+// while h is still open; the order of the calls is the only thing that
+// guarantees it.
 func newOverlappedIO(t *testing.T, h windows.Handle, bufSize int) *overlappedIO {
 	t.Helper()
 	ev, err := windows.CreateEvent(nil, 1, 0, nil) // manual reset, unsignalled
@@ -252,11 +259,13 @@ func TestDialLocal_RejectsAForeignOwner(t *testing.T) {
 	srv := rawServerPipe(t, path)
 	connect := newOverlappedIO(t, srv, 0)
 	issued := windows.ConnectNamedPipe(srv, &connect.ov)
-	// ERROR_PIPE_CONNECTED means a client got in before the call, which is
-	// "connected", not a failure; FILE_FLAG_FIRST_PIPE_INSTANCE and the
-	// per-test name keep that client from being anyone but DialLocal.
-	alreadyConnected := errors.Is(issued, windows.ERROR_PIPE_CONNECTED)
-	if !alreadyConnected && issued != nil && !errors.Is(issued, windows.ERROR_IO_PENDING) {
+	// ERROR_PIPE_CONNECTED would mean a client opened the pipe before this
+	// call. DialLocal has not run yet, so that client is someone else, and the
+	// read below would be about THEM, not about DialLocal.
+	if errors.Is(issued, windows.ERROR_PIPE_CONNECTED) {
+		t.Fatalf("a client connected before DialLocal was called")
+	}
+	if issued != nil && !errors.Is(issued, windows.ERROR_IO_PENDING) {
 		t.Fatalf("ConnectNamedPipe: %v", issued)
 	}
 	narrowPipeOwners(t, func(*windows.SID, string) bool { return false })
@@ -280,10 +289,8 @@ func TestDialLocal_RejectsAForeignOwner(t *testing.T) {
 	// DialLocal has returned, so if it connected at all the pending connect
 	// has completed already; the bound only covers a DialLocal that refused
 	// WITHOUT connecting, which would make the read below prove nothing.
-	if !alreadyConnected {
-		if _, err := connect.wait(t, issued, 10*time.Second, "the pending ConnectNamedPipe (DialLocal never connected)"); err != nil {
-			t.Fatalf("ConnectNamedPipe completed with %v", err)
-		}
+	if _, err := connect.wait(t, issued, 10*time.Second, "the pending ConnectNamedPipe (DialLocal never connected)"); err != nil {
+		t.Fatalf("ConnectNamedPipe completed with %v", err)
 	}
 
 	// The connection was CLOSED, and closed before anything was written: the
