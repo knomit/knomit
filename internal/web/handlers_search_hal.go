@@ -238,11 +238,7 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 		}}
 		// An empty text result caused by the caller's own cutoff says so, rather
 		// than looking like "nothing matched".
-		if len(items) == 0 && minSimilarity > 0 && diag.CutoffEmptied() {
-			view.Notice = fmt.Sprintf("no results: the min_similarity cutoff (%.2f) removed every candidate; the best cosine similarity found was %.2f. "+
-				"min_similarity is a raw cosine (the displayed score is cosine×100), and cosines for the loaded model run low, so a high cutoff can exclude everything — "+
-				"lower it or omit it (0 uses the model's calibrated floor).", minSimilarity, diag.BestCosine)
-		}
+		view.Notice = store.CutoffNotice(text != "", minSimilarity, diag)
 		hal.WriteHAL(w, http.StatusOK, view)
 	}
 }

@@ -810,9 +810,42 @@ func (d SearchDiag) CutoffEmptied() bool { return d.VecHits > 0 && d.Candidates 
 func ValidateMinSimilarity(v float64) error {
 	if math.IsNaN(v) || v < 0 || v > 1 {
 		return fmt.Errorf("min_similarity must be between 0 and 1 (got %v): it is a raw cosine, not the displayed score (cosine×100); "+
-			"cosines for the loaded model run low, and 0 (the default) selects the model's calibrated floor, which is usually right", v)
+			"0 (the default) selects the loaded model's calibrated floor, which is usually right; achievable cosines depend on the model", v)
 	}
 	return nil
+}
+
+// CutoffNotice explains an empty text result that is NOT "nothing matched": the
+// caller's own min_similarity removed every candidate. diags holds one entry
+// per mount that answered (a repo query passes one). It returns "" unless the
+// query had text, the caller supplied a cutoff, at least one mount had KNN
+// candidates, and NO mount kept any after the cutoff. A candidate that the
+// cutoff kept but a later filter (type, domain, ...) removed counts as kept, so
+// that case yields no notice — the cutoff is not what emptied it.
+//
+// One helper serves MCP and REST so the wording cannot diverge.
+func CutoffNotice(text bool, minSimilarity float64, diags ...SearchDiag) string {
+	if !text || minSimilarity <= 0 {
+		return ""
+	}
+	best, emptied := 0.0, false
+	for _, d := range diags {
+		if d.Candidates > 0 {
+			return ""
+		}
+		if d.CutoffEmptied() {
+			emptied = true
+			if d.BestCosine > best {
+				best = d.BestCosine
+			}
+		}
+	}
+	if !emptied {
+		return ""
+	}
+	return fmt.Sprintf("no results: the min_similarity cutoff (%.2f) removed every candidate; the best cosine similarity found was %.2f. "+
+		"min_similarity is a raw cosine (the displayed score is cosine×100); lower it or omit it (0 uses the loaded model's calibrated floor).",
+		minSimilarity, best)
 }
 
 func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {

@@ -626,8 +626,9 @@ func ApplyReflectDecisions(
 		// Novelty gate: search the existing methodology corpus on this
 		// branch for anything within similarity threshold of (title+body).
 		// Search will internally embed the Text via the configured
-		// embedder; if no embedder is wired up, this falls back to
-		// keyword/tag scoring — still a useful guard, just looser.
+		// embedder. Text search is vector-only: with an embedder that fails, the
+		// search errors (and so does this proposal); a store with NO embedder at
+		// all returns no hits, so the gate is then a no-op rather than looser.
 		hits, err := idx.Search(ctx, branch, store.SearchOptions{
 			Text:          p.Title + "\n\n" + p.Body,
 			IncludeTypes:  []string{string(fact.Methodology)},

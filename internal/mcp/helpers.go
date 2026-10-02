@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/rs/zerolog/log"
 
@@ -73,19 +74,24 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 // every repo instance, so the N vectors were already identical by construction
 // — this computes one of them instead of N.
 //
-// A nil vector here is a hand-off, not a verdict: with no embedder, no text, or
-// a failed inference, each mount embeds the query itself. Text search is
-// vector-only — there is no keyword fallback — so if that per-mount embedding
-// also fails, store.Search returns an error and the query FAILS with it rather
-// than answering with an empty list.
-func fanoutQueryVec(ctx context.Context, emb store.Embedder, text string) []float32 {
+// Text search is vector-only — there is no keyword fallback — so when the
+// embedder is present and cannot produce a vector, this returns the error and
+// the caller FAILS the query ONCE, up front, instead of letting every mount
+// repeat the same failing inference. A nil vector with a nil error means "no
+// text" or "no embedder handed in": each mount then embeds for itself (and a
+// mount with no embedder at all keeps the store's documented empty result).
+func fanoutQueryVec(ctx context.Context, emb store.Embedder, text string) ([]float32, error) {
 	if text == "" || emb == nil {
-		return nil
+		return nil, nil
 	}
 	vec, err := emb.EmbedQuery(ctx, text)
 	if err != nil {
-		log.Warn().Err(err).Msg("federated query: embed query failed")
-		return nil
+		log.Error().Err(err).Msg("federated query: embed query failed")
+		return nil, fmt.Errorf("search: embed query: %w", err)
 	}
-	return vec
+	if len(vec) == 0 {
+		log.Error().Msg("federated query: embedder returned an empty query vector")
+		return nil, errors.New("search: embed query: embedder returned an empty vector")
+	}
+	return vec, nil
 }

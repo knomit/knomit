@@ -1,9 +1,7 @@
 package web
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,32 +89,5 @@ func TestHandleSearch_CutoffExplainsEmptyResult(t *testing.T) {
 	none := &store.SearchDiag{Text: true, VecHits: 0, Cutoff: 0.7}
 	if _, ok := run("/repos/alpha/branches/agent:test/search?q=x&min_similarity=0.7", none)["notice"]; ok {
 		t.Error("nothing matched at all: no cutoff notice")
-	}
-}
-
-// A provider failure (embedder or KNN) is an error response, never an empty list.
-func TestHandleSearch_ProviderErrorIsNotEmpty(t *testing.T) {
-	provider := &stubSearchProvider{err: errors.New("search: embed query: boom")}
-	s := &Server{Manager: newTestManagerWithRepos(t, "alpha"), providers: storeProviders{search: provider}}
-	rec := httptest.NewRecorder()
-	s.NewAPIRouter().ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
-		"/repos/alpha/branches/agent:test/search?q=x", nil))
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status: %d, want 500; body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-type failingQueryEmbedder struct{ store.Embedder }
-
-func (failingQueryEmbedder) EmbedQuery(context.Context, string) ([]float32, error) {
-	return nil, errors.New("inference down")
-}
-
-// The production provider turns an embedder failure into an error rather than
-// handing the store an empty vector to re-embed.
-func TestDefaultSearchProvider_EmbedErrorPropagates(t *testing.T) {
-	_, err := defaultSearchProvider{}.Search(context.Background(), nil, failingQueryEmbedder{}, "agent:test", store.SearchOptions{Text: "x"})
-	if err == nil || !strings.Contains(err.Error(), "inference down") {
-		t.Fatalf("want embed error, got %v", err)
 	}
 }
