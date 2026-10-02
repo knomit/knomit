@@ -397,9 +397,8 @@ func TestChangesUnder_ExplicitFailures(t *testing.T) {
 	require.True(t, errors.Is(err, ErrInvalidPrefix))
 }
 
-// The cursor records the repo and branch it was minted for, and a legacy
-// cursor (minted before it did) still decodes, with an empty scope the
-// caller restores. A cursor carrying only half a scope was never minted.
+// The cursor records the repo and branch it was minted for. A cursor missing
+// either (or both) was never minted and is refused.
 func TestChangesCursor_ScopeRoundTrips(t *testing.T) {
 	head := "0123456789abcdef0123456789abcdef01234567"
 	scope := ChangesScope{Repo: "aaaaaaaaaaaa", Branch: "exp/x"}
@@ -408,11 +407,13 @@ func TestChangesCursor_ScopeRoundTrips(t *testing.T) {
 	require.Equal(t, scope, got)
 	require.Equal(t, ChangesQuery{Since: "s", Head: head, Prefix: "tasks/a", After: "kb/tasks/a/t1.md"}, q)
 
-	legacy := base64.RawURLEncoding.EncodeToString([]byte(`{"h":"` + head + `","a":"kb/x.md"}`))
-	q, got, err = DecodeChangesCursor(legacy)
-	require.NoError(t, err)
-	require.Equal(t, ChangesScope{}, got)
-	require.Equal(t, head, q.Head)
+	noScope := base64.RawURLEncoding.EncodeToString([]byte(`{"h":"` + head + `","a":"kb/x.md"}`))
+	_, _, err = DecodeChangesCursor(noScope)
+	require.ErrorIs(t, err, ErrInvalidChangesCursor)
+
+	noRepo := base64.RawURLEncoding.EncodeToString([]byte(`{"b":"main","h":"` + head + `","a":"kb/x.md"}`))
+	_, _, err = DecodeChangesCursor(noRepo)
+	require.ErrorIs(t, err, ErrInvalidChangesCursor)
 
 	half := base64.RawURLEncoding.EncodeToString([]byte(`{"r":"aaaaaaaaaaaa","h":"` + head + `","a":"kb/x.md"}`))
 	_, _, err = DecodeChangesCursor(half)
@@ -433,7 +434,8 @@ func TestParseChangesSince(t *testing.T) {
 	require.Empty(t, repo, "a bare commit names no repo")
 	require.Equal(t, head, commit)
 
-	for _, bad := range []string{"core:" + head, "aaaaaaaaaaaaa:" + head, ":" + head} {
+	for _, bad := range []string{"core:" + head, "aaaaaaaaaaaaa:" + head, ":" + head,
+		"aaaaaaaaaaaa:", "aaaaaaaaaaaa:abc", "aaaaaaaaaaaa:" + head + "0", "aaaaaaaaaaaa:" + head[:39] + "z"} {
 		_, _, err = ParseChangesSince(bad)
 		require.ErrorIs(t, err, ErrUnknownSince, bad)
 	}

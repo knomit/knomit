@@ -342,10 +342,7 @@ func isHex(s string) bool {
 
 // ChangesScope is WHICH history a paged read compares: the repo (its 12-hex
 // wire id) and the branch name. A cursor records it so every page reads the
-// same repo and branch as the first. The zero value marks a LEGACY cursor,
-// minted before the scope was recorded; restoring its meaning is the caller's
-// job (the MCP tool then reads the write repo's consensus branch, which was
-// all it could read when such cursors were minted).
+// same repo and branch as the first. A cursor always carries both.
 type ChangesScope struct {
 	Repo   string
 	Branch string
@@ -376,15 +373,15 @@ func EncodeChangesCursor(scope ChangesScope, since, head, prefix, after string) 
 }
 
 // DecodeChangesCursor reverses EncodeChangesCursor. The returned query has no
-// Limit; the caller sets one. A cursor carrying only one of repo and branch
-// was never minted and is refused.
+// Limit; the caller sets one. A cursor must carry BOTH repo and branch; one
+// missing either was never minted and is refused.
 func DecodeChangesCursor(s string) (ChangesQuery, ChangesScope, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
 		return ChangesQuery{}, ChangesScope{}, ErrInvalidChangesCursor
 	}
 	var c changesCursor
-	if err := json.Unmarshal(raw, &c); err != nil || c.Head == "" || c.After == "" || (c.Repo == "") != (c.Branch == "") {
+	if err := json.Unmarshal(raw, &c); err != nil || c.Head == "" || c.After == "" || c.Repo == "" || c.Branch == "" {
 		return ChangesQuery{}, ChangesScope{}, ErrInvalidChangesCursor
 	}
 	return ChangesQuery{Since: c.Since, Head: c.Head, Prefix: c.Prefix, After: c.After},
@@ -401,14 +398,18 @@ func ChangesBookmark(repo12, head string) string { return repo12 + ":" + head }
 
 // ParseChangesSince splits a caller's `since` into the repo it names and the
 // commit. A raw commit (no ":") names no repo — it means the repo being read —
-// and comes back with repo "". Only the repo half is checked here (a
-// malformed one is ErrUnknownSince); the commit is checked by ChangesUnder.
+// and comes back with repo "". A bookmark's repo half must be 12-hex and its
+// commit half a full 40-hex hash, else ErrUnknownSince (an empty half must
+// never read as "omit since"). Whether the commit exists is ChangesUnder's check.
 func ParseChangesSince(since string) (repo, commit string, err error) {
 	r, c, found := strings.Cut(since, ":")
 	if !found {
 		return "", since, nil
 	}
 	if len(r) != 12 || !isHex(r) {
+		return "", "", fmt.Errorf("%w (since %q is neither a bookmark <repo12>:<commit40> nor a 40-hex commit)", ErrUnknownSince, since)
+	}
+	if _, ok := parseFullHash(c); !ok {
 		return "", "", fmt.Errorf("%w (since %q is neither a bookmark <repo12>:<commit40> nor a 40-hex commit)", ErrUnknownSince, since)
 	}
 	return strings.ToLower(r), c, nil

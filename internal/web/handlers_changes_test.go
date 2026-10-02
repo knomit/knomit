@@ -150,8 +150,8 @@ func TestREST_Changes_AcceptsBookmarkForThisRepo(t *testing.T) {
 }
 
 // A cursor records the repo and branch it was minted for: replayed on another
-// branch or another repo's route it is refused, never re-read there. A legacy
-// cursor (no scope) keeps paging the route it is given.
+// branch or another repo's route it is refused, never re-read there; a cursor
+// with no scope was never minted and is refused too.
 func TestREST_Changes_CursorIsScopedToRepoAndBranch(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	r := (&Server{Manager: m, AgentBranch: "machine/test", OntologyRoot: "kb"}).NewAPIRouter()
@@ -171,16 +171,65 @@ func TestREST_Changes_CursorIsScopedToRepoAndBranch(t *testing.T) {
 
 	for name, url := range map[string]string{
 		"another branch": "/repos/alpha/branches/main/changes?cursor=" + cursor,
-		"another repo":   "/repos/beta/branches/main/changes?cursor=" + cursor,
+		"another repo":   "/repos/beta/branches/" + urlBranch(agent) + "/changes?cursor=" + cursor, // same branch name: only the repo half differs
 	} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
 		require.Equal(t, http.StatusBadRequest, rec.Code, "%s: %s", name, rec.Body.String())
-		require.Contains(t, rec.Body.String(), "restart without a cursor", name)
+		require.Contains(t, rec.Body.String(), "cursor is for branch", name) // the guard's own text, not the store's generic refusal
 	}
 
-	legacy := store.EncodeChangesCursor(store.ChangesScope{}, "", p1.Head, "tasks/a", p1.Embedded["changes"][0].Path)
-	rec, p2 := getChanges(t, r, base+"?limit=1&cursor="+legacy)
+	noScope := store.EncodeChangesCursor(store.ChangesScope{}, "", p1.Head, "tasks/a", p1.Embedded["changes"][0].Path)
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, base+"?limit=1&cursor="+noScope, nil))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "Invalid cursor")
+}
+
+// The ancestry check on a cursor's pinned head cannot tell branches apart when
+// one contains the other's head: a cursor minted on main replayed on the agent
+// branch AFTER it merged main passes that check, so only the scope guard
+// refuses it. (A different repo cannot contain this repo's head -- the repo id
+// IS its root commit -- so the repo half of the guard is only observable by its
+// message, asserted in the test above.)
+func TestREST_Changes_CursorForMainRefusedOnABranchContainingItsHead(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha")
+	r := (&Server{Manager: m, AgentBranch: "machine/test", OntologyRoot: "kb"}).NewAPIRouter()
+	ri := m.Get("alpha")
+	agent := ri.AgentBranch()
+	seedOn(t, ri, "main", "kb/tasks/a/t1.md", "kb/tasks/a/t2.md", "kb/tasks/a/t3.md")
+	require.NoError(t, ri.WithRead(func(svc *store.Service) {
+		require.NoError(t, svc.Branches().MergeBranch(context.Background(), "main", agent, store.StrategyLocalWins))
+	}))
+
+	rec, p1 := getChanges(t, r, "/repos/alpha/branches/main/changes?prefix=tasks/a&limit=1")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/t2.md", Change: store.ChangeAdded}}, p2.Embedded["changes"])
+	_, cursor, ok := strings.Cut(p1.Links["next"]["href"], "cursor=")
+	require.True(t, ok)
+	if i := strings.Index(cursor, "&"); i >= 0 {
+		cursor = cursor[:i]
+	}
+
+	// Sanity: the same cursor pages main itself.
+	rec, _ = getChanges(t, r, "/repos/alpha/branches/main/changes?limit=1&cursor="+cursor)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repos/alpha/branches/"+urlBranch(agent)+"/changes?cursor="+cursor, nil))
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.Contains(t, rec.Body.String(), "cursor is for branch")
+}
+
+// A bookmark with an empty or non-40-hex commit half is ErrUnknownSince, never
+// read as "omit since".
+func TestREST_Changes_MalformedBookmarkCommitIsRefused(t *testing.T) {
+	ri, r := changesRepo(t)
+	seedOn(t, ri, ri.AgentBranch(), "kb/tasks/a/t1.md")
+	base := "/repos/alpha/branches/" + urlBranch(ri.AgentBranch()) + "/changes?since="
+	for _, since := range []string{federate.ID12(ri.ID()) + ":", federate.ID12(ri.ID()) + ":abc"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, base+since, nil))
+		require.Equal(t, http.StatusBadRequest, rec.Code, since+": "+rec.Body.String())
+		require.Contains(t, rec.Body.String(), "Unknown since", since)
+	}
 }

@@ -52,6 +52,11 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		}
 
 		// The repo's wire id: what a cursor and a bookmark name it by.
+		if ri.ID() == "" {
+			hal.WriteProblem(w, http.StatusConflict, "Repo identity unresolved",
+				"this repo's identity is not resolved yet (no root commit); retry after the repo has its first commit", r.URL.Path)
+			return
+		}
 		repo12 := federate.ID12(ri.ID())
 
 		var q store.ChangesQuery
@@ -65,10 +70,9 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 				return
 			}
 			// A cursor minted for another repo or branch is refused, not
-			// replayed here. A legacy cursor (no scope) keeps its old
-			// meaning: this route's repo and branch, guarded by the store's
-			// ancestry check on its pinned head.
-			if scope.Repo != "" && (scope.Repo != repo12 || scope.Branch != branch) {
+			// replayed here. (The store's ancestry check on its pinned head
+			// cannot catch this: a branch may contain another's head.)
+			if scope.Repo != repo12 || scope.Branch != branch {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid cursor",
 					"cursor is for branch "+strconv.Quote(scope.Branch)+" of repo "+scope.Repo+", this route reads branch "+
 						strconv.Quote(branch)+" of repo "+repo12+"; restart without a cursor", r.URL.Path)

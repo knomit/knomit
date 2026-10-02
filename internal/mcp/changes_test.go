@@ -331,21 +331,60 @@ func TestChangesHandler_CursorRecordsRepoAndBranch(t *testing.T) {
 	require.Contains(t, text, "cursor is for repo "+b12+", which is not mounted in this binding; restart without a cursor")
 }
 
-// A cursor minted before cursors recorded their scope keeps its old meaning:
-// the write repo's consensus branch, whatever the binding is bound to.
-func TestChangesHandler_LegacyCursorPagesWriteRepoConsensus(t *testing.T) {
+// A cursor must carry both repo and branch: one without a scope was never
+// minted and is refused, and so is one carrying only half of it.
+func TestChangesHandler_ScopelessCursorIsRefused(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	svc := changesSvc(t, ri)
 	b := repos.NewBindingOfRepo(ri, "agent/test")
 	writeOn(t, svc, "main", "kb/tasks/a/t1.md")
 	head := writeOn(t, svc, "main", "kb/tasks/a/t2.md")
-	writeOn(t, svc, "agent/test", "kb/tasks/a/t3-agent.md")
 
-	legacy := store.EncodeChangesCursor(store.ChangesScope{}, "", head, "tasks/a", "kb/tasks/a/t1.md")
-	out, text, isErr := callChanges(t, b, map[string]any{"cursor": legacy})
+	cursor := store.EncodeChangesCursor(store.ChangesScope{}, "", head, "tasks/a", "kb/tasks/a/t1.md")
+	_, text, isErr := callChanges(t, b, map[string]any{"cursor": cursor})
+	require.True(t, isErr, text)
+	require.Contains(t, text, store.ErrInvalidChangesCursor.Error())
+
+	halfScoped := store.EncodeChangesCursor(store.ChangesScope{Repo: id12(ri)}, "", head, "tasks/a", "kb/tasks/a/t1.md")
+	_, text, isErr = callChanges(t, b, map[string]any{"cursor": halfScoped})
+	require.True(t, isErr, text)
+	require.Contains(t, text, store.ErrInvalidChangesCursor.Error())
+}
+
+// A cursor minted for repo A and a call that names repo B is a contradiction,
+// refused before anything is read.
+func TestChangesHandler_CursorForOneRepoRefusesAnotherExplicitRepo(t *testing.T) {
+	repoA := newLearnTestRepo(t, fact.CodeOntology())
+	repoB := newLearnTestRepo(t, fact.CodeOntology())
+	svcA := changesSvc(t, repoA)
+	for _, p := range []string{"kb/tasks/a/t1.md", "kb/tasks/a/t2.md"} {
+		writeOn(t, svcA, "agent/test", p)
+	}
+	lens := repos.NewBindingForTest(repoA,
+		repos.ReadTarget{RI: repoA, Branch: "agent/test"},
+		repos.ReadTarget{RI: repoB, Branch: "agent/test"},
+	)
+	p1, text, isErr := callChanges(t, lens, map[string]any{"prefix": "tasks/a", "limit": 1})
 	require.False(t, isErr, text)
-	require.Equal(t, "main", out.Branch)
-	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/t2.md", Change: store.ChangeAdded}}, out.Changes)
+	require.NotNil(t, p1.Cursor)
+
+	_, text, isErr = callChanges(t, lens, map[string]any{"cursor": *p1.Cursor, "repo": id12(repoB)})
+	require.True(t, isErr, text)
+	require.Contains(t, text, "cursor is for repo "+id12(repoA))
+}
+
+// A bookmark whose commit half is empty or not a full hash is refused, never
+// read as "omit since" (which would answer with the whole folder).
+func TestChangesHandler_MalformedBookmarkCommitIsRefused(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	svc := changesSvc(t, ri)
+	b := repos.NewBindingOfRepo(ri, "agent/test")
+	writeOn(t, svc, "agent/test", "kb/tasks/a/t1.md")
+	for _, since := range []string{id12(ri) + ":", id12(ri) + ":abc"} {
+		_, text, isErr := callChanges(t, b, map[string]any{"since": since})
+		require.True(t, isErr, since+": "+text)
+		require.Contains(t, text, "since", since)
+	}
 }
 
 // No write path: a read creates, moves or deletes no branch ref and no

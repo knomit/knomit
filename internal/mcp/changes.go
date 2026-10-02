@@ -27,8 +27,8 @@ const ChangesDescription = "What is different under a folder since a commit you 
 	"added, modified or deleted, plus `head` — the commit it compared against — and `bookmark`. " +
 	"No timestamp is read anywhere: the answer depends only on the two commits. " +
 	"WHICH HISTORY: one repo and one branch per call. `repo` (a 12-hex id from knomit_repos) defaults to the " +
-	"repo you write to; `branch` defaults to the branch you are bound to in that repo — your agent branch, or " +
-	"your experiment while you are in one — so your own writes appear immediately, and two machines get " +
+	"repo you write to; `branch` defaults to the branch your binding reads that repo at (for the write repo, normally your " +
+	"agent branch, or your experiment while you are in one), so your own writes appear immediately, and two machines get " +
 	"different answers. Pass `consensus: true` instead to read that repo's consensus branch (main, or whatever " +
 	"it is named there): the shared history every synced machine agrees on. Coordination agents reading a task " +
 	"pool, an inbox or anything another machine also reads should pass `consensus: true`. The response names " +
@@ -143,11 +143,12 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		}
 		q.Limit = limit
 
-		// The repo: the cursor's (a legacy cursor's is the write repo), else
-		// the argument, else the write repo.
+		// The repo: the cursor's, else the argument, else the write repo. A
+		// cursor always names both; an explicit argument that contradicts it
+		// is refused.
 		repoID := args.repo
 		if cursor != "" {
-			if scope.Repo != "" && args.repo != "" && !strings.EqualFold(args.repo, scope.Repo) {
+			if args.repo != "" && !strings.EqualFold(args.repo, scope.Repo) {
 				return mcpgo.NewToolResultError(fmt.Sprintf("cursor is for repo %s, this call names repo %s; pass the cursor alone", scope.Repo, args.repo)), nil
 			}
 			repoID = scope.Repo
@@ -159,6 +160,9 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 			}
 			return mcpgo.NewToolResultError(errText), nil
 		}
+		if rt.RI.ID() == "" {
+			return mcpgo.NewToolResultError("this repo's identity is not resolved yet (no root commit); cannot name it in a bookmark or cursor — retry after the repo has its first commit"), nil
+		}
 		repo12 := federate.ID12(rt.RI.ID())
 
 		svc, release, err := rt.RI.Acquire()
@@ -167,13 +171,10 @@ func ChangesHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallT
 		}
 		defer release()
 
-		// The branch: the cursor's (a legacy cursor's is the consensus
-		// branch), else the argument, else consensus on request, else the
-		// branch this binding reads the repo at.
+		// The branch: the cursor's, else the argument, else consensus on
+		// request, else the branch this binding reads the repo at.
 		branch, fromConsensus := rt.Branch, false
 		switch {
-		case cursor != "" && scope.Branch == "":
-			branch, fromConsensus = svc.UpstreamBranch(), true
 		case cursor != "":
 			branch = scope.Branch
 		case args.branch != "":
