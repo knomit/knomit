@@ -672,6 +672,16 @@ func (b *repoBuilder) build() *RepoInstance {
 	if b.agentBranch != "" && !b.subscribed && !b.cfg.ReadOnly {
 		ri.consensus = newConsensusMerger(ri, b.name, b.agentBranch)
 	}
+	// The experiment expiry sweeper, built here and started in activate() on
+	// its own context. Not built for a SUBSCRIPTION (no agent branch, so no
+	// experiment can be forked from one, and a loop that can never find
+	// anything is noise with a timer behind it), when experiments.expiry_days
+	// is 0 (never expire: the loop must not start at all), or under
+	// DisableBackgroundSync (a timer-driven loop a test harness asked not to
+	// have).
+	if !b.subscribed && b.cfg.Experiments.ExpiryDays > 0 && !b.disableBackgroundSync {
+		ri.sweep = newExperimentSweeper(ri.Acquire, b.name, b.cfg.Experiments.ExpiryDays)
+	}
 	// This closure runs under the writer's branch lock (store notifyCommit),
 	// so it must only schedule: the observer's debounce timer, and one
 	// non-blocking send on a 1-slot channel — the dispatcher's for the agent
@@ -868,13 +878,15 @@ func (b *repoBuilder) build() *RepoInstance {
 	// reached it.
 	//
 	// Same drain as startSync (cancel the running loops, wait them out under
-	// syncLoopMu, new ctx), then the loops startSyncLoops would have started for
-	// a repo with no origin: the experiment sweep (the cancel took it too) and
-	// runLocalReconcileLoop, on the CURRENT store so a SwapStore is followed.
-	// The caller has already removed the origin, so the loop's own ownsMain
-	// check finds none and advances. DisableBackgroundSync is honoured here as
-	// everywhere a loop starts (kb/gotchas/repos/sync/activatesync-honours-
-	// disable-flag): the drain still runs, the loops do not.
+	// syncLoopMu, new ctx), then the loop startSyncLoops would have started for
+	// a repo with no origin: runLocalReconcileLoop, on the CURRENT store so a
+	// SwapStore is followed. The experiment sweep is not restarted here because
+	// this drain never touches it: it has its own lifetime (experimentSweeper,
+	// started once in activate()). The caller has already removed the origin,
+	// so the loop's own ownsMain check finds none and advances.
+	// DisableBackgroundSync is honoured here as everywhere a loop starts
+	// (kb/gotchas/repos/sync/activatesync-honours-disable-flag): the drain
+	// still runs, the loop does not.
 	ri.startLocalSync = func() error {
 		currentSvc, release, err := ri.Acquire()
 		if err != nil {
@@ -895,13 +907,6 @@ func (b *repoBuilder) build() *RepoInstance {
 
 		if noBackgroundSync {
 			return nil
-		}
-		if !b.subscribed && cfg.Experiments.ExpiryDays > 0 {
-			b.syncLoopMu.Lock()
-			syncWg.Add(1)
-			b.syncLoopMu.Unlock()
-			go runExperimentSweepLoop(newCtx, &syncWg, currentSvc, name,
-				cfg.Experiments.ExpiryDays, defaultExperimentSweepInterval)
 		}
 		b.syncLoopMu.Lock()
 		syncWg.Add(1)
@@ -942,6 +947,7 @@ func (b *repoBuilder) activate() {
 	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
 	b.startTriggerDispatcher()
 	b.startConsensusMerger()
+	b.startExperimentSweep()
 }
 
 // startConsensusMerger launches the F08 merger built in build(), after the
@@ -960,8 +966,8 @@ func (b *repoBuilder) startConsensusMerger() {
 // startTriggerDispatcher launches the F07 dispatcher built in build(), after
 // the initial index so its first run never races the heal. It gets its OWN
 // context from b.ctx — never syncCtx, which ActivateSync cancels to restart
-// the reconcile loop (the experiment sweep shares syncCtx and dies on every
-// origin attach; the dispatcher must not). It runs regardless of
+// the reconcile loop (the experiment sweep once shared syncCtx and died on
+// every origin attach, issue #377). It runs regardless of
 // DisableBackgroundSync: it writes no ref and no fact, only its two tables and
 // the SSE hub, and a repo with no triggers declared does one cheap run.
 func (b *repoBuilder) startTriggerDispatcher() {
@@ -1071,7 +1077,6 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	if b.disableBackgroundSync {
 		return
 	}
-	b.startExperimentSweep(ctx, wg)
 	// F07 PR 2: the tick kicks the trigger dispatcher (the `on: due` sweep
 	// rides the existing tick; no timer of its own). nil when the builder has
 	// no instance yet (a unit test of the loops) — the loops are nil-safe.
@@ -1114,29 +1119,21 @@ func (b *repoBuilder) startSyncLoops(ctx context.Context, wg *sync.WaitGroup, hu
 	go runReconcileLoop(ctx, wg, b.svc, hub, b.name, b.agentBranch, authFn, b.cfg.LocalOriginRoot, b.cfg.ReadOnly, b.onPush, kick, wake, brk, mode)
 }
 
-// startExperimentSweep launches the expiry sweeper for this repo.
-//
-// Started alongside the sync loops rather than inside either of them: both
-// are chosen by whether the repo has an origin, and the sweeper does not care
-// — an experiment is local-only either way. It shares their ctx and
-// WaitGroup so a repo that is archived, swapped or shut down takes the
-// sweeper with it.
-//
-// A SUBSCRIPTION is skipped. It has no agent branch, so it can hold no
-// experiment forked from one, and a loop that can never find anything is
-// noise in the log with a timer behind it.
-func (b *repoBuilder) startExperimentSweep(ctx context.Context, wg *sync.WaitGroup) {
-	if b.subscribed {
+// startExperimentSweep launches the expiry sweeper built in build(), once,
+// after the initial index. It gets its OWN context from b.ctx — never syncCtx,
+// which ActivateSync and StartLocalSync cancel to restart the reconcile loops.
+// The sweep is origin-independent (an experiment is local-only), so it must
+// survive every origin attach and detach; on syncCtx it died on each attach
+// (issue #377). It reaches the store through ri.Acquire per tick, so the
+// handle drain covers it across SwapStore, and shutdown/Manager.Close stop it
+// before the store closes. Whether it runs at all (not a subscription,
+// expiry_days > 0, DisableBackgroundSync unset) was decided in build(): nil
+// means none.
+func (b *repoBuilder) startExperimentSweep() {
+	if b.ri == nil || b.ri.sweep == nil {
 		return
 	}
-	if b.cfg.Experiments.ExpiryDays <= 0 {
-		return
-	}
-	b.syncLoopMu.Lock()
-	wg.Add(1)
-	b.syncLoopMu.Unlock()
-	go runExperimentSweepLoop(ctx, wg, b.svc, b.name,
-		b.cfg.Experiments.ExpiryDays, defaultExperimentSweepInterval)
+	b.ri.sweep.start(b.ctx)
 }
 
 // close releases resources opened so far. Safe to call at any point during

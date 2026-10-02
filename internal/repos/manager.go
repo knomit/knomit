@@ -717,6 +717,20 @@ func (m *Manager) Close() error {
 		if ri.syncWg != nil {
 			ri.syncWg.Wait()
 		}
+		// The loops with their own context (derived from the manager ctx, not
+		// syncCtx): the trigger dispatcher, the consensus merger and the
+		// experiment sweep. Each reaches the store through Acquire, so each must
+		// be stopped (cancel + wait) before closeFn — a run still holding an
+		// Acquire would stall closeFn's drain, and one starting after it would
+		// find the store closed. Stopped after indexWg.Wait, which orders their
+		// start in activate() (inside the heal goroutine) before this stop.
+		if ri.triggers != nil {
+			ri.triggers.stop()
+		}
+		if ri.consensus != nil {
+			ri.consensus.stop()
+		}
+		ri.sweep.stop()
 		if ri.hub != nil {
 			ri.hub.Shutdown()
 		}
