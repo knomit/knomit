@@ -230,6 +230,9 @@ func newMissionManager(t *testing.T, agent, signer string, extra func(*config.Co
 		ScriptTools:           tools,
 	})
 	t.Cleanup(func() { _ = m.Close() })
+	// What a booted server records once its listeners are bound: the shipped
+	// recipe's exec waits for it. The fake claude never dials it.
+	m.SetServerAddress("http://127.0.0.1:1")
 	require.NoError(t, m.Start())
 	return m, tools
 }

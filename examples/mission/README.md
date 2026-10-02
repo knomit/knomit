@@ -368,8 +368,12 @@ one.
   recipe.
 - **With ONE MCP server, unbound**: knomit's bridge `kb` with no `--repo` and
   no `--lens`, built by the recipe. `kb` reaches THIS knomit through the
-  `KNOMIT_HOME` in the recipe's environment. `--strict-mcp-config` keeps the
-  user's own MCP servers out.
+  `KNOMIT_SERVER` knomit puts in the recipe's environment (its own local
+  socket, or its TCP address when the socket is not its own); Claude Code
+  passes that environment on to `kb`. `KNOMIT_HOME` alone would not do it:
+  `kb` does not choose its server by home, so with several instances on one
+  machine it would reach whichever one the desktop lockfile names.
+  `--strict-mcp-config` keeps the user's own MCP servers out.
 - **Allowed tools**: that server and `WebFetch`, `WebSearch`. Nothing else.
 - **A budget**: `--max-budget-usd` from `MAX_BUDGET_USD` in the recipe. Set
   it for your mission before the first run.

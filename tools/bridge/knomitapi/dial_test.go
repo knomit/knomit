@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -30,14 +32,54 @@ import (
 // isolateHome points KNOMIT_HOME at an empty temp dir so nothing in this
 // package's suite can reach a listener that happens to exist on the
 // developer's machine. Without it a green run means "no server at ~/.knomit
-// right now", not "this commit is good".
+// right now", not "this commit is good". It also empties KNOMIT_SERVER and
+// moves the desktop lockfile's directory (isolateLockfile): every client here
+// now resolves its server through ResolveServer, which reads both.
 func isolateHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("KNOMIT_HOME", dir)
 	t.Setenv("KNOMIT_REPO", "")
-	t.Setenv("KNOMIT_BASE_URL", "")
+	t.Setenv("KNOMIT_SOCKET", "")
+	t.Setenv("KNOMIT_SERVER", "")
+	isolateLockfile(t)
 	return dir
+}
+
+// isolateLockfile points the per-user state directory (where the desktop's
+// server.json lives) at an empty temp dir on every platform, so ResolveServer
+// can never find the developer's real lockfile — which names the running
+// desktop instance — and returns the lockfile path a test may write.
+func isolateLockfile(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "local"))
+	p, err := config.LockfilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(p, dir) {
+		t.Fatalf("the lockfile path %q is not under the isolated dir %q", p, dir)
+	}
+	return p
+}
+
+// writeLockfile writes a desktop lockfile advertising srvURL's port.
+func writeLockfile(t *testing.T, path, srvURL string) {
+	t.Helper()
+	u, err := url.Parse(srvURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"port":`+u.Port()+`,"pid":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // serveLocalAt starts an HTTP server on the local listener at path and
@@ -102,7 +144,7 @@ func serveAtResolvedHome(t *testing.T, body string) string {
 	home := homeForLocalListener(t)
 	t.Setenv("KNOMIT_HOME", home)
 	t.Setenv("KNOMIT_REPO", "")
-	t.Setenv("KNOMIT_BASE_URL", "")
+	t.Setenv("KNOMIT_SERVER", "")
 	path, err := config.SocketPath()
 	if err != nil {
 		t.Fatal(err)
@@ -251,29 +293,29 @@ func TestNewHTTPClient_NonSocketPathFallsBackToTCP(t *testing.T) {
 	}
 }
 
-// REGRESSION, blocking finding 2: the hooks client must read KNOMIT_BASE_URL
+// REGRESSION, blocking finding 2: the hooks client must read KNOMIT_SERVER
 // at DIAL time. A package-level var froze the transport at package init,
 // before any test body ran, so t.Setenv could not redirect it — and with a
 // live listener those tests reached the real local server and could pass for
 // the wrong reason.
-func TestClient_HonoursBaseURLSetAfterInit(t *testing.T) {
+func TestClient_HonoursKnomitServerSetAfterInit(t *testing.T) {
 	isolateHome(t)
 	// A LIVE listener at the resolved home: without per-dial resolution this
 	// is exactly the machine state that hijacks the call.
 	serveAtResolvedHome(t, "via-socket")
 
 	tcp := tcpServer(t)
-	t.Setenv("KNOMIT_BASE_URL", tcp.URL)
+	t.Setenv("KNOMIT_SERVER", tcp.URL)
 
 	if got := get(t, Client(), tcp.URL+"/anything"); got != "via-tcp" {
-		t.Fatalf("KNOMIT_BASE_URL set after init must be honoured; body=%q", got)
+		t.Fatalf("KNOMIT_SERVER set after init must be honoured; body=%q", got)
 	}
 }
 
 // The counterpart: with no explicit URL, the same lazily-built client DOES
 // take the local listener — so the test above is not passing merely because
 // the listener was never reachable.
-func TestClient_UsesTheSocketWhenNoBaseURLIsNamed(t *testing.T) {
+func TestClient_UsesTheSocketWhenNoServerIsNamed(t *testing.T) {
 	isolateHome(t)
 	serveAtResolvedHome(t, "via-socket")
 

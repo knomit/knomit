@@ -17,6 +17,7 @@ import (
 	knomitapp "knomit/internal/app"
 	"knomit/internal/auth"
 	"knomit/internal/config"
+	"knomit/internal/serveraddr"
 	"knomit/tools/desktop/internal/lockfile"
 	"knomit/tools/desktop/internal/netutil"
 )
@@ -32,6 +33,10 @@ type server struct {
 	cancel      context.CancelFunc
 	lockPath    string
 	closeSocket func() // from auth.ListenLocal; a noop when no socket was opened
+	// address is this server's own address in KNOMIT_SERVER's spelling: its
+	// local listener when that bound, else its TCP port. app.go hands it to
+	// the repos Manager for the processes recipes start.
+	address string
 }
 
 // shutdown stops the server and removes the discovery lockfile. It cancels the
@@ -213,7 +218,15 @@ func bootServer(parent context.Context, handler http.Handler, lockPath, version 
 		closeSocket()
 		return nil, 0, fmt.Errorf("write lockfile: %w", err)
 	}
-	return &server{http: srv, tls: tlsSrv, tlsAddr: tlsAddr, tlsState: tstate, closeTLS: closeTLS, cancel: cancel, lockPath: lockPath, closeSocket: closeSocket}, port, nil
+	// The address this server's own children (recipe `exec`) get as
+	// KNOMIT_SERVER: the local listener only if it BOUND here — a held one
+	// (ErrSocketInUse) belongs to another instance — else the TCP port.
+	address := serveraddr.ForTCP(ln.Addr().String())
+	if ul != nil {
+		address = serveraddr.ForLocal(local.Path)
+	}
+	return &server{http: srv, tls: tlsSrv, tlsAddr: tlsAddr, tlsState: tstate, closeTLS: closeTLS, cancel: cancel,
+		lockPath: lockPath, closeSocket: closeSocket, address: address}, port, nil
 }
 
 // localListener is WHERE the local authenticated listener goes and WHETHER

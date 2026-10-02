@@ -45,7 +45,7 @@ func TestSessionStart_EmitsGlobalPrinciples(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	payload := map[string]interface{}{
 		"cwd":             dir,
@@ -100,7 +100,7 @@ func TestSessionStart_LensConfigured_UsesWriteRepo(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	payload := map[string]interface{}{
 		"cwd":             dir,
@@ -169,7 +169,7 @@ func TestSessionStart_OmitsAreaTOC(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	data, _ := json.Marshal(map[string]interface{}{
 		"cwd": dir, "session_id": "s1", "transcript_path": "/tmp/nope.jsonl",
@@ -214,7 +214,7 @@ func TestSessionStart_FallsBackToInvariantsWhenNoGlobalPrinciples(t *testing.T) 
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	payload := map[string]interface{}{
 		"cwd":             dir,

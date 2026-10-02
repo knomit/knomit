@@ -99,41 +99,50 @@ func TestSelectMode(t *testing.T) {
 	}
 }
 
-// A mistyped subcommand must not become a base URL. Session-bound mode made
-// no-flags legal, so this is the only thing standing between `kb
+// A mistyped subcommand must not become a server address. Session-bound mode
+// made no-flags legal, so this is the only thing standing between `kb
 // clade init` and a proxy that dials http://clade forever.
-func TestBaseURLArg(t *testing.T) {
+func TestResolveServer_Argument(t *testing.T) {
+	isolateServerEnv(t)
 	cases := []struct {
-		name string
-		args []string
-		want string
-		bad  bool
+		name      string
+		args      []string
+		wantBase  string
+		wantLocal string
+		wantNamed bool
+		bad       bool
 	}{
-		{name: "no argument", args: nil, want: ""},
-		{name: "http", args: []string{"http://localhost:19278"}, want: "http://localhost:19278"},
-		{name: "https", args: []string{"https://kb.example.com"}, want: "https://kb.example.com"},
-		{name: "trailing slash trimmed", args: []string{"http://h:1/"}, want: "http://h:1"},
+		{name: "no argument", args: nil, wantBase: "http://localhost:19278"},
+		{name: "http", args: []string{"http://localhost:19278"}, wantBase: "http://localhost:19278", wantNamed: true},
+		{name: "https", args: []string{"https://kb.example.com"}, wantBase: "https://kb.example.com", wantNamed: true},
+		{name: "trailing slash trimmed", args: []string{"http://h:1/"}, wantBase: "http://h:1", wantNamed: true},
+		{name: "local listener", args: []string{localArg("/abs/knomit.sock")},
+			wantBase: "http://localhost", wantLocal: localPath("/abs/knomit.sock"), wantNamed: true},
 		// The typo this guard exists for, and the tail flag.Parse never reached.
 		{name: "mistyped subcommand", args: []string{"clade", "init", "-repo", "x"}, bad: true},
 		{name: "bare subcommand", args: []string{"init"}, bad: true},
 		{name: "host without scheme", args: []string{"localhost:19278"}, bad: true},
 		{name: "wrong scheme", args: []string{"ftp://h/x"}, bad: true},
 		{name: "scheme without host", args: []string{"http://"}, bad: true},
+		{name: "path after the port", args: []string{"http://h:1/api"}, bad: true},
 	}
 	for _, c := range cases {
-		got, err := baseURLArg(c.args)
+		got, err := resolveServer(c.args)
 		if c.bad {
 			if err == nil {
-				t.Errorf("%s: baseURLArg(%q) = %q, want an error", c.name, c.args, got)
+				t.Errorf("%s: resolveServer(%q) = %+v, want an error", c.name, c.args, got)
+			} else if !strings.Contains(err.Error(), "server argument") {
+				t.Errorf("%s: error %q does not name the server argument", c.name, err)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("%s: baseURLArg(%q) errored: %v", c.name, c.args, err)
+			t.Errorf("%s: resolveServer(%q) errored: %v", c.name, c.args, err)
 			continue
 		}
-		if got != c.want {
-			t.Errorf("%s: baseURLArg(%q) = %q, want %q", c.name, c.args, got, c.want)
+		if got.Base != c.wantBase || got.Local != c.wantLocal || got.Named != c.wantNamed {
+			t.Errorf("%s: resolveServer(%q) = base %q local %q named %v, want %q %q %v",
+				c.name, c.args, got.Base, got.Local, got.Named, c.wantBase, c.wantLocal, c.wantNamed)
 		}
 	}
 }

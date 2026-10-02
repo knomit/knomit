@@ -286,7 +286,7 @@ jobs:
       # takes in internal/oauth/idp (F19 phase 3c), whose tests drive the
       # in-process fake provider in internal/oauth/idp/idptest.
       - name: Unit tests (no model download)
-        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/pki/... ./internal/oauth/...
+        run: CGO_ENABLED=1 bash .github/scripts/go-test-capture.sh unit ./internal/embeddings/ ./internal/config/ ./internal/fact/ ./internal/auth/ ./internal/serveraddr/ ./internal/pki/... ./internal/oauth/...
 
       # Guard: the test harness (test/testenv, test/storytests) must
       # never be linked into a shipped binary. Pure `go list` graph check, no

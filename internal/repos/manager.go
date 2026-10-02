@@ -85,6 +85,12 @@ type Manager struct {
 	// takes its resume window from it.
 	sessionCfg sessionReaperConfig
 
+	// serverAddr is this server's OWN address in KNOMIT_SERVER's spelling
+	// (internal/serveraddr), set by whoever bound the listeners
+	// (SetServerAddress). A recipe's `exec` child gets it as KNOMIT_SERVER, so
+	// the `kb` it starts reaches THIS server. Nil until set.
+	serverAddr atomic.Pointer[string]
+
 	// repoEventHub fans every repo's REPO-LEVEL events into one server-wide
 	// stream. Per-repo TaskHubs cannot serve the fleet-wide index chip: the web
 	// app holds one events stream, for the ACTIVE repo, while rendering a chip
@@ -543,6 +549,20 @@ func (m *Manager) ControlDB() *sql.DB {
 		return nil
 	}
 	return m.reg.DB()
+}
+
+// SetServerAddress records this server's own address (serveraddr.ForLocal of
+// the local listener it BOUND, else serveraddr.ForTCP of its TCP listener) for
+// the processes it starts. Both server entry points call it once their
+// listeners are bound: cmd/serve.go and the desktop's boot.
+func (m *Manager) SetServerAddress(addr string) { m.serverAddr.Store(&addr) }
+
+// ServerAddress is the address SetServerAddress recorded, or "" before it.
+func (m *Manager) ServerAddress() string {
+	if p := m.serverAddr.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // ClientSessions returns the client-session store, or nil before Start.
@@ -1036,6 +1056,7 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		onPush:                m.fleetPushed,
 		embedder:              m.deps.Embedder,
 		scriptTools:           m.deps.ScriptTools,
+		serverAddr:            m.ServerAddress,
 		keyPath:               m.deps.KeyPath,
 		resumeWindow:          m.sessionCfg.PipelineResumeWindow,
 		ctx:                   m.ctx,

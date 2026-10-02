@@ -114,6 +114,9 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "WithBinding", "NewBindingOfRepo", "store.WithTrailers",
 		"recipeHostFunctions", "recipeMCP", "serverkey.ServerKey", "json.Marshal", "os.Environ", "mergeEnv",
 		"d.recipeGlobals", "d.recipeEnv",
+		// the child's KNOMIT_SERVER: the server's own address, read from the
+		// Manager (no I/O), waited for (bounded) while the server is booting
+		"d.serverAddr", "d.waitServerAddr", "time.NewTicker", "tick.Stop", "deadline.Stop", "ctx.Err",
 		// the runner: resolution, slots, the goroutine, the late inbox, a kick
 		"d.resolveRecipe", "d.mainRecipe", "d.localRecipe", "d.compileRecipe", "d.rc.tryTake", "d.rc.release",
 		"?.Add", "?.Done", "d.runJob", "d.execRecipe", "d.addLate", "d.triggerKick", "d.stats.recordRecipe",

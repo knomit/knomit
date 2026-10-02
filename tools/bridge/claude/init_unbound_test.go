@@ -196,7 +196,7 @@ func TestSessionStart_Unbound_InjectsBindNote_ReadsNoRepo(t *testing.T) {
 	writeFixture(t, filepath.Join(dir, ".mcp.json"),
 		`{"mcpServers":{"knomit-repo-ingestion":{"command":"kb","args":[]}}}`)
 	// Any request to the server is a failure: an unbound entry has no repo.
-	t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("KNOMIT_SERVER", "http://127.0.0.1:1")
 
 	var out bytes.Buffer
 	if err := hookSessionStart(strings.NewReader(`{"cwd":`+strconv.Quote(dir)+`}`), &out); err != nil {
@@ -339,7 +339,7 @@ func TestSessionStart_BrokenEntry_SaysSo(t *testing.T) {
 			dir := namedDir(t, "ingestion")
 			writeFixture(t, filepath.Join(dir, ".mcp.json"),
 				`{"mcpServers":{"knomit-repo-ingestion":{"command":"kb","args":`+args+`}}}`)
-			t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
+			t.Setenv("KNOMIT_SERVER", "http://127.0.0.1:1")
 
 			var out bytes.Buffer
 			if err := hookSessionStart(strings.NewReader(`{"cwd":`+strconv.Quote(dir)+`}`), &out); err != nil {

@@ -1,7 +1,6 @@
 package knomitapi
 
 import (
-	"os"
 	"testing"
 )
 
@@ -11,7 +10,7 @@ import (
 // without this assertion. Keep it red-when-the-URL-changes.
 func TestRecentFactsURL_PinsExactShape(t *testing.T) {
 	isolateHome(t)
-	t.Setenv("KNOMIT_BASE_URL", "http://localhost:19278")
+	t.Setenv("KNOMIT_SERVER", "http://localhost:19278")
 	got := RecentFactsURL("knomit", "machine/host", 200)
 	want := "http://localhost:19278/api/v1/repos/knomit/branches/machine:host/facts?sort=recent&limit=200"
 	if got != want {
@@ -20,13 +19,7 @@ func TestRecentFactsURL_PinsExactShape(t *testing.T) {
 }
 
 func TestBaseURL_DefaultWhenUnset(t *testing.T) {
-	old, had := os.LookupEnv("KNOMIT_BASE_URL")
-	os.Unsetenv("KNOMIT_BASE_URL")
-	defer func() {
-		if had {
-			os.Setenv("KNOMIT_BASE_URL", old)
-		}
-	}()
+	isolateHome(t) // no KNOMIT_SERVER, no lockfile
 	if got := BaseURL(); got != "http://localhost:19278" {
 		t.Errorf("BaseURL() = %q, want default localhost:19278", got)
 	}

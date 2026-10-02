@@ -140,6 +140,9 @@ func newScriptRepo(t *testing.T, rate int, entries ...string) (*Manager, *RepoIn
 	m := New(context.Background(), Deps{Cfg: cfg, AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: tools})
 	t.Cleanup(func() { _ = m.Close() })
+	// What a booted server records once its listeners are bound; a recipe's
+	// exec waits for it (recipeEnv). Nothing listens at this address.
+	m.SetServerAddress(testServerAddr)
 	ri := bootRepo(t, m)
 	tools.ri = ri
 	setOntology(t, ri, triggerOntology("", entries...))

@@ -24,19 +24,62 @@ knomit server (HTTP)
 4. Notifications (HTTP 202, no body) are silently acknowledged.
 5. HTTP errors are translated into JSON-RPC error responses so the client always receives well-formed output.
 
-Port discovery follows this priority:
+### Which server
 
-1. Positional `base-url` argument (explicit override).
-2. Lockfile written by the knomit server (`~/Library/Application Support/knomit/server.json` on macOS, `$XDG_STATE_HOME/knomit/server.json` on Linux).
-3. Default `http://localhost:19278`.
+`kb` talks to ONE server, and every call it makes goes there: the agent-branch
+discovery at startup, the proxied MCP traffic, the closing `DELETE`, and every
+hook (`kb claude hook …`, `kb antigravity hook …`). The server is, first match
+wins:
+
+1. The positional `server` argument (the proxy only; hooks have no argument).
+2. `KNOMIT_SERVER` in the environment.
+3. The desktop's lockfile (`~/Library/Application Support/knomit/server.json` on macOS, `$XDG_STATE_HOME/knomit/server.json` on Linux, `%LOCALAPPDATA%\knomit\server.json` on Windows).
+4. `http://localhost:19278`.
+
+The argument and `KNOMIT_SERVER` take the same forms:
+
+| Form | Example |
+|------|---------|
+| TCP | `http://127.0.0.1:19310`, `https://kb.example.com` |
+| The server's local socket (unix) | `unix:///Users/me/.knomit/knomit.sock` |
+| The server's named pipe (Windows) | `npipe:////./pipe/knomit-0123456789abcdef` |
+
+Only `scheme://host:port` — no path, query or credentials. A value that is not
+one of these forms stops `kb` with an error naming where it came from; it never
+falls through to the next level.
+
+A **named** server (the argument or `KNOMIT_SERVER`) is used exactly as given: a
+named socket is the only place `kb` connects — missing or dead, the call fails,
+it never falls back to TCP or the lockfile — and a named `http(s)` address is
+never rerouted onto the local socket. Only levels 3 and 4, which nobody chose,
+try this machine's local socket first (the one under `KNOMIT_HOME`, or
+`KNOMIT_SOCKET`) and fall back to the TCP port.
+
+`KNOMIT_HOME` does **not** choose the server. With several knomit instances on
+one machine, name the one you mean. Each instance logs its own address at
+startup, already in this spelling — copy it:
+
+```
+INF this server's address (KNOMIT_SERVER for kb) knomit_server=unix:///Users/me/.knomit/knomit.sock
+```
+
+It is the local socket when that instance bound one (the socket carries your
+verified identity), else its `http://127.0.0.1:<port>`. Do not build the socket
+path from the home folder: `KNOMIT_SOCKET` or the toml `socket` key can move it,
+and a data root too long for a socket path puts it under
+`/tmp/knomit-<uid>/<hash>.sock` instead of `<home>/knomit.sock`.
+A recipe's `exec` child is started with `KNOMIT_SERVER` already set to the
+server that runs the recipe, and Claude Code passes its environment to the
+stdio MCP servers it starts, so a `kb` inside a recipe's session reaches that
+server without any configuration.
 
 The target is resolved once at startup. If the server later quits or relaunches
 on a new port, restart the MCP client so the bridge re-resolves `server.json`.
 
-> **Run one server, not two.** The bridge follows a single `server.json`. Run
-> *either* `knomit serve` *or* the desktop app, not both at once — the desktop
-> app falls back to an ephemeral port when `:19278` is taken, which would leave
-> two servers running and `server.json` pointing at only one of them.
+> **Run one server per data root.** The lockfile names a single server. If you
+> run `knomit serve` beside the desktop app, the desktop falls back to an
+> ephemeral port when `:19278` is taken and the lockfile names only one of
+> them — set `KNOMIT_SERVER` for anything meant for the other.
 
 ## What the bridge tells the server
 
@@ -69,7 +112,7 @@ the session goes dead by silence instead. There is no reconnect and no retry.
 Without a command, `kb` runs as the MCP stdio↔HTTP proxy:
 
 ```
-kb [--repo <name> | --lens <name>] [--log <path>] [base-url]
+kb [--repo <name> | --lens <name>] [--log <path>] [server]
 ```
 
 | Flag | Default | Description |
@@ -78,7 +121,7 @@ kb [--repo <name> | --lens <name>] [--log <path>] [base-url]
 | `--lens` | none | Lens name; connects to `/api/v1/lenses/<lens>/mcp` (mutually exclusive with `--repo`) |
 | *(neither)* | — | Connects to the unscoped mount `/api/v1/mcp`; the agent binds with `knomit_bind` and passes the handle it returns |
 | `--log` | platform default (see below) | Log file path (lumberjack 4 MB rotation) |
-| `base-url` | `http://localhost:19278` | Base URL of the knomit server |
+| `server` | `KNOMIT_SERVER`, else the lockfile, else `http://localhost:19278` | The knomit server: `http(s)://host:port`, `unix:///path/knomit.sock`, or `npipe:////./pipe/<name>` (see [Which server](#which-server)) |
 
 With neither flag the bridge connects to `/api/v1/mcp`. There the agent binds a
 repo or lens with `knomit_bind`, which returns an opaque **`binding` handle**,

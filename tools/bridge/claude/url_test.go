@@ -13,7 +13,7 @@ import (
 // both correct and broken URLs. Keep these red-when-the-URL-changes.
 
 func TestPostEditSearchURL_PinsExactShape(t *testing.T) {
-	t.Setenv("KNOMIT_BASE_URL", "http://localhost:19278")
+	t.Setenv("KNOMIT_SERVER", "http://localhost:19278")
 	got := postEditSearchURL("knomit", "machine/host", "internal/store/foo.go")
 	want := "http://localhost:19278/api/v1/repos/knomit/branches/machine:host/search?q=internal%2Fstore%2Ffoo.go&limit=20"
 	if got != want {
@@ -21,8 +21,8 @@ func TestPostEditSearchURL_PinsExactShape(t *testing.T) {
 	}
 }
 
-func TestPostEditSearchURL_HonorsKnomitBaseURLEnv(t *testing.T) {
-	t.Setenv("KNOMIT_BASE_URL", "http://example.test:9000")
+func TestPostEditSearchURL_HonorsKnomitServerEnv(t *testing.T) {
+	t.Setenv("KNOMIT_SERVER", "http://example.test:9000")
 	got := postEditSearchURL("r", "b", "p")
 	want := "http://example.test:9000/api/v1/repos/r/branches/b/search?q=p&limit=20"
 	if got != want {

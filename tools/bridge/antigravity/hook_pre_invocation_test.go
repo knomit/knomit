@@ -28,7 +28,7 @@ func factsServer(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 }
 
 // isolateCache redirects the marker cache root. BOTH HOME and XDG_CACHE_HOME
@@ -216,7 +216,7 @@ func TestPreInvocation_MalformedStdin_Empty(t *testing.T) {
 
 func TestPreInvocation_ServerDown_Empty(t *testing.T) {
 	boundPlugin(t)
-	t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("KNOMIT_SERVER", "http://127.0.0.1:1")
 	assertEmpty(t, run(t, map[string]any{"invocationNum": 0, "conversationId": "c1"}))
 }
 
@@ -232,7 +232,7 @@ func TestPreInvocation_NoFacts_Empty(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	assertEmpty(t, run(t, map[string]any{"invocationNum": 0, "conversationId": "c1"}))
 }

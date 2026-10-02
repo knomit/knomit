@@ -43,8 +43,8 @@ func TestOAuthCLI_ForeignListenerIsSurfaced(t *testing.T) {
 	if strings.Contains(err.Error(), "knomit serve") {
 		t.Fatalf("a foreign listener must not be reported as a missing server: %v", err)
 	}
-	// This CLI honours no explicit URL, so it must not be advised to use one.
-	if strings.Contains(err.Error(), "KNOMIT_BASE_URL") || strings.Contains(err.Error(), "URL argument") {
+	// This CLI honours no named server, so it must not be advised to name one.
+	if strings.Contains(err.Error(), "KNOMIT_SERVER") || strings.Contains(err.Error(), "server argument") {
 		t.Fatalf("`knomit oauth` has no URL escape hatch, yet its error offers one: %v", err)
 	}
 	if n := hits.Load(); n != 0 {

@@ -1,6 +1,8 @@
 // knomit: {"concurrent": 1, "timeout_ms": 1800000}
 // Sample recipe (F07 PR 5): one headless Claude Code session per fire, with
-// this repo's knomit server as its MCP server. The task is passed BY PATH;
+// this repo's knomit server as its MCP server. `kb` in mcp.config names no
+// address: knomit starts this recipe's programs with KNOMIT_SERVER set to its
+// own, and Claude Code passes it on to `kb`. The task is passed BY PATH;
 // its text never enters argv or the prompt. Install it by copying it to
 // <home>/recipes/claude-session.js, or commit it to .knomit/recipes/ on main.
 //

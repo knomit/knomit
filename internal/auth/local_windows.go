@@ -215,7 +215,7 @@ func verifyPipeOwner(conn net.Conn, path string) error {
 	}
 	if !acceptedPipeOwner(owner, self) {
 		// No escape-hatch advice here: what skips the pipe differs by
-		// caller (the bridge's URL argument, the hooks' KNOMIT_BASE_URL,
+		// caller (kb's server argument or KNOMIT_SERVER for the bridge and hooks,
 		// nothing at all for `knomit oauth`), so each caller adds its own.
 		return fmt.Errorf("%w: %s is owned by %s, not %s; another process holds the local listener's name",
 			ErrForeignListener, path, owner.String(), self)

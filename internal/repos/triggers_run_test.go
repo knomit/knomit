@@ -486,6 +486,7 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 	deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
 		KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: &stubTools{}}
 	m := New(context.Background(), deps)
+	m.SetServerAddress(testServerAddr) // as a booted server records it
 	ri := bootRepo(t, m)
 	setOntology(t, ri, triggerOntology("", runTrig("w", "learn", "tasks/in/**", "worker")))
 	dir := t.TempDir()
@@ -506,6 +507,7 @@ func TestRun_StopKillsAndRecords(t *testing.T) {
 	require.NoError(t, m.Close())
 
 	m2 := New(context.Background(), deps)
+	m2.SetServerAddress(testServerAddr)
 	require.NoError(t, m2.Start())
 	t.Cleanup(func() { _ = m2.Close() })
 	ri2 := m2.Get(testRepoName)
@@ -528,6 +530,7 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 			deps := Deps{Cfg: config.Config{Home: home, OntologyRoot: "kb"}, AgentBranch: trigAgent,
 				KeyPath: filepath.Join(home, "agent.key"), DisableBackgroundSync: true, ScriptTools: &stubTools{}}
 			m := New(context.Background(), deps)
+			m.SetServerAddress(testServerAddr) // as a booted server records it
 			ri := bootRepo(t, m)
 			setOntology(t, ri, triggerOntology("", runTrig("w", "learn", "tasks/in/**", "worker")))
 			dir := t.TempDir()
@@ -549,6 +552,7 @@ func TestRun_CrashBeforeFlushReRunsOnce(t *testing.T) {
 			setHooks(t, triggerHooks{})
 
 			m2 := New(context.Background(), deps)
+			m2.SetServerAddress(testServerAddr)
 			require.NoError(t, m2.Start())
 			t.Cleanup(func() { _ = m2.Close() })
 			ri2 := m2.Get(testRepoName)
@@ -758,6 +762,94 @@ func TestRun_EnvMergedWithTrace(t *testing.T) {
 	require.Equal(t, fired, get("KNOMIT_CAUSE"))
 	require.Equal(t, rows[0].RunID, get("KNOMIT_RUN"))
 	require.Equal(t, "override", get("KNOMIT_T17_BASE"), "the recipe's env wins over the inherited value")
+}
+
+// runEnvChild fires one recipe that execs the helper with the recipe env
+// extra (key/value pairs), on a repo whose Manager knows addr as its own
+// address, and returns the child's environment.
+func runEnvChild(t *testing.T, addr string, extra ...string) []string {
+	t.Helper()
+	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
+	m.SetServerAddress(addr)
+	dir := t.TempDir()
+	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+		jsString(helperExe(t)), helperEnv(dir, extra...)))
+	write(t, ri, "kb/tasks/in/a.md")
+	_ = waitRows(t, ri, "w", 2)
+	return waitHelperReports(t, dir, "child", 1)[0].Env
+}
+
+// The recipe child's KNOMIT_SERVER is the server's OWN address, exactly as the
+// listener-binding code recorded it — that is what makes the `kb` a recipe
+// starts reach THIS server rather than whichever one the desktop lockfile or
+// the default names. An inherited value is overwritten. Sabotage: drop the
+// KNOMIT_SERVER line from recipeEnv (red: the inherited value survives).
+func TestRun_EnvCarriesTheServersOwnAddress(t *testing.T) {
+	t.Setenv("KNOMIT_SERVER", "http://inherited.invalid:1")
+	const own = "unix:///srv/knomit/knomit.sock"
+	got, ok := envOf(runEnvChild(t, own), "KNOMIT_SERVER")
+	require.True(t, ok, "the child has no KNOMIT_SERVER")
+	require.Equal(t, own, got)
+}
+
+// A recipe's `exec` env names a different server and wins. Sabotage: merge
+// the recipe env UNDER the base (red: the server's own address).
+func TestRun_EnvRecipeOverridesKnomitServer(t *testing.T) {
+	env := runEnvChild(t, "unix:///srv/knomit/knomit.sock", "KNOMIT_SERVER", "http://127.0.0.1:19310")
+	got, ok := envOf(env, "KNOMIT_SERVER")
+	require.True(t, ok)
+	require.Equal(t, "http://127.0.0.1:19310", got, "the recipe's env wins")
+}
+
+// testServerAddr is the address newScriptRepo records for its Manager, as a
+// booted server does once its listeners are bound. Nothing listens there.
+const testServerAddr = "http://127.0.0.1:1"
+
+// F1 (review of #393): the dispatcher starts while the server is still
+// booting, before the listeners are bound and the address recorded. A recipe
+// that fires in that window must NOT start its program without
+// KNOMIT_SERVER — the program's `kb` would reach whichever server the desktop
+// lockfile names. With no address within the bound, exec throws, the program
+// is never started, and the run ends recipe-error naming the cause. An
+// inherited KNOMIT_SERVER (here: what a launcher pointed knomit at) is not a
+// substitute. Sabotage: start the child anyway when the address is missing
+// (red: a child report, outcome done).
+func TestRun_ExecBeforeTheAddressIsSetStartsNothing(t *testing.T) {
+	old := recipeServerAddrWait
+	recipeServerAddrWait = 300 * time.Millisecond
+	t.Cleanup(func() { recipeServerAddrWait = old })
+	t.Setenv("KNOMIT_SERVER", "http://inherited.invalid:1")
+	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
+	m.SetServerAddress("") // the boot window: not recorded yet
+	dir := t.TempDir()
+	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+		jsString(helperExe(t)), helperEnv(dir)))
+	write(t, ri, "kb/tasks/in/a.md")
+	rows := waitRows(t, ri, "w", 2)
+	require.Equal(t, store.TriggerOutcomeRecipeError, rows[1].Outcome, rows[1].Error)
+	require.Contains(t, rows[1].Error, "server address not ready")
+	require.Empty(t, helperReports(t, dir, "child"), "a program was started without this server's address")
+}
+
+// The other half: an exec that fires in the boot window WAITS, and once the
+// server records its address the program starts with it.
+func TestRun_ExecWaitsForTheAddress(t *testing.T) {
+	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
+	m.SetServerAddress("")
+	dir := t.TempDir()
+	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+		jsString(helperExe(t)), helperEnv(dir)))
+	write(t, ri, "kb/tasks/in/a.md")
+	_ = waitRows(t, ri, "w", 1) // started, now waiting in exec
+	time.Sleep(200 * time.Millisecond)
+	require.Empty(t, helperReports(t, dir, "child"), "the program started before the address was set")
+	const own = "unix:///srv/knomit/late.sock"
+	m.SetServerAddress(own)
+	got, ok := envOf(waitHelperReports(t, dir, "child", 1)[0].Env, "KNOMIT_SERVER")
+	require.True(t, ok)
+	require.Equal(t, own, got)
+	rows := waitRows(t, ri, "w", 2)
+	require.Equal(t, store.TriggerOutcomeDone, rows[1].Outcome, rows[1].Error)
 }
 
 // ---- T18: a recipe's writes

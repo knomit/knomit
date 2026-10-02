@@ -52,6 +52,12 @@ func TestBootServer_OpensLocalPipeWithPeerCreds(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The address recipe children get as KNOMIT_SERVER is the pipe that
+	// bound here.
+	if w := "npipe://" + strings.ReplaceAll(pipe, `\`, "/"); srv.address != w {
+		srv.shutdown()
+		t.Fatalf("server address = %q, want %q", srv.address, w)
+	}
 	// Port 1: nothing listens there, so ONLY the pipe can answer this.
 	want := wantOwnPeer(t)
 	if got := getBody(t, localClient(pipe), "http://localhost:1/x"); got != want {
@@ -96,6 +102,11 @@ func TestBootServer_PipeInUseServesTCPOnly(t *testing.T) {
 	defer srv.shutdown()
 	if got := getBody(t, http.DefaultClient, fmt.Sprintf("http://127.0.0.1:%d/x", port)); got != wantNoPeer {
 		t.Fatalf("TCP must still serve: got %q", got)
+	}
+	// The held pipe is ANOTHER instance's: recipe children must be sent to
+	// this server's TCP port, never to it.
+	if want := fmt.Sprintf("http://127.0.0.1:%d", port); srv.address != want {
+		t.Fatalf("server address = %q, want %q (the pipe belongs to another instance)", srv.address, want)
 	}
 
 	// The owner still owns it. os.SameFile has no meaning here, so this is

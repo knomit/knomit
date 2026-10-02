@@ -40,9 +40,12 @@ type repoBuilder struct {
 	// agentBranch — RepoInstance.subscribed is only ever true alongside an
 	// empty agent branch, and this builder is the production constructor that
 	// has to uphold it.
-	subscribed            bool
-	embedder              store.BatchEmbedder
-	scriptTools           ScriptTools
+	subscribed  bool
+	embedder    store.BatchEmbedder
+	scriptTools ScriptTools
+	// serverAddr is Manager.ServerAddress: the server's own address, read
+	// when a recipe starts a process. Nil in tests that build alone.
+	serverAddr            func() string
 	keyPath               string
 	resumeWindow          time.Duration
 	ctx                   context.Context
@@ -660,7 +663,7 @@ func (b *repoBuilder) build() *RepoInstance {
 	// and the kick below is a nil check.
 	if b.agentBranch != "" && !b.subscribed && !b.cfg.ReadOnly {
 		ri.triggers = newTriggerDispatcher(ri, b.name, b.agentBranch, b.signer, b.cfg.Log.SlowTriggerMS,
-			b.cfg.Triggers.ScriptRatePerMinute, b.scriptTools, b.cfg.Home)
+			b.cfg.Triggers.ScriptRatePerMinute, b.scriptTools, b.cfg.Home, b.serverAddr)
 	}
 	// F08: the consensus merger, built under the same guard as the
 	// dispatcher (an agent branch to merge into, writes allowed) and started

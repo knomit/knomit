@@ -41,6 +41,11 @@ func TestBootServer_OpensLocalSocketWithPeerCreds(t *testing.T) {
 		srv.shutdown()
 		t.Fatalf("no socket at %s after bootServer: %v %v", sock, st, err)
 	}
+	// The address recipe children get as KNOMIT_SERVER is the socket that
+	// bound here.
+	if want := "unix://" + sock; srv.address != want {
+		t.Errorf("server address = %q, want %q", srv.address, want)
+	}
 	if st.Mode().Perm() != 0o600 {
 		t.Errorf("socket mode = %o, want 0600", st.Mode().Perm())
 	}
@@ -89,6 +94,11 @@ func TestBootServer_SocketInUseServesTCPOnly(t *testing.T) {
 	}
 	if got := getBody(t, http.DefaultClient, fmt.Sprintf("http://127.0.0.1:%d/x", port)); got != wantNoPeer {
 		t.Errorf("TCP must still serve: got %q", got)
+	}
+	// The held socket is ANOTHER instance's: recipe children must be sent to
+	// this server's TCP port, never to it.
+	if want := fmt.Sprintf("http://127.0.0.1:%d", port); srv.address != want {
+		t.Errorf("server address = %q, want %q (the socket belongs to another instance)", srv.address, want)
 	}
 	srv.shutdown() // its socket cleanup is the noop: must not touch the owner's file
 	after, err := os.Stat(sock)
