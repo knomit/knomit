@@ -166,15 +166,26 @@ type RepoInstance struct {
 	syncCancel context.CancelFunc
 	syncWg     *sync.WaitGroup
 	// indexCancel/indexWg own the background index-heal lifecycle, SEPARATE from
-	// syncCancel/syncWg (the reconcile loop). Only real teardown cancels/waits
-	// these; startSync's loop-restart must not touch them. See repoBuilder.build.
+	// syncCancel/syncWg (the reconcile loop). Only teardown and SwapStore
+	// cancel/wait these (SwapStore then starts what the skipped activate()
+	// would have — see startLifetimeAfterSwap); startSync's loop-restart must
+	// not touch them. See repoBuilder.build.
 	indexCancel context.CancelFunc
 	indexWg     *sync.WaitGroup
 	startSync   func(url string) error
 	// startLocalSync is startSync's origin-less twin (repoBuilder.build), run
 	// when the origin is removed from a live repo.
 	startLocalSync func() error
-	closeFn        func()
+	// startLifetime starts the lifetime components (trigger dispatcher,
+	// consensus merger, experiment sweep) — the swap-safe half of
+	// repoBuilder.activate. Nil for an instance built without the builder.
+	startLifetime func()
+	// activated is set once repoBuilder.activate has run. A heal cancelled by
+	// SwapStore exits without activating, and nothing else would ever start
+	// the lifetime components, so SwapStore reads this to know it must
+	// (issue #400).
+	activated atomic.Bool
+	closeFn   func()
 
 	indexState atomic.Int32 // indexReady | indexIndexing | indexFailed
 	indexDone  atomic.Int64
@@ -798,6 +809,14 @@ type TestInstanceConfig struct {
 	OntologyRoot        string
 	MethodologyMinScore float64
 	StartSync           func(url string) error
+	// StartLocalSync stands in for the origin-less sync restart. Nil keeps the
+	// default (StartLocalSync only stops the loops, as DeactivateSync does).
+	StartLocalSync func() error
+	// DBPath makes the instance file-backed for Manager.SwapStore: Svc must
+	// have been opened from this path. Empty (the default) takes SwapStore's
+	// in-memory branch. A test sets it to reach the file-backed failure
+	// paths, which only that branch has.
+	DBPath string
 	// Quality carries the bridge-quality knobs (CohFloor, MaxMembers, the Q
 	// weights). Optional and zero by default, which is the historical
 	// behaviour — but note that a zero MaxMembers gates out EVERY bridge
@@ -857,6 +876,8 @@ func NewTestInstanceWithDeps(cfg TestInstanceConfig) *RepoInstance {
 		discoveryBlastRadiusThreshold: 1,
 		hub:                           cfg.Hub,
 		startSync:                     cfg.StartSync,
+		startLocalSync:                cfg.StartLocalSync,
+		dbPath:                        cfg.DBPath,
 		syncCancel:                    func() {},
 		syncWg:                        &sync.WaitGroup{},
 		indexCancel:                   func() {},

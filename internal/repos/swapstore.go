@@ -78,10 +78,37 @@ func (m *Manager) reinjectOrigin(ri *RepoInstance, svc *store.Service) {
 // It stops sync loops, closes the old DB, copies the temp file over the real
 // one, and reopens store.Service from the real path.
 // If DBPath is empty (in-memory/test), it falls back to a pointer swap.
+//
+// SwapStore is NOT teardown: the repo stays open and observed afterwards. It
+// cancels two things to get the old store's users off it, and its contract
+// for each differs:
+//
+//   - SYNC: SwapStore stops the sync loop and does NOT restart it, on success
+//     or on failure. Restarting sync is the CALLER's contract — ActivateSync
+//     when the repo now has an origin, StartLocalSync when it does not — on
+//     every return path, the error one included; otherwise the repo silently
+//     stops syncing until the process restarts.
+//   - THE INITIAL HEAL: if the swap lands while the repo's first index heal is
+//     still running, cancelling it means activate() never runs. SwapStore
+//     then starts the lifetime components itself (trigger dispatcher,
+//     consensus merger, experiment sweep) once a store is attached again —
+//     the swapped-in one, or the restored one after a failed swap. It does
+//     not run activate()'s store-bound half (ensureLocalUpstream,
+//     recoverFromOrigin, startSyncLoops): those are bound to the discarded
+//     store and the cancelled syncCtx. It also does not mark the index
+//     state: a cancelled heal leaves it at 'indexing', and the caller that
+//     rebuilds the index on the new store owns the marks
+//     (MarkIndexRebuildStart/MarkIndexRebuildDone — single-writer holds
+//     because the heal has already exited when SwapStore returns).
+//
+// Never call it while holding an Acquire on ri: the drain below would wait on
+// the caller's own reference.
 func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	// Stop the background index heal AND existing sync loops so no goroutines
 	// reference the old store. indexWg before syncWg (the heal's activate() may
 	// have started the loop), and both before the DB below is closed/swapped.
+	// After indexWg.Wait the heal has either run activate() (ri.activated is
+	// set) or returned without it; startLifetimeAfterSwap reads which.
 	ri.mu.RLock()
 	cancel := ri.syncCancel
 	indexCancel := ri.indexCancel
@@ -106,11 +133,15 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		if err != nil {
 			// Fallback: no file-based swap possible. Keep existing svc.
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp DB, keeping existing service")
+			// The heal was cancelled all the same, and the existing store
+			// stays attached: start what it never activated.
+			startLifetimeAfterSwap(ri)
 			return nil
 		}
 		if err := svc.OpenRepo(); err != nil {
 			svc.Close()
 			log.Warn().Err(err).Msg("SwapStore: cannot open temp git, keeping existing service")
+			startLifetimeAfterSwap(ri)
 			return nil
 		}
 		m.rewireStore(ri, svc)
@@ -126,13 +157,17 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 		// old Service (rather than dropping it) also releases its ephemeral
 		// session DB handle and file, which would otherwise leak on every swap.
 		old := ri.detachStore(false)
-		if !ri.attachStore(svc) {
+		attached := ri.attachStore(svc)
+		if !attached {
 			// Instance was closed concurrently — the new service has no owner.
 			svc.Close()
 		}
 		if old != nil {
 			old.wg.Wait()
 			old.svc.Close()
+		}
+		if attached {
+			startLifetimeAfterSwap(ri)
 		}
 		broadcastHead(svc, ri.agentBranch, ri.hub)
 		m.recordSwappedIdentity(ri)
@@ -167,6 +202,7 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 			svc.Close() // instance closed concurrently; nothing may own svc now
 			return
 		}
+		startLifetimeAfterSwap(ri)
 		broadcastHead(svc, ri.agentBranch, ri.hub)
 	}
 	// reopenLocal reopens from ri.dbPath after the backup restore; best-effort.
@@ -218,6 +254,25 @@ func (m *Manager) SwapStore(ri *RepoInstance, tempDBPath string) error {
 	// Clean up backup — swap succeeded.
 	os.Remove(backupPath)
 	return nil
+}
+
+// startLifetimeAfterSwap starts the repo's lifetime components when the heal
+// this swap cancelled never got to activate() — the only other place that
+// starts them. Called only once a store is attached again, so the components'
+// first Acquire finds one.
+//
+// It must not leak a goroutine past a concurrent teardown, and it does not:
+// attachStore returning true means teardown had not yet set the closed
+// tombstone, and if a shutdown/Close is stopping the components at this very
+// moment each start is refused once its stop has run (lifetimeGuard), or
+// registers its goroutine before that stop's Wait. A repo that did activate
+// is left alone — its components are already running, and each start would
+// be a no-op anyway.
+func startLifetimeAfterSwap(ri *RepoInstance) {
+	if ri.activated.Load() || ri.startLifetime == nil {
+		return
+	}
+	ri.startLifetime()
 }
 
 // recordSwappedIdentity re-reads the repo's root commit after a store swap and

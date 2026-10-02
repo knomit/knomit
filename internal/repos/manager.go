@@ -723,7 +723,11 @@ func (m *Manager) Close() error {
 		// be stopped (cancel + wait) before closeFn — a run still holding an
 		// Acquire would stall closeFn's drain, and one starting after it would
 		// find the store closed. Stopped after indexWg.Wait, which orders their
-		// start in activate() (inside the heal goroutine) before this stop.
+		// start in activate() (inside the heal goroutine) before this stop. A
+		// start from SwapStore (a swap that cancelled the heal before it
+		// activated) is not ordered by that wait; lifetimeGuard covers it —
+		// a start racing this stop either registers before the Wait or is
+		// refused.
 		if ri.triggers != nil {
 			ri.triggers.stop()
 		}
@@ -1149,12 +1153,16 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 	// cancelled by startSync (ActivateSync) to restart the reconcile loop; a
 	// runtime clone-create calls ActivateSync right after this Add, so sharing
 	// syncCtx would cancel the in-flight heal and pin the index at "indexing"
-	// forever (the very bug this split fixes). indexCtx is cancelled only by a
-	// real teardown (shutdown/Close/SwapStore via ri.indexCancel, or b.ctx), so
-	// a close mid-index aborts the heal and skips activation.
+	// forever (the very bug this split fixes). indexCtx is cancelled only by
+	// teardown (shutdown/Close via ri.indexCancel, or b.ctx) and by SwapStore,
+	// so a close or a swap mid-index aborts the heal and skips activation.
+	// SwapStore is NOT teardown — the repo stays live and observed — so it
+	// owns what that skip leaves undone: it starts the lifetime components
+	// (startLifetimeAfterSwap), and its caller marks the index state around
+	// the rebuild it runs on the new store (issue #400).
 	//
-	// The heal goroutine is registered with b.indexWg so every teardown path
-	// (Manager.Close, Archive→shutdown, SwapStore) — each of which does
+	// The heal goroutine is registered with b.indexWg so every path that
+	// cancels it (Manager.Close, Archive→shutdown, SwapStore) — each of which does
 	// indexWg.Wait() BEFORE svc.Close() — waits for the heal to finish before
 	// the SQLite handle is closed. Without this the close would race in-flight
 	// index SQL on the same *sql.DB ("database is closed"). The Add happens
@@ -1175,9 +1183,15 @@ func (m *Manager) openOne(name, uid, dbPath string, origin *Origin) (*RepoInstan
 		progress := func(_ string, done, total int) { ri.setIndexProgress(done, total) }
 		ok := healIndexBranches(b.indexCtx, b.svc.IndexManager(), b.name, b.indexBranches, progress)
 		if b.indexCtx.Err() != nil {
-			// Repo was closed/cancelled mid-index — a clean shutdown, not a
-			// failure. Skip activation and leave the state as-is; the instance
-			// is being torn down and its status is no longer observed.
+			// Repo was closed or swapped mid-index — not a failure. Skip
+			// activation and leave the state as-is. On teardown the instance
+			// is going away and its status is no longer observed. On a
+			// SwapStore it is NOT going away, and this exit is safe only
+			// because SwapStore starts the lifetime components itself once
+			// this goroutine has exited (ri.activated is still false), and
+			// the swap's caller marks the index state around its rebuild on
+			// the new store. Do not add work here that a swap would need: the
+			// store this goroutine holds is about to be discarded.
 			return
 		}
 		// Activate the sync loops even on a failed heal so the reconcile/push

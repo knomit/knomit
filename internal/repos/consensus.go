@@ -81,8 +81,12 @@ type consensusMerger struct {
 	agentBranch string
 	kick        chan struct{}
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// life guards cancel/started/stopped: start is idempotent and a no-op
+	// once stop has run, because SwapStore may start the merger after the
+	// heal that would have started it was cancelled, concurrently with a
+	// teardown (see lifetimeGuard).
+	life lifetimeGuard
+	wg   sync.WaitGroup
 
 	mu sync.Mutex
 	// refused maps a pushed branch to the tip whose merge was refused: that
@@ -106,20 +110,21 @@ func newConsensusMerger(ri *RepoInstance, repo, agentBranch string) *consensusMe
 
 // start launches the merger on its own context derived from parent (never
 // the sync loop's, which ActivateSync restarts) and kicks it once, so pushes
-// that landed while the server was down are merged on restart.
+// that landed while the server was down are merged on restart. A second call,
+// or a call after stop, is a no-op.
 func (m *consensusMerger) start(parent context.Context) {
-	ctx, cancel := context.WithCancel(parent)
-	m.cancel = cancel
-	m.wg.Add(1)
+	ctx, ok := m.life.begin(parent, &m.wg)
+	if !ok {
+		return
+	}
 	m.kickNow()
 	go m.loop(ctx)
 }
 
-// stop cancels the merger and waits for a running merge to return.
+// stop cancels the merger and waits for a running merge to return. Safe when
+// start never ran; a later start is then a no-op.
 func (m *consensusMerger) stop() {
-	if m.cancel != nil {
-		m.cancel()
-	}
+	m.life.end()
 	m.wg.Wait()
 }
 

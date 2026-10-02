@@ -41,7 +41,9 @@ func experimentSweepInterval() time.Duration {
 
 // experimentSweeper owns the expiry sweep's lifetime, in the shape of the
 // trigger dispatcher and the consensus merger: built in repoBuilder.build(),
-// started ONCE from activate() on its own context derived from the manager
+// started once (from activate(), or from SwapStore when a swap cancelled the
+// heal before activate() ran — lifetimeGuard makes the start idempotent) on
+// its own context derived from the manager
 // context, stopped (cancel + wait) by RepoInstance.shutdown and Manager.Close
 // before closeFn closes the store.
 //
@@ -61,8 +63,10 @@ type experimentSweeper struct {
 	repo       string
 	expiryDays int
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// life guards the cancel func and the started/stopped flags: start is
+	// idempotent and a no-op once stop has run (see lifetimeGuard).
+	life lifetimeGuard
+	wg   sync.WaitGroup
 	// done is closed when the loop goroutine returns. Only tests read it, to
 	// assert that teardown actually stopped the sweep.
 	done chan struct{}
@@ -72,13 +76,16 @@ func newExperimentSweeper(acquire func() (*store.Service, func(), error), repo s
 	return &experimentSweeper{acquire: acquire, repo: repo, expiryDays: expiryDays, done: make(chan struct{})}
 }
 
-// start launches the loop on a context derived from parent. Called once, from
-// activate(); the Add happens there, which every teardown orders before its
-// stop() by waiting indexWg first (activate runs inside the heal goroutine).
+// start launches the loop on a context derived from parent. Called from
+// activate(), or from SwapStore when a swap cancelled the heal before
+// activate() ran. A second call, or a call after stop, is a no-op: the Add
+// happens under the guard that stop() closes, so a start racing a teardown
+// either lands before stop's Wait or not at all.
 func (s *experimentSweeper) start(parent context.Context) {
-	ctx, cancel := context.WithCancel(parent)
-	s.cancel = cancel
-	s.wg.Add(1)
+	ctx, ok := s.life.begin(parent, &s.wg)
+	if !ok {
+		return
+	}
 	interval := experimentSweepInterval()
 	go func() {
 		defer s.wg.Done()
@@ -94,9 +101,7 @@ func (s *experimentSweeper) stop() {
 	if s == nil {
 		return
 	}
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.life.end()
 	s.wg.Wait()
 }
 
