@@ -16,6 +16,7 @@ import (
 	"knomit/internal/auth"
 	"knomit/internal/config"
 	"knomit/internal/oauth"
+	"knomit/internal/store"
 	"knomit/internal/store/migrate"
 )
 
@@ -39,7 +40,9 @@ type oauthWebFixture struct {
 
 func newOAuthWebFixture(t *testing.T, issuer string) *oauthWebFixture {
 	t.Helper()
-	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL")
+	// SyncDSNParam: this package's TestMain turns fsyncs off (#365); a
+	// fixture that opens its own control.db opts in by hand.
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL"+store.SyncDSNParam())
 	if err != nil {
 		t.Fatal(err)
 	}

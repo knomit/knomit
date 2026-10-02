@@ -14,12 +14,14 @@ import (
 
 	"knomit/internal/client/sessions"
 	"knomit/internal/repos"
+	"knomit/internal/store"
 	storemigrate "knomit/internal/store/migrate"
 )
 
 func newClientSessionsStore(t *testing.T) *sessions.Store {
 	t.Helper()
-	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL")
+	// SyncDSNParam: see newOAuthWebFixture.
+	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "control.db")+"?_busy_timeout=5000&_journal_mode=WAL"+store.SyncDSNParam())
 	if err != nil {
 		t.Fatal(err)
 	}

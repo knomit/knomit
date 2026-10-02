@@ -31,6 +31,8 @@ import (
 	// not use the custom "sqlite3_knomit" driver — no vec extension needed.
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/segmentio/ksuid"
+
+	"knomit/internal/store"
 )
 
 var (
@@ -133,7 +135,8 @@ func NewLensRegistry(db *sql.DB) *LensRegistry {
 // mode plus a busy timeout and a single connection fully serialize concurrent
 // access to this control-plane config DB, avoiding "database is locked" errors.
 func OpenLensRegistry(path string) (*LensRegistry, error) {
-	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
+	// store.SyncDSNParam: see OpenRegistryNoSchema.
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL"+store.SyncDSNParam())
 	if err != nil {
 		return nil, fmt.Errorf("open lens registry: %w", err)
 	}
