@@ -704,9 +704,13 @@ func TestLensSearch_UnknownRepoFilter422(t *testing.T) {
 	}
 }
 
-// With embeddings disabled (Server.Embedder nil), the endpoint still serves
-// results — it forwards the nil embedder to the provider exactly as the repo
-// /search handler does (keyword fallback, no query vector), never 500s.
+// With no embedder handed to the handler (Server.Embedder nil) the handler does
+// not hoist a query vector: it forwards the nil embedder to the provider exactly
+// as the repo /search handler does, and each mount's own path applies. Text
+// search is vector-only — there is no keyword fallback — so what this pins is
+// that the handler itself neither fails nor embeds when it has no embedder, and
+// that the (stub) mount's rows are served. Whether a store with no embedder can
+// answer a text query is the store's concern, not this handler's.
 func TestLensSearch_EmbedderOffFallback(t *testing.T) {
 	m, _ := newTestLensManager(t, "alpha", "beta")
 	stub := &lensSearchStub{byRepo: map[string][]store.SearchResult{

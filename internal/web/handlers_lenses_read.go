@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -95,6 +96,9 @@ type lensFactItem struct {
 type lensFactsResponse struct {
 	Facts []lensFactItem `json:"facts"`
 	Total int            `json:"total"`
+	// Notice is set only when the caller's min_similarity removed every
+	// candidate of a text query; see store.CutoffNotice.
+	Notice string `json:"notice,omitempty"`
 }
 
 // lensQueryVec embeds a lens fan-out's query text ONCE, for every mount to
@@ -115,20 +119,25 @@ type lensFactsResponse struct {
 // the N vectors were already identical by construction — this computes one of
 // them instead of N.
 //
-// A nil vector is the caller's DEGRADED path, not an error: with no embedder,
-// no text, or a failed inference, each mount falls back to exactly what it
-// does today (its own embedder, else keyword-only search). Never fail a read
-// because a query could not be embedded.
-func lensQueryVec(ctx context.Context, emb store.Embedder, text string) []float32 {
+// Text search is vector-only — there is no keyword fallback — so when the
+// embedder is present and cannot produce a vector this returns the error and
+// the handler fails the request ONCE, up front, instead of letting every mount
+// repeat the same failing inference. nil with a nil error means no text or no
+// embedder: each mount then embeds for itself.
+func lensQueryVec(ctx context.Context, emb store.Embedder, text string) ([]float32, error) {
 	if text == "" || emb == nil {
-		return nil
+		return nil, nil
 	}
 	vec, err := emb.EmbedQuery(ctx, text)
 	if err != nil {
-		log.Warn().Err(err).Msg("lens search: embed query failed")
-		return nil
+		log.Error().Err(err).Msg("lens search: embed query failed")
+		return nil, fmt.Errorf("search: embed query: %w", err)
 	}
-	return vec
+	if len(vec) == 0 {
+		log.Error().Msg("lens search: embedder returned an empty query vector")
+		return nil, errors.New("search: embed query: embedder returned an empty vector")
+	}
+	return vec, nil
 }
 
 // handleHALLensFacts serves GET /lenses/{lens}/facts — the recency-ordered
@@ -175,6 +184,10 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 			if err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 					"invalid min_similarity value", r.URL.Path)
+				return
+			}
+			if err := store.ValidateMinSimilarity(n); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 				return
 			}
 			minSimilarity = n
@@ -229,12 +242,17 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 		// selecting filter is forwarded, not just path+text. Forwarding only
 		// path/text silently drops filters the caller sent (wrong data, not merely
 		// wrong order), diverging from both the repo and MCP twins.
+		queryVec, err := lensQueryVec(r.Context(), emb, text)
+		if err != nil {
+			hal.WriteProblem(w, http.StatusInternalServerError, "Failed to list facts", err.Error(), r.URL.Path)
+			return
+		}
 		base := store.SearchOptions{
 			Text: text,
 			// Embedded ONCE for the whole fan-out, not once per mount — see
 			// lensQueryVec. A text-less browse leaves this nil and never
 			// reaches an embedder at all.
-			QueryVec: lensQueryVec(r.Context(), emb, text),
+			QueryVec: queryVec,
 			// `entity` (singular) is the canonical name advertised by the HAL
 			// template and matches the data-model column; `entities` (plural) is a
 			// back-compat alias. Merge both, exactly as the repo facts collection
@@ -276,6 +294,9 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 		// short page can still be deepened.
 		truncated := false
 		var rows []lensFactItem
+		// Last round's per-mount vector-step report, for the cutoff notice and the
+		// Info log. A text query never deepens, so that is the only round.
+		var diags []store.SearchDiag
 
 		// DEPTH IS RE-DERIVED, not fixed, because dedupe spends it.
 		//
@@ -313,6 +334,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 			// mount error fails the whole request — a lens must never silently shrink
 			// its read set (RFC §9.1).
 			lists := make([][]store.RecentFactEntry, len(targets))
+			diags = make([]store.SearchDiag, len(targets))
 			mountTotal = 0
 			truncated = false
 			fetched := 0
@@ -324,6 +346,7 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 				q := base
 				q.Path = t.Path
 				q.Limit = depth
+				q.Diag = &diags[i]
 				entries, n, err := provider.RecentFacts(r.Context(), t.RT.RI, t.RT.Branch, q)
 				if err != nil {
 					writeStoreError(w, r, err, "Failed to list facts", t.RT.Branch)
@@ -459,7 +482,12 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 			page = []lensFactItem{}
 		}
 
-		hal.WriteHAL(w, http.StatusOK, lensFactsResponse{Facts: page, Total: total})
+		resp := lensFactsResponse{Facts: page, Total: total}
+		if len(rows) == 0 {
+			resp.Notice = store.CutoffNotice(text != "", minSimilarity, diags...)
+		}
+		logLensSearchDiag("facts", b.Name(), text != "", minSimilarity, targets, diags, len(rows))
+		hal.WriteHAL(w, http.StatusOK, resp)
 	}
 }
 
@@ -720,6 +748,38 @@ type lensSearchItem struct {
 type lensSearchResponse struct {
 	Results []lensSearchItem `json:"results"`
 	Total   int              `json:"total"`
+	// Notice is set only when the caller's min_similarity removed every
+	// candidate of a text query; see store.CutoffNotice.
+	Notice string `json:"notice,omitempty"`
+}
+
+// logLensSearchDiag writes the one Info line per lens text/filter read: whether
+// it had text, the caller's min_similarity, and per-mount cutoff and counts
+// after the vector step and after the cutoff.
+func logLensSearchDiag(endpoint, lens string, hasText bool, minSimilarity float64, targets []federate.Target, diags []store.SearchDiag, returned int) {
+	type mountCounts struct {
+		Mount      string  `json:"mount"`
+		VecHits    int     `json:"vec_hits"`
+		AfterCut   int     `json:"after_cutoff"`
+		BestCosine float64 `json:"best_cosine"`
+		Cutoff     float64 `json:"cutoff"`
+	}
+	counts := make([]mountCounts, 0, len(targets))
+	for i, t := range targets {
+		if i >= len(diags) {
+			break
+		}
+		counts = append(counts, mountCounts{Mount: t.RT.RI.Name() + "@" + t.RT.Branch, VecHits: diags[i].VecHits,
+			AfterCut: diags[i].Candidates, BestCosine: diags[i].BestCosine, Cutoff: diags[i].Cutoff})
+	}
+	log.Info().
+		Str("endpoint", endpoint).
+		Str("lens", lens).
+		Bool("text", hasText).
+		Float64("min_similarity", minSimilarity).
+		Int("returned", returned).
+		Interface("mounts", counts).
+		Msg("lens search")
 }
 
 // handleHALLensSearch serves GET /lenses/{lens}/search — the RRF-fused union
@@ -756,6 +816,10 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 			if err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 					"invalid min_similarity value", r.URL.Path)
+				return
+			}
+			if err := store.ValidateMinSimilarity(n); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 				return
 			}
 			minSimilarity = n
@@ -798,6 +862,11 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 
 		// Shared query across mounts (per-mount Path is set below). Depth is the
 		// per-mount candidate cap; the fused union is truncated to `limit` last.
+		queryVec, err := lensQueryVec(r.Context(), emb, qp.Get("q"))
+		if err != nil {
+			hal.WriteProblem(w, http.StatusInternalServerError, "Search failed", err.Error(), r.URL.Path)
+			return
+		}
 		base := store.SearchOptions{
 			Text:           qp.Get("q"),
 			Entities:       splitCSV(qp.Get("entities")),
@@ -821,7 +890,7 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 			Limit:         maxLensSearchCandidates,
 			// Embedded ONCE for the whole fan-out, not once per mount — see
 			// lensQueryVec.
-			QueryVec: lensQueryVec(r.Context(), emb, qp.Get("q")),
+			QueryVec: queryVec,
 		}
 		now := timeNow()
 		if !applyExpiryParams(w, r, &base, now) {
@@ -840,9 +909,11 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 		// its identity to FuseRRF and WriteFirstWinners, so results must never be
 		// appended from inside a goroutine.
 		lists := make([][]store.SearchResult, len(targets))
+		diags := make([]store.SearchDiag, len(targets))
 		if f := fanOutMounts(targets, func(i int, t federate.Target) (string, error) {
 			q := base
 			q.Path = t.Path
+			q.Diag = &diags[i]
 			res, err := provider.Search(r.Context(), t.RT.RI, emb, t.RT.Branch, q)
 			if err != nil {
 				return "Search failed", err
@@ -909,7 +980,12 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 			rows = []lensSearchItem{}
 		}
 
-		hal.WriteHAL(w, http.StatusOK, lensSearchResponse{Results: rows, Total: total})
+		resp := lensSearchResponse{Results: rows, Total: total}
+		if len(rows) == 0 {
+			resp.Notice = store.CutoffNotice(base.Text != "", minSimilarity, diags...)
+		}
+		logLensSearchDiag("search", b.Name(), base.Text != "", minSimilarity, targets, diags, len(rows))
+		hal.WriteHAL(w, http.StatusOK, resp)
 	}
 }
 

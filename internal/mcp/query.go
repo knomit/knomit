@@ -13,6 +13,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 // sort constants for knomit_query.
@@ -85,7 +86,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Minimum confidence threshold (0–1)."),
 		),
 		mcpgo.WithNumber("min_similarity",
-			mcpgo.Description("Minimum cosine similarity for text search (0–1); 0 uses the active embedding model's calibrated recall floor."),
+			mcpgo.Description("Minimum RAW cosine similarity for text search, in [0, 1]; values outside that range are rejected. Leave it unset (0) unless you have a reason: 0 uses the active embedding model's calibrated recall floor. Achievable cosines depend on the embedding model and are usually well below 1, so a high cutoff can return nothing; 0 is not \"no cutoff\" but the loaded model's calibrated floor. The `score` shown on results is cosine×100 — do NOT pass it back as min_similarity (a score of 45 means 0.45). When a cutoff you supplied removes every candidate, the response says so in `notice`."),
 		),
 		mcpgo.WithNumber("limit",
 			mcpgo.Description("Page size (results per call). Default 20, max 100 in snippet mode; default 3, max 5 when include_body=true."),
@@ -174,6 +175,10 @@ type queryResponse struct {
 	Facts   []factOutput `json:"facts"`
 	Cursor  *string      `json:"cursor"`
 	HasMore bool         `json:"has_more"`
+	// Notice explains an empty text result that is NOT "nothing matched": the
+	// caller-supplied min_similarity removed every candidate. Omitted otherwise,
+	// so every other response is byte-identical to before.
+	Notice string `json:"notice,omitempty"`
 }
 
 // pagedRowState is the minimal per-row state persisted in a session snapshot.
@@ -296,14 +301,19 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 	}
 	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
 	// Embed the query ONCE for the whole fan-out rather than once per mount —
-	// see fanoutQueryVec. Nil (no embedder, no text, failed inference) leaves
-	// every mount on the path it took before: its own embedder, else keywords.
-	q.QueryVec = fanoutQueryVec(ctx, emb, q.Text)
+	// see fanoutQueryVec. A failed or empty embedding fails the query
+	// here, once; nil with no error (no text, or no embedder handed in) leaves
+	// every mount to embed for itself. Text search is vector-only: there is no
+	// keyword fallback.
+	if q.QueryVec, err = fanoutQueryVec(ctx, emb, q.Text); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
 	// never silently shrink its read set (RFC §9.1).
 	lists := make([][]store.RecentFactEntry, len(targets))
 	errs := make([]error, len(targets))
+	diags := make([]store.SearchDiag, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		wg.Add(1)
@@ -314,6 +324,7 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 			defer recoverFanout(mountLabel(t.RT), &errs[i])
 			mq := q
 			mq.Path = t.Path
+			mq.Diag = &diags[i]
 			sm, release, serr := storeIndices(t.RT.RI)
 			if serr != nil {
 				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
@@ -329,6 +340,12 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 			return mcpgo.NewToolResultError(fmt.Sprintf("recent error: %v", e)), nil
 		}
 	}
+
+	returned := make([]int, len(lists))
+	for i, l := range lists {
+		returned[i] = len(l)
+	}
+	logQueryDiag(sortRecent, b, q, targets, diags, returned)
 
 	// RecentFacts orders its per-mount list by committed_at DESC WITHOUT a text
 	// query, but by RELEVANCE score WITH one (store.recentFactsSearch — a
@@ -372,7 +389,8 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 		order = order[:maxResults]
 	}
 	if len(order) == 0 {
-		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
+		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
+			Notice: store.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
 	}
 
 	// Recent mode snapshots ALL merged rows into the session and serves page 1
@@ -460,6 +478,10 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 		v := req.GetBool("expired", false)
 		expired = &v
 	}
+	minSim := req.GetFloat("min_similarity", 0)
+	if err := store.ValidateMinSimilarity(minSim); err != nil {
+		return store.SearchOptions{}, err
+	}
 	return store.SearchOptions{
 		// ONE clock per query: the expiry filters and every page's `expired`
 		// marker are computed from this instant (see pagedRowState.AsOf).
@@ -473,7 +495,7 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 		DomainAncestor: req.GetStringSlice("applies_to", nil),
 		Path:           req.GetString("path", ""),
 		MinConfidence:  req.GetFloat("min_confidence", 0),
-		MinSimilarity:  req.GetFloat("min_similarity", 0),
+		MinSimilarity:  minSim,
 		IncludeTypes:   req.GetStringSlice("type", nil),
 		IncludeOrigins: stringOrSlice(req, "origin"),
 		DomainExact:    req.GetBool("domain_exact", false),
@@ -579,14 +601,19 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	}
 	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
 	// Embed the query ONCE for the whole fan-out rather than once per mount —
-	// see fanoutQueryVec. Nil (no embedder, no text, failed inference) leaves
-	// every mount on the path it took before: its own embedder, else keywords.
-	q.QueryVec = fanoutQueryVec(ctx, emb, q.Text)
+	// see fanoutQueryVec. A failed or empty embedding fails the query
+	// here, once; nil with no error (no text, or no embedder handed in) leaves
+	// every mount to embed for itself. Text search is vector-only: there is no
+	// keyword fallback.
+	if q.QueryVec, err = fanoutQueryVec(ctx, emb, q.Text); err != nil {
+		return mcpgo.NewToolResultError(err.Error()), nil
+	}
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
 	// never silently shrink its read set (RFC §9.1).
 	lists := make([][]store.SearchResult, len(targets))
 	errs := make([]error, len(targets))
+	diags := make([]store.SearchDiag, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		wg.Add(1)
@@ -597,6 +624,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 			defer recoverFanout(mountLabel(t.RT), &errs[i])
 			mq := q
 			mq.Path = t.Path
+			mq.Diag = &diags[i]
 			sm, release, serr := storeIndices(t.RT.RI)
 			if serr != nil {
 				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
@@ -613,6 +641,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		}
 	}
 
+	logQueryDiag(sortRelevance, b, q, targets, diags, listLens(lists))
 	order := federate.FuseRRF(listLens(lists))
 	// Dedupe by repo-relative path (write mount wins) BEFORE truncating, so a
 	// shadowed cross-mount copy never consumes a result slot and the page agrees
@@ -623,7 +652,8 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		order = order[:maxResults]
 	}
 	if len(order) == 0 {
-		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
+		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
+			Notice: store.CutoffNotice(q.Text != "", q.MinSimilarity, diags...)})
 	}
 
 	// renderRow builds one output row from its fused reference. The displayed
@@ -1013,4 +1043,32 @@ func parseMotifMatch(raw string) (store.MotifMatchTier, error) {
 		}
 	}
 	return "", fmt.Errorf("motif_match must be one of %v", motifMatchEnum())
+}
+
+// logQueryDiag writes the ONE Info line per text-or-filter query (relevance and
+// sort=recent alike): whether it had text, the caller's min_similarity, the
+// binding, and per-mount cutoff and counts after the vector step and after the
+// cutoff. returned[i] is how many rows mount i handed back.
+func logQueryDiag(mode string, b *repos.Binding, q store.SearchOptions, targets []federate.Target, diags []store.SearchDiag, returned []int) {
+	type mountCounts struct {
+		Mount      string  `json:"mount"`
+		VecHits    int     `json:"vec_hits"`
+		AfterCut   int     `json:"after_cutoff"`
+		Returned   int     `json:"returned"`
+		BestCosine float64 `json:"best_cosine"`
+		Cutoff     float64 `json:"cutoff"`
+	}
+	counts := make([]mountCounts, len(targets))
+	for i, t := range targets {
+		counts[i] = mountCounts{Mount: mountLabel(t.RT), VecHits: diags[i].VecHits, AfterCut: diags[i].Candidates,
+			Returned: returned[i], BestCosine: diags[i].BestCosine, Cutoff: diags[i].Cutoff}
+	}
+	log.Info().
+		Str("mode", mode).
+		Bool("text", q.Text != "").
+		Float64("min_similarity", q.MinSimilarity).
+		Str("binding", b.Name()).
+		Bool("lens", b.IsLens()).
+		Interface("mounts", counts).
+		Msg("knomit_query search")
 }

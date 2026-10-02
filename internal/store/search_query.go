@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -258,9 +260,15 @@ type SearchOptions struct {
 	// empty must not pass it and expect nothing back: it has to short-circuit
 	// its own answer. Making emptiness mean "match nothing" here would turn
 	// every unset field into a silent zero-result filter.
-	PathsIn        []string
-	MinConfidence  float64
-	MinSimilarity  float64 // cosine similarity threshold (0–1); 0 uses the active model's recall floor
+	PathsIn       []string
+	MinConfidence float64
+	MinSimilarity float64 // cosine similarity threshold (0–1); 0 uses the active model's recall floor
+	// Diag, when non-nil, is filled by Search with what the vector step saw: how
+	// many candidates the KNN returned, the best cosine, the cutoff applied and
+	// how many survived it. It is an OUTPUT parameter (one per Search call —
+	// never share one across concurrent calls) that lets a caller tell "nothing
+	// matched" from "the cutoff removed everything".
+	Diag           *SearchDiag
 	Limit          int
 	Offset         int       // RecentFacts pagination offset; ignored by Search
 	QueryVec       []float32 // pre-computed embedding vector; if set, skips Embed(Text)
@@ -781,6 +789,65 @@ func (fq *factQuery) LiveFactCount(ctx context.Context, branch string) (int, err
 	return n, nil
 }
 
+// SearchDiag reports what the vector step of a text search saw. See
+// SearchOptions.Diag.
+type SearchDiag struct {
+	Text       bool    // the query carried text (or a vector / source path)
+	VecHits    int     // usable KNN candidates before the cutoff
+	BestCosine float64 // highest cosine among them (0 when VecHits == 0)
+	Cutoff     float64 // the cosine cutoff applied (caller's, or the model's floor)
+	Candidates int     // candidates strictly above the cutoff
+}
+
+// CutoffEmptied reports that the KNN found candidates and the cutoff removed
+// every one of them — the case an empty result list would otherwise hide.
+func (d SearchDiag) CutoffEmptied() bool { return d.VecHits > 0 && d.Candidates == 0 }
+
+// ValidateMinSimilarity rejects a min_similarity outside [0, 1]. The parameter
+// is a raw cosine; the `score` shown on results is cosine×100, so a caller who
+// passes a displayed score back (45) would otherwise get an empty list that
+// looks like an honest "no matches". Rejecting, not rescaling, is deliberate.
+func ValidateMinSimilarity(v float64) error {
+	if math.IsNaN(v) || v < 0 || v > 1 {
+		return fmt.Errorf("min_similarity must be between 0 and 1 (got %v): it is a raw cosine, not the displayed score (cosine×100); "+
+			"0 (the default) selects the loaded model's calibrated floor, which is usually right; achievable cosines depend on the model", v)
+	}
+	return nil
+}
+
+// CutoffNotice explains an empty text result that is NOT "nothing matched": the
+// caller's own min_similarity removed every candidate. diags holds one entry
+// per mount that answered (a repo query passes one). It returns "" unless the
+// query had text, the caller supplied a cutoff, at least one mount had KNN
+// candidates, and NO mount kept any after the cutoff. A candidate that the
+// cutoff kept but a later filter (type, domain, ...) removed counts as kept, so
+// that case yields no notice — the cutoff is not what emptied it.
+//
+// One helper serves MCP and REST so the wording cannot diverge.
+func CutoffNotice(text bool, minSimilarity float64, diags ...SearchDiag) string {
+	if !text || minSimilarity <= 0 {
+		return ""
+	}
+	best, emptied := 0.0, false
+	for _, d := range diags {
+		if d.Candidates > 0 {
+			return ""
+		}
+		if d.CutoffEmptied() {
+			emptied = true
+			if d.BestCosine > best {
+				best = d.BestCosine
+			}
+		}
+	}
+	if !emptied {
+		return ""
+	}
+	return fmt.Sprintf("no results: the min_similarity cutoff (%.2f) removed every candidate; the best cosine similarity found was %.2f. "+
+		"min_similarity is a raw cosine (the displayed score is cosine×100); lower it or omit it (0 uses the loaded model's calibrated floor).",
+		minSimilarity, best)
+}
+
 func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions) ([]SearchResult, error) {
 	branchID, err := fq.rh.branchID(ctx, branch)
 	if err != nil {
@@ -892,60 +959,84 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 	} else {
 		emb := fq.rh.getEmbedder()
 		if emb == nil && len(q.QueryVec) == 0 {
-			log.Debug().Msg("search: no embedder configured, skipping vec search")
+			// DELIBERATE EXCEPTION, kept: a store opened WITHOUT an embedder
+			// (read-only tooling, tests) has no vectors to search, so a text
+			// query answers empty here. A running service can never reach this —
+			// app.New refuses to start without an embedder — so it cannot hide a
+			// real failure in production. Every case where an embedder EXISTS
+			// and the vector step fails is an error below.
+			if q.Text != "" {
+				log.Warn().Msg("search: text query on a store with no embedder; returning no results")
+			} else {
+				log.Debug().Msg("search: no embedder configured, skipping vec search")
+			}
 		} else {
 			queryVec := q.QueryVec
 			if len(queryVec) == 0 {
 				var embedErr error
 				queryVec, embedErr = emb.EmbedQuery(ctx, q.Text)
 				if embedErr != nil {
-					log.Warn().Err(embedErr).Msg("search: embed query failed")
+					log.Error().Err(embedErr).Msg("search: embed query failed")
+					return nil, fmt.Errorf("search: embed query: %w", embedErr)
 				}
 			}
-			if queryVec == nil {
-				log.Warn().Msg("search: no query vector available")
-			} else {
-				vecBlob := float32SliceToBytes(queryVec)
-				rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
-					`SELECT f.path, (1.0 - fv.distance) as similarity
-					 FROM facts_vec fv
-					 JOIN facts f ON f.id = fv.rowid
-					 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
-					 WHERE fv.embedding MATCH ? AND fv.k = ?
-					 ORDER BY fv.distance ASC`,
-					branchID, vecBlob, kLimit,
-				)
-				if err != nil {
-					log.Warn().Err(err).Msg("search: vec query failed")
-				} else {
-					for rows.Next() {
-						var path string
-						var sim sql.NullFloat64
-						if err := rows.Scan(&path, &sim); err != nil {
-							break
-						}
-						// Skip degenerate (zero-norm) hits with a NULL similarity; see
-						// usableKNNSimilarity for the invariant.
-						s, ok := usableKNNSimilarity(sim)
-						if !ok {
-							continue
-						}
-						vecSimByPath[path] = s
-					}
+			if len(queryVec) == 0 {
+				log.Error().Msg("search: no query vector available")
+				return nil, errors.New("search: no query vector available")
+			}
+			vecBlob := float32SliceToBytes(queryVec)
+			rows, err := conn(ctx, fq.rh.db).QueryContext(ctx,
+				`SELECT f.path, (1.0 - fv.distance) as similarity
+				 FROM facts_vec fv
+				 JOIN facts f ON f.id = fv.rowid
+				 JOIN branch_facts bf ON bf.fact_id = f.id AND bf.branch_id = ?
+				 WHERE fv.embedding MATCH ? AND fv.k = ?
+				 ORDER BY fv.distance ASC`,
+				branchID, vecBlob, kLimit,
+			)
+			if err != nil {
+				log.Error().Err(err).Msg("search: vec query failed")
+				return nil, fmt.Errorf("search: vector query: %w", err)
+			}
+			for rows.Next() {
+				var path string
+				var sim sql.NullFloat64
+				if err := rows.Scan(&path, &sim); err != nil {
 					rows.Close()
-					log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
+					return nil, fmt.Errorf("search: vector query scan: %w", err)
 				}
+				// Skip degenerate (zero-norm) hits with a NULL similarity; see
+				// usableKNNSimilarity for the invariant.
+				s, ok := usableKNNSimilarity(sim)
+				if !ok {
+					continue
+				}
+				vecSimByPath[path] = s
 			}
+			rowsErr := rows.Err()
+			rows.Close()
+			if rowsErr != nil {
+				log.Error().Err(rowsErr).Msg("search: vec query failed")
+				return nil, fmt.Errorf("search: vector query: %w", rowsErr)
+			}
+			log.Debug().Int("vec_hits", len(vecSimByPath)).Msg("vec search complete")
 		}
-	}
-
-	if len(vecSimByPath) == 0 {
-		return nil, nil
 	}
 
 	minSim := q.MinSimilarity
 	if minSim <= 0 {
 		minSim = th.SearchFloor
+	}
+	if q.Diag != nil {
+		*q.Diag = SearchDiag{Text: q.Text != "", VecHits: len(vecSimByPath), Cutoff: minSim}
+		for _, c := range vecSimByPath {
+			if c > q.Diag.BestCosine {
+				q.Diag.BestCosine = c
+			}
+		}
+	}
+	if len(vecSimByPath) == 0 {
+		return nil, nil
 	}
 
 	candidatePaths := make([]string, 0, len(vecSimByPath))
@@ -953,6 +1044,9 @@ func (fq *factQuery) Search(ctx context.Context, branch string, q SearchOptions)
 		if cosine > minSim {
 			candidatePaths = append(candidatePaths, path)
 		}
+	}
+	if q.Diag != nil {
+		q.Diag.Candidates = len(candidatePaths)
 	}
 	if len(candidatePaths) == 0 {
 		return nil, nil

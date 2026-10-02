@@ -993,7 +993,7 @@ paths:
         - { name: domain_exact,   in: query, description: "Match domain by exact canonical tag only (no containment/hierarchy).", schema: { type: boolean, default: false } }
         - { name: path,           in: query, schema: { type: string } }
         - { name: min_confidence, in: query, schema: { type: number, format: double } }
-        - { name: min_similarity, in: query, description: "Minimum cosine similarity for text search (0–1); 0 uses the server default.", schema: { type: number, format: double } }
+        - { name: min_similarity, in: query, description: "Minimum cosine similarity for text search (0–1); a raw cosine, not the displayed score (cosine×100); values outside [0, 1] or non-numeric are 400; 0 uses the model's calibrated floor. An empty result caused by this cutoff carries a `notice`.", schema: { type: number, format: double } }
         - { name: limit,          in: query, description: "1–500; out-of-range or non-integer is 400.", schema: { type: integer, default: 50, minimum: 1, maximum: 500 } }
         - { name: type,           in: query, description: CSV, schema: { type: string } }
         - { name: exclude_type,   in: query, description: CSV, schema: { type: string } }
@@ -2552,7 +2552,7 @@ paths:
         - { name: origin,         in: query, description: CSV, schema: { type: string } }
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
-        - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+        - { name: min_similarity, in: query, description: "Raw cosine in [0, 1]; non-numeric or out of range is 400.", schema: { type: number, format: double } }
         - $ref: "#/components/parameters/MotifFilter"
         - $ref: "#/components/parameters/LensMotifMatchTier"
         - $ref: "#/components/parameters/ExpiredFilter"
@@ -2677,7 +2677,7 @@ paths:
         - { name: origin,         in: query, description: CSV, schema: { type: string } }
         - { name: ep,             in: query, description: CSV (episode operations), schema: { type: string } }
         - { name: min_confidence, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
-        - { name: min_similarity, in: query, description: "Non-numeric is 400.", schema: { type: number, format: double } }
+        - { name: min_similarity, in: query, description: "Raw cosine in [0, 1]; non-numeric or out of range is 400.", schema: { type: number, format: double } }
         - $ref: "#/components/parameters/MotifFilter"
         - $ref: "#/components/parameters/LensMotifMatchTier"
         - $ref: "#/components/parameters/ExpiredFilter"
@@ -3636,6 +3636,13 @@ components:
                 results:
                   type: array
                   items: { $ref: "#/components/schemas/SearchHit" }
+            notice:
+              type: string
+              description: &searchNotice |
+                Present only when a caller-supplied `min_similarity` removed every candidate
+                a text query found (and no later filter did). States the cutoff applied and the
+                best cosine similarity seen; `min_similarity` is a raw cosine, not the displayed
+                score (cosine×100). Absent in every other response.
 
     # Stats / activity / completions / domains
     Activity:
@@ -4833,6 +4840,9 @@ components:
         total:
           type: integer
           description: Post-dedupe union size; `limit`/`offset` page within it.
+        notice:
+          type: string
+          description: *searchNotice
 
     LensFact:
       allOf:
@@ -4867,6 +4877,9 @@ components:
           type: array
           items: { $ref: "#/components/schemas/LensSearchItem" }
         total: { type: integer }
+        notice:
+          type: string
+          description: *searchNotice
 
     LensCompletions:
       type: object
