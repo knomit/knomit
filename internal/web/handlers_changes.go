@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 	"knomit/internal/web/hal"
@@ -29,8 +30,9 @@ type changesView struct {
 // handleHALChanges serves GET /repos/{repo}/branches/{branch}/changes: each
 // fact path under `prefix` that differs between commit `since` and the
 // branch's head, as added/modified/deleted, plus that head. A read of two
-// trees — no timestamp, no write. Unlike the MCP tool (which always reads the
-// repo's upstream), the branch is the one in the URL.
+// trees — no timestamp, no write. The repo and branch are the ones in the URL;
+// a cursor records both and is refused on any other, and `since` also takes
+// the MCP tool's `<repo12>:<commit40>` bookmark when it names this repo.
 func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoName := chi.URLParam(r, "repo")
@@ -49,11 +51,27 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 			limit = n
 		}
 
+		// The repo's wire id: what a cursor and a bookmark name it by.
+		repo12 := federate.ID12(ri.ID())
+
 		var q store.ChangesQuery
 		if c := qp.Get("cursor"); c != "" {
-			var err error
-			if q, err = store.DecodeChangesCursor(c); err != nil {
+			var (
+				scope store.ChangesScope
+				err   error
+			)
+			if q, scope, err = store.DecodeChangesCursor(c); err != nil {
 				writeChangesError(w, r, err, branch)
+				return
+			}
+			// A cursor minted for another repo or branch is refused, not
+			// replayed here. A legacy cursor (no scope) keeps its old
+			// meaning: this route's repo and branch, guarded by the store's
+			// ancestry check on its pinned head.
+			if scope.Repo != "" && (scope.Repo != repo12 || scope.Branch != branch) {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid cursor",
+					"cursor is for branch "+strconv.Quote(scope.Branch)+" of repo "+scope.Repo+", this route reads branch "+
+						strconv.Quote(branch)+" of repo "+repo12+"; restart without a cursor", r.URL.Path)
 				return
 			}
 		} else {
@@ -61,10 +79,21 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		}
 		q.Limit = limit
 
-		var (
-			res store.ChangesResult
-			err error
-		)
+		// since may be the MCP tool's bookmark (<repo12>:<commit40>); it must
+		// name this repo.
+		sinceRepo, sinceCommit, err := store.ParseChangesSince(q.Since)
+		if err != nil {
+			writeChangesError(w, r, err, branch)
+			return
+		}
+		if sinceRepo != "" && sinceRepo != repo12 {
+			hal.WriteProblem(w, http.StatusBadRequest, "Bookmark for another repo",
+				"bookmark is for repo "+sinceRepo+", this route reads repo "+repo12+" ("+repoName+"); read that repo's route or omit since", r.URL.Path)
+			return
+		}
+		q.Since = sinceCommit
+
+		var res store.ChangesResult
 		if aerr := ri.WithRead(func(svc *store.Service) {
 			res, err = svc.Facts().ChangesUnder(r.Context(), branch, q)
 		}); aerr != nil {
@@ -79,7 +108,7 @@ func handleHALChanges(b hal.URLBuilder) http.HandlerFunc {
 		base := b.Branch(repoName, hal.Anchor{Branch: branch}) + "/changes"
 		links := hal.LinkMap{"self": {Href: selfWithQuery(base, r)}}
 		if res.HasMore {
-			next := store.EncodeChangesCursor(q.Since, res.Head, q.Prefix, res.Changes[len(res.Changes)-1].Path)
+			next := store.EncodeChangesCursor(store.ChangesScope{Repo: repo12, Branch: branch}, q.Since, res.Head, q.Prefix, res.Changes[len(res.Changes)-1].Path)
 			nq := r.URL.Query()
 			nq.Del("since")
 			nq.Del("prefix")

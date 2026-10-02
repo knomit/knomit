@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"knomit/internal/federate"
 	"knomit/internal/repos"
 	"knomit/internal/store"
 )
@@ -121,10 +122,65 @@ func TestREST_Changes_RefusalsAre4xx(t *testing.T) {
 		{"bad cursor", base + "?cursor=garbage", http.StatusBadRequest, "cursor"},
 		{"bad limit", base + "?limit=101", http.StatusBadRequest, "limit"},
 		{"unknown branch", "/repos/alpha/branches/nope/changes", http.StatusNotFound, "nope"},
+		{"malformed bookmark", base + "?since=alpha:" + onAgent, http.StatusBadRequest, "bookmark"},
+		{"bookmark for another repo", base + "?since=0123456789ab:" + onAgent, http.StatusBadRequest, "bookmark is for repo 0123456789ab"},
 	} {
 		rec := httptest.NewRecorder()
 		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, c.url, nil))
 		require.Equal(t, c.code, rec.Code, "%s: %s", c.name, rec.Body.String())
 		require.Contains(t, rec.Body.String(), c.says, c.name)
 	}
+}
+
+// since also takes the MCP tool's bookmark form when it names this repo, and
+// means exactly what the bare hash means.
+func TestREST_Changes_AcceptsBookmarkForThisRepo(t *testing.T) {
+	ri, r := changesRepo(t)
+	agent := ri.AgentBranch()
+	since := seedOn(t, ri, agent, "kb/tasks/a/seed.md")
+	seedOn(t, ri, agent, "kb/tasks/a/new.md")
+	base := "/repos/alpha/branches/" + urlBranch(agent) + "/changes?prefix=tasks/a&since="
+
+	rec, bare := getChanges(t, r, base+since)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	rec, marked := getChanges(t, r, base+store.ChangesBookmark(federate.ID12(ri.ID()), since))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, bare.Embedded, marked.Embedded)
+	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/new.md", Change: store.ChangeAdded}}, marked.Embedded["changes"])
+}
+
+// A cursor records the repo and branch it was minted for: replayed on another
+// branch or another repo's route it is refused, never re-read there. A legacy
+// cursor (no scope) keeps paging the route it is given.
+func TestREST_Changes_CursorIsScopedToRepoAndBranch(t *testing.T) {
+	m, _ := newTestLensManager(t, "alpha", "beta")
+	r := (&Server{Manager: m, AgentBranch: "machine/test", OntologyRoot: "kb"}).NewAPIRouter()
+	ri := m.Get("alpha")
+	agent := ri.AgentBranch()
+	seedOn(t, ri, agent, "kb/tasks/a/t1.md", "kb/tasks/a/t2.md", "kb/tasks/a/t3.md")
+
+	base := "/repos/alpha/branches/" + urlBranch(agent) + "/changes"
+	rec, p1 := getChanges(t, r, base+"?prefix=tasks/a&limit=1")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	next := p1.Links["next"]["href"]
+	_, cursor, ok := strings.Cut(next, "cursor=")
+	require.True(t, ok, next)
+	if i := strings.Index(cursor, "&"); i >= 0 {
+		cursor = cursor[:i]
+	}
+
+	for name, url := range map[string]string{
+		"another branch": "/repos/alpha/branches/main/changes?cursor=" + cursor,
+		"another repo":   "/repos/beta/branches/main/changes?cursor=" + cursor,
+	} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, url, nil))
+		require.Equal(t, http.StatusBadRequest, rec.Code, "%s: %s", name, rec.Body.String())
+		require.Contains(t, rec.Body.String(), "restart without a cursor", name)
+	}
+
+	legacy := store.EncodeChangesCursor(store.ChangesScope{}, "", p1.Head, "tasks/a", p1.Embedded["changes"][0].Path)
+	rec, p2 := getChanges(t, r, base+"?limit=1&cursor="+legacy)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, []store.PathChange{{Path: "kb/tasks/a/t2.md", Change: store.ChangeAdded}}, p2.Embedded["changes"])
 }

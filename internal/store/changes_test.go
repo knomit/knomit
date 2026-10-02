@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -394,4 +395,46 @@ func TestChangesUnder_ExplicitFailures(t *testing.T) {
 
 	_, err = svc.Facts().ChangesUnder(ctx, "main", ChangesQuery{Prefix: "../x"})
 	require.True(t, errors.Is(err, ErrInvalidPrefix))
+}
+
+// The cursor records the repo and branch it was minted for, and a legacy
+// cursor (minted before it did) still decodes, with an empty scope the
+// caller restores. A cursor carrying only half a scope was never minted.
+func TestChangesCursor_ScopeRoundTrips(t *testing.T) {
+	head := "0123456789abcdef0123456789abcdef01234567"
+	scope := ChangesScope{Repo: "aaaaaaaaaaaa", Branch: "exp/x"}
+	q, got, err := DecodeChangesCursor(EncodeChangesCursor(scope, "s", head, "tasks/a", "kb/tasks/a/t1.md"))
+	require.NoError(t, err)
+	require.Equal(t, scope, got)
+	require.Equal(t, ChangesQuery{Since: "s", Head: head, Prefix: "tasks/a", After: "kb/tasks/a/t1.md"}, q)
+
+	legacy := base64.RawURLEncoding.EncodeToString([]byte(`{"h":"` + head + `","a":"kb/x.md"}`))
+	q, got, err = DecodeChangesCursor(legacy)
+	require.NoError(t, err)
+	require.Equal(t, ChangesScope{}, got)
+	require.Equal(t, head, q.Head)
+
+	half := base64.RawURLEncoding.EncodeToString([]byte(`{"r":"aaaaaaaaaaaa","h":"` + head + `","a":"kb/x.md"}`))
+	_, _, err = DecodeChangesCursor(half)
+	require.ErrorIs(t, err, ErrInvalidChangesCursor)
+}
+
+// since takes the bookmark form or a bare commit; a malformed repo half is
+// ErrUnknownSince, never an empty page.
+func TestParseChangesSince(t *testing.T) {
+	head := "0123456789abcdef0123456789abcdef01234567"
+	repo, commit, err := ParseChangesSince(ChangesBookmark("AAAAAAAAAAAA", head))
+	require.NoError(t, err)
+	require.Equal(t, "aaaaaaaaaaaa", repo)
+	require.Equal(t, head, commit)
+
+	repo, commit, err = ParseChangesSince(head)
+	require.NoError(t, err)
+	require.Empty(t, repo, "a bare commit names no repo")
+	require.Equal(t, head, commit)
+
+	for _, bad := range []string{"core:" + head, "aaaaaaaaaaaaa:" + head, ":" + head} {
+		_, _, err = ParseChangesSince(bad)
+		require.ErrorIs(t, err, ErrUnknownSince, bad)
+	}
 }

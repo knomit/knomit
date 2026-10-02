@@ -1610,8 +1610,10 @@ paths:
         another branch) the request is refused with 409 instead of reporting
         false deletions: retry after sync, or omit `since`.
 
-        This route reads the branch in its URL. The MCP tool `knomit_changes`
-        always reads the repository's main (consensus) branch.
+        This route reads the repo and branch in its URL. The MCP tool
+        `knomit_changes` reads one mounted repo per call, by default at the
+        branch the caller is bound to, or at that repo's consensus branch
+        with `consensus: true`.
       parameters:
         - name: prefix
           in: query
@@ -1624,11 +1626,15 @@ paths:
           schema: { type: string }
         - name: since
           in: query
-          description: The caller's bookmark — the full 40-hex `head` a previous response returned. Omit to list the folder as it is now.
-          schema: { type: string, pattern: "^[0-9a-fA-F]{40}$" }
+          description: |
+            The caller's bookmark — the full 40-hex `head` a previous response
+            returned, or the MCP tool's `bookmark` form `<repo12>:<commit40>`.
+            A bookmark naming another repo is 400. Omit to list the folder as
+            it is now.
+          schema: { type: string, pattern: "^([0-9a-fA-F]{12}:)?[0-9a-fA-F]{40}$" }
         - name: cursor
           in: query
-          description: Opaque page token from the `next` link. When present, `prefix` and `since` are ignored; the page continues the same comparison (the same two commits).
+          description: Opaque page token from the `next` link. When present, `prefix` and `since` are ignored; the page continues the same comparison (the same two commits). A cursor records the repo and branch it was minted for; one minted for another repo or branch is 400.
           schema: { type: string }
         - { name: limit, in: query, description: "1–100; out-of-range or non-integer is 400.", schema: { type: integer, default: 100, minimum: 1, maximum: 100 } }
       responses:
