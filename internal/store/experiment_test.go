@@ -62,6 +62,26 @@ func readExperimentFact(t *testing.T, svc *Service, branch, path string) string 
 	return res.Content
 }
 
+// writeOnOrphanRef puts a commit on an experiment ref that has NO experiments
+// row, the shape an open that died between its steps (or a lost row) leaves
+// behind. Since #394 a write onto such a ref is refused (its owning agent
+// cannot be named, commitAgentID), so the commit is written while a row
+// exists and the row is then deleted — the ref keeps the content, the record
+// is gone.
+func writeOnOrphanRef(t *testing.T, svc *Service, name, path, title, body string) {
+	t.Helper()
+	ctx := context.Background()
+	branch := ExperimentBranch(name)
+	tip, err := svc.Branches().HeadCommit(ctx, branch)
+	require.NoError(t, err)
+	_, err = svc.rh.db.Exec(`INSERT INTO experiments (name, description, parent_branch, fork_commit, created_at, last_activity_at)
+		VALUES (?, '', ?, ?, 0, 0)`, name, testAgentBranch, tip)
+	require.NoError(t, err)
+	writeMergeFact(t, svc, branch, path, title, body)
+	_, err = svc.rh.db.Exec(`DELETE FROM experiments WHERE name = ?`, name)
+	require.NoError(t, err)
+}
+
 // newTestSigner returns an ephemeral ed25519 SSH signer. Commit signing is a
 // no-op without one, so any test that asserts a signature has to install it.
 func newTestSigner(t *testing.T) ssh.Signer {
@@ -698,7 +718,7 @@ func TestOpenExperiment_RefusesOrphanRef(t *testing.T) {
 
 	// An orphan ref, forked from the parent at an OLD point...
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "exp/orphan", testAgentBranch))
-	writeMergeFact(t, svc, "exp/orphan", "kb/smuggled.md", "smuggled", "content nobody asked for")
+	writeOnOrphanRef(t, svc, "orphan", "kb/smuggled.md", "smuggled", "content nobody asked for")
 	orphanTip, err := svc.Branches().HeadCommit(ctx, "exp/orphan")
 	require.NoError(t, err)
 
@@ -759,7 +779,7 @@ func TestRollbackExperiment_CleansAnOrphanRef(t *testing.T) {
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", testAgentBranch, "aaaa1111"))
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "exp/half-open", testAgentBranch))
 	require.NoError(t, svc.Pipeline().SetPipelineWatermark(ctx, "review", "exp/half-open", "aaaa1111"))
-	writeMergeFact(t, svc, "exp/half-open", "kb/partial.md", "partial", "body")
+	writeOnOrphanRef(t, svc, "half-open", "kb/partial.md", "partial", "body")
 
 	var branchID int64
 	require.NoError(t, svc.rh.db.QueryRow(`SELECT id FROM branches WHERE name = ?`, "exp/half-open").Scan(&branchID))
@@ -792,7 +812,7 @@ func TestRollbackExperiment_OrphanThenReopenSucceeds(t *testing.T) {
 	svc := newExperimentTestStore(t)
 
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "exp/retry-me", testAgentBranch))
-	writeMergeFact(t, svc, "exp/retry-me", "kb/stale.md", "stale", "work from the dead open")
+	writeOnOrphanRef(t, svc, "retry-me", "kb/stale.md", "stale", "work from the dead open")
 
 	// Refused while the orphan stands...
 	_, err := svc.Experiments().OpenExperiment(ctx, "retry-me", "", testAgentBranch)

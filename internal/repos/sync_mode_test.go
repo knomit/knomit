@@ -242,7 +242,10 @@ func TestSyncMode_OnlyAgentBranchWakes(t *testing.T) {
 
 	ctx := context.Background()
 	svc := testService(t, ri)
-	require.NoError(t, svc.Branches().CreateBranch(ctx, "exp/x", trigAgent))
+	// A recorded experiment: a write onto an exp/ ref with no record is
+	// refused since #394 (its owning agent cannot be named).
+	_, err := svc.Experiments().OpenExperiment(ctx, "x", "", trigAgent)
+	require.NoError(t, err)
 	writeOn(t, ri, "exp/x", "kb/tasks/exp.md")
 	require.NoError(t, svc.Branches().CreateBranch(ctx, "agent/peer-0badc0de", trigAgent))
 	writeOn(t, ri, "agent/peer-0badc0de", "kb/tasks/peer.md")

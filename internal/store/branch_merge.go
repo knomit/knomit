@@ -285,6 +285,13 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
 	}
+	// The merge commit's author is resolved here too, for the same reason: an
+	// experiment whose owning agent cannot be named (commitAgentID) refuses
+	// the merge before any tree is written.
+	author, committer, err := rh.commitSigs(ctx, dst, "merge")
+	if err != nil {
+		return AgentReconcileResult{}, fmt.Errorf("mergeIntoBranch: %w", err)
+	}
 
 	// A `conflicts` strategy settles the conflict set up front, as per-path
 	// resolutions the REFUSING walk applies; whatever it could not settle
@@ -341,8 +348,8 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	}
 
 	mc := &object.Commit{
-		Author:       rh.authorSig(dst, "merge"),
-		Committer:    rh.committerSig(dst),
+		Author:       author,
+		Committer:    committer,
 		Message:      appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},

@@ -159,8 +159,10 @@ func (fi *factIndex) writeFileExact(ctx context.Context, branch, path, content, 
 	if err != nil {
 		return "", "", fmt.Errorf("WriteFile: %w", err)
 	}
-	author := fi.rh.authorSig(branch, operation)
-	committer := fi.rh.committerSig(branch)
+	author, committer, err := fi.rh.commitSigs(ctx, branch, operation)
+	if err != nil {
+		return "", "", fmt.Errorf("WriteFile: %w", err)
+	}
 	// The causal-trace trailers (F07): stamped here, on the message the
 	// builder signs, when the caller's ctx carries a set; nothing otherwise.
 	message = appendTrailers(message, trailersFromContext(ctx))
@@ -224,8 +226,10 @@ func (fi *factIndex) deleteFile(ctx context.Context, branch, path, message, oper
 	if err != nil {
 		return "", fmt.Errorf("DeleteFile: %w", err)
 	}
-	author := fi.rh.authorSig(branch, operation)
-	committer := fi.rh.committerSig(branch)
+	author, committer, err := fi.rh.commitSigs(ctx, branch, operation)
+	if err != nil {
+		return "", fmt.Errorf("DeleteFile: %w", err)
+	}
 	message = appendTrailers(message, trailersFromContext(ctx)) // see writeFileExact
 	newCommitHash, err := deleteFileFromStore(fi.rh.gits, signer, headHash, path, message, author, committer)
 	if err != nil {
@@ -451,8 +455,10 @@ func (fi *factIndex) batchWriteLocked(ctx context.Context, branch string, files 
 	}
 
 	// Create single commit.
-	author := fi.rh.authorSig(branch, operation)
-	committer := fi.rh.committerSig(branch)
+	author, committer, err := fi.rh.commitSigs(ctx, branch, operation)
+	if err != nil {
+		return plumbing.ZeroHash, nil, fmt.Errorf("batchWrite: %w", err)
+	}
 	commit := &object.Commit{
 		Author:    author,
 		Committer: committer,
