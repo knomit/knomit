@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -30,10 +31,12 @@ func (defaultSearchProvider) Search(ctx context.Context, ri *repos.RepoInstance,
 	if q.Text != "" && emb != nil && len(q.QueryVec) == 0 {
 		vec, err := emb.EmbedQuery(ctx, q.Text)
 		if err != nil {
-			log.Warn().Err(err).Msg("search: embed query failed")
-		} else {
-			q.QueryVec = vec
+			// Text search is vector-only: an unembeddable query is a failure, not
+			// an empty result.
+			log.Error().Err(err).Msg("search: embed query failed")
+			return nil, fmt.Errorf("search: embed query: %w", err)
 		}
+		q.QueryVec = vec
 	}
 
 	var (
@@ -64,6 +67,13 @@ type searchResultItem struct {
 	Expires    string      `json:"expires,omitempty"`
 	Expired    bool        `json:"expired,omitempty"`
 	Links      hal.LinkMap `json:"_links"`
+}
+
+// searchView is the search collection plus an optional notice. Notice is
+// omitted unless the caller's min_similarity removed every candidate.
+type searchView struct {
+	hal.CollectionView[searchResultItem]
+	Notice string `json:"notice,omitempty"`
 }
 
 // handleSearch serves GET /repos/{repo}/branches/{branch}/search.
@@ -107,6 +117,10 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 			if err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 					"invalid min_similarity value", r.URL.Path)
+				return
+			}
+			if err := store.ValidateMinSimilarity(v); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 				return
 			}
 			minSimilarity = v
@@ -167,9 +181,21 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 			results []store.SearchResult
 			err     error
 		)
+		var diag store.SearchDiag
+		q.Diag = &diag
 		if !empty {
 			results, err = provider.Search(r.Context(), ri, emb, branch, q)
 		}
+		log.Info().
+			Bool("text", text != "").
+			Float64("min_similarity", minSimilarity).
+			Float64("cutoff", diag.Cutoff).
+			Str("repo", repoName).
+			Str("branch", branch).
+			Int("vec_hits", diag.VecHits).
+			Int("after_cutoff", diag.Candidates).
+			Int("returned", len(results)).
+			Msg("hal search")
 		if err != nil {
 			log.Debug().Err(err).Msg("hal search failed")
 			writeStoreError(w, r, err, "Search failed", branch)
@@ -203,12 +229,19 @@ func handleSearch(b hal.URLBuilder, provider searchProvider, emb store.Embedder)
 			items = append(items, item)
 		}
 
-		view := hal.CollectionView[searchResultItem]{
+		view := searchView{CollectionView: hal.CollectionView[searchResultItem]{
 			Count: len(items),
 			Links: hal.LinkMap{"self": {Href: selfURL}},
 			Embedded: map[string][]searchResultItem{
 				"results": items,
 			},
+		}}
+		// An empty text result caused by the caller's own cutoff says so, rather
+		// than looking like "nothing matched".
+		if len(items) == 0 && minSimilarity > 0 && diag.CutoffEmptied() {
+			view.Notice = fmt.Sprintf("no results: the min_similarity cutoff (%.2f) removed every candidate; the best cosine similarity found was %.2f. "+
+				"min_similarity is a raw cosine (the displayed score is cosine×100), and cosines for the loaded model run low, so a high cutoff can exclude everything — "+
+				"lower it or omit it (0 uses the model's calibrated floor).", minSimilarity, diag.BestCosine)
 		}
 		hal.WriteHAL(w, http.StatusOK, view)
 	}

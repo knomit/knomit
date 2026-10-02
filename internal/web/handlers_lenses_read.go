@@ -177,6 +177,10 @@ func handleHALLensFacts(provider factsCollectionProvider, motifsP motifsProvider
 					"invalid min_similarity value", r.URL.Path)
 				return
 			}
+			if err := store.ValidateMinSimilarity(n); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
+				return
+			}
 			minSimilarity = n
 		}
 
@@ -756,6 +760,10 @@ func handleHALLensSearch(provider searchProvider, emb store.Embedder, motifsP mo
 			if err != nil {
 				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter",
 					"invalid min_similarity value", r.URL.Path)
+				return
+			}
+			if err := store.ValidateMinSimilarity(n); err != nil {
+				hal.WriteProblem(w, http.StatusBadRequest, "Invalid parameter", err.Error(), r.URL.Path)
 				return
 			}
 			minSimilarity = n

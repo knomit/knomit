@@ -17,12 +17,17 @@ import (
 type stubSearchProvider struct {
 	results []store.SearchResult
 	err     error
+	// diag, when set, is what the stub reports through SearchOptions.Diag.
+	diag *store.SearchDiag
 	// lastQuery lets tests assert what query was built
 	lastQuery store.SearchOptions
 }
 
 func (s *stubSearchProvider) Search(_ context.Context, _ *repos.RepoInstance, _ store.Embedder, branch string, q store.SearchOptions) ([]store.SearchResult, error) {
 	s.lastQuery = q
+	if s.diag != nil && q.Diag != nil {
+		*q.Diag = *s.diag
+	}
 	return s.results, s.err
 }
 

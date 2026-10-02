@@ -73,10 +73,11 @@ func storeIndices(ri *repos.RepoInstance) (mcpStore, func(), error) {
 // every repo instance, so the N vectors were already identical by construction
 // — this computes one of them instead of N.
 //
-// A nil vector is the DEGRADED path, not an error: with no embedder, no text,
-// or a failed inference, each mount falls back to exactly what it does today
-// (its own embedder, else keyword-only search). Never fail a query because it
-// could not be embedded.
+// A nil vector here is a hand-off, not a verdict: with no embedder, no text, or
+// a failed inference, each mount embeds the query itself. Text search is
+// vector-only — there is no keyword fallback — so if that per-mount embedding
+// also fails, store.Search returns an error and the query FAILS with it rather
+// than answering with an empty list.
 func fanoutQueryVec(ctx context.Context, emb store.Embedder, text string) []float32 {
 	if text == "" || emb == nil {
 		return nil

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/rs/zerolog/log"
 )
 
 // sort constants for knomit_query.
@@ -85,7 +86,7 @@ func queryTool() mcpgo.Tool {
 			mcpgo.Description("Minimum confidence threshold (0–1)."),
 		),
 		mcpgo.WithNumber("min_similarity",
-			mcpgo.Description("Minimum cosine similarity for text search (0–1); 0 uses the active embedding model's calibrated recall floor."),
+			mcpgo.Description("Minimum RAW cosine similarity for text search, in [0, 1]; values outside that range are rejected. Leave it unset (0) unless you have a reason: 0 uses the active embedding model's calibrated recall floor. Cosines for the loaded embedding model run well below 1 even for near-verbatim queries, so a high cutoff (e.g. 0.7) can return nothing; 0 is not \"no cutoff\" but the model's floor. The `score` shown on results is cosine×100 — do NOT pass it back as min_similarity (a score of 45 means 0.45). When a cutoff you supplied removes every candidate, the response says so in `notice`."),
 		),
 		mcpgo.WithNumber("limit",
 			mcpgo.Description("Page size (results per call). Default 20, max 100 in snippet mode; default 3, max 5 when include_body=true."),
@@ -174,6 +175,10 @@ type queryResponse struct {
 	Facts   []factOutput `json:"facts"`
 	Cursor  *string      `json:"cursor"`
 	HasMore bool         `json:"has_more"`
+	// Notice explains an empty text result that is NOT "nothing matched": the
+	// caller-supplied min_similarity removed every candidate. Omitted otherwise,
+	// so every other response is byte-identical to before.
+	Notice string `json:"notice,omitempty"`
 }
 
 // pagedRowState is the minimal per-row state persisted in a session snapshot.
@@ -297,7 +302,9 @@ func queryRecent(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb sto
 	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
 	// Embed the query ONCE for the whole fan-out rather than once per mount —
 	// see fanoutQueryVec. Nil (no embedder, no text, failed inference) leaves
-	// every mount on the path it took before: its own embedder, else keywords.
+	// every mount to embed for itself; if that also fails, the mount's Search
+	// returns an error and the whole query fails. Text search is vector-only:
+	// there is no keyword fallback.
 	q.QueryVec = fanoutQueryVec(ctx, emb, q.Text)
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
@@ -460,6 +467,10 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 		v := req.GetBool("expired", false)
 		expired = &v
 	}
+	minSim := req.GetFloat("min_similarity", 0)
+	if err := store.ValidateMinSimilarity(minSim); err != nil {
+		return store.SearchOptions{}, err
+	}
 	return store.SearchOptions{
 		// ONE clock per query: the expiry filters and every page's `expired`
 		// marker are computed from this instant (see pagedRowState.AsOf).
@@ -473,7 +484,7 @@ func parseQueryFilters(req mcpgo.CallToolRequest) (store.SearchOptions, error) {
 		DomainAncestor: req.GetStringSlice("applies_to", nil),
 		Path:           req.GetString("path", ""),
 		MinConfidence:  req.GetFloat("min_confidence", 0),
-		MinSimilarity:  req.GetFloat("min_similarity", 0),
+		MinSimilarity:  minSim,
 		IncludeTypes:   req.GetStringSlice("type", nil),
 		IncludeOrigins: stringOrSlice(req, "origin"),
 		DomainExact:    req.GetBool("domain_exact", false),
@@ -580,13 +591,16 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 	q.Limit = maxResults // per-mount snapshot depth (RFC §7.1: no overscan factor)
 	// Embed the query ONCE for the whole fan-out rather than once per mount —
 	// see fanoutQueryVec. Nil (no embedder, no text, failed inference) leaves
-	// every mount on the path it took before: its own embedder, else keywords.
+	// every mount to embed for itself; if that also fails, the mount's Search
+	// returns an error and the whole query fails. Text search is vector-only:
+	// there is no keyword fallback.
 	q.QueryVec = fanoutQueryVec(ctx, emb, q.Text)
 
 	// Fan out in parallel; any mount error fails the whole query — a lens must
 	// never silently shrink its read set (RFC §9.1).
 	lists := make([][]store.SearchResult, len(targets))
 	errs := make([]error, len(targets))
+	diags := make([]store.SearchDiag, len(targets))
 	var wg sync.WaitGroup
 	for i, t := range targets {
 		wg.Add(1)
@@ -597,6 +611,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 			defer recoverFanout(mountLabel(t.RT), &errs[i])
 			mq := q
 			mq.Path = t.Path
+			mq.Diag = &diags[i]
 			sm, release, serr := storeIndices(t.RT.RI)
 			if serr != nil {
 				errs[i] = fmt.Errorf("mount %s: %w", mountLabel(t.RT), serr)
@@ -613,6 +628,7 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		}
 	}
 
+	logQueryDiag(b, q, targets, diags, lists)
 	order := federate.FuseRRF(listLens(lists))
 	// Dedupe by repo-relative path (write mount wins) BEFORE truncating, so a
 	// shadowed cross-mount copy never consumes a result slot and the page agrees
@@ -623,7 +639,8 @@ func queryFirstCall(ctx context.Context, b *repos.Binding, sWrite mcpStore, emb 
 		order = order[:maxResults]
 	}
 	if len(order) == 0 {
-		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false})
+		return marshalQueryResponse(queryResponse{Facts: []factOutput{}, Cursor: nil, HasMore: false,
+			Notice: cutoffNotice(q, diags)})
 	}
 
 	// renderRow builds one output row from its fused reference. The displayed
@@ -1013,4 +1030,60 @@ func parseMotifMatch(raw string) (store.MotifMatchTier, error) {
 		}
 	}
 	return "", fmt.Errorf("motif_match must be one of %v", motifMatchEnum())
+}
+
+// cutoffNotice explains an empty text result caused by the caller's own
+// min_similarity: at least one mount had candidates and the cutoff removed all
+// of them, and no mount kept any. It returns "" when the caller supplied no
+// cutoff (the model's floor is not the caller's doing), for a text-less query,
+// or when the emptiness has another cause (nothing matched at all, or a
+// non-vector filter removed the survivors).
+func cutoffNotice(q store.SearchOptions, diags []store.SearchDiag) string {
+	if q.Text == "" || q.MinSimilarity <= 0 {
+		return ""
+	}
+	best, emptied := 0.0, false
+	for _, d := range diags {
+		if d.Candidates > 0 {
+			return ""
+		}
+		if d.CutoffEmptied() {
+			emptied = true
+			if d.BestCosine > best {
+				best = d.BestCosine
+			}
+		}
+	}
+	if !emptied {
+		return ""
+	}
+	return fmt.Sprintf("no results: the min_similarity cutoff (%.2f) removed every candidate; the best cosine similarity found was %.2f. "+
+		"min_similarity is a raw cosine (the displayed score is cosine×100), and cosines for the loaded model run low, so a high cutoff can exclude everything — "+
+		"lower it or omit it (0 uses the model's calibrated floor).", q.MinSimilarity, best)
+}
+
+// logQueryDiag writes the ONE Info line per relevance query: whether it had
+// text, the caller's min_similarity, the cutoff each mount applied, the binding,
+// and per-mount counts after the vector step and after the cutoff.
+func logQueryDiag(b *repos.Binding, q store.SearchOptions, targets []federate.Target, diags []store.SearchDiag, lists [][]store.SearchResult) {
+	type mountCounts struct {
+		Mount      string  `json:"mount"`
+		VecHits    int     `json:"vec_hits"`
+		AfterCut   int     `json:"after_cutoff"`
+		Returned   int     `json:"returned"`
+		BestCosine float64 `json:"best_cosine"`
+		Cutoff     float64 `json:"cutoff"`
+	}
+	counts := make([]mountCounts, len(targets))
+	for i, t := range targets {
+		counts[i] = mountCounts{Mount: mountLabel(t.RT), VecHits: diags[i].VecHits, AfterCut: diags[i].Candidates,
+			Returned: len(lists[i]), BestCosine: diags[i].BestCosine, Cutoff: diags[i].Cutoff}
+	}
+	log.Info().
+		Bool("text", q.Text != "").
+		Float64("min_similarity", q.MinSimilarity).
+		Str("binding", b.Name()).
+		Bool("lens", b.IsLens()).
+		Interface("mounts", counts).
+		Msg("knomit_query relevance search")
 }
