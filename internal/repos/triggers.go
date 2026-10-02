@@ -136,8 +136,10 @@ type triggerDispatcher struct {
 	cache    fact.TriggerCache
 	stats    *triggerStats
 
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	// life guards the cancel func and the started/stopped flags: start is
+	// idempotent and a no-op once stop has run (see lifetimeGuard).
+	life lifetimeGuard
+	wg   sync.WaitGroup
 
 	mu       sync.Mutex
 	lastSet  *fact.TriggerSet
@@ -249,12 +251,14 @@ func isHex8(s string) bool {
 
 // start launches the actor with its own context derived from parent. It kicks
 // itself once so advances made while the server was down fire on restart (the
-// watermark makes that at-least-once).
+// watermark makes that at-least-once). A second call, or a call after stop,
+// is a no-op.
 func (d *triggerDispatcher) start(parent context.Context) {
-	ctx, cancel := context.WithCancel(parent)
-	d.cancel = cancel
+	ctx, ok := d.life.begin(parent, &d.wg)
+	if !ok {
+		return
+	}
 	d.runCtx = ctx
-	d.wg.Add(1)
 	d.triggerKick()
 	go d.loop(ctx)
 }
@@ -264,9 +268,7 @@ func (d *triggerDispatcher) start(parent context.Context) {
 // running recipe to be killed and to hand in its `stopped` row, which the
 // final flush writes.
 func (d *triggerDispatcher) stop() {
-	if d.cancel != nil {
-		d.cancel()
-	}
+	d.life.end()
 	d.wg.Wait()
 }
 

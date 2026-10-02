@@ -168,6 +168,46 @@ func rootCommitOfDB(ctx context.Context, dbPath, branch string) (string, error) 
 	return svc.RootCommit(ctx, branch)
 }
 
+// currentOrigin reports whether the repo has an origin right now, and its URL,
+// read from the live store's injected origin — the same record the running
+// sync loop and ActivateSync read, which control.db's Origins row backs and
+// which SwapStore's recovery path re-injects. The Acquire is released before
+// returning, so this is safe to call just before SwapStore. An unreadable
+// store reads as "no origin": a local loop is the conservative restart.
+func currentOrigin(ri *repos.RepoInstance) (bool, string) {
+	var url string
+	var had bool
+	err := ri.WithRead(func(svc *store.Service) {
+		if r, rerr := svc.Remote().GetRemote("origin"); rerr == nil && r != nil {
+			had, url = true, r.URL
+		}
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("repo", ri.Name()).Msg("commit: could not read the current origin before the swap")
+	}
+	return had, url
+}
+
+// restorePreviousSync restarts the sync mode the repo ran before a failed
+// SwapStore. SwapStore stops sync and never restarts it — that is its
+// caller's contract — and its failure paths put the old store back with the
+// loop still dead, so without this the repo silently stops syncing until the
+// process restarts. A restart error is logged, not returned: the request is
+// already failing with the swap's own error, which is the one to report.
+// ActivateSync and StartLocalSync both honour DisableBackgroundSync.
+func restorePreviousSync(ri *repos.RepoInstance, repo string, hadOrigin bool, previousURL string) {
+	var err error
+	if hadOrigin {
+		err = ri.ActivateSync(previousURL)
+	} else {
+		err = ri.StartLocalSync()
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("repo", repo).Bool("had_origin", hadOrigin).
+			Msg("commit: could not restart sync after a failed store swap")
+	}
+}
+
 // persistSessionOrigin writes the connection the session negotiated to
 // control.db and then updates the running store — the same three-step
 // PUT /origin runs (defaultOriginProvider.SetOrigin). control.db owns
@@ -973,7 +1013,23 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 			}
 		}
 
+		// The sync mode the repo runs NOW, captured before the swap: SwapStore
+		// stops sync and leaves restarting it to us on every return path, and
+		// on failure the mode to restart is this one, not the session's.
+		hadOrigin, previousURL := currentOrigin(ri)
+
 		if err := rm.SwapStore(ri, tempDBPath); err != nil {
+			// The swap put the old store back but left its sync loop dead.
+			restorePreviousSync(ri, repo, hadOrigin, previousURL)
+			// If the swap cancelled the initial heal, the index state is
+			// pinned at 'indexing' with no writer left — the heal has exited
+			// (SwapStore waited for it) — and handleStartRebuild refuses with
+			// 409 while it reads 'indexing', so the UI could never recover.
+			// The restored store's index is whatever the cancelled heal left,
+			// so 'error' is the truthful terminal, and it re-enables rebuild.
+			if state, _, _ := ri.IndexStatus(); state == repos.IndexStateIndexing {
+				ri.MarkIndexRebuildDone(fmt.Errorf("index heal cancelled by a failed store swap: %w", err))
+			}
 			sendEvent(map[string]string{"phase": "error", "message": fmt.Sprintf("swap failed: %v", err)})
 			return
 		}
@@ -986,9 +1042,31 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 		// keeps the freshly swapped-in store open for the config/rebuild steps
 		// below; nil svc is tolerated by the guards on each step.
 		var svc *store.Service
+		var acquireErr error
 		if s, release, err := ri.Acquire(); err == nil {
 			svc = s
 			defer release()
+		} else {
+			acquireErr = err
+		}
+
+		// INDEX STATE. The new store's index is not built until the rebuild
+		// below, so the state says 'indexing' from here, and the rebuild
+		// marks the terminal. Without this bracket a swap that cancelled the
+		// initial heal left the state at 'indexing' for the life of the
+		// process (the heal's cancelled exit marks nothing), and the rebuild
+		// endpoint's 409 made that unrecoverable (issue #400).
+		//
+		// Single writer holds: SwapStore has already cancelled the heal and
+		// waited for it to exit, and drained any manual rebuild (which holds
+		// an Acquire on the old store for its whole run), so nothing else is
+		// writing the state when we mark; once we have, handleStartRebuild
+		// refuses with 409 until our terminal. Marked straight after the
+		// swap rather than beside the rebuild to keep the window in which a
+		// manual rebuild could slip in as short as the endpoint's own
+		// check-then-mark window.
+		if svc != nil {
+			ri.MarkIndexRebuildStart()
 		}
 
 		// Phase: configuring — save remote config and start sync.
@@ -1046,7 +1124,12 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 					})
 				}
 			}
-			if err := svc.IndexManager().Rebuild(r.Context(), rebuildBranch, progress); err != nil {
+			rebuildErr := svc.IndexManager().Rebuild(r.Context(), rebuildBranch, progress)
+			// The terminal for the MarkIndexRebuildStart above, on both
+			// outcomes: returning without it would pin the state at
+			// 'indexing', the failure this bracket exists to end.
+			ri.MarkIndexRebuildDone(rebuildErr)
+			if err := rebuildErr; err != nil {
 				log.Warn().Err(err).Str("repo", repo).Msg("commit: index rebuild failed")
 			} else {
 				log.Info().Str("repo", repo).Msg("commit: index rebuilt from swapped store")
@@ -1060,6 +1143,14 @@ func (s *Server) handleCommit(rm *repos.Manager, sm *SessionManager, agentBranch
 					}
 				}
 			}
+		} else if !errors.Is(acquireErr, repos.ErrRepoClosed) {
+			// No store to rebuild on, so no rebuild runs. A cancelled heal
+			// may have left the state at 'indexing' with no writer, and the
+			// new store's index was never built either way: 'error' is the
+			// truthful state and leaves the rebuild endpoint usable. A repo
+			// that is being torn down (ErrRepoClosed) is not marked — its
+			// state is no longer observed, as on every teardown path.
+			ri.MarkIndexRebuildDone(fmt.Errorf("index not rebuilt after store swap: %w", acquireErr))
 		}
 
 		// Start sync/push loops.

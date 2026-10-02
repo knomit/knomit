@@ -86,9 +86,11 @@ type repoBuilder struct {
 	syncLoopMu sync.Mutex
 
 	// index-heal handles: the background heal owns its OWN context + waitgroup,
-	// SEPARATE from syncCtx/syncWg. The heal is cancelled only by a real teardown
-	// (shutdown/Close/SwapStore), never by startSync's loop-restart cancel — so a
-	// runtime clone-create's ActivateSync cannot kill the in-flight initial index.
+	// SEPARATE from syncCtx/syncWg. The heal is cancelled only by teardown
+	// (shutdown/Close) and by SwapStore — which is NOT teardown and so starts
+	// what the skipped activate() would have (issue #400) — never by
+	// startSync's loop-restart cancel, so a runtime clone-create's ActivateSync
+	// cannot kill the in-flight initial index.
 	indexCtx context.Context
 	indexWg  *sync.WaitGroup
 	// ri is the instance build() produced, kept so activate() can start the
@@ -729,9 +731,12 @@ func (b *repoBuilder) build() *RepoInstance {
 	// reconcile loop; if the heal shared that context, a runtime clone-create —
 	// which calls ActivateSync immediately after openOne launches the heal —
 	// would cancel the in-flight initial index, leaving it stuck "indexing"
-	// forever. indexCtx is cancelled only by a real teardown (shutdown /
-	// Manager.Close / SwapStore), each of which also waits indexWg before
-	// svc.Close(). Derived from b.ctx so Manager-context cancellation reaches it.
+	// forever. indexCtx is cancelled only by teardown (shutdown /
+	// Manager.Close) and by SwapStore, each of which also waits indexWg before
+	// svc.Close(). SwapStore is not teardown — the repo stays live — so it then
+	// starts the lifetime components the cancelled heal never activated (see
+	// startLifetimeAfterSwap). Derived from b.ctx so Manager-context
+	// cancellation reaches it.
 	indexCtx, indexCancel := context.WithCancel(b.ctx)
 	var indexWg sync.WaitGroup
 	ri.indexCancel = indexCancel
@@ -932,6 +937,13 @@ func (b *repoBuilder) build() *RepoInstance {
 		h.svc.Close()
 	}
 
+	// startLifetime is the swap-safe half of activate(), exposed so SwapStore
+	// can start the lifetime components when a swap cancelled the heal before
+	// activate() ran. It deliberately does NOT include the store-bound half
+	// (ensureLocalUpstream, recoverFromOrigin, startSyncLoops): those would
+	// run against the discarded store and the cancelled syncCtx.
+	ri.startLifetime = b.startLifetime
+
 	b.ri = ri
 	return ri
 }
@@ -941,10 +953,30 @@ func (b *repoBuilder) build() *RepoInstance {
 // the reconcile loop never races the initial index build. (The commit observer
 // is wired earlier in build() but is race-safe via SyncLocked; only the remote
 // reconcile/push loops are deferred here.)
+//
+// It has two halves, and only the second may run anywhere else. The first —
+// ensureLocalUpstream, recoverFromOrigin, startSyncLoops — is bound to the
+// build-time store (b.svc) and to syncCtx. The second, startLifetime, starts
+// the components that live as long as the repo does (dispatcher, merger,
+// sweep); they reach the store through ri.Acquire, so they are swap-safe, and
+// SwapStore runs that half itself when a swap cancelled the heal before this
+// ran (issue #400). activated records that this ran, so SwapStore can tell.
 func (b *repoBuilder) activate() {
 	b.ensureLocalUpstream()
 	b.recoverFromOrigin()
 	b.startSyncLoops(b.syncCtx, b.syncWg, b.hub)
+	b.startLifetime()
+	if b.ri != nil {
+		b.ri.activated.Store(true)
+	}
+}
+
+// startLifetime starts the repo's lifetime components: the trigger
+// dispatcher, the consensus merger and the experiment sweep, each on its own
+// context from b.ctx. Every start is idempotent and refused after a stop
+// (lifetimeGuard), so calling this from both activate() and SwapStore — or
+// racing a teardown — neither doubles a loop nor leaks one.
+func (b *repoBuilder) startLifetime() {
 	b.startTriggerDispatcher()
 	b.startConsensusMerger()
 	b.startExperimentSweep()
