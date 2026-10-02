@@ -40,9 +40,20 @@ func experimentTool() mcpgo.Tool {
 			mcpgo.Description("Only for `commit`, and only after one was refused: how to settle each conflicting path, keyed by the fact path exactly as the refusal listed it. Each value is \"ours\" (keep THIS EXPERIMENT's version — it is the merge source, the opposite of git's \"ours\"), \"theirs\" (take the agent branch's version), or {\"body\": \"<full merged fact text>\"} to land content that is neither. Every path in the refusal needs an entry — one left out is refused again, and a path that did not conflict is an error rather than a no-op. The merge is still ONE merge: everything else merges exactly as it would have.")),
 		mcpgo.WithString("description",
 			mcpgo.Description("Free text saying what this experiment is for. Only used by `open`; stored locally, never committed to git. Re-opening with a new description replaces it; re-opening with none keeps it.")),
+		mcpgo.WithObject(traceArgument,
+			mcpgo.Description(traceArgDescription+" "+experimentTraceNote),
+			mcpgo.AdditionalProperties(map[string]any{"type": "string"}),
+		),
 		bindingArg(true),
 	)
 }
+
+// experimentTraceNote says what the trace stamps on THIS tool, whose actions
+// make at most one commit each.
+const experimentTraceNote = "On knomit_experiment the trace is stamped on the one commit an action can make: " +
+	"`commit`'s merge commit and `sync`'s merge commit. `open`, `rollback` and `list` make no commit, and a `commit` or `sync` " +
+	"that fast-forwards or changes nothing makes none either, so nothing new is stamped then — the fact commits it carries " +
+	"keep the trace their own writes were given. It is still validated on every action."
 
 // experimentResult is the wire shape. Every field is omitempty except action,
 // because one result type serves five actions and a caller should not have to
@@ -160,6 +171,14 @@ type experimentView struct {
 func ExperimentHandler(mgr *repos.Manager) func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	return func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 		if err := rejectUnknownArguments(req, experimentTool()); err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		// #349 extended to experiments: the same `trace` validation as the
+		// write tools, BEFORE any action runs, so a bad entry refuses the whole
+		// call with nothing opened, merged or dropped; refused on a ctx that
+		// already carries knomit's own set (a script or recipe host).
+		ctx, err := applyTrace(ctx, req)
+		if err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
 		b, err := repos.RequireBinding(ctx)

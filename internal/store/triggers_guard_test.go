@@ -50,6 +50,10 @@ var triggersAllowedCalls = map[string][]string{
 		// same transport), and appendTrailers sorting a COPY of the agent's
 		// own entries — pure helpers, no write
 		"errors.New", "WithTrailers", "len", "append", "sort.SliceStable",
+		// rehearsal F10: rendering a set (t.lines) and joining it to a merge
+		// commit's trailer paragraph (appendTrailersToParagraph) — string
+		// helpers, no write
+		"t.lines", "isTrailerParagraph", "appendTrailers",
 	},
 }
 

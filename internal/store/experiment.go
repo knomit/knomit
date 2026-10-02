@@ -431,7 +431,12 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	// same three-way walk that would otherwise have refused it, so everything
 	// else merges exactly as it did before and a path with no resolution is
 	// refused by construction rather than by falling through to a default.
-	res, err := rh.mergeIntoBranchResolved(ctx, exp.Branch(), exp.Parent, StrategyRefuse, resolutions)
+	//
+	// The agent `trace` of the call (knomit_experiment, #349 extended) is
+	// stamped on the merge commit this writes — the experiment's own merge
+	// opts in explicitly; a fast-forward writes no commit, so it stamps
+	// nothing (the fact commits it carries keep the traces their writes had).
+	res, err := rh.mergeExperiment(ctx, exp.Branch(), exp.Parent, StrategyRefuse, resolutions)
 	if err != nil {
 		return AgentReconcileResult{}, err
 	}
@@ -442,6 +447,16 @@ func (rh *repoHandler) CommitExperiment(ctx context.Context, name string, resolu
 	log.Info().Str("experiment", name).Str("parent", exp.Parent).
 		Str("mode", string(res.Mode)).Msg("experiment committed")
 	return res, nil
+}
+
+// mergeExperiment is an experiment's OWN merge (commit: exp into its parent;
+// sync: the parent into exp) under the dst lock, with the call's agent trace
+// (the ctx set store.WithAgentTrace put there) opted in for the merge commit.
+// No other merge reads the ctx trace: they keep the transport-commit contract.
+func (rh *repoHandler) mergeExperiment(ctx context.Context, src, dst string, strategy ConflictStrategy, resolutions map[string]Resolution) (AgentReconcileResult, error) {
+	unlock := rh.lockBranch(dst)
+	defer unlock()
+	return rh.mergeIntoBranchLockedOpts(ctx, src, dst, strategy, resolutions, mergeOpts{trace: trailersFromContext(ctx)})
 }
 
 // SyncExperiment merges the parent INTO the experiment, parent-wins on
@@ -464,7 +479,7 @@ func (rh *repoHandler) SyncExperiment(ctx context.Context, name string) (AgentRe
 	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
 		return AgentReconcileResult{}, err
 	}
-	res, err := rh.mergeIntoBranch(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins)
+	res, err := rh.mergeExperiment(ctx, exp.Parent, exp.Branch(), StrategyRemoteWins, nil)
 	if err != nil {
 		return AgentReconcileResult{}, fmt.Errorf("SyncExperiment %q: %w", name, err)
 	}

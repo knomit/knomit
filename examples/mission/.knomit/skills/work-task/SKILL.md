@@ -26,8 +26,10 @@ through the knowledge-base handle. Bind nothing the tasks do not name.
 
 Pass a `trace` on EVERY knomit write — `knomit_learn`, `knomit_update`,
 `knomit_retract`, and `knomit_review` or `knomit_hypothesize` if a task has
-you run them — on both handles, the take and the ack included. knomit keeps
-nothing between calls, so a write without it is untraced.
+you run them — on both handles, the take and the ack included, AND on every
+`knomit_experiment` `open`, `commit` and `rollback` (the merge commit that
+lands an experiment carries it). knomit keeps nothing between calls, so a
+write without it is untraced.
 - For the copy named in your context: the context's `trace`, unchanged.
 - For every other copy you take: `{"Knomit-Trace": "<that copy's task id>", "Knomit-Run": "<the context trace's Knomit-Run>"}`.
   Leave out `Knomit-Cause` (it names the commit that woke you, which was not
@@ -65,8 +67,8 @@ Repeat until step 1 finds nothing:
    If the call is refused because the copy is gone, another session took it
    or the duplicate check removed it: go back to step 1. The path of the new
    fact is YOUR copy from now on.
-3. **Open the experiment.** `knomit_experiment` with `action: "open"` and the
-   experiment name, on the knowledge-base handle. If the name already exists,
+3. **Open the experiment.** `knomit_experiment` with `action: "open"`, the
+   experiment name and the copy's trace, on the knowledge-base handle. If the name already exists,
    `open` resumes it: an earlier session died in the middle of this task, and
    you continue its work. If `open` is refused (a subscribed knowledge base,
    for one), go to step 7.
@@ -76,14 +78,14 @@ Repeat until step 1 finds nothing:
 5. **Check it is still yours at every task boundary**: `knomit_query`
    (mission handle) with `path` set to your active copy's exact path. If it
    is gone (the duplicate check backed you off), `knomit_experiment`
-   `action: "rollback"` on the knowledge-base handle, write nothing else for
+   `action: "rollback"` with the copy's trace on the knowledge-base handle, write nothing else for
    this task, and go back to step 1.
-6. **Commit the experiment.** `knomit_experiment` `action: "commit"` on the
-   knowledge-base handle. If the commit is refused for conflicts, do not
+6. **Commit the experiment.** `knomit_experiment` `action: "commit"` with the
+   copy's trace on the knowledge-base handle. If the commit is refused for conflicts, do not
    pick sides: roll it back and go to step 7.
 7. **Failed.** If the task cannot be done (no knowledge base named, `open`
    refused, a refused commit, the work itself failed): `knomit_experiment`
-   `action: "rollback"` if one is open, then acknowledge as in step 8 with
+   `action: "rollback"` with the copy's trace if one is open, then acknowledge as in step 8 with
    `title` "Failed: <task title>" and the reason in `body`, and no `refs`.
    Never leave a copy behind to retry: re-offering is the coordinator's call.
 8. **Acknowledge, in one move.** `knomit_learn` on the MISSION handle with one

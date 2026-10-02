@@ -123,6 +123,13 @@ type mergeOpts struct {
 	// key is LocalWins, as always.
 	factConsensus fact.MergeSide
 	factFallback  ConflictStrategy
+	// trace, when set, is stamped on the merge commit (joined to its trailer
+	// paragraph). ONLY an experiment's own merges set it — CommitExperiment
+	// and SyncExperiment, from the agent `trace` of the knomit_experiment
+	// call — so every other merge (agent sync, reconcile, the peer merge)
+	// stays a transport commit with no trace, as before. A fast-forward or a
+	// no-op writes no commit and so stamps nothing.
+	trace Trailers
 }
 
 func (o mergeOpts) factMerge(p conflictsPolicy) factMerge {
@@ -350,7 +357,7 @@ func (rh *repoHandler) mergeIntoBranchLockedOpts(
 	mc := &object.Commit{
 		Author:       author,
 		Committer:    committer,
-		Message:      appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers),
+		Message:      appendTrailersToParagraph(appendTrailerLines(fmt.Sprintf("merge: %s into %s (%s)", src, dst, strategy), trailers), o.trace),
 		TreeHash:     mergedTreeHash,
 		ParentHashes: []plumbing.Hash{dstHash, srcHash},
 	}
