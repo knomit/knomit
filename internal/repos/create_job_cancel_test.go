@@ -459,17 +459,19 @@ func TestCreate_CancelledDuringIndexSkipsSyncActivation(t *testing.T) {
 // half: the user's actual complaint, which was that a late cancel appeared to
 // do nothing at all.
 //
-// It asserts the cancel lands FAST RELATIVE TO THE INDEX rather than against a
-// wall-clock constant. The comparison is what makes it meaningful and what
-// keeps it honest on a slow machine: the same manager then indexes a second
-// repo from the same fixture, and the cancel must complete in well under that.
-// A fixed "under 5 seconds" would be a machine-speed assertion, and on the
-// broken code a fast enough box could satisfy it.
+// It asserts on the STEP, not on the clock. Under the bug the job parks on
+// "sync" behind the heal's branch lock for the whole remaining index, so the
+// 5ms poll below cannot miss it; a cancelled job must never report that step.
+// The deterministic check of the mechanism itself is
+// TestCreate_CancelledDuringIndexSkipsSyncActivation.
+//
+// There is deliberately no timing assertion. An earlier version compared the
+// cancel's latency with a baseline create taken at a different moment. That
+// flaked on a degraded Windows runner (#368: 17.5s against 1.88s, the disk
+// having slowed in between) and stayed GREEN with the regression re-injected,
+// so it was both a source of flakes and blind to the bug. The 120s bound is
+// only a hang detector.
 func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
-	// TWO fixtures, not one. A repo already subscribed to an origin URL makes
-	// a second subscribe to the same URL refuse, so a baseline create against
-	// the same remote would starve the measured one of an index entirely.
-	refURL := servedKnomitOrigin(t, 200)
 	url := servedKnomitOrigin(t, 200)
 
 	home := t.TempDir()
@@ -481,16 +483,7 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	require.NoError(t, m.Start())
 	t.Cleanup(func() { _ = m.Close() })
 
-	// A create we let run to completion, to measure what a full index costs on
-	// THIS machine with THIS fixture.
-	baseline := time.Now()
-	ref := m.StartCreate(CreateSpec{Name: "ref", Mode: "subscribe", Origin: &OriginSpec{URL: refURL}})
-	_, err := ref.Result()
-	require.NoError(t, err)
-	fullCreate := time.Since(baseline)
-	t.Logf("uncancelled create with a full index: %s", fullCreate)
-
-	// Now the same create again, cancelled once it reaches the index phase.
+	// Cancel the create once it reaches the index phase.
 	job := m.StartCreate(CreateSpec{Name: "sub", Mode: "subscribe", Origin: &OriginSpec{URL: url}})
 	// THE LATE WINDOW, taken from the JOB rather than from the registry.
 	//
@@ -517,10 +510,8 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 	// for minutes). So a cancelled job that ever reports "sync" has waited on
 	// the lock, whatever the wall clock happened to say on this machine.
 	//
-	// The elapsed time is logged and bounded too, but loosely: a timing
-	// assertion alone is a machine-speed assertion, and on a fixture whose
-	// index is nearly finished by the time the cancel lands it passes under
-	// the broken code as readily as under the fixed code.
+	// The elapsed time is only logged, and the 120s bound is a hang detector:
+	// a timing assertion is a machine-speed assertion (see the doc comment).
 	var sawSync bool
 	for {
 		st := job.Status()
@@ -535,13 +526,11 @@ func TestCancelCreate_DuringIndexLandsWithoutWaitingForTheIndex(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	elapsed := time.Since(start)
-	t.Logf("cancel during the index landed in %s (a full create takes %s)", elapsed, fullCreate)
+	t.Logf("cancel during the index landed in %s", elapsed)
 
 	require.False(t, sawSync,
 		"the cancelled job activated sync, so it waited on the branch lock the "+
 			"index heal holds — the whole reason a late cancel appeared to do nothing")
-	require.Less(t, elapsed, fullCreate,
-		"a cancel during the index took as long as a full create (%s)", elapsed)
 
 	require.Nil(t, m.Get("sub"))
 	archived, aerr := m.ListArchived()
