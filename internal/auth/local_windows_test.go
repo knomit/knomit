@@ -8,10 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"net"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
@@ -137,25 +137,137 @@ func narrowPipeOwners(t *testing.T, accept func(owner *windows.SID, self string)
 	t.Cleanup(func() { acceptedPipeOwner = orig })
 }
 
-// The squatting case of knomit#265. A pipe owned by ANOTHER account cannot be
-// created without privileges this suite does not have, so the accepted set is
-// narrowed to nothing instead: our own real listener then stands in for a
-// foreign one, and everything downstream of the owner read is the real path.
-func TestDialLocal_RejectsAForeignOwner(t *testing.T) {
-	path := testLocalListenerPath(t)
-	ln, cleanup, err := ListenLocal(path)
+// rawServerPipe creates a single-instance, overlapped, byte-mode server end at
+// path with the SDDL ListenLocal passes to winio (listen_windows.go). That
+// SDDL only has to let DialLocal open the pipe: the test narrows the accepted
+// owners to none, so the owner's value does not matter. The handle is closed
+// at cleanup; any I/O on it must be cancelled before then (overlappedIO does).
+func rawServerPipe(t *testing.T, path string) windows.Handle {
+	t.Helper()
+	sddl, err := ownerOnlySDDL()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
-	accepted := make(chan net.Conn, 1)
-	go func() {
-		c, err := ln.Accept()
-		if err != nil {
-			c = nil
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sa := &windows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+		SecurityDescriptor: sd,
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateNamedPipe(name,
+		windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_OVERLAPPED|windows.FILE_FLAG_FIRST_PIPE_INSTANCE,
+		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
+		1, 4096, 4096, 0, sa)
+	if err != nil {
+		t.Fatalf("CreateNamedPipe %s: %v", path, err)
+	}
+	t.Cleanup(func() { windows.CloseHandle(h) })
+	return h
+}
+
+// overlappedIO is ONE overlapped operation on h, signalled through its own
+// event. The kernel writes into ov (and into buf, for a read) until the
+// operation completes, so neither may go away while it is in flight: its
+// cleanup cancels a still-pending operation and WAITS for the cancellation to
+// land before it closes the event. That is what makes a t.Fatal on a
+// timed-out wait safe.
+type overlappedIO struct {
+	h       windows.Handle
+	ov      windows.Overlapped
+	buf     []byte
+	pending bool
+}
+
+// newOverlappedIO prepares one operation on h.
+//
+// PRECONDITION: call it AFTER whatever registered h's close (rawServerPipe).
+// Cleanups run last-registered-first, and this one has to cancel the I/O
+// while h is still open; the order of the calls is the only thing that
+// guarantees it.
+func newOverlappedIO(t *testing.T, h windows.Handle, bufSize int) *overlappedIO {
+	t.Helper()
+	ev, err := windows.CreateEvent(nil, 1, 0, nil) // manual reset, unsignalled
+	if err != nil {
+		t.Fatal(err)
+	}
+	op := &overlappedIO{h: h, buf: make([]byte, bufSize)}
+	op.ov.HEvent = ev
+	t.Cleanup(func() {
+		if op.pending {
+			_ = windows.CancelIoEx(op.h, &op.ov)
+			var n uint32
+			_ = windows.GetOverlappedResult(op.h, &op.ov, &n, true)
 		}
-		accepted <- c
-	}()
+		windows.CloseHandle(ev)
+	})
+	return op
+}
+
+// wait takes issued, what the call that started the operation returned, and
+// waits at most bound for the operation to finish. It returns the bytes moved
+// and the operation's own outcome. Exceeding bound is a test failure naming
+// what; the bound only turns a hang into that failure.
+func (op *overlappedIO) wait(t *testing.T, issued error, bound time.Duration, what string) (uint32, error) {
+	t.Helper()
+	if issued != nil && !errors.Is(issued, windows.ERROR_IO_PENDING) {
+		return 0, issued // failed synchronously; nothing is in flight
+	}
+	op.pending = true
+	ev, err := windows.WaitForSingleObject(op.ov.HEvent, uint32(bound/time.Millisecond))
+	if err != nil {
+		t.Fatalf("waiting for %s: %v", what, err)
+	}
+	if ev == uint32(windows.WAIT_TIMEOUT) {
+		t.Fatalf("%s did not finish within %v", what, bound)
+	}
+	var n uint32
+	err = windows.GetOverlappedResult(op.h, &op.ov, &n, false)
+	op.pending = false
+	return n, err
+}
+
+// The squatting case of knomit#265. A pipe owned by ANOTHER account cannot be
+// created without privileges this suite does not have, so the accepted set is
+// narrowed to nothing instead: a pipe of our own then stands in for a foreign
+// one, and everything downstream of the owner read is DialLocal's real path.
+//
+// WHY A RAW PIPE AND NOT ListenLocal + Accept (knomit#367). DialLocal's
+// refusal connects, reads the owner and hangs up at once. go-winio's Accept
+// drops a client that hangs up before the listener has issued
+// ConnectNamedPipe on the instance it connected to (the connect then fails
+// with ERROR_NO_DATA and the listener quietly waits for the next client), so
+// a test waiting on Accept for the server end could hang forever; it did,
+// twice, on Windows CI. See
+// kb/gotchas/windows/named-pipes/accept-drops-early-hangup/51d80936.md.
+//
+// So the ConnectNamedPipe below is issued BEFORE the dial, on purpose: a
+// connect that is already pending completes when the client connects, even if
+// the client has hung up by the time anyone looks. The race cannot occur, and
+// the server end is then read directly to see what DialLocal left behind.
+//
+// The bounds on the two waits are failure bounds, NOT the fix: they exist so
+// that a DialLocal that never connects, or a read that never ends, fails with
+// a message instead of hanging the package until the test binary times out.
+func TestDialLocal_RejectsAForeignOwner(t *testing.T) {
+	path := testLocalListenerPath(t)
+	srv := rawServerPipe(t, path)
+	connect := newOverlappedIO(t, srv, 0)
+	issued := windows.ConnectNamedPipe(srv, &connect.ov)
+	// ERROR_PIPE_CONNECTED would mean a client opened the pipe before this
+	// call. DialLocal has not run yet, so that client is someone else, and the
+	// read below would be about THEM, not about DialLocal.
+	if errors.Is(issued, windows.ERROR_PIPE_CONNECTED) {
+		t.Fatalf("a client connected before DialLocal was called")
+	}
+	if issued != nil && !errors.Is(issued, windows.ERROR_IO_PENDING) {
+		t.Fatalf("ConnectNamedPipe: %v", issued)
+	}
 	narrowPipeOwners(t, func(*windows.SID, string) bool { return false })
 
 	conn, err := DialLocal(context.Background(), path, 10*time.Second)
@@ -174,17 +286,24 @@ func TestDialLocal_RejectsAForeignOwner(t *testing.T) {
 		}
 	}
 
-	// The connection was CLOSED, and closed before anything was written: the
-	// server end sees end-of-stream and no bytes.
-	srv := <-accepted
-	if srv == nil {
-		t.Fatal("the listener accepted nothing, so this proves nothing about the close")
+	// DialLocal has returned, so if it connected at all the pending connect
+	// has completed already; the bound only covers a DialLocal that refused
+	// WITHOUT connecting, which would make the read below prove nothing.
+	if _, err := connect.wait(t, issued, 10*time.Second, "the pending ConnectNamedPipe (DialLocal never connected)"); err != nil {
+		t.Fatalf("ConnectNamedPipe completed with %v", err)
 	}
-	defer srv.Close()
-	_ = srv.SetReadDeadline(time.Now().Add(5 * time.Second))
-	n, rerr := srv.Read(make([]byte, 64))
-	if n != 0 || !errors.Is(rerr, io.EOF) {
-		t.Fatalf("the server end must see EOF with no bytes, got n=%d err=%v", n, rerr)
+
+	// The connection was CLOSED, and closed before anything was written: the
+	// server end reads no bytes and a broken pipe, which is how a pipe reports
+	// that the client end hung up (there is no separate end-of-stream; measured,
+	// ReadFile fails at once with ERROR_BROKEN_PIPE). A client that wrote first
+	// would be read here as n > 0, so this also proves nothing was sent.
+	read := newOverlappedIO(t, srv, 64)
+	var done uint32
+	issued = windows.ReadFile(srv, read.buf, &done, &read.ov)
+	n, rerr := read.wait(t, issued, 5*time.Second, "ReadFile on the server end")
+	if n != 0 || !errors.Is(rerr, windows.ERROR_BROKEN_PIPE) {
+		t.Fatalf("the server end must read no bytes and ERROR_BROKEN_PIPE, got n=%d err=%v", n, rerr)
 	}
 }
 
