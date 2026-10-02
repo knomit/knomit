@@ -976,6 +976,134 @@ func TestCreate_CloneMode_ActivateSyncDoesNotKillIndex(t *testing.T) {
 		"clone-create index must reach 'ready'; ActivateSync must not kill the background heal")
 }
 
+// setExperimentSweepInterval shortens the sweep cadence for sweepers started
+// after the call, through the test-only seam, and restores it at cleanup.
+func setExperimentSweepInterval(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := experimentSweepIntervalOverride.Swap(int64(d))
+	t.Cleanup(func() { experimentSweepIntervalOverride.Store(prev) })
+}
+
+// newSweepingCloneManager is a manager whose repos run the experiment sweep:
+// background sync left ON (the flag would suppress the sweep, and the point is
+// the production path), expiry_days set (the zero Config means never expire),
+// and a local-origin root for a file:// clone.
+func newSweepingCloneManager(t *testing.T, root string) *Manager {
+	t.Helper()
+	m := New(context.Background(), Deps{
+		Cfg: config.Config{
+			Home:            t.TempDir(),
+			LocalOriginRoot: root,
+			Experiments:     config.ExperimentsConfig{ExpiryDays: 30},
+		},
+		AgentBranch: "machine/test",
+		Embedder:    testEmbedder{},
+		// DisableBackgroundSync deliberately NOT set: it would stop the sweep
+		// from starting at all, and this is the production lifetime under test.
+	})
+	require.NoError(t, m.Start())
+	t.Cleanup(func() { _ = m.Close() })
+	return m
+}
+
+// cloneCreateForSweep runs a real clone-mode Create against a file:// bare
+// remote. Create waits for the index (so activate() has started the sweep)
+// and then calls ActivateSync, which cancels syncCtx to restart the reconcile
+// loop.
+func cloneCreateForSweep(t *testing.T, m *Manager, root, name string) *RepoInstance {
+	t.Helper()
+	url := seedBareRemoteWithFact(t, filepath.Join(root, name+".git"))
+	ri, err := m.Create(context.Background(), CreateSpec{
+		Name: name, Mode: "clone",
+		Origin: &OriginSpec{URL: url, Branch: "main"},
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, ri)
+	require.Eventually(t, func() bool {
+		s, _, _ := ri.IndexStatus()
+		return s == "ready"
+	}, 10*time.Second, 20*time.Millisecond)
+	require.NotNil(t, ri.sweep, "fixture: this repo must run an experiment sweep")
+	return ri
+}
+
+// Issue #377. The experiment sweep ran on syncCtx, which ActivateSync cancels
+// to restart the reconcile loop and relaunches with ONLY the reconcile loop —
+// so a clone-mode Create (activate() starts the sweep, then Create attaches
+// the origin) killed the sweep it had just started, and the repo's
+// experiments stopped expiring until the process restarted. Same failure
+// shape as TestCreate_CloneMode_ActivateSyncDoesNotKillIndex.
+//
+// The experiment is opened and backdated AFTER Create returns, so only a
+// sweep still ticking after the ActivateSync can expire it.
+func TestCreate_CloneMode_ActivateSyncDoesNotKillExperimentSweep(t *testing.T) {
+	setExperimentSweepInterval(t, 20*time.Millisecond)
+	root := t.TempDir()
+	m := newSweepingCloneManager(t, root)
+	ri := cloneCreateForSweep(t, m, root, "cloned")
+
+	openExperimentOn(t, ri, "ancient", ri.AgentBranch())
+	openExperimentOn(t, ri, "current", ri.AgentBranch())
+	backdateExperiment(t, ri, "ancient", time.Now().Add(-40*24*time.Hour))
+
+	require.Eventually(t, func() bool {
+		return !experimentExists(t, ri, "ancient")
+	}, 10*time.Second, 20*time.Millisecond,
+		"an experiment past expiry_days must be expired after the origin attach; ActivateSync must not kill the sweep")
+	require.True(t, experimentExists(t, ri, "current"), "a fresh experiment survives the same sweep")
+
+	// A second attach (PUT .../origin takes the same path) must not kill it either.
+	o, err := testService(t, ri).Remote().GetRemote("origin")
+	require.NoError(t, err)
+	require.NotNil(t, o)
+	require.NoError(t, ri.ActivateSync(o.URL))
+	openExperimentOn(t, ri, "ancient2", ri.AgentBranch())
+	backdateExperiment(t, ri, "ancient2", time.Now().Add(-40*24*time.Hour))
+	require.Eventually(t, func() bool {
+		return !experimentExists(t, ri, "ancient2")
+	}, 10*time.Second, 20*time.Millisecond, "the sweep survives a repeated ActivateSync")
+}
+
+// sweepStopped reports whether the sweep goroutine has returned.
+func sweepStopped(ri *RepoInstance) bool {
+	select {
+	case <-ri.sweep.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// The sweep has its own context now, so no syncWg wait stops it: teardown must
+// stop it explicitly, before closeFn closes the store. Archive goes through
+// RepoInstance.shutdown, the bulk path through Manager.Close; both must leave
+// no sweep goroutine behind (one would tick against a closed repo forever).
+func TestExperimentSweep_StoppedByArchiveAndClose(t *testing.T) {
+	setExperimentSweepInterval(t, 5*time.Millisecond)
+	root := t.TempDir()
+	m := newSweepingCloneManager(t, root)
+	archived := cloneCreateForSweep(t, m, root, "archived")
+	// A second clone of a fixture remote can share the first one's root commit
+	// (same content, same second) and be refused as the same knowledge base, so
+	// the bystander is a preset repo: it runs the same sweep.
+	kept := createRepo(t, m, "kept")
+	require.Eventually(t, func() bool {
+		s, _, _ := kept.IndexStatus()
+		return s == "ready"
+	}, 10*time.Second, 20*time.Millisecond)
+	require.NotNil(t, kept.sweep, "fixture: the bystander runs a sweep too")
+	require.False(t, sweepStopped(archived), "the sweep runs while the repo is live")
+	require.False(t, sweepStopped(kept))
+
+	_, err := m.Archive("archived")
+	require.NoError(t, err)
+	require.True(t, sweepStopped(archived), "Archive (shutdown) must stop the sweep before it returns")
+	require.False(t, sweepStopped(kept), "and only that repo's sweep")
+
+	require.NoError(t, m.Close())
+	require.True(t, sweepStopped(kept), "Manager.Close must stop the sweep before it returns")
+}
+
 // Every lifecycle operation reads the control.db tenants that Start assigns and
 // Close nils, both under m.mu. Reading them as bare fields made an in-flight
 // request racing shutdown two things at once: an unsynchronised read (-race
