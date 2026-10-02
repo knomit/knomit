@@ -507,3 +507,89 @@ func parseCert(t *testing.T, raw []byte) *x509.Certificate {
 	}
 	return c
 }
+
+// The --root form (rehearsal finding F3; the user's ruling: one form,
+// documented). --root takes the 64-hex SHA-256 of the root key's SSH wire
+// encoding; the expected value here is computed INDEPENDENTLY of pki.RootID
+// (ssh.NewPublicKey + sha256), and the openssl values from the certificate's
+// DER exactly as `openssl x509 -noout -fingerprint -sha256` prints them
+// (OpenSSL 3 lowercase `sha256 Fingerprint=`, LibreSSL `SHA256 Fingerprint=`).
+// Every other value — the openssl forms, truncated or SHA-1 values, junk — is
+// refused naming the form and where to get it, and installs nothing.
+// init-master prints the value and show prints the installed root.
+// Sabotage: compare --root without the form check (red: the malformed values
+// get "is not the bundle's fleet root" instead of the form), or drop the
+// init-master line (red).
+func TestIdentity_RootFingerprintForm(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "master")
+	passFile := filepath.Join(base, "pass")
+	if err := os.WriteFile(passFile, []byte("correct horse\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initOut, err := run(t, "", "identity", "init-master", "--dir", dir, "--cn", "knomit-master-test", "--passphrase-file", passFile)
+	if err != nil {
+		t.Fatalf("init-master: %v\n%s", err, initOut)
+	}
+	rootCert, err := pki.LoadRootCert(filepath.Join(dir, pki.RootCertFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPub, err := ssh.NewPublicKey(rootCert.PublicKey.(ed25519.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(sshPub.Marshal())
+	rootFP := hex.EncodeToString(sum[:])
+	if !strings.Contains(initOut, "# fleet root fingerprint: "+rootFP+" ") {
+		t.Fatalf("init-master does not print the root fingerprint %s:\n%s", rootFP, initOut)
+	}
+
+	certSum := sha256.Sum256(rootCert.Raw)
+	pairs := make([]string, len(certSum))
+	for i, b := range certSum {
+		pairs[i] = strings.ToUpper(hex.EncodeToString([]byte{b}))
+	}
+	opensslColon := strings.Join(pairs, ":")
+	sha1Pairs := strings.Join(pairs[:20], ":")
+
+	home, _, pubPath := instanceHome(t, "laptop")
+	useHome(t, home)
+	bundle := enroll(t, dir, passFile, pubPath)
+	pkiDir := filepath.Join(home, "pki")
+
+	malformed := map[string]string{
+		"openssl 3":           "sha256 Fingerprint=" + opensslColon,
+		"libressl":            "SHA256 Fingerprint=" + opensslColon,
+		"openssl bare colons": opensslColon,
+		"sha1 openssl":        "SHA1 Fingerprint=" + sha1Pairs,
+		"truncated 8":         rootFP[:8],
+		"truncated 63":        rootFP[:63],
+		"sha1 length":         rootFP[:40],
+		"too long":            rootFP + "00",
+		"junk":                "not-a-fingerprint",
+		"non-hex":             strings.Repeat("g", 64),
+	}
+	for name, v := range malformed {
+		_, err := run(t, "", "identity", "install", "--bundle", bundle, "--root", v)
+		if err == nil || !strings.Contains(err.Error(), "is not a fleet root fingerprint") ||
+			!strings.Contains(err.Error(), "64 hex characters") || !strings.Contains(err.Error(), "init-master") {
+			t.Fatalf("%s: --root %q not refused for its form: %v", name, v, err)
+		}
+		if strings.Contains(v, ":") && !strings.Contains(err.Error(), "hashes the root CERTIFICATE") {
+			t.Fatalf("%s: the openssl hint is missing: %v", name, err)
+		}
+		if _, statErr := os.Stat(pkiDir); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("%s: a refused install created %s", name, pkiDir)
+		}
+	}
+
+	// The one form: surrounding space and either case.
+	if out, err := run(t, "", "identity", "install", "--bundle", bundle, "--root", "  "+strings.ToUpper(rootFP)+"\n"); err != nil {
+		t.Fatalf("--root %s: %v\n%s", rootFP, err, out)
+	}
+	show, err := run(t, "", "identity", "show")
+	if err != nil || !strings.Contains(show, "root: "+rootFP+` ("knomit-master-test")`) {
+		t.Fatalf("show does not print the installed root: %v\n%s", err, show)
+	}
+}
