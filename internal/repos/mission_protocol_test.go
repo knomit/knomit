@@ -169,6 +169,12 @@ func TestMissionTemplate_LoadsAsIs(t *testing.T) {
 	_, isErr, text := h.call(t, "learn", map[string]any{"moment_name": "post", "facts": []any{f}})
 	require.True(t, isErr)
 	require.Contains(t, text, "signal")
+
+	// A copy in the inbox without its lease is refused by rule name.
+	_, isErr, text = h.call(t, "learn", map[string]any{"moment_name": "post", "facts": []any{
+		signal("inbox", mPeerID+"/working", "No lease", "x", "task-no-lease", time.Time{})}})
+	require.True(t, isErr)
+	require.Contains(t, text, "expires")
 }
 
 // ---- T-D2
@@ -326,11 +332,10 @@ func TestMission_AssignedTaskNeverClaimed(t *testing.T) {
 	h, _ := newMissionHost(t, nil)
 	p := newMissionPeer(t, h.url)
 	const sentinel = "SENTINEL-7f3a-do-not-echo"
-	path := h.post(t, signal("inbox", mPeerID+"/working", "Assigned to P", "Please: "+sentinel, "task-assigned", time.Time{}))
+	path := h.post(t, signal("inbox", mPeerID+"/working", "Assigned to P", "Please: "+sentinel, "task-assigned", clock.now().Add(lease)))
 	h.ri.QuiesceTriggersForTest(t)
 	exchange(t, h, p)
 	exchange(t, h, p)
-	_ = clock
 
 	for _, at := range branchesOf(t, h, p) {
 		require.Empty(t, at.n.paths(t, at.branch, "kb/claims/"), "%s: an assigned task is never claimed", at.where)
@@ -417,7 +422,7 @@ func TestMission_SkillsServed(t *testing.T) {
 			Body string `json:"body"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(res.Content[0].Text), &got))
-		require.Contains(t, got.Body, "retract: [<working copy path>]", "%s: the work-task body", n.name)
+		require.Contains(t, got.Body, "retract: [<your active copy's path>]", "%s: the work-task body", n.name)
 	}
 }
 

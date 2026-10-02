@@ -9,7 +9,7 @@
 //   offers/<awarder-agent-id>/<lane>/<id>.md                one entity: the task id
 //   bids/<awarder-agent-id>/<task-id>/<bidder-agent-id>/<id>.md
 //   awards/<winner-agent-id>/<id>.md
-//   inbox/<agent-id>/working/<id>.md
+//   inbox/<agent-id>/working/<id>.md                         the queue (README "The queue")
 //
 // Why exactly once: only the awarder writes awards (the award trigger's match
 // names {agent}, so it fires on that one instance), and each award is the
@@ -22,8 +22,14 @@
 // (the withdraw-bid trigger, inline in the ontology).
 var BID_SECONDS = 600;
 
-// How many working copies this machine holds before it stops bidding.
+// The BACKLOG: how many copies (working + active) this machine holds before
+// it stops bidding. An award that arrives over it is still taken: the award
+// already deleted the offer, so refusing it would lose the task. The extra
+// copy waits in the queue (README "Capacity and parallelism").
 var CAPACITY = 2;
+
+// A working copy's lease, in seconds: the same rule as claims.js.
+var LEASE_SECONDS = 300;
 
 function root() {
   return change.path.split("/")[0];
@@ -64,7 +70,7 @@ function bid() {
   if (!task) {
     return;
   }
-  if (under(r + "/inbox/" + agent.id + "/working/").length >= CAPACITY) {
+  if (under(r + "/inbox/" + agent.id + "/").length >= CAPACITY) {
     return;
   }
   if (under(r + "/bids/" + awarder + "/" + task + "/" + agent.id + "/").length > 0) {
@@ -112,7 +118,8 @@ function award() {
   }
 }
 
-// ---- take-award: I won; move the award into my working queue
+// ---- take-award: I won; move the award into my working queue (never
+// refused for capacity: see CAPACITY)
 
 function takeAward() {
   var r = root();
@@ -129,6 +136,7 @@ function takeAward() {
     title: won.title,
     body: won.body,
     entities: [task],
+    expires: iso(Date.now() + LEASE_SECONDS * 1000),
     confidence: 1,
     sources: 1
   }, {retract: [change.path].concat(mine)});

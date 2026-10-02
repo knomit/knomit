@@ -35,6 +35,13 @@ import (
 //	HELPER_EXIT=n          exit code
 //
 // A grandchild (HELPER_ROLE=grandchild) records itself and sleeps 60 s.
+//
+// Started under the NAME mktemp or rm (the mission e2e links the test binary
+// under those names beside its fake claude), the helper stands in for those
+// tools instead: `mktemp -d` makes an empty directory under the report dir,
+// prints it and records it (role "mktemp"); `rm -rf <dir>` removes it and
+// records the argv (role "rm"). Every report carries the process's working
+// directory and how many entries it held at start.
 
 const recipeHelperEnv = "KNOMIT_RECIPE_HELPER"
 
@@ -46,6 +53,10 @@ type helperReport struct {
 	Args  []string `json:"args"`
 	Env   []string `json:"env"`
 	Stdin string   `json:"stdin"`
+	Cwd   string   `json:"cwd"`
+	// CwdEntries is how many entries the working directory held at start
+	// (-1 when it could not be read).
+	CwdEntries int `json:"cwd_entries"`
 }
 
 // maybeRunRecipeHelper turns this process into the helper when the env marker
@@ -61,7 +72,31 @@ func recipeHelperMain(dir string) int {
 	if role == "" {
 		role = "child"
 	}
-	rep := helperReport{Role: role, Pid: os.Getpid(), Ppid: os.Getppid(), Args: os.Args, Env: os.Environ()}
+	rep := helperReport{Role: role, Pid: os.Getpid(), Ppid: os.Getppid(), Args: os.Args, Env: os.Environ(), CwdEntries: -1}
+	if wd, err := os.Getwd(); err == nil {
+		rep.Cwd = wd
+		if ents, err := os.ReadDir(wd); err == nil {
+			rep.CwdEntries = len(ents)
+		}
+	}
+	switch strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") {
+	case "mktemp":
+		made, err := os.MkdirTemp(dir, "session-")
+		if err != nil {
+			return 96
+		}
+		rep.Role, rep.Stdin = "mktemp", made
+		writeHelperReport(dir, rep)
+		fmt.Println(made)
+		return 0
+	case "rm":
+		rep.Role = "rm"
+		if len(os.Args) > 1 {
+			_ = os.RemoveAll(os.Args[len(os.Args)-1])
+		}
+		writeHelperReport(dir, rep)
+		return 0
+	}
 	if role == "grandchild" {
 		writeHelperReport(dir, rep)
 		time.Sleep(60 * time.Second)

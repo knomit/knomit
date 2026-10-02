@@ -12,7 +12,7 @@ package cmd
 //
 // Run on branches named trunk and master (stock `git init` makes master):
 // neither may turn into a hardcoded "main" when the origin goes. The host
-// (also after a restart) and the peer must each load all 10 triggers, both
+// (also after a restart) and the peer must each load all 11 triggers, both
 // skills and the consensus / conflicts / sync settings at the tip of the repo's
 // consensus branch.
 //
@@ -80,7 +80,7 @@ func copyTree(t *testing.T, src, dst string) {
 
 // missionTriggers is how many triggers the shipped template declares. It
 // has no `do: push` trigger: `sync: {push: realtime}` sends every commit.
-const missionTriggers = 10
+const missionTriggers = 11
 
 // requireMissionLoaded asserts ri serves the template from the tip of its
 // consensus branch, which must be wantBranch.
