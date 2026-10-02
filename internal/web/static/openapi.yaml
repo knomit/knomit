@@ -1423,8 +1423,9 @@ paths:
         `runs` carries the run count and the last run's coalesced range,
         path count, evaluations, fires and durations. `?log=N` (0–500)
         appends the newest N fire-log rows; the log keeps the newest 10,000
-        rows per repo; `?run=<id>` returns instead the rows of one recipe run
-        (see `do: run`). `enabled: false` with a `reason` on a read-only server
+        rows per repo; `?run=<id>` returns ONLY the rows of one recipe run
+        (`TriggerRunRows`: `branch`, `run`, `fires`; no triggers, statistics
+        or run summary; see `do: run`). `enabled: false` with a `reason` on a read-only server
         or a subscription (no agent branch to observe).
 
         `do: script` (F07 PR 3). The script `.knomit/triggers/<script>.js` is
@@ -1504,7 +1505,11 @@ paths:
         ends, a second row with the SAME `run_id` records its result: the
         status it returned (`done`, `spawned`, `delivered`, `unreachable`;
         `error` becomes `recipe-error`), `recipe-error` for a throw, an
-        invalid result or a knomit stop, or `recipe-timeout`. Both rows carry
+        invalid result or a knomit stop, or `recipe-timeout`. The result's
+        text (the recipe's `message`, e.g. `exit 0 cost=1.03`) is in the
+        row's `message` for `done`, `spawned` and `delivered`, and in its
+        `error` only for the failures (`unreachable`, `recipe-error`,
+        `recipe-timeout`). Both rows carry
         `recipe_source` (`repo` or `local`), `recipe_rev` (the file's blob at
         main, or the first 12 hex of the local file's sha256) and the fire's
         `trace`; `?run=<id>` returns exactly them. A recipe's own writes
@@ -1569,13 +1574,16 @@ paths:
           in: query
           required: false
           schema: { type: string, pattern: "^run-[0-9a-f]{32}$" }
-          description: A recipe run id; `fires` is then that run's rows (the `started` row and, once logged, its result row) instead of the recent log.
+          description: A recipe run id; the answer is then ONLY that run's rows (the `started` row and, once logged, its result row) as a `TriggerRunRows`, not the trigger resource.
       responses:
         "200":
-          description: The trigger resource
+          description: The trigger resource, or with `?run=<id>` only that run's rows
           content:
             application/hal+json:
-              schema: { $ref: "#/components/schemas/Triggers" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/Triggers" }
+                  - { $ref: "#/components/schemas/TriggerRunRows" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
@@ -4007,6 +4015,19 @@ components:
         recipe_source:    { type: string, enum: [repo, local], description: "do: run / knomit.run rows — repo (the file at main's tip) or local (<home>/recipes)." }
         recipe_rev:       { type: string, description: "do: run rows — which code ran: the file's blob at main, or sha256[:12] of the local file." }
         run_id:           { type: string, description: "do: run rows — the run id (run- + 32 hex) the started row and its result row share." }
+        message:          { type: string, description: "A recipe result row's text when the outcome is a success (done, spawned, delivered), e.g. `exit 0 cost=1.03`. Failures (unreachable, recipe-error, recipe-timeout, and every non-recipe failure) put their text in `error` instead." }
+
+    TriggerRunRows:
+      type: object
+      description: "GET …/triggers?run=<id>: ONLY the rows of one recipe run — its `started` row and, once logged, its result row — oldest first."
+      required: [branch, run, fires, _links]
+      properties:
+        branch: { type: string, description: "The observed agent branch." }
+        run:    { type: string, description: "The run id asked for." }
+        fires:
+          type: array
+          items: { $ref: "#/components/schemas/TriggerFire" }
+        _links: { $ref: "#/components/schemas/LinkMap" }
 
     Triggers:
       type: object

@@ -320,7 +320,15 @@ func (d *triggerDispatcher) runJob(ctx context.Context, j recipeJob) {
 	outcome, msg := d.execRecipe(ctx, j)
 	d.rc.release(j.cr.name)
 	row := j.row
-	row.Outcome, row.Error, row.DurationMS = outcome, msg, time.Since(t0).Milliseconds()
+	row.Outcome, row.DurationMS = outcome, time.Since(t0).Milliseconds()
+	// The result text goes in `error` only when the run FAILED; a recipe's
+	// own report on a run that succeeded (done, spawned, delivered —
+	// "exit 0 cost=…") is a message, not an error (F5).
+	if store.IsRecipeFailure(outcome) {
+		row.Error = msg
+	} else {
+		row.Message = msg
+	}
 	d.stats.recordRecipe(row.Trigger, outcome)
 	log.Debug().Str("repo", d.repo).Str("trigger", capForLog(row.Trigger)).Str("recipe", capForLog(j.cr.name)).
 		Str("run", j.id).Str("outcome", outcome).Msg("recipe finished")

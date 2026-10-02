@@ -114,6 +114,9 @@ var triggersRepoAllowedCalls = map[string][]string{
 		"fact.CompileRecipe", "fact.RunRecipe", "h.functions", "WithBinding", "NewBindingOfRepo", "store.WithTrailers",
 		"recipeHostFunctions", "recipeMCP", "serverkey.ServerKey", "json.Marshal", "os.Environ", "mergeEnv",
 		"d.recipeGlobals", "d.recipeEnv",
+		// F5: which result outcomes are failures (their text in `error`, else
+		// `message`) — a pure predicate on the outcome string
+		"store.IsRecipeFailure",
 		// the child's KNOMIT_SERVER: the server's own address, read from the
 		// Manager (no I/O), waited for (bounded) while the server is booting
 		"d.serverAddr", "d.waitServerAddr", "time.NewTicker", "tick.Stop", "deadline.Stop", "ctx.Err",

@@ -132,10 +132,30 @@ type TriggerFire struct {
 	RecipeSource string `json:"recipe_source,omitempty"`
 	RecipeRev    string `json:"recipe_rev,omitempty"`
 	RunID        string `json:"run_id,omitempty"`
+	// Message is a NON-error result text (migration 000033): what a recipe's
+	// result row reports when its outcome is a success (done, spawned,
+	// delivered), e.g. "exit 0 cost=1.03". Error holds failures only
+	// (IsRecipeFailure); before 000033 this text was stored in Error for
+	// every outcome.
+	Message string `json:"message,omitempty"`
 	// FiredAt is the row's stamp rendered as RFC 3339 UTC with an explicit Z
 	// (all times are UTC); stored as Unix seconds. For the operator, never
 	// read for ordering.
 	FiredAt string `json:"fired_at"`
+}
+
+// IsRecipeFailure reports whether a recipe result row's outcome is a failure,
+// so its text belongs in Error: the run did not complete (recipe-error: a
+// throw, `status: "error"`, an invalid result, a knomit stop; recipe-timeout)
+// or the recipe reported it could not deliver (unreachable). The successful
+// outcomes (done, spawned, delivered) are the recipe's own report, and their
+// text belongs in Message.
+func IsRecipeFailure(outcome string) bool {
+	switch outcome {
+	case TriggerOutcomeRecipeError, TriggerOutcomeRecipeTimeout, TriggerOutcomeUnreachable:
+		return true
+	}
+	return false
 }
 
 // DueCandidate is one row of the sweep's liveness join: a dated fact live on
@@ -641,18 +661,18 @@ func (rh *repoHandler) TriggerWatermarks(ctx context.Context, branch string) (ma
 // order fireRowArgs produces the values.
 const triggerFireColumns = `(trigger, branch, path, episode, source, commit_hash, trace, outcome, error, nonlinear,
 	 range_from, range_to, evaluated, paths, fires, fires_not_logged, duration_ms, diff_ms, change_ms, fired_at,
-	 recipe_source, recipe_rev, run_id)`
+	 recipe_source, recipe_rev, run_id, message)`
 
-// triggerFirePlaceholder is one row's placeholders (23 columns).
-const triggerFirePlaceholder = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+// triggerFirePlaceholder is one row's placeholders (24 columns).
+const triggerFirePlaceholder = "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
 // triggerFireSelect is the SELECT list the readers scan with scanTriggerFire.
 const triggerFireSelect = `SELECT id, trigger, branch, path, episode, source, commit_hash, trace,
 		outcome, error, nonlinear, range_from, range_to, evaluated, paths, fires, fires_not_logged,
-		duration_ms, diff_ms, change_ms, fired_at, recipe_source, recipe_rev, run_id FROM trigger_fires`
+		duration_ms, diff_ms, change_ms, fired_at, recipe_source, recipe_rev, run_id, message FROM trigger_fires`
 
-// fireRowBatch is how many rows one multi-row INSERT carries: 23 columns ×
-// 400 rows = 9,200 bound parameters, well under SQLite's limit. Fewer, larger
+// fireRowBatch is how many rows one multi-row INSERT carries: 24 columns ×
+// 400 rows = 9,600 bound parameters, well under SQLite's limit. Fewer, larger
 // statements hold the process-wide write lock for less time than one
 // statement per row, and that lock is the one fact writes wait on.
 const fireRowBatch = 400
@@ -688,7 +708,7 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 			}
 			var sb strings.Builder
 			sb.WriteString("INSERT INTO trigger_fires " + triggerFireColumns + " VALUES ")
-			args := make([]any, 0, (end-start)*23)
+			args := make([]any, 0, (end-start)*24)
 			for i, r := range rows[start:end] {
 				if i > 0 {
 					sb.WriteString(", ")
@@ -696,7 +716,7 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 				sb.WriteString(placeholder)
 				args = append(args, r.Trigger, run.Branch, r.Path, r.Episode, r.Source, r.Commit, r.Trace,
 					r.Outcome, r.Error, boolInt(r.Nonlinear), run.RangeFrom, run.RangeTo, 0, 0, 0, 0, 0, 0, 0, now,
-					r.RecipeSource, r.RecipeRev, r.RunID)
+					r.RecipeSource, r.RecipeRev, r.RunID, r.Message)
 			}
 			if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
 				return 0, fmt.Errorf("RecordTriggerRun: fire rows: %w", err)
@@ -705,7 +725,7 @@ func (rh *repoHandler) RecordTriggerRuns(ctx context.Context, runs []TriggerRun)
 		if _, err := tx.ExecContext(ctx, "INSERT INTO trigger_fires "+triggerFireColumns+" VALUES "+placeholder,
 			"", run.Branch, "", "", "", "", "", TriggerOutcomeRun, "", boolInt(run.Nonlinear),
 			run.RangeFrom, run.RangeTo, run.Evaluated, run.Paths, run.Fires, notLogged,
-			run.DurationMS, run.DiffMS, run.ChangeMS, now, "", "", ""); err != nil {
+			run.DurationMS, run.DiffMS, run.ChangeMS, now, "", "", "", ""); err != nil {
 			return 0, fmt.Errorf("RecordTriggerRun: run row: %w", err)
 		}
 		logged += len(rows)
@@ -734,7 +754,7 @@ func (rh *repoHandler) RecordTriggerResults(ctx context.Context, rows []TriggerF
 		end := min(start+fireRowBatch, len(rows))
 		var sb strings.Builder
 		sb.WriteString("INSERT INTO trigger_fires " + triggerFireColumns + " VALUES ")
-		args := make([]any, 0, (end-start)*23)
+		args := make([]any, 0, (end-start)*24)
 		for i, r := range rows[start:end] {
 			if i > 0 {
 				sb.WriteString(", ")
@@ -742,7 +762,7 @@ func (rh *repoHandler) RecordTriggerResults(ctx context.Context, rows []TriggerF
 			sb.WriteString(triggerFirePlaceholder)
 			args = append(args, r.Trigger, r.Branch, r.Path, r.Episode, r.Source, r.Commit, r.Trace,
 				r.Outcome, r.Error, boolInt(r.Nonlinear), r.RangeFrom, r.RangeTo, 0, 0, 0, 0, r.DurationMS, 0, 0, now,
-				r.RecipeSource, r.RecipeRev, r.RunID)
+				r.RecipeSource, r.RecipeRev, r.RunID, r.Message)
 		}
 		if _, err := tx.ExecContext(ctx, sb.String(), args...); err != nil {
 			return fmt.Errorf("RecordTriggerResults: %w", err)
@@ -881,7 +901,7 @@ func (rh *repoHandler) queryTriggerFires(ctx context.Context, who, query string,
 		if err := rows.Scan(&f.ID, &f.Trigger, &f.Branch, &f.Path, &f.Episode, &f.Source, &f.Commit, &f.Trace,
 			&f.Outcome, &f.Error, &nonlinear, &f.RangeFrom, &f.RangeTo, &f.Evaluated, &f.Paths, &f.Fires,
 			&f.FiresNotLogged, &f.DurationMS, &f.DiffMS, &f.ChangeMS, &firedAt,
-			&f.RecipeSource, &f.RecipeRev, &f.RunID); err != nil {
+			&f.RecipeSource, &f.RecipeRev, &f.RunID, &f.Message); err != nil {
 			return nil, fmt.Errorf("%s: %w", who, err)
 		}
 		f.Nonlinear = nonlinear != 0

@@ -34,6 +34,15 @@ type triggersView struct {
 	Links    hal.LinkMap           `json:"_links"`
 }
 
+// triggerRunView is the HAL body of GET …/triggers?run=<id>: the rows of ONE
+// recipe run (its `started` row and its result row), and nothing else.
+type triggerRunView struct {
+	Branch string              `json:"branch"`
+	Run    string              `json:"run"`
+	Fires  []store.TriggerFire `json:"fires"`
+	Links  hal.LinkMap         `json:"_links"`
+}
+
 // handleHALTriggers serves GET /repos/{repo}/branches/{branch}/triggers. The
 // dispatcher observes the repo's agent branch, so the report is the same
 // whichever branch is in the URL; `branch` in the body names the observed one.
@@ -61,8 +70,26 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 				"run must be a run id: run- followed by 32 lowercase hex", r.URL.Path)
 			return
 		}
+		self := b.Branch(repoName, hal.Anchor{Branch: branch}) + "/triggers"
 		if runID != "" {
-			logN = 0
+			// ONLY that run's rows (rehearsal finding F5): not the declared
+			// triggers, their statistics or the run summary, which a caller
+			// following one run has no use for and which buried its rows.
+			fires, err := ri.TriggerFiresByRun(r.Context(), runID)
+			if err != nil {
+				writeStoreError(w, r, err, "Failed to read triggers", branch)
+				return
+			}
+			hal.WriteHAL(w, http.StatusOK, triggerRunView{
+				Branch: ri.AgentBranch(),
+				Run:    runID,
+				Fires:  fires,
+				Links: hal.LinkMap{
+					"self":     {Href: selfWithQuery(self, r)},
+					"triggers": {Href: self},
+				},
+			})
+			return
 		}
 
 		rep, err := ri.TriggerReport(r.Context(), logN)
@@ -70,13 +97,6 @@ func handleHALTriggers(b hal.URLBuilder) http.HandlerFunc {
 			writeStoreError(w, r, err, "Failed to read triggers", branch)
 			return
 		}
-		if runID != "" {
-			if rep.Fires, err = ri.TriggerFiresByRun(r.Context(), runID); err != nil {
-				writeStoreError(w, r, err, "Failed to read triggers", branch)
-				return
-			}
-		}
-		self := b.Branch(repoName, hal.Anchor{Branch: branch}) + "/triggers"
 		hal.WriteHAL(w, http.StatusOK, triggersView{
 			Enabled:  rep.Enabled,
 			Reason:   rep.Reason,

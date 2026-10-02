@@ -43,6 +43,10 @@ func TestOpenAPI_TriggersDeclared(t *testing.T) {
 	require.ElementsMatch(t, []any{"repo", "local"}, enumOf("recipe_source"))
 	require.Contains(t, fire, "recipe_rev")
 	require.Contains(t, fire, "run_id")
+	require.Contains(t, fire, "message", "F5: a recipe's non-error result text")
+	runRows := schemas["TriggerRunRows"].(map[string]any)
+	require.ElementsMatch(t, []any{"branch", "run", "fires", "_links"}, runRows["required"].([]any),
+		"?run=<id> answers ONLY the run's rows (F5)")
 	var runParam map[string]any
 	for _, p := range op["get"].(map[string]any)["parameters"].([]any) {
 		if pm := p.(map[string]any); pm["name"] == "run" {
