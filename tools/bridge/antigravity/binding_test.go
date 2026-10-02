@@ -220,7 +220,7 @@ func TestResolveWriteRepo_LensMode_ResolvesWriteRepo(t *testing.T) {
 		w.Write([]byte(`{"name":"eng","write":{"uid":"u1","name":"writerepo"},"reads":[]}`))
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	repo, skip := resolveWriteRepo(dir)
 	if skip != "" || repo != "writerepo" {
@@ -238,7 +238,7 @@ func TestResolveWriteRepo_LensMode_ServerReturnsHostileName_Rejected(t *testing.
 		w.Write([]byte(`{"name":"eng","write":{"uid":"u1","name":"../../etc"},"reads":[]}`))
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	repo, skip := resolveWriteRepo(dir)
 	if skip != skipInvalidScope {
@@ -249,7 +249,7 @@ func TestResolveWriteRepo_LensMode_ServerReturnsHostileName_Rejected(t *testing.
 func TestResolveWriteRepo_LensMode_ServerDown_SkipsUnresolved(t *testing.T) {
 	dir := t.TempDir()
 	writeConfig(t, dir, `{"mcpServers":{"k":{"command":"kb","args":["--lens","eng"]}}}`)
-	t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("KNOMIT_SERVER", "http://127.0.0.1:1")
 
 	repo, skip := resolveWriteRepo(dir)
 	if skip != skipLensUnresolved || repo != "" {

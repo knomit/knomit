@@ -45,7 +45,7 @@ func TestSocketPreferringClient_ForeignListenerIsNotATCPFallback(t *testing.T) {
 			t.Fatalf("request %d: want auth.ErrForeignListener in the chain, got %v", i, err)
 		}
 		// The escape hatch is the BRIDGE's advice, added where it refuses.
-		for _, want := range []string{"URL argument", "KNOMIT_BASE_URL"} {
+		for _, want := range []string{"server argument", "KNOMIT_SERVER"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("request %d: the error must name %q as the way past the pipe; got %v", i, want, err)
 			}

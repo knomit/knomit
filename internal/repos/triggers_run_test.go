@@ -760,6 +760,55 @@ func TestRun_EnvMergedWithTrace(t *testing.T) {
 	require.Equal(t, "override", get("KNOMIT_T17_BASE"), "the recipe's env wins over the inherited value")
 }
 
+// runEnvChild fires one recipe that execs the helper with the recipe env
+// extra (key/value pairs), on a repo whose Manager knows addr as its own
+// address ("" leaves it unset), and returns the child's environment.
+func runEnvChild(t *testing.T, addr string, extra ...string) []string {
+	t.Helper()
+	m, ri, _ := newScriptRepo(t, 0, runTrig("w", "learn", "tasks/in/**", "worker"))
+	if addr != "" {
+		m.SetServerAddress(addr)
+	}
+	dir := t.TempDir()
+	putLocalRecipe(t, ri.triggers.home, "worker", fmt.Sprintf(`knomit.exec([%s], {env: %s}); ({status: "done"});`,
+		jsString(helperExe(t)), helperEnv(dir, extra...)))
+	write(t, ri, "kb/tasks/in/a.md")
+	_ = waitRows(t, ri, "w", 2)
+	return waitHelperReports(t, dir, "child", 1)[0].Env
+}
+
+// The recipe child's KNOMIT_SERVER is the server's OWN address, exactly as the
+// listener-binding code recorded it — that is what makes the `kb` a recipe
+// starts reach THIS server rather than whichever one the desktop lockfile or
+// the default names. An inherited value is overwritten. Sabotage: drop the
+// KNOMIT_SERVER line from recipeEnv (red: the inherited value survives).
+func TestRun_EnvCarriesTheServersOwnAddress(t *testing.T) {
+	t.Setenv("KNOMIT_SERVER", "http://inherited.invalid:1")
+	const own = "unix:///srv/knomit/knomit.sock"
+	got, ok := envOf(runEnvChild(t, own), "KNOMIT_SERVER")
+	require.True(t, ok, "the child has no KNOMIT_SERVER")
+	require.Equal(t, own, got)
+}
+
+// A recipe's `exec` env names a different server and wins. Sabotage: merge
+// the recipe env UNDER the base (red: the server's own address).
+func TestRun_EnvRecipeOverridesKnomitServer(t *testing.T) {
+	env := runEnvChild(t, "unix:///srv/knomit/knomit.sock", "KNOMIT_SERVER", "http://127.0.0.1:19310")
+	got, ok := envOf(env, "KNOMIT_SERVER")
+	require.True(t, ok)
+	require.Equal(t, "http://127.0.0.1:19310", got, "the recipe's env wins")
+}
+
+// Before the server knows its address the child gets NO KNOMIT_SERVER: an
+// inherited one names whatever server knomit's own launcher pointed at, and
+// passing it on would send the recipe's `kb` there. Sabotage: skip
+// withoutEnv (red: the inherited value reaches the child).
+func TestRun_EnvNoAddressDropsAnInheritedKnomitServer(t *testing.T) {
+	t.Setenv("KNOMIT_SERVER", "http://inherited.invalid:1")
+	_, ok := envOf(runEnvChild(t, ""), "KNOMIT_SERVER")
+	require.False(t, ok, "an inherited KNOMIT_SERVER reached the child although this server has no address yet")
+}
+
 // ---- T18: a recipe's writes
 
 // RecipeWritesStampedAndGuarded: knomit.learn from a recipe commits with the

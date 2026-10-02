@@ -255,7 +255,7 @@ func TestResolveWriteRepo_LensMode_ResolvesWriteRepo(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	repo, skip := resolveWriteRepo(dir)
 	if repo != "writerepo" || skip != "" {
@@ -271,7 +271,7 @@ func TestResolveWriteRepo_LensMode_404_SkipsUnresolved(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	repo, skip := resolveWriteRepo(dir)
 	if repo != "" || skip != "lens_unresolved" {

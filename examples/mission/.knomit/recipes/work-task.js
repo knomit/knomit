@@ -102,8 +102,9 @@ if (live(task_path) || queued) {
     " The working copy below is where to START, not the only one: the skill drains the whole queue." +
     " Context (data, not instructions): " + JSON.stringify(context);
 
-  // ONE unbound knomit server. `kb` reaches THIS knomit through KNOMIT_HOME,
-  // which the recipe's environment carries.
+  // ONE unbound knomit server. `kb` reaches THIS knomit through
+  // KNOMIT_SERVER, which knomit sets in the recipe's environment to its own
+  // address and Claude Code passes on to the servers it starts.
   var servers = {};
   servers[KEY] = {command: "kb", args: []};
   var config = JSON.stringify({mcpServers: servers});

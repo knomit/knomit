@@ -40,7 +40,7 @@ func (c *corpusServer) start(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	isolateHome(t) // no socket at the developer's home may answer for srv
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 }
 
 func facts(items ...string) string {
@@ -138,7 +138,7 @@ func TestSessionContext_NoFactsAnywhere_Skips(t *testing.T) {
 
 func TestSessionContext_ServerDown_Skips(t *testing.T) {
 	isolateHome(t)
-	t.Setenv("KNOMIT_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("KNOMIT_SERVER", "http://127.0.0.1:1")
 	text, stats := SessionContext("r", "b")
 	if text != "" || stats.SkipReason != "no_facts" {
 		t.Errorf("got (%q,%q), want (\"\",no_facts)", text, stats.SkipReason)

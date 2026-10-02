@@ -13,7 +13,7 @@ import (
 	"knomit/tools/bridge/knomitapi"
 )
 
-// closedKnomit points KNOMIT_BASE_URL at an immediately-closed httptest server
+// closedKnomit points KNOMIT_SERVER at an immediately-closed httptest server
 // so every hook HTTP call fails fast with "connection refused", making the
 // test deterministic regardless of whether a real knomit happens to be running
 // on localhost.
@@ -21,7 +21,7 @@ func closedKnomit(t *testing.T) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	srv.Close()
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 }
 
 func TestHookPostEdit_MalformedStdin_Clean(t *testing.T) {
@@ -133,7 +133,7 @@ func postEditHappyPath(t *testing.T, event string) []byte {
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	t.Setenv("KNOMIT_BASE_URL", srv.URL)
+	t.Setenv("KNOMIT_SERVER", srv.URL)
 
 	payload := map[string]interface{}{
 		"tool_name": "Edit",

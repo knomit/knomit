@@ -52,6 +52,7 @@ import (
 	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +60,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"knomit/internal/fact"
+	"knomit/internal/serveraddr"
 	"knomit/internal/serverkey"
 	"knomit/internal/store"
 )
@@ -399,7 +401,9 @@ func (d *triggerDispatcher) recipeGlobals(j recipeJob) map[string]any {
 // writes it (the same ServerKey rule), as a JSON STRING for
 // `claude --mcp-config`, plus the server key and the documented server-wide
 // allow form `mcp__<server>` for `--allowedTools` [N3]. `kb` finds this
-// server through the local socket its inherited environment names [N1].
+// server through the KNOMIT_SERVER its inherited environment carries
+// (recipeEnv); Claude Code passes its own environment to the stdio MCP
+// servers it starts, so the config itself names no address.
 func recipeMCP(repo string) map[string]any {
 	key := serverkey.ServerKey(repo, "")
 	cfg, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
@@ -409,16 +413,42 @@ func recipeMCP(repo string) map[string]any {
 }
 
 // recipeEnv is the child's base environment: knomit's own, plus
-// KNOMIT_HOME (this server's home, so `kb` reaches THIS server's socket),
-// KNOMIT_TRACE / KNOMIT_CAUSE (the fire's trace and firing commit) and
-// KNOMIT_RUN (the run id). exec merges the recipe's own `env` over it; it
-// never replaces it, so PATH and HOME survive.
+// KNOMIT_SERVER (this server's own address — its local listener when that
+// bound, else its TCP address — so the `kb` a recipe starts reaches THIS
+// server; KNOMIT_HOME alone never did, because `kb` does not choose its
+// server by home), KNOMIT_HOME (this server's home), KNOMIT_TRACE /
+// KNOMIT_CAUSE (the fire's trace and firing commit) and KNOMIT_RUN (the run
+// id). exec merges the recipe's own `env` over it, so a recipe may name a
+// different server; it never replaces it, so PATH and HOME survive.
+//
+// Before the server knows its address (its listeners not bound yet) the child
+// gets NO KNOMIT_SERVER — an inherited one is removed, since it names
+// whatever server knomit's own launcher pointed at, not this one — and its
+// `kb` falls back to its default.
 func (d *triggerDispatcher) recipeEnv(j recipeJob) []string {
 	over := map[string]string{"KNOMIT_TRACE": j.p.trace, "KNOMIT_CAUSE": j.p.commit, "KNOMIT_RUN": j.id}
 	if d.home != "" {
 		over["KNOMIT_HOME"] = d.home
 	}
-	return mergeEnv(os.Environ(), over)
+	base := os.Environ()
+	if addr := d.serverAddr(); addr != "" {
+		over[serveraddr.EnvVar] = addr
+	} else {
+		base = withoutEnv(base, serveraddr.EnvVar)
+	}
+	return mergeEnv(base, over)
+}
+
+// withoutEnv is env minus every entry named key (compared as the OS does).
+func withoutEnv(env []string, key string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if k, _, _ := strings.Cut(kv, "="); envKey(k) == envKey(key) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // recipeHostFunctions is the TRUSTED host map: the script's eight functions

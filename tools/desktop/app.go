@@ -482,6 +482,7 @@ func bootKnomit(ctx context.Context, cfg config.Config, lockPath string, setPhas
 		return "", nil, err
 	}
 	tlsSt.set(srv.tlsState)
+	a.Manager().SetServerAddress(srv.address)
 	apiBase := fmt.Sprintf("http://127.0.0.1:%d", port)
 	log.Info().Str("api", apiBase).Int("port", port).Str("socket", cfg.Socket).Msg("knomit-desktop server up (API-only)")
 	return apiBase, func() { srv.shutdown(); a.Close() }, nil

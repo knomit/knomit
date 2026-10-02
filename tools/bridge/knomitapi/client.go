@@ -6,9 +6,9 @@ package knomitapi
 import (
 	"encoding/json"
 	"fmt"
+	"knomit/internal/serveraddr"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,18 +23,16 @@ import (
 const httpTimeout = 2 * time.Second
 
 // hooksClient is built on FIRST USE, never at package init, and reached only
-// through Client(). It prefers the unix socket for the same reason the proxy
-// client does — the kernel vouches for the caller — unless KNOMIT_BASE_URL
-// names a server, in which case the operator has chosen one and that choice
-// stands. The hooks have no CLI argument, so that env var is the only
-// explicit form here.
+// through Client(). It goes where KNOMIT_SERVER says, exactly as given; with
+// nothing named it prefers the local listener for the same reason the proxy
+// client does — the kernel vouches for the caller. The hooks have no CLI
+// argument, so KNOMIT_SERVER is the only way to name a server here.
 var (
 	hooksOnce   sync.Once
 	hooksClient *http.Client
 )
 
-// Client is the shared hooks client, so hooks within a session reuse the
-// connection pool.
+// Client is the shared hooks client.
 //
 // It is a FUNCTION and not a package-level var on purpose. A var would be
 // initialised at package-init time, before any caller — or any test's
@@ -44,8 +42,8 @@ var (
 // fail on whether a socket existed at the developer's ~/.knomit, which is a
 // green run that says nothing about the commit.
 //
-// Laziness alone would only move that freeze later, so the socket decision is
-// ALSO made per dial (see socketPreferringClient): this function may be
+// Laziness alone would only move that freeze later, so the address decision
+// is ALSO made per dial (see newLazyHooksClient): this function may be
 // called once, and the answer still tracks the environment afterwards.
 func Client() *http.Client {
 	hooksOnce.Do(func() { hooksClient = newLazyHooksClient(httpTimeout) })
@@ -60,13 +58,23 @@ func EncodeBranch(branch string) string {
 	return strings.ReplaceAll(branch, "/", ":")
 }
 
-// BaseURL returns the knomit HTTP base URL. Set KNOMIT_BASE_URL for
-// non-default ports; otherwise the default works for a standard local install.
+// BaseURL is the URL prefix the hooks build requests on: the server
+// ResolveServer("") picks (KNOMIT_SERVER, else the desktop lockfile, else
+// DefaultServer). For a local listener it is the placeholder
+// serveraddr.LocalBase; Client() dials the listener itself.
+//
+// A malformed KNOMIT_SERVER is logged at ERROR, naming the variable, and the
+// placeholder is returned: no request then leaves this process, because the
+// hooks client's dial resolves the same value and fails with the same error.
+// Falling back to the default instead would reach some other server, which is
+// the bug KNOMIT_SERVER exists to remove.
 func BaseURL() string {
-	if u := os.Getenv("KNOMIT_BASE_URL"); u != "" {
-		return u
+	s, err := ResolveServer("")
+	if err != nil {
+		log.Error().Err(err).Msg("hooks: cannot use the server address; no request will be sent")
+		return serveraddr.LocalBase
 	}
-	return "http://localhost:19278"
+	return s.Base
 }
 
 // AgentBranch returns the repo's agent_branch, or "" on any error so the

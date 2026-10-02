@@ -8,6 +8,7 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
+	"knomit/internal/serveraddr"
 )
 
 // openLocalListener opens the local authenticated listener for cfg and decides
@@ -67,4 +68,21 @@ func openLocalListener(cfg config.Config) (net.Listener, func(), error) {
 		return nil, func() {}, rerr
 	}
 	return ul, closeSocket, nil
+}
+
+// serverAddress is this server's own address in KNOMIT_SERVER's spelling, for
+// the processes it starts (a recipe's `exec` child; repos.Manager hands it
+// on). It is the local listener when one BOUND — its path is cfg.Socket,
+// which may be KNOMIT_SOCKET, the toml `socket` or the /tmp fallback for a
+// long data root, never a re-derived <home>/knomit.sock — and the TCP
+// listener otherwise. "Otherwise" includes ErrSocketInUse: another instance
+// holds that socket, so naming it would send this server's children THERE.
+//
+// local is what openLocalListener returned; tcpAddr is the TCP listener's
+// bound address.
+func serverAddress(cfg config.Config, local net.Listener, tcpAddr string) string {
+	if local != nil {
+		return serveraddr.ForLocal(cfg.Socket)
+	}
+	return serveraddr.ForTCP(tcpAddr)
 }

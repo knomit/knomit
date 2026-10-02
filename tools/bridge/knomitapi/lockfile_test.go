@@ -1,4 +1,4 @@
-package main
+package knomitapi
 
 import (
 	"path/filepath"

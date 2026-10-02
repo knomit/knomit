@@ -17,16 +17,20 @@
 //
 // Usage:
 //
-//	kb --repo <name> [base-url]
-//	kb --lens <name> [base-url]
-//	kb [base-url]
+//	kb --repo <name> [server]
+//	kb --lens <name> [server]
+//	kb [server]
 //	kb --repo work http://myhost:8080
+//	kb --repo work unix:///Users/me/.knomit/knomit.sock
 //
 // --repo and --lens are mutually exclusive. With neither, the bridge connects
 // to the unscoped mount /api/v1/mcp, where the agent calls knomit_bind and
 // passes the handle it returns on every other tool call; knomit has no default
 // repo either way.
-// The base-url defaults to http://localhost:19278.
+//
+// The server is the argument, else KNOMIT_SERVER, else the desktop lockfile's
+// port, else http://localhost:19278 — and EVERY call (discovery, the proxy,
+// the closing DELETE, the hooks) goes to it. KNOMIT_HOME does not choose it.
 //
 // Claude Desktop config:
 //
@@ -50,7 +54,6 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -58,7 +61,6 @@ import (
 
 	"github.com/rs/zerolog/log"
 
-	"knomit/internal/config"
 	"knomit/tools/bridge/antigravity"
 	"knomit/tools/bridge/bridgelog"
 	"knomit/tools/bridge/claude"
@@ -137,30 +139,31 @@ func selectMode(repo, lens string, repoSet, lensSet bool) bridgeMode {
 	}
 }
 
-// baseURLArg validates the optional leading positional argument as the server
-// base URL, returning "" when there is none.
+// resolveServer picks the ONE address every call this process makes goes to:
+// the optional leading positional argument > KNOMIT_SERVER > the desktop
+// lockfile > http://localhost:19278 (knomitapi.ResolveServer). The argument
+// takes the same forms as KNOMIT_SERVER: http://host:port, https://host:port,
+// or the local listener (unix:///abs/path.sock; npipe:////./pipe/<name> on
+// Windows).
 //
-// This guard exists because session-bound mode made no-flags legal. Before it,
-// a mistyped subcommand still failed loudly: `kb clade init` parsed
-// no --repo and the required-flag check exited. Now the same typo would be
-// accepted as a base URL and the proxy would dial http://clade/... forever.
-//
-// Go's flag package stops parsing at the FIRST non-flag argument, so
-// `clade init -repo x` never parses -repo at all: "clade", "init", "-repo" and
-// "x" all land in flag.Args(), flag.Visit reports neither flag as set, and the
-// mode selector picks session-bound. Rejecting a first positional that is not
-// an http/https URL is what turns that silent misconfiguration back into an
-// exit.
-func baseURLArg(args []string) (string, error) {
-	if len(args) == 0 {
-		return "", nil
+// The argument check also guards a typo. Session-bound mode made no-flags
+// legal, so `kb clade init` would otherwise be accepted as an address and the
+// proxy would dial http://clade/... forever. Go's flag package stops parsing
+// at the FIRST non-flag argument, so `clade init -repo x` never parses -repo
+// at all: "clade", "init", "-repo" and "x" all land in flag.Args(), flag.Visit
+// reports neither flag as set, and the mode selector picks session-bound.
+// Rejecting a first positional that is not an address is what turns that
+// silent misconfiguration back into an exit.
+func resolveServer(args []string) (knomitapi.Server, error) {
+	arg := ""
+	if len(args) > 0 {
+		arg = args[0]
 	}
-	raw := args[0]
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return "", fmt.Errorf("unknown command or base-url %q (expected http:// or https://)", raw)
+	s, err := knomitapi.ResolveServer(arg)
+	if err != nil && arg != "" {
+		return knomitapi.Server{}, fmt.Errorf("unknown command or server address %q: %w", arg, err)
 	}
-	return strings.TrimRight(raw, "/"), nil
+	return s, err
 }
 
 func main() {
@@ -264,84 +267,27 @@ func main() {
 	fmt.Fprintf(os.Stderr, "[knomit-bridge] log file: %s (pid=%d)\n", logPath, os.Getpid())
 	log.Info().Str("repo", *repo).Msg("bridge starting")
 
-	baseURL := "http://localhost:19278"
-	arg, argErr := baseURLArg(flag.Args())
-	if argErr != nil {
-		fmt.Fprintf(os.Stderr, "knomit-bridge: %v\n", argErr)
+	srv, err := resolveServer(flag.Args())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "knomit-bridge: %v\n", err)
 		flag.Usage()
 		os.Exit(2)
 	}
-	if arg != "" {
-		baseURL = arg
-	} else if lockURL, err := readLockfileBaseURL(); err == nil && lockURL != "" {
-		baseURL = lockURL
-		log.Debug().Str("base_url", baseURL).Msg("discovered base-url from lockfile")
-	} else if err != nil {
-		log.Debug().Err(err).Msg("lockfile read failed, falling back to default")
-	}
-	var serverURL string
-	// branch is also what the bridge declares about itself; it stays empty in
-	// lens mode, where the branch is resolved per mount server-side.
-	var branch string
-	if mode == modeSessionBound {
-		// Unscoped mode: nothing to discover. The mount names no repo, and the
-		// agent binds by calling knomit_bind and passing the handle it returns
-		// on every other call; until it does, every other tool fails.
-		//
-		// Note this is a property of the BRIDGE's connection, not of any
-		// session: several independent jobs may share one bridge process, and
-		// each holds its own handle. The bridge itself stays ignorant — it
-		// forwards tool arguments untouched.
-		serverURL = mcpURL(baseURL, "", "", "")
-		log.Info().Str("url", serverURL).Msg("bridge configured (unscoped; the agent calls knomit_bind)")
-	} else if mode == modeLens {
-		// Lens mode: skip branch discovery entirely. A lens resolves each
-		// mount's branch server-side via LensMiddleware, so the bridge just
-		// connects to the lens endpoint (no branch).
-		serverURL = mcpURL(baseURL, "", *lens, "")
-		log.Info().Str("lens", *lens).Str("url", serverURL).Msg("bridge configured (lens)")
-	} else {
-		var err error
-		branch, err = discoverAgentBranch(baseURL, *repo)
-		if err != nil {
-			log.Error().Err(err).Str("repo", *repo).Msg("failed to discover agent branch")
-			fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
-			os.Exit(1)
-		}
-		encodedBranch := strings.ReplaceAll(branch, "/", ":")
-		serverURL = mcpURL(baseURL, *repo, "", encodedBranch)
-		log.Info().Str("repo", *repo).Str("branch", branch).Str("url", serverURL).Msg("bridge configured")
+	conn, err := connect(srv, mode, *repo, *lens)
+	if err != nil {
+		log.Error().Err(err).Str("repo", *repo).Msg("failed to discover agent branch")
+		fmt.Fprintf(os.Stderr, "knomit-bridge: failed to discover agent branch for repo %q: %v\n", *repo, err)
+		os.Exit(1)
 	}
 
 	// Identity is computed once and never re-read: this process is one
 	// instance for its whole life.
-	hdr := clientHeaders(buildIdentity(branch, time.Now()))
-	// The socket wins over a DISCOVERED port but never over a chosen one: a
-	// CLI argument or KNOMIT_BASE_URL means the user pointed at a particular
-	// server, and a lockfile port means nobody chose anything.
-	explicitURL := arg != "" || os.Getenv("KNOMIT_BASE_URL") != ""
-	// Timeout 0, matching the http.Client{} this replaces: the proxy holds SSE
-	// long-polls open and a deadline here would cut them.
-	//
-	// An explicit URL never uses the local listener, so its path is not even
-	// resolved: a broken local knomit.toml would otherwise log a misleading
-	// "cannot resolve the local listener" for a bridge aimed at another server.
-	// newLazyHooksClient skips it for the same reason.
-	var socketPath string
-	if !explicitURL {
-		socketPath = knomitapi.SocketPath()
-	}
-	client := knomitapi.NewHTTPClient(socketPath, explicitURL, 0)
-	// PREFERENCE, not fact: the transport is chosen per dial, and a socket
-	// that does not answer falls back to TCP with its own warning. Logging
-	// "unix" here would claim a connection nothing has made yet.
-	log.Info().Str("transport", knomitapi.TransportPreference(socketPath, explicitURL)).
-		Str("base_url", baseURL).Msg("bridge transport")
+	hdr := clientHeaders(buildIdentity(conn.branch, time.Now()))
 
-	sessionID, err := runProxy(os.Stdin, os.Stdout, client, serverURL, hdr)
+	sessionID, err := runProxy(os.Stdin, os.Stdout, conn.client, conn.serverURL, hdr)
 	// stdin closed: the host is gone. Tell the server so the row is marked
 	// ended instead of going dead by silence. Fire-and-forget.
-	terminateSession(client, serverURL, sessionID, hdr)
+	terminateSession(conn.client, conn.serverURL, sessionID, hdr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "stdin read error: %v\n", err)
 		os.Exit(1)
@@ -605,15 +551,67 @@ func mcpURL(baseURL, repo, lens, encodedBranch string) string {
 	return fmt.Sprintf("%s/api/v1/repos/%s/branches/%s/mcp", baseURL, repo, encodedBranch)
 }
 
-// discoverAgentBranch queries GET /api/v1/repos/{repo} and returns the
-// agent_branch field. This is the branch the local server writes facts to.
-// Bounded by a short timeout so a missing/dead server fails fast at startup
-// instead of hanging Claude Desktop.
-func discoverAgentBranch(baseURL, repo string) (string, error) {
+// connection is what the proxy runs on, resolved before the first byte is
+// proxied.
+type connection struct {
+	client    *http.Client
+	serverURL string
+	// branch is also what the bridge declares about itself; it stays empty in
+	// lens and unscoped mode, where the branch is resolved server-side.
+	branch string
+}
+
+// discoveryTimeout bounds agent-branch discovery so a missing/dead server
+// fails fast at startup instead of hanging the MCP host.
+const discoveryTimeout = 3 * time.Second
+
+// connect builds the proxy's client and endpoint for s. Discovery and the
+// proxy use clients built from the SAME s by the same rule
+// (knomitapi.NewServerClient): a named address is the only place either goes,
+// and the default path prefers the local listener for both.
+func connect(s knomitapi.Server, mode bridgeMode, repo, lens string) (connection, error) {
+	// Timeout 0, matching the http.Client{} this replaces: the proxy holds SSE
+	// long-polls open and a deadline here would cut them.
+	c := connection{client: knomitapi.NewServerClient(s, 0)}
+	// For an address nobody chose this is a PREFERENCE, not a fact: the
+	// transport is chosen per dial, and a socket that does not answer falls
+	// back to TCP with its own warning.
+	log.Info().Str("transport", knomitapi.TransportFor(s)).Str("server", s.Raw).
+		Str("source", s.Source).Msg("bridge transport")
+	switch mode {
+	case modeSessionBound:
+		// Unscoped mode: nothing to discover. The mount names no repo, and the
+		// agent binds by calling knomit_bind and passing the handle it returns
+		// on every other call; until it does, every other tool fails.
+		//
+		// Note this is a property of the BRIDGE's connection, not of any
+		// session: several independent jobs may share one bridge process, and
+		// each holds its own handle. The bridge itself stays ignorant — it
+		// forwards tool arguments untouched.
+		c.serverURL = mcpURL(s.Base, "", "", "")
+		log.Info().Str("url", c.serverURL).Msg("bridge configured (unscoped; the agent calls knomit_bind)")
+	case modeLens:
+		// Lens mode: skip branch discovery entirely. A lens resolves each
+		// mount's branch server-side via LensMiddleware, so the bridge just
+		// connects to the lens endpoint (no branch).
+		c.serverURL = mcpURL(s.Base, "", lens, "")
+		log.Info().Str("lens", lens).Str("url", c.serverURL).Msg("bridge configured (lens)")
+	default:
+		branch, err := discoverAgentBranch(knomitapi.NewServerClient(s, discoveryTimeout), s.Base, repo)
+		if err != nil {
+			return connection{}, err
+		}
+		c.branch = branch
+		c.serverURL = mcpURL(s.Base, repo, "", strings.ReplaceAll(branch, "/", ":"))
+		log.Info().Str("repo", repo).Str("branch", branch).Str("url", c.serverURL).Msg("bridge configured")
+	}
+	return c, nil
+}
+
+// discoverAgentBranch queries GET /api/v1/repos/{repo} on c and returns the
+// agent_branch field: the branch the server writes facts to.
+func discoverAgentBranch(c *http.Client, baseURL, repo string) (string, error) {
 	repoURL := fmt.Sprintf("%s/api/v1/repos/%s", baseURL, repo)
-	// Explicit-URL client: plain TCP as before, plus the bearer token `kb
-	// login` saved for this host, if any.
-	c := knomitapi.NewHTTPClient("", true, 3*time.Second)
 	resp, err := c.Get(repoURL) //nolint:noctx
 	if err != nil {
 		return "", fmt.Errorf("GET %s: %w", repoURL, err)
@@ -633,44 +631,4 @@ func discoverAgentBranch(baseURL, repo string) (string, error) {
 		return "", fmt.Errorf("server did not return agent_branch for repo %q", repo)
 	}
 	return body.AgentBranch, nil
-}
-
-// readLockfileBaseURL returns http://127.0.0.1:<port> from the knomit-tray
-// lockfile, or ("", nil) if the file does not exist.
-func readLockfileBaseURL() (string, error) {
-	path, err := lockfilePath()
-	if err != nil {
-		return "", err
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	var info struct {
-		Port int `json:"port"`
-	}
-	if err := json.Unmarshal(data, &info); err != nil {
-		return "", fmt.Errorf("parse lockfile %s: %w", path, err)
-	}
-	if info.Port <= 0 {
-		return "", nil
-	}
-	return fmt.Sprintf("http://127.0.0.1:%d", info.Port), nil
-}
-
-// lockfilePath is <state dir>/server.json — the same file the desktop writes.
-//
-// It delegates rather than re-deriving. This function used to carry its own
-// copy of the per-OS switch with cases for darwin and linux only, so on
-// Windows it returned "unsupported platform windows"; the caller logs that at
-// Debug and falls back to the default base URL, so `kb` silently talked to the
-// wrong port while the desktop's lockfile sat in %LOCALAPPDATA%\knomit
-// unread. The bridge cannot import tools/desktop/internal/paths (Go's internal
-// rule), which is why the copy existed at all — internal/config is the
-// shared owner both of them can reach.
-func lockfilePath() (string, error) {
-	return config.LockfilePath()
 }

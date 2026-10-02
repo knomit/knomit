@@ -173,6 +173,10 @@ type triggerDispatcher struct {
 	// home is this machine's knomit home: <home>/recipes holds the local
 	// recipes, and a recipe's child gets it as KNOMIT_HOME.
 	home string
+	// serverAddr is this server's own address (Manager.ServerAddress, ""
+	// until the listeners are bound); a recipe's child gets it as
+	// KNOMIT_SERVER. KNOMIT_HOME does not choose the server — this does.
+	serverAddr func() string
 	// rc is the `do: run` state (trigger_recipe.go): the recipe caches, the
 	// concurrency slots and the running recipes' wait group.
 	rc recipeState
@@ -192,18 +196,22 @@ type triggerDispatcher struct {
 // ratePerMinute is [triggers].script_rate_per_minute; tools the injected
 // in-process MCP tool set of `do: script` (nil on a build with none); home
 // the knomit home whose recipes/ folder holds this machine's recipes.
-func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh.Signer, slowMS, ratePerMinute int, tools ScriptTools, home string) *triggerDispatcher {
+func newTriggerDispatcher(ri *RepoInstance, repo, agentBranch string, signer ssh.Signer, slowMS, ratePerMinute int, tools ScriptTools, home string, serverAddr func() string) *triggerDispatcher {
+	if serverAddr == nil {
+		serverAddr = func() string { return "" }
+	}
 	return &triggerDispatcher{
-		ri:       ri,
-		repo:     repo,
-		branch:   agentBranch,
-		identity: triggerIdentityFor(agentBranch, signer),
-		slow:     time.Duration(slowMS) * time.Millisecond,
-		kick:     make(chan struct{}, 1),
-		stats:    newTriggerStats(),
-		sc:       newScriptState(tools, ratePerMinute),
-		home:     home,
-		rc:       newRecipeState(),
+		ri:         ri,
+		repo:       repo,
+		branch:     agentBranch,
+		identity:   triggerIdentityFor(agentBranch, signer),
+		slow:       time.Duration(slowMS) * time.Millisecond,
+		kick:       make(chan struct{}, 1),
+		stats:      newTriggerStats(),
+		sc:         newScriptState(tools, ratePerMinute),
+		home:       home,
+		serverAddr: serverAddr,
+		rc:         newRecipeState(),
 	}
 }
 

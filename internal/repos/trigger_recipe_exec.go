@@ -9,7 +9,8 @@
 //	    never through a shell, never joined or split. argv[0] without a path
 //	    separator is resolved against the CHILD's PATH.
 //	  - env MERGES over the recipe's base environment (knomit's own plus
-//	    KNOMIT_HOME/TRACE/CAUSE/RUN); it never replaces it.
+//	    KNOMIT_SERVER/HOME/TRACE/CAUSE/RUN); it never replaces it, and a key
+//	    it names wins over the base, KNOMIT_SERVER included.
 //	  - the whole process GROUP (Unix) or job object (Windows) is killed when
 //	    the call's timeout, the recipe's budget or knomit's stop ends it; a
 //	    grandchild holding the pipes cannot keep the call alive beyond

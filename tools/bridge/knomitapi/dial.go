@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 
 	"knomit/internal/auth"
 	"knomit/internal/config"
+	"knomit/internal/serveraddr"
 )
 
 // SocketPath is where a same-machine server listens: a unix socket, or a
@@ -58,12 +58,13 @@ var socketPathWarnOnce sync.Once
 // the OS tells the server who is calling, so nothing is stored or presented —
 // and it is what fills client_sessions.principal.
 //
-// An EXPLICIT base URL wins. "Explicit" means the user pointed at a
-// particular server (a CLI argument or KNOMIT_BASE_URL), possibly a remote
-// one, and silently rerouting that onto a local transport would answer a
-// different question than the one asked. A port DISCOVERED from the lockfile
-// is NOT explicit — nobody chose it — so the local listener still wins over
-// it.
+// A NAMED http(s) address wins (explicitURL). "Named" means the user pointed
+// at a particular server — `kb`'s server argument or KNOMIT_SERVER — possibly
+// a remote one, and silently rerouting that onto a local transport would
+// answer a different question than the one asked. A port DISCOVERED from the
+// lockfile is NOT named — nobody chose it — so the local listener still wins
+// over it. A named LOCAL listener does not come through here at all:
+// NewServerClient dials it and nothing else.
 //
 // THE CHOICE IS MADE PER DIAL, NOT HERE. That matters: the socket file
 // outlives any ungraceful exit, because cmd/serve.go only removes it on a
@@ -84,18 +85,41 @@ func NewHTTPClient(socketPath string, explicitURL bool, timeout time.Duration) *
 	return socketPreferringClient(timeout, func() string { return socketPath })
 }
 
-// newLazyHooksClient is the hooks' client. Its socket decision is deferred to
-// dial time for BOTH halves — whether an explicit URL was named, and where the
-// socket is — because this client is reached through a package-level accessor
-// and would otherwise freeze its transport at package-init time, before any
-// caller (or any test's t.Setenv) can say where the server is.
+// newLazyHooksClient is the hooks' client. Its whole address decision is
+// deferred to dial time — which server (ResolveServer: KNOMIT_SERVER, then the
+// lockfile, then the default) and, on the default path, where the local
+// listener is — because this client is reached through a package-level
+// accessor and would otherwise freeze its transport at first use, before a
+// caller (or a test's t.Setenv) can say where the server is. The hooks have no
+// command-line argument, so KNOMIT_SERVER is their only way to name a server.
+//
+// Keep-alives are off: the request URL for a local listener carries the shared
+// placeholder host (serveraddr.LocalBase), so a pooled connection could
+// otherwise be reused for a request meant for a different listener. A hook
+// makes a handful of requests; a fresh local connection each costs nothing.
 func newLazyHooksClient(timeout time.Duration) *http.Client {
-	return socketPreferringClient(timeout, func() string {
-		if os.Getenv("KNOMIT_BASE_URL") != "" {
-			return "" // the operator named a server; do not reroute it
-		}
-		return SocketPath()
-	})
+	prefer := socketPreferringDialer(timeout, SocketPath)
+	tcp := &net.Dialer{Timeout: timeout}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: withBearer(&http.Transport{
+			DisableKeepAlives: true,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				s, err := ResolveServer("")
+				if err != nil {
+					return nil, err
+				}
+				switch {
+				case s.IsLocal():
+					return localOnlyDialer(s.Addr, timeout)(ctx, network, addr)
+				case s.Named:
+					return tcp.DialContext(ctx, network, addr)
+				default:
+					return prefer(ctx, network, addr)
+				}
+			},
+		}),
+	}
 }
 
 // socketPreferringClient dials the local listener first and falls back to the
@@ -109,72 +133,76 @@ func newLazyHooksClient(timeout time.Duration) *http.Client {
 // carries the impersonation level the server needs to read a SID at all — a
 // plain winio.DialPipeContext would connect and then be anonymous.
 func socketPreferringClient(timeout time.Duration, socketPath func() string) *http.Client {
-	d := &net.Dialer{Timeout: timeout}
-	var warnOnce, foreignOnce sync.Once
 	return &http.Client{
 		Timeout: timeout,
 		// withBearer: the token `kb login` saved for the request's host,
 		// if any. Over the local listener the server ignores it.
-		Transport: withBearer(&http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				p := socketPath()
-				if p == "" {
-					return d.DialContext(ctx, network, addr)
-				}
-				conn, err := auth.DialLocal(ctx, p, localDialBudget(timeout))
-				if err == nil {
-					return conn, nil
-				}
-				// Two shapes of failure are benign and fall back to TCP
-				// below: a MISSING listener, and one that is there but
-				// UNREACHABLE. A FOREIGN one is neither and does not fall
-				// back (knomit#265): another account holds our listener's
-				// name, which means a live process chose it, and the TCP
-				// path carries no verified identity either. The request
-				// fails, and the error says how to name a server explicitly.
-				//
-				// This is a SIGNAL for the case we can see, not a boundary:
-				// a squatter that denies READ_CONTROL (or all access) makes
-				// DialLocal fail with access denied, which lands in the
-				// unreachable branch below and falls back to TCP like any
-				// other listener we cannot open. Either way no byte reaches
-				// a foreign-owned pipe, which is the security property.
-				if errors.Is(err, auth.ErrForeignListener) {
-					err = fmt.Errorf("%w; pass an explicit URL (the URL argument, or KNOMIT_BASE_URL for the hooks client) "+
-						"to skip the pipe if that server is yours", err)
-					foreignOnce.Do(func() {
-						log.Warn().Err(err).Str("socket", p).Str("via", string(auth.LocalVia)).Str("addr", addr).
-							Msg("bridge: local listener is held by another account; refusing to talk to it and not falling back to TCP")
-					})
-					return nil, err
-				}
-				// NO LISTENER AT ALL is the ordinary case — no server
-				// running, or one older than the socket — and warning about
-				// it would dilute the signal this log line exists for. The
-				// anomaly worth a WARN is a listener that EXISTS and does not
-				// answer: a socket inode left by an ungracefully killed
-				// server, or a pipe that refuses us.
-				//
-				// errors.Is, not string matching, on both platforms: Windows
-				// returns ERROR_FILE_NOT_FOUND inside an *os.PathError, and
-				// syscall.Errno.Is maps that onto fs.ErrNotExist, so the one
-				// branch covers ENOENT and 0x2 alike.
-				if errors.Is(err, fs.ErrNotExist) {
-					log.Debug().Str("socket", p).Str("via", string(auth.LocalVia)).
-						Msg("bridge: no local listener, using TCP")
-					return d.DialContext(ctx, network, addr)
-				}
-				// Once, not per dial: a stale listener would otherwise repeat
-				// this on every connection. Silence here is the failure mode
-				// worth avoiding — a dead socket beside a live server looks
-				// exactly like a healthy bridge until someone reads this.
-				warnOnce.Do(func() {
-					log.Warn().Err(err).Str("socket", p).Str("via", string(auth.LocalVia)).Str("addr", addr).
-						Msg("bridge: local listener unreachable, falling back to TCP; the server's verified identity is not available on this path")
-				})
-				return d.DialContext(ctx, network, addr)
-			},
-		}),
+		Transport: withBearer(&http.Transport{DialContext: socketPreferringDialer(timeout, socketPath)}),
+	}
+}
+
+// socketPreferringDialer is socketPreferringClient's per-dial decision, shared
+// with the hooks client's default path.
+func socketPreferringDialer(timeout time.Duration, socketPath func() string) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	d := &net.Dialer{Timeout: timeout}
+	var warnOnce, foreignOnce sync.Once
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		p := socketPath()
+		if p == "" {
+			return d.DialContext(ctx, network, addr)
+		}
+		conn, err := auth.DialLocal(ctx, p, localDialBudget(timeout))
+		if err == nil {
+			return conn, nil
+		}
+		// Two shapes of failure are benign and fall back to TCP
+		// below: a MISSING listener, and one that is there but
+		// UNREACHABLE. A FOREIGN one is neither and does not fall
+		// back (knomit#265): another account holds our listener's
+		// name, which means a live process chose it, and the TCP
+		// path carries no verified identity either. The request
+		// fails, and the error says how to name a server.
+		//
+		// This is a SIGNAL for the case we can see, not a boundary:
+		// a squatter that denies READ_CONTROL (or all access) makes
+		// DialLocal fail with access denied, which lands in the
+		// unreachable branch below and falls back to TCP like any
+		// other listener we cannot open. Either way no byte reaches
+		// a foreign-owned pipe, which is the security property.
+		if errors.Is(err, auth.ErrForeignListener) {
+			err = fmt.Errorf("%w; name the server (kb's server argument, or %s, which the hooks read too) "+
+				"to skip the local listener if that server is yours", err, serveraddr.EnvVar)
+			foreignOnce.Do(func() {
+				log.Warn().Err(err).Str("socket", p).Str("via", string(auth.LocalVia)).Str("addr", addr).
+					Msg("bridge: local listener is held by another account; refusing to talk to it and not falling back to TCP")
+			})
+			return nil, err
+		}
+		// NO LISTENER AT ALL is the ordinary case — no server
+		// running, or one older than the socket — and warning about
+		// it would dilute the signal this log line exists for. The
+		// anomaly worth a WARN is a listener that EXISTS and does not
+		// answer: a socket inode left by an ungracefully killed
+		// server, or a pipe that refuses us.
+		//
+		// errors.Is, not string matching, on both platforms: Windows
+		// returns ERROR_FILE_NOT_FOUND inside an *os.PathError, and
+		// syscall.Errno.Is maps that onto fs.ErrNotExist, so the one
+		// branch covers ENOENT and 0x2 alike.
+		if errors.Is(err, fs.ErrNotExist) {
+			log.Debug().Str("socket", p).Str("via", string(auth.LocalVia)).
+				Msg("bridge: no local listener, using TCP")
+			return d.DialContext(ctx, network, addr)
+		}
+		// Once, not per dial: a stale listener would otherwise repeat
+		// this on every connection. Silence here is the failure mode
+		// worth avoiding — a dead socket beside a live server looks
+		// exactly like a healthy bridge until someone reads this.
+		warnOnce.Do(func() {
+			log.Warn().Err(err).Str("socket", p).Str("via", string(auth.LocalVia)).Str("addr", addr).
+				Msg("bridge: local listener unreachable, falling back to TCP; the server's verified identity is not available on this path")
+		})
+		return d.DialContext(ctx, network, addr)
 	}
 }
 
