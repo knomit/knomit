@@ -11,14 +11,18 @@ import (
 // TestSetTestFastDurability_SyncOffWALKept pins what the #365 switch does and,
 // as importantly, what it leaves alone. With it off (this package's TestMain
 // never turns it on) the main DB runs synchronous=NORMAL and control.db's DSN
-// gets nothing appended — production durability. With it on, every DB a test
+// gets nothing appended — production durability, and how this package's
+// TestMain leaves it. With it on, every DB a test
 // binary opens runs synchronous=OFF, and every one is STILL in WAL: the
 // journal mode decides locking, which concurrency tests rely on, so a switch
 // that quietly changed it would invalidate them without failing them.
 //
 // It flips a process-wide switch, so it must not run in parallel.
 func TestSetTestFastDurability_SyncOffWALKept(t *testing.T) {
-	t.Cleanup(func() { SetTestFastDurability(false) })
+	// Restore whatever TestMain set, so the rest of the binary runs as it
+	// asked to whether or not this package enables the switch.
+	prev := testFastDurability.Load()
+	t.Cleanup(func() { SetTestFastDurability(prev) })
 
 	// synchronous: 0 = OFF, 1 = NORMAL.
 	pragmas := func(t *testing.T, db *sql.DB) (journal string, sync int) {
