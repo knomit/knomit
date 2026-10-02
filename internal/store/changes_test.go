@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -96,55 +95,6 @@ func folderPresent(t *testing.T, svc *Service, branch, dir string) bool {
 	}
 	require.NoError(t, err)
 	return true
-}
-
-// dropEmptyFolder commits, on top of branch's tip, the same tree with the
-// entry for dir removed — what git (a GitHub merge, a hand commit) produces
-// once a folder's last file is gone, and what knomit's own writer does not.
-func dropEmptyFolder(t *testing.T, svc *Service, branch, dir string) string {
-	t.Helper()
-	rh := svc.rh
-	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
-	require.NoError(t, err)
-	tip, err := rh.repo.CommitObject(ref.Hash())
-	require.NoError(t, err)
-	root, err := tip.Tree()
-	require.NoError(t, err)
-
-	var rebuild func(tr *object.Tree, parts []string) plumbing.Hash
-	rebuild = func(tr *object.Tree, parts []string) plumbing.Hash {
-		out := &object.Tree{}
-		for _, e := range tr.Entries {
-			switch {
-			case e.Name != parts[0]:
-				out.Entries = append(out.Entries, e)
-			case len(parts) == 1:
-				sub, err := tr.Tree(e.Name)
-				require.NoError(t, err)
-				require.Empty(t, sub.Entries, "fixture: only an EMPTY folder may be dropped")
-			default:
-				sub, err := tr.Tree(e.Name)
-				require.NoError(t, err)
-				e.Hash = rebuild(sub, parts[1:])
-				out.Entries = append(out.Entries, e)
-			}
-		}
-		obj := rh.repo.Storer.NewEncodedObject()
-		require.NoError(t, out.Encode(obj))
-		h, err := rh.repo.Storer.SetEncodedObject(obj)
-		require.NoError(t, err)
-		return h
-	}
-	newRoot := rebuild(root, strings.Split(dir, "/"))
-
-	sig := object.Signature{Name: "github", Email: "noreply@github.com", When: tip.Committer.When.Add(time.Second)}
-	c := &object.Commit{Author: sig, Committer: sig, Message: "merge: lane emptied", TreeHash: newRoot, ParentHashes: []plumbing.Hash{tip.Hash}}
-	obj := rh.repo.Storer.NewEncodedObject()
-	require.NoError(t, c.Encode(obj))
-	h, err := rh.repo.Storer.SetEncodedObject(obj)
-	require.NoError(t, err)
-	require.NoError(t, rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
-	return h.String()
 }
 
 func changes(t *testing.T, svc *Service, branch string, q ChangesQuery) ChangesResult {
@@ -296,19 +246,12 @@ func TestChangesUnder_MissingFolderIsEmptyTree(t *testing.T) {
 	res := changes(t, svc, "main", ChangesQuery{Since: before, Prefix: "tasks/new"})
 	require.Equal(t, []PathChange{{Path: "kb/tasks/new/first.md", Change: ChangeAdded}}, res.Changes)
 
-	// The lane's last task goes. knomit's own DeleteFact leaves an EMPTY
-	// tree entry behind (kb/tasks still lists new/, with no entries) — so
-	// this first read does NOT reach the missing-folder rule.
+	// The lane's last task goes. Like git itself (a GitHub merge, a hand
+	// commit), knomit's own DeleteFact drops the emptied folder rather than
+	// keeping an empty tree (#375), so the lane is MISSING at head — and a
+	// missing folder must read as a deletion, not as "no change".
 	deleteF(t, svc, "main", "kb/tasks/new/first.md")
-	require.True(t, folderPresent(t, svc, "main", "kb/tasks/new"), "fixture: knomit leaves an empty tree entry")
-	res = changes(t, svc, "main", ChangesQuery{Since: post, Prefix: "tasks/new"})
-	require.Equal(t, []PathChange{{Path: "kb/tasks/new/first.md", Change: ChangeDeleted}}, res.Changes)
-
-	// Git itself never writes an empty tree: a lane emptied by a GitHub
-	// merge or a hand commit on main is MISSING at head. That is the run-1
-	// path, and the one that must read as a deletion, not as "no change".
-	dropEmptyFolder(t, svc, "main", "kb/tasks/new")
-	require.False(t, folderPresent(t, svc, "main", "kb/tasks/new"), "fixture: the folder must be missing at head")
+	require.False(t, folderPresent(t, svc, "main", "kb/tasks/new"), "an emptied folder is dropped, never kept as an empty tree")
 	res = changes(t, svc, "main", ChangesQuery{Since: post, Prefix: "tasks/new"})
 	require.Equal(t, []PathChange{{Path: "kb/tasks/new/first.md", Change: ChangeDeleted}}, res.Changes)
 

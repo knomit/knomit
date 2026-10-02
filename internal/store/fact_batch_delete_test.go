@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,10 +94,12 @@ func TestBatchWriteFacts_EmptyBatchIsNoOp(t *testing.T) {
 	require.Empty(t, blobs)
 }
 
-// TestBatchWriteFacts_DeleteMissingPathFails: a deletion naming a path that
-// isn't in the tree must fail the whole batch rather than silently committing
-// the writes alone — the caller asked for both or neither.
-func TestBatchWriteFacts_DeleteMissingPathFails(t *testing.T) {
+// TestBatchWriteFacts_DeleteInMissingFolderIsNoOp: a deletion naming a path
+// whose folder does not exist is a no-op, exactly like a missing leaf in an
+// existing folder — nothing is there, so there is nothing to delete (#375,
+// option b). The batch's write still lands. Callers that need the path to
+// exist say so with BatchWriteFactsMustExist.
+func TestBatchWriteFacts_DeleteInMissingFolderIsNoOp(t *testing.T) {
 	svc := newBatchTestService(t)
 	ctx := context.Background()
 	facts := svc.Facts()
@@ -105,11 +110,70 @@ func TestBatchWriteFacts_DeleteMissingPathFails(t *testing.T) {
 	_, _, err = facts.BatchWriteFacts(ctx, "main",
 		map[string]string{"kb/b.md": testFactBody("b", 0.9, nil)},
 		[]string{"kb/nested/missing.md"},
+		"write plus absent delete", "learn")
+	require.NoError(t, err)
+
+	_, err = facts.ReadFact(ctx, "main", "kb/b.md", nil)
+	require.NoError(t, err, "the write must land; the absent delete removes nothing")
+	_, err = facts.ReadFact(ctx, "main", "kb/a.md", nil)
+	require.NoError(t, err)
+}
+
+// TestBatchWriteFacts_DeleteFailureCommitsNothing: a deletion that FAILS must
+// fail the whole batch rather than silently committing the writes alone — the
+// caller asked for both or neither. A missing folder is no longer a failure
+// (see above), so the failure here is a real one: a subtree object the tree
+// names but the store does not hold.
+func TestBatchWriteFacts_DeleteFailureCommitsNothing(t *testing.T) {
+	svc := newBatchTestService(t)
+	ctx := context.Background()
+	facts := svc.Facts()
+
+	_, err := facts.WriteFact(ctx, "main", "kb/a.md", testFactBody("a", 0.5, nil), "seed", "")
+	require.NoError(t, err)
+	before := commitBrokenSubtree(t, svc, "main", "kb", "broken")
+
+	_, _, err = facts.BatchWriteFacts(ctx, "main",
+		map[string]string{"kb/b.md": testFactBody("b", 0.9, nil)},
+		[]string{"kb/broken/x.md"},
 		"bad", "learn")
 	require.Error(t, err)
 
-	// The write was not committed on its own.
+	head, err := svc.Branches().HeadCommit(ctx, "main")
+	require.NoError(t, err)
+	require.Equal(t, before, head, "a failed batch must not move the branch")
 	_, err = facts.ReadFact(ctx, "main", "kb/b.md", nil)
 	require.True(t, errors.Is(err, ErrPathNotFound),
 		"a failed batch must not leave the write committed, got %v", err)
+}
+
+// commitBrokenSubtree commits, on top of branch's tip, a tree whose folder dir
+// gains a sub-folder entry name pointing at a tree object the store does not
+// hold, and moves the branch there. It returns the new tip.
+func commitBrokenSubtree(t *testing.T, svc *Service, branch, dir, name string) string {
+	t.Helper()
+	rh := svc.rh
+	ref, err := rh.gits.Reference(plumbing.NewBranchReferenceName(branch))
+	require.NoError(t, err)
+	tip, err := rh.repo.CommitObject(ref.Hash())
+	require.NoError(t, err)
+	root, err := tip.Tree()
+	require.NoError(t, err)
+	sub, err := root.Tree(dir)
+	require.NoError(t, err)
+
+	missing := plumbing.NewHash("1111111111111111111111111111111111111111")
+	subHash, err := upsertEntry(rh.gits, sub, object.TreeEntry{Name: name, Mode: filemode.Dir, Hash: missing})
+	require.NoError(t, err)
+	rootHash, err := upsertEntry(rh.gits, root, object.TreeEntry{Name: dir, Mode: filemode.Dir, Hash: subHash})
+	require.NoError(t, err)
+
+	c := &object.Commit{Author: tip.Author, Committer: tip.Committer, Message: "broken subtree",
+		TreeHash: rootHash, ParentHashes: []plumbing.Hash{tip.Hash}}
+	obj := rh.gits.NewEncodedObject()
+	require.NoError(t, c.Encode(obj))
+	h, err := rh.gits.SetEncodedObject(obj)
+	require.NoError(t, err)
+	require.NoError(t, rh.gits.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), h)))
+	return h.String()
 }
