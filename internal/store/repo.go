@@ -49,6 +49,12 @@ var ErrRepoReadOnly = errors.New("repo is read-only")
 // in between, and committing would silently discard it.
 var ErrFactChanged = errors.New("fact changed since it was read")
 
+// ErrInvalidPath is wrapped by every write door when it refuses the path
+// itself: empty, containing "..", or one go-git would refuse to read back
+// (#384). Nothing was written. Callers map it (IsInvalidPath) to a 400 rather
+// than a 500: the path is the caller's mistake, not a store failure.
+var ErrInvalidPath = errors.New("invalid path")
+
 // ErrFactNotLive is returned by ExplainFact (and any other HEAD-anchored read
 // path that needs to resolve a path's active commit via branch_facts) when
 // no row exists for (branch, path). This means the fact is not currently live

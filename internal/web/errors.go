@@ -19,6 +19,10 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error, defaultT
 			`no branch named "`+branch+`"`, r.URL.Path)
 		return
 	}
+	if errors.Is(err, store.ErrInvalidPath) {
+		hal.WriteProblem(w, http.StatusBadRequest, "Invalid path", err.Error(), r.URL.Path)
+		return
+	}
 	if errors.Is(err, store.ErrFactNotLive) {
 		hal.WriteProblem(w, http.StatusNotFound, "Fact not found",
 			`no live version of this fact on branch "`+branch+`" — it may have been retracted (use the commit-anchored endpoint to read older versions)`,

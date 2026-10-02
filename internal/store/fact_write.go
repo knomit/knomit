@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -13,16 +14,80 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// validatePath returns an error if path is empty or contains "..".
+// validatePath refuses a path the store must never commit, wrapping
+// ErrInvalidPath: an empty path, one containing "..", or one go-git would
+// refuse to READ back (gitReadablePath).
 // It does not normalise case; callers must lower-case before calling.
+//
+// Every write door (writeFileExact, deleteFile, batchWrite) runs it BEFORE the
+// branch lock and before the ref moves, so a refused path leaves nothing
+// behind. That ordering is the point: go-git checks tree paths only on READ
+// (FindEntry, TreeEntryFile, the tree walker under DiffTree), and those reads
+// first run in notifyCommit's im.Sync, AFTER SetReference. A path git cannot
+// read back, refused there, leaves a commit on the branch that every later
+// sync trips over (#384).
 func validatePath(path string) error {
 	if path == "" {
-		return fmt.Errorf("path must not be empty")
+		return fmt.Errorf("%w: path must not be empty", ErrInvalidPath)
 	}
 	if strings.Contains(path, "..") {
-		return fmt.Errorf("path must not contain '..'")
+		return fmt.Errorf("%w %q: path must not contain '..'", ErrInvalidPath, path)
+	}
+	if err := gitReadablePath(path); err != nil {
+		return fmt.Errorf("%w %q: %v", ErrInvalidPath, path, err)
 	}
 	return nil
+}
+
+// gitErrInvalidPath is go-git's own invalid-path sentinel
+// (internal/pathutil.ErrInvalidPath), which every refusal of ValidTreePath
+// wraps. The package is internal, so the sentinel is recovered by unwrapping
+// the error of a probe that is invalid under any version of the rule (a NUL
+// byte). TestGitErrInvalidPath_Recovered fails if a go-git upgrade stops
+// wrapping it, rather than letting gitReadablePath silently accept everything.
+var gitErrInvalidPath = func() error {
+	_, err := (&object.Tree{}).FindEntry("\x00")
+	return errors.Unwrap(err)
+}()
+
+// gitReadablePath reports go-git's own refusal of path, or nil when go-git
+// would read it back. It does not restate the rule (control characters, "."
+// and ".." components, .git and its HFS+/NTFS disguises such as git~1 or a
+// zero-width-joined .git, volume names): it ASKS go-git, through the same
+// ValidTreePath gate its readers apply, so the store can neither refuse a path
+// git reads nor accept one it refuses, and cannot drift on an upgrade.
+//
+// Two gates, because go-git's readers apply the rule at two granularities:
+// FindEntry and TreeEntryFile validate the whole path, while the tree walker
+// (DiffTree, ListAllWithHash) validates each entry NAME. They differ only on
+// Windows, where a volume name ("c:") is refused as a component but not
+// mid-path. The lookups run on an empty in-memory tree, so they touch no
+// storage: a valid path simply is not found.
+func gitReadablePath(path string) error {
+	empty := &object.Tree{}
+	if _, err := empty.FindEntry(path); errors.Is(err, gitErrInvalidPath) {
+		return err
+	}
+	for _, name := range strings.Split(path, "/") {
+		if name == "" {
+			// An empty segment ("x//y") is not a read-back refusal: the
+			// whole-path gate splits it away. Asked alone, FindEntry("")
+			// would refuse it, so asking would widen the rule beyond git's.
+			continue
+		}
+		if _, err := empty.FindEntry(name); errors.Is(err, gitErrInvalidPath) {
+			return err
+		}
+	}
+	return nil
+}
+
+// IsInvalidPath reports whether err is a refusal of the path itself: the
+// store's own (ErrInvalidPath) or go-git's, from a read of a path go-git will
+// not look up. It is ERROR MAPPING for callers that answer a client, so a bad
+// path in a request reads as the client's mistake (400), not a store failure.
+func IsInvalidPath(err error) bool {
+	return errors.Is(err, ErrInvalidPath) || (gitErrInvalidPath != nil && errors.Is(err, gitErrInvalidPath))
 }
 
 // writeFile writes content to path in a new commit with message on branch,
