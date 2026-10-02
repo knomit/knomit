@@ -232,6 +232,10 @@ func TestBearer_ExpiredAccessRefreshesOnceAndReplays(t *testing.T) {
 	if n, err := res.RowsAffected(); err != nil || n != 1 {
 		t.Fatalf("expired %d access tokens (%v), want exactly the one login minted", n, err)
 	}
+	// The fixture answers 401 for ANY verify error; this pins that the first 401 is expiry.
+	if _, err := f.store.LookupAccess(context.Background(), first.AccessToken); !errors.Is(err, oauth.ErrExpired) {
+		t.Fatalf("LookupAccess after aging the token = %v, want oauth.ErrExpired", err)
+	}
 
 	resp, err := NewHTTPClient("", true, 5*time.Second).Post(f.srv.URL+"/protected", "text/plain", strings.NewReader("payload"))
 	if err != nil {
