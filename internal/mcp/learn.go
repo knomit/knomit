@@ -1170,7 +1170,7 @@ func uncountedMergeNotes(uncounted map[int]string, facts []fact.Fact) []string {
 		if i >= len(facts) {
 			continue
 		}
-		notes = append(notes, fmt.Sprintf("fact %d: merged into %s; %s, sources unchanged.",
+		notes = append(notes, fmt.Sprintf("fact %d: merged into existing fact %s; %s, sources unchanged.",
 			i, facts[i].Path(), uncounted[i]))
 	}
 	return notes

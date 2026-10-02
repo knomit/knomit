@@ -41,16 +41,19 @@ func RefIdentity(raw, localRepoID string) string {
 }
 
 func normalizeURL(raw string) string {
-	if i := strings.Index(raw, "#"); i >= 0 {
-		raw = raw[:i]
-	}
-	raw = strings.TrimSuffix(raw, "/")
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" {
-		return raw
+		// Unparseable: fall back to the old string-level normalization.
+		if i := strings.Index(raw, "#"); i >= 0 {
+			raw = raw[:i]
+		}
+		return strings.TrimSuffix(raw, "/")
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
 	u.Host = strings.ToLower(u.Host)
+	u.Fragment, u.RawFragment = "", ""
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	u.RawPath = strings.TrimSuffix(u.RawPath, "/")
 	return u.String()
 }
 

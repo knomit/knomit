@@ -567,3 +567,31 @@ func TestApplyReinforcements_SkipsAnIllegalTypeOriginPairing(t *testing.T) {
 		"the refusal must name the origin, or the assertion cannot tell the fidelity "+
 			"check from any other refusal — which is the shadowing that produced M5")
 }
+
+// A target whose prior refs spell the seeds as BARE local paths, reinforced with
+// the seeds in canonical kb://<localRepoID>/<path> form (what Canonicalize
+// hands the membership test), must not gain them again nor bump sources: the
+// membership check compares ref identity, not raw strings (#361).
+func TestApplyReinforcements_BarePriorRefAndCanonicalSeedAreTheSameRef(t *testing.T) {
+	env := newReinforceEnv(t)
+	ctx := context.Background()
+
+	target := env.read(reinforcePath)
+	target.Refs = []string{seedOnePath, seedTwoPath} // bare, as an older fact may carry them
+	content, err := fact.SerializeFact(target)
+	require.NoError(t, err)
+	_, err = env.svc.Facts().WriteFact(ctx, env.branch, reinforcePath, content, "bare seed refs", "test")
+	require.NoError(t, err)
+	before := env.read(reinforcePath)
+	require.Equal(t, []string{seedOnePath, seedTwoPath}, before.Refs, "fixture must keep the bare spelling")
+
+	canon := func(p string) string { return "kb://" + env.repoID + "/" + p }
+	r := goodReinforcement()
+	r.Refs = flexStrings{canon(seedOnePath), canon(seedTwoPath)}
+
+	require.Empty(t, env.apply(r), "both seeds are already derivation paths, spelled differently")
+	after := env.read(reinforcePath)
+	require.Equal(t, before.Refs, after.Refs)
+	require.Equal(t, before.Sources, after.Sources)
+	require.Equal(t, before.EvidenceWeight, after.EvidenceWeight)
+}

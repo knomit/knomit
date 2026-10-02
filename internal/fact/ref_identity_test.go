@@ -19,6 +19,7 @@ func TestRefIdentity(t *testing.T) {
 		{src(h("1"), h("a"), ""), src(h("1"), h("a"), "#L3-L9")},
 		{"https://Example.ORG/p", "https://example.org/p/"},
 		{"https://example.org/p", "https://example.org/p#frag"},
+		{"https://E.org/p/#x", "https://e.org/p"},
 	}
 	for _, p := range same {
 		require.Equal(t, RefIdentity(p[0], local), RefIdentity(p[1], local), "%v", p)
@@ -26,6 +27,7 @@ func TestRefIdentity(t *testing.T) {
 	diff := [][2]string{
 		{src(h("1"), h("a"), ""), src(h("1"), h("b"), "")},
 		{"https://example.org/p?a=1", "https://example.org/p?a=2"},
+		{"https://e.org/p?a=/", "https://e.org/p?a="}, // a trailing slash inside the query is part of the query
 		{"kb/x/y.md", "kb://bbbbbbbbbbbb/kb/x/y.md"},
 		{"kb/x/y.md", "https://example.org/kb/x/y.md"},
 		{"src://aaaaaaaaaaaa/x.go@" + h("1"), "src://aaaaaaaaaaaa/x.go@" + h("2")}, // legacy: commit counts
