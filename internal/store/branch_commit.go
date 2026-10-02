@@ -13,24 +13,68 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// authorSig returns the author signature for a given operation.
-func (rh *repoHandler) authorSig(branch, operation string) object.Signature {
-	agentID := deriveAgentID(branch)
-	return object.Signature{
-		Name:  agentID,
-		Email: agentID + "+" + operation + "@agents.knomit.io",
-		When:  time.Now(),
+// commitSigs returns the author signature (for a given operation) and the
+// committer signature (stable per agent) of a commit written ON branch.
+//
+// Every authored commit — writeFileExact, deleteFile, batchWriteLocked and the
+// merge commit in mergeIntoBranch — takes its identity from here, so the rule
+// lives in one place: the author is the AGENT whose key signs the commit, not
+// the branch it lands on. For an agent branch that is deriveAgentID(branch);
+// for an experiment branch it is the experiment's owning agent (#394).
+func (rh *repoHandler) commitSigs(ctx context.Context, branch, operation string) (author, committer object.Signature, err error) {
+	agentID, err := rh.commitAgentID(ctx, branch)
+	if err != nil {
+		return object.Signature{}, object.Signature{}, err
 	}
+	now := time.Now()
+	author = object.Signature{Name: agentID, Email: agentID + "+" + operation + "@agents.knomit.io", When: now}
+	committer = object.Signature{Name: agentID, Email: agentID + "@agents.knomit.io", When: now}
+	return author, committer, nil
 }
 
-// committerSig returns the committer signature (stable per agent).
-func (rh *repoHandler) committerSig(branch string) object.Signature {
-	agentID := deriveAgentID(branch)
-	return object.Signature{
-		Name:  agentID,
-		Email: agentID + "@agents.knomit.io",
-		When:  time.Now(),
+// commitAgentID names the agent a commit on branch is authored as.
+//
+// An experiment branch (exp/<name>) is NOT an agent: its commits are signed by
+// this instance's key, so they are authored by the agent branch the experiment
+// was forked from — its RECORDED parent (experiments.parent_branch). Authoring
+// them `exp/<name>` (the old behaviour, deriveAgentID's verbatim fallback) made
+// the acceptance gate look up a member record at an id no member has
+// (agentIDOfAuthor) and showed experiment names in every per-author count.
+//
+// It never falls back to the experiment's name. Each case where the owning
+// agent cannot be named is an error, and the write is refused before any
+// object is built:
+//   - no experiments row for the branch (an orphan ref: its parentage is
+//     unknowable — ErrOrphanExperimentRef);
+//   - a recorded parent that is empty or is itself an experiment branch;
+//   - a recorded parent that is not this database's KNOWN agent branch owner
+//     (the repo was taken over since the fork — ErrStaleExperimentParent, the
+//     same refusal commit and sync give).
+//
+// An EMPTY owner is unknown, not a mismatch (checkExperimentParentCurrent):
+// the recorded parent names the agent then.
+//
+// deriveAgentID / AgentIDOf keep their meaning; only the experiment case is
+// resolved here.
+func (rh *repoHandler) commitAgentID(ctx context.Context, branch string) (string, error) {
+	name, isExp := ExperimentNameOf(branch)
+	if !isExp {
+		return deriveAgentID(branch), nil
 	}
+	exp, ok, err := rh.GetExperiment(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("author of %s: %w", branch, err)
+	}
+	if !ok {
+		return "", fmt.Errorf("author of %s: %w: no experiment record names its owning agent", branch, ErrOrphanExperimentRef)
+	}
+	if exp.Parent == "" || IsExperimentBranch(exp.Parent) {
+		return "", fmt.Errorf("author of %s: recorded parent %q is not an agent branch", branch, exp.Parent)
+	}
+	if err := rh.checkExperimentParentCurrent(ctx, exp); err != nil {
+		return "", fmt.Errorf("author of %s: %w", branch, err)
+	}
+	return deriveAgentID(exp.Parent), nil
 }
 
 // notifyCommit runs the post-commit side effects for a new commit on branch:

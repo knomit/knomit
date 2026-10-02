@@ -235,12 +235,12 @@ func TestTrace_MomentNameMustBeOneLine(t *testing.T) {
 	require.Equal(t, head, headOf(t, ri, "agent/test"), "nothing was written")
 }
 
-// The five write tools declare `trace` in their served schema, as an object
+// The five write tools and knomit_experiment declare `trace` in their served schema, as an object
 // of string values. review and hypothesize refuse undeclared arguments, so
 // without this a trace there is "unknown argument". Sabotage: drop traceArg()
 // from one tool.
 func TestTrace_DeclaredOnTheFiveWriteTools(t *testing.T) {
-	for _, tool := range []mcpgo.Tool{learnTool(), updateTool(), retractTool(), reviewTool(), hypothesizeTool()} {
+	for _, tool := range []mcpgo.Tool{learnTool(), updateTool(), retractTool(), reviewTool(), hypothesizeTool(), experimentTool()} {
 		prop, ok := tool.InputSchema.Properties["trace"].(map[string]any)
 		require.True(t, ok, "%s has no trace argument", tool.Name)
 		require.Equal(t, "object", prop["type"], tool.Name)

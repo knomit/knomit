@@ -269,10 +269,12 @@ func TestMissionTemplate_WorkTaskSkill(t *testing.T) {
 		"`topic: inbox`, `category: <agent-id>/active`",
 		"`expires: <the context's lease>`",
 		// the experiment per task
-		"`knomit_experiment` with `action: \"open\"` and the experiment name, on the knowledge-base handle",
+		// (each with the copy's trace: #349 extended to experiments)
+		"`knomit_experiment` with `action: \"open\"`, the experiment name and the copy's trace, on the knowledge-base handle",
 		"`open` resumes it",
-		"`knomit_experiment` `action: \"commit\"` on the knowledge-base handle",
-		"`knomit_experiment` `action: \"rollback\"` on the knowledge-base handle",
+		"`knomit_experiment` `action: \"commit\"` with the copy's trace on the knowledge-base handle",
+		"`knomit_experiment` `action: \"rollback\"` with the copy's trace on the knowledge-base handle",
+		"AND on every `knomit_experiment` `open`, `commit` and `rollback`",
 		// the ack: one move on the mission handle
 		"`knomit_learn` on the MISSION handle with one fact AND `retract: [<your active copy's path>]`",
 		// the trace

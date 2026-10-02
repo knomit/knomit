@@ -84,9 +84,13 @@ func (s *Service) TestingCommitFiles(branch string, files map[string]string, mes
 	if err != nil {
 		return "", err
 	}
+	author, committer, err := rh.commitSigs(ctx, branch, "learn")
+	if err != nil {
+		return "", err
+	}
 	c := &object.Commit{
-		Author:       rh.authorSig(branch, "learn"),
-		Committer:    rh.committerSig(branch),
+		Author:       author,
+		Committer:    committer,
 		Message:      message,
 		TreeHash:     root,
 		ParentHashes: []plumbing.Hash{parent},

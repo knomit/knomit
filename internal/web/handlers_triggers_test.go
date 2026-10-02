@@ -212,8 +212,11 @@ func TestSSE_TriggerOnlyOnItsBranchStream(t *testing.T) {
 // TriggersByRun (F07 PR 5, D5): a `do: run` fire's run id finds exactly its
 // two rows on GET …/triggers?run=<id> — `started`, then the recipe's result —
 // both with that run_id, the same trace and recipe_source; ?run replaces the
-// recent log; a malformed id is a 400. Sabotage: serve ?run from the recent
-// log (red: the other rows show) or skip the id check (red: no 400).
+// recent log; a malformed id is a 400. Since rehearsal finding F5 the answer
+// is ONLY that run's rows (no trigger state) with two runs in the fixture, and
+// the done row's text is in `message`, not `error`. Sabotage: serve ?run from
+// the recent log (red: the other rows show), wrap the rows in the whole
+// report again (red: `triggers` present), or skip the id check (red: no 400).
 func TestREST_TriggersByRun(t *testing.T) {
 	m, home := newTestLensManager(t, "alpha")
 	require.NoError(t, os.MkdirAll(filepath.Join(home, "recipes"), 0o755))
@@ -231,41 +234,60 @@ func TestREST_TriggersByRun(t *testing.T) {
 	r := (&Server{Manager: m, AgentBranch: "machine/test", OntologyRoot: "kb"}).NewAPIRouter()
 	base := "/repos/alpha/branches/" + urlBranch(ri.AgentBranch()) + "/triggers"
 	waitTriggersHead(t, r, base, head)
+	// TWO runs, so "only this run's rows" is falsifiable against another run.
 	seedOn(t, ri, ri.AgentBranch(), "kb/tasks/a/fire.md")
+	seedOn(t, ri, ri.AgentBranch(), "kb/tasks/a/fire-2.md")
 
-	var id string
+	var ids []string
 	require.Eventually(t, func() bool {
 		_, p := getTriggers(t, r, base+"?log=50")
+		ids = ids[:0]
+		done := 0
 		for _, f := range p.Fires {
 			if f.Trigger == "work" && f.Outcome == store.TriggerOutcomeStarted {
-				id = f.RunID
+				ids = append(ids, f.RunID)
+			}
+			if f.Trigger == "work" && f.Outcome == store.TriggerOutcomeDone {
+				done++
 			}
 		}
-		return id != ""
-	}, 20*time.Second, 20*time.Millisecond, "the started row never showed")
+		return len(ids) == 2 && done == 2
+	}, 20*time.Second, 20*time.Millisecond, "both runs never finished")
+	id, other := ids[0], ids[1]
 	require.Regexp(t, `^run-[0-9a-f]{32}$`, id)
+	require.NotEqual(t, id, other)
 
-	var page triggersPage
-	require.Eventually(t, func() bool {
-		rec, p := getTriggers(t, r, base+"?log=50&run="+id)
-		page = p
-		return rec.Code == http.StatusOK && len(p.Fires) == 2
-	}, 20*time.Second, 20*time.Millisecond, "the run's two rows never showed: %+v", page.Fires)
+	rec, page := getTriggers(t, r, base+"?log=50&run="+id)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, page.Fires, 2, "exactly this run's two rows: %+v", page.Fires)
 	require.Equal(t, store.TriggerOutcomeStarted, page.Fires[0].Outcome)
 	require.Equal(t, store.TriggerOutcomeDone, page.Fires[1].Outcome)
-	require.Equal(t, "ran "+id, page.Fires[1].Error, "the recipe saw run.id")
+	require.Equal(t, "ran "+id, page.Fires[1].Message, "the recipe saw run.id; a done row's text is a message")
+	require.Empty(t, page.Fires[1].Error, "F5: a done row carries no error")
 	for _, f := range page.Fires {
-		require.Equal(t, id, f.RunID)
+		require.Equal(t, id, f.RunID, "never the other run's rows")
 		require.Equal(t, "work", f.Trigger)
 		require.Equal(t, page.Fires[0].Trace, f.Trace)
 		require.Equal(t, store.RecipeSourceLocal, f.RecipeSource)
 	}
+	// ONLY the run's rows (F5): no declared triggers, statistics, run
+	// summary, head or ontology blob — the whole trigger state is not sent.
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	for _, k := range []string{"triggers", "runs", "head", "ontology_blob", "enabled"} {
+		require.NotContains(t, raw, k, "?run= returns only the run's rows")
+	}
+	require.Equal(t, id, raw["run"])
+	require.Equal(t, ri.AgentBranch(), raw["branch"])
+
+	// The plain report still has the whole state.
+	_, full := getTriggers(t, r, base+"?log=50")
 	found := false
-	for _, tr := range page.Triggers {
+	for _, tr := range full.Triggers {
 		if tr.Name == "work" {
 			found = true
 			require.Equal(t, "worker", tr.Recipe)
-			require.Equal(t, int64(1), tr.Stats.Started)
+			require.Equal(t, int64(2), tr.Stats.Started)
 		}
 	}
 	require.True(t, found)

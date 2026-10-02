@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -94,6 +95,10 @@ func identityInitMasterCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "# fleet root created in %s (root.key is passphrase-encrypted; keep this directory OFF fleet machines)\n", dir)
+			// The value each instance confirms with `identity install --root`.
+			if id, err := pki.RootID(root.Cert); err == nil {
+				fmt.Fprintf(out, "# fleet root fingerprint: %s (give it to each instance for `knomit identity install --root`)\n", id)
+			}
 			_, err = out.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Cert.Raw}))
 			return err
 		},
@@ -212,7 +217,24 @@ bundle's fleet root fingerprint is printed and must be confirmed against the
 fingerprint the fleet operator gave you out of band: with --root <fingerprint>,
 by answering the prompt (only when --bundle is a file and stdin is a
 terminal), or by --yes. A bundle under the root already installed (a renewal)
-needs no confirmation.`,
+needs no confirmation.
+
+The fingerprint --root takes is 64 hex characters (either case): the SHA-256
+of the fleet root public key's SSH wire encoding, the same rule knomit uses
+for an instance key's fingerprint. It is NOT what
+` + "`openssl x509 -noout -fingerprint -sha256`" + ` prints: that hashes the
+root certificate, not its key. Ways to get it:
+
+  - the operator: ` + "`knomit identity init-master`" + ` prints it on its
+    "# fleet root fingerprint:" line;
+  - the operator, later, in the master directory (asks for the root
+    passphrase):
+      ssh-keygen -y -f root.key | awk '{print $2}' | base64 -d | shasum -a 256
+    (` + "`ssh-keygen -l -E sha256`" + ` on that public key shows the same
+    digest in base64, not hex);
+  - on the instance: ` + "`knomit identity install`" + ` without --root prints
+    it as "bundle fleet root:" (compare it with the operator's value), and
+    ` + "`knomit identity show`" + ` prints the installed root as "root:".`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := config.Load()
 			if err != nil {
@@ -239,7 +261,7 @@ needs no confirmation.`,
 	}
 	c.Flags().StringVar(&bundlePath, "bundle", "", "bundle file from `knomit identity enroll` (default/-: stdin)")
 	c.Flags().BoolVar(&opts.replaceRoot, "replace-root", false, "allow a bundle from a DIFFERENT fleet root (moves this instance to another fleet; the new root must still be confirmed)")
-	c.Flags().StringVar(&opts.root, "root", "", "the fleet root fingerprint the operator gave you out of band: confirms a bundle whose root matches it")
+	c.Flags().StringVar(&opts.root, "root", "", "the fleet root fingerprint the operator gave you out of band (64 hex: SHA-256 of the root key's SSH encoding, NOT openssl's certificate fingerprint): confirms a bundle whose root matches it")
 	c.Flags().BoolVar(&opts.yes, "yes", false, "trust the bundle's fleet root without confirming it")
 	return c
 }
@@ -325,6 +347,35 @@ func orNone(fp string) string {
 	return fp
 }
 
+// rootFingerprintForm is the one form --root takes, and where to get it: the
+// help text, the refusal of a malformed value and the fleet docs say the same.
+const rootFingerprintForm = "the fleet root fingerprint: 64 hex characters, the SHA-256 of the root " +
+	"public key's SSH wire encoding (the same rule as an instance key's fingerprint). Get it from the operator, who " +
+	"has it from `knomit identity init-master` (its `# fleet root fingerprint:` line) or can recompute it in the " +
+	"master directory with `ssh-keygen -y -f root.key | awk '{print $2}' | base64 -d | shasum -a 256`; on an " +
+	"instance, `knomit identity install` without --root prints it as `bundle fleet root:` and " +
+	"`knomit identity show` prints the installed one as `root:`"
+
+// rootFingerprintRe is the form --root takes once trimmed and lowercased.
+var rootFingerprintRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// parseRootFingerprint normalises --root (surrounding space, case) and
+// refuses anything that is not the 64-hex root fingerprint, naming the form
+// and where to get it. A value that looks like `openssl x509 -fingerprint`
+// output is called out: that hashes the root CERTIFICATE, not its key, so it
+// can never match, whatever its format.
+func parseRootFingerprint(s string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(s))
+	if rootFingerprintRe.MatchString(v) {
+		return v, nil
+	}
+	hint := ""
+	if strings.Contains(v, "fingerprint=") || strings.Contains(v, ":") {
+		hint = " (this looks like `openssl x509 -fingerprint` output, which hashes the root CERTIFICATE, not its key: a different value)"
+	}
+	return "", fmt.Errorf("--root %q is not a fleet root fingerprint%s; --root takes %s; nothing was installed", s, hint, rootFingerprintForm)
+}
+
 // confirmRoot shows the bundle's root and principal and returns nil only if
 // the user confirmed that root: --root naming it, --yes, or "y" at the
 // prompt. Without any of them it refuses, naming the fingerprint and the
@@ -336,7 +387,11 @@ func confirmRoot(out io.Writer, p pki.BundlePreview, installed pki.RootInfo, opt
 	fmt.Fprintf(out, "bundle fleet root: %s (%q)\nprincipal: %s\n", p.Root.Fingerprint, p.Root.CommonName, p.Principal)
 	switch {
 	case opts.root != "":
-		if !strings.EqualFold(strings.TrimSpace(opts.root), p.Root.Fingerprint) {
+		given, err := parseRootFingerprint(opts.root)
+		if err != nil {
+			return err
+		}
+		if given != p.Root.Fingerprint {
 			return fmt.Errorf("--root %s is not the bundle's fleet root %s; nothing was installed", opts.root, p.Root.Fingerprint)
 		}
 		return nil
@@ -456,6 +511,9 @@ func showIdentity(out io.Writer, cfg config.Config) error {
 		id := st.Cert
 		fmt.Fprintf(out, "principal: %s:%s@cert\nsan: %s\nserial: %s\nnot_after: %s\n",
 			pki.PrincipalKind(id.Role), id.Fingerprint, pki.SAN(id.Role, id.Host, id.Fingerprint), id.Serial.Text(16), id.NotAfter.Format(time.RFC3339))
+	}
+	if st.Root != nil {
+		fmt.Fprintf(out, "root: %s (%q)\n", st.Root.Fingerprint, st.Root.CommonName)
 	}
 	if st.CRL != nil {
 		fmt.Fprintf(out, "crl_number: %s\ncrl_next_update: %s\n", st.CRL.Number, st.CRL.NextUpdate.Format(time.RFC3339))

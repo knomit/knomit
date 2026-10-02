@@ -407,17 +407,21 @@ The prompt hands the session a `trace`: `Knomit-Cause` (the commit that
 fired), `Knomit-Run` (this run's id) and `Knomit-Trace` (the task id,
 included only when it is a plain id). The `work-task` skill tells the
 session to pass it as the `trace` argument on every knomit write for that
-copy (the take, the results, the ack), so a task's story (the trigger
+copy (the take, the results, the experiment's `open`, `commit` and
+`rollback`, the ack), so a task's story (the trigger
 scripts' writes, the session's results and the ack) reads back with
 `git log --all --grep='^Knomit-Trace: <task id>'` (or
 `--grep='^Knomit-Run: <run id>'` for one run). For every other copy it takes,
 the session builds the trace itself: `Knomit-Trace` = that copy's task id,
 the same `Knomit-Run`, and no `Knomit-Cause`.
 
-**Known gaps:** a write the session makes without the trace is untraced, and
-`knomit_experiment` takes no trace, so the merge commit that lands an
-experiment on the knowledge base carries none (the fact commits inside it
-keep theirs).
+`knomit_experiment` takes the same `trace` and stamps it on the merge commit
+its `commit` (or `sync`) writes. A `commit` that fast-forwards writes no new
+commit, so there is nothing new to stamp: the fact commits it lands already
+carry the trace their writes were given. `open` and `rollback` make no
+commit; the trace is still validated there, so pass it anyway.
+
+**Known gap:** a write the session makes without the trace is untraced.
 
 ## Re-offering
 

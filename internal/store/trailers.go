@@ -86,7 +86,9 @@ type trailersCtxKey struct{}
 // three builders every WriteFact / WriteFactIfUnchanged / DeleteFact /
 // BatchWriteFacts reaches — ends with the set as its last paragraph. Merge,
 // replay and reconcile commits are built elsewhere and never see it: a
-// transport commit carries no trailer and strips none.
+// transport commit carries no trailer and strips none. The ONE exception is
+// an experiment's own merge (CommitExperiment, SyncExperiment), which opts the
+// ctx set in explicitly through mergeOpts.trace (appendTrailersToParagraph).
 //
 // The transport is a ctx value (precedent: WithPrecomputedEmbeddings) so the
 // four FactIndex write methods and their callers keep their signatures; the
@@ -145,7 +147,13 @@ func appendTrailers(message string, t Trailers) string {
 	if t.IsZero() {
 		return message
 	}
-	out := strings.TrimRight(message, "\n") + "\n\n"
+	return strings.TrimRight(message, "\n") + "\n\n" + t.lines()
+}
+
+// lines renders the non-empty keys of t, one `Key: value` line each, in the
+// fixed order appendTrailers documents.
+func (t Trailers) lines() string {
+	var out string
 	if t.Trace != "" {
 		out += TrailerTrace + ": " + t.Trace + "\n"
 	}
@@ -166,4 +174,25 @@ func appendTrailers(message string, t Trailers) string {
 		}
 	}
 	return out
+}
+
+// appendTrailersToParagraph is appendTrailers for a message that may ALREADY
+// end with a trailer paragraph — a merge commit's conflict record (key per
+// path, appendTrailerLines). The trace lines join THAT paragraph, after the
+// record, instead of opening a new one: both TrailerValue (Knomit-Trace) and
+// TrailerValues (the conflict record) read only the LAST paragraph, so a
+// second paragraph would hide the record from its readers. With no trailer
+// paragraph it is appendTrailers.
+//
+// Used only by an experiment's own merges (CommitExperiment, SyncExperiment),
+// which opt in through mergeOpts.trace; every other merge stays unstamped.
+func appendTrailersToParagraph(message string, t Trailers) string {
+	if t.IsZero() {
+		return message
+	}
+	msg := strings.TrimRight(message, "\n")
+	if i := strings.LastIndex(msg, "\n\n"); i >= 0 && isTrailerParagraph(msg[i+2:]) {
+		return msg + "\n" + t.lines()
+	}
+	return appendTrailers(message, t)
 }

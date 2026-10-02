@@ -1205,8 +1205,10 @@ func (cr *changeReader) metaOf(ctx context.Context, commit plumbing.Hash) commit
 		}
 		// fp only when the SSHSIG verifies over the payload; never from the
 		// embedded key alone. `source` is decided by the SIGNER, not the
-		// author text: an experiment's commits are authored exp/<name> yet
-		// signed by this instance, so they are local.
+		// author text. (An experiment's commits are authored by the agent
+		// that owns the experiment and signed by this instance, #394; before
+		// that fix they were authored exp/<name>, and history keeps such
+		// commits — the signer, not the author, still makes them local.)
 		if signer, err := cr.tr.CommitSignerOf(ctx, commit); err == nil {
 			m.fp = signer.Fingerprint
 		}

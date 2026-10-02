@@ -190,6 +190,22 @@ func TestScriptTools_TrailersThroughUnchangedHandlers(t *testing.T) {
 // host passes those options through unchanged — is REFUSED, even an empty one,
 // and nothing is written; the same for learn reached with a trace. Sabotage:
 // let WithAgentTrace overwrite (or merge into) the existing set.
+// knomit_experiment applies the same rule (#349 extended to experiments). No
+// script or recipe host exposes knomit_experiment today, so this calls the
+// handler DIRECTLY under a ctx that carries knomit's own set — what a host
+// would hand it — and checks the refusal comes before anything is opened.
+// Sabotage: drop applyTrace from ExperimentHandler (red: the open runs).
+func TestExperimentHandler_AgentTraceRefusedOnKnomitsSet(t *testing.T) {
+	ri := newLearnTestRepo(t, fact.CodeOntology())
+	ctx := scriptCtx(t, ri, store.Trailers{Trace: "story-1", Cause: strings.Repeat("c", 40), Trigger: "inbox"})
+	for _, trace := range []map[string]any{{"Knomit-Trace": "other-story"}, {}} {
+		text, isErr := callHandler(t, ExperimentHandler(nil), ctx, map[string]any{"action": "open", "name": "from-a-host", "trace": trace})
+		require.True(t, isErr, text)
+		require.Contains(t, text, "already carries knomit's own trace entries")
+		require.Empty(t, headOf(t, ri, "exp/from-a-host"), "nothing was opened")
+	}
+}
+
 func TestScriptTools_AgentTraceRefusedOnKnomitsSet(t *testing.T) {
 	ri := newLearnTestRepo(t, fact.CodeOntology())
 	tools := NewScriptTools(nil)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -216,4 +217,41 @@ func TestUpdateHandler_RejectsPrivatePath(t *testing.T) {
 	res, err := svc.Facts().ReadFact(ctx, "agent/test", path, nil)
 	require.NoError(t, err)
 	require.Equal(t, content, res.Content, "the refused update must not have landed")
+}
+
+// TestUpdateHandler_CommitRecordsMomentName (rehearsal finding F7): the
+// update's commit carries its moment_name the way retract's does —
+// `update(<moment>): <title>` — so a label such as `corroborate: <path>` can
+// be found in history. Before the fix the message was always
+// `update: <title>` and the label was validated, then dropped. Sabotage:
+// restore `update: %s` (red: the label is missing from the message).
+func TestUpdateHandler_CommitRecordsMomentName(t *testing.T) {
+	svc, ctx, emb := newPrinciplesTestRepo(t)
+	seed, err := LearnHandler(emb)(ctx, principleLearnReq("seed", 0.8, []any{"global"}))
+	require.NoError(t, err)
+	require.False(t, seed.IsError, "seed must succeed: %s", resultText(t, seed))
+	path := mergedFactPath(t, seed)
+
+	var req mcpgo.CallToolRequest
+	req.Params.Arguments = map[string]any{
+		"file":        path,
+		"moment_name": "corroborate: kb/evidence/one.md",
+		"updates":     map[string]any{"confidence": 0.9},
+	}
+	res, err := UpdateHandler()(ctx, req)
+	require.NoError(t, err)
+	require.False(t, res.IsError, "update must succeed: %s", resultText(t, res))
+	var out struct {
+		Commit string `json:"commit"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, res)), &out))
+	require.NotEmpty(t, out.Commit, "fixture: the update must report its commit")
+
+	head, err := svc.Branches().HeadCommit(context.Background(), "agent/test")
+	require.NoError(t, err)
+	require.Equal(t, out.Commit, head, "fixture: the update's commit is the head")
+	info, err := svc.Triggers().CommitInfo(context.Background(), plumbing.NewHash(head))
+	require.NoError(t, err)
+	require.Equal(t, "update(corroborate: kb/evidence/one.md): Test Principle", info.Message,
+		"the commit message carries the moment label, then the fact's title, and nothing else")
 }
