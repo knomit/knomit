@@ -37,7 +37,7 @@ func updateTool() mcpgo.Tool {
 		),
 		mcpgo.WithString("moment_name",
 			mcpgo.Required(),
-			mcpgo.Description("A short label for this update moment."),
+			mcpgo.Description("A short label for this update moment, one line. It is recorded in the commit message as `update(<label>): <fact title>`."),
 		),
 		mcpgo.WithObject("updates",
 			mcpgo.AdditionalProperties(false),
@@ -396,7 +396,11 @@ func UpdateHandler() func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallTo
 		if err := checkRoundtrip(file, fact, serialized); err != nil {
 			return mcpgo.NewToolResultError(err.Error()), nil
 		}
-		commitMsg := fmt.Sprintf("update: %s", fact.Title)
+		// The moment label is recorded the way retract records it: in
+		// parentheses after the operation, then the object (here the fact's
+		// title), so a grep for '^update(corroborate' finds it. It is one
+		// line (checkMomentName above), so it cannot open a paragraph.
+		commitMsg := fmt.Sprintf("update(%s): %s", momentName, fact.Title)
 		writeRes, err := s.facts.WriteFactIfUnchanged(ctx, writeBranch, file, serialized, commitMsg, "update", readResult.BlobHash)
 		if errors.Is(err, store.ErrFactChanged) {
 			reason := "the fact changed while this update was being applied"

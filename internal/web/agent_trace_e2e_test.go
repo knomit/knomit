@@ -112,7 +112,7 @@ func TestAgentTrace_E2E_StampsEachWriteAndNothingWithout(t *testing.T) {
 		// traced, it is followed by exactly the trace paragraph.
 		bare := map[string]string{
 			"learn":   "learn: session work",
-			"update":  "update: Fact one " + suffix,
+			"update":  "update(session work): Fact one " + suffix,
 			"move":    "move: session work",
 			"retract": "retract(session work): " + file2,
 		}
