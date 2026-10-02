@@ -30,8 +30,17 @@ func registerVec() {
 				// Apply per-connection performance pragmas. These must run in
 				// ConnectHook so every connection in the pool is configured —
 				// db.Exec() only reaches one connection.
+				//
+				// synchronous is chosen per connection, so a test binary's
+				// fast-durability switch (fastDurability, test_durability.go;
+				// set in TestMain, before any open) reaches every pooled
+				// connection. Outside a test binary it is always NORMAL.
+				syncPragma := "PRAGMA synchronous = NORMAL"
+				if fastDurability() {
+					syncPragma = "PRAGMA synchronous = OFF"
+				}
 				for _, p := range []string{
-					"PRAGMA synchronous = NORMAL",
+					syncPragma,
 					"PRAGMA cache_size = -65536",   // 64 MB page cache
 					"PRAGMA mmap_size = 268435456", // 256 MB memory-mapped I/O
 					"PRAGMA temp_store = MEMORY",

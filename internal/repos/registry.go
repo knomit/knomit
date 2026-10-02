@@ -19,6 +19,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"knomit/internal/store"
 	storemigrate "knomit/internal/store/migrate"
 )
 
@@ -135,7 +136,10 @@ func OpenRegistry(path string) (*Registry, error) {
 // controlUp; the split lets a caller observe whether the repos table was
 // already there (SchemaExisted) before anything creates it.
 func OpenRegistryNoSchema(path string) (*Registry, error) {
-	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL")
+	// store.SyncDSNParam is "" outside a test binary that asked for fast
+	// durability (#365), so production control.db keeps go-sqlite3's WAL
+	// default of synchronous=NORMAL.
+	db, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL"+store.SyncDSNParam())
 	if err != nil {
 		return nil, fmt.Errorf("open repo registry: %w", err)
 	}

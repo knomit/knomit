@@ -19,12 +19,59 @@ import (
 // and the installer package (internal/testsupport/testsigner), which is itself
 // kept out of every shipped binary by TestHarnessNotLinkedIntoShippedBinaries.
 func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
-	root := filepath.Join("..", "..")
-	allowed := map[string]bool{
-		filepath.Join("internal", "store", "sign.go"):                           true,
-		filepath.Join("internal", "testsupport", "testsigner", "testsigner.go"): true,
+	offenders := productionSourceNaming(t,
+		[]string{"SetTestFallbackSigner", "internal/testsupport/testsigner"},
+		filepath.Join("internal", "store", "sign.go"),
+		filepath.Join("internal", "testsupport", "testsigner", "testsigner.go"),
+	)
+	if len(offenders) > 0 {
+		t.Fatalf("production source must not reference the test fallback signer:\n  %s", strings.Join(offenders, "\n  "))
 	}
-	needles := []string{"SetTestFallbackSigner", "internal/testsupport/testsigner"}
+}
+
+// TestFastDurabilityOnlyReferencedFromTests: store.SetTestFastDurability turns
+// SQLite's fsyncs off (synchronous=OFF) for a whole test binary (#365). In a
+// production knomit that would turn a power cut into a corrupt store or
+// control.db, so the switch is set only from a test package's TestMain. Like
+// the signer hook it refuses to work outside a test binary; this test keeps
+// production SOURCE from naming it at all.
+//
+// The READ side, store.SyncDSNParam, is deliberately not a needle: production
+// opens of control.db call it, and outside a test binary it returns "".
+//
+// The needles are the setter and the atomic it writes (testFastDurability),
+// so production cannot bypass the setter within package store either.
+//
+// Allowed non-test file: the switch's own definition. Every needle must
+// appear THERE, or a rename would leave this test passing on nothing.
+func TestFastDurabilityOnlyReferencedFromTests(t *testing.T) {
+	needles := []string{"SetTestFastDurability", "testFastDurability"}
+	def := filepath.Join("internal", "store", "test_durability.go")
+	src, err := os.ReadFile(filepath.Join("..", "..", def))
+	if err != nil {
+		t.Fatalf("read the switch's definition file: %v", err)
+	}
+	for _, n := range needles {
+		if !strings.Contains(string(src), n) {
+			t.Fatalf("%s no longer contains %q: the switch was renamed or moved, so this guard checks nothing — update its needles", def, n)
+		}
+	}
+	offenders := productionSourceNaming(t, needles, def)
+	if len(offenders) > 0 {
+		t.Fatalf("production source must not reference the test durability switch:\n  %s", strings.Join(offenders, "\n  "))
+	}
+}
+
+// productionSourceNaming walks every non-test .go file in the module and
+// returns "<file> references <needle>" for each needle a file contains,
+// skipping the allowed files (module-root-relative paths).
+func productionSourceNaming(t *testing.T, needles []string, allowed ...string) []string {
+	t.Helper()
+	root := filepath.Join("..", "..")
+	allow := make(map[string]bool, len(allowed))
+	for _, a := range allowed {
+		allow[a] = true
+	}
 	var offenders []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -48,7 +95,7 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
-		if allowed[rel] {
+		if allow[rel] {
 			return nil
 		}
 		b, rerr := os.ReadFile(path)
@@ -65,7 +112,5 @@ func TestFallbackSignerOnlyReferencedFromTests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(offenders) > 0 {
-		t.Fatalf("production source must not reference the test fallback signer:\n  %s", strings.Join(offenders, "\n  "))
-	}
+	return offenders
 }

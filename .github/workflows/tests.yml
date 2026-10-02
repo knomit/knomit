@@ -90,12 +90,23 @@ name: Tests
 #     carries both machines' numbers.
 #     Every OTHER step keeps the 10-minute default deliberately: a ceiling is
 #     also a hang guard, and a package that suddenly needs 40 minutes is news.
-#     The package nearest that line in build-test is internal/web — 455s alone
-#     on the laptop, and it shares its step with storytests and the desktop
-#     helpers, which go test runs CONCURRENTLY, so its real margin is thinner
-#     than 455s suggests. On the runner the whole step is 3m13s-3m55s, so this
-#     is a thing to watch rather than a thing to fix: if that step ever times
-#     out, internal/web is where to look first.
+#     The package nearest that line in build-test is internal/web, and it
+#     shares its step with storytests and the desktop helpers, which go test
+#     runs CONCURRENTLY, so its real margin is thinner than its own time
+#     suggests. It once hit the line (#365; dev run 36731818890, timed out at
+#     600s): ~400 tests each create real repos, and on Windows each create's
+#     SQLite fsyncs cost most of ~0.8s.
+#     The fix was NOT a longer -timeout here: internal/web's TestMain now
+#     calls store.SetTestFastDurability, which runs every DB the test binary
+#     opens at synchronous=OFF (WAL kept, so locking is unchanged). On a
+#     Windows 10 laptop that took the package from 706s to 389s, same 834
+#     tests passing (737s in an earlier measurement); on the windows-2025
+#     runner it was ~281s before (PR #363, run 36863649277, windows-2025
+#     build-test job 110394895276: internal/web 281s, the whole web step
+#     4m49s), and the after-number is to be confirmed from the first CI run
+#     with the switch. If that step ever times out
+#     again, internal/web is still where to look first — and the fix is
+#     still to make it faster, not to raise the ceiling.
 #
 # WHAT THIS COSTS SOMEONE WAITING ON A PR. JOB durations — what the checks list
 # shows, including checkout and the bootstrap — from the green legs of
